@@ -1,0 +1,143 @@
+// The one gate between sessions and the Changes page (docs/proposals/
+// changes-page.md 8.4). Stories and editions are team-only rows with no
+// `workspace` key, so they stay safe only if no private input ever enters
+// them. Every read of `conversations` or `session_insights` by a changes*
+// module goes through here; changesAccess.guard.test.ts fails on any other.
+//
+// A conversation passes when the team can already read it, by the same rules
+// the team feed applies (createTeamFeedFilter: sharing, a locked-private
+// override, the owner's membership level at the session's start), when its
+// visible team is this team, and when its effective visibility mode is above
+// `minimal`. The mode decides what prose may use: `summary` allows the
+// insight's headline and summary, `full` (the feed's `full` or `detailed`)
+// allows its turns too. An insight written while the session sat in another
+// team is withheld even when the session itself passes.
+
+import type { Doc, Id } from "../_generated/dataModel";
+import { createTeamFeedFilter, getOwnerMembership, resolveVisibilityMode, teamVisibleConvTeam } from "../privacy";
+import { effectiveMembershipVisibility, type TeamVisibilityLevel } from "../teamVisibility";
+
+type DbCtx = { db: any };
+
+export type ChangesInputMode = "summary" | "full";
+
+/** The insight fields prose may read. goal, what_changed, key_changes,
+ *  next_action and themes never leave this module. */
+export type ChangesInsight = {
+  _id: Id<"session_insights">;
+  generated_at: number;
+  headline?: string;
+  summary: string;
+  outcome_type: Doc<"session_insights">["outcome_type"];
+  // Present only at mode `full`.
+  turns?: Array<{ ask: string; did: string[] }>;
+};
+
+export type TeamVisibleInput = {
+  conversation_id: Id<"conversations">;
+  owner_id: Id<"users">;
+  started_at: number;
+  title?: string;
+  active_task_id?: Id<"tasks">;
+  mode: ChangesInputMode;
+  // The owner's membership level for this session (history-aware). Hashed
+  // into a story's inputs_hash so a level change regenerates its prose.
+  membership_level: TeamVisibilityLevel;
+  insight: ChangesInsight | null;
+};
+
+function inputMode(mode: string): ChangesInputMode | null {
+  if (mode === "full" || mode === "detailed") return "full";
+  if (mode === "summary") return "summary";
+  return null;
+}
+
+function projectInsight(row: Doc<"session_insights">, mode: ChangesInputMode): ChangesInsight {
+  return {
+    _id: row._id,
+    generated_at: row.generated_at,
+    headline: row.headline,
+    summary: row.summary,
+    outcome_type: row.outcome_type,
+    ...(mode === "full" && row.turns ? { turns: row.turns } : {}),
+  };
+}
+
+/** The level the owner shows one session at in a team, read from the
+ *  membership's visibility_history at the session's start. */
+export async function ownerMembershipVisibilityAt(
+  ctx: DbCtx,
+  ownerId: Id<"users">,
+  teamId: Id<"teams">,
+  startedAt: number | undefined,
+): Promise<TeamVisibilityLevel> {
+  return effectiveMembershipVisibility(await getOwnerMembership(ctx, ownerId, teamId), startedAt);
+}
+
+/** For each conversation the team may draw on, its mode and its gated insight,
+ *  keyed by conversation id. A conversation missing from the map contributes
+ *  nothing but the commit text already readable through canAccessCommit. */
+export async function teamVisibleInputs(
+  ctx: DbCtx,
+  teamId: Id<"teams">,
+  conversationIds: Iterable<Id<"conversations">>,
+): Promise<Map<string, TeamVisibleInput>> {
+  const out = new Map<string, TeamVisibleInput>();
+  const ids = [...new Set([...conversationIds].map(String))] as Id<"conversations">[];
+  if (ids.length === 0) return out;
+
+  const filter = await createTeamFeedFilter(ctx, teamId);
+  const conversations: Array<Doc<"conversations"> | null> = await Promise.all(ids.map((id) => ctx.db.get(id)));
+
+  await Promise.all(conversations.map(async (conv) => {
+    if (!conv) return;
+    if (String(teamVisibleConvTeam(conv)) !== String(teamId)) return;
+    if (!filter.isVisible(conv)) return;
+    const level = filter.getVisibilityFor(conv) as TeamVisibilityLevel;
+    const mode = inputMode(resolveVisibilityMode(conv.team_visibility, level, true));
+    if (!mode) return;
+
+    const insight: Doc<"session_insights"> | null = await ctx.db
+      .query("session_insights")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id))
+      .first();
+    out.set(String(conv._id), {
+      conversation_id: conv._id,
+      owner_id: conv.user_id,
+      started_at: conv.started_at,
+      title: conv.title,
+      active_task_id: conv.active_task_id,
+      mode,
+      membership_level: level,
+      insight: insight && String(insight.team_id) === String(teamId) ? projectInsight(insight, mode) : null,
+    });
+  }));
+  return out;
+}
+
+/** The team's insights generated since `since` whose sessions pass the gate,
+ *  newest first, each with its input. For "In the works", which starts from
+ *  insights rather than from commits. */
+export async function teamVisibleRecentInsights(
+  ctx: DbCtx,
+  teamId: Id<"teams">,
+  since: number,
+  limit = 200,
+): Promise<Array<TeamVisibleInput & { insight: ChangesInsight }>> {
+  const rows: Doc<"session_insights">[] = await ctx.db
+    .query("session_insights")
+    .withIndex("by_team_generated_at", (q: any) => q.eq("team_id", teamId).gte("generated_at", since))
+    .order("desc")
+    .take(limit);
+  const inputs = await teamVisibleInputs(ctx, teamId, rows.map((r) => r.conversation_id));
+  const out: Array<TeamVisibleInput & { insight: ChangesInsight }> = [];
+  for (const row of rows) {
+    const input = inputs.get(String(row.conversation_id));
+    // The gate reads the conversation's current insight; a stale duplicate row
+    // never stands in for it.
+    if (input?.insight && String(input.insight._id) === String(row._id)) {
+      out.push(input as TeamVisibleInput & { insight: ChangesInsight });
+    }
+  }
+  return out;
+}

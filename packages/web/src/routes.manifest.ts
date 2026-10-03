@@ -121,6 +121,7 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 // Dashboard / tab-routable
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
+const Changes = lazy(() => import("@/app/changes/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
@@ -290,6 +291,8 @@ export const ROUTES: RouteEntry[] = [
   // -- Dashboard tab shell (DashboardShell) — tab-routable; conversation routes are guest-OK --
   { path: "inbox", component: cast(Inbox), layout: "dashboardShell", tab: "/inbox", fullWidth: true },
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
+  // The daily edition owns its 1180px reading column (changes-page.md 4).
+  { path: "changes", component: cast(Changes), layout: "dashboardShell", tab: "/changes", fullWidth: true },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
   // A web page as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS (like
   // /chat), so no fullWidth flag here.

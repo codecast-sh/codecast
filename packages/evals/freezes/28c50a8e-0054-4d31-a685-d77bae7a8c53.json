@@ -1,0 +1,26 @@
+{
+  "name": "changes-story commit-only-no-why",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:commit-only-no-why"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:commit-only-no-why",
+    "title": "changes-story commit-only-no-why"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/commit-only-no-why.json"
+  },
+  "judge": "says invoices are now sorted by due date by default (and the table was split out with no behavior change) without offering any reason or motive, because no input states one",
+  "notes": null,
+  "tags": [],
+  "id": "28c50a8e-0054-4d31-a685-d77bae7a8c53",
+  "createdAt": "2026-10-02T23:33:27.212Z"
+}

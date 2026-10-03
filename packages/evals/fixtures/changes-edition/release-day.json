@@ -1,0 +1,183 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: an ordinary day of nine stories, a cli release and a backend deploy, one blocked session, two branches",
+ "snapshot": {
+  "input": {
+   "date": "2026-01-14",
+   "stats": {
+    "commits": 23,
+    "stories": 9,
+    "releases": 2,
+    "people": 4,
+    "sessions": 5
+   },
+   "releases": [
+    {
+     "surface": "cli",
+     "version": "1.4.2",
+     "sha": "9c1e4b7a2",
+     "time": "14:05"
+    },
+    {
+     "surface": "backend",
+     "sha": "4f1c2d9a1",
+     "time": "16:40"
+    }
+   ],
+   "stories": [
+    {
+     "key": "s1",
+     "area": "api",
+     "kind": "fix",
+     "importance": 4,
+     "headline": "Webhook deliveries now retry for an hour before giving up",
+     "dek": "Partners whose servers blip no longer miss events: a failed delivery retries with backoff up to six times.",
+     "insertions": 258,
+     "deletions": 46,
+     "authors": 1,
+     "sessions": 1,
+     "risks": [],
+     "release": "backend 4f1c2d9a1"
+    },
+    {
+     "key": "s2",
+     "area": "api",
+     "kind": "feature",
+     "importance": 4,
+     "headline": "Daily digests arrive at 8am in each workspace's own timezone",
+     "dek": "Digests used to go out at 8am UTC, so most teams outside Europe read them a day late (#212).",
+     "insertions": 210,
+     "deletions": 39,
+     "authors": 1,
+     "sessions": 0,
+     "risks": [
+      "schema"
+     ],
+     "release": "backend 4f1c2d9a1"
+    },
+    {
+     "key": "s3",
+     "area": "cli",
+     "kind": "fix",
+     "importance": 3,
+     "headline": "The CLI no longer hangs when the network drops mid-upload",
+     "dek": "Uploads now time out after 30 seconds and resume from the last chunk.",
+     "insertions": 75,
+     "deletions": 20,
+     "authors": 1,
+     "sessions": 1,
+     "risks": [],
+     "release": "cli 1.4.2"
+    },
+    {
+     "key": "s4",
+     "area": "web",
+     "kind": "feature",
+     "importance": 3,
+     "headline": "Invoices are sorted by due date by default",
+     "dek": "The invoice table moved into its own component along the way, with no change in behavior.",
+     "insertions": 264,
+     "deletions": 158,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s5",
+     "area": "api",
+     "kind": "feature",
+     "importance": 3,
+     "headline": "Account activity can be exported as CSV",
+     "dek": "A new endpoint streams the last 90 days of activity for an account.",
+     "insertions": 270,
+     "deletions": 34,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s6",
+     "area": "web",
+     "kind": "fix",
+     "importance": 2,
+     "headline": "Sign-in keeps the email you typed after a failed attempt",
+     "dek": "",
+     "insertions": 18,
+     "deletions": 4,
+     "authors": 1,
+     "sessions": 1,
+     "risks": []
+    },
+    {
+     "key": "s7",
+     "area": "docs",
+     "kind": "docs",
+     "importance": 1,
+     "headline": "Setup guide typos fixed",
+     "dek": "",
+     "insertions": 12,
+     "deletions": 12,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s8",
+     "area": "mobile",
+     "kind": "infra",
+     "importance": 1,
+     "headline": "Date picker library updated",
+     "dek": "",
+     "insertions": 40,
+     "deletions": 38,
+     "authors": 1,
+     "sessions": 0,
+     "risks": []
+    },
+    {
+     "key": "s9",
+     "area": "cli",
+     "kind": "release",
+     "importance": 1,
+     "headline": "CLI 1.4.2 released",
+     "dek": "",
+     "insertions": 6,
+     "deletions": 6,
+     "authors": 1,
+     "sessions": 0,
+     "risks": [],
+     "release": "cli 1.4.2"
+    }
+   ],
+   "branches": [
+    {
+     "branch": "feat/offline-mode",
+     "commits": 14,
+     "area": "mobile"
+    },
+    {
+     "branch": "spike/search-index",
+     "commits": 5,
+     "area": "api"
+    }
+   ],
+   "blocked": [
+    "Mobile push notifications wait on a new signing certificate"
+   ]
+  },
+  "people": [
+   "Priya Raman",
+   "Tomas Ek",
+   "Dana Whitfield",
+   "Ines Moreau",
+   "Kofi Mensah"
+  ]
+ },
+ "label": {
+  "leads": [
+   "s1",
+   "s2"
+  ]
+ },
+ "judge": "the headline says what the day was about and names the cli 1.4.2 release, the standfirst makes no claim the stories do not support, the lead is the webhook retry or the digest timezone story, and housekeeping (s7, s8, s9) is in brief rather than the lead"
+}

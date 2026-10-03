@@ -421,10 +421,10 @@ describe("push", () => {
     expect(refresh[0].delay).toBe(15000);
   });
 
-  test("a tag push is not a branch push", async () => {
+  test("a tag push is not a branch push: it stores no commits (changesDeploy.test.ts covers the release it records)", async () => {
     const ctx = context(pushPayload({ ref: "refs/tags/v1" }), undefined, "push");
     const result = await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
-    expect(result.reason).toBe("Not a branch push");
+    expect(result.reason).toBe("Tag names no version");
     expect(ctx.db._tables.commits).toHaveLength(0);
   });
 

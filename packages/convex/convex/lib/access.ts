@@ -12,6 +12,7 @@ import { findConversationBySessionReference } from "../conversationSessionLookup
 import { canOwnerOrTeamAccess, isTeamMember, teamVisibleConvTeam } from "../privacy";
 import { forbidden, notFound } from "./auth";
 import { roleDropForVisibility } from "../sessionOwnership";
+import { invalidateForConversation } from "./changesDirty";
 import {
   accessStampFor,
   accessStampFromDoc,
@@ -214,6 +215,7 @@ export async function patchConversationVisibility(
   await ctx.db.patch(conversation._id, drop ? { ...updates, ...drop.patch } : updates);
   if (drop) await drop.tell();
   const after = { ...conversation, ...updates };
+  await invalidateForConversation(ctx, after);
   return recomputeWorkspaceForConversation(ctx, after);
 }
 

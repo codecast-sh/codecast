@@ -6428,3 +6428,83 @@ mark.search-hit[data-search-active] {
 @keyframes tour-sheet-in { from { opacity: 0; } to { opacity: 1; } }
 .tour-sheet { animation: tour-sheet-in 220ms ease-out both; }
 @media (prefers-reduced-motion: reduce) { .tour-ring, .tour-card-in, .tour-leader, .tour-sheet { animation: none; } }
+
+/* Changes (components/changes, docs/proposals/changes-page.md 4 and 5): a
+   daily edition. The page is its own container, so the 12 column grid follows
+   the room the page has, not the window (a sidebar takes part of the window).
+   Accents are var(--sol-*) only. Motion runs once on change, never ambient,
+   and every animation stops under reduced motion. */
+.chg-root { container: changes / inline-size; }
+.chg-ui { font-family: var(--font-ui); }
+.chg-root input { font-variant-ligatures: none; }
+.chg-headline {
+  font-family: var(--font-ui);
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-ligatures: none;
+  text-wrap: balance;
+}
+.chg-rule {
+  height: 3px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-text) 70%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 70%, transparent);
+}
+.chg-grid { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 28px; }
+.chg-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px 32px; grid-auto-flow: row; align-items: start; }
+.chg-works-inner { position: sticky; top: 16px; }
+@container changes (min-width: 1100px) {
+  .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 32px; }
+  .chg-span-12 { grid-column: 1 / -1; }
+  .chg-span-8 { grid-column: 1 / span 8; }
+  .chg-works { grid-column: 9 / span 4; grid-row: 2 / span 2; }
+  .chg-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .chg-standfirst { max-width: calc(8 / 12 * 100%); }
+}
+/* The release stamp: a perforated line through a centred pill. */
+.chg-perf { height: 1px; flex: 1; background: repeating-linear-gradient(90deg, var(--sol-border) 0 4px, transparent 4px 7px); }
+/* In brief: a dotted leader from the line to its area. */
+.chg-leader {
+  flex: 1;
+  min-width: 16px;
+  height: 4px;
+  align-self: center;
+  background: radial-gradient(var(--sol-text-dim) 0.6px, transparent 0.6px) 0 50% / 4px 4px repeat-x;
+  opacity: 0.7;
+}
+.chg-hatch { background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-red) 22%, transparent) 0 2px, transparent 2px 6px); }
+.chg-pending-bar {
+  display: block;
+  height: 0.7em;
+  margin-top: 0.4em;
+  width: 60%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--sol-text) 6%, transparent) 30%, color-mix(in srgb, var(--sol-text) 12%, transparent) 50%, color-mix(in srgb, var(--sol-text) 6%, transparent) 70%);
+  background-size: 200% 100%;
+  animation: ccShimmer 2.4s linear infinite;
+}
+.chg-story[data-focused="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
+/* The open drawer's height animation, opening only: a drawer that closes goes
+   at once, so the story that opens keeps its place on screen. */
+@keyframes chgOpen { from { height: 0; } to { height: var(--radix-accordion-content-height); } }
+.chg-drawer { overflow: hidden; }
+.chg-drawer[data-state="open"] { animation: chgOpen 200ms ease-out; }
+/* Transform with a partial fade: a background tab parks an animation on its
+   first frame, and a region parked invisible is a page nobody can read. */
+@keyframes chgRise { from { opacity: 0.35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.chg-rise { animation: chgRise 220ms ease-out both; animation-delay: calc(var(--i, 0) * 40ms); }
+@keyframes chgFromRight { from { opacity: 0.6; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+@keyframes chgFromLeft { from { opacity: 0.6; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+.chg-slide-next { animation: chgFromRight 160ms ease-out; }
+.chg-slide-prev { animation: chgFromLeft 160ms ease-out; }
+@keyframes chgProseIn { from { opacity: 0.25; } to { opacity: 1; } }
+.chg-prose-in { animation: chgProseIn 180ms ease-out; }
+@keyframes chgRoll { from { opacity: 0.4; transform: translateY(40%); } to { opacity: 1; transform: none; } }
+.chg-roll { display: inline-block; animation: chgRoll 220ms ease-out; }
+@keyframes chgPulse { 0% { opacity: 1; } 35% { opacity: 0.3; } 100% { opacity: 1; } }
+.chg-pulse { animation: chgPulse 700ms ease-out 1; }
+@media (prefers-reduced-motion: reduce) {
+  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] { animation: none; }
+}

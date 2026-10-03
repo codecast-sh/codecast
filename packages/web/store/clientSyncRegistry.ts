@@ -1,4 +1,5 @@
 import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { deliverableAttachments } from "../lib/pendingUploads";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -401,6 +402,18 @@ export const CLIENT_SYNC_REGISTRY = {
     // A row must know which channel it belongs to; anything else is a foreign
     // document that would render as a message with no home.
     validRow: (row: any) => typeof row?.channel_id === "string" && typeof row?.content === "string",
+    // A send painted while its images uploaded (chatSlice sendChatMessage) had
+    // no outbox entry yet, and the reload took the upload and its blob with
+    // it: show it as a failed send carrying what can still be delivered.
+    hydrateRow: (row: any) => {
+      if (!row?.attachments?.some((a: any) => !a.storage_id) || row._failedAt) return row;
+      return {
+        ...row,
+        attachments: deliverableAttachments(row.attachments),
+        _failedAt: Date.now(),
+        _failReason: "The image upload was interrupted",
+      };
+    },
   },
   chatReactions: {
     persistence: { kind: "collection", key: "chatReactions" },
@@ -705,7 +718,9 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "commits" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet"],
+    // changesQueries.storyEvidence: a Changes story's commits, so its evidence
+    // drawer paints from the same rows the /commit page reads.
+    feeds: ["commits.getCommitsForTimeline", "commits.getCommitBySha", "commits.getCommitsForConversation", "commits.webGet", "changesQueries.storyEvidence"],
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
@@ -749,6 +764,43 @@ export const CLIENT_SYNC_REGISTRY = {
       "externalEvents.listForProject",
       "externalEvents.listForRepository",
     ],
+  },
+  // The Changes page (docs/proposals/changes-page.md 8.3). Team-only rows
+  // with no `workspace` key: the server gates every read on membership, and
+  // nothing private is ever written into them. Stories and editions come in
+  // date windows, so delta; their feeder prunes the days an answer covered
+  // whole, since a rebuild deletes a story whose key disappeared (a story's
+  // _id is never reused, so the exclude tombstone that prune plants never
+  // hides a later row). Live surfaces and In the works describe now for the
+  // viewed team and repository, and each answer is the complete set, so
+  // snapshot: a surface or a stuck session that drops out leaves.
+  changeStories: {
+    persistence: { kind: "collection", key: "changeStories" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, team_id, repository, date, area",
+    feeds: ["changesQueries.listStories"],
+  },
+  changeEditions: {
+    persistence: { kind: "collection", key: "changeEditions" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, team_id, repository, scope, date",
+    feeds: ["changesQueries.listEditions"],
+  },
+  changeLive: {
+    persistence: { kind: "collection", key: "changeLive" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    indexes: "_id, team_id, repository, surface",
+    feeds: ["changesQueries.liveStatus"],
+  },
+  changeWorks: {
+    persistence: { kind: "collection", key: "changeWorks" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    indexes: "_id, team_id, kind",
+    feeds: ["changesQueries.inTheWorks"],
   },
   // The daemon-side fleet (managed_sessions). listActiveSessions is the
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
@@ -1255,6 +1307,10 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   pullRequests: "shared",
   codeComments: "shared",
   externalEvents: "shared",
+  changeStories: "shared",
+  changeEditions: "shared",
+  changeLive: "shared",
+  changeWorks: "shared",
   managedSessions: "shared",
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",

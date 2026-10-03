@@ -1,0 +1,118 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: the api slice of a four-area batch commit plus one whole fix, with a session that states why",
+ "snapshot": {
+  "story": {
+   "area": "api",
+   "branch": "main",
+   "commit_shas": [
+    "7f01fe787c49e4adbe32533279699f08494c6472",
+    "1264bdfe5ff3215cf6abac2152fff607f7dc78dc"
+   ],
+   "area_counts": {
+    "api": 4
+   },
+   "risks": [],
+   "conversation_ids": [
+    "conv-webhooks"
+   ],
+   "kind": "fix",
+   "importance": 2
+  },
+  "commits": [
+   {
+    "sha": "7f01fe787c49e4adbe32533279699f08494c6472",
+    "subject": "chore: sweep before the 2.3 cut",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana.whitfield@example.com",
+    "timestamp": 1768386600000,
+    "branch": "main",
+    "conversation_id": "conv-webhooks",
+    "insertions": 412,
+    "deletions": 96,
+    "areas": {
+     "api": {
+      "touches": 3,
+      "insertions": 220,
+      "deletions": 40
+     },
+     "web": {
+      "touches": 5,
+      "insertions": 120,
+      "deletions": 30
+     },
+     "mobile": {
+      "touches": 2,
+      "insertions": 60,
+      "deletions": 20
+     },
+     "docs": {
+      "touches": 1,
+      "insertions": 12,
+      "deletions": 6
+     }
+    },
+    "top_paths": [
+     "packages/api/webhooks/deliver.ts",
+     "packages/web/pages/Invoices.tsx",
+     "packages/api/webhooks/backoff.ts",
+     "packages/mobile/screens/DatePicker.tsx",
+     "packages/api/webhooks/deliver.test.ts",
+     "docs/setup.md"
+    ],
+    "body": "Tidies several areas at once:\n- api: retry webhook deliveries with backoff instead of dropping them after one failure\n- web: rename the Invoices tab to Billing\n- mobile: update the date picker\n- docs: fix typos in the setup guide"
+   },
+   {
+    "sha": "1264bdfe5ff3215cf6abac2152fff607f7dc78dc",
+    "subject": "fix(api): keep the delivery attempt count across worker restarts",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana.whitfield@example.com",
+    "timestamp": 1768389300000,
+    "branch": "main",
+    "conversation_id": "conv-webhooks",
+    "insertions": 38,
+    "deletions": 6,
+    "areas": {
+     "api": {
+      "touches": 1,
+      "insertions": 38,
+      "deletions": 6
+     }
+    },
+    "top_paths": [
+     "packages/api/webhooks/deliver.ts"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "conv-webhooks",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Webhook deliveries retry with backoff instead of dropping",
+    "summary": "Partners reported missing payment notifications whenever their endpoint was briefly down, because a delivery that failed once was dropped. Deliveries now retry with exponential backoff, up to 6 attempts over about an hour, and the attempt count survives a worker restart.",
+    "turns": [
+     {
+      "ask": "Partners say they miss webhook events when their server blips. Make deliveries retry instead of dropping on the first failure.",
+      "did": [
+       "Added exponential backoff, 6 attempts over about an hour",
+       "Stored the attempt count so a worker restart does not reset it"
+      ]
+     }
+    ]
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek",
+   "Dana Whitfield",
+   "Ines Moreau",
+   "Kofi Mensah"
+  ]
+ },
+ "label": {
+  "why": "session"
+ },
+ "judge": "tells receivers of webhooks that failed deliveries now retry for about an hour, gives the session's reason (one failure used to drop the event while a partner's server blipped), and does not present the web, mobile or docs parts of the batch commit as this story's change"
+}

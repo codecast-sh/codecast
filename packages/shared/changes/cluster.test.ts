@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { commit, MIN, T0 } from "./__fixtures__/commit";
+import { littlebirdDay } from "./__fixtures__/littlebird";
 import days from "./__fixtures__/codecastDays.json";
 import { buildLayerZero, type LayerZeroInput } from "./cluster";
 import type { ChangeCommit, LayerZeroStory, VisibleConversation } from "./types";
@@ -185,45 +186,19 @@ describe("rules (a) to (c) in isolation", () => {
     expect(holding(r.stories, "a")[0].pr_ids).toEqual(["pr1"]);
     expect(holding(r.stories, "b")[0].pr_ids).toEqual(["pr2", "pr9"]);
   });
-});
 
-/** A Littlebird-shaped day: 760 commits, 45 branches, sparse sessions, a few batch commits and twins. */
-function littlebirdDay(): ChangeCommit[] {
-  let seed = 7;
-  const rnd = () => {
-    seed = (seed + 0x6d2b79f5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const pick = <T,>(xs: readonly T[]) => xs[Math.floor(rnd() * xs.length)];
-  const dirs = ["backend/api", "backend/worker", "backend/db", "backend/auth", "apps/web", "apps/mobile", "apps/admin", "packages/ui", "packages/sdk", "infra"];
-  const types = ["feat", "fix", "chore", "refactor", "test", "docs", "perf"];
-  const branches = Array.from({ length: 45 }, (_, i) => `dev${i % 9}/topic-${i}`);
-  const out: ChangeCommit[] = [];
-  for (let i = 0; i < 760; i++) {
-    const main = i % 10 === 0;
-    const batch = rnd() < 0.05;
-    const dir = pick(dirs);
-    const paths: Record<string, number> = {};
-    const n = 1 + Math.floor(rnd() * 30);
-    for (let f = 0; f < n; f++) paths[`${batch ? pick(dirs) : dir}/src/f${Math.floor(rnd() * 400)}.ts`] = Math.floor(rnd() * 120);
-    const area = dir.split("/").pop();
-    out.push(commit({
-      sha: `lb${i.toString(16).padStart(6, "0")}`,
-      subject: i % 97 === 0 && main ? `chore(release): bump version to 2.${i}.0` : `${pick(types)}(${area}): change ${i}`,
-      author_email: `dev${i % 23}@littlebird.test`,
-      author_name: `Dev ${i % 23}`,
-      timestamp: T0 - 12 * 60 * MIN + Math.floor(rnd() * 24 * 60) * MIN,
-      branch: main ? "main" : pick(branches),
-      conversation_id: rnd() < 0.015 ? `jx7lb${i % 5}` : null,
-      paths,
-    }));
-  }
-  // Rebase twins: some main commits also arrive from the branch they came from.
-  for (let i = 0; i < 20; i++) out.push({ ...out[i * 10], sha: `tw${i}`, branch: pick(branches) });
-  return out;
-}
+  test("a private session's own task and PR links stay out of the story, and the bulk risk still fires", () => {
+    const big = commit({ sha: "p1", subject: "feat(web): big private work", conversation_id: "secret", task_ids: ["ct-9"], pr_id: "pr-secret", paths: { "packages/web/a.ts": 2000 } });
+    const s = holding(build({ commits: [big], visible: [] }).stories, "p1")[0];
+    expect(s.task_ids).toEqual([]);
+    expect(s.pr_ids).toEqual([]);
+    expect(s.private_conversation_count).toBe(1);
+    expect(s.risks.map((x) => x.code)).toEqual(["bulk"]);
+    const open = holding(build({ commits: [big], visible: [{ conversation_id: "secret" }] }).stories, "p1")[0];
+    expect(open.task_ids).toEqual(["ct-9"]);
+    expect(open.pr_ids).toEqual(["pr-secret"]);
+  });
+});
 
 describe("a Littlebird-shaped day", () => {
   const commits = littlebirdDay();

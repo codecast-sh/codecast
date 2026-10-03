@@ -70,6 +70,15 @@ describe("parseRelease", () => {
     expect(parseRelease("chore(electron): release desktop 1.1.123")).toEqual({ surface: "desktop", version: "1.1.123", scope: "electron" });
     expect(parseRelease("chore(electron): bump desktop to v1.1.122")?.version).toBe("1.1.122");
     expect(parseRelease("release: bump 2.0.0")?.surface).toBe("release");
+    expect(parseRelease("chore(mobile): bump app version to 1.0.4")).toEqual({ surface: "mobile", version: "1.0.4", scope: "mobile" });
+    expect(parseRelease("chore(cli): bump version from 1.1.162 to 1.1.163")?.version).toBe("1.1.163");
+  });
+
+  test("a dependency bump is not a release", () => {
+    expect(parseRelease("chore(deps): bump lodash from 1.0.0 to 2.0.0")).toBeNull();
+    expect(parseRelease("chore(deps-dev): bump vite to 5.4.1")).toBeNull();
+    expect(parseRelease("chore: bump lodash from 4.17.20 to 4.17.21")).toBeNull();
+    expect(subjectKind("chore(deps): bump lodash from 1.0.0 to 2.0.0")).toBe("infra");
   });
 
   test("ignores everything else", () => {
