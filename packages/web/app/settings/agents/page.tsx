@@ -1,10 +1,14 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
-import { Shield, SlidersHorizontal } from "lucide-react";
+import { Pin, Shield, SlidersHorizontal } from "lucide-react";
+import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
+import { AgentTypeIcon } from "../../../components/AgentTypeIcon";
+import { Switch } from "../../../components/ui/switch";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { SettingsOptionGroup, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { toast } from "sonner";
 
 type ClaudeMode = "default" | "bypass";
@@ -68,6 +72,8 @@ export default function AgentsPage() {
 
   return (
     <SettingsPanel>
+      <PinnedAgentsSection />
+
       <SettingsSection
         title="Permissions"
         icon={Shield}
@@ -139,6 +145,38 @@ export default function AgentsPage() {
         />
       </SettingsSection>
     </SettingsPanel>
+  );
+}
+
+/** Which agents the pickers offer. Every supported agent stays launchable from
+ *  the CLI; an unpinned one still shows on a session already running it. */
+function PinnedAgentsSection() {
+  const pinned = usePinnedAgentIds();
+  const clients = Object.values(AGENT_CLIENTS);
+  const toggle = (id: AgentClientId, on: boolean) => {
+    const next = clients.map((d) => d.id).filter((x) => (x === id ? on : pinned.includes(x)));
+    useInboxStore.getState().setPinnedAgents(next);
+  };
+  return (
+    <SettingsSection
+      title="Pinned agents"
+      icon={Pin}
+      description="The agents offered when you start, switch, fork or hand off a session. Unpinned agents stay available from the CLI."
+    >
+      {clients.map((d) => {
+        const on = pinned.includes(d.id);
+        const last = on && pinned.length === 1;
+        return (
+          <SettingsRow
+            key={d.id}
+            label={<span className="flex items-center gap-2"><AgentTypeIcon agentType={d.convexId} className="h-4 w-4" />{d.displayName}</span>}
+            description={last ? "At least one agent stays pinned." : d.pinnedByDefault === false ? "Unpinned by default." : undefined}
+          >
+            <Switch checked={on} disabled={last} onCheckedChange={(v) => toggle(d.id, v)} aria-label={`Pin ${d.displayName}`} />
+          </SettingsRow>
+        );
+      })}
+    </SettingsSection>
   );
 }
 

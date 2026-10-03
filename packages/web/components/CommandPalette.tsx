@@ -27,6 +27,7 @@ import { canControlModel, modelOptionKey } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
 import { AGENT_LAUNCH_OPTIONS, AGENT_MODEL_CONFIG, modelAgentKey, dynamicModelOption, canSessionBecomeAgent, listedModels, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useDynamicModels } from "../hooks/useDynamicModels";
+import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
 import { useDevices, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
@@ -208,9 +209,16 @@ const PLAN_STATUS_META: Record<string, { label: string; color: string }> =
 
 const AGENT_OPTIONS = AGENT_LAUNCH_OPTIONS.map((agent) => ({
   key: `agent:${agent.convexType}`,
+  id: agent.id,
   agentType: agent.convexType,
   label: agent.label,
 }));
+
+/** The agent rows a pick offers: the viewer's pinned agents plus the one the
+ *  target session already runs. Labels elsewhere still read AGENT_OPTIONS. */
+function pinnedAgentRows(pinned: readonly string[], currentAgentType: string | undefined) {
+  return AGENT_OPTIONS.filter((o) => pinned.includes(o.id) || o.agentType === currentAgentType);
+}
 
 // One accent per agent (lib/agentColors), keyed the way the rows are.
 const AGENT_COLORS: Record<string, string> = Object.fromEntries(
@@ -424,6 +432,7 @@ export function ActionSubmenu({
   currentUser?: any;
 }) {
   // Rename seeds the field with the current name, shown the way lists show it.
+  const pinnedAgents = usePinnedAgentIds();
   const seedSearch = () => mode !== "rename" ? initialSearch : targetType === "session" ? cleanTitle(targets[0]?.title || "") : targets[0]?.title || "";
   const [search, setSearch] = useState(seedSearch);
   const [highlightIndex, setHighlightIndex] = useState(0);
@@ -688,7 +697,7 @@ export function ActionSubmenu({
     if (mode === "agent_run" || mode === "agent_switch" || mode === "agent_fork" || mode === "agent_handoff") {
       const currentAgentType = (target as InboxSession | undefined)?.agent_type;
       const messageCount = (target as InboxSession | undefined)?.message_count;
-      return AGENT_OPTIONS
+      return pinnedAgentRows(pinnedAgents, currentAgentType)
         .filter((o) => mode !== "agent_switch" || o.agentType !== (currentAgentType || "claude_code"))
         // A session with history can only become an agent that can rebuild it.
         // A hand-off starts fresh, so every agent (the current one included)
@@ -804,7 +813,7 @@ export function ActionSubmenu({
       return filtered;
     }
     return [];
-  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, assignPeople, assignRoles]);
+  }, [mode, search, target, targets, currentLabels, teamMembers, currentUser, buckets, bucketAssignments, viewChipData, activeBucketFilter, activeProjectFilter, chipFilterExclude, dynamicModels, taskStatuses, myLayouts, renameId, activeWorkbenchId, workspaceProjects, rosterLocals, rosterRemotes, orgRoles, assignPeople, assignRoles, pinnedAgents]);
 
   useWatchEffect(() => { setHighlightIndex(0); }, [search]);
 
@@ -2299,8 +2308,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const actions = [...paletteActions(targetType, targets, currentUser?._id, chatOn), ...(targetType === "session" && target && targets.length === 1 ? getPaletteSessionCommands(target._id) : [])];
 
   const rootTaskStatuses = useTeamTaskStatusList(target?.team_id);
+  const pinnedAgents = usePinnedAgentIds();
   const nestedMatches = query.trim().length < 2 ? [] : actions.flatMap(action => {
-    const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" || action.key === "agent_handoff" ? AGENT_OPTIONS
+    const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" || action.key === "agent_handoff" ? pinnedAgentRows(pinnedAgents, target?.agent_type)
       : action.key === "status" ? statusEntityOptions(rootTaskStatuses)
       : action.key === "priority" ? PRIORITY_OPTIONS
       : action.key === "type" ? DOC_TYPE_OPTIONS
