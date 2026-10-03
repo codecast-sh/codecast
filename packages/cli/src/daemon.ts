@@ -198,7 +198,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
-import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCodexProgramLaunch, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -11759,6 +11759,8 @@ async function processCodexSessionPass(
             parentMessageUuid: undefined,
             parentConversationId,
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
+            // The mark the claude path stamps for `claude -p`.
+            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row
@@ -13997,6 +13999,19 @@ export function usageLimitMenuBanner(
   return `You've hit your usage limit · ${resets ?? "parked at the usage limit dialog"}`;
 }
 
+// Is the live pane one of the two limit dialogs above? Both are parks, not
+// questions: a message for the session dismisses the dialog (Escape, its own
+// "cancel") and is then typed at the composer. Answering it with an option
+// instead is the hazard: since Claude Code 2.1.289 option 2 reads "Wait here,
+// then continue automatically at <reset>", and a recovery "continue" read as
+// that option armed a day-long wait on 24 sessions and never delivered the
+// continue itself (2026-10-04).
+export function limitDialogOnPane(pane: string): boolean {
+  if (spendLimitDialogBanner(pane)) return true;
+  const prompt = parseInteractivePrompt(pane, true);
+  return !!prompt && usageLimitMenuBanner(pane, prompt.options.map((o) => o.label)) !== null;
+}
+
 // Claude Code renders each assistant message with a leading bullet ("⏺" on current
 // builds, "●" on older ones) and indents its continuation lines two spaces. A turn
 // that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
@@ -14908,6 +14923,7 @@ export type TmuxLiveState =
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
+  | "limit_dialog"  // usage/spend limit dialog — Escape (its options are billing actions and a day-long wait)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "signed_out"    // the agent's own login splash — hold, press nothing; the machine must log in
   | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
@@ -15000,6 +15016,9 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // the next one opens the real Rewind dialog (2026-09-30: three Escapes left a
   // limit-parked session holding every message for two hours). It is no modal.
   const dialogText = region.split("\n").filter((line) => !isClaudeAutoContinueLine(line)).join("\n");
+  // The limit dialog ends in "Esc to cancel" too; named first so its Escape is
+  // a deliberate dismissal, not a Rewind cancel that happens to fit.
+  if (limitDialogOnPane(region)) return "limit_dialog";
   if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -16722,7 +16741,7 @@ function assertPromptAbsent(pane: string): void {
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
   // delivery on a dialog the launch path already knows how to dismiss.
-  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane)) return;
+  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane)) return;
   if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
@@ -16876,6 +16895,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "rewind") {
       log(`Cancelling Rewind dialog in ${target} (Escape, never Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } else if (state === "limit_dialog") {
+      log(`Dismissing limit dialog in ${target} (Escape, never an option)`);
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "update_menu") {

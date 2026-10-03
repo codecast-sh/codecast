@@ -9,7 +9,13 @@ import { autonomyOn, trustForSwitch } from "./roleAutonomy";
 
 export const ORG_PROPOSAL_FENCE = "org-proposal";
 
-export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number };
+/** `cards` is the line's admission cap (line-profile.md LP6): open change cards per person. */
+export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; tokens_per_day?: number; cards?: number };
+
+// The line a role's tasks run on (the-line.md L2): a workflow slug, absent
+// meaning the shipped "line" template.
+export const DEFAULT_LINE_SLUG = "line";
+export const LINE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export type OrgProposalScope = {
   /** Project refs: a short id, an id, or a title substring unique in the workspace. */
@@ -49,6 +55,8 @@ export type OrgRoleProposal = {
   /** The switch as stored (org-staffing.md S23.1); a hired role starts on, so a proposal rarely writes it. */
   trust?: OrgTrustStage;
   caps?: OrgProposalCaps;
+  /** The workflow slug its line runs on (line-profile.md LP7); absent = the role's default. */
+  line?: string;
   /** See OrgLeaveSessions: the sessions in the new role's scope stay with their owner. */
   leave_sessions?: boolean;
   /** The counts and session titles the proposal rests on; prose for the reader. */
@@ -310,6 +318,8 @@ export function orgChangeError(raw: any): string | null {
         const h = handle(); if (h) return h;
         if (raw.tenure !== undefined) { const t = orgTenureError(raw.tenure); if (t) return t; }
         if (raw.avatar !== undefined && !nonEmpty(raw.avatar)) return "avatar is an avatar key";
+        if (raw.line !== undefined && !(typeof raw.line === "string" && LINE_SLUG_RE.test(raw.line))) return "line is a workflow slug: 1 to 64 characters of a-z, 0-9 and -";
+        if (raw.caps?.cards !== undefined && !(Number.isSafeInteger(raw.caps.cards) && raw.caps.cards > 0)) return "caps.cards is a positive whole number";
         if (raw.seat !== undefined) {
           const s = orgRoleSeatError(raw.seat); if (s) return s;
           // The card promises naming changes nothing about how the session
@@ -765,7 +775,8 @@ function askWords(names?: OrgAskNames) {
     switch (c.kind) {
       case "role": {
         const scope = [projects(c.scope?.projects ?? []), plans(c.scope?.plans ?? [])].filter(Boolean).join(" and ");
-        const line = `reporting to ${parent(c.reports_to)}${scope ? ` and looking after ${scope}` : ""}.${tenure(c.tenure)}${riders.map(rider).join("")}`;
+        const runsLine = c.line || c.caps?.cards !== undefined ? ` It runs the project's line on the ${c.line ?? DEFAULT_LINE_SLUG} workflow${c.caps?.cards !== undefined ? `, starting new work only while fewer than ${c.caps.cards} change cards wait on a person` : ""}.` : "";
+        const line = `reporting to ${parent(c.reports_to)}${scope ? ` and looking after ${scope}` : ""}.${runsLine}${tenure(c.tenure)}${riders.map(rider).join("")}`;
         return c.seat ? `${seatSentence(c.seat)} It becomes a role, ${line}` : `A new agent, ${c.name}, ${line}`;
       }
       case "retire": return `${agent(c.handle)} retires. Its sessions go back to their owners, and anything under it reports one level up.`;

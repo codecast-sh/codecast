@@ -24,7 +24,33 @@ const PAGES: { [V in Exclude<EvalsViewName, "not-found">]: PageFor<V> } = {
   bisect: page(() => import("../../components/evals/pages/BisectPage").then((m) => m.BisectPage)),
   sim: page(() => import("../../components/evals/pages/SimCatalogPage").then((m) => m.SimCatalogPage)),
   "sim-run": page(() => import("../../components/evals/pages/SimRunPage").then((m) => m.SimRunPage)),
+  commit: page(() => import("../../components/evals/pages/CodePage").then((m) => m.CommitPage)),
+  patch: page(() => import("../../components/evals/pages/CodePage").then((m) => m.PatchPage)),
 };
+
+/** What a view's page is called while its code loads: under load a hop can take seconds, and a blank pane reads as broken. */
+const OPENING: { [V in Exclude<EvalsViewName, "not-found">]: string } = {
+  home: "the wall",
+  surface: "the surface",
+  freeze: "the freeze",
+  run: "the run",
+  compare: "the comparison",
+  "bisect-list": "the bisects",
+  "bisect-new": "the attribution",
+  bisect: "the bisect",
+  sim: "the Multiplayer sim",
+  "sim-run": "the Multiplayer sim run",
+  commit: "the commit",
+  patch: "the patch",
+};
+
+function Opening({ view }: { view: EvalsView }) {
+  return (
+    <div className="ev-page text-[12px] ev-quiet" data-evals-loading="page">
+      Opening {view.view === "not-found" ? "the page" : OPENING[view.view]}...
+    </div>
+  );
+}
 
 function EvalsViewPage({ view }: { view: EvalsView }) {
   if (view.view === "not-found") {
@@ -43,7 +69,7 @@ export default function EvalsPage() {
     <AuthGuard>
       <div className="h-full min-h-0">
         <EvalsShell view={view}>
-          <Suspense fallback={null}>
+          <Suspense fallback={<Opening view={view} />}>
             <EvalsViewPage view={view} />
           </Suspense>
         </EvalsShell>

@@ -213,9 +213,10 @@ The loop: `./evals freeze create title@jx7c6zk:142` → `./evals check title
 
 `check` replays every freeze of a surface through `prompt-dry-run.ts` on
 its pinned model and prints a verdict against the previous run set. Never
-claim a win without `separated: better` (an exact one-sided Mann-Whitney at
-p <= 0.05 with 5+ reps a side). Gates are decided in code, and a single gate
-failure in any sample fails the variant. Agent surfaces (org-review,
+claim a win without `separated: better` (a one-sided Mann-Whitney at
+p <= 0.05, exact at ablation sizes and sampled past them, with 5+ reps a side
+on a call surface and 8 on an agent surface). Gates are decided in code, and a
+single gate failure in any sample fails the variant. Agent surfaces (org-review,
 role-wake, anchor-brief) are run by hand only: the cadence triggers flag them
 and never run them.
 

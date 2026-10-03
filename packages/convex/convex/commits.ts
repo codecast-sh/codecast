@@ -219,27 +219,34 @@ export const webGet = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    let commit: any = null;
     if (args.id) {
-      commit = await ctx.db.get(args.id);
-    } else if (args.sha) {
-      const sha = args.sha.trim().toLowerCase();
-      const repository = args.repository ? normalizeRepository(args.repository) : undefined;
-      const candidates =
-        sha.length === 40
-          ? await ctx.db.query("commits").withIndex("by_sha", (q) => q.eq("sha", sha)).collect()
-          : await ctx.db
-              .query("commits")
-              .withIndex("by_sha", (q) => q.gte("sha", sha).lt("sha", sha + "\uffff"))
-              .take(20);
-      // A transcript-written commit may carry no repository; the sha alone
-      // still names it. A row that names a different repository does not.
-      commit = candidates.find((c) => !repository || !c.repository || c.repository === repository) ?? null;
+      const commit = await ctx.db.get(args.id);
+      return commit ? (await accessibleCommits(ctx, userId, [commit]))[0] ?? null : null;
     }
-    if (!commit) return null;
-    return (await accessibleCommits(ctx, userId, [commit]))[0] ?? null;
+    return args.sha ? await commitBySha(ctx, userId, args.sha, args.repository) : null;
   },
 });
+
+/**
+ * The commit a full or abbreviated sha names, if `userId` may read it. A
+ * transcript-written commit may carry no repository; the sha alone still
+ * names it. A row that names a different repository does not.
+ */
+export async function commitBySha(ctx: any, userId: Id<"users">, rawSha: string, rawRepository?: string): Promise<any | null> {
+  const sha = rawSha.trim().toLowerCase();
+  if (!sha) return null;
+  const repository = rawRepository ? normalizeRepository(rawRepository) : undefined;
+  const candidates =
+    sha.length === 40
+      ? await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.eq("sha", sha)).collect()
+      : await ctx.db
+          .query("commits")
+          .withIndex("by_sha", (q: any) => q.gte("sha", sha).lt("sha", sha + "\uffff"))
+          .take(20);
+  const commit = candidates.find((c: any) => !repository || !c.repository || c.repository === repository) ?? null;
+  if (!commit) return null;
+  return (await accessibleCommits(ctx, userId, [commit]))[0] ?? null;
+}
 
 /**
  * The commits either side of one, in this repository's history.

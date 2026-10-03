@@ -1,0 +1,53 @@
+{
+  "cause": {
+    "task": "ct-56750",
+    "title": "insight reports intended work as done: did items and outcome claim checks the excerpt never shows finishing",
+    "signals": 1,
+    "first_seen": 1791085163803,
+    "sources": [
+      "evals"
+    ]
+  },
+  "goal": {
+    "ref": "sd7dqnq9hny1dtzy83as2av4z18c9z2z",
+    "name": "Codecast: Product",
+    "why": "Make codecast the place a person steers every agent from: one inbox, one org chart, one place to decide."
+  },
+  "wrong": "",
+  "change": "",
+  "proof": {
+    "before": [],
+    "after": []
+  },
+  "examples": [],
+  "checks": [
+    {
+      "name": "Verify",
+      "ok": true,
+      "detail": "No new commit this round. The branch already holds the full fix: 8336bcc66, c3d9115b2 and 76cd9b1ee, pushed, HEAD 76cd9b1ee. It is a prompt-only change in insightRequest (packages/convex/convex/sessionInsights.ts) plus the regenerated request golden, 12 insertions and 10 deletions. Since the last implement round, the only change is the sharpened judge on 0706ea1a. So this round re-verifies the branch against that judge. Nothing new needed fixing."
+    },
+    {
+      "name": "Review",
+      "ok": true,
+      "detail": "All criteria met; no unmet points.\n\nAC1: the rewrite is prompt text only in insightRequest (sessionInsights.ts): preamble, headline schema line, did schema line, turns rule, headline/summary/outcome_type rules, and the \"Deployed fix, confirmed memory stable\" example replaced by a measured result. Golden insight.json regenerated; `bun test convex/sessionInsights.request.test.ts` 4/4. No filter, retry, second call or parse guard. Freezes and judges untouched by the diff (the 0706ea1a judge was sharpened earlier, not loosened).\nAC2: only done steps go in did; running/waiting steps are never done/passed/verified; announced-next steps are neither done nor underway (summary names them as next); one result per bullet, mixed bullets claim only the shown part; headline claims only finished work. A completion notice is not a pass.\nAC3: shipped needs the excerpt to show deployed/merged/complete; progress covers a last step not shown finishing.\nAC4: run of record (eval-result.json, 08:57, haiku-4-5, 5 reps): miss 0706ea1a base 0/5 -> branch 4/5; 79b1a58a 3/5 -> 5/5; guards 8157ae70, c0c50f98, 23d5e903 5/5 on branch; no gate failures, 0 crashes; separated: better (p=2.9e-5). My own `./evals check insight --reps 5` on the branch: 24/25, 0706ea1a 5/5, 79b1a58a 5/5, c0c50f98 5/5, 8157ae70 5/5, 23d5e903 4/5 (one rep at 0.60; passes by majority, a note), no gates, not separated vs the prior branch run set (medians 0.93/0.93), not worse.\nAC5: `cast check convex` 0 errors in the branch worktree.\n\nNote: one branch rep on 0706ea1a in the run of record still wrote \"modal appears when clicked\"; my 5 reps had none. Isolated, not repeating.\n\nP12 checklist: P5 pass (each rule rewritten at its own site), P1 pass (opens with reader and intent), P2 pass (one call, one schema), P3 pass (example swap removes the anchoring \"confirmed\" closer; no new examples), P4 pass (reads clean, no history), P8 n/a, P9 pass (red on base, green on branch, same freezes, guards held, judges not loosened), P10 n/a (context unchanged), P11 pass (the earlier \"tests underway\" swing on c0c50f98 is gone: 5/5 in both runs).\nPrinciples checked: PR-prompt-1, PR-prompt-3, PR-code-1, PR-process-7, CC-verify-2, CC-ship-2."
+    }
+  ],
+  "diff": {
+    "files": 2,
+    "added": 0,
+    "removed": 0
+  },
+  "risk": {
+    "class": "low",
+    "reason": "Ground rated it low."
+  },
+  "recommend": {
+    "verdict": "",
+    "why": ""
+  },
+  "cost": {
+    "tokens": 0,
+    "usd": 0,
+    "minutes": 286
+  }
+}

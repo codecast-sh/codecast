@@ -5,7 +5,11 @@ import * as path from "path";
 import {
   FLEET_GATE_ACCOUNT,
   FLEET_MIN_ACCESS_MS,
+  argvOnLaunchAccount,
   fleetBearer,
+  fleetLoginDead,
+  maintainFleetStore,
+  setLaunchProfile,
   fleetStoreDir,
   invalidateAccountsCache,
   launchAccountPrefix,
@@ -108,6 +112,45 @@ describe("fleet store (sandboxed $HOME)", () => {
     await putFleetOn("tok", now);
     await expect(putFleetOn("dead", now)).rejects.toThrow();
     expect(readFleetState()?.profile).toBe("tok");
+  });
+
+  // ct-56748: a fleet left on a signed-out account fails every session launched
+  // on it, and a run that dies on its first turn never parks for the server's
+  // auth recovery to see. The tick moves the fleet to the account auto-switch
+  // would pick, skipping any that cannot carry it either.
+  it("moves the fleet off a dead account onto one that can carry it", async () => {
+    setLaunchProfile("dead", undefined, now);
+    const did = await maintainFleetStore(now);
+    expect(did).toContain("cast accounts signin dead");
+    // "lapsing" ranks first on equal (unknown) headroom but cannot carry; the
+    // next candidate takes the fleet.
+    expect(readFleetState()?.profile).toBe("live");
+    expect(launchProfileName(now)).toBe("live");
+  });
+
+  it("stays put on an account whose login is only about to lapse", async () => {
+    // No refresh token, so the tick's refresh fails without reaching the network.
+    const lapsingLogin = { claudeAiOauth: { accessToken: "access-lapsing", expiresAt: now + FLEET_MIN_ACCESS_MS / 2 } };
+    fs.writeFileSync(path.join(home, ".codecast", "cc-accounts", "lapsing.json"), JSON.stringify({ credentials: lapsingLogin, oauthAccount: {}, saved_at: 1 }));
+    setLaunchProfile("lapsing", undefined, now);
+    const did = await maintainFleetStore(now);
+    expect(did).toStartWith("cannot carry");
+    expect(readFleetState()).toBeNull();
+    expect(fleetLoginDead("lapsing", JSON.stringify(login("x", now + 1000)), now)).toBe(false);
+  });
+
+  it("reads a logged-out stub as dead, and a live setup-token as never dead", () => {
+    const stub = JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "", expiresAt: 0 } });
+    expect(fleetLoginDead("live", stub, now)).toBe(true);
+    expect(fleetLoginDead("tok", stub, now)).toBe(false);
+  });
+
+  it("runs a shell-less launch on the fleet store", async () => {
+    await putFleetOn("tok", now);
+    const argv = argvOnLaunchAccount(["claude", "--print", "hi"]);
+    expect(argv.slice(0, 2)).toEqual(["bash", "-c"]);
+    expect(argv[2]).toContain("cc-fleet.env");
+    expect(argv.slice(-3)).toEqual(["claude", "--print", "hi"]);
   });
 
   it("is off on request: no pin launches as before", async () => {

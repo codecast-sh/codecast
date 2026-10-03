@@ -122,4 +122,20 @@ describe("replicated facts and locks", () => {
     useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_pinned_at: 25 } }, 25);
     expect((useInboxStore.getState().sessions as any)[id].inbox_pinned_at).toBe(25);
   });
+
+  // A follower undoes a kill and redoes it; its undo's mut waits in the
+  // channel while the server stamps the redo's kill and this window takes the
+  // row. Only the server writes the marker, so the stamp the row holds is the
+  // newest kill: the older clear must not land under a lock no ack retires.
+  it("a replicated clear of inbox_killed_at older than the stamp the row holds is dropped", () => {
+    const id = "k".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, inbox_killed_at: 30 }], { isDelta: true });
+    for (const ts of [20, 30]) useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_killed_at: null } }, ts);
+    expect((useInboxStore.getState().sessions as any)[id].inbox_killed_at).toBe(30);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:inbox_killed_at`]).toBeUndefined();
+
+    // A clear made after the kill lands.
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_killed_at: null } }, 40);
+    expect((useInboxStore.getState().sessions as any)[id].inbox_killed_at).toBeNull();
+  });
 });

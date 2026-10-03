@@ -6,7 +6,7 @@ import { applyProposalChanges, extractOrgProposal, orgProposalBlock, ORG_PROPOSA
 import type { OrgInitDeps } from "./orgInit.js";
 import { acquireFileLock } from "./lockFile.js";
 import { sessionIdFromEnv } from "./sessionIdentity.js";
-import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
+import { artifactFromSnapshot, atomicJson, canonicalDirectory, checkReleaseVersion, freezeArtifact, intervalMs, noSymlink, readArtifact, releaseRoot, snapshotArtifact, templateRoleFields, type OrgTemplate, type TemplateArtifact } from "./orgTemplateArtifact.js";
 import { writeInstanceFile } from "./orgTemplateInstance.js";
 import { fill, receiptPath, setupText, setupWords } from "./orgTemplateText.js";
 export { receiptPath };
@@ -238,7 +238,7 @@ async function prepareInstall(deps: OrgInitDeps, artifact: TemplateArtifact, ins
     if (!(tree.roles ?? []).some((r: any) => r.status !== "retired" && `@${r.handle}` === reportsTo)) throw new Error(`No active role ${reportsTo} in this workspace`);
   }
   if (leads.length && !leads.some((r: any) => `@${r.handle}` === reportsTo)) throw new Error(`Project ${project.ref} already has a lead, @${leads[0].handle}. Hire under it with --reports-to @${leads[0].handle}, or name that role as the seat; a second role beside a project's lead is refused.`);
-  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...(artifact.manifest.role.avatar ? { avatar: artifact.manifest.role.avatar } : {}), ...(artifact.manifest.role.tenure ? { tenure: artifact.manifest.role.tenure.kind === "standing" ? { kind: "standing" as const } : { kind: "program" as const, ends: { project: project.ref }, then: artifact.manifest.role.tenure.then } } : {}), trust: "understand", caps: artifact.manifest.role.caps, charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
+  receipt.proposal = { kind: "role", name: fill(artifact.manifest.role.name, receipt, artifact.manifest), handle, scope: { projects: [project.ref], plans: [] }, reports_to: reportsTo, ...templateRoleFields(artifact.manifest.role, project.ref), trust: "understand", charter: loaderPrompt(receipt, "charter"), evidence: [`Explicit install into existing project ${project.ref}`, `Pinned ${receipt.template.id}@${receipt.template.version} sha256:${receipt.template.hash}`] };
   checkReleaseVersion(dir, artifact);
   return receipt;
 }
@@ -633,6 +633,9 @@ export async function reconcileTemplate(deps: OrgInitDeps, instance: string, opt
       }
       if (applied.role && applied.role.id !== role._id) throw new Error("Applied role identity mismatch");
       if ((role.trust ?? "understand") !== "understand") throw new Error("New role is not at understand; manual review required");
+      // The line it owns (line-profile.md LP7) is part of what the person approved.
+      if (proposed.line && role.line_workflow_slug !== proposed.line) throw new Error(`New role does not run the approved line ${proposed.line}; manual review required`);
+      if (proposed.caps?.cards !== undefined && role.caps?.cards !== proposed.caps.cards) throw new Error(`New role's cards cap is not the approved ${proposed.caps.cards}; manual review required`);
       receipt.role = { id: role._id, handle: role.handle };
       receipt.phase = "provisioning";
       save(receipt);
@@ -878,7 +881,7 @@ export async function upgradeTemplate(deps: OrgInitDeps, instance: string, sourc
     const preview = { changedFiles, sharedCharterChanged, cadenceOverrides, warnings: tree.templateWarnings, from: receipt.template, to: { id: next.manifest.id, version: next.manifest.version, hash: next.hash }, added: added.map((r) => r.id), removed: removed.map((r) => r.id), cadenceChanged: cadenceChanged.map((r) => r.id), roleChanges: JSON.stringify(before.manifest.role) !== JSON.stringify(next.manifest.role), applied: false };
     if (!options.apply) return preview;
     if (next.hash === receipt.template.hash) return { ...preview, applied: true, unchanged: true, receipt };
-    if (next.manifest.role.handle !== before.manifest.role.handle || next.manifest.role.name !== before.manifest.role.name || JSON.stringify(next.manifest.role.caps) !== JSON.stringify(before.manifest.role.caps)) throw new Error("Upgrade cannot alter role identity or caps; use a separate human org decision");
+    if (next.manifest.role.handle !== before.manifest.role.handle || next.manifest.role.name !== before.manifest.role.name || JSON.stringify(next.manifest.role.caps) !== JSON.stringify(before.manifest.role.caps) || next.manifest.role.line !== before.manifest.role.line) throw new Error("Upgrade cannot alter role identity or caps, or the line it runs; use a separate human org decision");
     for (const [id, state] of Object.entries(receipt.routines)) {
       if (!state.triggerId) continue;
       const row = triggerFor(observed, state.triggerId);

@@ -50,8 +50,8 @@ import { FollowChip } from "./FollowInCall";
 import { AutoStage, GridStage, SpeakerStage } from "./StageViews";
 import { STAGE_CTL, STAGE_CTL_IDLE, STAGE_VIEWS, StageHostProvider, type StageHost, type StageView } from "./stageHost";
 import { GuestInvite, GuestRemoveButton } from "./GuestDoor";
-import { guestsJoining, guestsSig, rosterWithGuests, withGuestMedia } from "../../lib/calls/roomGuests";
-import { walkieCallState } from "../../lib/calls/walkie";
+import { guestsJoining } from "../../lib/calls/roomGuests";
+import { useStageRoster } from "../../hooks/useStageRoster";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
@@ -204,30 +204,14 @@ export function CallStage({
   // Memoized because it feeds an effect's dependency list: a fresh no-op every
   // render would re-bind the key listener on every render.
   const collapse = useMemo(() => onCollapse ?? (() => {}), [onCollapse]);
-  const s = useTrackedStore([
-    (st: any) => st.call,
-    (st: any) => (st.call.roomKey ? st.callOccupancy[st.call.roomKey] : undefined),
-    // The room's guests by signature: liveRooms is rewritten whole on every
-    // push, and only who is in (and their names) paints here.
-    (st: any) => guestsSig(st.liveRooms?.find((r: any) => r.room_key === st.call.roomKey)?.guests),
-  ]);
+  const s = useTrackedStore([(st: any) => st.call]);
   const call = s.call;
-  const seats: any[] = (call.roomKey && s.callOccupancy[call.roomKey]) || [];
-  const guestKey = guestsSig(s.liveRooms?.find((r: any) => r.room_key === call.roomKey)?.guests);
-  // Seats, then the guests let in on a link: a guest has no seat, and a guest
-  // with no camera was nobody on the stage without them (lib/calls/roomGuests).
-  const listed: any[] = useMemo(
-    () => rosterWithGuests(seats, s.liveRooms?.find((r: any) => r.room_key === call.roomKey)?.guests),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [seats, guestKey, call.roomKey],
-  );
   const myUserId = useInboxStore((st: any) => st.currentUser?._id?.toString?.() ?? null);
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
-  // ...as the media has them once connected: a guest who cannot be heard is
-  // not drawn as here, and a guest's microphone shows (roomGuests). The list
-  // is the voice host's (mirrored on desktop) and moves with the tiles.
-  const guestMedia = call.phase === "connected" ? walkieCallState().guests : null;
-  const roster: any[] = useMemo(() => withGuestMedia(listed, guestMedia), [listed, guestMedia]);
+  // Seats, then the guests let in on a link, as the media has them once
+  // connected (useStageRoster): a guest has no seat, and a guest with no
+  // camera was nobody on the stage without the fold.
+  const { listed, roster, guestMedia } = useStageRoster(call.roomKey, call.phase === "connected");
   const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
 
   // The live transcript, if anyone is scribing: id (for the call-page link),
@@ -530,7 +514,7 @@ export function CallStage({
       {/* Who is at the door, over the stage's top-right corner — visible
           without taking a lane from the people already in the room. */}
       {call.roomKey && call.phase === "connected" && (
-        <div className="pointer-events-none absolute right-3 top-12 z-10 w-72 max-w-[calc(100%-24px)]">
+        <div className="pointer-events-none absolute right-3 top-12 z-10 w-80 max-w-[calc(100%-24px)]">
           <div className="pointer-events-auto rounded-lg bg-sol-base03/80 backdrop-blur">
             <RoomKnocks roomKey={call.roomKey} />
           </div>

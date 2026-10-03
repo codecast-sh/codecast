@@ -513,3 +513,27 @@ function sameKeys(a: Record<string, unknown>, b: Record<string, unknown>): boole
   const ka = Object.keys(a);
   return ka.length === Object.keys(b).length && ka.every((k) => k in b);
 }
+
+// Lock ids: unique within this page (counter) and across reloads and windows
+// (random prefix), since planted locks persist and replicate.
+const LOCK_ID_PREFIX = Math.random().toString(36).slice(2, 10);
+let lockIdCounter = 0;
+export function newLockId(): string {
+  lockIdCounter += 1;
+  return `${LOCK_ID_PREFIX}.${lockIdCounter.toString(36)}`;
+}
+
+/**
+ * Whether `entry` is the very lock `planted` describes. Locks that carry an
+ * id compare by it; older locks (persisted before ids, or planted outside the
+ * middleware) fall back to type, ts and value.
+ */
+export function sameLock(
+  entry: PendingEntry | undefined,
+  planted: { type?: PendingEntry["type"]; membership?: "include" | "exclude"; ts?: number; value?: unknown; lock?: string },
+): boolean {
+  if (!entry) return false;
+  if (entry.lock !== undefined || planted.lock !== undefined) return entry.lock === planted.lock;
+  const type = planted.membership ?? planted.type ?? "field";
+  return entry.type === type && (entry.ts ?? 0) === (planted.ts ?? 0) && (type !== "field" || sameShape(entry.value, planted.value));
+}

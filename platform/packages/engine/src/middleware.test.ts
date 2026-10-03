@@ -622,6 +622,74 @@ describe("a permanent refusal lifts the refused action's locks", () => {
   });
 });
 
+// Writes in one millisecond (an undo walk replays its steps in one loop) can
+// put the same value on one cell twice. A refusal must still know which lock
+// is its own: matching on (key, ts, value) looped forever on a chain that led
+// back to a refused lock, and handed a landed write's lock to a refused one.
+describe("refusals of same-millisecond writes of one value", () => {
+  const pinNow = (t: number) => {
+    const real = Date.now;
+    Date.now = () => t;
+    return () => { Date.now = real; };
+  };
+
+  it("terminates, and leaves the landed write's value when the later two are refused", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "x" });
+    await waitFor(() => h.outbox.size === 0);
+    const refusals: Array<() => void> = [];
+    let n = 0;
+    h.wireDispatch((a) => {
+      if (a !== "rename") return Promise.resolve({});
+      n += 1;
+      if (n === 1) return Promise.resolve({});
+      return new Promise((_, reject) => refusals.push(() => reject(new Error("Uncaught Error: no"))));
+    });
+    const unpin = pinNow(Date.now() + 1000);
+    try {
+      h.wrapped.rename(SERVER_ID, "a");
+      h.wrapped.rename(SERVER_ID, "x");
+      h.wrapped.rename(SERVER_ID, "a");
+    } finally { unpin(); }
+    await waitFor(() => refusals.length === 2);
+    refusals[0]!();
+    await sleep(5);
+    refusals[1]!();
+    await sleep(10);
+    expect(h.state.items[SERVER_ID].title).toBe("a");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toMatchObject({ value: "a" });
+  });
+
+  it("a refused write does not take a later landed write's identical lock", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "x" });
+    await waitFor(() => h.outbox.size === 0);
+    let refuse!: () => void;
+    let n = 0;
+    h.wireDispatch((a) => {
+      if (a !== "rename") return Promise.resolve({});
+      n += 1;
+      if (n === 1) return new Promise((_, reject) => { refuse = () => reject(new Error("Uncaught Error: no")); });
+      return Promise.resolve({});
+    });
+    const unpin = pinNow(Date.now() + 1000);
+    try {
+      h.wrapped.rename(SERVER_ID, "a");
+      h.wrapped.rename(SERVER_ID, "y");
+      h.wrapped.rename(SERVER_ID, "a");
+    } finally { unpin(); }
+    await waitFor(() => !!refuse && n === 3);
+    await sleep(5);
+    refuse();
+    await sleep(10);
+    // The server holds "a" (the third write landed); so does the row.
+    expect(h.state.items[SERVER_ID].title).toBe("a");
+    expect(h.state.pending[`items:${SERVER_ID}:title`]).toMatchObject({ value: "a" });
+  });
+});
+
 describe("list and singleton locks from an action", () => {
   it("locks a list row by its _id and a singleton field by the empty id", () => {
     const h = makeHarness();

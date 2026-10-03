@@ -100,6 +100,13 @@ export interface AgentOptions {
   maxTurns?: number;
   /** Later turns, in order: each is sent into the same session once the previous one ends. */
   then?: string[];
+  /**
+   * run.json.promptSha when the briefing wraps the prompt under test in text
+   * of the run's own (org-review: the analyzer prompt without the harness
+   * note and the run's paths). Named before the run starts, so a rep that
+   * dies mid-run still records the prompt it ran.
+   */
+  promptSha?: string;
 }
 
 export interface AgentResult {
@@ -144,8 +151,6 @@ export interface ReplayOutput {
   reply: string;
   parsed?: unknown;
   extra?: Record<string, unknown>;
-  /** run.json.promptSha when the surface names its prompt better than a hash of what it sent (org-review: the analyzer prompt without the run's harness note). */
-  promptSha?: string;
 }
 
 /** The output plus every harness run it made, which the route gates read. */

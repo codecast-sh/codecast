@@ -35,7 +35,9 @@
 //               the change, the project's check command, the reproduction
 //               now passing
 //   eval        the project's eval command (it picks what the branch owes),
-//               then `cast line eval-result` for the verdict (LP4)
+//               then `cast line eval-result` for the verdict (LP4); an eval
+//               that could not judge the change (exit 2: no scored reps on a
+//               side) stops at unscored with a blocker, never back at the builder
 //   review      the independent reviewer (L3, LE9)
 //   card_draft, card_write, card
 //               the change card: assembled by code, three fields by a model,
@@ -66,14 +68,14 @@ digraph line {
 
   analyze [label="Analyze", backend=session, agent=claude, prompt="@line/analyze.md"]
 
-  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, prompt="@line/prove.md"]
+  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, timeout=5400, prompt="@line/prove.md"]
 
   red [label="Red", shape=parallelogram, timeout=1800, script="@line/red.sh"]
 
   dissolve [label="Dissolve", shape=parallelogram,
     script="cast task done $task_id -m \"Dissolved: the miss did not reproduce. The evidence is in the prove comment.\""]
 
-  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, prompt="@line/implement.md"]
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=5400, prompt="@line/implement.md"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=1800,
@@ -82,6 +84,9 @@ digraph line {
   green [label="Green", shape=parallelogram, timeout=1800, script="@line/green.sh"]
 
   eval [label="Eval", shape=parallelogram, timeout=3600, script="@line/eval.sh"]
+
+  unscored [label="Unscored", shape=parallelogram,
+    script="note=$eval.output; cast task comment $task_id \"The eval station could not judge the change, so the builder was not sent back. Rerun the line once the eval can run.${note:+ $note}\" -t blocker"]
 
   review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@line/review.md"]
 
@@ -136,7 +141,9 @@ digraph line {
   green -> eval          [condition="outcome = success"]
   green -> implement     [condition="outcome = failure", label="still red"]
   eval -> review         [condition="outcome = success"]
-  eval -> implement      [condition="outcome = failure", label="eval failed"]
+  eval -> implement      [condition="outcome = failure and eval.exit_code = 1", label="eval failed"]
+  eval -> unscored       [condition="outcome = failure and eval.exit_code != 1", label="eval could not score"]
+  unscored -> exit
 
   review -> card_draft [condition="review_verdict = approve"]
   review -> implement  [condition="review_verdict = changes", label="changes"]

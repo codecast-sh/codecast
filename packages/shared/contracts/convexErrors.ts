@@ -29,3 +29,14 @@ export function humanizeConvexError(err: unknown, fallback = "Something went wro
   }
   return msg || fallback;
 }
+
+/**
+ * The one line a CLI prints for a server error. Same as humanizeConvexError,
+ * after redacting the api_token: an ArgumentValidationError dumps the whole
+ * args object, token included (`api_token: "…"` or `"api_token":"…"`), and
+ * the line must not carry it into a terminal, a transcript or `cast read`.
+ */
+export function cliErrorMessage(raw: unknown): string {
+  const text = String((raw as any)?.message ?? raw ?? "").replace(/("?api_token"?\s*:\s*)"[^"]*"/g, '$1"***"');
+  return humanizeConvexError(text, "Unknown error");
+}

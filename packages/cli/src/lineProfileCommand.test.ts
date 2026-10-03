@@ -59,6 +59,14 @@ describe("cast line eval-result", () => {
     expect(gated.lines.at(-1)).toBe("FAIL suite gates failed: core/venue");
   });
 
+  test("a side with no scored rep exits 2: the eval could not judge the change", () => {
+    const reps = unionReps(true);
+    reps.surfaces[0].freezes[0].branch.reps = reps.surfaces[0].freezes[0].branch.reps.map((r: any) => ({ ...r, passed: false, error: "API error 429" }));
+    const run = runEvalResult(write("reps.json", reps), path.join(dir, "r.json"));
+    expect(run.code).toBe(2);
+    expect(run.lines.join("\n")).toContain("proven freeze fz_miss_ was not scored on the branch");
+  });
+
   test("an unreadable or malformed reps file is an error, never a result", () => {
     expect(() => runEvalResult(path.join(dir, "missing.json"), path.join(dir, "r.json"))).toThrow(/cannot read/);
     expect(() => runEvalResult(write("bad.json", "{not json"), path.join(dir, "r.json"))).toThrow(/cannot read/);

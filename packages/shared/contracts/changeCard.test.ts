@@ -9,7 +9,13 @@ import {
   countSentences,
   proofCountsIn,
   proofSummary,
+  cardChecks,
+  cardFailing,
+  checksLabel,
+  reportsFailure,
+  PROOF_CHECK,
   riskLabel,
+  SUITE_GATE_CHECK,
   validateChangeCard,
   type CardAssemblyInput,
   type ChangeCard,
@@ -40,6 +46,13 @@ function golden(file: string, actual: string) {
 }
 
 const sample = () => assembleChangeCard(sampleAssemblyInput());
+/** The sample with two suite gate scenarios failing, recommended for revision as a failing check requires. */
+function gateSample(): ChangeCard {
+  const input = sampleAssemblyInput();
+  input.evalResult = { ...input.evalResult!, ok: false, gatesFailed: ["handoff-keeps-owner", "dup-merge-keeps-newest"] };
+  input.recommend = { verdict: "revise", why: "Two suite scenarios fail on the branch, so the change needs another pass." };
+  return assembleChangeCard(input);
+}
 const clone = (c: ChangeCard): any => JSON.parse(JSON.stringify(c));
 const errorsOf = (c: unknown) => {
   const v = validateChangeCard(c);
@@ -53,6 +66,10 @@ describe("change card golden", () => {
 
   it("renders the sample card", () => {
     golden("card.html", renderChangeCardHtml(sample()));
+  });
+
+  it("renders a card whose suite gates failed, the failing scenarios in its checks", () => {
+    golden("card-gates.html", renderChangeCardHtml(gateSample()));
   });
 
   it("the sample card is valid", () => {
@@ -74,6 +91,20 @@ describe("assembleChangeCard", () => {
     expect(card.diff.pr).toBe("https://github.com/codecast-sh/codecast/pull/912");
   });
 
+  it("a failed suite gate is its own red check naming the scenarios, and the Eval check answers for the replays alone", () => {
+    const card = gateSample();
+    expect(card.checks.map((c) => [c.name, c.ok])).toEqual([["Verify", true], ["Eval", true], [SUITE_GATE_CHECK, false], ["Review", true]]);
+    expect(card.checks[2]!.detail).toBe("2 scenarios failed: handoff-keeps-owner, dup-merge-keeps-newest");
+    expect(errorsOf(card)).toEqual([]);
+    const ship = clone(card);
+    ship.recommend.verdict = "ship";
+    expect(errorsOf(ship)).toEqual([`recommend.verdict: ship over failing checks (${SUITE_GATE_CHECK}); recommend revise or drop`]);
+  });
+
+  it("no suite gate check when no gate failed", () => {
+    expect(sample().checks.some((c) => c.name === SUITE_GATE_CHECK)).toBe(false);
+  });
+
   it("lists broken flips after fixed ones and caps examples at three", () => {
     const input = sampleAssemblyInput();
     const s = input.evalResult!.surfaces[0]!;
@@ -90,7 +121,7 @@ describe("assembleChangeCard", () => {
     input.proof = null;
     input.evalResult!.surfaces[0]!.proven = input.evalResult!.surfaces[0]!.proven.map((p) => ({ ...p, basePasses: true }));
     const card = assembleChangeCard(input);
-    expect(card.proof.before.every((x) => x.ok && x.detail === "already passes on origin/main")).toBe(true);
+    expect(card.proof.before.every((x) => x.ok && x.detail === "already passes before the change")).toBe(true);
     expect(errorsOf(card)).toContain("proof.before: no failing check; proof starts red (LE8)");
   });
 
@@ -185,14 +216,28 @@ describe("helpers", () => {
   });
 
   it("summarizes the proof honestly", () => {
-    expect(proofSummary(sample().proof).label).toBe("4 proven misses, all fixed");
-    expect(proofSummary(sample().proof).short).toBe("4/4 misses fixed");
+    expect(proofSummary(sample().proof).evidence).toBe("4 of 4 cases fixed");
     const p = {
       before: [{ name: "a", ok: false, detail: "" }, { name: "b", ok: false, detail: "" }],
       after: [{ name: "a", ok: true, detail: "" }, { name: "b", ok: false, detail: "" }, { name: "c", ok: false, detail: "" }],
     };
-    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], label: "2 proven misses, 1 fixed, 1 broke", short: "1/2 misses fixed, 1 broke" });
-    expect(proofSummary({ before: [], after: [] }).label).toBe("No proof recorded");
+    expect(proofSummary(p)).toEqual({ red: 2, fixed: 1, stillRed: ["b"], broke: ["c"], evidence: "1 of 2 cases fixed, 1 new failure" });
+    expect(proofSummary(sample().proof).evidence).toBe("4 of 4 cases fixed");
+  });
+
+  it("counts every failure from one list: the proof as a check, and a check whose words report a failure", () => {
+    const c = sample();
+    expect(cardChecks(c).map((x) => x.name)).toEqual([PROOF_CHECK, ...c.checks.map((x) => x.name)]);
+    expect(cardFailing(c)).toBe(0);
+    expect(checksLabel(cardChecks(c))).toBe(`${c.checks.length + 1} checks pass`);
+    const red = { ...c, proof: { before: c.proof.before, after: c.proof.after.map((x, i) => (i === 0 ? { ...x, ok: false } : x)) }, checks: [{ name: "Verify", ok: true, detail: "bun test: 11 pass, 1 fail." }, { name: "Review", ok: true, detail: "0 errors" }] };
+    expect(cardChecks(red).filter((x) => !x.ok).map((x) => x.name)).toEqual([PROOF_CHECK, "Verify"]);
+    expect(cardFailing(red)).toBe(2);
+    expect(checksLabel(cardChecks(red))).toBe("2 of 3 checks fail");
+    expect(checksLabel(cardChecks(red), true)).toBe("2 of 3 fail");
+    expect(reportsFailure("cast check: 0 errors. 12 pass.")).toBe(false);
+    expect(reportsFailure("2 errors")).toBe(true);
+    expect(proofSummary({ before: [], after: [] }).evidence).toBe("No proof recorded");
   });
 
   it("refuses a reason whose proof count is not the proof's", () => {
@@ -225,7 +270,9 @@ describe("helpers", () => {
 
   it("labels risk", () => {
     expect(riskLabel({ class: "low", reason: "" })).toBe("Low risk");
-    expect(riskLabel({ class: "plan", reason: "" })).toBe("Plan level change");
+    expect(riskLabel({ class: "review", reason: "" })).toBe("Medium risk");
+    expect(riskLabel({ class: "plan", reason: "" })).toBe("High risk: needs its own plan");
+    expect(riskLabel({ class: "plan", reason: "" }, true)).toBe("High risk");
   });
 });
 

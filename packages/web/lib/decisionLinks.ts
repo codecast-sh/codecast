@@ -5,6 +5,14 @@ export function decisionHref(d: Pick<SessionDecisionItem, "_id" | "short_id">): 
   return `/decisions/${d.short_id ?? d._id}`;
 }
 
+// The asking session's name without an id the card already shows in its own
+// chip (a change card's task), so a header never says it twice. A name that
+// is nothing but the id keeps it.
+export function askingSessionName(title: string | undefined, omitRef?: string): string | undefined {
+  if (!title || !omitRef || !title.includes(omitRef)) return title;
+  return title.split(omitRef).join(" ").replace(/\s+/g, " ").replace(/[\s·:-]+$/, "").trim() || title;
+}
+
 // The latest recommendation on the ladder, if any role gave one.
 export function ladderRecommendation(d: Pick<SessionDecisionItem, "hops">): number | undefined {
   for (let i = (d.hops?.length ?? 0) - 1; i >= 0; i--) {
@@ -40,4 +48,10 @@ export function gateRunLabel(
 
 export function runHref(runId: string): string {
   return `/workflows/runs/${runId}`;
+}
+
+/** What a pending decision's wait means for the person, in plain words: the consequence, never the mechanism. */
+export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "blocking">): string {
+  if (d.status !== "pending") return d.status;
+  return d.blocking ? "Waiting on you" : "The agent went ahead; you can change course";
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { routeQueueKey } from "../decisionQueue";
+import { keysOwnedElsewhere, routeQueueKey } from "../decisionQueue";
 
 // The decision card's key listener runs on window in CAPTURE phase, so every
 // key in the app passes through it first. These tests pin the stand-down
@@ -19,6 +19,7 @@ const key = (k: string, mods: Partial<{ shiftKey: boolean; metaKey: boolean; ctr
 
 const ctx = (over: Partial<Parameters<typeof routeQueueKey>[1]> = {}) => ({
   modalOpen: false,
+  ownedElsewhere: false,
   editing: false,
   inOwnFreeTextBox: false,
   isPermissionCard: false,
@@ -86,5 +87,29 @@ describe("queue keys at rest (no modal, not editing)", () => {
   test("modified chords are left for the shortcut layer", () => {
     expect(routeQueueKey(key("1", { metaKey: true }), ctx())).toBeNull();
     expect(routeQueueKey(key("s", { ctrlKey: true }), ctx())).toBeNull();
+  });
+});
+
+// The undo timeline (and any [data-owns-keys] region) owns its arrows, O and
+// Esc while focused. The card's capture listener runs before the timeline's
+// own handler, so it must stand down the way the dispatcher does.
+describe("stand-down: a focused region that owns its keys", () => {
+  const timeline = { owns: true };
+  const inTimeline = { closest: (sel: string) => (sel.includes("[data-owns-keys]") ? timeline : null) };
+  const inThread = { closest: () => null };
+  const cardRoot = (holds: unknown) => ({ contains: (n: unknown) => n === holds });
+
+  test("focus in the undo timeline is owned elsewhere; focus in the thread or the card is not", () => {
+    expect(keysOwnedElsewhere(inTimeline, cardRoot(null))).toBe(true);
+    expect(keysOwnedElsewhere(inThread, cardRoot(null))).toBe(false);
+    expect(keysOwnedElsewhere(inTimeline, cardRoot(inTimeline))).toBe(false);
+    expect(keysOwnedElsewhere(null, null)).toBe(false);
+  });
+  test("Escape, ArrowDown, ArrowUp and O in the timeline are never claimed", () => {
+    for (const k of ["Escape", "ArrowDown", "ArrowUp", "j", "k", "o", "s", "x", "1"]) {
+      for (const sheet of ["full", "peek"] as const) {
+        expect(routeQueueKey(key(k), ctx({ ownedElsewhere: true, sheet }))).toBeNull();
+      }
+    }
   });
 });

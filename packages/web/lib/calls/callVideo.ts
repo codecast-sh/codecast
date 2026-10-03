@@ -11,18 +11,26 @@
 // place the alignment rule is written.
 
 import {
+  coveredSpans,
+  formatCallTime,
   locateCallMoment,
+  nearestRecordedMs,
   offsetIntoRecording,
   playableFiles,
   segmentAt,
+  type CallCoveredSpan,
   type CallMomentPrefer,
   type CallRecordingSpan,
 } from "@codecast/shared/contracts";
-import { formatCallTime } from "@codecast/shared/entities";
 
 // The files that can be played (finished, with a URL, and a time 0) are the
 // shared contract's rule, which the CLI's frame grab reads too.
 export { playableFiles };
+
+/** While a file's metadata has not arrived: a quiet breath over the black.
+ *  One shade for the player, its placeholder and a frame embed in a message,
+ *  so an embed and the player it opens breathe alike. */
+export const CALL_VIDEO_LOADING = "pointer-events-none absolute inset-0 animate-pulse bg-white/[0.08] motion-reduce:animate-none";
 
 /** A recording row as the call page reads it (webCallRecordings), or a shared
  *  video (getSharedCall) shaped to match. */
@@ -147,9 +155,54 @@ export function shownMomentNear(files: readonly CallVideoFile[], callStartedAt: 
   return best?.ms ?? null;
 }
 
-/** What a page says when a line is clicked at a moment no video shows. */
-export function noVideoWords(callMs: number): { title: string; detail: string } {
-  return { title: `No video at ${formatCallTime(callMs)}`, detail: "That part of the call was not recorded." };
+/** The stretches of the call that play, in call time: the shared spans
+ *  (coveredSpans, what `cast call` prints) of the files that can play. */
+export function filmedSpans(files: readonly CallVideoFile[], callStartedAt: number): CallCoveredSpan[] {
+  // Every playable file is finished, so its window never reads the clock.
+  return coveredSpans(playableFiles(files), callStartedAt, 0);
+}
+
+/** The filmed stretches as a reader sees them: the union of every span, a
+ *  screen inside its room's run adding nothing, so the header can say which
+ *  part of a call has video and the transcript can mark the lines in it. */
+export function videoStretches(spans: readonly CallCoveredSpan[]): Array<{ fromMs: number; toMs: number }> {
+  const out: Array<{ fromMs: number; toMs: number }> = [];
+  for (const s of [...spans].sort((a, b) => a.fromMs - b.fromMs)) {
+    const last = out[out.length - 1];
+    if (last && s.fromMs <= last.toMs) last.toMs = Math.max(last.toMs, s.toMs);
+    else out.push({ fromMs: s.fromMs, toMs: s.toMs });
+  }
+  return out;
+}
+
+/** The stretches in words: `2:12–6:15, 9:40–12:02`. */
+export function describeStretches(stretches: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
+  return stretches.map((s) => `${formatCallTime(s.fromMs)}–${formatCallTime(s.toMs)}`).join(", ");
+}
+
+/** What a page says when a line is clicked at a moment no video shows, and
+ *  where the nearest video is (the shared rule the CLI's refusal offers,
+ *  nearestRecordedMs): `jump` is that moment with the words for the button
+ *  that goes there, null when nothing of the call plays. */
+export function noVideoWords(
+  callMs: number,
+  spans: readonly CallCoveredSpan[] = [],
+): { title: string; detail: string; jump: { ms: number; words: string } | null } {
+  const at = nearestRecordedMs(spans, callMs);
+  const clock = at === null ? "" : formatCallTime(at);
+  // Ahead: where it starts, or resumes after a stretch already passed.
+  // Behind (the moment is past the last of it): where it was last filmed.
+  const words =
+    at === null
+      ? null
+      : at < callMs
+        ? `The nearest video is at ${clock}`
+        : `The video ${spans.some((s) => !s.pending && s.toMs <= callMs) ? "resumes" : "starts"} at ${clock}`;
+  return {
+    title: `No video at ${formatCallTime(callMs)}`,
+    detail: "That part of the call was not recorded.",
+    jump: at === null || words === null ? null : { ms: at, words },
+  };
 }
 
 /** One chip of the view switch: a sharer's screen, folded across their
@@ -188,6 +241,21 @@ export function turnIndexAt(
   // the rest.
   const spans = turns.map((t) => ({ t0: t.t0, t1: t.segments[t.segments.length - 1]?.t1 }));
   return segmentAt(spans, callMs, { holdMs: holdLast ? Infinity : 0 })?.index ?? null;
+}
+
+/** The line of a turn being said at a moment: the last whose start has
+ *  passed (a pause between two lines still belongs to the one just said),
+ *  else the turn's first. A turn can hold minutes of one speaker, so the lit
+ *  line, not the lit turn, is what follows the picture. Null for a turn with
+ *  no lines. */
+export function lineSeqAt(
+  turn: { segments: ReadonlyArray<{ seq: number; t0: number }> } | null | undefined,
+  callMs: number,
+): number | null {
+  const segs = turn?.segments ?? [];
+  let seq: number | null = segs[0]?.seq ?? null;
+  for (const s of segs) if (s.t0 <= callMs) seq = s.seq;
+  return seq;
 }
 
 /** What the call page says above where the video goes, when there is

@@ -230,6 +230,17 @@ describe("facePeople", () => {
     const people = facePeople([...roster, { user_name: "ghost" }, roster[0]], tiles, "riley");
     expect(people.map((p) => p.id)).toEqual(["riley", "jordan"]);
   });
+
+  it("marks a guest, camera off from the folded roster or camera on from a tile", () => {
+    const folded = [...roster, { user_id: "guest:g1", user_name: "Pat", guest: true }];
+    const people = facePeople(folded, [...tiles, { identity: "guest:g2", name: "Lee (guest)", isLocal: false }], "riley");
+    expect(people.map((p) => [p.id, p.guest, p.hasVideo])).toEqual([
+      ["riley", false, true],
+      ["jordan", false, false],
+      ["guest:g1", true, false],
+      ["guest:g2", true, true],
+    ]);
+  });
 });
 
 describe("facesToShow", () => {

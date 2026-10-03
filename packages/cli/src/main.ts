@@ -5,6 +5,11 @@
 // import() is load-bearing: it keeps index.js lazy in the compiled bundle.
 import { spawnSync } from "node:child_process";
 import { runFastPath } from "./fastPath.js";
+import { installSyncStdio } from "./syncStdio.js";
+
+// Before anything can touch process.stdout: a large write into a pipe must
+// arrive whole (syncStdio.ts).
+installSyncStdio();
 
 const workerArgs = process.argv.slice(process.argv[2] === "--" ? 3 : 2);
 // A prompt dry run (scripts/prompt-dry-run.ts) gives its agent an empty state

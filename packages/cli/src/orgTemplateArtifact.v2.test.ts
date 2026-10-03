@@ -126,3 +126,53 @@ describe("hire-time input answers", () => {
     expect(parseInputs({ ...m, inputs: undefined }, [])).toEqual({});
   });
 });
+
+// A template that owns a project's line (line-profile.md LP7): the workflow
+// its tasks run on and its admission cap ride in the role.
+describe("role.line and caps.cards", () => {
+  test("a v2 role may name its line and cards cap; v1 may not", () => {
+    const m = withoutKey(v2(), (row) => { row.role.line = "line"; row.role.caps.cards = 5; });
+    expect(validateTemplate(m).role).toMatchObject({ line: "line", caps: { cards: 5 } });
+    const v1 = withoutKey(v2(), (row) => {
+      row.schemaVersion = 1;
+      for (const key of ["inputs", "authority", "setup", "evidence", "ledgers", "scoreboard", "learn", "instance_file"]) delete row[key];
+      delete row.role.avatar; delete row.role.tenure;
+      row.routines = row.routines.map(({ mode, requires, ...r }: any) => r);
+    });
+    expect(() => validateTemplate(v1)).not.toThrow();
+    expect(() => validateTemplate(withoutKey(v1 as OrgTemplate, (row) => { row.role.line = "line"; }))).toThrow(/missing or unknown fields/);
+    expect(() => validateTemplate(withoutKey(v1 as OrgTemplate, (row) => { row.role.caps.cards = 5; }))).toThrow(/missing or unknown fields/);
+  });
+  test("a line is a workflow slug and a cards cap admits at least one card", () => {
+    for (const line of ["Line", "line.cast", "", "-line", 7]) expect(() => validateTemplate(withoutKey(v2(), (row) => { row.role.line = line; }))).toThrow(/role.line/);
+    expect(() => validateTemplate(withoutKey(v2(), (row) => { row.role.caps.cards = 0; }))).toThrow(/at least 1/);
+    expect(() => validateTemplate(withoutKey(v2(), (row) => { row.role.caps.cards = 2.5; }))).toThrow(/nonnegative safe integers/);
+    expect(() => validateTemplate(withoutKey(v2(), (row) => { row.role.caps.merges = 1; }))).toThrow(/missing or unknown fields/);
+  });
+  test("templateRoleFields carries line and caps into the hire proposal, and omits a line the role does not name", async () => {
+    const { templateRoleFields } = await import("./orgTemplateArtifact");
+    const m = validateTemplate(withoutKey(v2(), (row) => { row.role.line = "feature"; row.role.caps.cards = 3; row.role.tenure = { kind: "program", then: "review" }; }));
+    expect(templateRoleFields(m.role, "pr-9")).toEqual({ avatar: "fox", tenure: { kind: "program", ends: { project: "pr-9" }, then: "review" }, caps: { hands_per_day: 4, wakes_per_day: 12, tokens_per_day: 200000, cards: 3 }, line: "feature" });
+    expect("line" in templateRoleFields(v2().role, "pr-9")).toBe(false);
+  });
+});
+
+describe("the shipped line template", () => {
+  const root = path.join(import.meta.dir, "..", "org-templates", "line");
+  test("validates, names every file it ships, and owns a line with a cards cap", () => {
+    const artifact = readArtifact(root);
+    const m = artifact.manifest;
+    expect(m.role.line).toBe("line");
+    expect(m.role.caps.cards).toBeGreaterThan(0);
+    expect(m.routines.map((r) => [r.id, r.every])).toEqual([["lessons-weekly", "7d"], ["finder-health", "1d"]]);
+    for (const file of manifestFiles(m)) expect(artifact.files.has(file)).toBe(true);
+  });
+  test("every text fills for an instance: no token the manifest does not declare", () => {
+    const artifact = readArtifact(root);
+    const m = artifact.manifest;
+    const values: Record<string, string> = { instance: "codecast", "project.ref": "pr-1", "project.name": "Codecast", "project.dir": "/src/codecast", "template.root": "/r", "instance.file": "/f", ...Object.fromEntries((m.inputs ?? []).map((i) => [`input.${i.key}`, String(i.default ?? "")])) };
+    for (const file of manifestFiles(m)) expect(substitute(artifact.files.get(file)!.toString("utf8"), values, inputTokens(m))).not.toContain("{{");
+    for (const text of [m.role.handle, m.role.name, ...m.routines.map((r) => r.title), ...(m.setup ?? []).map((s) => s.title), ...(m.evidence ?? []).map((e) => e.title), ...(m.ledgers ?? []).map((l) => l.title)]) expect(substitute(text, values, inputTokens(m))).not.toContain("{{");
+    expect(substitute(m.role.handle, values, inputTokens(m))).toMatch(/^[a-z0-9-]{2,32}$/);
+  });
+});

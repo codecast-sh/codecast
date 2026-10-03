@@ -628,6 +628,86 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["signals.webList"],
   },
+  // External data on the Ops page (external-data.md X10). Every row carries
+  // the workspace key its query read by. Sources, the transition timeline and
+  // metric watches are each one complete answer for the active workspace, so
+  // snapshots. Groups and replays take a bounded newest window AND every
+  // opened row's detail, so delta: neither feeder may prune the other's rows.
+  // Their list feeder vouches for its own window instead (hooks/useSyncOps
+  // opsWindowPrune), so a row the server deleted inside it still leaves.
+  // localFirst: a source's pause and a group's status paint from the draft
+  // (store/opsSlice.ts) and hold until the echo. A source's name is unique in
+  // its workspace (ingest.createSource), so an add's stub supersedes onto the
+  // server row by name.
+  opsSources: {
+    persistence: { kind: "collection", key: "opsSources" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    sync: { altKey: "name" },
+    feeds: ["ingest.listSources"],
+  },
+  opsGroups: {
+    persistence: { kind: "collection", key: "opsGroups" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    indexes: "_id, source_id",
+    sync: { isDelta: true },
+    feeds: ["ingest.listGroups", "ingest.getGroup"],
+  },
+  // A group's recent occurrences (stack, url, tags), fanned out of
+  // ingest.getGroup for each group a person opens. Read by group_id; each
+  // answer vouches for its group's samples (hooks/useSyncOps).
+  opsSamples: {
+    persistence: { kind: "collection", key: "opsSamples" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, group_id",
+    sync: { isDelta: true },
+  },
+  opsEvents: {
+    persistence: { kind: "collection", key: "opsEvents" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    sync: {},
+    feeds: ["ingest.listEvents"],
+  },
+  opsReplays: {
+    persistence: { kind: "collection", key: "opsReplays" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    sync: { isDelta: true },
+    feeds: ["replays.list", "replays.get"],
+  },
+  // One opened replay's text timeline and linked groups, keyed by the replay
+  // _id: the part of replays.get the list never carries.
+  opsReplayTimelines: {
+    persistence: { kind: "collection", key: "opsReplayTimelines" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+  },
+  opsWatches: {
+    persistence: { kind: "collection", key: "opsWatches" },
+    hydration: { phase: "deferred" },
+    workspaceScoped: true,
+    sync: {},
+    feeds: ["metrics.listWatches"],
+  },
+  // An app source's cached manifest, grants and watch state, keyed by the
+  // source _id, and its call audit. Both are per source, so delta.
+  opsApps: {
+    persistence: { kind: "collection", key: "opsApps" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["sources.app.capabilities"],
+  },
+  opsAppCalls: {
+    persistence: { kind: "collection", key: "opsAppCalls" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, source_id",
+    sync: { isDelta: true },
+    feeds: ["sources.app.listCalls"],
+  },
   // Published pages (artifacts). listForWeb returns the complete visible set
   // — own plus shareable teammates' — so snapshot. Rows have no server _id;
   // the feeder keys them by slug.
@@ -779,9 +859,10 @@ export const CLIENT_SYNC_REGISTRY = {
   // date windows, so delta; their feeder prunes the days an answer covered
   // whole, since a rebuild deletes a story whose key disappeared (a story's
   // _id is never reused, so the exclude tombstone that prune plants never
-  // hides a later row). Live surfaces and In the works describe now for the
-  // viewed team and repository, and each answer is the complete set, so
-  // snapshot: a surface or a stuck session that drops out leaves.
+  // hides a later row). Live surfaces and In the works describe now for one
+  // repository, so delta: each answer is complete for its repository, and
+  // its feeder drops the rows of that repository it lacks (dropAbsent, no
+  // tombstone, the ids are composed) while other repositories stay cached.
   changeStories: {
     persistence: { kind: "collection", key: "changeStories" },
     hydration: { phase: "deferred" },
@@ -799,14 +880,14 @@ export const CLIENT_SYNC_REGISTRY = {
   changeLive: {
     persistence: { kind: "collection", key: "changeLive" },
     hydration: { phase: "deferred" },
-    sync: {},
+    sync: { isDelta: true },
     indexes: "_id, team_id, repository, surface",
     feeds: ["changesQueries.liveStatus"],
   },
   changeWorks: {
     persistence: { kind: "collection", key: "changeWorks" },
     hydration: { phase: "deferred" },
-    sync: {},
+    sync: { isDelta: true },
     indexes: "_id, team_id, kind",
     feeds: ["changesQueries.inTheWorks"],
   },
@@ -943,7 +1024,8 @@ export const CLIENT_SYNC_REGISTRY = {
   // for ever. The press paints it and every push corrects it, and the press in
   // flight (hooks/useRoomRecording) carries the mark across the round trip.
   // The run behind the flag rides the same row, flat (recording_status, who
-  // pressed, the clock's time 0, whether a press could work): the room's
+  // pressed, the clock's time 0, whether a press could work and why not, when
+  // a saving run was stopped, whether its video goes to the public link): the room's
   // recording has this one home, and every mark, the Record button and the
   // notice read it. All the server's, none locked.
   callRooms: {
@@ -959,6 +1041,9 @@ export const CLIENT_SYNC_REGISTRY = {
       "recording_requested_at",
       "recording_started_at",
       "recording_configured",
+      "recording_unavailable",
+      "recording_stop_requested_at",
+      "recording_video_shared",
     ],
     feeds: ["calls.getLiveRooms"],
   },
@@ -1024,6 +1109,26 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     unprotectedFields: ["deleted_here_at"],
     feeds: ["callRecordings.webCallRecordings"],
+  },
+  // The viewer's calls and recordings (transcripts.webListCalls, the newest
+  // page) and each call opened (transcripts.webGetCall, keyed by transcript
+  // id, segments included). Persisted so the phone's Record list and a
+  // recording's page open on what they showed last; the recording_url is a
+  // storage URL, stable across sessions (unlike a call video's signed one).
+  // The list is a delta overlay so a shorter page never prunes the longer one;
+  // each answer prunes only the window it covers (useCallList). Every reader
+  // goes through useCallList. The detail has no `feeds`: the call stage and
+  // a transcript embed still read webGetCall live, straight off the query.
+  callList: {
+    persistence: { kind: "collection", key: "callList" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    feeds: ["transcripts.webListCalls"],
+  },
+  callDetails: {
+    persistence: { kind: "collection", key: "callDetails" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -1409,6 +1514,15 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   workflows: "shared",
   workflowRuns: "shared",
   signals: "shared",
+  opsSources: "shared",
+  opsGroups: "shared",
+  opsSamples: "shared",
+  opsEvents: "shared",
+  opsReplays: "shared",
+  opsReplayTimelines: "shared",
+  opsWatches: "shared",
+  opsApps: "shared",
+  opsAppCalls: "shared",
   artifacts: "shared",
   anchorSpaces: "shared",
   anchors: "shared",
@@ -1448,6 +1562,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Per-view, like guestLinks: fed by the window showing the call.
   callRecordings: "local",
   callRecordingCalls: "local",
+  callList: "shared",
+  callDetails: "shared",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

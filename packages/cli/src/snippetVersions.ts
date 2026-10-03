@@ -11,7 +11,7 @@
 // ./update.ts re-exports every getter here, so existing importers are unchanged.
 
 const MEMORY_VERSION = "14"; // bumped: --state done / dormant, states answer who acts next
-const TASK_VERSION = "8"; // bumped: how to choose fresh versus inline runs; fresh runs stay out of the inbox, a once run posts its result back
+const TASK_VERSION = "9"; // bumped: product events and --source, and the external data verbs (sources, events, replay, metrics, connector)
 const WORK_VERSION = "11"; // bumped: an assignee is who answers for a task, never who may work it (R7)
 const PLAN_VERSION = "2";
 const WORKFLOW_VERSION = "1";
@@ -22,7 +22,7 @@ const PUBLISH_VERSION = "4"; // bumped: cast image cross-reference for single-im
 const BROWSER_VERSION = "17"; // bumped: reuse abandoned Cast tabs on the same URL; Grok is not keyed by pane
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "3"; // v3: never post a probe or test decision; every ask reaches the real queue
-const CALLS_VERSION = "5"; // 5: a frame is shown by its citation, --share is public and only on request, the snap spellings; 4: cast call snap, frames of a recorded call; 3: cl-N short ids and cl-N:a-b line embeds
+const CALLS_VERSION = "6"; // 6: filmed lines marked in the transcript, --crop and --tiles for small screen text; 5: a frame is shown by its citation, --share is public and only on request, the snap spellings; 4: cast call snap, frames of a recorded call; 3: cl-N short ids and cl-N:a-b line embeds
 const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project

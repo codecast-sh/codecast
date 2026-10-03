@@ -5,7 +5,7 @@
 import { useState } from "react";
 import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, ListChecks, Sparkles, Square, Trash2, UserMinus } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { recordingFailureWords } from "@codecast/shared/contracts";
+import { recordingFailureWords, recordingStoppedItselfWords } from "@codecast/shared/contracts";
 import { ChatAttachments } from "../chat/ChatMessage";
 import { MESSAGE_MD_COMPONENTS, MESSAGE_MD_REHYPE, USER_MD_REMARK } from "../messageMarkdown";
 import { EntityAwareLink } from "../EntityIdPill";
@@ -33,6 +33,10 @@ export type RoomThreadSelection = {
   isSelected: (index: number) => boolean;
   onTurnClick: (index: number, e: React.MouseEvent, atMs: number) => void;
   activeIndex?: number | null;
+  /** The line inside the active turn being said, and the filmed stretches
+   *  (TranscriptTurnList's rails), where media plays. */
+  activeSeq?: number | null;
+  filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>;
   /** A line under the recap that says how selecting works, until a turn is chosen. */
   hint?: string | null;
   /** A moment of the call's video at a wall time, for an event line to jump
@@ -109,6 +113,8 @@ export function PassageBlock({
             isSelected={selection?.isSelected}
             onTurnClick={selection?.onTurnClick}
             activeIndex={selection?.activeIndex ?? null}
+            activeSeq={selection?.activeSeq}
+            filmed={selection?.filmed}
             callId={callId}
           />
         </div>
@@ -166,6 +172,8 @@ export function PassageBlock({
             onTurnClick={selection?.onTurnClick}
             compact={recording}
             activeIndex={selection?.activeIndex ?? null}
+            activeSeq={selection?.activeSeq}
+            filmed={selection?.filmed}
             callId={callId}
           />
         </div>
@@ -366,11 +374,11 @@ function RecordEventLine({
   // ends are dim, as an ended thing should be.
   const tone = row.event === "record_on" ? "fill-current text-sol-red" : failed ? "text-sol-orange" : "text-sol-text-dim";
   const who = row.event_guest_name ? <GuestWho name={row.event_guest_name} /> : actor;
+  const itself = row.event === "record_off" ? recordingStoppedItselfWords(row.event_reason) : null;
   let words: React.ReactNode;
   if (row.event === "record_on") words = <>{who} started recording</>;
   else if (row.event === "record_deleted") words = <>{who} deleted a recording</>;
-  else if (row.event_reason === "huddle_ended") words = "Recording stopped when everyone left";
-  else if (row.event_reason === "limit") words = "Recording stopped at its time limit";
+  else if (itself) words = itself;
   else if (failed) words = recordingFailureWords(row.text);
   else words = <>{who} stopped recording</>;
   return (

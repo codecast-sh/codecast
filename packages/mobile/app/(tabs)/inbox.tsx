@@ -156,6 +156,7 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
   ready.catch((error) => {
     const store = useInboxStore.getState();
     if (store.getConvexId(stubId) || mobileCreateFailureDisposition(error) === "accepted-pending") return;
+    console.warn("[session] create refused", error);
     Alert.alert("Session didn't start", "The server didn't confirm the new session. Retrying is safe.", [
       { text: "Not now", style: "cancel" },
       {

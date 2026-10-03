@@ -31,6 +31,7 @@ const OPEN_INTENT: SlotClass = { shared: "an open-beside intent set by a pointer
 const DRAFTS: SlotClass = { shared: "compose draft debounce; the sim types no drafts" };
 const ANALYTICS: SlotClass = { shared: "analytics runtime; the sim never initializes analytics" };
 const NO_WARM: SlotClass = { shared: "message-page warming (warmVisibleSessions); sim windows mount the feeders without it" };
+const AUDIO: SlotClass = { shared: "audio output; bun has no AudioContext, so it stays null" };
 const IMAGE_URLS: SlotClass = { shared: "storage id to image URL cache: the mapping is immutable and production keeps it origin-wide (localStorage); the sim serves no storage" };
 
 /** "<path under packages/web>:<binding>" to its class. */
@@ -119,6 +120,17 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/undo/onRevert.ts:hooks": {
     shared: "undo revert hooks registered once at module load (undoActions.ts); the one there animates a DOM row, and the sim has no DOM",
   },
+  // Reached through the human actor's undo and redo (sim/actors.ts).
+  "store/mutativeMiddleware.ts:replayBridgeTs": {
+    shared: "written by an undo replay's beforeReplay and read by its afterReplay in the same synchronous call, inside one window's turn",
+  },
+  "store/undoStack.ts:liveEntryToasts": { shared: "ids of the undo toasts on screen; the sim renders no toasts" },
+  ...Object.fromEntries(
+    ["snapshot", "lastSteadyFocus", "returnTo", "trackedDoc", "flash", "listeners", "flashListeners"].map((name) => [
+      `lib/undoTimelineOpen.ts:${name}`,
+      { shared: "the history timeline's open state and DOM focus bookkeeping; the sim never opens the timeline" },
+    ]),
+  ),
   "store/syncProtocol.ts:OPTIONAL_INBOX_TIMESTAMPS": CONSTANT,
   "store/workbench.ts:RESTORABLE_KINDS": CONSTANT,
   "store/workbench.ts:MAY_FAIL_TO_MATERIALIZE": CONSTANT,
@@ -156,7 +168,9 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/browserPane.ts:titles": { shared: "page titles a browser pane reports; the sim opens no pane" },
   "lib/browserPane.ts:listeners": NO_REACT,
   "lib/browserPane.ts:APP_HOSTS": CONSTANT,
+  "lib/calls/recordingPress.ts:abandoned": { shared: "Record presses a person was told did not happen, written only by useRoomRecording; the sim presses no Record, so it stays empty" },
   "lib/chatViews.ts:knownAgents": { shared: "display-name fallback only; nothing an invariant compares reads it" },
+  "lib/cuePlay.ts:shared": AUDIO,
   "lib/desktop.ts:shareCursorsUnsupported": DESKTOP,
   "lib/desktop.ts:lastDesktopInputAt": DESKTOP,
   "lib/desktop.ts:lastDesktopActivityAt": DESKTOP,
@@ -173,6 +187,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/dispatchBinding.ts:CALLER_REPORTED_ACTIONS": CONSTANT,
   "lib/imageByteCache.ts:opaqueOrigins": IMAGE_URLS,
   "lib/inboxViewHistory.ts:applying": { shared: "true only inside a synchronous popstate re-apply, which the sim never drives" },
+  "lib/migrationPlan.ts:CLAUDE_TYPES": CONSTANT,
+  "lib/migrationPlan.ts:MID_TURN_STATUSES": CONSTANT,
   "lib/notificationDelivery.ts:current": { shared: "browser notifications; the sim installs no delivery" },
   "lib/notificationGate.ts:COMPLETION_KINDS": CONSTANT,
   "lib/openIntent.ts:splitOpener": NO_REACT,
@@ -186,7 +202,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
     shared: "in-flight image uploads keyed by blob preview URL; only the composer (a component) adds one, and the sim mounts no React",
   },
   "lib/shareTokenScope.ts:tokensByConversation": { shared: "share tokens a guest presented on a page; sim windows are signed in and present none" },
-  "lib/sounds.ts:ctx": { shared: "audio output; bun has no AudioContext, so it stays null" },
+  "lib/sounds.ts:ctx": AUDIO,
   "lib/sounds.ts:soundedAt": { shared: "arrival sound de-dupe; affects only whether a sound plays" },
   "lib/syncLogCargo.ts:FACT_FIELDS": CONSTANT,
   "lib/tabRoutes.ts:NON_TAB_EXACT": CONSTANT,

@@ -1085,6 +1085,24 @@ describe("placeSections (the placement chokepoint)", () => {
       "conv-done-deferred",
     ]);
   });
+
+  it("a fresh defer lands below rows deferred before it", () => {
+    // Deferring is "send to the end": with deferred rows already at the bottom,
+    // the one just deferred goes under them, whatever its own event time.
+    const doneBase = { ...baseSession, message_count: 3, agent_status: "done" as const };
+    const now = Date.now();
+    const plain: InboxSession = { ...doneBase, _id: "conv-plain", session_id: "sd-plain", updated_at: now - 300, turn_completed_at: now - 300 };
+    const deferredFirst: InboxSession = { ...doneBase, _id: "conv-deferred-first", session_id: "sd-d1", updated_at: now - 200, turn_completed_at: now - 200, is_deferred: true, inbox_deferred_at: now - 100 };
+    // Oldest event time of all, deferred last: a time sort would lift it above deferredFirst.
+    const deferredLast: InboxSession = { ...doneBase, _id: "conv-deferred-last", session_id: "sd-d2", updated_at: now - 400, turn_completed_at: now - 400, is_deferred: true, inbox_deferred_at: now - 50 };
+
+    const { done } = placeSections(
+      { [deferredLast._id]: deferredLast, [deferredFirst._id]: deferredFirst, [plain._id]: plain },
+      new Set(),
+    );
+
+    expect(done.map((s) => s._id)).toEqual(["conv-plain", "conv-deferred-first", "conv-deferred-last"]);
+  });
 });
 
 describe("mergeMessages — sync-recovery safety net", () => {

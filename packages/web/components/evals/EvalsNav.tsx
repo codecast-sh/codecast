@@ -72,6 +72,11 @@ function EvalsSearch() {
   const [sel, setSel] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const targets = useMemo(() => evalsSearchTargets(q, known), [q, known]);
+  // The surfaces and their batches come from the wall's answer: fetch it when
+  // the box is used, so it works from any view (cached, shared with the wall).
+  const wantKnown = () => {
+    if (useEvalsStore.getState().connection === "connected") void useEvalsStore.getState().load("GET /overview", {});
+  };
   const go = (href: string) => {
     setOpen(false);
     setQ("");
@@ -88,15 +93,14 @@ function EvalsSearch() {
         aria-label="Search the evals"
         spellCheck={false}
         onChange={(e) => {
+          wantKnown();
           setQ(e.target.value);
           setSel(0);
           setOpen(true);
         }}
         onFocus={() => {
           setOpen(true);
-          // The surfaces and their batches come from the wall's answer; fetch it
-          // once here so the box works from any view (cached, shared with the wall).
-          if (useEvalsStore.getState().connection === "connected") void useEvalsStore.getState().load("GET /overview", {});
+          wantKnown();
         }}
         onBlur={() => setTimeout(() => setOpen(false), 120)}
         onKeyDown={(e) => {
@@ -183,7 +187,7 @@ export function EvalsNav({ view }: { view: EvalsView }) {
     <nav className="ev-nav" aria-label="Evals" data-evals-nav>
       <EvalsLink href={evalsHref.home()} className="ev-mark">
         <PlateMark />
-        Evals
+        <span className="ev-mark-word">Evals</span>
       </EvalsLink>
       <div className="ev-tabs">
         {SECTIONS.map((s) => (

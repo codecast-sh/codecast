@@ -87,6 +87,7 @@ export function AssignmentChip({
   // shared owners hook so the sheet opens with every name already drawn.
   const currentUser = useInboxStore((s) => s.currentUser) as any;
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const activeTeamId = useInboxStore((s) => (s.clientState.ui?.active_team_id ?? null)) as string | null;
   // The store binding web uses: every owner change and role move rides the one
   // reparent path, so the inbox refiles and open questions follow the owners.
   const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', {
@@ -221,7 +222,7 @@ export function AssignmentChip({
             <OwnerSheetRows
               owners={owners}
               conversationId={conversationId}
-              activeTeamId={currentUser ? (currentUser.active_team_id ?? null) : undefined}
+              activeTeamId={activeTeamId}
               onDone={() => setSheetVisible(false)}
             />
             </ScrollView>

@@ -18,6 +18,8 @@ const SETTINGS = never("settings: a preference the person sets and resets in the
 const MACHINE = never("machine control: it acts on a running agent or host, which an undo cannot rewind");
 const SHARING = never("sharing: links and membership visibility change who can see something; set them back explicitly");
 const INTERNAL = never("internal: engine or sync plumbing, never a user gesture");
+const DRAFT = never("draft: unsent text or a pick on an unsent session, changed back in the same field");
+const LOCAL_ECHO = never("local echo: the store's copy of a send or an answer, which the server's reply settles");
 
 export const NEVER_UNDO_POLICY: UndoPolicy = {
   // Navigation
@@ -68,6 +70,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   clearSelection: VIEW_STATE,
   initPagination: VIEW_STATE,
   setPagination: VIEW_STATE,
+  setOrgFocusChangeId: VIEW_STATE,
+  setFeedCursor: VIEW_STATE,
+  setFeedHasMore: VIEW_STATE,
 
   // Sends and agent turns
   sendMessage: SEND,
@@ -80,10 +85,32 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   shareChatMessageToSlack: SEND,
   retryPendingMessage: SEND,
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
-  clearDraftFinal: never("draft: the composer owns its own text undo"),
+  clearDraftFinal: DRAFT,
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
+
+  // Local echoes of sends (sync creators a component calls)
+  addOptimisticMessage: LOCAL_ECHO,
+  markOptimisticAsFailed: LOCAL_ECHO,
+  removeOptimisticMessage: LOCAL_ECHO,
+  resolvePendingUploads: LOCAL_ECHO,
+  stampPendingDispatchContent: LOCAL_ECHO,
+  setQueuedMessagesFor: LOCAL_ECHO,
+  takeQueuedMessage: LOCAL_ECHO,
+  resolveSessionQuestion: LOCAL_ECHO,
+  confirmSessionCommand: LOCAL_ECHO,
+
+  // Drafts
+  setDraft: DRAFT,
+  clearDraft: DRAFT,
+  setSessionHasDraft: DRAFT,
+  addReviewComment: DRAFT,
+  commitReviewComment: DRAFT,
+  removeReviewComment: DRAFT,
+  clearReviewComments: DRAFT,
+  setSessionTargetDevice: DRAFT,
+  setStableContextPrefs: DRAFT,
 
   // Creates
   createBucket: CREATE,
@@ -102,6 +129,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   promoteDocToPlan: CREATE,
   publishToDirectory: CREATE,
   addIssueSyncSource: CREATE,
+  createOpsSource: CREATE,
+  rotateOpsSourceKey: never("key rotation: the old ingest key stops working at once and cannot be restored"),
   upsertAgentDefinition: CREATE,
   upsertAgentChain: CREATE,
 
@@ -120,7 +149,11 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   removeAgentDefinition: DELETE,
   removeFromStack: never("delete: re-adding to a stack needs an addToStack server verb (follow-up)"),
   removeIssueSyncSource: DELETE,
+  removeOpsSource: DELETE,
   removeMachines: DELETE,
+  markSessionsDismissed: never(
+    "bulk dismiss: the server half dismisses every session older than 30 days by age, not the ids shown, and has no restore verb (follow-up)",
+  ),
   unlinkChatSlack: DELETE,
 
   // Read state
@@ -133,6 +166,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   writeSessionAck: READ_STATE,
   writeSessionUnread: READ_STATE,
   updateClientDismissed: READ_STATE,
+  markSessionSeen: READ_STATE,
+  clearAssignedPing: READ_STATE,
+  markBlockedAcknowledged: never("banner: \"never restart this\" answers the blocked banner; the row's restart control asks again"),
   toggleChatReaction: never("reaction: the same click takes it back, and it notifies the author"),
 
   // Settings
@@ -160,9 +196,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,
+  setOpsSourceStatus: SETTINGS,
+  setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
+  grantOpsAction: never("permission: a grant changes what agents may do; revoke it explicitly"),
+  revokeOpsAction: never("permission: a revoke changes what agents may do; grant it again explicitly"),
   updateChatSlackLink: SETTINGS,
   persistClientTips: SETTINGS,
   updateClientUI: SETTINGS,
+  setActiveTeamPointer: never("navigation: switching workspace moves the view, it changes no work"),
 
   // Machine and agent control
   convCommand: MACHINE,
@@ -173,6 +214,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
   startResourceOffload: MACHINE,
   cancelResourceOffload: MACHINE,
+  markBlockedReviveRequested: MACHINE,
+  clearBlockedReviveRequested: MACHINE,
 
   // Sharing
   setCallShareVideo: SHARING,
@@ -184,4 +227,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   applyUndoPatches: never("internal: the undo replay itself"),
   restoreArchivedDoc: never("internal: the server half of undoing a doc archive"),
   flushResolvedSessionFields: INTERNAL,
+  recordSyncMeta: INTERNAL,
+  seedSession: INTERNAL,
+  preloadForkSessions: INTERNAL,
+  pruneGhostSessions: INTERNAL,
+  markServerDeleted: INTERNAL,
+  dropOrgIntent: INTERNAL,
 };

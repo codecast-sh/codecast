@@ -22,9 +22,10 @@ function set(next: UndoTimelineSnapshot): void {
 
 // Focus goes back where it was when the card opened, on every close (Esc,
 // the chord again, an act), not only Esc. An overlay that opened the card
-// (the palette, whose input still holds focus as it closes) is not a place to
-// return to, so the target is the last focus outside any overlay.
-const OVERLAY = '[role="dialog"], [cmdk-root], [data-radix-popper-content-wrapper]';
+// (the palette, whose input still holds focus as it closes; a toast, whose
+// History button leaves with it) is not a place to return to, so the target
+// is the last focus outside any overlay.
+const OVERLAY = '[role="dialog"], [cmdk-root], [data-radix-popper-content-wrapper], [data-sonner-toaster]';
 let lastSteadyFocus: HTMLElement | null = null;
 let returnTo: HTMLElement | null = null;
 
@@ -93,5 +94,29 @@ export function subscribe(fn: () => void): () => void {
   listeners.add(fn);
   return () => {
     listeners.delete(fn);
+  };
+}
+
+// A keyboard undo that stopped at an entry it may not take back blind (one
+// whose undo widens access) while the card is open: the notifier stays quiet
+// so no toast covers the card, and the card marks that row instead. `n`
+// counts the stops, so a second press on the same row flashes it again.
+export type UndoTimelineFlash = { id: string; n: number };
+let flash: UndoTimelineFlash | null = null;
+const flashListeners = new Set<() => void>();
+
+export function flashRow(id: string): void {
+  flash = { id, n: (flash?.n ?? 0) + 1 };
+  for (const listener of [...flashListeners]) listener();
+}
+
+export function getFlash(): UndoTimelineFlash | null {
+  return flash;
+}
+
+export function subscribeFlash(fn: () => void): () => void {
+  flashListeners.add(fn);
+  return () => {
+    flashListeners.delete(fn);
   };
 }

@@ -239,12 +239,14 @@ function hourLabel(h: number): string {
 export function timeAxisLabels(dates: string[], toX: (i: number) => number): { label: string; x: number }[] {
   const labels: { label: string; x: number }[] = [];
   const mn = MONTHS;
+  // Under ten days a Monday-only axis leaves one label or none, so every day ticks.
+  const daily = dates.length <= 10;
   const weekly = dates.length <= 45;
   let lastM = -1;
   let lastX = -Infinity;
   for (let i = 0; i < dates.length; i++) {
     const [y, m, d] = dates[i].split("-").map(Number);
-    const isTick = weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM;
+    const isTick = daily || (weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM);
     if (!isTick) continue;
     lastM = m - 1;
     const x = toX(i);

@@ -25,6 +25,7 @@ import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { bumpWindow } from "./ipRateLimit";
+import { TEAM_RECORDINGS_PURGE_GRACE_MS } from "./lib/r2";
 import {
   TEAM_MEMBERS_VIEW_CONTRACT_ID,
   TEAMS_GRANT_KEY,
@@ -673,9 +674,10 @@ export async function endMembership(
 // Retire a team: end every membership, drop every directory mapping to it,
 // decommission its anchors, and leave the row as a tombstone (deleted_at) that
 // carries the roster for a later restore. The team's shared work stays in the
-// database under a key nobody holds any more.
+// database under a key nobody holds any more; its call recordings do not
+// (callRecordings.purgeTeamRecordings).
 export async function retireTeam(
-  ctx: { db: any },
+  ctx: { db: any; scheduler: any },
   team: { _id: Id<"teams">; name: string },
   actorId: Id<"users"> | undefined,
 ): Promise<{ members: number; anchors: number }> {
@@ -717,6 +719,10 @@ export async function retireTeam(
     await decommissionAnchorRow(ctx, anchor);
     retired++;
   }
+  // The team's call recordings (video of its meetings, guests included) leave
+  // the private bucket once the restore window has passed. The sweep checks
+  // the tombstone again when it runs, so a restored team keeps them.
+  await ctx.scheduler.runAfter(TEAM_RECORDINGS_PURGE_GRACE_MS, internal.callRecordings.purgeTeamRecordings, { team_id: team._id });
   return { members: memberships.length, anchors: retired };
 }
 

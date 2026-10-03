@@ -236,7 +236,7 @@ describe("dsl", () => {
       expect(f.message).toContain("ada/s is not among the active rows");
       expect(f.message).toContain("row ada/s (conversations)");
       expect(f.message).toContain(`bun run sim dsl-window --seed ${run.seed} --trace ada/s`);
-      expect(f.message).toContain(`--order "${SCRIPTED_ORDER_MARK} `);
+      expect(f.message).toContain(`--order="${SCRIPTED_ORDER_MARK} `);
       expect(logged.mock.calls.flat().join("\n")).toContain("sim inspect ada/s");
     } finally {
       said.mockRestore();

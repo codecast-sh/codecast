@@ -1,4 +1,4 @@
-import { createReloadWhenHidden } from "./reloadWhenHidden";
+import { createReloadWhenAway, type ReloadWhenAwayOptions } from "./reloadWhenAway";
 
 // The two registerSW callbacks (vite-plugin-pwa's virtual:pwa-register, 1.0
 // or later) that make the autoUpdate flow quiet:
@@ -7,10 +7,13 @@ import { createReloadWhenHidden } from "./reloadWhenHidden";
 //    on navigation (or every 24h), and a single page app or a desktop window
 //    stays open for days without navigating, so a stale shell would pin it to
 //    an old bundle across deploys. Fifteen minutes: a deploy reaches a window
-//    that never navigates within a quarter hour plus its next hide.
+//    that never navigates within a quarter hour plus its next hide or its next
+//    few idle minutes.
 //  - onNeedReload replaces autoUpdate's instant reload of every open window
-//    with a reload on the next hide, and tells the update prompt an update is
-//    waiting (createUpdatePrompt's noteUpdateWaiting).
+//    with a reload once the window is hidden or untouched
+//    (createReloadWhenAway), and tells the update prompt an update is waiting
+//    (createUpdatePrompt's noteUpdateWaiting). `busy` names a window in use
+//    without input (a call), which the idle reload must not interrupt.
 
 export const UPDATE_POLL_MS = 15 * 60 * 1000;
 
@@ -18,7 +21,12 @@ type Registration = { update(): Promise<unknown> };
 
 export function serviceWorkerHooks(
   onUpdateWaiting: () => void,
-  { pollMs = UPDATE_POLL_MS, reloadWhenHidden = createReloadWhenHidden(), every = (fn: () => void, ms: number): unknown => setInterval(fn, ms) } = {},
+  {
+    pollMs = UPDATE_POLL_MS,
+    busy,
+    reloadWhenAway = createReloadWhenAway(undefined, undefined, { busy }),
+    every = (fn: () => void, ms: number): unknown => setInterval(fn, ms),
+  }: { pollMs?: number; busy?: ReloadWhenAwayOptions["busy"]; reloadWhenAway?: () => void; every?: (fn: () => void, ms: number) => unknown } = {},
 ) {
   return {
     onRegisteredSW(_url: string, reg: Registration | undefined) {
@@ -26,7 +34,7 @@ export function serviceWorkerHooks(
       every(() => { reg.update().catch(() => {}); }, pollMs);
     },
     onNeedReload() {
-      reloadWhenHidden();
+      reloadWhenAway();
       onUpdateWaiting();
     },
   };

@@ -5,8 +5,8 @@ follows this standard. A change to a prompt is a change to behavior, and it
 ships the way a code change does: proven broken, rewritten, proven fixed
 (the-line-end-to-end.md LE8). Sections are numbered P1 onward so a review can
 cite them. The prompting principles in docs/principles.md (PR-prompt-1 to
-PR-prompt-4) are the source of the rules here; this file is how they apply to
-a prompt.
+PR-prompt-3) are the source of the rules here, and P11 carries the rule on
+correcting a tendency toward balance; this file is how they apply to a prompt.
 
 ## P1. A prompt states intent, not a script
 
