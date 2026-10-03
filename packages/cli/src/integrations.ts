@@ -17,12 +17,21 @@ import open from "open";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { formatRelativeTime } from "./formatter.js";
 import { c, fmt } from "./colors.js";
-import { APP_DESCRIPTORS, type AppId, type AppConnectionStatus } from "@codecast/shared/contracts";
+import {
+  APP_DESCRIPTORS,
+  type AppDescriptor,
+  type AppId,
+  type AppConnectionStatus,
+  type TokenConfigField,
+} from "@codecast/shared/contracts";
 import { commandGroup } from "./commandGroups.js";
+import { promptHiddenSecret } from "./hiddenSecret.js";
 
 export interface IntegrationsDeps extends PublishDeps {
   /** index.ts owns project lookup by id, short id or title substring. */
   resolveProjectId: (ref: string) => Promise<string>;
+  /** Reads a pasted token; the echo-free prompt unless a test hands in its own. */
+  readSecret?: (prompt: string) => Promise<string>;
 }
 
 /** The two providers that carry issues. Slack, Gmail and Notion connect but sync nothing. */
@@ -49,6 +58,42 @@ const isUuid = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}
 
 function appName(id: string): string {
   return APP_DESCRIPTORS[id as AppId]?.name ?? id;
+}
+
+/** Every token-paste setting across the catalog, one CLI flag each. Two
+ *  providers may share a flag (--host); it maps to the same config key. */
+const TOKEN_FIELDS: TokenConfigField[] = [
+  ...new Map(
+    Object.values(APP_DESCRIPTORS)
+      .flatMap((d) => d.tokenConfig ?? [])
+      .map((f) => [f.flag, f] as const),
+  ).values(),
+];
+
+/** commander's property name for a flag: --base-url arrives as baseUrl. */
+const optionKey = (flag: string) => flag.replace(/-([a-z])/g, (_, ch: string) => ch.toUpperCase());
+
+/**
+ * The config a token-paste connect sends, from the flags typed. A flag that
+ * belongs to another provider is refused rather than ignored, so `--org` on a
+ * PostHog connect is a visible mistake. Defaults and required fields are the
+ * server's to apply (tokenConnectors.parseTokenConfig), so the CLI cannot
+ * drift from the web form on them.
+ */
+export function tokenConfigFromOptions(
+  descriptor: AppDescriptor,
+  options: Record<string, unknown>,
+): { ok: true; config: Record<string, string> } | { ok: false; error: string } {
+  const own = new Set((descriptor.tokenConfig ?? []).map((f) => f.flag));
+  const config: Record<string, string> = {};
+  for (const field of TOKEN_FIELDS) {
+    const value = options[optionKey(field.flag)];
+    if (typeof value !== "string") continue;
+    if (!own.has(field.flag)) return { ok: false, error: `--${field.flag} does not apply to ${descriptor.name}` };
+    const mine = descriptor.tokenConfig!.find((f) => f.flag === field.flag)!;
+    config[mine.key] = value;
+  }
+  return { ok: true, config };
 }
 
 function ago(ts: number | undefined | null): string {
@@ -141,14 +186,44 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
       console.log();
     });
 
-  integrations
+  const connect = integrations
     .command("connect")
-    .description("Start the connect flow for an app (opens your browser)")
+    .description("Connect an app: opens your browser, or for a token app reads the token from stdin or a hidden prompt")
     .argument("<provider>", `App to connect: ${Object.keys(APP_DESCRIPTORS).join(", ")}`)
     .option("--personal", "Connect it for yourself, usable in every workspace you work in (default: your active team)")
-    .option("--team", "Connect it for your active team (the default)")
-    .action(async (providerRaw: string, options: { personal?: boolean; team?: boolean }) => {
+    .option("--team", "Connect it for your active team (the default)");
+  for (const field of TOKEN_FIELDS) {
+    // A shared flag (--host) defaults differently per app, so each app's
+    // default is named beside it.
+    const apps = Object.values(APP_DESCRIPTORS).flatMap((d) => {
+      const own = d.tokenConfig?.find((f) => f.flag === field.flag);
+      return own ? [`${d.name}${own.default ? ` (default ${own.default})` : ""}`] : [];
+    });
+    connect.option(`--${field.flag} <${field.key}>`, `${field.label} for ${apps.join(", ")}`);
+  }
+  connect.action(async (providerRaw: string, options: { personal?: boolean; team?: boolean } & Record<string, unknown>) => {
       const provider = requireProvider(providerRaw, Object.keys(APP_DESCRIPTORS) as AppId[]);
+      const descriptor = APP_DESCRIPTORS[provider];
+      if (descriptor.connectKind === "token-paste") {
+        const parsed = tokenConfigFromOptions(descriptor, options);
+        if (!parsed.ok) fail(parsed.error);
+        // The token never rides argv: piped stdin for scripts, an echo-free
+        // prompt at a terminal.
+        const token = await (deps.readSecret ?? promptHiddenSecret)(`Paste the ${descriptor.tokenLabel ?? "token"} for ${descriptor.name} (hidden): `);
+        if (!token) fail(`No token given. Pipe it in or paste it at the prompt: cast integrations connect ${provider}`);
+        const result = await post("/cli/integrations/connect-token", {
+          provider,
+          token,
+          config: parsed.config,
+          scope: scopeOption(options),
+        });
+        if (!result?.ok) fail(result?.error || `Could not connect ${descriptor.name}.`);
+        console.log(`${c.green}ok${c.reset} Connected ${c.bold}${descriptor.name}${c.reset}${result.label ? ` ${c.dim}${result.label}${c.reset}` : ""}`);
+        return;
+      }
+      // A browser-flow app takes none of the token settings.
+      const stray = tokenConfigFromOptions(descriptor, options);
+      if (!stray.ok) fail(stray.error);
       const result = await post("/cli/integrations/connect-url", { provider, scope: scopeOption(options) });
       if (!result?.ok || !result.url) {
         fail(result?.error || `No connect flow available for ${appName(provider)}.`);

@@ -49,7 +49,7 @@
   "triggers": {
     "config": {
       "task_enabled": true,
-      "task_version": "8"
+      "task_version": "9"
     },
     "stdout": "* Triggers — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -106,7 +106,7 @@
   "calls": {
     "config": {
       "calls_enabled": true,
-      "calls_version": "5"
+      "calls_version": "6"
     },
     "stdout": "* Calls — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

@@ -61,6 +61,8 @@ export interface Footing {
 
 /** A sha the api accepts. The child also checks `git rev-parse --verify <sha>^{commit}`. */
 export const EVALS_SHA_RE = /^[0-9a-f]{7,40}$/;
+/** A tree patch's name: the sha256 of its text, as EVALS_HOME/trees/<sha>.patch keeps it (always in full). */
+export const EVALS_PATCH_SHA_RE = /^[0-9a-f]{64}$/;
 
 /** The separation rule's answer (packages/evals/src/stats.ts `separate`). */
 export type SeparationResult = { kind: "better" | "worse" | "not-separated"; p: number } | { kind: "too-few" };
@@ -542,6 +544,8 @@ export interface BisectSummary {
   spentUsd: number;
   budgetUsd: number;
   startedAt: string;
+  /** state.json's last write: a live bisect quiet for five minutes reads "stalled?". */
+  updatedAt: string;
   finishedAt: string | null;
 }
 
@@ -721,6 +725,14 @@ export interface SimGridCell {
   history: Array<{ session: string; seeds: number; failed: number }>;
   gitHead: string | null;
   lastRunAt: string | null;
+  /**
+   * The newest run of this cell that failed and left an artifact folder, with
+   * the invariant it broke (its result.json): what a click on the cell opens,
+   * even when the latest session passed, and what the invariant filter reads.
+   * null when the history holds no failing run with artifacts. The api child's
+   * `simGrid` fills it.
+   */
+  newestFailure: { session: string; run: string; seed: number; invariant: string; at: string } | null;
 }
 
 // ── Endpoints (section 3.4) ─────────────────────────────────────────────────
@@ -831,6 +843,12 @@ export interface SurfaceResponse {
   ledger: LedgerRow[];
   /** Commits that touched the declared sources inside the window. */
   commits: CommitRef[];
+  /**
+   * The newest graded batch in the window weighed the way the wall weighs it
+   * (against batches that began before it), so the page can say what brought
+   * the investigator here. Null when the window holds no graded batch.
+   */
+  latest: BatchVerdict | null;
 }
 
 /** A conversation message as a surface's describe() renders the moment (@platform/evals ConvoMessage). */
@@ -1143,6 +1161,15 @@ export interface CommitResponse {
   diff: string;
 }
 
+/** One kept tree patch: the uncommitted edits a dirty rep ran on top of its gitHead. */
+export interface PatchResponse {
+  sha: string;
+  files: Array<{ path: string; additions: number; deletions: number }>;
+  /** The patch text (`git diff --binary`), cut at 2 MiB so a huge patch cannot stall the page. */
+  diff: string;
+  truncated: boolean;
+}
+
 export interface ChangesQuery {
   since: number;
 }
@@ -1238,6 +1265,7 @@ export interface EvalsRoutes {
   "GET /epoch": { params: None; query: EpochQuery; body: never; response: EpochResponse };
   "GET /attribution": { params: None; query: AttributionQuery; body: never; response: Attribution };
   "GET /commit/:sha": { params: { sha: string }; query: CommitQuery; body: never; response: CommitResponse };
+  "GET /patch/:sha": { params: { sha: string }; query: None; body: never; response: PatchResponse };
   "GET /changes": { params: None; query: ChangesQuery; body: never; response: ChangesResponse };
   "POST /bisect/plan": { params: None; query: None; body: BisectPlanRequest; response: BisectPlan };
   "POST /bisect": { params: None; query: None; body: BisectStartRequest; response: BisectStartResponse };
@@ -1267,6 +1295,7 @@ export const EVALS_ROUTE_KEYS = [
   "GET /epoch",
   "GET /attribution",
   "GET /commit/:sha",
+  "GET /patch/:sha",
   "GET /changes",
   "POST /bisect/plan",
   "POST /bisect",

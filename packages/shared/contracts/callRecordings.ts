@@ -52,9 +52,12 @@ export function isRecordingActive(status: CallRecordingStatus): boolean {
 }
 
 // Why a file stopped. "pressed" is somebody in the room (a guest included);
-// "huddle_ended" is the room emptying; "share_ended" ends a screen file when
-// its share stops while the run goes on; "limit" is LiveKit's own ceiling.
-export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "share_ended", "limit", "failed"] as const;
+// "huddle_ended" is the call's record ending (the huddle is over);
+// "room_empty" is the media room left with no teammate in it while the seat
+// leases agree (guests may still be there); "share_ended" ends a screen file
+// when its share stops while the run goes on; "limit" is a ceiling (ours or
+// LiveKit's); "ended" is LiveKit finishing a file without saying why.
+export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "room_empty", "share_ended", "limit", "ended", "failed"] as const;
 export type CallRecordingStopReason = (typeof CALL_RECORDING_STOP_REASONS)[number];
 
 /** The fields of a recording row that alignment reads. Ids are strings so the
@@ -120,7 +123,9 @@ export type CallMomentPrefer = "composite" | "screen";
  * share's own file. `cast call snap`, the frame a `cl-42@12:34` citation
  * renders as, and its hover picture all take this, so the picture an agent
  * saw is the one its readers see. The call page's player is the exception on
- * purpose: it plays the room, which is the file with everyone's sound.
+ * purpose: it plays the room, which is the file with everyone's sound, except
+ * when a citation's link opens it (`view=screen`, callLinks.CallView): then it
+ * shows the screen the citation showed, with the room's sound under it.
  */
 export const CALL_FRAME_PREFER: CallMomentPrefer = "screen";
 
@@ -332,6 +337,14 @@ export function callRecordingUrlWindow(now: number = Date.now()): number {
 // not have every press refused.
 export const RECORDING_PRESS_FRESH_MS = 30_000;
 
+/** A press within this long of the room's last stop is refused: LiveKit is
+ *  still finishing that file, and Record toggled as fast as a hand can press
+ *  it would start a billed egress per press. Counted from when the stop was
+ *  asked for, never from LiveKit's upload (which can take minutes), and the
+ *  same rule on both ends: the server refuses inside it (convex
+ *  callRecordings.startRecording) and the Record button waits it out. */
+export const RECORDING_RESTART_COOLDOWN_MS = 5_000;
+
 /** Is a press made at `pressedAt` too old to act on at `now`? A press with no
  *  stamp (a client older than the rule) is taken as made now. */
 export function recordingPressStale(pressedAt: unknown, now: number): boolean {
@@ -369,6 +382,27 @@ export function recordingAudience(roomKey?: string | null): string {
  *  video on it (shareIncludesVideo: off on every link until turned on). */
 export function recordingKeptWords(roomKey?: string | null): string {
   return `The video stays with the call, where ${recordingAudience(roomKey)} can watch it, and anyone with the call's public link if someone shares the video on it.`;
+}
+
+/** How a run that stopped by itself is said, by its reason, for the room's
+ *  thread and the notice: null for the reasons said otherwise (a press names
+ *  who pressed, a failure gives its words). Each says only what is true: the
+ *  huddle ending, the media room left without a teammate (guests may still
+ *  be in it), a ceiling, or LiveKit closing the file without a reason. */
+export function recordingStoppedItselfWords(reason: string | null | undefined): string | null {
+  switch (reason) {
+    case "huddle_ended":
+      return "Recording stopped when the huddle ended";
+    case "room_empty":
+      return "Recording stopped: no teammate was left in the call";
+    case "limit":
+      return "Recording stopped at its time limit";
+    case "ended":
+    case "share_ended":
+      return "Recording stopped";
+    default:
+      return null;
+  }
 }
 
 /** A failed run's reason as a sentence a person reads. The server's own

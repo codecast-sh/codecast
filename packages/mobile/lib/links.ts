@@ -52,6 +52,15 @@ export async function openLink(url: string): Promise<void> {
     return;
   }
 
+  await openWebPage(absolute);
+}
+
+/**
+ * Open a URL as a web page, never as an app screen: the in-app browser sheet,
+ * else the system handler. For a page the phone has no screen for yet (a
+ * call's video), where openLink would route an app URL back into the app.
+ */
+export async function openWebPage(absolute: string): Promise<void> {
   if (/^https?:/i.test(absolute)) {
     try {
       await WebBrowser.openBrowserAsync(absolute, {
@@ -68,6 +77,6 @@ export async function openLink(url: string): Promise<void> {
   try {
     await Linking.openURL(absolute);
   } catch {
-    // Nothing can open it — stay put rather than surfacing a native error.
+    // Nothing can open it: stay put rather than surfacing a native error.
   }
 }

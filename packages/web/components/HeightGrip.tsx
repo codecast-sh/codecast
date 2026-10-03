@@ -7,15 +7,9 @@
 
 import React, { useCallback } from "react";
 import { cssZoomOf } from "../lib/cssZoom";
+import { scrollParentOf } from "../lib/scrollWithin";
 
-/** The nearest scrolling ancestor: the surface a frame scrolls with. */
-export function scrollParentOf(el: HTMLElement): HTMLElement | null {
-  for (let n = el.parentElement; n; n = n.parentElement) {
-    const o = getComputedStyle(n).overflowY;
-    if (o === "auto" || o === "scroll") return n;
-  }
-  return null;
-}
+export { scrollParentOf };
 
 /** A frame never outgrows its scrolling surface, so its top and bottom fit
  *  in one view. */

@@ -8,7 +8,7 @@ import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEnti
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
-import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, type EntityType } from '@codecast/shared/entities';
+import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
@@ -136,7 +136,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const session = useQueryNoThrow(api.conversations.webGet, isSession && queryArgs ? queryArgs : 'skip').data;
   const trigger = useQueryNoThrow(api.agentTasks.webGet, type === 'trigger' && queryArgs ? queryArgs : 'skip').data;
   const doc = useQueryNoThrow(api.docs.webGet, type === 'doc' && looksConvex && !named ? { id: rawId } : 'skip').data;
-  // A call names its title; a stretch of one (`cl-42:15-25`) adds the lines.
+  // A call names its title; a stretch of one (`cl-42:15-25`) adds the lines,
+  // a moment (`cl-42@2:30`) the time, the way the web pill labels them.
   const callRef = type === 'call' ? parseCallRef(rawId) : null;
   const call = useQueryNoThrow(api.transcripts.webGetCallRef, callRef && !named ? { ref: callRef.call } : 'skip').data;
 
@@ -159,16 +160,20 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) + (callRef?.turns ? ` #${callRef.turns.from_seq}${callRef.turns.to_seq !== callRef.turns.from_seq ? `–${callRef.turns.to_seq}` : ''}` : '');
+  }) + callRefLabelSuffix(callRef);
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.
   const identityRow = isSession && entity?._id ? identityRowOf(entity) : null;
   const label = (identityRow && identityLine(identityRow, refLabel, personifyAll).name) || refLabel;
 
+  // A call keeps the whole reference, so the screen opens at the moment or
+  // the lines it names, not at the top of the call.
   const targetId = isSession || type === 'doc'
     ? entity?._id ?? (looksConvex ? rawId : null)
-    : entity?.short_id ?? rawId;
+    : type === 'call'
+      ? rawId
+      : entity?.short_id ?? rawId;
   // No trigger screen on mobile yet — that pill still names the trigger and
   // reads inline, it just isn't tappable. The type → screen table is shared
   // with the link opener and the deep-link handler (lib/links).

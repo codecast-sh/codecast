@@ -12,6 +12,8 @@ import { codecastReplyJudge } from './adapters/judge';
 import { codecastReplayer } from './adapters/replay';
 import { codecastFreezeResolver, defaultJudgeFor, describeFreeze, judgeMomentOfFreeze, productionReplyOf } from './adapters/resolver';
 import { codecastRunSource } from './adapters/runs';
+import { registerApi } from './commands/api';
+import { registerBisect } from './commands/bisect';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
 import { registerDoctor } from './commands/doctor';
@@ -83,6 +85,8 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   registerPublish(program);
   registerPin(program);
   registerIndex(program);
+  registerBisect(program);
+  registerApi(program);
 
   // A bare `./evals` (flags at most) is the status view. Any word is a command,
   // so a typo gets commander's unknown-command error and its suggestion.

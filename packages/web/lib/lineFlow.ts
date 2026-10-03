@@ -2,7 +2,7 @@
 // factory as one flow, derived from store rows. Pure: no store, no React, so a
 // test feeds rows and reads columns.
 //
-//   sense      signals by source, a 24h sparkline each           (signals)
+//   sense      signals by source, a 7 day sparkline each          (signals)
 //   causes     open causes ranked by computed priority (LE5)      (tasks with `cause`)
 //   in build   live runs on a cause, by their current node      (workflowRuns)
 //              (other live runs only count, as "not from the line")
@@ -113,7 +113,7 @@ export type SenseSource = {
   source: string;
   day: number;
   week: number;
-  /** Signals per hour over the last 24 hours, oldest first. */
+  /** Signals per day over the last seven days, oldest first. */
   spark: number[];
   /** The newest signal in the window; null for a declared finder with none. */
   newest: LineSignal | null;
@@ -140,6 +140,8 @@ export type BuildRow = {
   workflow: string | null;
   /** The step it is at (the node label), null when the run names none. */
   step: string | null;
+  /** Where a line run sits in LINE_STEPS (0 to 4), null for any other workflow. */
+  stepIndex: number | null;
 };
 export type WatchRow = { task: LineCauseTask; until: number; daysLeft: number };
 export type ClosedOutcome = "shipped" | "dissolved" | "resolved";
@@ -152,6 +154,9 @@ export type Throughput = {
   opened: number;
   dissolved: number;
   shipped: number;
+  /** Of this week's ships, how many still sit in Watching: Closed lists a
+   *  shipped cause only once its watch ends, so the page says where they are. */
+  shippedInWatch: number;
   reopened: number;
   /** Median ms from a shipped cause's first signal to its close; null with none shipped. */
   medianToShip: number | null;
@@ -202,6 +207,22 @@ function runStep(run: LineFlowRun, node: LiveNode | null): string | null {
   if (node?.label && node.label !== node.id) return node.label;
   const live = (run.node_statuses as Array<{ status: string; phase?: string; label?: string }> | undefined)?.find((n) => n.status === "running");
   return live?.phase ?? node?.label ?? null;
+}
+
+/** The line workflow's nodes folded into five steps, so In build can show
+ *  how far along a run is. Gates and closing nodes fold into the step they
+ *  belong to; a node outside the map (or another workflow) has no place. */
+export const LINE_STEPS = ["Plan", "Prove", "Build", "Check", "Card"] as const;
+const LINE_STEP_OF: Record<string, number> = {
+  ground: 0, park: 0, plan: 0, plan_gate: 0, analyze: 0,
+  prove: 1, red: 1, dissolve: 1,
+  implement: 2,
+  verify: 3, green: 3, eval: 3, review: 3,
+  card_draft: 4, card_write: 4, card: 4, decide: 4,
+};
+export function lineStepIndex(run: Pick<LineFlowRun, "workflow_name">, node: Pick<LiveNode, "id"> | null): number | null {
+  if (run.workflow_name !== "line" || !node) return null;
+  return LINE_STEP_OF[node.id] ?? null;
 }
 
 /** A run's name: its task, its goal, its first phase, its workflow when that
@@ -307,15 +328,12 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const sources: SenseSource[] = [];
   for (const [source, list] of bySource) {
     const sorted = [...list].sort((a, b) => b.created_at - a.created_at);
-    const spark = new Array(24).fill(0);
+    const spark = perDay(sorted.map((s) => s.created_at), now);
     let day = 0;
     let week = 0;
     for (const s of sorted) {
       if (s.created_at >= weekAgo) week++;
-      if (s.created_at >= dayAgo) {
-        day++;
-        spark[Math.min(23, Math.floor((s.created_at - dayAgo) / HOUR))]++;
-      }
+      if (s.created_at >= dayAgo) day++;
     }
     if (week === 0 && !finderBySource.has(source)) continue;
     sources.push({ source, day, week, spark, newest: sorted[0], kinds: [...new Set(sorted.map((s) => s.kind))], finder: finderBySource.get(source), silent: false, undeclared: false });
@@ -323,7 +341,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   // A declared finder is a row even with nothing in the window: its silence is the news.
   const seen = new Set(sources.map((s) => s.source));
   for (const f of finders) {
-    if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(24).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
+    if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(7).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
   }
   for (const s of sources) {
     s.silent = !!s.finder && s.day === 0;
@@ -361,7 +379,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     if (atGate) continue;
     const node = runLiveNode(run);
     const step = runStep(run, node);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, ...runName(run, task, step) });
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(run, node), ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
@@ -410,7 +428,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const causesState: StageState = capped
     ? { kind: "paused", since: gateCards[cardsCap - 1]?.created_at ?? null, why: `queued behind ${gateCards.length} open cards` }
     : openRows.length > 0
-      ? { kind: "running", why: `${ranked.length} ready to admit` }
+      ? { kind: "running", why: `${ranked.length} queued` }
       : { kind: "idle", why: started ? "no open cause" : "opens on the first signal" };
 
   const buildState: StageState = lastEnded?.status === "failed"
@@ -440,6 +458,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
     opened: causes.filter((t) => t.created_at >= weekAgo).length,
     dissolved: causes.filter((t) => t.status === "dropped" && (t.closed_at ?? 0) >= weekAgo).length,
     shipped: shippedThisWeek.length,
+    shippedInWatch: shippedThisWeek.filter((t) => inWatch(t, now)).length,
     reopened: input.signals.filter((s) => s.reopened && s.created_at >= weekAgo).length,
     medianToShip: median(shippedThisWeek.filter((t) => t.cause?.first_seen).map((t) => (t.closed_at ?? 0) - t.cause!.first_seen)),
     tokensPerShip: shippedThisWeek.length && tokens ? tokens / shippedThisWeek.length : null,
@@ -501,7 +520,7 @@ export function lineHeadline(flow: LineFlow, now: number): HeadlinePart[] {
   }
   if (build.state.kind === "failing") parts.push({ text: `last run failed${build.state.since ? ` ${ageShort(now - build.state.since)} ago` : ""}`, tone: "fail" });
   if (causes.state.kind === "paused") parts.push({ text: `admission paused, ${causes.state.why}`, tone: "warn" });
-  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} ready to admit`, tone: "live", station: "causes" });
+  else if (causes.items.length > 0) parts.push({ text: `${plural(causes.items.length, "cause", "causes")} queued`, tone: "live", station: "causes" });
   if (watching.count > 0) parts.push({ text: `${watching.count} in watch`, tone: "calm", station: "watching" });
   if (!flow.started && parts.length === 0) return [{ text: "Nothing has reached the line yet", tone: "calm" }];
   if (awaiting.count === 0) parts.push({ text: parts.length ? "nothing waiting on you" : "The line is quiet: nothing building, nothing waiting on you", tone: "clear" });

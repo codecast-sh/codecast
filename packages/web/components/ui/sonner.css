@@ -185,13 +185,18 @@
   transform: translateY(0.5px);
 }
 /* [data-button] twice over: sonner's dark theme rule for the cancel has the
-   same weight as this one and loads after it, which painted a grey fill. */
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button] {
+   same weight as this one and loads after it, which painted a grey fill.
+   A toast whose one action is a side door, not the answer (the "Undid"
+   toast's History), wears it the same quiet way: cc-toast-quiet-action. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button],
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button] {
   color: var(--sol-text-muted);
   background: transparent;
   border-color: color-mix(in srgb, var(--sol-border) 50%, transparent);
+  box-shadow: none;
 }
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover {
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover,
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button]:hover {
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
   border-color: color-mix(in srgb, var(--sol-border) 80%, transparent);

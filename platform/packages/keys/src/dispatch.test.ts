@@ -31,6 +31,15 @@ function makeEvent(over: Partial<{ [K in keyof KeyboardEvent]: unknown }>): Keyb
 }
 
 describe("ShortcutDispatcher", () => {
+  test("a handler hears whether a key press or a named dispatch reached it", () => {
+    const d = new ShortcutDispatcher<Action>();
+    const heard: string[] = [];
+    d.register("next", (source) => { heard.push(source); });
+    d.dispatch("next");
+    createKeydownHandler(catalog, d, {})(makeEvent({ key: "j", code: "KeyJ", ctrlKey: true }));
+    expect(heard).toEqual(["named", "key"]);
+  });
+
   test("dispatch with no handlers reports unhandled", () => {
     const d = new ShortcutDispatcher<Action>();
     expect(d.dispatch("next")).toBe(false);

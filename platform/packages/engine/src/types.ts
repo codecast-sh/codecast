@@ -330,6 +330,8 @@ export type UndoEntry = {
   external?: string;
   droppedBy?: string;
   undoneAt?: number;
+  /** When a redo last put it back: the keyboard window counts from here too. */
+  redoneAt?: number;
   mode: "generic" | "manual";
   /** From the spec: blind keyboard undo skips this entry with a notice. */
   confirm?: boolean;
@@ -347,6 +349,10 @@ export type UndoConfig = {
   // Fields the server assigns when it creates a row ("created_at"): the echo
   // of an add carries the server's own value, so the row-add guard skips them.
   serverAssignedFields?: ReadonlySet<string>;
+  // A row the server keeps after a delete and the sync log still delivers,
+  // marked (a doc with archived_at). The guard reads it as gone, so the undo
+  // of the delete still applies once the marked row has synced back.
+  tombstone?: (store: string, row: unknown) => boolean;
   ignoreKeys?: ReadonlySet<string>; // never captured (clientState, tabs, pagination, ...)
   beforeReplay?: (entry: UndoEntry, dir: "undo" | "redo") => void;
   afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[]) => void;

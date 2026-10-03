@@ -24,6 +24,11 @@ import { formatCallTime } from "@codecast/shared/entities";
 // shared contract's rule, which the CLI's frame grab reads too.
 export { playableFiles };
 
+/** While a file's metadata has not arrived: a quiet breath over the black.
+ *  One shade for the player, its placeholder and a frame embed in a message,
+ *  so an embed and the player it opens breathe alike. */
+export const CALL_VIDEO_LOADING = "pointer-events-none absolute inset-0 animate-pulse bg-white/[0.05] motion-reduce:animate-none";
+
 /** A recording row as the call page reads it (webCallRecordings), or a shared
  *  video (getSharedCall) shaped to match. */
 export type CallVideoFile = CallRecordingSpan & {

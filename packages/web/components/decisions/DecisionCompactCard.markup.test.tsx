@@ -89,3 +89,55 @@ describe("DecisionCompactCardView", () => {
     });
   }
 });
+
+// A change card (LE11) is one row in the queue: the change, its proof and
+// Ship / Revise / Drop as chips, with no question link, proof block or
+// answer row of its own.
+test("a change card draws as one row with its answer chips", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "hero-card", blocking: false, default_option: 2, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} keys />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  const row = doc.querySelector("[data-card-row]")!;
+  expect(row).toBeTruthy();
+  expect(doc.querySelector(".decision-question")).toBeNull();
+  expect(row.querySelector(".cc-line-change")!.textContent).toBe(card.change);
+  expect(row.textContent).toContain("4 of 4 failing cases now pass");
+  expect(Array.from(row.querySelectorAll("[data-verdict]")).map((b) => b.getAttribute("data-verdict"))).toEqual(["ship", "revise", "drop"]);
+  expect(row.querySelector("[data-verdict=drop]")!.className).toContain("is-taken");
+  expect(doc.querySelector("[data-cc-course]")).toBeNull();
+  expect(doc.querySelector("[data-card-question]")!.textContent).toBe("[test] change card render");
+  // Why it exists, before what it is: the cause and the goal in the meta row.
+  expect(doc.querySelector("[data-card-cause]")!.textContent).toBe(card.cause.title);
+  expect(doc.querySelector("[data-card-goal]")!.textContent).toBe(`serves ${card.goal.name}`);
+  // The advisory course is said beside the chips, not left to a check mark.
+  expect(row.querySelector("[data-cc-course-short]")!.textContent).toBe("agent went with Drop");
+  // One id on the row: the task chip; the open link is the arrow alone.
+  const open = doc.querySelector(`a[aria-label="Open the decision"]`)!;
+  expect(open.textContent).toBe("");
+});
+
+// On the line (LE13) the header folds into a few dim words at the proof
+// row's end: the goal and the age, with the ids in their tooltip and no chips
+// or arrow. The cause leads the card.
+test("a line card folds its header into the proof row", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "line-card", blocking: true, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} line />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  const cause = doc.querySelector("[data-cc-line-cause]")!;
+  expect(cause.textContent).toBe(card.cause.title);
+  const meta = doc.querySelector("[data-cc-line-meta]")!;
+  expect(meta.closest(".cc-line-row")).toBe(doc.querySelector("[data-cc-line-proof]")!.closest(".cc-line-row"));
+  expect(cause.parentElement!.firstElementChild).toBe(cause);
+  expect(meta.textContent).toMatch(new RegExp(`^${card.goal.name} · \\d`));
+  expect(meta.querySelector("[title]")!.getAttribute("title")).toContain(card.cause.task);
+  expect(doc.querySelector("[data-card-goal]")).toBeNull();
+  expect(doc.querySelector(`a[aria-label="Open the decision"]`)).toBeNull();
+});

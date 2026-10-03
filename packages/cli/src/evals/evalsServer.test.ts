@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import type { AddressInfo } from "net";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import { EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
+import { EVALS_API_COMMAND, EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
 import { handleEvalsHttp } from "./evalsServer.js";
 
 // Every test spawns git and bun children; at a load average in the hundreds a
@@ -53,10 +53,11 @@ const rigs: { bridge: EvalsBridge; server: http.Server }[] = [];
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
 
-/** A scratch checkout. `header: false` writes a foreign `evals` script, `entry: false` leaves out the child's entry. */
-function makeCheckout(name: string, opts: { header?: boolean; entry?: boolean; gitInit?: boolean } = {}): string {
+/** A scratch checkout. `header: false` writes a foreign `evals` script, `entry: false` leaves out the child's entry, `api: false` its api command. */
+function makeCheckout(name: string, opts: { header?: boolean; entry?: boolean; api?: boolean; gitInit?: boolean } = {}): string {
   const root = path.join(tmp, name);
-  fs.mkdirSync(path.join(root, path.dirname(EVALS_ENTRY)), { recursive: true });
+  fs.mkdirSync(path.join(root, path.dirname(EVALS_API_COMMAND)), { recursive: true });
+  if (opts.api !== false) fs.writeFileSync(path.join(root, EVALS_API_COMMAND), "");
   const header = opts.header === false ? ["#!/bin/sh", "# some other tool", "exec true"] : [...EVALS_SCRIPT_HEADER];
   fs.writeFileSync(path.join(root, "evals"), `${header.join("\n")}\nroot="$(cd "$(dirname "$0")" && pwd)"\n`);
   if (opts.entry !== false) fs.writeFileSync(path.join(root, EVALS_ENTRY), FAKE_CHILD);
@@ -213,6 +214,10 @@ describe("checkout validation, before any exec", () => {
 
   test("a checkout without the child's entry", async () => {
     await refused(makeHome("entry", makeCheckout("noentry", { entry: false })), "checkout-no-entry");
+  });
+
+  test("a checkout whose eval tool predates the api command", async () => {
+    await refused(makeHome("noapi", makeCheckout("noapi", { api: false })), "checkout-no-entry");
   });
 
   test("no bun on PATH", async () => {

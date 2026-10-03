@@ -38,6 +38,7 @@ import {
   type CcKeychainItem,
 } from "./ccKeychain.js";
 import { isRemoteDevice } from "./remote/device.js";
+import { fallbackProfiles } from "@codecast/shared/contracts";
 import type { UsageRetryState } from "./usageRetry.js";
 
 const PROFILE_KEYCHAIN_PREFIX = "codecast-cc-account-";
@@ -1645,8 +1646,48 @@ export async function maintainFleetStore(now = Date.now()): Promise<string | nul
     const state = await putFleetOn(name, now);
     return before?.profile === state.profile && before.expires_at === state.expires_at ? null : describeFleetWrite(state);
   } catch (err) {
+    const moved = await failFleetOver(name, login, now);
+    if (moved) return moved;
     return `cannot carry "${name}": ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** The fleet's account can never carry a session again until a person signs
+ *  in: no live setup-token, and its login is dead (the token endpoint refused
+ *  the refresh, or the credential is a logged-out stub with no tokens at all).
+ *  A login that is merely about to lapse is not dead; the next tick refreshes it. */
+export function fleetLoginDead(name: string, login: string | null, now = Date.now()): boolean {
+  const meta = readProfileIndex().profiles[name];
+  if (!meta || readAccountTokenValue(name)) return false;
+  return !!meta.login_expired_at || !credentialHealth(login, now).usable;
+}
+
+/** Move the fleet off a dead account onto the one auto-switch would pick
+ *  (fallbackProfiles: reachable, not spent, most headroom). Staying would fail
+ *  every session launched on the store, and a run that dies on its first turn
+ *  never parks, so the server's auth recovery never sees it. Returns what it
+ *  did, naming the sign-in the dead account needs; null when the account is
+ *  not dead or nothing else can carry the fleet. */
+async function failFleetOver(dead: string, login: string | null, now: number): Promise<string | null> {
+  if (!fleetLoginDead(dead, login, now)) return null;
+  const { accounts: usage } = readUsageCache();
+  const deadEmail = readProfileIndex().profiles[dead]?.email;
+  const candidates = fallbackProfiles(
+    listProfiles()
+      .filter((p) => p.name !== dead)
+      .map((p) => ({ ...p, usage: usage[p.uuid || p.email || ""], setup_token: accountTokenInfo(p.name) })),
+    deadEmail,
+    now,
+  );
+  for (const candidate of candidates) {
+    try {
+      const state = await putFleetOn(candidate.name, now);
+      return `"${dead}" is signed out (cast accounts signin ${dead}); moved the ${describeFleetWrite(state)}`;
+    } catch {
+      // This one cannot carry either (its login lapsed since the last probe): try the next.
+    }
+  }
+  return null;
 }
 
 function describeFleetWrite(state: FleetState): string {
@@ -1670,6 +1711,14 @@ export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string
   const account = pin ?? launchProfileName();
   const prefix = accountSourcePrefix(account, warn);
   return { prefix, account: prefix ? account : undefined };
+}
+
+/** `argv` run under the unpinned launch account (launchAccountPrefix), for a
+ *  caller that execs without a shell. Unchanged when the launch is the
+ *  keychain login. */
+export function argvOnLaunchAccount(argv: string[], warn?: (msg: string) => void): string[] {
+  const { prefix } = launchAccountPrefix(undefined, warn);
+  return prefix ? ["bash", "-c", `${prefix}exec "$@"`, "bash", ...argv] : argv;
 }
 
 export interface AccountTokenInfo {

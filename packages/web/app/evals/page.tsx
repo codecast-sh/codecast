@@ -24,6 +24,8 @@ const PAGES: { [V in Exclude<EvalsViewName, "not-found">]: PageFor<V> } = {
   bisect: page(() => import("../../components/evals/pages/BisectPage").then((m) => m.BisectPage)),
   sim: page(() => import("../../components/evals/pages/SimCatalogPage").then((m) => m.SimCatalogPage)),
   "sim-run": page(() => import("../../components/evals/pages/SimRunPage").then((m) => m.SimRunPage)),
+  commit: page(() => import("../../components/evals/pages/CodePage").then((m) => m.CommitPage)),
+  patch: page(() => import("../../components/evals/pages/CodePage").then((m) => m.PatchPage)),
 };
 
 function EvalsViewPage({ view }: { view: EvalsView }) {

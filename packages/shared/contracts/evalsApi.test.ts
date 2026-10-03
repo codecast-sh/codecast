@@ -64,7 +64,7 @@ describe("runRowProblems", () => {
 
 describe("matchEvalsRoute", () => {
   test("every key in the spec's table is listed once", () => {
-    expect(EVALS_ROUTE_KEYS.length).toBe(22);
+    expect(EVALS_ROUTE_KEYS.length).toBe(23);
     expect(new Set(EVALS_ROUTE_KEYS).size).toBe(EVALS_ROUTE_KEYS.length);
   });
 

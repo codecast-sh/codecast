@@ -178,6 +178,26 @@ describe("learn (LE12)", () => {
     expect((await decision()).status).toBe("answered");
   });
 
+  test("the lesson files into the answered cause's project (LP1)", async () => {
+    const { t, userId, taskId, decision, read, settle } = await pausedAt("decide");
+    const projectId = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("projects", { user_id: userId, workspace: `user:${userId}`, title: "Checkout", status: "active", created_at: Date.now(), updated_at: Date.now() } as any);
+      await ctx.db.patch(taskId, { project_id: id } as any);
+      return id;
+    });
+    await t.run(async (ctx) => {
+      const row = await ctx.db.query("session_decisions").first();
+      const verdict = normalizeVerdict(row as any, { status: "answered", answer_index: 2, answer_text: "the cart is being rewritten anyway" });
+      await finalizeAnswer(ctx as any, row as any, verdict as any, { kind: "user", id: String(userId), user_id: userId }, { deliver: false });
+    });
+    await settle();
+    const { signals, tasks } = await read();
+    expect(signals).toHaveLength(1);
+    expect(signals[0].project_id).toBe(projectId);
+    expect(tasks.find((x: any) => String(x._id) === String(signals[0].task_id))?.project_id).toBe(projectId);
+    expect((await decision()).status).toBe("answered");
+  });
+
   test("Drop from the run panel: the key in front of the note is not part of it", async () => {
     const { t, userId, runId, read, settle } = await pausedAt("decide");
     await t.run(async (ctx) => {

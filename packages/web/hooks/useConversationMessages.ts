@@ -8,6 +8,7 @@ import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { prefetchStorageImageUrls } from "./useStorageImageUrl";
 import { rowSigExcluding } from "../store/wakeSig";
+import { withClearedInboxStamps } from "../store/syncProtocol";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { deepenConversation, fetchMessagesAround, fetchOlderMessages, fetchOlderPage, WARM_DEEP_ROWS } from "./inboxWarm";
 
@@ -410,7 +411,7 @@ export function useConversationMessages(
     // stays put through transient auth blips, and a truly-deleted conversation
     // just stops receiving updates.
     if (!meta) return;
-    useInboxStore.getState().syncRecord("conversations", conversationId, meta);
+    useInboxStore.getState().syncRecord("conversations", conversationId, withClearedInboxStamps(meta));
   }, [conversationId]));
 
   // =============================================

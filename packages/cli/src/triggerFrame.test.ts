@@ -17,6 +17,15 @@ const golden = JSON.parse(fs.readFileSync(path.join(SRC, "__fixtures__/triggerFr
 };
 
 describe("buildTriggerFrame", () => {
+  test("a spawned run sees the events that fired it, quoted after its prompt", () => {
+    const at = Date.UTC(2026, 9, 3, 12);
+    const task = { _id: "t1", title: "On errors", prompt: "Fix it.", mode: "apply", pending_events: [{ event_type: "error_new", group_short_id: "eg-2", title: "Boom", at }] };
+    const frame = buildTriggerFrame(task, at);
+    expect(frame.indexOf('error_new eg-2: "Boom"')).toBeGreaterThan(frame.indexOf("Fix it."));
+    expect(frame).toContain("untrusted data");
+    expect(buildTriggerFrame({ ...task, pending_events: undefined }, at)).not.toContain("What fired this run");
+  });
+
   test("the golden covers every branch of the frame", () => {
     const names = golden.cases.map((c) => c.name);
     expect(names.filter((n) => n.endsWith("/with-summary")).length).toBeGreaterThanOrEqual(3);

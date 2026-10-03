@@ -7,7 +7,8 @@ import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import { useNearViewport } from "../../hooks/useNearViewport";
 import { useStableMediaSrcs } from "../../hooks/useStableMediaSrcs";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { playableFiles, videoAt } from "../../lib/calls/callVideo";
+import { CALL_VIDEO_LOADING, playableFiles, videoAt } from "../../lib/calls/callVideo";
+import { ACCENT } from "../../lib/entityCardAccent";
 
 // A moment of a call, written in a message as `cl-42@12:34` on a line of its
 // own: the call as it looked then, a frame of its video, linking to the call
@@ -19,6 +20,11 @@ import { playableFiles, videoAt } from "../../lib/calls/callVideo";
 // the same rule (webCallRecordings answers only someone who may read the
 // call). A moment nobody recorded still reads as the call at a time, with the
 // reason there is no picture, never as a broken box.
+//
+// The link (entityRoute) names the view as well as the second: the page's
+// player opens on the room, and a frame of a shared screen must not open on a
+// different picture, so it carries `view=screen` and the page shows the
+// screen this frame shows, by the same rule (CALL_FRAME_PREFER).
 
 export function CallMomentFrame({
   rawId,
@@ -49,13 +55,16 @@ export function CallMomentFrame({
   return (
     <Link
       href={href}
-      className="group my-1 block w-[min(100%,420px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40 transition-shadow hover:ring-sol-red/40"
+      // The ring stays neutral on hover: the call's own colour is on its
+      // icon, as on every other call card and pill, and a red ring here
+      // would read as the REC mark of a call being filmed now.
+      className="group my-1 block w-[min(100%,420px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40 transition-shadow hover:ring-sol-border/70"
       title={`Open the call at ${time}`}
       data-call-moment={rawId}
     >
       <CallMomentPicture rawId={rawId} entity={entity} served={served} />
       <div className="flex items-center gap-2 px-2.5 py-1.5">
-        <Phone className="h-3.5 w-3.5 shrink-0 text-sol-red" />
+        <Phone className={`h-3.5 w-3.5 shrink-0 ${ACCENT.call.text}`} />
         <span className="min-w-0 flex-1 truncate text-[12px] text-sol-text">{title}</span>
         <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{rawId}</span>
         <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
@@ -121,10 +130,10 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
             onBlank={() => setBlank(src)}
           />
         ) : (
-          <div className="absolute inset-0 animate-pulse bg-white/[0.04] motion-reduce:animate-none" />
+          <div className={CALL_VIDEO_LOADING} />
         )
       ) : recs === undefined || !served ? (
-        <div className="absolute inset-0 animate-pulse bg-white/[0.04] motion-reduce:animate-none" />
+        <div className={CALL_VIDEO_LOADING} />
       ) : (
         <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 px-6 text-center">
           <Phone className="h-4 w-4 text-sol-text-dim" />

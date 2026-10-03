@@ -34,19 +34,22 @@ export function ShipCard({ ship, carried }: { ship: Ship; carried: readonly Stor
   );
 }
 
+/** The pill is a button, so the keyboard reaches the card that lists what the release carried. */
 export function ReleaseStamp({ ship, stories }: { ship: Ship; stories: readonly StoryRow[] }) {
   return (
-    <div className="flex items-center gap-2 py-1.5" role="separator" aria-label={`${shipLabel(ship)} shipped at ${clockOf(ship.at)}`}>
-      <span className="chg-perf" />
-      <HoverCard card={<ShipCard ship={ship} carried={carriedBy(ship, stories)} />} align="center" className="w-72">
-        <span
-          className="rounded-full border px-2 py-[1px] font-mono text-[10px] tabular-nums text-sol-text/75"
+    <div className="flex items-center gap-2 py-1.5">
+      <span aria-hidden className="chg-perf" />
+      <HoverCard card={<ShipCard ship={ship} carried={carriedBy(ship, stories)} />} align="center" className="w-72" focusable>
+        <button
+          type="button"
+          aria-label={`${shipLabel(ship)} shipped at ${clockOf(ship.at)}`}
+          className="cursor-default rounded-full border px-2 py-[1px] font-mono text-[10px] tabular-nums text-sol-text/75"
           style={{ borderColor: RELEASE_COLOR }}
         >
           {shipLabel(ship)}, {clockOf(ship.at)}
-        </span>
+        </button>
       </HoverCard>
-      <span className="chg-perf" />
+      <span aria-hidden className="chg-perf" />
     </div>
   );
 }

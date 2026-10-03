@@ -7,7 +7,7 @@ import { buildEdition, stepOrder, type EditionModel } from "../editionModel";
 import { InBrief } from "../InBrief";
 import { LeadStory } from "../LeadStory";
 import { SectionBlock } from "../SectionBlock";
-import { StoryCtx } from "../storyContext";
+import { StoryCtx, createFocusStore } from "../storyContext";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, at, edition, story } from "./fixtures";
 import { changesCss, pageSource } from "./pageSources";
@@ -43,7 +43,7 @@ const model = (url: ChangesUrl = EMPTY_URL) => buildEdition({ stories: STORIES, 
 function render(m: EditionModel): string {
   return renderToStaticMarkup(
     <TooltipProvider>
-      <StoryCtx.Provider value={{ focused: null, waiting: m.waiting, dimmed: m.dimmed, pick: () => {} }}>
+      <StoryCtx.Provider value={{ focus: createFocusStore(), waiting: m.waiting, dimmed: m.dimmed, pick: () => {} }}>
         <Accordion.Root type="single" collapsible value="">
           <div className="chg-grid">
             <div className="chg-span-8">

@@ -5,7 +5,7 @@
 
 [line]
 project = "Codecast: Product"        # default project for signals filed here
-principles = ["docs/principles.md"]  # codecast's own set is the shared set (LP5)
+principles = ["docs/line/principles.md"]  # codecast's own set; the shared docs/principles.md is always read too (LP5)
 prompting = "docs/prompting.md"
 size_budget = 400                    # changed lines before a run returns to plan
 watch_days = 7
@@ -41,3 +41,9 @@ source = "lesson"
 kind = "cohesion"
 fingerprint = "lesson:<task>:<note hash> (a card's Revise or Drop note), lesson:<rule slug> (cast-lessons)"
 runs = "convex lineLearn on a card answered Revise or Drop; the cast-lessons skill, weekly"
+
+# Not built: Sentry (codecast-a2, projects javascript-react and react-native).
+# No Sentry API token exists for this repo or its hosts, only DSNs, so the
+# one way to read issues is a signed-in browser tab, and a finder scraping a
+# person's tab is not one the line can rely on. A Sentry finder starts with
+# an org auth token (scope event:read) kept as a Convex env var.

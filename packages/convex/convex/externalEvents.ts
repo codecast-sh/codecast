@@ -20,14 +20,15 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { normalizeRepository } from "./lib/gitRefs";
 import { markEventDirty } from "./lib/changesDirty";
+import { externalEventDataValidator } from "./ingestSchema";
 import {
   canAccessConversation,
   canAccessPlan,
   canAccessProject,
   canAccessPullRequest,
-  isTeamMember,
   requireAccessibleTask,
   requireTeamMembership,
+  workspaceGrantsAccess,
 } from "./lib/access";
 
 const DEFAULT_LIMIT = 200;
@@ -56,7 +57,8 @@ const metaValidator = v.object({
 });
 
 export const recordArgs = {
-  team_id: v.id("teams"),
+  // Absent only for an ingestion row from a personal workspace source.
+  team_id: v.optional(v.id("teams")),
   // github | linear | codecast
   source: v.string(),
   repository: v.optional(v.string()),
@@ -84,12 +86,18 @@ export const recordArgs = {
     title: v.optional(v.string()),
   })),
   meta: v.optional(metaValidator),
+  // Ingestion rows (external-data.md X3): the access key, the source and group
+  // the transition belongs to, and its small render payload.
+  workspace: v.optional(v.string()),
+  source_id: v.optional(v.id("event_sources")),
+  group_id: v.optional(v.id("event_groups")),
+  data: v.optional(externalEventDataValidator),
   dedupe_key: v.string(),
   created_at: v.optional(v.number()),
 };
 
 type RecordArgs = {
-  team_id: Id<"teams">;
+  team_id?: Id<"teams">;
   source: string;
   repository?: string;
   kind: string;
@@ -112,6 +120,10 @@ type RecordArgs = {
   project_ids?: Id<"projects">[];
   issue?: { provider: string; key: string; url?: string; title?: string };
   meta?: Record<string, any>;
+  workspace?: string;
+  source_id?: Id<"event_sources">;
+  group_id?: Id<"event_groups">;
+  data?: Doc<"external_events">["data"];
   created_at?: number;
 };
 
@@ -161,6 +173,10 @@ export async function recordExternalEvent(ctx: { db: any }, args: RecordArgs): P
     plan_ids: args.plan_ids?.length ? args.plan_ids : undefined,
     project_ids: args.project_ids?.length ? args.project_ids : undefined,
     meta: args.meta,
+    workspace: args.workspace,
+    source_id: args.source_id,
+    group_id: args.group_id,
+    data: args.data,
     dedupe_key: args.dedupe_key,
     created_at: args.created_at ?? Date.now(),
   });
@@ -177,18 +193,22 @@ export const record = internalMutation({
 
 // ── Reads ──
 
-/** Team membership, or access to the conversation the event names. */
+/**
+ * The event's workspace, or access to the conversation it names. An ingestion
+ * row carries its stored key (external-data.md X3), which may be personal; a
+ * git or issue row is keyed by its team.
+ */
 async function canReadEvent(
   ctx: { db: any },
   userId: Id<"users">,
   event: Doc<"external_events">,
-  teamCache: Map<string, boolean>,
+  keyCache: Map<string, boolean>,
 ): Promise<boolean> {
-  const teamKey = String(event.team_id);
-  if (!teamCache.has(teamKey)) {
-    teamCache.set(teamKey, await isTeamMember(ctx, userId, event.team_id));
+  const key = event.workspace ?? (event.team_id ? `team:${event.team_id}` : undefined);
+  if (key && !keyCache.has(key)) {
+    keyCache.set(key, await workspaceGrantsAccess(ctx, userId, key));
   }
-  if (teamCache.get(teamKey)) return true;
+  if (key && keyCache.get(key)) return true;
   if (!event.conversation_id) return false;
   const conversation = await ctx.db.get(event.conversation_id);
   return conversation ? await canAccessConversation(ctx, userId, conversation) : false;
@@ -200,11 +220,11 @@ async function filterReadable(
   events: Doc<"external_events">[],
   limit: number,
 ): Promise<Doc<"external_events">[]> {
-  const teamCache = new Map<string, boolean>();
+  const keyCache = new Map<string, boolean>();
   const out: Doc<"external_events">[] = [];
   for (const event of events) {
     if (out.length >= limit) break;
-    if (await canReadEvent(ctx, userId, event, teamCache)) out.push(event);
+    if (await canReadEvent(ctx, userId, event, keyCache)) out.push(event);
   }
   return out;
 }
@@ -223,7 +243,9 @@ export const listForTeam = query({
 
     return await ctx.db
       .query("external_events")
-      .withIndex("by_team_created", (q) => q.eq("team_id", teamId))
+      // Git and issue activity only: a product's ingestion rows (source_id
+      // set) have their own timeline and never push these out of the feed.
+      .withIndex("by_team_source_created", (q) => q.eq("team_id", teamId).eq("source_id", undefined))
       .order("desc")
       .take(args.limit ?? DEFAULT_LIMIT);
   },
@@ -296,7 +318,7 @@ async function listForContainer(
   if (!teamId) return [];
   const recent = await ctx.db
     .query("external_events")
-    .withIndex("by_team_created", (q: any) => q.eq("team_id", teamId))
+    .withIndex("by_team_source_created", (q: any) => q.eq("team_id", teamId).eq("source_id", undefined))
     .order("desc")
     .take(SCAN_LIMIT);
   return await filterReadable(ctx, userId, recent.filter(match), limit);

@@ -1,0 +1,61 @@
+/* The call page's media and its thread (app/calls/page.tsx).
+ *
+ * Narrow (a laptop): the video sits above the thread, sized by the space the
+ * thread leaves (CallVideoPlayer's box), and the thread keeps a floor of
+ * about six lines, so the line lit as the video plays always has room to
+ * show. Wide (the content column past 1400px): the video stands on the left,
+ * as tall as the page allows, and the thread scrolls beside it, so the two
+ * are read side by side instead of in two nested scrollers.
+ *
+ * The side column is `display: contents` while narrow, so its blocks flow in
+ * the page's column exactly as if it were not there. */
+
+.call-media {
+  container-type: inline-size;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.call-media-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.call-media-side {
+  display: contents;
+}
+
+.call-media-thread {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 200px;
+}
+
+@container (min-width: 1400px) {
+  .call-media-body[data-side] {
+    flex-direction: row;
+  }
+  .call-media-body[data-side] > .call-media-side {
+    display: block;
+    flex: 0 0 58%;
+    min-width: 0;
+    overflow-y: auto;
+    padding-bottom: 16px;
+  }
+  .call-media-body[data-side] > .call-media-thread {
+    min-width: 0;
+    min-height: 0;
+    border-left: 1px solid color-mix(in srgb, var(--sol-border) 20%, transparent);
+  }
+  /* Beside the thread the picture may take the page's height, not a share
+     of it: only the header and the toolbar sit above and below it. */
+  .call-media-body[data-side] .call-video-box {
+    max-height: calc(100dvh - 240px);
+  }
+}

@@ -4,6 +4,7 @@ import {
   GUEST_LINK_REFUSAL_TEXT,
   guestJoinRefusalOf,
   callParticipantKind,
+  isRoomMachineryKind,
   guestNoticeLines,
   guestNoticeSentence,
   callSpeakerName,
@@ -40,6 +41,13 @@ describe("guest identities", () => {
     expect(callParticipantKind("k17user")).toBe("person");
     expect(callParticipantKind(guestIdentity("g1"))).toBe("guest");
     expect(callParticipantKind(agentFaceIdentity("c1"))).toBe("agent");
+  });
+
+  test("a recording's egress and the agent-face worker are machinery; people, guests and faces are not", () => {
+    // LiveKit ParticipantInfo.Kind: STANDARD 0, INGRESS 1, EGRESS 2, SIP 3, AGENT 4.
+    expect(isRoomMachineryKind(2)).toBe(true);
+    expect(isRoomMachineryKind(4)).toBe(true);
+    for (const k of [0, 1, 3, undefined]) expect(isRoomMachineryKind(k)).toBe(false);
   });
 });
 
@@ -114,6 +122,15 @@ describe("the notice a guest's consent rests on", () => {
     expect(guestNoticeLines(both, "short")[1].text).toContain("written down");
     expect(guestNoticeLines(both, "label").map((l) => l.text)).toEqual(["recording", "transcribed"]);
     expect(guestNoticeLines({ recording: false, transcribed: false }, "long")).toEqual([]);
+  });
+
+  test("a recording whose video goes to the call's public link says so in every form", () => {
+    const shared = { recording: true, transcribed: false, video_public: true };
+    expect(guestNoticeLines(shared, "long")[0].text).toContain("anyone with that link can watch it");
+    expect(guestNoticeLines(shared, "short")[0].text).toContain("shared by public link");
+    expect(guestNoticeLines(shared, "label")[0].text).toBe("recording, public");
+    // Never said of a call that is not being recorded.
+    expect(guestNoticeLines({ recording: false, transcribed: false, video_public: true }, "long")).toEqual([]);
   });
 
   test("a link's card says it in one sentence, or not at all", () => {

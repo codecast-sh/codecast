@@ -181,7 +181,7 @@ describe("the lobby and the door", () => {
     expect(text(lobby("waiting", { live: false, creatorTold: true }))).toContain("We let Sam know you're here");
     expect(text(lobby("waiting", { live: false }))).not.toContain("Sam know");
     expect(text(lobby("waiting", { live: false }))).toContain("Someone can let you in once the call starts");
-    expect(text(lobby("waiting"))).toContain("Stop asking");
+    expect(text(lobby("waiting"))).toContain("stop asking");
   });
 
   test("a page that came back to a full door says so and keeps trying", () => {
@@ -311,6 +311,12 @@ describe("inside the call", () => {
     expect(inCall(fakeCall({ phase: "disconnected", ended: "removed" }))).toContain("You were removed from the call.");
     expect(inCall(fakeCall({ phase: "disconnected", ended: "room_closed" }))).toContain("The call has ended.");
     expect(inCall(fakeCall({ phase: "disconnected", ended: "elsewhere" }))).toContain("You joined this call from another tab or window. Use this tab");
+  });
+
+  test("the page's reading of the ending overrules the media's: a closed room the server still admits into is a lost line", () => {
+    const t = inCall(fakeCall({ phase: "disconnected", ended: "room_closed" }), { ended: "lost" });
+    expect(t).toContain("You lost the connection to the call.");
+    expect(t).not.toContain("The call has ended.");
   });
 
   test("losing touch with the server is a line, not the end of the call", () => {

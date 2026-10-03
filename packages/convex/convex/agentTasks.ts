@@ -12,7 +12,9 @@ import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { enqueuePush } from "./pushRouter";
 import { isTeamMember } from "./privacy";
 import { nextShortId } from "./counters";
-import { canAccessConversation } from "./lib/access";
+import { eventFilterValidator, type EventFilter, type PendingEvent } from "./lib/eventFilterValidator";
+import { PENDING_EVENTS_CAP, sourceFilterAdmits } from "@codecast/shared/contracts/ingest";
+import { canAccessConversation, workspaceGrantsAccess } from "./lib/access";
 import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
@@ -482,7 +484,7 @@ interface NewTaskArgs {
   schedule_type: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
-  event_filter?: { event_type: string; action?: string; repository?: string; pr_number?: number };
+  event_filter?: EventFilter;
   mode?: string;
   max_runtime_ms?: number;
   max_retries?: number;
@@ -612,12 +614,7 @@ export const createTask = mutation({
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
-    event_filter: v.optional(v.object({
-      event_type: v.string(),
-      action: v.optional(v.string()),
-      repository: v.optional(v.string()),
-      pr_number: v.optional(v.number()),
-    })),
+    event_filter: v.optional(eventFilterValidator),
     mode: v.optional(v.string()),
     max_runtime_ms: v.optional(v.number()),
     max_retries: v.optional(v.number()),
@@ -1195,8 +1192,11 @@ export function nextArmingAfterRun(task: Pick<Doc<"agent_tasks">, "schedule_type
     const elapsed = slot > now ? 0 : Math.floor((now - slot) / task.interval_ms) + 1;
     return { status: "scheduled", run_at: slot + elapsed * task.interval_ms, cadence_slot_at: undefined };
   }
-  // Disarmed until the next webhook, which sets run_at again.
-  if (task.schedule_type === "event") return { status: "scheduled", run_at: undefined };
+  // Disarmed until the next webhook, which sets run_at again. The events this
+  // run was told about are spent here rather than at the claim: an inject run
+  // reads its frame from the row after claiming (injectFrame), so clearing at
+  // the claim would hand it an empty list (external-data.md X4).
+  if (task.schedule_type === "event") return { status: "scheduled", run_at: undefined, pending_events: undefined };
   // A one-shot keeps its run_at: nothing reads it once the status is terminal,
   // and it is the record of when this trigger actually fired.
   return { status: "completed" };
@@ -2050,12 +2050,7 @@ export const webCreate = mutation({
     schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
     run_at: v.optional(v.number()),
     interval_ms: v.optional(v.number()),
-    event_filter: v.optional(v.object({
-      event_type: v.string(),
-      action: v.optional(v.string()),
-      repository: v.optional(v.string()),
-      pr_number: v.optional(v.number()),
-    })),
+    event_filter: v.optional(eventFilterValidator),
     mode: v.optional(v.string()),
     agent_type: v.optional(v.string()),
     model: v.optional(v.string()),
@@ -2149,7 +2144,7 @@ type TaskUpdateArgs = {
   schedule_type?: "once" | "recurring" | "event";
   run_at?: number;
   interval_ms?: number;
-  event_filter?: { event_type: string; action?: string; repository?: string; pr_number?: number };
+  event_filter?: EventFilter;
   mode?: string;
   agent_type?: string;
   model?: string;
@@ -2311,12 +2306,7 @@ const TASK_UPDATE_ARG_VALIDATORS = {
   schedule_type: v.optional(v.union(v.literal("once"), v.literal("recurring"), v.literal("event"))),
   run_at: v.optional(v.number()),
   interval_ms: v.optional(v.number()),
-  event_filter: v.optional(v.object({
-    event_type: v.string(),
-    action: v.optional(v.string()),
-    repository: v.optional(v.string()),
-    pr_number: v.optional(v.number()),
-  })),
+  event_filter: v.optional(eventFilterValidator),
   mode: v.optional(v.string()),
   agent_type: v.optional(v.string()),
   model: v.optional(v.string()),
@@ -2468,38 +2458,65 @@ export const matchTaskTriggers = internalMutation({
     // only members of that team can be woken. It is omitted only when the
     // webhook could not resolve a team, and then the old behaviour stands.
     team_id: v.optional(v.id("teams")),
+    // The source name an ingestion event came from (external-data.md X4). A
+    // trigger that names a source fires only for it; one that does not fires
+    // for every source its owner can see, like a repository filter.
+    source: v.optional(v.string()),
+    // The access key of the event's rows. Ingestion events can belong to a
+    // personal workspace, which has no team to scope by, so when this is set
+    // only an owner the key admits can be woken.
+    workspace: v.optional(v.string()),
+    // What fired, appended to each matched trigger's pending_events so the
+    // run knows what woke it. Omitted by the git events, which carry their
+    // context in the session they wake.
+    event_ref: v.optional(v.object({
+      external_event_id: v.optional(v.id("external_events")),
+      group_short_id: v.optional(v.string()),
+      title: v.string(),
+      url: v.optional(v.string()),
+    })),
   },
   handler: async (ctx, args) => {
+    // Only the triggers armed on this name: a firing used to read every
+    // scheduled trigger of every user.
     const tasks = await ctx.db
       .query("agent_tasks")
-      .withIndex("by_event_filter", (q) => q.eq("status", "scheduled"))
+      .withIndex("by_status_event_type", (q) => q.eq("status", "scheduled").eq("event_filter.event_type", args.event_type))
       .collect();
 
-    // One membership lookup per distinct owner, not per task: a user with
-    // several armed triggers is the normal case.
-    const membership = new Map<string, boolean>();
-    const ownerIsInTeam = async (userId: Id<"users">): Promise<boolean> => {
-      if (!args.team_id) return true;
+    // One lookup per distinct owner, not per task: a user with several armed
+    // triggers is the normal case.
+    const ownerVerdicts = new Map<string, boolean>();
+    const ownerMayBeWoken = async (userId: Id<"users">): Promise<boolean> => {
+      if (!args.team_id && !args.workspace) return true;
       const key = String(userId);
-      const known = membership.get(key);
+      const known = ownerVerdicts.get(key);
       if (known !== undefined) return known;
-      const verdict = await isTeamMember(ctx, userId, args.team_id);
-      membership.set(key, verdict);
+      const verdict =
+        (!args.team_id || (await isTeamMember(ctx, userId, args.team_id))) &&
+        (!args.workspace || (await workspaceGrantsAccess(ctx, userId, args.workspace)));
+      ownerVerdicts.set(key, verdict);
       return verdict;
     };
 
+    const now = Date.now();
     let matched = 0;
     for (const task of tasks) {
       if (!task.event_filter) continue;
-      if (task.event_filter.event_type !== args.event_type) continue;
       if (task.event_filter.action && task.event_filter.action !== args.action) continue;
       // Both sides canonical: the filter is what a person typed, the event is what GitHub sent.
       if (task.event_filter.repository && normalizeRepository(task.event_filter.repository) !== normalizeRepository(args.repository)) continue;
       if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
+      if (!sourceFilterAdmits(task.event_filter.source, args.source)) continue;
       // Last, because it is the only check that reads the database.
-      if (!(await ownerIsInTeam(task.user_id))) continue;
+      if (!(await ownerMayBeWoken(task.user_id))) continue;
 
-      await ctx.db.patch(task._id, { run_at: Date.now() });
+      const patch: Partial<Doc<"agent_tasks">> = { run_at: now };
+      if (args.event_ref) {
+        const event: PendingEvent = { ...args.event_ref, event_type: args.event_type, at: now };
+        patch.pending_events = [...(task.pending_events ?? []), event].slice(-PENDING_EVENTS_CAP);
+      }
+      await ctx.db.patch(task._id, patch);
       matched++;
     }
 

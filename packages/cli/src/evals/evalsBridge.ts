@@ -38,6 +38,11 @@ export const EVALS_SCRIPT_HEADER = [
 /** The child's entry, relative to the checkout root. */
 export const EVALS_ENTRY = path.join("packages", "evals", "src", "index.ts");
 
+/** The `api` command the child runs. A checkout at a commit from before it
+ *  (a review or agent worktree that ran ./evals) has the entry but answers
+ *  `api --stdio` with its help and exit 1, so it is refused up front. */
+export const EVALS_API_COMMAND = path.join("packages", "evals", "src", "commands", "api.ts");
+
 const IDLE_MS = 10 * 60_000;
 const REQUEST_TIMEOUT_MS = 120_000;
 const CRASH_BACKOFF_MS = 5_000;
@@ -100,7 +105,8 @@ async function pointedRoot(deps: EvalsBridgeDeps): Promise<string | null> {
 /**
  * Prove the pointer names a codecast checkout this user owns: the realpath is
  * a directory owned by our uid, its `evals` script starts with the known
- * header, git calls it the top level, and the child's entry exists. Runs
+ * header, git calls it the top level, and the child's entry and api command
+ * exist. Runs
  * before any exec; git is the only thing it spawns, never checkout code.
  */
 export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps): Promise<CheckoutCheck> {
@@ -129,6 +135,10 @@ export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps)
 
   const entry = await fsp.stat(path.join(root, EVALS_ENTRY)).catch(() => null);
   if (!entry?.isFile()) return refuse("checkout-no-entry", `${root} has no ${EVALS_ENTRY}`);
+  const api = await fsp.stat(path.join(root, EVALS_API_COMMAND)).catch(() => null);
+  if (!api?.isFile()) {
+    return refuse("checkout-no-entry", `${root} last ran ./evals, and its eval tool predates the api command (no ${EVALS_API_COMMAND}); run ./evals from a current checkout`);
+  }
   return { ok: true, root };
 }
 

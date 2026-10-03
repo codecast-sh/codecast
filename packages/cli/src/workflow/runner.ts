@@ -6,6 +6,7 @@ import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition"
 import { planReadiness } from "../planReadiness.js";
 import { readCardFile } from "../cardFile.js";
 import { spawnSync } from "../proc.js";
+import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
@@ -189,7 +190,10 @@ async function executeAgent(
     }
 
     const beforeMs = Date.now();
-    const result = spawnSync(args[0], args.slice(1), {
+    // On the fleet store like every codecast launch, never the bare keychain
+    // login (ct-56748).
+    const argv = argvOnLaunchAccount(args, (msg) => console.log(`${c.dim}${msg}${c.reset}`));
+    const result = spawnSync(argv[0], argv.slice(1), {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf-8",
@@ -262,7 +266,7 @@ async function executeCliAgent(
     });
   }
 
-  const timeout = options.agentTimeout || 1800_000;
+  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = 10_000;
 
@@ -417,7 +421,7 @@ async function executeSessionNode(
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
-  const timeout = options.agentTimeout || 1800_000;
+  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = options.pollIntervalMs ?? 10_000;
   let wasLive = false;
@@ -436,9 +440,10 @@ async function executeSessionNode(
     const settled = state === "done" || state === "needs_input" || row.is_killed || (wasLive && !row.is_live);
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
-    const pinnedText: string = typeof pinned?.text === "string" ? pinned.text : (typeof pinned?.state?.text === "string" ? pinned.state.text : "");
+    // conversations.getThreadState: the pinned text is `state`, its status `status`.
+    const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
     recordNodeOutput(context, node.id, `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`);
-    const pinnedStatus: string = pinned?.status || pinned?.state?.status || "";
+    const pinnedStatus: string = pinned?.status || "";
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
       context["last_error"] = pinnedText.slice(0, 2000);
@@ -939,13 +944,22 @@ async function queueTaskDecision(options: RunOptions, context: Record<string, st
   return !!result;
 }
 
+// How long a hand may run before the runner kills it: the node's own
+// `timeout` (seconds) when the graph sets one, since a station that replays
+// evals under load needs more than one that writes criteria, else the run's
+// --agent-timeout, else 30 minutes.
+export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick<RunOptions, "agentTimeout">): number {
+  return node.timeout ? node.timeout * 1000 : options.agentTimeout || 1800_000;
+}
+
 // The failure path for a bound task (the-line.md L4). A hand that handed off
 // blocked or needs_context already parked the task in review: keep it there.
 // Retries exhausted parks it in review as blocked. Anything else (a killed
 // hand, a hand that ended without a handoff) returns it to open. Either way
 // a blocker comment says what happened, and a parked task gets a decision.
 async function returnTaskOnFailure(options: RunOptions, state: WorkflowRunState): Promise<void> {
-  if (!options.taskId) return;
+  // A dry run validates the graph; it never moves or comments on the real task.
+  if (!options.taskId || options.dryRun) return;
   const reason = state.failReason || "workflow failed";
   const exhausted = /max_visits/.test(reason);
   const handoff = state.context["handoff"];
@@ -1194,7 +1208,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     }
 
     // Log completion to bound plan
-    if (options.planId && options.apiToken && options.convexSiteUrl) {
+    if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
       try {
         await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
           method: "POST",
@@ -1334,7 +1348,7 @@ async function runNodeLoop(
     }
 
     // Log node completion to bound plan
-    if (options.planId && options.apiToken && options.convexSiteUrl && current.type !== "start") {
+    if (options.planId && options.apiToken && options.convexSiteUrl && current.type !== "start" && !options.dryRun) {
       try {
         await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
           method: "POST",

@@ -10,6 +10,7 @@ import { HoverCard } from "../ui/HoverCard";
 import { areaColor, areaFill, RISK_HATCH } from "./areaColor";
 import { carriedBy, ShipCard } from "./ReleaseStamp";
 import { Tip } from "./StoryParts";
+import { useAreaColors } from "./storyContext";
 
 export type LiveTile =
   | { kind: "ship"; row: LiveRow; risk: string | null }
@@ -32,19 +33,20 @@ function Tile({ tile, stories, active, onPick }: { tile: LiveTile; stories: read
   const label = ship ? ship.version ?? ship.sha.slice(0, 7) : null;
   // A new ship while the page is open rolls its version in and pulses the border once.
   const fresh = useChangedSinceMount(label);
+  const colors = useAreaColors();
   const body = (
     <button
       type="button"
       onClick={() => onPick(surface)}
       aria-pressed={active}
       className="relative block w-full overflow-hidden rounded-md border border-sol-border/25 bg-sol-card px-3 pb-2.5 pt-3 text-left shadow-sm transition-colors hover:border-sol-border/50"
-      style={active ? { background: areaFill(surface, 10), borderColor: areaColor(surface) } : undefined}
+      style={active ? { background: areaFill(surface, 10, colors), borderColor: areaColor(surface, colors) } : undefined}
     >
       <span
         aria-hidden
         key={label ?? "silent"}
         className={`absolute inset-x-0 top-0 h-[2px] ${fresh ? "chg-pulse" : ""}`}
-        style={{ background: ship ? areaColor(surface) : "var(--sol-border)" }}
+        style={{ background: ship ? areaColor(surface, colors) : "var(--sol-border)" }}
       />
       <span className="chg-ui block text-[12px] text-sol-text/70">{surface}</span>
       {ship && label ? (
@@ -66,15 +68,18 @@ function Tile({ tile, stories, active, onPick }: { tile: LiveTile; stories: read
         </>
       )}
       {tile.kind === "ship" && tile.risk && (
-        <Tip text={<span className="whitespace-pre-line">{tile.risk}</span>}>
-          <span aria-label="Risk" className="absolute right-0 top-0 h-3.5 w-3.5" style={{ background: RISK_HATCH }} />
-        </Tip>
+        <>
+          <span className="sr-only">Risk: {tile.risk}</span>
+          <Tip text={<span className="whitespace-pre-line">{tile.risk}</span>}>
+            <span aria-hidden className="absolute right-0 top-0 h-3.5 w-3.5" style={{ background: RISK_HATCH }} />
+          </Tip>
+        </>
       )}
     </button>
   );
   if (!ship) return body;
   return (
-    <HoverCard card={<ShipCard ship={ship} carried={carriedBy(ship, stories)} />} className="w-72" triggerClassName="block min-w-0" side="bottom">
+    <HoverCard card={<ShipCard ship={ship} carried={carriedBy(ship, stories)} />} className="w-72" triggerClassName="block min-w-0" side="bottom" focusable>
       {body}
     </HoverCard>
   );

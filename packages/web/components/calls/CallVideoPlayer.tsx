@@ -1,9 +1,10 @@
 import { useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { AlertTriangle, Loader2, MonitorUp, RotateCw, Trash2, Users, Volume2, VolumeX } from "lucide-react";
-import { recordingFailureWords, recordingSubject } from "@codecast/shared/contracts";
+import { recordingFailureWords, recordingSubject, type CallView } from "@codecast/shared/contracts";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useStableMediaSrcs } from "../../hooks/useStableMediaSrcs";
 import {
+  CALL_VIDEO_LOADING,
   callMsOf,
   fileSecondsAt,
   noVideoWords,
@@ -16,6 +17,7 @@ import {
 import { RecordingMark } from "./RecordingMark";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { fmtClock } from "./speakers";
+import "./callVideoPlayer.css";
 
 // A call's video on its page, kept in step with the transcript the way the
 // recording's audio always was: a line clicked seeks the picture there, and
@@ -35,7 +37,16 @@ import { fmtClock } from "./speakers";
 // THE CLOCK. The native controls count from the file's own start, which is
 // not the call's (Record was pressed some minutes in). So the toolbar says
 // where in the CALL the picture is, in the clock the transcript and every
-// `cl-42@12:34` reference use.
+// `cl-42@12:34` reference use, and the browser's own time readouts are hidden
+// (callVideoPlayer.css): one picture, one clock. The browser's download,
+// speed and picture-in-picture menus are left out too: they are not this
+// page's controls, and a downloaded file leaves the call's access rules
+// behind.
+//
+// LOADING. Until a file's metadata arrives the box pulses the way the page's
+// placeholder does (CallVideoPlaceholder) and the browser draws nothing: no
+// spinner on black, no control bar at 0:00. Under load that can last a while,
+// and the move from placeholder to picture should be the only change seen.
 //
 // URLS. A file's URL changes under it (a presigned one every window, the share
 // page's redirect signs a short one per request), and a video element handed a
@@ -48,10 +59,11 @@ import { fmtClock } from "./speakers";
 // voices is playing unseen with its controls off. So the toolbar has its own
 // mute and volume while a screen is shown, and they act on the room's file.
 //
-// ONE SHAPE. The picture's box is 16:9 (capped by the viewport) whatever the
-// file's own shape, and the page's placeholder is the same box
-// (CallVideoPlaceholder): the transcript under it never moves when the
-// metadata lands or the view switches to a screen of another shape.
+// ONE SHAPE. The picture's box is 16:9 whatever the file's own shape, capped
+// by the space the page leaves after its header and a floor for the thread
+// (and never below a size worth watching), and the page's placeholder is the
+// same box (CallVideoPlaceholder): the transcript under it never moves when
+// the metadata lands or the view switches to a screen of another shape.
 //
 // ONE CALL, SEVERAL RECORDINGS. Record pressed twice makes two runs with a gap
 // between. Playing to the end of one carries on into the next, the way the
@@ -59,7 +71,9 @@ import { fmtClock } from "./speakers";
 
 /** The picture's box: one shape for the player and for whatever holds its
  *  place before it mounts. */
-const CALL_VIDEO_BOX = "relative aspect-video max-h-[46vh] w-full overflow-hidden bg-black";
+const CALL_VIDEO_BOX = "call-video-box relative aspect-video max-h-[min(46vh,calc(100dvh-460px))] min-h-[180px] w-full overflow-hidden bg-black";
+/** The browser menus that are not this page's (THE CLOCK above). */
+const NATIVE_MENUS_OFF = "nodownload noplaybackrate noremoteplayback";
 const CALL_VIDEO_FRAME = "dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30";
 const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-[11px] text-sol-text-muted";
 
@@ -67,17 +81,23 @@ const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1
  *  says the call was filmed and the recordings have not answered yet), so the
  *  words under it do not jump when the video lands. */
 export function CallVideoPlaceholder() {
+  // The same breath the player shows while its file loads, so the page goes
+  // placeholder, loading, picture with nothing jumping or flashing between.
   return (
-    <div className={`${CALL_VIDEO_FRAME} animate-pulse motion-reduce:animate-none`} aria-hidden="true">
-      <div className={CALL_VIDEO_BOX} />
+    <div className={CALL_VIDEO_FRAME} aria-hidden="true">
+      <div className={CALL_VIDEO_BOX}>
+        <div className={CALL_VIDEO_LOADING} />
+      </div>
       <div className={CALL_VIDEO_BAR} />
     </div>
   );
 }
 
 export type CallVideoHandle = {
-  /** Show the call at `callMs`. False when no video covers that moment. */
-  seek: (callMs: number, opts?: { play?: boolean }) => boolean;
+  /** Show the call at `callMs`. False when no video covers that moment.
+   *  `view` (a link's `view=screen`) switches to the screen it names when
+   *  one covers the moment, the room playing under it; else the room. */
+  seek: (callMs: number, opts?: { play?: boolean; view?: CallView | null }) => boolean;
 };
 
 export function CallVideoPlayer({
@@ -129,6 +149,12 @@ export function CallVideoPlayer({
   const pending = useRef(new Map<string, { seconds: number; play: boolean }>());
   // The URL each file plays from (see URLS above).
   const media = useStableMediaSrcs(files);
+  // Elements whose metadata has arrived, by element key (LOADING above).
+  const [loadedKeys, setLoadedKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const noteLoaded = (f: CallVideoFile) => {
+    const key = media.keyOf(f);
+    setLoadedKeys((prev) => (prev.has(key) ? prev : new Set([...prev, key])));
+  };
   const srcOf = (f: CallVideoFile) => media.srcOf(f);
 
   const driver = () => (screen && screenEl.current ? { el: screenEl.current, file: screen } : main && mainEl.current ? { el: mainEl.current, file: main } : null);
@@ -173,8 +199,28 @@ export function CallVideoPlayer({
     setMainId(file.id);
   };
 
-  const seek = (at: number, opts: { play?: boolean } = {}): boolean => {
+  const seek = (at: number, opts: { play?: boolean; view?: CallView | null } = {}): boolean => {
     const play = opts.play ?? true;
+    // A link that names a screen (a frame of it was cited): show that screen
+    // at the moment, with the room's file brought there underneath for the
+    // voices. The same rule the frame was located by, so it is the same file.
+    const asked = opts.view?.screen ? videoAt(playable, callStartedAt, at, "screen", opts.view.identity) : null;
+    // A screen that is itself a lead (its run's room file was lost) plays as
+    // the main picture, below.
+    if (asked && asked.file.kind === "screen" && !leads.some((f) => f.id === asked.file.id)) {
+      if (asked.file.id === screen?.id && screenEl.current) {
+        screenEl.current.currentTime = asked.seconds;
+        if (play) void screenEl.current.play().catch(() => {});
+      } else {
+        pending.current.set(asked.file.id, { seconds: asked.seconds, play });
+        setScreenId(asked.file.id);
+      }
+      const room = videoAt(leads, callStartedAt, at);
+      if (room && room.file.kind === "composite") showMain(room.file, room.seconds, play);
+      setCallMs(at);
+      onTime?.(at, play);
+      return true;
+    }
     // Watching a screen that covers the moment: stay on it.
     const intoScreen = screen ? fileSecondsAt(screen, callStartedAt, at) : null;
     if (screen && intoScreen !== null && screenEl.current) {
@@ -312,24 +358,30 @@ export function CallVideoPlayer({
   const runIndex = leads.findIndex((f) => f.id === main.id);
   const shown = screen ?? main;
   const dead = media.dead(shown.id);
+  // The file shown has its metadata (LOADING above): keyed by the element,
+  // so a fresh URL after a refusal starts loading again.
+  const shownLoaded = loadedKeys.has(media.keyOf(shown));
 
   return (
     // Always dark, like the stage: video wants a dark room, and the `dark`
     // class makes every sol token inside (the toolbar's words) read on it
     // whatever theme the page is in.
     <div className={`${CALL_VIDEO_FRAME} ${className}`}>
-      <div className={CALL_VIDEO_BOX}>
+      <div className={CALL_VIDEO_BOX} aria-busy={!shownLoaded && !dead ? true : undefined}>
         <video
           key={media.keyOf(main)}
           ref={mainEl}
           src={srcOf(main)}
-          controls={!screen}
+          controls={!screen && loadedKeys.has(media.keyOf(main))}
+          controlsList={NATIVE_MENUS_OFF}
+          disablePictureInPicture
           playsInline
           preload="metadata"
           aria-hidden={screen ? true : undefined}
           tabIndex={screen ? -1 : undefined}
-          className={`absolute inset-0 h-full w-full object-contain ${screen ? "pointer-events-none opacity-0" : ""}`}
+          className={`call-video absolute inset-0 h-full w-full object-contain ${screen || !loadedKeys.has(media.keyOf(main)) ? "pointer-events-none opacity-0" : ""}`}
           onLoadedMetadata={(e) => {
+            noteLoaded(main);
             onMainVolume(e);
             onLoadedFile(main)(e);
           }}
@@ -343,17 +395,23 @@ export function CallVideoPlayer({
             key={media.keyOf(screen)}
             ref={screenEl}
             src={srcOf(screen)}
-            controls
+            controls={loadedKeys.has(media.keyOf(screen))}
+            controlsList={NATIVE_MENUS_OFF}
+            disablePictureInPicture
             muted
             playsInline
             preload="metadata"
-            className="absolute inset-0 h-full w-full object-contain"
-            onLoadedMetadata={onLoadedFile(screen)}
+            className={`call-video absolute inset-0 h-full w-full object-contain ${loadedKeys.has(media.keyOf(screen)) ? "" : "opacity-0"}`}
+            onLoadedMetadata={(e) => {
+              noteLoaded(screen);
+              onLoadedFile(screen)(e);
+            }}
             onError={onError(screen)}
             onEnded={onScreenEnded}
             {...driverHandlers}
           />
         )}
+        {!shownLoaded && !dead && <div className={CALL_VIDEO_LOADING} aria-hidden="true" />}
         {dead && (
           <div className="absolute inset-0 flex flex-col items-center justify-center gap-2.5 bg-black/85 px-6 text-center text-[12px] text-sol-text-muted" role="status">
             {refreshing ? (
@@ -600,7 +658,7 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
         type="button"
         onClick={() => setAsking(true)}
         className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red"
-        title="Delete this recording, its screen files too, for everyone"
+        title="Delete this recording for everyone, with its screen files and any frames shared from it"
       >
         <Trash2 className="h-3 w-3" /> Delete
       </button>

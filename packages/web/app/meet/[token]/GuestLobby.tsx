@@ -93,7 +93,7 @@ export function GuestLobby({
   };
 
   return (
-    <div className="mx-auto grid w-full max-w-[1080px] flex-1 items-center gap-6 px-4 pb-10 pt-2 sm:px-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,1fr)] lg:gap-12">
+    <div className="mx-auto grid w-full max-w-[1080px] flex-1 items-center gap-6 max-lg:content-start max-lg:pt-0 px-4 pb-10 pt-2 sm:px-6 lg:grid-cols-[minmax(0,1.3fr)_minmax(320px,1fr)] lg:gap-12">
       {/* Their own picture, and the devices behind it. */}
       <section className="meet-rise flex min-w-0 flex-col gap-3" aria-label="Your camera and microphone">
         <PreviewFrame preview={preview} name={name} mode={mode} onToggle={onToggle} />
@@ -173,26 +173,30 @@ export function GuestLobby({
             )}
             <CallNotice transcribed={transcribed} recording={recording} since={mode === "rejoin" ? accepted : null} />
             {/* Joining while the browser's prompt is up would walk in with
-                no camera and no microphone, so the press waits for it. */}
-            <button
-              type={mode === "ask" ? "submit" : "button"}
-              onClick={mode === "rejoin" ? onJoin : undefined}
-              disabled={busy || (mode === "ask" && !name.trim()) || (mode === "rejoin" && p.asking)}
-              className="flex items-center justify-center gap-2 rounded-xl bg-sol-cyan px-4 py-3 text-[14px] font-semibold text-sol-base03 shadow-[0_8px_24px_-10px_rgba(42,161,152,0.7)] transition-[transform,background-color,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
-            >
-              {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-              {mode === "rejoin"
-                ? p.asking
-                  ? "Waiting for your camera and microphone…"
-                  : widened
-                    ? recording
-                      ? "Join, recorded"
-                      : "Join, transcribed"
-                    : "Join the call"
-                : busy
-                  ? "Asking…"
-                  : "Ask to join"}
-            </button>
+                no camera and no microphone, so the press waits for it. On a
+                phone the press stays in reach at the bottom of the screen,
+                over a fade into the page, while the rest scrolls under it. */}
+            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-[#002b36] max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4">
+              <button
+                type={mode === "ask" ? "submit" : "button"}
+                onClick={mode === "rejoin" ? onJoin : undefined}
+                disabled={busy || (mode === "ask" && !name.trim()) || (mode === "rejoin" && p.asking)}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-sol-cyan px-4 py-3 text-[14px] font-semibold text-sol-base03 shadow-[0_8px_24px_-10px_rgba(42,161,152,0.7)] transition-[transform,background-color,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45 disabled:shadow-none"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                {mode === "rejoin"
+                  ? p.asking
+                    ? "Waiting for your camera and microphone…"
+                    : widened
+                      ? recording
+                        ? "Join, recorded"
+                        : "Join, transcribed"
+                      : "Join the call"
+                  : busy
+                    ? "Asking…"
+                    : "Ask to join"}
+              </button>
+            </div>
             {/* Being let in is not having agreed: a guest who does not want
                 what the call keeps now walks out here, and the room is told
                 they left rather than left holding a place for them. */}
@@ -323,7 +327,7 @@ function WaitingCard({
           disabled={busy}
           className="rounded-md px-2 py-1 text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text disabled:opacity-50"
         >
-          Stop asking
+          stop asking
         </button>
       </div>
     </div>
@@ -369,34 +373,72 @@ function PreviewFrame({
   const ctl = (on: boolean) =>
     p.asking ? "bg-white/10 text-white/50" : on ? "bg-white/15 text-white hover:bg-white/25" : "bg-sol-red/85 text-white hover:bg-sol-red";
   const initial = (name.trim() || "?").charAt(0).toUpperCase();
+  // The device notice sits over the picture where there is room, and under
+  // it on a phone: four lines over a narrow preview ran its last one, the
+  // "you can still join" that matters, under the switches.
   return (
-    <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black/50 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)] ring-1 ring-white/[0.08]">
-      {p.video ? (
-        <video ref={videoRef} autoPlay playsInline muted className="h-full w-full -scale-x-100 object-cover" />
-      ) : (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
-          {p.asking ? (
-            <>
-              <Loader2 className="h-6 w-6 animate-spin text-sol-text-dim" />
-              <span className="text-[12px] text-sol-text-muted">Allow your camera and microphone in the browser's prompt</span>
-            </>
-          ) : (
-            <>
-              <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-base02 font-mono text-[30px] text-sol-text-secondary">
-                {initial}
-              </span>
-              <span className="text-[12px] text-sol-text-muted">{p.cameraError ? "No camera" : "Your camera is off"}</span>
-            </>
-          )}
+    <div className="relative">
+      <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black/50 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)] ring-1 ring-white/[0.08]">
+        {p.video ? (
+          <video ref={videoRef} autoPlay playsInline muted className="h-full w-full -scale-x-100 object-cover" />
+        ) : (
+          <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-6 text-center">
+            {p.asking ? (
+              <>
+                <Loader2 className="h-6 w-6 animate-spin text-sol-text-dim" />
+                <span className="text-[12px] text-sol-text-muted">Allow your camera and microphone in the browser's prompt</span>
+              </>
+            ) : (
+              <>
+                <span className="flex h-20 w-20 items-center justify-center rounded-full bg-sol-base02 font-mono text-[30px] text-sol-text-secondary">
+                  {initial}
+                </span>
+                <span className="text-[12px] text-sol-text-muted">{p.cameraError ? "No camera" : "Your camera is off"}</span>
+              </>
+            )}
+          </div>
+        )}
+        {mode !== "waiting" && name.trim() && p.video && !refused && (
+          <span className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[12px] text-white/90 backdrop-blur">
+            {name.trim()}
+          </span>
+        )}
+        <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/55 to-transparent pb-3 pt-10">
+          <button
+            ref={micRef}
+            type="button"
+            disabled={p.asking}
+            onClick={() => {
+              const on = !p.audio;
+              onToggle("mic", on);
+              void preview.setMic(on);
+            }}
+            className={`${STAGE_CTL} meet-level p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.audio)}`}
+            title={p.asking ? "Waiting for the browser's prompt" : p.audio ? "Turn your microphone off" : "Turn your microphone on"}
+            aria-label={p.audio ? "Turn your microphone off" : "Turn your microphone on"}
+            aria-pressed={!p.audio}
+          >
+            {p.audio || p.asking ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
+          </button>
+          <button
+            type="button"
+            disabled={p.asking}
+            onClick={() => {
+              const on = !p.video;
+              onToggle("camera", on);
+              void preview.setCamera(on);
+            }}
+            className={`${STAGE_CTL} p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.video)}`}
+            title={p.asking ? "Waiting for the browser's prompt" : p.video ? "Turn your camera off" : "Turn your camera on"}
+            aria-label={p.video ? "Turn your camera off" : "Turn your camera on"}
+            aria-pressed={!p.video}
+          >
+            {p.video || p.asking ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
+          </button>
         </div>
-      )}
-      {mode !== "waiting" && name.trim() && p.video && !refused && (
-        <span className="absolute left-3 top-3 rounded-full bg-black/45 px-2.5 py-0.5 font-mono text-[12px] text-white/90 backdrop-blur">
-          {name.trim()}
-        </span>
-      )}
+      </div>
       {refused && !p.asking && (
-        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 text-[11.5px] leading-snug text-sol-orange backdrop-blur">
+        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 max-sm:static max-sm:mt-2 max-sm:bg-sol-orange/10 max-sm:ring-1 max-sm:ring-sol-orange/20 text-[11.5px] leading-snug text-sol-orange backdrop-blur">
           <span className="min-w-0 flex-1">
             {deviceTrouble(p)}
           </span>
@@ -410,39 +452,6 @@ function PreviewFrame({
           </button>
         </div>
       )}
-      <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 bg-gradient-to-t from-black/55 to-transparent pb-3 pt-10">
-        <button
-          ref={micRef}
-          type="button"
-          disabled={p.asking}
-          onClick={() => {
-            const on = !p.audio;
-            onToggle("mic", on);
-            void preview.setMic(on);
-          }}
-          className={`${STAGE_CTL} meet-level p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.audio)}`}
-          title={p.asking ? "Waiting for the browser's prompt" : p.audio ? "Turn your microphone off" : "Turn your microphone on"}
-          aria-label={p.audio ? "Turn your microphone off" : "Turn your microphone on"}
-          aria-pressed={!p.audio}
-        >
-          {p.audio || p.asking ? <Mic className="h-5 w-5" /> : <MicOff className="h-5 w-5" />}
-        </button>
-        <button
-          type="button"
-          disabled={p.asking}
-          onClick={() => {
-            const on = !p.video;
-            onToggle("camera", on);
-            void preview.setCamera(on);
-          }}
-          className={`${STAGE_CTL} p-3 backdrop-blur disabled:cursor-default ${ctl(!!p.video)}`}
-          title={p.asking ? "Waiting for the browser's prompt" : p.video ? "Turn your camera off" : "Turn your camera on"}
-          aria-label={p.video ? "Turn your camera off" : "Turn your camera on"}
-          aria-pressed={!p.video}
-        >
-          {p.video || p.asking ? <Video className="h-5 w-5" /> : <VideoOff className="h-5 w-5" />}
-        </button>
-      </div>
     </div>
   );
 }

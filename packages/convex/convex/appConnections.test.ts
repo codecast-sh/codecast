@@ -121,10 +121,11 @@ describe("listConnections", () => {
     expect(apps.github).toEqual(notConnected("github"));
     expect(apps["github:personal"]).toEqual(notConnected("github", "personal"));
     // Every catalog app is a live connector: gmail via googleOAuth (personal
-    // only, so no team entry), linear/notion via the generic oauthConnectors table.
+    // only, so no team entry), linear/notion via the generic oauthConnectors
+    // table, sentry/posthog/app via the token connectors on the same table.
     expect(apps.gmail).toBeUndefined();
     expect(apps["gmail:personal"]).toEqual(notConnected("gmail", "personal"));
-    for (const id of ["linear", "notion"]) {
+    for (const id of ["linear", "notion", "sentry", "posthog", "app"]) {
       expect(apps[id]).toEqual(notConnected(id));
       expect(apps[`${id}:personal`]).toEqual(notConnected(id, "personal"));
     }
@@ -136,7 +137,7 @@ describe("listConnections", () => {
     const result = await run(ctx(OWNER, t));
     expect(result.team).toBeNull();
     expect(result.apps.every((a: any) => a.scope === "personal")).toBe(true);
-    expect(result.apps.map((a: any) => a.id)).toEqual(["slack", "github", "gmail", "linear", "notion"]);
+    expect(result.apps.map((a: any) => a.id)).toEqual(APP_IDS.filter((id) => APP_DESCRIPTORS[id].scopes.includes("personal")));
   });
 
   test("a linear connection reports team scope, the workspace, who, and a disconnect id", async () => {

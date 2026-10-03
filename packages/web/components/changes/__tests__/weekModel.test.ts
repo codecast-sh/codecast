@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
-import { buildWeek } from "../weekModel";
+import { buildWeek, weekNotes } from "../weekModel";
+import { provenanceText } from "../ChangesFooter";
+import { changesDayLabel } from "../../../lib/changesDay";
 import { edition, story } from "./fixtures";
 
 const MON = "2026-09-28";
@@ -36,9 +38,9 @@ describe("buildWeek", () => {
     expect(w.ledger).toEqual([{ surface: "cli", count: 2, first: "1.1.157", last: "1.1.158", at: 2 }]);
     expect(w.areas.map((a) => a.area)).toEqual(["docs", "cli", "web"]);
     expect(w.days).toEqual([
-      { date: MON, headline: "Line pages land", prose: true, commits: 5, quiet: false },
-      { date: TUE, headline: "3 commits, 1 release, 1 story", prose: false, commits: 3, quiet: false },
-      { date: WED, headline: "0 commits, 0 stories", prose: false, commits: 0, quiet: true },
+      { date: MON, headline: "Line pages land", prose: true, commits: 5, stories: 2, quiet: false },
+      { date: TUE, headline: "3 commits, 1 release, 1 story", prose: false, commits: 3, stories: 1, quiet: false },
+      { date: WED, headline: "0 commits, 0 stories", prose: false, commits: 0, stories: 0, quiet: true },
     ]);
   });
 
@@ -79,5 +81,68 @@ describe("buildWeek", () => {
     expect(ben.order).toEqual(["c"]);
     const none = buildWeek({ days: [MON, TUE], stories, editions, week, url: url({ risk: true }) });
     expect(none).toMatchObject({ matching: 0, top: [], order: [], filterLine: "Showing 0 of 3 stories (risks)" });
+  });
+});
+
+describe("the week's live count on main", () => {
+  test("sums the day editions' counts, else the days' main stories, whatever the branch toggle shows", () => {
+    const { stories, editions } = fixture();
+    // Monday 5 and Tuesday 3 from their editions; Wednesday has one main story and no edition.
+    const all = [...stories, story("w", { date: WED, commit_shas: ["w1", "w2"] })];
+    const main = buildWeek({ days: [MON, TUE, WED], stories: all, editions, week: undefined, url: url() });
+    const every = buildWeek({ days: [MON, TUE, WED], stories: all, editions, week: undefined, url: url({ branches: "all" }) });
+    expect(main.mainCommits).toBe(10);
+    expect(every.mainCommits).toBe(10);
+    // With every branch the header counts Tuesday's branch story too.
+    expect(every.stats.stories).toBe(main.stats.stories + 1);
+  });
+});
+
+describe("weekNotes: what the week's notes stand on", () => {
+  const SAT = "2026-10-03";
+  const FRI = "2026-10-02";
+  const T = (iso: string) => Date.parse(iso);
+  const WRITTEN = T("2026-10-03T10:29:00");
+  const days = (main: Record<string, number>) => ({ days: Object.keys(main).map((date) => ({ date, headline: "", prose: true, commits: main[date], quiet: false })), mainByDay: main });
+  const row = edition({ scope: "week", date: "2026-W40", status: "written", generated_at: WRITTEN, stats: { commits: 128, stories: 20, releases: 2, people: 3, sessions: 6, private_sessions: 0 } });
+  const fri = edition({ date: FRI, generated_at: T("2026-10-03T00:20:00") });
+
+  test("today's commits never make the current week's notes stale, and the notes say how much of today they hold", () => {
+    // Built after Friday ended, before anything landed today.
+    expect(weekNotes(days({ [FRI]: 128, [SAT]: 33 }), row, [fri], SAT)).toEqual({ written: 128, sessions: 6, ended: 128, today: 33, todayIn: 0, staleSince: null });
+    // Built mid-morning: the build read today's first 6 commits too.
+    expect(weekNotes(days({ [FRI]: 122, [SAT]: 43 }), row, [fri], SAT)).toMatchObject({ ended: 122, today: 43, todayIn: 6, staleSince: null });
+  });
+
+  test("an ended day that moved after the notes, with the week's count moved too, makes them stale since that move", () => {
+    const moved = edition({ date: FRI, generated_at: T("2026-10-03T12:00:00"), dirty_since: T("2026-10-03T11:15:00") });
+    const n = weekNotes(days({ [FRI]: 131, [SAT]: 33 }), row, [moved], SAT)!;
+    expect(n.staleSince).toBe(T("2026-10-03T11:15:00"));
+    // Once an ended day moved, today's share of the notes is no longer known.
+    expect(n.todayIn).toBeNull();
+    // A rebuild that found nothing new (the count is the notes' own), or a day that has not moved: not stale.
+    expect(weekNotes(days({ [FRI]: 100, [SAT]: 28 }), row, [moved], SAT)!.staleSince).toBeNull();
+    expect(weekNotes(days({ [FRI]: 131, [SAT]: 33 }), row, [fri], SAT)!.staleSince).toBeNull();
+  });
+
+  test("no written notes, no basis", () => {
+    expect(weekNotes(days({ [FRI]: 1 }), { ...row, status: "facts" }, [], SAT)).toBeNull();
+    expect(weekNotes(days({ [FRI]: 1 }), undefined, [], SAT)).toBeNull();
+  });
+
+  test("the footer says it in one sentence: when, through which day, from what, and what joins later", () => {
+    const stats = { commits: 161, stories: 24, releases: 2, people: 3, sessions: 6, private_sessions: 0 };
+    const current = weekNotes(days({ [FRI]: 128, [SAT]: 33 }), row, [fri], SAT);
+    const text = provenanceText({ stats, edition: row, week: current, date: "", today: SAT });
+    expect(text).toMatch(/^Notes written .*, 10:29, through .* from 128 commits and 6 team sessions; today's 33 commits join when the day ends\.$/);
+    expect(text).toContain(` through ${changesDayLabel(FRI)} `);
+    // Notes that read part of today say so, and count only the rest as still to join.
+    const partial = weekNotes(days({ [FRI]: 122, [SAT]: 43 }), row, [fri], SAT);
+    expect(provenanceText({ stats, edition: row, week: partial, date: "", today: SAT })).toMatch(/ from 128 commits \(6 of them today's\) and 6 team sessions; today's 37 later commits join when the day ends\.$/);
+    // A past week whose days moved says how much of them the notes cover.
+    const past = weekNotes(days({ [FRI]: 161 }), row, [fri], "2026-10-12");
+    expect(provenanceText({ stats, edition: row, week: past, date: "", today: "2026-10-12" })).toMatch(/from 128 of 161 commits and 6 team sessions\.$/);
+    // A day: no "through", no pending commits.
+    expect(provenanceText({ stats: { ...stats, sessions: 0 }, edition: edition({ status: "final", generated_at: T("2026-10-02T16:08:00") }), date: FRI, today: SAT })).toMatch(/^Notes written \d\d:\d\d from 161 commits\.$/);
   });
 });

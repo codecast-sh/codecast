@@ -86,6 +86,7 @@ export function useChatToasts(): void {
     const name = state.chatChannels?.[channelId]?.name ?? "channel";
     state.setChannelNotifyLevel(channelId, "none");
     toast.dismiss(`chat:${channelId}`);
+    // A local Undo, not the window's history: notify level is a setting (never.ts), not a gesture to step back through.
     toast(`Muted #${name}`, {
       description: "No more notifications from this channel.",
       action: {

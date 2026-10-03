@@ -40,7 +40,7 @@ test("the week view renders its head, biggest stories, ledger and days in readin
   // A past week says the rail is the state right now, and leads with the bars that are its own.
   const past = render("2026-10-12");
   expect(html).not.toContain("Live state");
-  expect(past).toContain("Live state, not this week");
+  expect(past).toContain("Live state, not the week of Mon 28 Sep");
   expect(past.indexOf("Areas that week")).toBeGreaterThan(-1);
   expect(past.indexOf("Areas that week")).toBeLessThan(past.indexOf("In the works now"));
 });

@@ -26,7 +26,7 @@ describe("org proposal block", () => {
 
 // Staffing changes (org-staffing.md S4): one validator per kind, the spec
 // envelope, the accept order and the one-line describer.
-import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
+import { ORG_CHANGE_APPLY_RANK, ORG_CHANGE_KINDS, ORG_VERDICT_REVISED, deriveAsks, describeOrgChange, describeTenure, isOrgChange, latestOrgRevisionAt, orderOrgChanges, orgChangeDependencies, orgChangeError, orgTenureError, orgVerdictSeenFault, parseOrgProposalSpec, type OrgChange } from "./orgProposal";
 
 const GOOD: Record<OrgChange["kind"], OrgChange> = {
   role: { kind: "role", name: "Head of Growth", handle: "growth", scope: { projects: ["pr-1"] }, reports_to: "me" },
@@ -78,6 +78,8 @@ describe("org change validation", () => {
       [{ kind: "project_meta", project: "pr-1", success_metrics: "x" }, "lists of strings"],
       [{ kind: "adopt", handle: "head-of-people" }, "adopt needs the conversation"],
       [{ kind: "adopt", conversation: "jx7abcd" }, "handle is required"],
+      [{ kind: "role", name: "Line lead", handle: "line-lead", line: "Line.cast" }, "line is a workflow slug"],
+      [{ kind: "role", name: "Line lead", handle: "line-lead", caps: { cards: 0 } }, "caps.cards is a positive whole number"],
     ];
     for (const [raw, fault] of faults) {
       const err = orgChangeError(raw);
@@ -582,5 +584,18 @@ describe("the switch in a spec (org-staffing.md S23.1)", () => {
     expect(changeLine(c)).toBe("@growth stops starting work on its own");
     const bad = parseOrgProposalSpec({ title: "t", summary_md: "s", mode: "review", changes: [{ change: { kind: "autonomy", handle: "growth", on: "maybe" }, rationale: "r" }] });
     expect(bad.errors.join("\n")).toContain("autonomy on is true or false");
+  });
+});
+
+// A role that owns a project's line (line-profile.md LP7): the person reads
+// the workflow and the cards cap they are approving.
+describe("a role proposal with a line", () => {
+  test("validates and says the line and the cap in the ask", () => {
+    const change = { kind: "role", name: "Line lead", handle: "codecast-line", scope: { projects: ["Codecast"] }, caps: { hands_per_day: 6, cards: 5 }, line: "line" } as const;
+    expect(orgChangeError(change)).toBeNull();
+    const [ask] = deriveAsks([{ seq: 1, change: change as OrgChange }]);
+    expect(ask!.effect).toContain("runs the project's line on the line workflow, starting new work only while fewer than 5 change cards wait on a person");
+    const plain = deriveAsks([{ seq: 1, change: { kind: "role", name: "Ops", handle: "ops" } as OrgChange }]);
+    expect(plain[0]!.effect).not.toContain("workflow");
   });
 });

@@ -447,7 +447,8 @@ export const inTheWorks = query({
     // Open pull requests, found through the team's recent pull request activity.
     const events: Doc<"external_events">[] = await ctx.db
       .query("external_events")
-      .withIndex("by_team_created", (q) => q.eq("team_id", teamId).gte("created_at", now - WORKS_PR_EVENT_WINDOW_MS))
+      .withIndex("by_team_source_created", (q) =>
+        q.eq("team_id", teamId).eq("source_id", undefined).gte("created_at", now - WORKS_PR_EVENT_WINDOW_MS))
       .order("desc")
       .take(WORKS_PR_EVENT_SCAN);
     const prIds: Id<"pull_requests">[] = [];

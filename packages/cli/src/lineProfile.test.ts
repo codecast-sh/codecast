@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
+  CODECAST_PRINCIPLES,
   CODECAST_PROMPTING,
   findLineProfile,
   formatLineProfile,
@@ -142,14 +143,28 @@ describe("line profile (LP2)", () => {
     const vars = lineProfileVars(resolveLineProfile(parseLineProfileText(LP2_EXAMPLE).values).profile);
     expect(vars["line.commands.check"]).toContain("test:touched");
     expect(vars["line.size_budget"]).toBe("400");
-    expect(vars["line.principles"]).toBe("outreach/docs/line/principles.md");
+    expect(vars["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set) and outreach/docs/line/principles.md (this project's own)`);
     const empty = lineProfileVars(resolveLineProfile({}).profile);
     expect(empty["line.commands.prove"]).toBe("");
-    expect(empty["line.principles"]).toBe("none");
+    expect(empty["line.principles"]).toBe(`${CODECAST_PRINCIPLES} (the shared set)`);
     expect(empty["line.commands.check"]).toBe("cast ws check");
   });
 
   test("a station's command env carries the run values a profile command names, and nothing else", () => {
     expect(lineCommandEnv({ task_id: "ct-1", run_dir: "/r", task_title: "x", "red.json": "{}" })).toEqual({ task_id: "ct-1", run_dir: "/r" });
+  });
+});
+
+// The starter a line template offers a repository with no profile (LP7): the
+// defaults written out, the project filled in, and nothing else in force.
+describe("starterLineProfile", () => {
+  test("parses back to exactly the defaults plus the project and team", async () => {
+    const { starterLineProfile, parseLineProfileText, resolveLineProfile, LINE_PROFILE_DEFAULTS } = await import("./lineProfile");
+    const { values, warnings } = parseLineProfileText(starterLineProfile({ project: "Codecast \"core\"", team: "Union" }));
+    expect(warnings).toEqual([]);
+    expect(resolveLineProfile(values).profile).toEqual({ ...LINE_PROFILE_DEFAULTS, project: "Codecast \"core\"", team: "Union" });
+    const bare = parseLineProfileText(starterLineProfile({ project: "Codecast" })).values;
+    expect(bare.team).toBeUndefined();
+    expect(bare.finders).toBeUndefined();
   });
 });

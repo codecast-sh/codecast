@@ -75,6 +75,16 @@ export class DispatchHeldError extends Error {
   }
 }
 
+// A failed send that a later send ordered after it (an undo of it) already
+// overtook on the wire. Retrying would land it after its own reversal, so it
+// stops: the reversal leaves the server where it was before this write.
+export class DispatchOvertakenError extends Error {
+  constructor(action: string, readonly cause: unknown) {
+    super(`"${action}" failed after a later write that reverses it was sent; not retried`);
+    this.name = "DispatchOvertakenError";
+  }
+}
+
 export function isParkedDispatchError(error: unknown): error is DispatchNotWiredError | DispatchHeldError {
   return (error instanceof DispatchNotWiredError && error.parked) || error instanceof DispatchHeldError;
 }
@@ -494,6 +504,8 @@ async function dispatchWithRetry(
   onError?: (action: string, error: unknown, args?: unknown) => void,
   retryDelays: number[] = RETRY_DELAYS,
   assertCurrent: () => void = () => {},
+  // Asked after a transient failure, before the retry: false stops here.
+  keepRetrying?: () => boolean,
 ): Promise<any> {
   const safeArgs = sanitizeForTransport(args);
   const safeGrouped = grouped !== undefined ? sanitizeForTransport(grouped) : undefined;
@@ -516,6 +528,7 @@ async function dispatchWithRetry(
         onError?.(action, e, args);
         throw e;
       }
+      if (keepRetrying && !keepRetrying()) throw new DispatchOvertakenError(action, e);
       await new Promise(r => setTimeout(r, retryDelays[attempt]));
       assertCurrent();
     }
@@ -847,15 +860,35 @@ export function mutativeMiddleware(
     // (RunActionOpts.after): delivered, refused for good, or parked in the
     // outbox after a transient failure. A parked id leaves the set when the
     // row is retired.
-    const liveSends = new Map<string, Promise<"ok" | "refused" | "parked">>();
+    type LiveSend = {
+      settled: Promise<"ok" | "refused" | "parked">;
+      /** Failed once and waiting to retry: a later send could overtake it. */
+      retrying: boolean;
+      /** Not sent yet: held behind the sends it follows. */
+      waiting: boolean;
+      /** A send ordered after it went out while this one was on its first attempt. */
+      overtaken: boolean;
+      receipt: boolean;
+    };
+    const liveSends = new Map<string, LiveSend>();
     const parkedOutboxIds = new Set<string>();
-    // Whether every send in `after` is behind us and none is parked. Null
-    // when nothing named is pending, so the send goes out at once.
+    // How a send ordered after `after` goes out. Sends leave in call order,
+    // so one still on its first attempt cannot be overtaken: the follower
+    // goes at once and marks it overtaken, so a failure of it is not retried
+    // after the follower landed. One already retrying (or a receipt, whose
+    // ambiguous failures replay) is waited for. One parked in the outbox
+    // holds the follower there too (false), so the drain keeps ts order.
+    // Null: send now.
     const settledInOrder = (after: readonly string[] | undefined): Promise<boolean> | null => {
-      if (!after?.some((id) => liveSends.has(id) || parkedOutboxIds.has(id))) return null;
-      return Promise.all(after.map((id) => liveSends.get(id))).then(
-        () => !after.some((id) => parkedOutboxIds.has(id)),
-      );
+      if (!after?.length) return null;
+      const live = after.map((id) => liveSends.get(id)).filter((s): s is LiveSend => !!s);
+      const parked = () => after.some((id) => parkedOutboxIds.has(id));
+      if (live.some((s) => s.retrying || s.waiting || s.receipt)) {
+        return Promise.all(live.map((s) => s.settled)).then(() => !parked());
+      }
+      if (parked()) return Promise.resolve(false);
+      for (const s of live) s.overtaken = true;
+      return null;
     };
     // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
     // COMPLETIONS can invert order under slow storage). A newer row retires
@@ -1396,15 +1429,25 @@ export function mutativeMiddleware(
           capturedError,
           retryDelays,
           () => assertDispatchCurrent(capturedDispatch),
+          () => {
+            const live = liveSends.get(outboxId);
+            if (live?.overtaken) return false;
+            if (live) live.retrying = true;
+            return true;
+          },
         );
         // Live sends are not ordered by themselves: a write retrying after a
         // transient error can land after a later call's send. A call that
         // names what it must follow waits for it, and parks behind it when
         // it is parked, so the drain delivers both in ts order.
+        // A send held this way is itself waited for by the sends that
+        // follow it, so the order holds down a chain of followers.
+        const waiting = settledInOrder(after);
         const dispatchNow = () => {
-          const waiting = settledInOrder(after);
           if (!waiting) return send();
           return waiting.then((inOrder) => {
+            const live = liveSends.get(outboxId);
+            if (live) live.waiting = false;
             if (!inOrder) throw new DispatchHeldError(key);
             return send();
           });
@@ -1423,6 +1466,7 @@ export function mutativeMiddleware(
           () => "ok" as const,
           (e) => {
             if (isPermanentDispatchError(e)) return "refused" as const;
+            if (e instanceof DispatchOvertakenError) return "ok" as const;
             // Without an outbox row nothing will replay it, so nothing waits on it.
             if (!enqueued) return "ok" as const;
             parkedOutboxIds.add(outboxId);
@@ -1435,7 +1479,7 @@ export function mutativeMiddleware(
             return "parked" as const;
           },
         );
-        liveSends.set(outboxId, settled);
+        liveSends.set(outboxId, { settled, retrying: false, waiting: !!waiting, overtaken: false, receipt: usesReceiptEnvelope });
         void settled.then(() => liveSends.delete(outboxId));
         const enqueueDurable = () =>
           enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
@@ -1530,6 +1574,12 @@ export function mutativeMiddleware(
           // standing over the server's.
           if (isPermanentDispatchError(e)) {
             releaseRefusedLocks(key, fieldLocks, outboxId);
+            await retireOutboxEntry(outboxId, enqueued);
+            void drainOutbox(false);
+          }
+          // Its reversal is already on the server: a replay of this row would
+          // land after it and undo the undo, so the row goes.
+          if (e instanceof DispatchOvertakenError) {
             await retireOutboxEntry(outboxId, enqueued);
             void drainOutbox(false);
           }

@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { parseEntityUrl, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { entityRoute, parseEntityUrl, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 
 /**
  * One URL vocabulary for every surface. `www.` hosts count: people paste them
@@ -57,12 +57,22 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   task: '/task',
   plan: '/plan',
   doc: '/doc',
+  // A call opens on the recording screen, which reads any call's words.
+  call: '/recording',
 };
 
-/** The mobile route for an object id, or null when that type has no screen. */
+/** The mobile route for an object id, or null when that type has no screen.
+ *  A call reference keeps the place it names: the web's own route for it
+ *  (`?t=<seconds>` for a moment, `?turns=` for lines), on the phone's
+ *  screen, so `cl-42@2:30` opens at 2:30 on both. */
 export function mobileEntityRoute(type: EntityType, id: string): string | null {
   const base = MOBILE_ENTITY_ROUTE[type];
-  return base ? `${base}/${id}` : null;
+  if (!base) return null;
+  if (type === 'call') {
+    const web = entityRoute('call', id);
+    if (web?.startsWith('/calls/')) return `${base}/${web.slice('/calls/'.length)}`;
+  }
+  return `${base}/${id}`;
 }
 
 /**

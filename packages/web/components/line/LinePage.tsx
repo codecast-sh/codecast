@@ -6,7 +6,7 @@
 // derives every column, stage state and the throughput strip. One project's
 // line at a time (line-profile.md LP1): LineProjects holds the switcher and
 // the "all projects" roll-up, and scopeLine narrows the rows.
-import { Fragment, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Copy } from "lucide-react";
@@ -26,14 +26,21 @@ import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
-  buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY,
+  ageShort, buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY, LINE_STEPS,
   type LineProject, type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type LineCauseTask, type LineFlowRun, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { Spark } from "../Spark";
 import { LineProjectSwitcher, LineRollup, lineKeys, useLineProject } from "./LineProjects";
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
+import { centerInRow, edgeAttrs, useScrollEdges } from "./useScrollEdges";
 import { cardAnswerIndexes } from "../decisions/ChangeCardView";
+import { evalsSenseHref } from "../evals/evalsPaths";
 import "./line.css";
+
+/** formatElapsed without its zero units: "2d", "2d 5h", "40m", never "2d 0h". */
+const ago = (from: number | null | undefined, now: number) => (from == null ? null : (formatElapsed(from, now) ?? "").replace(/ 0[hm]$/, ""));
+const compactElapsed = (ms: number) => ago(0, ms) ?? "";
 
 const RUNS_FEED = { limit: 200 };
 
@@ -44,15 +51,15 @@ const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${
 
 type StationKey = "sense" | "causes" | "build" | "awaiting" | "watching" | "closed";
 /** what and cmd teach an empty station: what feeds it, and the command. */
-type Station = { key: StationKey; name: string; short: string; sub?: string; wide?: boolean; what: string; cmd: string };
+type Station = { key: StationKey; name: string; short: string; sub?: string; wide?: boolean; slim?: boolean; tail?: boolean; what: string; cmd: string };
 
 const STATIONS: Station[] = [
-  { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
+  { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", slim: true, what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
   { key: "causes", name: "Causes", short: "Causes", what: "A signal opens a cause, or joins the open one that shares its fingerprint.", cmd: "cast signal ls" },
-  { key: "build", name: "In build", short: "Build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
-  { key: "awaiting", name: "Awaiting you", short: "You", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
-  { key: "watching", name: "Watching", short: "Watch", what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
-  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
+  { key: "build", name: "In build", short: "In build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
+  { key: "awaiting", name: "Awaiting you", short: "Yours", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
+  { key: "watching", name: "Watching", short: "Watching", tail: true, what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
+  { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", tail: true, what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
 ];
 
 /** The first command a new line needs: file one signal by hand. */
@@ -62,19 +69,25 @@ const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id
 
 // Columns size from the flow's own width (a container query), so the inbox
 // panel opening narrows the line the way a smaller window does. An empty
-// station is a slimmer tile so the live ones get the width, and its command
-// wraps at flag boundaries. The tight set takes over under 1360px and the
-// compact one under 1000px, where an idle station still reads its name,
-// count and what feeds it. Only under 840px does an empty station fold to a
-// 40px labelled slot (lamp, count, name) so the stations holding work keep
-// their width. Below sm the stations snap one per screen and scroll sideways.
-const ROOMY = { rail: "24px", empty: "minmax(148px, 0.6fr)", wide: "minmax(256px, 1.4fr)", live: "minmax(180px, 1fr)" };
-const TIGHT = { rail: "12px", empty: "minmax(136px, 0.55fr)", wide: "minmax(216px, 1.4fr)", live: "minmax(156px, 1fr)" };
-const COMPACT = { rail: "8px", empty: "minmax(112px, 0.5fr)", wide: "minmax(208px, 1.3fr)", live: "minmax(168px, 1fr)" };
-const SLIM = { rail: "10px", empty: "40px", wide: "minmax(232px, 1.4fr)", live: "minmax(168px, 1fr)" };
-const NARROW = { rail: "18px", empty: "68vw", wide: "86vw", live: "86vw" };
+// station is a narrow tile at every width (its name, lamp, count and what
+// feeds it), so the eye goes to the stations holding work. The tight set
+// takes over under 1360px and the compact one under 1000px. Under 840px an
+// empty station folds to a 40px labelled slot (lamp, count, name). Below sm
+// the stations snap one per screen and scroll sideways. Awaiting is the
+// founder's own station, so it takes the most room and never drops under the
+// width its card's answers need. Sense is a list of one line sources, and
+// Watching and Closed hold short rows, so they take less and leave the width
+// to the titles in Causes and In build. When the stations still overflow, the
+// flow's edge fades to say there is more.
+const ROOMY = { rail: "24px", empty: "minmax(132px, 0.42fr)", wide: "minmax(340px, 2fr)", slim: "minmax(150px, 0.6fr)", tail: "minmax(160px, 0.8fr)", live: "minmax(200px, 1fr)" };
+const TIGHT = { rail: "12px", empty: "minmax(124px, 0.4fr)", wide: "minmax(320px, 2fr)", slim: "minmax(150px, 0.55fr)", tail: "minmax(150px, 0.8fr)", live: "minmax(190px, 1fr)" };
+const COMPACT = { rail: "8px", empty: "minmax(108px, 0.4fr)", wide: "minmax(300px, 2fr)", slim: "minmax(150px, 0.55fr)", tail: "minmax(150px, 0.8fr)", live: "minmax(190px, 1fr)" };
+const SLIM = { rail: "10px", empty: "40px", wide: "minmax(300px, 2fr)", slim: "minmax(150px, 0.55fr)", tail: "minmax(150px, 0.8fr)", live: "minmax(190px, 1fr)" };
+// Each station fills the flow less its padding, and the rail is wider than
+// that padding, so a neighbour never peeks in as a stray border.
+const NARROW = { rail: "18px", empty: "calc(100cqw - 32px)", wide: "calc(100cqw - 32px)", slim: "calc(100cqw - 32px)", tail: "calc(100cqw - 32px)", live: "calc(100cqw - 32px)" };
 const template = (set: typeof ROOMY, emptyOf: (s: Station) => boolean) =>
-  STATIONS.flatMap((s, i) => [...(i ? [set.rail] : []), emptyOf(s) ? set.empty : s.wide ? set.wide : set.live]).join(" ");
+  STATIONS.flatMap((s, i) => [...(i ? [set.rail] : []), emptyOf(s) ? set.empty : s.wide ? set.wide : s.slim ? set.slim : s.tail ? set.tail : set.live]).join(" ");
 
 export function LinePage() {
   useSyncSignals();
@@ -111,16 +124,28 @@ export function LinePage() {
   const taskById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks]);
   const buildBlocks = useMemo(() => groupBuild(flow.build.items), [flow.build.items]);
   const [parkedOpen, setParkedOpen] = useState(false);
+  // Sources quiet for 24 hours fold under their own line, the way parked
+  // causes do, while any source is live; with none live they all show.
+  const [quietOpen, setQuietOpen] = useState(false);
+  // A silent finder never folds away: finder health shows where it lives.
+  const sense = useMemo(() => {
+    const live = flow.sense.items.filter((s) => s.day > 0);
+    const silent = flow.sense.items.filter((s) => s.silent);
+    const quiet = live.length ? flow.sense.items.filter((s) => s.day === 0 && !s.silent) : [];
+    return { live: live.length ? [...live, ...silent] : flow.sense.items, quiet, silent: silent.map((x) => x.source) };
+  }, [flow.sense.items]);
+  const senseRows = useMemo(() => [...sense.live, ...(quietOpen ? sense.quiet : [])], [sense, quietOpen]);
 
   // Keyboard: one cursor over the whole flow, in render order.
   const hrefs: Record<StationKey, string[]> = useMemo(() => ({
-    sense: flow.sense.items.map((s) => { const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
+    // The evals finder's row opens the Evals area, where the drop can be read and attributed.
+    sense: senseRows.map((s) => { if (s.source === "evals") return evalsSenseHref(s.newest?.subject); const t = s.newest ? taskById.get(s.newest.task_id) : undefined; return t ? taskHref(t) : line.href; }),
     causes: [...flow.causes.items, ...(parkedOpen ? flow.causes.parked : [])].map((r) => taskHref(r.task)),
     build: buildBlocks.flatMap((g) => g.rows).map((b) => runHref(b.run._id)),
     awaiting: flow.awaiting.items.map((d) => decisionHref(d)),
     watching: flow.watching.items.map((w) => taskHref(w.task)),
     closed: flow.closed.items.map((c) => taskHref(c.task)),
-  }), [flow, buildBlocks, taskById, parkedOpen, line.href]);
+  }), [flow, senseRows, buildBlocks, taskById, parkedOpen, line.href]);
 
   const columns: Record<StationKey, Column<unknown>> = flow as unknown as Record<StationKey, Column<unknown>>;
   // Sense counts today's signals but lists the week's sources.
@@ -224,6 +249,32 @@ export function LinePage() {
     });
     if (best !== shown) setShown(best);
   };
+  // Which edges hide stations, so the flow can fade them (line.css). The
+  // scroller mounts only on a project's flow.
+  const edges = useScrollEdges(scroller, `${rollupView}|${allEmpty}`);
+  const tabsRow = useRef<HTMLElement>(null);
+  const tabEdges = useScrollEdges(tabsRow, `${rollupView}|${allEmpty}`);
+  // A phone opens on the founder's station when a card waits there: the
+  // five-second read lands on what needs them, once, on first paint.
+  const awaitingIdx = STATIONS.findIndex((x) => x.key === "awaiting");
+  const openedOnCards = useRef(false);
+  useEffect(() => {
+    const root = scroller.current;
+    if (openedOnCards.current || !root || flow.awaiting.count === 0) return;
+    openedOnCards.current = true;
+    if (!window.matchMedia?.("(max-width: 639px)").matches) return;
+    const el = root.querySelector<HTMLElement>(`[data-line-col="${awaitingIdx}"]`);
+    // Rects, not offsetLeft: see onFlowScroll.
+    if (el) root.scrollLeft += el.getBoundingClientRect().left - root.getBoundingClientRect().left - (root.clientWidth - el.offsetWidth) / 2;
+    setShown(awaitingIdx);
+  }, [flow.awaiting.count, awaitingIdx]);
+  // The tab for the station on screen sits at the tabs row's center, the
+  // way the selected project pill does.
+  useEffect(() => {
+    const nav = tabsRow.current;
+    const tab = nav?.querySelector<HTMLElement>("[data-active=true]");
+    if (nav && tab && nav.scrollWidth > nav.clientWidth) centerInRow(nav, tab, "smooth");
+  }, [shown]);
   const showStation = (i: number) => {
     setFocus({ col: i, row: 0 });
     setShown(i);
@@ -238,23 +289,23 @@ export function LinePage() {
           <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
         </div>
         <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => { setFocus(null); line.select(k); }} />
-        {!allEmpty && !rollupView && <><Headline parts={lineHeadline(flow, now)} onStation={(key) => showStation(STATIONS.findIndex((x) => x.key === key))} /><Throughput t={flow.throughput} /></>}
+        {!allEmpty && !rollupView && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={(key) => showStation(STATIONS.findIndex((x) => x.key === key))} />} />}
       </header>
 
       {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => { setFocus(null); line.select(k); }} /> : allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} /> : (<>
-      <nav className="line-tabs sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations">
+      <nav ref={tabsRow} className="line-tabs line-edge-fade line-scroll-quiet sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations" {...edgeAttrs(tabEdges)}>
         {STATIONS.map((s, i) => (
-          <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
-            {s.short} <span className="tabular-nums" data-zero={columns[s.key].count === 0 ? "true" : undefined}>{columns[s.key].count}</span>
+          <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} data-ask={s.key === "awaiting" && columns[s.key].count > 0 ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
+            {s.name} <span className="tabular-nums" data-zero={columns[s.key].count === 0 ? "true" : undefined}>{columns[s.key].count}</span>
           </button>
         ))}
       </nav>
 
-      <div ref={scroller} onScroll={onFlowScroll} className="line-flow flex-1 min-h-0 overflow-x-auto overflow-y-hidden snap-x snap-mandatory sm:snap-none" data-line-flow>
+      <div ref={scroller} onScroll={onFlowScroll} className="line-flow line-edge-fade flex-1 min-h-0 overflow-x-auto overflow-y-hidden snap-x snap-mandatory sm:snap-none" data-line-flow {...edgeAttrs(edges)}>
         <div className="line-track h-full px-4 sm:px-5 pb-4" style={grid}>
           {STATIONS.map((s, i) => (
             <Fragment key={s.key}>
-              {i > 0 && <Rail live={!empty(s.key)} moved={flow.moved[s.key as keyof typeof flow.moved] ?? 0} into={s.name} />}
+              {i > 0 && <Rail live={!empty(s.key)} />}
               <StationColumn
                 station={s}
                 index={i}
@@ -265,23 +316,35 @@ export function LinePage() {
                 focused={col === i}
                 now={now}
                 onFocus={() => setFocus({ col: i, row: 0 })}
-                note={s.key === "causes" && ungrounded ? <>None of these serve a goal yet. <code className="text-sol-text-muted">cast task update ct-N --goal-ref in-N:key</code></> : undefined}
+                note={s.key === "causes" && ungrounded
+                  ? <>None of these serve a goal yet. <code className="text-sol-text-muted">cast task update ct-N --goal-ref in-N:key</code></>
+                  : s.key === "sense" && sense.silent.length > 0
+                    ? <button type="button" onClick={(e) => { e.stopPropagation(); setFocus({ col: i, row: Math.max(0, senseRows.findIndex((x) => x.source === sense.silent[0])) }); }} className="line-chip-warn hover:brightness-125" title={`Declared finders that filed nothing in 24 hours: ${sense.silent.join(", ")}. Shows the finder and how it runs.`} data-line-silent-note>{sense.silent.length === 1 ? `${sense.silent[0]} silent` : `${sense.silent.length} finders silent`}</button>
+                    : undefined}
               >
-                {empty(s.key) && <Empty station={s} focused={col === i} after={s.key === "build" && <OtherRuns n={flow.build.otherRuns} />} />}
+                {empty(s.key) && <Empty station={s} focused={col === i} what={s.key === "closed" && flow.throughput.shippedInWatch > 0 ? closedInWatch(flow.throughput.shippedInWatch) : undefined} after={s.key === "build" ? <OtherRuns n={flow.build.otherRuns} /> : s.key === "closed" && flow.watching.count > 0 && flow.throughput.shippedInWatch > 0 ? <button type="button" onClick={(e) => { e.stopPropagation(); showStation(STATIONS.findIndex((x) => x.key === "watching")); }} className="self-start text-[11px] text-sol-text-muted underline underline-offset-2 decoration-sol-border hover:text-sol-text" data-line-see-watching>see Watching</button> : undefined} />}
 
-                {s.key === "sense" && !empty("sense") && ( flow.sense.items.map((src, r) => <SenseRow key={src.source} src={src} now={now} focused={at("sense", r)} index={r} href={hrefs.sense[r]} />))}
+                {s.key === "sense" && !empty("sense") && (<>
+                  {sense.live.map((src, r) => <SenseRow key={src.source} src={src} now={now} focused={at("sense", r)} index={r} href={hrefs.sense[r]} />)}
+                  {sense.quiet.length > 0 && (
+                    <div className="pt-2">
+                      <Fold open={quietOpen} onToggle={() => setQuietOpen((v) => !v)} label="nothing today" count={sense.quiet.length} />
+                      {quietOpen && sense.quiet.map((src, r) => {
+                        const idx = sense.live.length + r;
+                        return <SenseRow key={src.source} src={src} now={now} focused={at("sense", idx)} index={idx} href={hrefs.sense[idx]} />;
+                      })}
+                    </div>
+                  )}
+                </>)}
 
                 {s.key === "causes" && !empty("causes") && (<>
-                      {flow.causes.items.map((c, r) => <CauseRowView key={c.task._id} row={c} rank={r + 1} max={flow.causes.items[0]?.score ?? 1} focused={at("causes", r)} index={r} />)}
+                      {flow.causes.items.map((c, r) => <CauseRowView key={c.task._id} row={c} rank={r + 1} focused={at("causes", r)} index={r} />)}
                       {flow.causes.parked.length > 0 && (
                         <div className="pt-2">
-                          <button onClick={() => setParkedOpen((v) => !v)} className="w-full flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text px-1 py-1">
-                            {parkedOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-                            parked, no goal <span className="ml-auto">{flow.causes.parked.length}</span>
-                          </button>
+                          <Fold open={parkedOpen} onToggle={() => setParkedOpen((v) => !v)} label="parked, no goal" count={flow.causes.parked.length} />
                           {parkedOpen && flow.causes.parked.map((c, r) => {
                             const idx = flow.causes.items.length + r;
-                            return <CauseRowView key={c.task._id} row={c} max={flow.causes.items[0]?.score ?? c.score} focused={at("causes", idx)} index={idx} muted />;
+                            return <CauseRowView key={c.task._id} row={c} focused={at("causes", idx)} index={idx} muted />;
                           })}
                         </div>
                       )}
@@ -295,7 +358,7 @@ export function LinePage() {
                 {s.key === "awaiting" && !empty("awaiting") && (<div className="space-y-2">
                       {flow.awaiting.items.map((d, r) => (
                         <div key={d._id} data-line-row={r} data-focused={at("awaiting", r) ? "true" : undefined} className="line-card rounded-lg">
-                          <DecisionCompactCard decision={d as SessionDecisionItem} keys={at("awaiting", r)} />
+                          <DecisionCompactCard decision={d as SessionDecisionItem} keys={at("awaiting", r)} line />
                         </div>
                       ))}
                     </div>)}
@@ -317,13 +380,13 @@ export function LinePage() {
         <Hint label="items"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap></Hint>
         <Hint label="jump to a station"><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">1</KeyCap>-<KeyCap size="xs">{String(STATIONS.length)}</KeyCap></Hint>
         <span className="ml-auto hidden sm:flex items-center gap-4 min-w-0" data-line-hint>
-          {focusedCard && options > 0 && <Hint label="answer the card" className="text-sol-yellow/90"><KeyCap size="xs">1</KeyCap>{options > 1 && <>-<KeyCap size="xs">{String(options)}</KeyCap></>}</Hint>}
+          {focusedCard && options > 0 && <Hint label={cardTakesReturn ? "answer the card" : "pick, then return"} className="text-sol-yellow/90"><KeyCap size="xs">1</KeyCap>{options > 1 && <>-<KeyCap size="xs">{String(options)}</KeyCap></>}</Hint>}
           {rows > 0
             ? <Hint label={cardTakesReturn ? "submit" : "open"}><KeyCap size="xs">↵</KeyCap></Hint>
             : <Hint label={allEmpty ? "copy the first command" : "copy the command"}><KeyCap size="xs">c</KeyCap></Hint>}
         </span>
         </>}
-        <span className="ml-auto sm:ml-0 shrink-0 whitespace-nowrap flex items-center gap-3 pl-3 sm:border-l border-sol-border/40">
+        <span className="shrink-0 whitespace-nowrap flex items-center gap-3 sm:pl-3 sm:border-l border-sol-border/40" data-line-footer-links>
           <Link href="/questions" className="hover:text-sol-text">all questions</Link>
           <Link href="/routines" className="hover:text-sol-text">workflows</Link>
         </span>
@@ -344,14 +407,28 @@ function Hint({ label, className, children }: { label: string; className?: strin
 
 // ── Headline and throughput ──
 
+// Color only what needs the founder: cards waiting, a stall, a failure.
+// An all-clear part is plain text.
 const TONE: Record<HeadlinePart["tone"], string> = {
   ask: "text-sol-yellow",
   warn: "text-sol-orange",
   fail: "text-sol-red",
-  live: "text-sol-text",
-  calm: "text-sol-text",
-  clear: "line-tone-clear",
+  live: "",
+  calm: "",
+  clear: "",
 };
+
+/** The headline says only what needs the founder (cards waiting, a stall, a
+ *  failure), or that nothing does: the station counts right below carry the
+ *  rest, so no number is said twice. */
+const LEAD_TONES = new Set<HeadlinePart["tone"]>(["ask", "warn", "fail", "clear"]);
+const headlineLead = (parts: HeadlinePart[]) => {
+  const lead = parts.filter((p) => LEAD_TONES.has(p.tone));
+  return lead.length ? lead : parts.slice(0, 1);
+};
+
+/** The sentence's counts in bold, so the numbers are what the eye lands on. */
+const boldNumbers = (text: string) => text.split(/(\d+)/).map((t, i) => (i % 2 ? <b key={i} className="font-semibold">{t}</b> : t));
 
 /** The five-second read. A part that names a station links to it: the
  *  cursor moves there and the flow scrolls it into view. */
@@ -359,15 +436,17 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
   return (
     <p className="line-headline text-sol-text" data-line-headline>
       {parts.map((p, i) => {
-        const text = i === 0 ? p.text.charAt(0).toUpperCase() + p.text.slice(1) : p.text;
+        // A count never ends a line apart from the word it counts, nor an
+        // age apart from the word before it ("oldest 1d").
+        const text = (i === 0 ? p.text.charAt(0).toUpperCase() + p.text.slice(1) : p.text).replace(/(\d+) /g, "$1\u00a0").replace(/ (\d+\w*)$/, "\u00a0$1");
         const station = p.station;
         // The comma rides the part before it, so a wrap never opens a line with one.
         const sep = i < parts.length - 1 ? ", " : "";
         return (
           <Fragment key={i}>
             {station
-              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{text}</a>
-              : <span className={TONE[p.tone]}>{text}</span>}
+              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{boldNumbers(text)}</a>
+              : <span className={TONE[p.tone] || undefined}>{boldNumbers(text)}</span>}
             {sep}
           </Fragment>
         );
@@ -381,61 +460,78 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
  *  few pixels of nothing, and the number alone says it better. */
 const sparkable = (days: number[]) => days.filter((d) => d > 0).length >= 3;
 
-/** A metric with nothing to measure yet: a dim dash, so it never reads as a value. */
-function NoValue({ className }: { className?: string }) {
-  return <span className={cn("line-num text-sol-text-dim opacity-50", className)} aria-label="no data yet">–</span>;
-}
-
-function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }) {
+/** The headline, then the week as one dim trailing clause on its row; a
+ *  click on the clause opens the week's figures under it. */
+function Throughput({ t, lead: headline }: { t: ReturnType<typeof buildLineFlow>["throughput"]; lead: ReactNode }) {
+  const [open, setOpen] = useState(false);
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
-    return <p className="text-[11px] text-sol-text-dim" data-line-throughput="quiet">No signals this week. Throughput appears once the line moves.</p>;
+    return <div className="line-head-row">{headline}<span className="text-[12px] text-sol-text-dim" data-line-throughput="quiet">no signals this week</span></div>;
   }
-  // The two numbers a founder reads first lead; the flow counts sit quieter.
-  const lead: Array<{ label: string; value: string | number | null; tip: string; spark?: number[] }> = [
-    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, tip: "Causes shipped in the last 7 days, per day" },
-    { label: "median signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
+  const inWatch = t.shippedInWatch > 0 ? (t.shippedInWatch === t.shipped ? "now in watch" : `${t.shippedInWatch} in watch`) : null;
+  const median = t.medianToShip === null ? null : compactElapsed(t.medianToShip);
+  // A metric with nothing measured yet stays out, so it never reads as a value.
+  const lead: Array<{ label: string; value: string | number; tip: string; spark?: number[]; note?: string | null }> = [
+    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, note: inWatch, tip: `Causes shipped in the last 7 days, per day.${t.shippedInWatch ? ` ${t.shippedInWatch} still in Watching; a ship moves to Closed when its watch ends quiet.` : ""}` },
+    ...(median ? [{ label: "median signal to ship", value: median, tip: "From a cause's first signal to its ship, median over this week's ships" }] : []),
   ];
-  const flowCells: Array<{ label: string; value: number; tone?: string; spark: number[] }> = [
-    { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn },
-    { label: "causes opened", value: t.opened, spark: t.daily.opened },
-    { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved },
-    { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
+  const flowCells: Array<{ label: string; value: string | number; tone?: string; spark?: number[]; tip: string; unit?: string }> = [
+    { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn, tip: "signals in this week, per day" },
+    { label: "causes opened", value: t.opened, spark: t.daily.opened, tip: "causes opened this week, per day" },
+    { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved, tip: "causes dissolved this week, per day" },
+    { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened, tip: "causes reopened this week, per day" },
+    ...(t.tokensPerShip === null ? [] : [{ label: "cost per ship", value: formatTokens(Math.round(t.tokensPerShip)), unit: "tokens", tip: "Cost per shipped change, in run tokens. Runs record tokens, not dollars." }]),
+  ];
+  // The station headers already count signals in and what sits in watch, so
+  // the clause says only the week's outcome: what shipped, how fast, and a
+  // reopen when there is one.
+  const summary: Array<{ n: string | number; words: string; tone?: string }> = [
+    { n: t.shipped, words: " shipped this week" },
+    ...(median ? [{ n: median, words: " median to ship" }] : []),
+    ...(t.reopened ? [{ n: t.reopened, words: " reopened", tone: "text-sol-red" }] : []),
   ];
   return (
+    <div className="flex flex-col gap-2 min-w-0">
+    <div className="line-head-row">
+    {headline}
+    {/* Each figure stays whole and the clause wraps between them; the
+        chevron rides the last figure, so a wrap never strands it. */}
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary max-w-full text-[12px] text-sol-text-dim text-left hover:text-sol-text" data-line-throughput-summary title={open ? "Hide the week's figures" : "The week's figures"}>
+      {summary.map((p, i) => (
+        <span key={p.words}>
+          {i > 0 && <span> · </span>}
+          <span className="whitespace-nowrap"><span className={cn("line-num", p.tone ?? "text-sol-text-muted")}>{p.n}</span>{p.words}{i === summary.length - 1 && <ChevronDown className={cn("inline-block align-[-2px] ml-1 w-3.5 h-3.5 transition-transform", open && "rotate-180")} />}</span>
+        </span>
+      ))}
+    </button>
+    </div>
+    {open && (
     <div className="line-meter rounded-xl" data-line-throughput>
       <div className="line-meter-lead">
         {lead.map((c) => (
           <div key={c.label} className="line-meter-big min-w-0" title={c.tip}>
-            <div className="flex items-end gap-2.5 h-[30px]">
-              {c.value === null
-                ? <NoValue className="text-[32px]" />
-                : <span className="line-num line-display-num text-[32px] text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
-              {c.spark && sparkable(c.spark) && <Spark values={c.spark} bar={4} height={20} className="mb-0.5" label={`${c.label}, per day`} />}
+            <div className="flex items-end gap-2.5 h-[26px]">
+              <span className="line-display-num line-meter-num text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>
+              {c.spark && sparkable(c.spark) && <Spark values={c.spark} bar={4} height={18} className="mb-0.5" label={`${c.label}, per day`} />}
             </div>
-            <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}</div>
+            <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}{c.note && <span className="text-sol-text-dim">, {c.note}</span>}</div>
           </div>
         ))}
       </div>
       <div className="line-meter-flow">
         {flowCells.map((c) => (
-          <div key={c.label} className="min-w-0" title={`${c.label} this week, per day`}>
+          <div key={c.label} className="min-w-0" title={c.tip}>
             <div className="flex items-center gap-1.5">
               <span className={cn("line-num text-[15px] text-sol-text-muted", c.tone)} data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>
-              {sparkable(c.spark) && <Spark values={c.spark} bar={2} height={10} label={`${c.label} per day`} />}
+              {c.unit && <span className="text-[11px] text-sol-text-dim">{c.unit}</span>}
+              {c.spark && sparkable(c.spark) && <Spark values={c.spark} bar={2} height={10} label={c.tip} />}
             </div>
             <div className="mt-1 text-[11px] text-sol-text-dim truncate">{c.label}</div>
           </div>
         ))}
-        <div className="min-w-0" title="Cost per shipped change, in run tokens. Runs record tokens, not dollars.">
-          <div className="flex items-baseline gap-1">
-            {t.tokensPerShip === null
-              ? <NoValue className="text-[15px]" />
-              : <><span className="line-num text-[15px] text-sol-text-muted">{formatTokens(Math.round(t.tokensPerShip))}</span><span className="text-[11px] text-sol-text-dim">tokens</span></>}
-          </div>
-          <div className="mt-1 text-[11px] text-sol-text-dim truncate">cost per ship</div>
-        </div>
       </div>
+    </div>
+    )}
     </div>
   );
 }
@@ -443,7 +539,7 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
 // ── A station ──
 
 function stateWords(state: StageState, now: number): string {
-  const since = state.since ? formatElapsed(state.since, now) : null;
+  const since = state.since ? ago(state.since, now) : null;
   if (state.kind === "idle") return state.why;
   if (state.kind === "ask") return `${state.why}${since ? `, oldest ${since}` : ""}`;
   if (state.kind === "paused") return `paused${since ? ` ${since}` : ""}: ${state.why}`;
@@ -455,10 +551,12 @@ function stateWords(state: StageState, now: number): string {
 
 /** The short tag beside the lamp; the why lives in its tooltip, and for a
  *  stage in trouble in one line at the foot of the column. */
-function stateTag(state: StageState, now: number): string {
-  const since = state.since ? ` ${formatElapsed(state.since, now)}` : "";
+function stateTag(state: StageState, oldestAt: number | null, now: number): string {
+  const since = state.since ? ` ${ageShort(now - state.since)}` : "";
   if (state.kind === "ask") return `waiting${since}`;
   if (state.kind === "paused" || state.kind === "starved" || state.kind === "failing") return `${state.kind}${since}`;
+  // Running is the ordinary case: the header spends its words on the oldest age.
+  if (state.kind === "running" && oldestAt) return `oldest ${ageShort(now - oldestAt)}`;
   return state.kind;
 }
 const TROUBLE = new Set<StageState["kind"]>(["paused", "starved", "failing"]);
@@ -473,8 +571,17 @@ const STATE_TONE: Record<StageState["kind"], string> = {
   running: "text-sol-text-muted",
 };
 
-/** What a station's count measures, said beside it. */
-const COUNT_UNIT: Partial<Record<StationKey, string>> = { sense: "in 24h", closed: "this week" };
+/** What a station's count is, one fixed noun beside the big number. */
+const COUNT_NOUN: Record<StationKey, string> = { sense: "today", causes: "open", build: "running", awaiting: "waiting", watching: "in watch", closed: "last 7 days" };
+
+/** What entered the station this week, on a dimmer line under the count, so
+ *  it never reads as a delta of the number beside it. Closed already counts
+ *  the week, so it has none. */
+function weekWords(key: StationKey, count: number, moved: number, week?: number): string | null {
+  if (key === "sense") return week !== undefined && week !== count ? `${week} this week` : null;
+  if (key === "closed") return null;
+  return moved > 0 ? `${moved} in this week` : null;
+}
 
 function StationColumn({ station, index, column, empty, moved, week, focused, now, onFocus, note, children }: {
   station: Station;
@@ -483,7 +590,7 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   index: number;
   column: Column<unknown>;
   empty: boolean;
-  /** What entered this week; the rail chip says it too where there is room. */
+  /** What entered this week, said beside the count. */
   moved: number;
   /** Sense only: the week's signals, said dimly beside the 24h count. */
   week?: number;
@@ -494,10 +601,11 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
 }) {
   const state = column.state;
   const words = stateWords(state, now);
-  const countTip = [
-    moved > 0 ? `${moved} entered this week` : null,
-    column.oldestAt ? `oldest ${formatElapsed(column.oldestAt, now)}` : null,
-  ].filter(Boolean).join(", ");
+  const countTip = column.oldestAt ? `oldest ${ago(column.oldestAt, now)}` : "";
+  const unit = empty ? null : COUNT_NOUN[station.key];
+  const weekLine = empty ? null : weekWords(station.key, column.count, moved, week);
+  const body = useRef<HTMLDivElement>(null);
+  const more = useRowsBelow(body, !empty);
   return (
     <section
       data-line-col={index}
@@ -512,34 +620,42 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
       {/* Folded: an empty station in a tight flow is a slot that still says
           what it is, how it stands, and how much it holds. */}
       <div className="line-col-slim" title={`${station.name}, ${words}. ${station.what}`} aria-label={`${station.name}, ${column.count}`}>
-        <span className="line-num line-display-num text-[17px]" data-zero="true">{column.count}</span>
+        <span className="line-display-num text-[19px]" data-zero="true">{column.count}</span>
         <span className="line-lamp" data-kind={state.kind} />
         <span className="line-col-slim-name text-[11px] text-sol-text-muted">{station.name}</span>
       </div>
       <div className="line-col-head shrink-0 px-3 pt-3 pb-3 border-b border-sol-border/25">
-        <div className="flex items-center h-[24px] min-w-0">
+        <div className="flex items-center gap-2 h-[24px] min-w-0">
           <h2 className="text-[13px] font-medium text-sol-text whitespace-nowrap">
             <span className="line-name-full">{station.name}</span>
             <span className="line-name-short">{station.short}</span>
           </h2>
-        </div>
-        <div className="mt-2 flex items-end gap-2 min-w-0">
-          <span className={cn("line-num line-display-num line-col-count text-[34px]", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
-          {COUNT_UNIT[station.key] && !empty && (
-            <span className="pb-[3px] text-[11px] text-sol-text-dim whitespace-nowrap min-w-0 truncate">
-              {COUNT_UNIT[station.key]}{week !== undefined && week !== column.count && <span className="line-count-of" title={`${week} signals this week`}> of {week} wk</span>}
-            </span>
-          )}
-          <span className={cn("ml-auto pb-[3px] flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-line-state title={words}>
+          <span className={cn("line-state ml-auto flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-kind={state.kind} data-line-state title={words}>
             <span className="line-lamp" data-kind={state.kind} />
-            <span className="line-state-text truncate">{stateTag(state, now)}</span>
+            <span className="line-state-text truncate">{stateTag(state, column.oldestAt, now)}</span>
           </span>
         </div>
+        <div className="mt-2.5 flex items-baseline gap-2 min-w-0">
+          <span className={cn("line-display-num line-col-count", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
+          {unit && <span className="line-unit text-[11px] whitespace-nowrap min-w-0 truncate" data-line-unit>{unit}</span>}
+        </div>
+        {/* Held open when blank, so every live station's rows start level. */}
+        {!empty && <div className="line-week mt-1.5 text-[11px] leading-[14px] whitespace-nowrap truncate" data-line-week aria-hidden={weekLine ? undefined : true}>{weekLine ?? "\u00a0"}</div>}
         {note && <div className="mt-2 text-[11px] text-sol-text-dim leading-snug" data-line-note>{note}</div>}
       </div>
-      <div className={cn("line-col-body min-h-0 flex-1 p-2", !empty && "overflow-y-auto")} data-line-body>
+      <div ref={body} className={cn("line-col-body min-h-0 flex-1 p-2", !empty && "overflow-y-auto")} data-line-body>
         {children}
       </div>
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); body.current?.scrollBy({ top: body.current.clientHeight * 0.8, behavior: "smooth" }); }}
+          className="line-col-more shrink-0 flex items-center justify-center gap-1 px-3 py-1.5 text-[11px] text-sol-text-muted hover:text-sol-text"
+          data-line-more
+        >
+          +{more} more<ChevronDown className="w-3 h-3" />
+        </button>
+      )}
       {TROUBLE.has(state.kind) && (
         <div className={cn("line-col-why shrink-0 px-3 py-2 text-[11px] truncate", STATE_TONE[state.kind])} title={words} data-line-why>{state.why}</div>
       )}
@@ -547,20 +663,48 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   );
 }
 
-function Rail({ live, moved, into }: { live: boolean; moved: number; into: string }) {
+/** How many rows sit wholly or partly below a scrolling body's fold, so a
+ *  station that clips says so ("+3 more") instead of cutting off silently. */
+function useRowsBelow(ref: RefObject<HTMLElement | null>, on: boolean): number {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !on) { setN(0); return; }
+    const count = () => {
+      const fold = el.getBoundingClientRect().bottom - 2;
+      let below = 0;
+      el.querySelectorAll<HTMLElement>("[data-line-row]").forEach((row) => { if (row.getBoundingClientRect().bottom > fold) below++; });
+      setN(below);
+    };
+    count();
+    void document.fonts?.ready.then(count);
+    el.addEventListener("scroll", count, { passive: true });
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(count);
+    ro?.observe(el);
+    const mo = typeof MutationObserver === "undefined" ? null : new MutationObserver(count);
+    mo?.observe(el, { childList: true, subtree: true });
+    return () => { el.removeEventListener("scroll", count); ro?.disconnect(); mo?.disconnect(); };
+  }, [ref, on]);
+  return n;
+}
+
+function Rail({ live }: { live: boolean }) {
   return (
     <div className="line-rail-slot relative" aria-hidden>
       <div className="line-rail" data-live={live ? "true" : undefined} />
-      {moved > 0 && <span className="line-rail-chip" title={`${moved} entered ${into} this week`}>{moved}</span>}
     </div>
   );
 }
 
+/** Closed is empty while this week's ships still sit in their watch: it says
+ *  where they are, so the strip's shipped count never reads as a bug. */
+const closedInWatch = (n: number) => `${n === 1 ? "This week's ship is" : `This week's ${n} ships are`} in Watching. ${n === 1 ? "It lands" : "They land"} here when the watch ends quiet.`;
+
 /** An empty station: what feeds it and the command that does. */
-function Empty({ station, focused, after }: { station: Station; focused: boolean; after?: ReactNode }) {
+function Empty({ station, focused, what, after }: { station: Station; focused: boolean; what?: string; after?: ReactNode }) {
   return (
-    <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty title={`${station.what} ${station.cmd}`}>
-      <p className="text-[11px] text-sol-text-muted leading-relaxed">{station.what}</p>
+    <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty title={`${what ?? station.what} ${station.cmd}`}>
+      <p className="text-[11px] text-sol-text-muted leading-relaxed">{what ?? station.what}</p>
       <Cmd cmd={station.cmd} shown={focused} />
       {after}
     </div>
@@ -614,11 +758,17 @@ function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: 
 }
 
 /** The line before anything has reached it: the first command, then the six
- *  stations in one row, each saying what will feed it. */
+ *  stations in one row, each saying what will feed it and, on hover or under
+ *  the cursor, the command that does. */
 function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: number) => void }) {
   return (
-    <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col gap-5" data-line-onboarding>
-      <div className="line-start shrink-0 max-w-[760px] rounded-xl p-5 sm:p-6">
+    <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col" data-line-onboarding>
+      {/* The start card sits above the stations at their own width, so the
+          page reads as one column: what to do, then where it will flow. The
+          pair centers in the floor's height, so a tall window is not left
+          with an empty lower half. */}
+      <div className="flex flex-col gap-5 pt-1 pb-4 my-auto">
+      <div className="line-start shrink-0 rounded-xl p-5 sm:p-6">
         <div className="line-start-title text-sol-text">File the first signal.</div>
         <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
           A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
@@ -637,13 +787,16 @@ function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: 
             className="line-ghost-col relative rounded-[10px] min-w-0"
             style={{ "--i": i } as CSSProperties}
           >
-            <div className="flex items-center h-[24px]">
+            <div className="line-ghost-head flex items-center gap-2 h-[24px]">
+              <span className="line-ghost-num line-num text-[11px] text-sol-text-dim">{i + 1}</span>
               <span className="text-[13px] font-medium text-sol-text whitespace-nowrap">{s.name}</span>
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-sol-text-muted">{s.what}</p>
+            <p className="line-ghost-what mt-2 text-[11px] leading-relaxed text-sol-text-muted" title={s.what}>{s.what}</p>
+            <div className="line-ghost-cmd mt-auto pt-3"><Cmd cmd={s.cmd} shown={focusedCol === i} /></div>
           </li>
         ))}
       </ol>
+      </div>
       </div>
     </div>
   );
@@ -658,6 +811,17 @@ function OtherRuns({ n }: { n: number }) {
   );
 }
 
+/** A folded group inside a station: parked causes, quiet sources. */
+function Fold({ open, onToggle, label, count }: { open: boolean; onToggle: () => void; label: string; count: number }) {
+  return (
+    <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text px-1 py-1 whitespace-nowrap min-w-0" data-line-fold>
+      {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+      <span className="truncate min-w-0">{label}</span>
+      <span className="ml-auto tabular-nums shrink-0">{count}</span>
+    </button>
+  );
+}
+
 function RowLink({ href, focused, index, children, className }: { href: string; focused: boolean; index: number; children: ReactNode; className?: string }) {
   return (
     <Link href={href} data-line-row={index} data-focused={focused ? "true" : undefined} className={cn("line-row block rounded-md px-2.5 py-2", className)}>
@@ -668,79 +832,64 @@ function RowLink({ href, focused, index, children, className }: { href: string; 
 
 // ── Rows ──
 
-/** Bars oldest first; the last few, when non-zero, read bright. */
-function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 24 hours", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
-  const max = Math.max(1, ...values);
-  const gap = 1;
-  const hot = Math.max(1, Math.round(values.length / 8));
-  return (
-    <svg className={cn("line-spark shrink-0", className)} width={values.length * (bar + gap)} height={height} viewBox={`0 0 ${values.length * (bar + gap)} ${height}`} aria-label={label}>
-      {values.map((v, i) => {
-        const h = v === 0 ? 1 : Math.max(3, Math.round((v / max) * height));
-        return <rect key={i} x={i * (bar + gap)} y={height - h} width={bar} height={h} rx={1} data-hot={i >= values.length - hot && v > 0 ? "true" : undefined} opacity={v === 0 ? 0.35 : 1} />;
-      })}
-    </svg>
-  );
-}
-
 /** A source of signals: a finder the project's profile declares (LP3), or
- *  one that filed without being declared. A declared finder with nothing in
- *  24 hours says since when it is silent; with nothing in the window, that
- *  it has not filed in two weeks. */
+ *  one that filed without being declared. One line: the source and its count,
+ *  with the week's bars beside the count only when the week has a trend. The
+ *  latest signal, the kinds it files and how it runs sit in the tooltip, so
+ *  the station stays narrow and gives its width to the titles beside it. A
+ *  quiet source (nothing in 24 hours) says its week instead of a zero, and a
+ *  declared finder's silence says how long, in the warning ink. */
 function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: number; focused: boolean; index: number; href: string }) {
   const f = src.finder;
-  const tip = f ? [`finder ${f.id}`, f.kind === "any" ? "any kind" : f.kind.join(", "), f.runs].filter(Boolean).join(" · ") : src.undeclared ? "Files signals here but the project's line profile does not declare it" : undefined;
+  const kinds = src.kinds.length ? src.kinds.join(", ") : f?.kind === "any" ? "any kind" : null;
+  const latest = src.newest ? `latest: ${src.newest.title}, ${ago(src.newest.created_at, now)} ago` : "no signal in 14 days";
+  const tip = [src.source, src.silent ? "silent: a declared finder with no signal in 24 hours" : null, src.undeclared ? "files here, not declared in the line profile" : f ? `finder ${f.id}` : null, kinds, f?.runs ? `runs ${f.runs}` : null, latest, `${src.day} in the last 24 hours, ${src.week} this week`].filter(Boolean).join("\n");
+  const quiet = src.day === 0;
   return (
-    <RowLink href={href} focused={focused} index={index} className={src.day === 0 ? "line-row-quiet" : undefined}>
+    <RowLink href={href} focused={focused} index={index} className={cn("py-1.5", src.silent ? "line-row-silent" : quiet ? "line-row-quiet" : undefined)}>
       <div className="flex items-center gap-2 min-w-0" title={tip}>
-        <span className="text-[13px] text-sol-text whitespace-nowrap shrink-0">{src.source}</span>
-        {src.undeclared
-          ? <span className="text-[11px] text-sol-text-dim italic truncate min-w-0">undeclared</span>
-          : <span className="text-[11px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>}
-        <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap" title={`${src.day} in the last 24 hours, ${src.week} this week`}>
-          <span className={cn("text-[13px]", src.day > 0 ? "text-sol-text" : "text-sol-text-dim")}>{src.day}</span> today<span className="line-count-of"> · {src.week} wk</span>
+        <span className={cn("text-[13px] truncate min-w-0", src.undeclared ? "text-sol-text-muted italic" : "text-sol-text")}>{src.source}</span>
+        {!src.silent && sparkable(src.spark) && <Spark values={src.spark} bar={2} height={12} className="line-sense-spark ml-auto" label="signals per day, last 7 days" />}
+        <span className={cn("line-sense-count shrink-0 text-[11px] tabular-nums whitespace-nowrap", (src.silent || !sparkable(src.spark)) && "ml-auto", "text-sol-text-dim")}>
+          {src.silent
+            ? <span className="line-silent-dot inline-block" role="img" aria-label={src.newest ? `silent ${ago(src.newest.created_at, now)}` : "silent, no signal in 14 days"} />
+            : quiet
+              ? (src.week > 0 ? `${src.week} wk` : null)
+              : <span className="text-[13px] font-semibold text-sol-text">{src.day}</span>}
         </span>
       </div>
-      <div className="mt-1.5"><Spark values={src.spark} /></div>
-      {src.newest
-        ? (
-          <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>
-            {src.silent && <span className="text-sol-orange" data-line-silent>silent {formatElapsed(src.newest.created_at, now)} · </span>}
-            {src.newest.title}{!src.silent && <> · {formatElapsed(src.newest.created_at, now)}</>}
-          </div>
-        )
-        : <div className="mt-1 text-[11px] text-sol-orange truncate" data-line-silent title={f?.runs}>no signal in 14 days{f?.runs ? ` · ${f.runs}` : ""}</div>}
     </RowLink>
   );
 }
 
-/** A chip only where a goal exists. Ungrounded causes carry none (the
- *  column header says so once), and parked ones sit under their own fold. */
-const GOAL_TONE: Partial<Record<CauseRow["goal"]["kind"], string>> = {
-  initiative: "border-sol-text-muted/50 text-sol-text",
-  project: "border-sol-border text-sol-text-muted",
-  unknown: "border-sol-border text-sol-text-dim",
-};
+/** A goal only where one exists, as quiet text that wraps to two lines.
+ *  Ungrounded causes carry none (the column header says so once), and
+ *  parked ones sit under their own fold. */
+const GOAL_SHOWN = new Set<CauseRow["goal"]["kind"]>(["initiative", "project", "unknown"]);
 
-function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow; rank?: number; max: number; focused: boolean; index: number; muted?: boolean }) {
+function CauseRowView({ row, rank, focused, index, muted }: { row: CauseRow; rank?: number; focused: boolean; index: number; muted?: boolean }) {
   const t = row.task;
   // The row is a scan line: rank, title, signal count and goal. The rest of
   // the triage sits on hover and on the task page.
   const tip = [t.short_id, t.category, t.risk && t.risk !== "low" ? `${t.risk} risk` : null, `priority ${row.score.toFixed(1)}`].filter(Boolean).join(" · ");
   const unready = t.readiness && t.readiness !== "ready";
   return (
-    <RowLink href={taskHref(t)} focused={focused} index={index} className={muted ? "opacity-70" : undefined}>
+    <RowLink href={taskHref(t)} focused={focused} index={index} className={cn(muted && "opacity-70")}>
+      {/* Rank is a quiet tabular figure, the same on every row; the score
+          sits in the tooltip. A cause that cannot start yet says so in a
+          chip on its title line, the one state here that asks for action. */}
       <div className="flex items-start gap-2" title={tip}>
-        {rank !== undefined && <span className="line-num text-[13px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
-        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
+        {rank !== undefined && <span className="line-rank w-4 shrink-0" aria-label={`rank ${rank}, priority ${row.score.toFixed(1)}`}>{rank}</span>}
+        <span className="text-[13px] text-sol-text leading-snug flex-1 min-w-0 line-title">
+          {t.title}
+          {unready && <span className="line-chip-warn ml-1.5" title={t.readiness_note ?? undefined} data-line-unready>{t.readiness!.replace("_", " ")}</span>}
+        </span>
       </div>
-      <div className={cn("mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0", rank !== undefined && "pl-6")}>
-        <span className="text-sol-text tabular-nums shrink-0" title="signals attached">×{row.signals}</span>
-        {GOAL_TONE[row.goal.kind] && <span className={cn("px-1.5 py-px rounded border min-w-0 truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref}>{row.goal.label}</span>}
-        {unready && <span className="ml-auto shrink-0 text-sol-yellow" title={t.readiness_note ?? undefined}>{t.readiness!.replace("_", " ")}</span>}
-      </div>
-      <div className={cn("line-bar mt-2 h-[3px] rounded-full overflow-hidden", rank !== undefined && "ml-6")}>
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.score / (max || 1)) * 100))}%` }} />
+      {/* Count and goal share one dim line, the goal taking what is left and
+          wrapping inside it. */}
+      <div className={cn("mt-1 flex items-start gap-1.5 text-[11px] leading-[16px] min-w-0 text-sol-text-dim", rank !== undefined && "pl-6")}>
+        <span className="tabular-nums shrink-0" title="signals attached">×{row.signals}</span>
+        {GOAL_SHOWN.has(row.goal.kind) && <span className="line-goal flex-1 min-w-0 break-words line-clamp-2" title={`serves ${row.goal.label} (${row.goal.ref})`}>{row.goal.label.split(" · ")[0]}</span>}
       </div>
     </RowLink>
   );
@@ -765,20 +914,37 @@ function BuildRowView({ row, now, focused, index }: { row: BuildBlock["rows"][nu
   const r = row.run;
   const ref = row.task?.short_id ?? r.task_short_id;
   const old = now - row.since > DAY;
+  // The title is what a founder scans; the ids and the workflow sit in its
+  // tooltip, and what the step is doing shows on the row under the cursor.
+  const tip = [row.name, ref, row.workflow ? `workflow ${row.workflow}` : null, row.node?.activity].filter(Boolean).join(" · ");
   return (
     <RowLink href={runHref(r._id)} focused={focused} index={index} className={row.stalled ? "opacity-60" : undefined}>
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2" title={tip}>
         <span className={cn("mt-1 w-1.5 h-1.5 rounded-full shrink-0", row.stalled ? "border border-sol-text-dim" : r.status === "paused" ? "bg-sol-yellow" : "line-live-dot")} />
-        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0" title={row.name}>{row.name}</span>
-        <span className={cn("text-[11px] tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : undefined}>{formatElapsed(row.since, now)}</span>
+        <span className="text-[13px] text-sol-text leading-snug flex-1 min-w-0 line-title">{row.name}</span>
       </div>
       <div className="mt-1 pl-3.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim min-w-0">
-        {row.chip && <span className="shrink-0 max-w-[60%] truncate px-1.5 rounded border border-sol-border/60 text-sol-text-muted">{row.chip}</span>}
-        {row.workflow && <span className="truncate">{row.workflow}</span>}
-        {ref && <span className="ml-auto font-mono shrink-0">{ref}</span>}
+        {row.stepIndex !== null
+          ? <Stepper at={row.stepIndex} label={row.chip} tone={row.stalled ? "stalled" : r.status === "paused" ? "paused" : "live"} />
+          : row.chip && <span className="min-w-0 truncate px-1.5 rounded border border-sol-border/60 text-sol-text-muted">{row.chip}</span>}
+        <span className={cn("ml-auto tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : "at this step"}>{ago(row.since, now)}</span>
       </div>
-      {row.node?.activity && <div className="mt-1 pl-3.5 text-[11px] text-sol-text-muted truncate" title={row.node.activity}>{row.node.activity}</div>}
+      {focused && row.node?.activity && <div className="mt-1 pl-3.5 text-[11px] text-sol-text-muted leading-snug line-clamp-2" data-line-activity>{row.node.activity}</div>}
     </RowLink>
+  );
+}
+
+/** Where a line run sits: five dots, the steps done filled, the current one
+ *  in the belt color and named beside the dots (a grouped run's block header
+ *  names it instead). The same ticked grammar as Watching's countdown. */
+function Stepper({ at, label, tone }: { at: number; label: string | null; tone: "live" | "paused" | "stalled" }) {
+  return (
+    <span className="line-stepper flex items-center gap-1.5 min-w-0" data-tone={tone} title={`step ${at + 1} of ${LINE_STEPS.length}: ${LINE_STEPS.map((x, i) => (i === at ? `[${x}]` : x)).join(" ")}${label ? `, at ${label}` : ""}`} data-line-stepper={at}>
+      <span className="flex items-center gap-[3px] shrink-0" aria-hidden>
+        {LINE_STEPS.map((x, i) => <span key={x} className="line-step" data-done={i < at ? "true" : undefined} data-now={i === at ? "true" : undefined} />)}
+      </span>
+      {label && <span className="truncate min-w-0 text-sol-text-muted">{label}</span>}
+    </span>
   );
 }
 
@@ -786,16 +952,15 @@ function WatchRowView({ row, focused, index }: { row: WatchRow; focused: boolean
   const span = Math.max(1, Math.ceil((row.until - (row.task.closed_at ?? row.until - 7 * DAY)) / DAY));
   return (
     <RowLink href={taskHref(row.task)} focused={focused} index={index}>
-      <div className="flex items-start gap-2">
-        <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{row.task.title}</span>
-        <span className="text-[11px] text-sol-text tabular-nums shrink-0">{row.daysLeft}d left</span>
+      <div className="flex items-start gap-2" title={[row.task.title, row.task.short_id].filter(Boolean).join(" · ")}>
+        <span className="text-[13px] text-sol-text leading-snug flex-1 min-w-0 line-title">{row.task.title}</span>
       </div>
-      <div className="line-bar mt-1.5 h-[3px] rounded-full overflow-hidden">
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` }} />
+      <div className="line-countdown mt-1.5" title={`${row.daysLeft} of ${span} watch days left`}>
+        <span style={{ "--left": `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` } as CSSProperties} />
       </div>
-      <div className="mt-1 flex gap-2 text-[11px] text-sol-text-dim">
-        <span>×{row.task.cause?.signal_count ?? 0} before ship</span>
-        <span className="ml-auto font-mono">{row.task.short_id}</span>
+      <div className="mt-1 flex gap-2 text-[11px] text-sol-text-dim whitespace-nowrap min-w-0">
+        <span className="truncate min-w-0" title="signals before ship">×{row.task.cause?.signal_count ?? 0} before ship</span>
+        <span className="ml-auto text-sol-text tabular-nums shrink-0">{row.daysLeft}d left</span>
       </div>
     </RowLink>
   );
@@ -811,14 +976,11 @@ function ClosedRowView({ row, now, focused, index }: { row: ClosedRow; now: numb
   const o = OUTCOME[row.outcome];
   return (
     <RowLink href={taskHref(row.task)} focused={focused} index={index}>
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2" title={[row.task.title, row.task.short_id].filter(Boolean).join(" · ")}>
         <span className={cn("text-[13px] w-3 shrink-0", o.tone)}>{o.glyph}</span>
-        <span className={cn("text-[13px] leading-snug line-clamp-2 flex-1 min-w-0", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>
+        <span className={cn("text-[13px] leading-snug flex-1 min-w-0 line-title", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>
       </div>
-      <div className="mt-1 pl-5 flex gap-2 text-[11px] text-sol-text-dim min-w-0">
-        <span className="truncate"><span className={o.tone}>{row.outcome}</span> · {formatElapsed(row.at, now)} ago</span>
-        <span className="ml-auto shrink-0 font-mono">{row.task.short_id}</span>
-      </div>
+      <div className="mt-1 pl-5 text-[11px] text-sol-text-dim whitespace-nowrap truncate"><span className={o.tone}>{row.outcome}</span> · {ago(row.at, now)}</div>
     </RowLink>
   );
 }

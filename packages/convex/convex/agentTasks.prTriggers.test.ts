@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { matchTaskTriggers } from "./agentTasks";
+import { PENDING_EVENTS_CAP } from "@codecast/shared/contracts/ingest";
 
 function trigger(_id: string, event_filter: any, status = "scheduled") {
   return {
@@ -131,5 +132,93 @@ describe("matchTaskTriggers repository case", () => {
     ]);
     expect(await run(ctx, { event_type: "pr_check_failed", repository: "codecast-sh/codecast", pr_number: 1 })).toBe(1);
     expect(await run(ctx, { event_type: "pr_check_failed", repository: "codecast-sh/other", pr_number: 1 })).toBe(0);
+  });
+});
+
+// ── Ingestion events (external-data.md X4) ──
+//
+// A source narrows the ingestion names the way a repository narrows the pull
+// request ones, and an event from a personal workspace has no team, so the
+// workspace key is what keeps one person's product errors from waking another
+// person's "any new error" trigger.
+
+describe("matchTaskTriggers source filter", () => {
+  test("a trigger that names a source fires only for it, in any spelling", async () => {
+    const ctx = context([trigger("union_only", { event_type: "error_new", source: " Union " })]);
+    expect(await run(ctx, { event_type: "error_new", source: "web" })).toBe(0);
+    expect(await run(ctx, { event_type: "error_new" })).toBe(0);
+    expect(await run(ctx, { event_type: "error_new", source: "union" })).toBe(1);
+  });
+
+  test("a trigger with no source fires for every source", async () => {
+    const ctx = context([trigger("any", { event_type: "check_failed" })]);
+    expect(await run(ctx, { event_type: "check_failed", source: "union" })).toBe(1);
+    expect(await run(ctx, { event_type: "check_failed", source: "web" })).toBe(1);
+  });
+
+  test("a firing reads only the triggers armed on its name", async () => {
+    const ctx = context([
+      trigger("errors", { event_type: "error_new" }),
+      trigger("jobs", { event_type: "job_failed" }),
+    ]);
+    expect(await run(ctx, { event_type: "job_failed", source: "union" })).toBe(1);
+    const rows = ctx.db._tables.agent_tasks;
+    expect(rows.find((t: any) => t._id === "jobs").run_at).toBeGreaterThan(0);
+    expect(rows.find((t: any) => t._id === "errors").run_at).toBeUndefined();
+  });
+});
+
+describe("matchTaskTriggers workspace scoping", () => {
+  const filter = { event_type: "error_new" };
+
+  test("a personal workspace event wakes only its owner", async () => {
+    const ctx = teamContext([ownedTrigger("mine", "user_a", filter), ownedTrigger("theirs", "user_b", filter)], []);
+    expect(await run(ctx, { ...filter, workspace: "user:user_a" })).toBe(1);
+    const rows = ctx.db._tables.agent_tasks;
+    expect(rows.find((t: any) => t._id === "mine").run_at).toBeGreaterThan(0);
+    expect(rows.find((t: any) => t._id === "theirs").run_at).toBeUndefined();
+  });
+
+  test("a team workspace event wakes members only", async () => {
+    const ctx = teamContext(
+      [ownedTrigger("member", "user_a", filter), ownedTrigger("outsider", "user_b", filter)],
+      [{ _id: "m1", user_id: "user_a", team_id: TEAM_A }],
+    );
+    expect(await run(ctx, { ...filter, workspace: `team:${TEAM_A}` })).toBe(1);
+    expect(ctx.db._tables.agent_tasks.find((t: any) => t._id === "member").run_at).toBeGreaterThan(0);
+  });
+
+  test("an unknown key variant wakes nobody", async () => {
+    const ctx = teamContext([ownedTrigger("mine", "user_a", filter)], []);
+    expect(await run(ctx, { ...filter, workspace: "restricted:x" })).toBe(0);
+  });
+});
+
+describe("matchTaskTriggers pending events", () => {
+  test("each firing is appended, so a run woken twice knows about both", async () => {
+    const ctx = context([trigger("t", { event_type: "error_new" })]);
+    await run(ctx, { event_type: "error_new", event_ref: { group_short_id: "eg-1", title: "TypeError: x" } });
+    await run(ctx, { event_type: "error_new", event_ref: { group_short_id: "eg-2", title: "RangeError", url: "https://x" } });
+    const pending = ctx.db._tables.agent_tasks[0].pending_events;
+    expect(pending.map((e: any) => e.group_short_id)).toEqual(["eg-1", "eg-2"]);
+    expect(pending[1]).toMatchObject({ event_type: "error_new", title: "RangeError", url: "https://x" });
+    expect(pending[1].at).toBeGreaterThan(0);
+  });
+
+  test("the list is capped, keeping the newest", async () => {
+    const ctx = context([trigger("t", { event_type: "error_new" })]);
+    for (let i = 0; i < PENDING_EVENTS_CAP + 5; i++) {
+      await run(ctx, { event_type: "error_new", event_ref: { group_short_id: `eg-${i}`, title: "e" } });
+    }
+    const pending = ctx.db._tables.agent_tasks[0].pending_events;
+    expect(pending).toHaveLength(PENDING_EVENTS_CAP);
+    expect(pending.at(-1).group_short_id).toBe(`eg-${PENDING_EVENTS_CAP + 4}`);
+    expect(pending[0].group_short_id).toBe("eg-5");
+  });
+
+  test("a firing with no event ref leaves pending events alone", async () => {
+    const ctx = context([trigger("t", { event_type: "pr_merged" })]);
+    await run(ctx, { event_type: "pr_merged" });
+    expect(ctx.db._tables.agent_tasks[0].pending_events).toBeUndefined();
   });
 });

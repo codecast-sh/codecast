@@ -1370,6 +1370,64 @@ describe("gesture bridge lock parity", () => {
     expect(fieldLocks(useInboxStore.getState().pending, REAL_A)).toEqual({});
   });
 
+  // An undo's sibling locks retire on the acknowledgement of the undo's own
+  // dispatch. Its message is stamped before the replay dispatches (the ack
+  // skips a lock newer than its send) and names exactly the fields the replay
+  // sent, so no barrier lock waits on an ack that never covers it. The
+  // dispatch here takes a few milliseconds, as a real replay can.
+  const undoLeavesNoSiblingLocks = (forwardRow: Record<string, unknown>, forward: () => void) => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_pinned_at: null } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A } },
+    });
+    _resetUndoStacks();
+    const store = useInboxStore.getState() as any;
+    const sends: Array<{ patches: any; sentAt: number }> = [];
+    store._setOutbox(() => {}, () => {}, async () => []);
+    store._setDispatch((_action: string, _args: unknown[], patches: any) => {
+      sends.push({ patches, sentAt: Date.now() });
+      const until = Date.now() + 3;
+      while (Date.now() < until) { /* the replay's remaining work */ }
+      return Promise.resolve();
+    });
+    forward();
+    sends.length = 0;
+    const posted = hub.posted.length;
+    expect(performUndo()).toBe(true);
+    const messages = hub.posted.slice(posted).map((p) => p.data as GestureMessage);
+    expect(messages.some((m) => m.kind === "fields")).toBe(true);
+    expect(sends.length).toBeGreaterThan(0);
+
+    // The sibling, holding the row as the forward gesture left it.
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: false, inbox_pinned_at: null, ...forwardRow } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, ...forwardRow } },
+    });
+    for (const m of messages) useInboxStore.getState().applyGestureBridge(m);
+    expect(Object.keys(fieldLocks(useInboxStore.getState().pending, REAL_A)).length).toBeGreaterThan(0);
+    useInboxStore.getState().syncTable("syncMeta", { "synclog:v1:user:me": { cursor: 10 } }, { kind: "singleton" });
+    for (const { patches, sentAt } of sends) {
+      useInboxStore.getState().applyGestureBridge({ kind: "ack", sentAt, ts: sentAt, ack: [{ scope_key: "user:me", position: 7 }], patches });
+    }
+    expect(fieldLocks(useInboxStore.getState().pending, REAL_A)).toEqual({});
+  };
+
+  it("the undo of a pin leaves the sibling no lock its ack does not retire", () => {
+    let pinnedAt = 0;
+    undoLeavesNoSiblingLocks({ get inbox_pinned_at() { return pinnedAt; }, is_pinned: true }, () => {
+      useInboxStore.getState().pinSession(REAL_A);
+      pinnedAt = useInboxStore.getState().sessions[REAL_A]!.inbox_pinned_at as number;
+    });
+  });
+
+  it("the undo of a stash leaves the sibling no lock its ack does not retire", () => {
+    let stashedAt = 0;
+    undoLeavesNoSiblingLocks({ get inbox_stashed_at() { return stashedAt; } }, () => {
+      useInboxStore.getState().stashSession(REAL_A);
+      stashedAt = useInboxStore.getState().sessions[REAL_A]!.inbox_stashed_at as number;
+    });
+  });
+
   it("a kill of a pinned row bridges the pin clear it wrote, is_pinned included", () => {
     seed({
       sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 5 } as any) },

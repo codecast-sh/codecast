@@ -51,6 +51,7 @@ import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
+import { isOpsPath } from "./ops/opsPaths";
 
 const CreateTaskModal = lazy(() =>
   import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
@@ -1032,6 +1033,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             workflows: isWorkflows,
             line: pathname === "/line",
             triggers: isTriggers,
+            ops: isOpsPath(pathname),
             org: !!isOrg,
             changes: pathname === "/changes",
             rootAgent: isRootAgent,

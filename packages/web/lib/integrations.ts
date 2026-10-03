@@ -14,8 +14,14 @@ import { openExternalUrl } from "./desktop";
 import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { GitPullRequest, ListChecks, Mail, MessagesSquare, NotebookText } from "lucide-react";
-import type { AppConnectionScope, AppConnectionStatus, AppDescriptor, AppId } from "@codecast/shared/contracts";
+import { Bug, ChartLine, GitPullRequest, ListChecks, Mail, MessagesSquare, NotebookText, Plug } from "lucide-react";
+import {
+  isAppInstallationApp,
+  type AppConnectionScope,
+  type AppConnectionStatus,
+  type AppDescriptor,
+  type AppId,
+} from "@codecast/shared/contracts";
 import { formatRelative } from "./utils";
 import type { IssueProvider, TaskExternal } from "../store/inboxStore";
 
@@ -33,6 +39,9 @@ export const APP_LOOK: Record<AppId, { icon: AppIcon; accent: string }> = {
   gmail: { icon: Mail, accent: "var(--sol-red)" },
   linear: { icon: ListChecks, accent: "var(--sol-blue)" },
   notion: { icon: NotebookText, accent: "var(--sol-yellow)" },
+  sentry: { icon: Bug, accent: "var(--sol-orange)" },
+  posthog: { icon: ChartLine, accent: "var(--sol-cyan)" },
+  app: { icon: Plug, accent: "var(--sol-green)" },
 };
 
 /** Apps whose sources the issue sync UI hangs off (docs/architecture/issue-sync.md S9). */
@@ -53,6 +62,9 @@ export function issueSyncTitle(external: TaskExternal): string {
 
 export type AppConnectionActions = {
   connect: () => Promise<void>;
+  /** token-paste apps: validate and store a pasted token with its settings.
+   *  Resolves true when the connection was stored; a refusal lands in `error`. */
+  connectToken: (token: string, config: Record<string, string>) => Promise<boolean>;
   /** Runs the revoke. Confirmation belongs to the caller's UI, not here. */
   disconnect: () => Promise<void>;
   busy: boolean;
@@ -70,7 +82,8 @@ export type AppConnectionActions = {
  * The connect and disconnect gestures for one app at one scope. Every branch
  * calls a flow that already exists server-side: Slack's getInstallUrl,
  * googleOAuth's getConnectUrl/disconnect, the generic oauthConnectors pair for
- * Linear and Notion, githubApp.getInstallUrl and
+ * Linear and Notion, tokenConnectors.connectWithToken for a pasted token
+ * (Sentry, PostHog, an app), githubApp.getInstallUrl and
  * githubApp.deleteInstallation. `scope` says which workspace the connection
  * binds to — the team being looked at, or the person themself.
  */
@@ -83,6 +96,7 @@ export function useAppConnection(
   const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
   const disconnectGoogle = useAction(api.googleOAuth.disconnect);
   const getConnectorUrl = useAction(api.oauthConnectors.getConnectUrl);
+  const connectWithToken = useAction(api.tokenConnectors.connectWithToken);
   const disconnectConnector = useAction(api.oauthConnectors.disconnect);
   const deleteGithubInstallation = useMutation(api.githubApp.deleteInstallation);
   const getGithubInstallUrl = useAction(api.githubApp.getInstallUrl);
@@ -154,11 +168,22 @@ export function useAppConnection(
     }, `Couldn't reach ${descriptor.name}`);
   };
 
+  const connectToken = async (token: string, config: Record<string, string>) => {
+    let stored = false;
+    await attempt(async () => {
+      const res = await connectWithToken({ provider: descriptor.id, token, config, scope });
+      if (res?.ok) stored = true;
+      else setError(res?.error ?? `Couldn't connect ${descriptor.name}`);
+    }, `Couldn't reach ${descriptor.name}`);
+    return stored;
+  };
+
   const disconnect = async () => {
     const installationId = connected?.disconnect_id;
     if (!installationId) return;
     await attempt(async () => {
-      if (descriptor.id === "linear" || descriptor.id === "notion") {
+      // Every app_installations row, OAuth or pasted token, revokes the same way.
+      if (isAppInstallationApp(descriptor.id)) {
         await disconnectConnector({ installation_id: installationId });
       } else if (descriptor.id === "gmail") {
         await disconnectGoogle({ installation_id: installationId });
@@ -168,5 +193,5 @@ export function useAppConnection(
     }, `Couldn't disconnect ${descriptor.name}`);
   };
 
-  return { connect, disconnect, busy, error, setError };
+  return { connect, connectToken, disconnect, busy, error, setError };
 }

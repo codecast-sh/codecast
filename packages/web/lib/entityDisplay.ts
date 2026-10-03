@@ -2,7 +2,7 @@ import { createContext, useContext, useMemo } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, formatCallTime, type EntityType } from "./entityLinks";
+import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, type EntityType } from "./entityLinks";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, entityTypeInStore, resolveAssigneeInfo } from "./liveEntities";
 import { useInboxStore } from "../store/inboxStore";
@@ -268,11 +268,7 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   };
   // A stretch of a call reads as the call plus the transcript lines it names,
   // and a moment of it as the call plus the time on the player.
-  const turnsSuffix = callRef?.at_ms != null
-    ? ` @${formatCallTime(callRef.at_ms)}`
-    : callRef?.turns
-      ? ` #${callRef.turns.from_seq}${callRef.turns.to_seq !== callRef.turns.from_seq ? `–${callRef.turns.to_seq}` : ""}`
-      : "";
+  const turnsSuffix = callRefLabelSuffix(callRef);
   const label = entityReferenceLabel(labelArgs) + turnsSuffix;
   const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + turnsSuffix : label;
   // Sessions carry a generated short name (title generation writes

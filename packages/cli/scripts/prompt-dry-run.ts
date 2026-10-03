@@ -79,7 +79,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
-import { accountTokenFilePath } from "../src/ccAccounts.ts";
+import { accountTokenFilePath, fleetBearer, launchProfileName } from "../src/ccAccounts.ts";
 
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
@@ -123,7 +123,11 @@ function profileToken(name: string): string {
   if (!m) throw new Error(`no CLAUDE_CODE_OAUTH_TOKEN in ${file}`);
   return m[1];
 }
-/** The machine login, best candidate first; the scoped item when this shell itself runs under a config dir. */
+/** The machine login, best candidate first; the scoped item when this shell
+ *  itself runs under a config dir. A signed-out machine login (the item kept,
+ *  its token blanked) falls back to the bearer of the profile the fleet runs
+ *  on (`cast accounts ls`, "sessions run here"), so a run spends what every
+ *  session here spends instead of failing. */
 function loginToken(): string {
   for (const item of ccKeychainReadItems()) {
     const r = spawnSync("security", ccKeychainReadArgs(item), { encoding: "utf8" });
@@ -133,7 +137,11 @@ function loginToken(): string {
       if (tok) return tok;
     } catch { /* not this item */ }
   }
-  throw new Error("no Claude Code login in the keychain; run `claude` once on this machine");
+  const fleet = launchProfileName();
+  const bearer = fleet ? fleetBearer(fleet, null) : null;
+  const tok = bearer ? JSON.parse(bearer.blob)?.claudeAiOauth?.accessToken : null;
+  if (tok) return tok;
+  throw new Error("no Claude Code login in the keychain and no fleet profile with a live token; run `claude` once on this machine, or pass --account <profile>");
 }
 
 fs.mkdirSync(runDir, { recursive: true });

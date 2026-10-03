@@ -18,7 +18,7 @@ import { MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "@c
 import { chatRelayClientId } from "@codecast/convex/convex/lib/chatWakeIds";
 import { makeSimBackend, type SimBackend } from "@codecast/convex/convex/simBackend.testing";
 import { snapshotEntries } from "@platform/engine";
-import { __createInboxStoreForTests, syncLogScopeMetaKey, useInboxStore } from "../../../inboxStore";
+import { syncLogScopeMetaKey, useInboxStore } from "../../../inboxStore";
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../../inboxOverlays";
 import { REGISTERED_FEEDS, REPLICATED_STORE_KEYS, REPLICATION_CLASSIFICATION } from "../../../clientSyncRegistry";
 import { applyCollectionFeed } from "../../../../hooks/useSyncCollection";
@@ -28,7 +28,7 @@ import { applyMineLivenessPayload } from "../../../../hooks/useSyncInboxSessions
 import { applyEntityIds, catchUp, emptyIdsByCollection } from "../../../../hooks/useSyncChangeFeed";
 import { Net } from "../net";
 import { SimLabels } from "../labels";
-import { advance, attachRealm, installRealm, now, runInWindow, stream, T0, uninstallRealm } from "../realm";
+import { advance, attachRealm, createWindowStore, installRealm, now, runInWindow, stream, T0, uninstallRealm, type SimStore } from "../realm";
 import { SimWorld } from "../world";
 import { checkInvariants, failureContext, INVARIANTS } from "../invariants";
 import {
@@ -51,7 +51,7 @@ const BO = userIdFor("bo");
 const ACME = teamIdFor("acme");
 
 class FixtureWindow implements InvariantWindow {
-  readonly store = __createInboxStoreForTests();
+  readonly store: SimStore;
   readonly feeds = new Set<string>();
   private readonly mounted: string[] = [];
   readonly outbox = new Map<string, { id: string; action: string; args?: unknown }>();
@@ -64,6 +64,7 @@ class FixtureWindow implements InvariantWindow {
     // Also apply the base list's rows themselves, as useLiveInboxSessions does.
     private readonly listFeeder = false,
   ) {
+    this.store = createWindowStore(name);
     // The window's IDB tee: nothing persists, every write goes to the taps.
     (this.store.getState() as any)._setIDBWrite((patches: StorePatch[], state: unknown) => {
       for (const tap of this.taps) tap(patches, state);

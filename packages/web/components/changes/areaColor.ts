@@ -80,9 +80,8 @@ export const KIND_COLOR: Partial<Record<string, string>> = {
   revert: "var(--sol-red)",
 };
 
-/** Risk is a texture, never a fill (spec 5.2). */
-export const RISK_HATCH =
-  "repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-red) 22%, transparent) 0 2px, transparent 2px 6px)";
+/** Risk is a texture, never a fill (spec 5.2). Defined once on `.chg-root` in globals.css, with its light theme strength. */
+export const RISK_HATCH = "var(--chg-risk-hatch)";
 
 /** The release stamp's pill border. */
 export const RELEASE_COLOR = "var(--sol-green)";

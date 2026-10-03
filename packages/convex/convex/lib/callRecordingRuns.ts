@@ -1,7 +1,8 @@
 // A call recording's runs: the rules for moving a `call_recordings` row
 // through its life, and the few database helpers the huddle lifecycle needs
 // (calls.ts stops a recording when the room empties, transcripts.ts when the
-// record ends, the heartbeat nudges it when a screen share starts).
+// record ends, the heartbeat nudges it when a screen share starts, a deleted
+// team's sweep purges a call's recordings).
 //
 // A RUN is one press of Record: a composite row (the room as people saw it)
 // and a screen row per screen shared while it ran. A screen row names its run
@@ -24,11 +25,13 @@ import { internal } from "../_generated/api";
 import {
   callParticipantKind,
   isRecordingActive,
+  RECORDING_RESTART_COOLDOWN_MS,
+  shareIncludesVideo,
   type CallRecordingStatus,
   type CallRecordingStopReason,
 } from "@codecast/shared/contracts";
 import { livekitConfigFromEnv, recordingFieldsFromEgress, type LivekitEgress, type LivekitParticipant, screenShareTracks } from "./livekitServer";
-import { callRecordingsBucketFromEnv } from "./r2";
+import { callRecordingCallPrefix, callRecordingsBucketFromEnv } from "./r2";
 import { displayName } from "./displayNames";
 import { postEvent } from "../callChat";
 
@@ -48,6 +51,26 @@ export const RECORDING_POLL_MS = 10_000;
  *  between the insert and the answer. Past this it is failed, not pending. */
 export const EGRESS_ACCEPT_TIMEOUT_MS = 60_000;
 
+/** A row LiveKit never acknowledged while LiveKit itself could not be asked
+ *  (ListEgress failing too, so nothing can be adopted by its path). Past this
+ *  it fails anyway: the room is not left showing a red mark, and guests held
+ *  at the door, for a recording that does not exist. The sweep stops an
+ *  egress that turns up later with no live row. */
+export const EGRESS_UNREACHABLE_FAIL_MS = 3 * EGRESS_ACCEPT_TIMEOUT_MS;
+
+/** A file we asked LiveKit to stop that is still not finished after this:
+ *  its upload is stuck. The bucket is asked whether the file landed anyway
+ *  (it is then ready); otherwise the row fails, so a stuck save never holds
+ *  the room's "saving" mark, or a later huddle's Record button, for good. An
+ *  hour of call uploads in a few minutes; twenty is far past a slow one. */
+export const EGRESS_SAVE_TIMEOUT_MS = 20 * 60_000;
+
+/** How long a refusal for spent recording minutes is remembered
+ *  (noteRecordingOutage): presses meanwhile are refused before they tell the
+ *  room anything, and the button says why. Past it the next press asks
+ *  LiveKit again, and any egress LiveKit accepts clears it at once. */
+export const RECORDING_OUTAGE_TTL_MS = 60 * 60_000;
+
 /** A file LiveKit acknowledged but never began writing. A healthy egress
  *  goes active in seconds; one that has not after this will not (a track
  *  composite asked for an MP4 and pictures together sat in "starting" for
@@ -60,10 +83,16 @@ export const EGRESS_BEGIN_TIMEOUT_MS = 120_000;
  *  asked again; a stop request can be lost like any other. */
 export const STOP_RETRY_MS = 30_000;
 
-/** How long LiveKit may report a room with no person in it before the run is
- *  stopped. The seat leases end a huddle on their own clock (leaveRoom stops
- *  the run at once); this covers the tab that died without leaving, so no
- *  egress keeps filming an empty room for the three minute huddle grace. */
+/** How long the room must stand empty of teammates on BOTH clocks before the
+ *  run is stopped: LiveKit's participant list holds no keeper, and no seat
+ *  lease is live (call_members). Either alone lies for a while: a teammate
+ *  whose network dropped leaves LiveKit's list mid reconnect while their
+ *  seat stays live, and a tab that died without leaving keeps its seat until
+ *  the lease lapses (CALL_MEMBER_STALE_MS). Requiring both means a reconnect
+ *  never cuts the video, and a dead tab still stops it within about this
+ *  plus the lease. The last teammate leaving on purpose does not stop it at
+ *  once either (calls.leaveRoom: a reload is a leave and a join); this is the
+ *  stop, unless the huddle's record ends first. */
 export const RECORDING_EMPTY_ROOM_STOP_MS = 30_000;
 
 /** A run that is still recording after this was forgotten by everyone: stop
@@ -75,10 +104,9 @@ export const RECORDING_MAX_RUN_MS = 6 * 60 * 60 * 1000;
  *  rewritten while it records: "the screen right now" is at most this old. */
 export const LIVE_FRAME_INTERVAL_S = 2;
 
-/** A press within this long of the room's last stop is refused: LiveKit is
- *  still finishing that file, and Record toggled as fast as a hand can press
- *  it would start a billed egress per press. */
-export const RECORDING_RESTART_COOLDOWN_MS = 5_000;
+/** A press this soon after the room's last stop is refused (the shared
+ *  contract holds the rule, so the Record button waits the same span). */
+export { RECORDING_RESTART_COOLDOWN_MS };
 
 /** A one off look at a run (a screen share just started) is skipped when the
  *  run was looked at or nudged this recently: a client flapping its `sharing`
@@ -146,18 +174,37 @@ export function nextPollDelayMs(rows: ReadonlyArray<{ status: CallRecordingStatu
   return active.some((r) => r.status !== "recording") ? RECORDING_POLL_FAST_MS : RECORDING_POLL_MS;
 }
 
+/** Bits a screen file spends per pixel of each frame. Screen content is
+ *  small high-contrast text, and a keyframe every second re-encodes all of
+ *  it each second: at a flat bitrate a 4K share gets a third of the bits per
+ *  pixel a 1080p one does, and its glyphs ring and smear. */
+export const SCREEN_BITS_PER_PIXEL = 0.1;
+/** The floor is LiveKit's own default (4500 kbps), which a 1080p share is
+ *  written at today, so no share is written worse than before. The ceiling
+ *  keeps an hour of a 4K share near 5 GB. */
+export const SCREEN_BITRATE_KBPS = { min: 4500, max: 12000 } as const;
+
 /** The encoding a screen file is written with. Transcoded to H.264 MP4 at
  *  the share's own size rather than copied as published: a published share
  *  is usually VP8, which LiveKit writes to WebM, and WebM from a live track
  *  carries no seek index, so every frame grab would read the file from the
  *  start and Safari would not play it at all. Keyframes every second make a
  *  grab land on the exact moment; 15fps is what a screen share sends. Sizes
- *  are kept even (H.264 wants it) and capped at 4K. */
-export function screenEncoding(track: { width?: number; height?: number }): { width: number; height: number; framerate: number; key_frame_interval: number } | null {
+ *  are kept even (H.264 wants it) and capped at 4K. The bitrate follows the
+ *  pixel count (SCREEN_BITS_PER_PIXEL), rounded to 100 kbps and held inside
+ *  SCREEN_BITRATE_KBPS, so a Retina or 4K share keeps its text legible. */
+export function screenEncoding(
+  track: { width?: number; height?: number },
+): { width: number; height: number; framerate: number; key_frame_interval: number; video_bitrate: number } | null {
   if (!track.width || !track.height) return null;
   const scale = Math.min(1, 3840 / track.width, 2160 / track.height);
   const even = (n: number) => Math.max(2, Math.round((n * scale) / 2) * 2);
-  return { width: even(track.width), height: even(track.height), framerate: 15, key_frame_interval: 1 };
+  const width = even(track.width);
+  const height = even(track.height);
+  const framerate = 15;
+  const kbps = Math.round((width * height * framerate * SCREEN_BITS_PER_PIXEL) / 1000 / 100) * 100;
+  const video_bitrate = Math.min(SCREEN_BITRATE_KBPS.max, Math.max(SCREEN_BITRATE_KBPS.min, kbps));
+  return { width, height, framerate, key_frame_interval: 1, video_bitrate };
 }
 
 // ── LiveKit's view onto a row ─────────────────────────────────────────────
@@ -217,9 +264,11 @@ export function egressPatch(
     set("error", plainEgressError(f.error ?? egress.error));
     if (!row.stop_reason) set("stop_reason", "failed");
   } else if (status === "ready" && !row.stop_reason) {
-    // Finished without anyone pressing stop: LiveKit's ceiling, a share
-    // that ended, or LiveKit closing a room everybody had left.
-    set("stop_reason", egress.status === "limit_reached" ? "limit" : row.kind === "screen" ? "share_ended" : "huddle_ended");
+    // Finished without anyone asking: LiveKit's ceiling, a share that
+    // ended, or LiveKit closing the file for its own reasons. Nothing here
+    // knows the huddle ended or the room emptied (those stops are written
+    // by whoever saw it, before LiveKit answers), so it says no more.
+    set("stop_reason", egress.status === "limit_reached" ? "limit" : row.kind === "screen" ? "share_ended" : "ended");
   }
   return { drop: false, patch };
 }
@@ -256,6 +305,33 @@ export function mayDeleteRun(
   if (!head || (String(head.started_by) !== String(userId) && !isTeamAdmin)) return { ok: false, reason: "not_yours" };
   if (runRows.some((r) => isRecordingActive(r.status))) return { ok: false, reason: "still_recording" };
   return { ok: true };
+}
+
+/** May this person put the call's video on its public link? Publishing reaches
+ *  further than deleting (the whole internet rather than the room's
+ *  audience), so it takes at least the same authority over every room video
+ *  it would publish: whoever pressed Record for each of them, or an admin of
+ *  the call's team. Reading the call is checked separately and first, and
+ *  taking the video OFF the link needs only that: anyone who may read the
+ *  call may make it less public. */
+export function mayShareVideo(userId: string, composites: ReadonlyArray<{ started_by: string }>, isTeamAdmin: boolean): boolean {
+  return isTeamAdmin || composites.every((c) => String(c.started_by) === String(userId));
+}
+
+/** The room videos a call's public link shows: every finished one pressed for
+ *  before the moment somebody chose to include the video
+ *  (`share_video_through`). A run recorded after that choice is a new
+ *  recording nobody chose to publish, so it waits for a fresh choice. A link
+ *  shared before the cutoff existed shows what it always showed. */
+export function sharedVideoRuns<R extends { kind: string; status: string; started_at?: number | null; requested_at: number }>(
+  rows: readonly R[],
+  through: number | null | undefined,
+): { shared: R[]; later: R[] } {
+  const done = rows.filter((r) => r.kind === "composite" && r.status === "ready" && r.started_at != null);
+  if (through == null) return { shared: done, later: [] };
+  // Strictly before: a press landing in the very millisecond of the choice
+  // is not something anybody saw when they made it.
+  return { shared: done.filter((r) => r.requested_at < through), later: done.filter((r) => r.requested_at >= through) };
 }
 
 // ── Database helpers ──────────────────────────────────────────────────────
@@ -303,6 +379,49 @@ export function recordingConfigured(): boolean {
   return livekitConfigFromEnv() !== null && callRecordingsBucketFromEnv() !== null;
 }
 
+// ── A LiveKit plan out of recording minutes ───────────────────────────────
+//
+// LiveKit refuses every egress once the project's recording minutes for the
+// billing period are spent, and keeps refusing until someone raises the plan.
+// Finding that out by pressing is the worst way: each press inserts a run,
+// tells the room "X started recording" (guests hear the chime and read the
+// notice), and a second later tells it "Recording failed". So the first such
+// refusal is remembered here (one system_config row), and until it lapses
+// (RECORDING_OUTAGE_TTL_MS) or LiveKit accepts an egress again, a press is
+// refused before it tells the room anything, and the room's Record button
+// says why instead of offering itself.
+
+const RECORDING_OUTAGE_KEY = "call_recording_outage";
+
+/** The remembered outage: what a person is told, and since when. */
+export async function recordingOutage(ctx: any): Promise<{ reason: string; since: number } | null> {
+  const row = await ctx.db
+    .query("system_config")
+    .withIndex("by_key", (q: any) => q.eq("key", RECORDING_OUTAGE_KEY))
+    .first();
+  return row ? { reason: row.value, since: row.updated_at } : null;
+}
+
+/** Remember that LiveKit refused for spent minutes. The stamp lifts itself
+ *  after RECORDING_OUTAGE_TTL_MS (a scheduled clear, so no reader needs a
+ *  clock), and the next press probes LiveKit again. */
+export async function noteRecordingOutage(ctx: any, reason: string): Promise<void> {
+  if (await recordingOutage(ctx)) return;
+  const now = Date.now();
+  await ctx.db.insert("system_config", { key: RECORDING_OUTAGE_KEY, value: reason, updated_at: now });
+  await ctx.scheduler.runAfter(RECORDING_OUTAGE_TTL_MS, internal.callRecordings.clearRecordingOutage, { since: now });
+}
+
+/** Forget the outage: LiveKit accepted an egress, or the stamp from `since`
+ *  lapsed (a newer stamp is left alone). */
+export async function forgetRecordingOutage(ctx: any, since?: number): Promise<void> {
+  const row = await ctx.db
+    .query("system_config")
+    .withIndex("by_key", (q: any) => q.eq("key", RECORDING_OUTAGE_KEY))
+    .first();
+  if (row && (since === undefined || row.updated_at === since)) await ctx.db.delete(row._id);
+}
+
 export async function teammateName(ctx: any, userId: Id<"users"> | string): Promise<string> {
   const id = ctx.db.normalizeId("users", String(userId));
   return displayName(id ? await ctx.db.get(id) : null);
@@ -334,7 +453,21 @@ export async function roomRecordingState(ctx: any, roomKey: string) {
     requested_at: run.requested_at,
     // The file's time 0: when the room began to be filmed, not the press.
     started_at: run.started_at ?? null,
+    // When somebody (or something) asked a stopping run to stop: a new
+    // press is accepted RECORDING_RESTART_COOLDOWN_MS after it, however long
+    // LiveKit's upload takes, and the button counts from the same moment.
+    stop_requested_at: run.stop_requested_at ?? null,
+    // This run's video will be on the call's public link once it lands
+    // (sharedVideoRuns): the room is told, since a guest's face then goes
+    // further than the team.
+    video_shared: !!call && shareIncludesVideo(call) && (call.share_video_through == null || run.requested_at < call.share_video_through),
   };
+}
+
+/** When a stopping run was asked to stop: its stamp, or for a row written
+ *  before the stamp existed, its last write. */
+export function stopRequestedAt(row: Pick<RecordingRow, "stop_requested_at" | "updated_at">): number {
+  return row.stop_requested_at ?? row.updated_at;
 }
 
 /**
@@ -376,6 +509,10 @@ export async function stopRoomRecording(
       status: "stopping",
       stop_reason: r.stop_reason ?? opts.reason,
       ...(opts.stoppedBy && !r.stopped_by ? { stopped_by: opts.stoppedBy } : {}),
+      // Its own stamp, not updated_at, which every later write from
+      // LiveKit's side moves: the restart cooldown and the save timeout
+      // both count from the stop.
+      stop_requested_at: now,
       updated_at: now,
     });
   }
@@ -443,6 +580,30 @@ export async function nudgeRecordingForShare(ctx: any, roomKey: string): Promise
   if (loop && now - Math.max(loop.looked_at, loop.nudged_at ?? 0) < RECORDING_NUDGE_MIN_GAP_MS) return;
   if (loop) await ctx.db.patch(loop._id, { nudged_at: now });
   await ctx.scheduler.runAfter(2_000, internal.callRecordings.reconcileRun, { run_id: run._id, once: true });
+}
+
+/** Remove every recording of one call: its rows, each run's loop, and
+ *  everything under the call's prefix in the bucket (files, live frames and
+ *  LiveKit's manifests alike). Answers null, touching nothing, while any file
+ *  of the call is still being written. */
+export async function purgeCallRecordings(ctx: any, transcriptId: Id<"transcripts">): Promise<number | null> {
+  const rows: RecordingRow[] = await ctx.db
+    .query("call_recordings")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", transcriptId))
+    .collect();
+  // A call nobody recorded has nothing in the bucket (a deleted run took its
+  // prefix with it), so it costs no listing.
+  if (rows.length === 0) return 0;
+  if (rows.some((r) => isRecordingActive(r.status))) return null;
+  for (const runId of new Set(rows.map(runIdOf))) {
+    const loop = await recordingLoop(ctx, runId as Id<"call_recordings">);
+    if (loop) await ctx.db.delete(loop._id);
+  }
+  for (const r of rows) await ctx.db.delete(r._id);
+  // The whole call's prefix rather than each row's keys, so a file that
+  // landed after its row failed goes too.
+  await ctx.scheduler.runAfter(0, internal.callRecordings.deleteObjects, { keys: [], prefixes: [callRecordingCallPrefix(transcriptId)], attempt: 0 });
+  return rows.length;
 }
 
 /** A run's loop bookkeeping (call_recording_loops), kept off the rows every

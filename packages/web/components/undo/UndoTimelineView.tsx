@@ -12,8 +12,8 @@ import { Command } from "cmdk";
 import { Ban, CornerDownLeft, History, Network, Redo2, Undo2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { visitTimeAgo, type ResolvedVisit } from "../../lib/recentVisits";
-import { undoActLabel, undoSetAsideLine, undoWindowWords, type UndoTimelineModel, type UndoTimelineRow } from "../../lib/undoHistory";
-import type { UndoTimelineMode } from "../../lib/undoTimelineOpen";
+import { undoActLabel, undoLabelNamesTitle, undoSetAsideLine, undoWindowWords, type UndoTimelineModel, type UndoTimelineRow } from "../../lib/undoHistory";
+import type { UndoTimelineFlash, UndoTimelineMode } from "../../lib/undoTimelineOpen";
 import { HISTORY_STRUCK, HistoryFold, HistoryRailDot, HistoryRailLine } from "../history/HistoryRail";
 import { RecentVisitGlyph } from "../RecentVisitRow";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
@@ -33,12 +33,17 @@ export type UndoTimelineViewProps = {
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
   onKey?: (e: ReactKeyboardEvent) => boolean;
+  /** A ⌘Z stopped at this row (its undo widens access): select and mark it. */
+  flash?: UndoTimelineFlash | null;
 };
 
 const HINT = "flex items-center gap-1";
 const CHORD = "inline-flex items-center gap-[2px] align-middle";
 
-export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey }: UndoTimelineViewProps) {
+/** How long a flashed row stays marked. */
+const FLASH_MS = 1400;
+
+export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
   const peek = mode === "peek";
   // A peek shows the head with a few rows either side; interactive shows all.
   const { rows, headIndex, atEnd } = useMemo(() => {
@@ -63,6 +68,23 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
     lastHead.current = model.headId;
     setSelected(model.headId ?? model.rows[model.rows.length - 1]?.id ?? "");
   }, [model.headId, model.rows]);
+
+  // A ⌘Z that stopped at a row it may not take back: the press is not a dead
+  // key, the row it stopped at lights up and takes the selection.
+  // Only stops made while this card is mounted: an older one is history.
+  const [flashing, setFlashing] = useState<string | null>(null);
+  const seenFlash = useRef(flash?.n);
+  const flashN = flash?.n;
+  useLayoutEffect(() => {
+    if (!flash || flash.n === seenFlash.current) return;
+    seenFlash.current = flash.n;
+    if (!rows.some((r) => r.id === flash.id)) return;
+    setSelected(flash.id);
+    setFlashing(flash.id);
+    const t = setTimeout(() => setFlashing(null), FLASH_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one run per stop
+  }, [flashN]);
 
   // The selected row stays in sight however the selection moved there
   // (Home, End, the head following ⌘Z): Enter acts on what the user sees.
@@ -179,6 +201,8 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
                   key={row.id}
                   row={row}
                   aboveHead={i < headIndex}
+                  peek={peek}
+                  flashing={flashing === row.id}
                   foldOpen={folds.has(row.id)}
                   onFold={() => toggleFold(row.id)}
                   onAct={() => act(row)}
@@ -198,11 +222,14 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
           </Command.List>
         )}
         {!peek && model.rows.length > 0 && (
-          <div className="flex items-center gap-3 px-3.5 py-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim" data-undo-legend>
+          <div className="flex items-center gap-2.5 px-3 py-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim whitespace-nowrap" data-undo-legend>
             <span className={HINT}><KeyCap size="xs">&uarr;</KeyCap><KeyCap size="xs">&darr;</KeyCap>move</span>
             <span className={HINT}><KeyCap size="xs">&#9166;</KeyCap>go</span>
             <span className={HINT}><KeyCap size="xs">&rarr;</KeyCap>fold</span>
             <span className={HINT}><KeyCap size="xs">O</KeyCap>open</span>
+            <span className={cn(HINT, "ml-auto")} title="Back and forward one step">
+              <MenuKeyCaps action="ui.undo" className={CHORD} /><MenuKeyCaps action="ui.redo" className={CHORD} />step
+            </span>
           </div>
         )}
       </Command>
@@ -212,22 +239,22 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
 
 function Header({ peek, windowMs }: { peek: boolean; windowMs: number }) {
   return (
-    <div className="flex items-start gap-2.5 px-3.5 pt-3 pb-2">
-      <span className="mt-[1px] w-7 h-7 flex-shrink-0 rounded-lg inline-flex items-center justify-center text-sol-cyan" style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }}>
+    <div className="flex items-center gap-2.5 px-3.5 pt-3 pb-2">
+      <span className="w-7 h-7 flex-shrink-0 rounded-lg inline-flex items-center justify-center text-sol-cyan" style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)" }}>
         <History className="w-4 h-4" />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <h2 className="text-[13px] font-semibold text-sol-text">Undo history</h2>
+          <h2 className="text-[13px] font-semibold leading-[18px] text-sol-text truncate">Undo history</h2>
+          {/* Stepping keys sit in the footer beside the list they move; the
+              header names only the way out, so the title keeps one line. */}
           {!peek && (
-            <span className="ml-auto flex items-center gap-2 text-[10px] text-sol-text-dim" data-undo-header-keys>
-              <span className={HINT}><MenuKeyCaps action="ui.undo" className={CHORD} />back</span>
-              <span className={HINT}><MenuKeyCaps action="ui.redo" className={CHORD} />forward</span>
+            <span className="ml-auto flex flex-shrink-0 items-center whitespace-nowrap text-[10px] text-sol-text-dim" data-undo-header-keys>
               <span className={HINT}><KeyCap size="xs">Esc</KeyCap>close</span>
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-[11px] text-sol-text-dim leading-[18px]" data-undo-subline>
+        <p className="text-[11px] text-sol-text-dim leading-[18px] truncate" data-undo-subline>
           This window · <MenuKeyCaps action="ui.undo" className={CHORD} /> reaches the last {undoWindowWords(windowMs)}
         </p>
       </div>
@@ -272,9 +299,12 @@ function RowDot({ row }: { row: UndoTimelineRow }) {
   }
 }
 
-function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
+function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, refCb }: {
   row: UndoTimelineRow;
   aboveHead: boolean;
+  /** A peek takes no keys: its selection marks the head, not a target for Enter. */
+  peek: boolean;
+  flashing: boolean;
   foldOpen: boolean;
   onFold: () => void;
   onAct: () => void;
@@ -285,9 +315,13 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
   const inert = !row.act;
   const visit = row.visits[0];
   // The live title as a quiet link, unless the label already says it. A
-  // group names several objects, so no one title speaks for it.
-  const showTitle = !!visit && !row.fold && !row.label.includes(visit.title);
+  // group names several objects, so no one title speaks for it. Only a live
+  // object (an archived doc resolves to its kind word), and only on a row in
+  // force: an undone or refused row's line 2 is its state.
+  const showTitle = !!visit?.entity && !row.fold && row.state === "done" && !undoLabelNamesTitle(row.label, visit.title);
   const actLabel = undoActLabel(row.act);
+  // A group with nothing to report on line 2 puts its fold there.
+  const foldInline = !!row.fold && !row.detail;
   const skipped = new Set((row.item.skipped ?? []).map((s) => `${s.store}:${s.id}`));
   return (
     <Command.Item
@@ -296,7 +330,13 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
       data-undo-row={row.id}
       data-state={row.state}
       data-above-head={aboveHead ? "" : undefined}
-      className="group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25"
+      data-undo-flash={flashing ? "" : undefined}
+      className={cn(
+        "group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors duration-300",
+        flashing
+          ? "bg-sol-yellow/[0.12] border-sol-yellow/40"
+          : "data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25",
+      )}
     >
       <div className="relative pl-[30px]">
         <RowDot row={row} />
@@ -304,27 +344,33 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
           <span
             className={cn("min-w-0 truncate text-[13px] leading-[22px]", row.state === "dropped" && HISTORY_STRUCK)}
             style={{ color: undone || row.state === "dropped" || inert ? "var(--sol-text-dim)" : "var(--sol-text)" }}
+            title={row.label}
             data-undo-label
           >
             {row.label}
           </span>
-          {showTitle && (
-            // A flex row whose button truncates itself: a button is an atomic
-            // inline box, so an ellipsis on a wrapper would hide it whole. It
-            // gives way faster than the label but keeps a few characters.
-            <span className="flex min-w-[6ch] shrink-[3] items-baseline gap-1 text-[12px] leading-[22px]">
-              <span className="flex-shrink-0 text-sol-text-dim">·</span>
-              <button type="button" onClick={(e) => { e.stopPropagation(); onOpen(); }} className="min-w-0 truncate text-left text-sol-text-muted hover:text-sol-cyan hover:underline underline-offset-2" data-undo-open>
-                {visit.title}
-              </button>
-            </span>
-          )}
           <span className="ml-auto flex-shrink-0 text-[10.5px] text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
         </div>
         <div className="flex items-center gap-2 min-h-[18px]">
+          {foldInline && <HistoryFold open={foldOpen} onClick={onFold} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
+          {showTitle && (
+            // Line 2 is where it happened, and the object is the first word of
+            // that: its live title, a quiet link. The button truncates itself
+            // (an atomic inline box would vanish whole under a wrapper's ellipsis).
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onOpen(); }}
+              className="min-w-[6ch] truncate text-left text-[11px] text-sol-text-muted hover:text-sol-cyan hover:underline underline-offset-2"
+              data-undo-open
+            >
+              {visit!.title}
+            </button>
+          )}
+          {showTitle && row.detail && <span aria-hidden className="-mx-1 flex-shrink-0 text-[11px] text-sol-text-dim">·</span>}
           <span
-            className="min-w-0 truncate text-[11px]"
-            style={{ color: row.state === "conflict" ? "var(--sol-yellow)" : row.state === "refused" ? "var(--sol-red)" : row.secondsLeft !== null ? "var(--sol-orange)" : "var(--sol-text-dim)" }}
+            // After a title, the short facts keep their room and the title gives way.
+            className={cn("min-w-0 truncate text-[11px]", showTitle && "flex-shrink-0 max-w-[55%]")}
+            style={{ color: row.state === "conflict" || flashing ? "var(--sol-yellow)" : row.state === "refused" ? "var(--sol-red)" : row.secondsLeft !== null ? "var(--sol-orange)" : "var(--sol-text-dim)" }}
             data-undo-detail
           >
             {row.detail}
@@ -336,20 +382,20 @@ function Row({ row, aboveHead, foldOpen, onFold, onAct, onOpen, refCb }: {
               className={cn(
                 // Out of flow until hover or selection, so the detail gets the full line.
                 "ml-auto flex-shrink-0 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
-                "group-hover:inline-flex group-data-[selected=true]:inline-flex",
+                peek ? "group-hover:inline-flex" : "group-hover:inline-flex group-data-[selected=true]:inline-flex",
                 row.act?.kind === "org" ? "text-sol-violet hover:bg-sol-violet/10" : "text-sol-cyan hover:bg-sol-cyan/10",
               )}
               data-undo-act={row.act?.kind}
             >
               {row.act?.kind === "back" ? <Undo2 className="w-3 h-3" /> : row.act?.kind === "forward" ? <Redo2 className="w-3 h-3" /> : <Network className="w-3 h-3" />}
               {actLabel}
-              <CornerDownLeft className="w-2.5 h-2.5 opacity-60 hidden group-data-[selected=true]:inline" />
+              {!peek && <CornerDownLeft className="w-2.5 h-2.5 opacity-60 hidden group-data-[selected=true]:inline" />}
             </button>
           )}
         </div>
         {row.fold && (
-          <div className="mt-0.5">
-            <HistoryFold open={foldOpen} onClick={onFold} data-undo-fold>{row.fold.label}</HistoryFold>
+          <div className={foldInline ? undefined : "mt-0.5"}>
+            {!foldInline && <HistoryFold open={foldOpen} onClick={onFold} data-undo-fold>{row.fold.label}</HistoryFold>}
             {foldOpen && (
               <ul className="mt-1 mb-0.5 space-y-0.5 pl-1" data-undo-fold-rows>
                 {row.fold.children.map((c) => {

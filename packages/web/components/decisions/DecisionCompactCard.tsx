@@ -18,7 +18,7 @@ import { AskingSessionView, type AskingSessionRow } from "./DecisionParties";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
-import { ChangeCardView } from "./ChangeCardView";
+import { ChangeCardView, SepRow, cardAnswerIndexes, cardAskedQuestion } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
@@ -36,6 +36,7 @@ export function DecisionCompactCard({
   onToggleSelect,
   showTask = true,
   cta = false,
+  line = false,
 }: {
   decision: SessionDecisionItem;
   keys?: boolean;
@@ -45,6 +46,8 @@ export function DecisionCompactCard({
   /** This decision is what a surface is waiting on (a task held at its
    *  station): a tint and a warm edge mark it as the thing to do. */
   cta?: boolean;
+  /** Drawn in the line's Awaiting station (LE13). */
+  line?: boolean;
 }) {
   const s = useTrackedStore([
     ...askingSessionDeps(decision.conversation_id),
@@ -75,6 +78,7 @@ export function DecisionCompactCard({
       onToggleSelect={onToggleSelect}
       showTask={showTask}
       cta={cta}
+      line={line}
     />
   );
 }
@@ -97,6 +101,7 @@ export function DecisionCompactCardView({
   onToggleSelect,
   showTask = true,
   cta = false,
+  line = false,
 }: {
   decision: SessionDecisionItem;
   session?: AskingSessionRow;
@@ -112,6 +117,10 @@ export function DecisionCompactCardView({
   onToggleSelect?: () => void;
   showTask?: boolean;
   cta?: boolean;
+  /** The line's Awaiting station (LE13): every card there is a line run at
+   *  its decide gate, so the category and run chips say nothing, and the
+   *  change card tells its story (cause, change, one example). */
+  line?: boolean;
 }) {
   const kind = decision.kind ?? "single";
   const pending = decision.status === "pending";
@@ -120,62 +129,127 @@ export function DecisionCompactCardView({
   // The answer controls carry the card's recommendation, so the proof line
   // does not say it again beside them.
   const answersHere = pending && kind === "single";
+  // A card's Ship / Revise / Drop ride its one row as chips.
+  const chipsInRow = answersHere && !!cardAnswerIndexes(decision);
   // A change card leads with the change, the way its page does; the asker's
   // own question moves into the meta row.
-  const cardQuestion = decision.card && decision.question.trim() !== decision.card.change.trim() ? decision.question : null;
+  const cardQuestion = decision.card ? cardAskedQuestion(decision.card, decision.question) : null;
+  const cardCause = decision.card && !line ? decision.card.cause.title : "";
+  const cardGoal = decision.card && decision.card.goal.ref && decision.card.goal.ref !== "none" ? decision.card.goal.name || decision.card.goal.ref : "";
+  // On the line every card is a run at its decide gate: the header's facts
+  // fold into a few dim words at the proof row's right end (the goal and the
+  // age), and its ids into their tooltip, so the card reads cause, change, proof.
+  const lineCard = line && !!decision.card;
+  const asked = `asked ${formatTimeAgo(decision.created_at, now)}`;
+  const taskRef = task?.short_id ?? decision.card?.cause.task;
+  const lineMeta = lineCard ? (
+    <span title={[taskRef, decision.short_id, cardGoal ? `serves ${cardGoal}${decision.card?.goal.why ? `: ${decision.card.goal.why}` : ""}` : null, asked].filter(Boolean).join(" · ")}>
+      {[cardGoal, !decision.blocking ? "advisory" : null, formatTimeAgo(decision.created_at, now)].filter(Boolean).join(" · ")}
+    </span>
+  ) : undefined;
+
+  const openLink = (
+    <Link href={decisionHref(decision)} className="flex items-center gap-1 font-mono text-[11px] text-sol-text-dim hover:text-sol-text" title={decision.card ? `Open ${decision.short_id ?? "the decision"}` : undefined} aria-label={decision.card ? "Open the decision" : undefined}>
+      {/* A card's change is its link and its task chip names it, so its own
+          id stays on hover. */}
+      {!decision.card && (decision.short_id ?? "open")}<ArrowUpRight className="w-3 h-3" />
+    </Link>
+  );
 
   return (
     <div
       data-decision-card={decision.short_id ?? decision._id}
       data-cta={cta ? "true" : undefined}
-      className={`decision-card rounded-lg border bg-sol-card/40 transition-colors ${selected ? "border-sol-violet/60 bg-sol-violet/5" : keys ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
+      className={`decision-card rounded-lg border bg-sol-card/40 transition-colors ${selected ? "border-sol-violet/60 bg-sol-violet/5" : keys && !line ? "border-sol-yellow/40" : "border-sol-border/70 hover:border-sol-border"}`}
     >
       <div className="px-4 pt-3 pb-2">
-        <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim min-w-0">
-          {onToggleSelect && (
-            <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
-          )}
-          <span className={`w-1.5 h-1.5 shrink-0 rounded-full ${decision.blocking ? "bg-sol-yellow animate-pulse" : "bg-sol-blue"}`} />
-          <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
-          <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
-          {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
-          {cardQuestion && <span className="min-w-0 max-w-[20rem] truncate text-sol-text-muted" title={cardQuestion} data-card-question>{cardQuestion}</span>}
-          {/* The category decides who may answer, and only a real one says
-              anything: "unknown" is the absence of a proposal, so it earns no
-              chip here. The document page spells out what it means. */}
-          {decision.category && decision.category !== "unknown" && (
-            <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person, never a role" : "A role can earn the right to answer these"}>
-              {decision.category}
-            </span>
-          )}
-          {/* S15: a staffing proposal's pointer card names who wrote the proposal */}
-          <DecisionProposalOrigin contextMd={decision.context_md} />
-          {showTask && (task || decision.task_id) && (
-            <Link href={`/tasks/${task?.short_id ?? decision.task_id}`} className="px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-              {task?.short_id ?? "task"}{decision.station ? ` · ${decision.station}` : ""}
+        {/* Each fact carries its own separator (SepRow), so a wrapped line
+            never opens on a dot or an orphaned mark. The asking session's
+            own dot says whether it is live; only a blocking ask adds one. */}
+        {!lineCard && <div className="flex items-start gap-2">
+          <SepRow
+          className="flex-1 min-w-0 text-[11px] text-sol-text-dim"
+          items={[
+            {
+              key: "who",
+              plain: true,
+              className: "items-center gap-2",
+              node: (
+                <>
+                  {onToggleSelect && (
+                    <input type="checkbox" checked={!!selected} onChange={onToggleSelect} className="accent-[var(--sol-violet)]" aria-label="Select for a stack" />
+                  )}
+                  {decision.blocking && <span className="w-1.5 h-1.5 shrink-0 rounded-full bg-sol-yellow animate-pulse" title="Blocking: the session is parked" aria-label="blocking" />}
+                  <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} omitRef={showTask && decision.card ? taskRef : undefined} className="max-w-[22rem]" />
+                </>
+              ),
+            },
+            { key: "asked", className: "cc-nowrap", node: asked },
+            ...(cardQuestion ? [{ key: "q", className: "min-w-0", node: <span className="min-w-0 max-w-[20rem] truncate text-sol-text-muted" title={cardQuestion} data-card-question>{cardQuestion}</span> }] : []),
+            { key: "chips", plain: true, className: "flex-wrap items-center gap-2 min-w-0", node: (
+              <>
+                {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
+                {cardGoal && <span className="max-w-[10rem] sm:max-w-[16rem] truncate px-1.5 py-0.5 rounded border border-sol-border/70 text-sol-text-muted" title={decision.card?.goal.why || cardGoal} data-card-goal>serves {cardGoal}</span>}
+                {/* The category decides who may answer, and only a real one says
+                    anything: "unknown" is the absence of a proposal, so it earns no
+                    chip here. The document page spells out what it means. */}
+                {!line && decision.category && decision.category !== "unknown" && (
+                  <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person, never a role" : "A role can earn the right to answer these"}>
+                    {decision.category}
+                  </span>
+                )}
+                {/* S15: a staffing proposal's pointer card names who wrote the proposal */}
+                <DecisionProposalOrigin contextMd={decision.context_md} />
+                {showTask && (task || decision.task_id) && (
+                  <Link href={`/tasks/${task?.short_id ?? decision.task_id}`} className="px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
+                    {/* Every card in the queue waits at its decide station, so a card's chip is just its task. */}
+                    {task?.short_id ?? (decision.card ? decision.card.cause.task : "task")}{decision.station && !decision.card ? ` · ${decision.station}` : ""}
+                  </Link>
+                )}
+                {stack && (
+                  <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10">
+                    <Layers className="w-3 h-3" />{stack.title}
+                  </Link>
+                )}
+                {!line && decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
+                {pageCount > 0 && (
+                  <Link href={decisionHref(decision)} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim hover:text-sol-text" title="The options carry pages to compare">
+                    <LayoutTemplate className="w-3 h-3" />{pageCount} page{pageCount === 1 ? "" : "s"}
+                  </Link>
+                )}
+                {decision.holder?.kind === "role" && (
+                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green"><ShieldCheck className="w-3 h-3" />with a lead</span>
+                )}
+              </>
+            ) },
+            ...(decision.card ? [] : [{ key: "open", plain: true, end: true, node: openLink }]),
+          ]}
+          />
+          {/* A change card's link sits at the end of the first line, never on
+              a wrapped one, so the header is the meta line and the cause. */}
+          {decision.card && <span className="shrink-0 pt-px">{openLink}</span>}
+        </div>}
+        {/* Why the change exists, before what it is: the cause on a muted
+            line of its own over the change, the order every surface reads a
+            card in. The line's own station tells it inside the card. */}
+        {cardCause && <p className="mt-1.5 text-[12px] leading-snug text-sol-text-muted truncate" title={cardCause} data-card-cause>{cardCause}</p>}
+        {decision.card ? (
+          // A change card (LE11) keeps one grid on every card, so the queue
+          // scans by alignment: the change across the width, then its proof,
+          // checks and risk on the left with Ship / Revise / Drop pinned
+          // right (cc-card-row; a narrow card gives the chips their own row).
+          // The whole card is on the document page and in the sheet.
+          <div className={`cc-card-row ${lineCard ? "" : cardCause ? "mt-1" : "mt-2"}`} data-card-row>
+            <Link href={decisionHref(decision)} className="cc-line-host">
+              <ChangeCardView card={decision.card} density="line" recommend={!answersHere && pending} story={line} meta={lineMeta} />
             </Link>
-          )}
-          {stack && (
-            <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10">
-              <Layers className="w-3 h-3" />{stack.title}
-            </Link>
-          )}
-          {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
-          {pageCount > 0 && (
-            <Link href={decisionHref(decision)} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim hover:text-sol-text" title="The options carry pages to compare">
-              <LayoutTemplate className="w-3 h-3" />{pageCount} page{pageCount === 1 ? "" : "s"}
-            </Link>
-          )}
-          {decision.holder?.kind === "role" && (
-            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green"><ShieldCheck className="w-3 h-3" />with a lead</span>
-          )}
-          <Link href={decisionHref(decision)} className="ml-auto flex items-center gap-1 font-mono text-sol-text-dim hover:text-sol-text">
-            {decision.short_id ?? "open"}<ArrowUpRight className="w-3 h-3" />
+            {chipsInRow && <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="line" recommendation={rec} />}
+          </div>
+        ) : (
+          <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
+            {decision.question}
           </Link>
-        </div>
-        <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-          {decision.card?.change || decision.question}
-        </Link>
+        )}
         {/* The reasoning, inline. A decision cannot be made from its title
             and its option labels alone, so the context the asker wrote reads
             here, clipped to a few lines with the way to open it. Collapsed it
@@ -205,13 +279,6 @@ export function DecisionCompactCardView({
         {/* An attached report is the evidence the question rests on, so it
             renders here rather than living one click away on the document
             page. Clipped like the context: a page is taller than a card. */}
-        {/* A change card (LE11) reads as one dense line of proof here; the
-            whole card is on the document page and in the transcript sheet. */}
-        {decision.card && (
-          <Link href={decisionHref(decision)} className="block mt-1.5 rounded-md px-2.5 py-1.5 -mx-2.5 hover:bg-sol-bg-alt/60 transition-colors">
-            <ChangeCardView card={decision.card} density="line" change={false} recommend={!answersHere && decision.status === "pending"} />
-          </Link>
-        )}
         {decision.report_slug && !decision.card && (
           <div className="mt-1" data-decision-report={decision.report_slug}>
             <PublishedPageEmbed slug={decision.report_slug} height={240} />
@@ -224,7 +291,7 @@ export function DecisionCompactCardView({
           <div className="mt-2 text-[12px] text-sol-cyan">a lead recommends: {decision.options[rec]?.label}</div>
         )}
       </div>
-      {pending && (
+      {pending && !chipsInRow && (
         <div className="px-4 pb-3">
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />

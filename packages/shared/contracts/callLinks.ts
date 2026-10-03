@@ -2,6 +2,8 @@
 // page's chips, the session header's pill and `cast call` all say it the
 // same way.
 
+import { CALL_FRAME_PREFER, type CallRecordingKind } from "./callRecordings";
+
 export type CallLinkHow = {
   live: boolean;
   excerpts: Array<{ from_seq: number; to_seq: number; at: number }>;
@@ -53,15 +55,58 @@ export function parseCallAnchor(params: { get(name: string): string | null } | n
  *  lights the line being said. Kept apart from CallAnchor on purpose: an
  *  anchor selects a place in the record, a moment positions the player, and
  *  one link can carry both. */
-export function callMomentHref(transcriptId: string, atMs: number, anchor?: CallAnchor | null): string {
+export function callMomentHref(transcriptId: string, atMs: number, anchor?: CallAnchor | null, view?: CallView | null): string {
   const base = callAnchorHref(transcriptId, anchor);
-  return `${base}${base.includes("?") ? "&" : "?"}t=${Math.max(0, Math.floor(atMs / 1000))}`;
+  const at = `${base}${base.includes("?") ? "&" : "?"}t=${Math.max(0, Math.floor(atMs / 1000))}`;
+  if (!view?.screen) return at;
+  return `${at}&view=screen${view.identity ? `:${encodeURIComponent(view.identity)}` : ""}`;
+}
+
+/**
+ * The call page at the moment a frame shows, on the picture it shows. Every
+ * surface that links a frame (the `cl-42@12:34` embed, `cast call snap`'s
+ * call_url, the player's Link button) builds it here, so a link never opens
+ * the room under a frame of a screen. `shown` is the file the frame came
+ * from: a screen's file names its sharer (`view=screen:<identity>`), the
+ * room's names no view. Without one (a citation, which has not chosen a file
+ * yet) the link takes the view a citation renders, CALL_FRAME_PREFER.
+ */
+export function callFrameHref(
+  transcriptId: string,
+  atMs: number,
+  shown?: { kind: CallRecordingKind; participant_identity?: string | null } | null,
+): string {
+  const screen = shown ? shown.kind === "screen" : CALL_FRAME_PREFER === "screen";
+  return callMomentHref(transcriptId, atMs, null, screen ? { screen: true, identity: shown?.participant_identity ?? null } : null);
 }
 
 /** The moment a call page URL names (`?t=754`, also `754s`), in ms, or null. */
 export function parseCallMomentParam(params: { get(name: string): string | null } | null | undefined): number | null {
   const m = /^(\d+(?:\.\d+)?)s?$/.exec(params?.get("t")?.trim() ?? "");
   return m ? Math.round(Number(m[1]) * 1000) : null;
+}
+
+/** What a link to a moment shows. The call page's player opens on the room
+ *  (the file with everyone's sound), so the room is the default and needs no
+ *  word. A screen rides `&view=screen`: the shared screen covering that
+ *  moment, the one a `cl-42@12:34` citation renders (CALL_FRAME_PREFER), or
+ *  with `:<participant identity>` one person's screen, which is what the
+ *  player's Link copies while a screen is the view. The page falls back to
+ *  the room where no screen of that kind covers the moment. */
+export type CallView = { screen: true; identity?: string | null };
+
+/** The view a call page URL names (`view=screen`, `view=screen:<identity>`),
+ *  or null for the room. */
+export function parseCallViewParam(params: { get(name: string): string | null } | null | undefined): CallView | null {
+  const m = /^screen(?::(.+))?$/.exec(params?.get("view")?.trim() ?? "");
+  if (!m) return null;
+  let identity: string | null = null;
+  try {
+    identity = m[1] ? decodeURIComponent(m[1]) : null;
+  } catch {
+    identity = m[1] ?? null;
+  }
+  return { screen: true, identity };
 }
 
 /** One key per anchor, for the DOM attribute that marks it and for "landed once". */

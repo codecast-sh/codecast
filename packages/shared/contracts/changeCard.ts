@@ -238,10 +238,10 @@ export interface ProofSummary {
   stillRed: string[];
   /** Green before (or new) and red after: what the change broke. */
   broke: string[];
-  /** "4 proven misses, all fixed", or the honest version of it. */
+  /** "4 proven misses, all fixed", or the honest version of it: every surface says the proof this one way. */
   label: string;
-  /** The same in a dense line: "4/4 misses fixed", "1/2 misses fixed, 1 broke". */
-  short: string;
+  /** The same proof as evidence, for a row with no strip to decode "misses": "2 of 2 failing cases now pass". */
+  evidence: string;
 }
 
 export function proofSummary(proof: ChangeCard["proof"]): ProofSummary {
@@ -256,9 +256,11 @@ export function proofSummary(proof: ChangeCard["proof"]): ProofSummary {
   let label: string;
   if (!redBefore.length) label = proof.after.length ? `${proof.after.length} ${proof.after.length === 1 ? "check" : "checks"}, none shown failing first` : "No proof recorded";
   else label = `${misses(redBefore.length)}, ${fixed === redBefore.length ? (fixed === 1 ? "fixed" : "all fixed") : `${fixed} fixed`}`;
-  let short = redBefore.length ? `${fixed}/${redBefore.length} misses fixed` : "no proof";
-  if (broke.length) { label += `, ${broke.length} broke`; short += `, ${broke.length} broke`; }
-  return { red: redBefore.length, fixed, stillRed, broke, label, short };
+  if (broke.length) label += `, ${broke.length} broke`;
+  const evidence = !redBefore.length
+    ? label
+    : `${fixed} of ${redBefore.length} failing ${redBefore.length === 1 ? "case" : "cases"} now ${fixed === 1 ? "passes" : "pass"}${broke.length ? `, ${broke.length} other${broke.length === 1 ? " now fails" : "s now fail"}` : ""}`;
+  return { red: redBefore.length, fixed, stillRed, broke, label, evidence };
 }
 
 /** The card's own checks in a dense line, named apart from the proof: "checks 3/3". */
@@ -266,8 +268,14 @@ export function checksLabel(checks: ReadonlyArray<{ ok: boolean }>): string {
   return `checks ${checks.filter((c) => c.ok).length}/${checks.length}`;
 }
 
-export function riskLabel(risk: ChangeCard["risk"]): string {
-  return risk.class === "low" ? "Low risk" : risk.class === "review" ? "Needs a careful look" : "Plan level change";
+/**
+ * The risk in plain words: "Low risk", "Medium risk", "High risk: needs its
+ * own plan". `short` drops the clause after the level, for a dense row.
+ */
+export function riskLabel(risk: Pick<ChangeCard["risk"], "class">, short = false): string {
+  if (risk.class === "low") return "Low risk";
+  if (risk.class === "review") return "Medium risk";
+  return short ? "High risk" : "High risk: needs its own plan";
 }
 
 /** The answer's word, or a neutral one while the card has no recommendation yet. */
@@ -347,7 +355,13 @@ function surfaceLine(s: EvalSurfaceResult): string {
   return `${s.title || s.surface}: ${sep}${p}${gates}`;
 }
 
-/** The eval station's proof: each proven freeze was red on the base, and is green on the branch when it passes. */
+/** The check a card carries when the project's suite gates failed (reps.json gates_failed): red, naming each failing scenario, so Ship is refused like any failing check. */
+export const SUITE_GATE_CHECK = "Suite gates";
+export function suiteGateCheck(failed: readonly string[]): CardCheck {
+  return { name: SUITE_GATE_CHECK, ok: false, detail: `${failed.length} ${failed.length === 1 ? "scenario" : "scenarios"} failed: ${failed.join(", ")}` };
+}
+
+/** The eval station's proof: each proven freeze was red before the change (on the base), and is green after it when it passes. The details say before and after, never a ref, because the founder reads them. */
 export function evalProof(result: EvalResult): ChangeCard["proof"] {
   const before: CardCheck[] = [];
   const after: CardCheck[] = [];
@@ -357,8 +371,8 @@ export function evalProof(result: EvalResult): ChangeCard["proof"] {
       const name = `${s.surface} · ${names.get(p.freeze) ?? p.freeze}`;
       // Read loosely: a result written before base verdicts were recorded has none, and its proven freezes were shown red.
       const basePasses = (p as { basePasses?: boolean | null }).basePasses;
-      before.push({ name, ok: basePasses === true, detail: basePasses === true ? `already passes on ${result.base.ref}` : basePasses === null ? `no base verdict on ${result.base.ref}` : `fails on ${result.base.ref}` });
-      after.push({ name, ok: p.passes, detail: p.passes ? "passes on the branch" : "still fails on the branch" });
+      before.push({ name, ok: basePasses === true, detail: basePasses === true ? "already passes before the change" : basePasses === null ? "no verdict before the change" : "fails before the change" });
+      after.push({ name, ok: p.passes, detail: p.passes ? "passes after the change" : "still fails after the change" });
     }
   }
   return { before, after };
@@ -401,11 +415,15 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     });
   }
   if (evalResult) {
+    // A failed suite gate is its own check, so the Eval check answers for the
+    // replays alone and one red is never counted twice.
+    const gates = evalResult.gatesFailed ?? [];
     checks.push({
       name: "Eval",
-      ok: evalResult.ok,
+      ok: gates.length ? evalResult.surfaces.every((s) => s.ok) : evalResult.ok,
       detail: evalResult.surfaces.length ? evalResult.surfaces.map(surfaceLine).join("; ") : "no surface touched",
     });
+    if (gates.length) checks.push(suiteGateCheck(gates));
   }
   if (evidence?.review_verdict) {
     checks.push({

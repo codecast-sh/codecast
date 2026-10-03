@@ -75,7 +75,7 @@ directory (`<git common dir>/cast-line/line-<task>`), the same for every
 station and never committed.
 A repo without a profile gets the defaults: `cast ws check`, no prove or eval
 command (the stations pass with a note saying so), codecast's prompting
-standard, no principles file.
+standard, and the shared principles with no project file.
 
 ## LP3. Finders are declared
 
@@ -99,17 +99,25 @@ declaration; the finder itself lives where its data lives.
 - `cast line eval-result --reps $run_dir/reps.json --out eval-result.json`
   turns reps into the `EvalResult` the card reads: separation by the one
   Mann-Whitney implementation (`packages/evals/src/stats.ts`), flips, proven
-  freezes, the verdict. Its exit code is the eval station's.
+  freezes, the verdict. Its exit code is the eval station's. A failed suite
+  gate (`gates_failed`) reaches the card as its own red check, "Suite gates",
+  naming each failing scenario, so the card cannot recommend Ship over it.
 - **ship** lands the change the project's way and prints one line saying what
   is true now: live, or waiting on a deploy and where.
 
 ## LP5. Principles and prompting per project
 
 Principles are split three ways. The shared set ships with codecast
-(`docs/principles.md`, the ones the evidence shows in every project). A
-project's own set lives in its repo at the path its profile names. The review
-node reads both and cites ids; a project id is prefixed with the project
-(`UN-prompt-2`). The weekly lessons run is per project: it mines that
+(`docs/principles.md`, the ones the evidence shows in more than one project,
+in project-neutral language). A project's own set lives in its repo at the
+path its profile names: codecast's is `docs/line/principles.md` (`CC-` ids),
+Union's `outreach/docs/line/principles.md` (`UN-` ids). A project file holds
+what is true only there and the concrete form a shared principle takes in
+that project. Every reader takes both, shared first: `cast goals` reads the
+shared set from the copy built into the CLI and the profile's files from the
+repo, and the plan, implement and review nodes receive the shared set's
+public link with the profile's paths (`$line.principles`). Reviews cite ids.
+The weekly lessons run is per project: it mines that
 project's sessions and files `lesson:<id>` signals into that project.
 
 ## LP6. Who answers
@@ -125,5 +133,47 @@ of them is a signal.
 
 The default line that ships with codecast is an org template: one role that
 owns a project's line, routines that are its finders, the shipped `line`
-workflow, and the shared principles. `role.line` and `caps.cards` join the
-manifest. A project's profile overrides any default.
+workflow, and the shared principles. A project's profile overrides any
+default.
+
+The release lives in this repository at `packages/cli/org-templates/line/`
+and installs like any other (org-templates.md):
+
+```sh
+cast org template install packages/cli/org-templates/line --instance <name> \
+  --project <exact-project-id> --team <team-id> --dir <checkout>
+```
+
+- **The role** is the Line lead (`<instance>-line`), scoped to exactly the
+  instance project. Its charter gives it four jobs: ground the causes the
+  ground sweep could not place (LE5) from the project's goals and the evidence
+  on the cause; keep the queue worth admitting and never route around the
+  cards cap (LE6); keep the declared finders honest (LP3); and answer nothing
+  on the line. Cards go to the person it reports to, protected causes to the
+  workspace owner (LP6), and profile, principle and repository changes are
+  proposals a person accepts.
+- **`role.line` and `role.caps.cards`** are the manifest's line fields (v2
+  only). The install copies both into the role proposal, so the person
+  approves the workflow and the cap with the role, and the sentence they read
+  says both. Applying the answer sets `org_roles.line_workflow_slug` and
+  `caps.cards` under that human decision (`applyRole` in `orgInit.ts`), and
+  reconcile refuses to provision a role that does not carry what was
+  approved. A manifest without `role.line` leaves the role on the default,
+  the shipped `line`. An upgrade cannot change either; that is a separate org
+  decision, as for the other caps.
+- **Two routines, both created paused and gated** like every template
+  routine. `lessons-weekly` runs the cast-lessons skill over the project's
+  sessions and files `lesson:<rule>` signals into it (LP5).
+  `finder-health` reads the profile's finders and each one's newest signal
+  daily, and files one `org_health` signal per silent finder under
+  `finder-silent:<finder id>`, so every day of one silence counts toward one
+  cause. A finder is silent past the input `finders.silent_days` (default 3),
+  or past one interval of its own schedule when it runs less often. It
+  requires the evidence check `profile`.
+- **The starter profile.** The role's one setup item reads the repository's
+  `.codecast/line.toml`. When there is none it shows the person the output of
+  `cast line profile --starter --project <name>` (the defaults of LP2 written
+  out, the project filled in, optional commands and a finder as comments) and
+  writes it with `--write` only on their yes; `--write` refuses when a profile
+  exists. Then `cast line profile --publish` declares the finders and the role
+  records `profile`, which unlocks `finder-health`.

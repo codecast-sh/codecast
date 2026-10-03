@@ -157,7 +157,18 @@ export type ShortcutAction =
   | 'vault.search'
   | 'vault.find'
   | 'vault.toggleEdit'
-  | 'vault.sourceMode';
+  | 'vault.sourceMode'
+  | 'evals.attribute'
+  | 'evalsRun.nextSeed'
+  | 'evalsRun.prevSeed'
+  | 'evalsRun.prevBatch'
+  | 'evalsRun.nextBatch'
+  | 'evalsRun.compare'
+  | 'evalsSim.prev'
+  | 'evalsSim.next'
+  | 'evalsSim.first'
+  | 'evalsSim.last'
+  | 'evalsSim.play';
 
 export type ShortcutDef = PlatformShortcutDef<ShortcutAction>;
 
@@ -259,21 +270,32 @@ export const SHORTCUTS: ShortcutDef[] = [
   // as ',' or '<' depending on browser/layout — register both spellings.
   { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
   { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
-  // App undo fires only when focus is outside an editable field, so inputs,
-  // the composer and the doc editor keep their own text undo. noRepeat: a held
+  // A field with text keeps its own undo: inputs, the composer and the doc
+  // editor. An empty one hands the chord to app undo ('whenEmpty'), because
+  // the triage chords fire from an empty composer and leave focus in one; the
+  // handler (hooks/useUndoWalk) still declines when the field was edited after
+  // the entry it would reach, so a cleared draft comes back. noRepeat: a held
   // chord is one undo, not the whole stack at key-repeat speed. The second
   // ui.undo row keeps ⌃Z working on mac (off mac it is the same chord).
-  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, description: 'Undo' },
-  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, description: 'Undo' },
-  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, description: 'Redo' },
-  { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, description: 'Redo' },
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Undo' },
+  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Redo' },
+  { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Redo' },
+  // ⌘⌥Z means nothing to a text field, so on mac the history chord opens the
+  // card from the composer too (the second row; it is autofocused on every
+  // conversation page). Off mac Ctrl+Alt is AltGr, and AltGr+Z types a letter
+  // on some layouts (Polish ż), so Ctrl+Alt+Z stays out of fields there; the
+  // second row's Win+Alt+Z off mac is no text either.
   { key: 'ctrl+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', description: 'Undo history' },
+  { key: 'meta+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', skipInputCheck: true, description: 'Undo history' },
   // H pins the held undo peek (hooks/useUndoWalk). The context is live only
   // while the peek shows or fades, and these rows sit above conv.toggleThinking
   // so they win the H there. ⌘H belongs to the OS on mac, so H pins during the
-  // fade; off mac, Ctrl+H pins with the modifier still held.
-  { key: 'h', action: 'undoWalk.pin', when: 'undoWalk', description: 'Pin the undo history open' },
-  { key: 'ctrl+h', mac: 'meta+h', action: 'undoWalk.pin', when: 'undoWalk', description: 'Pin the undo history open' },
+  // fade; off mac, Ctrl+H pins with the modifier still held. They fire from a
+  // field too: the walk opens from the empty composer, and while the card
+  // shows an H there is never typing.
+  { key: 'h', action: 'undoWalk.pin', when: 'undoWalk', skipInputCheck: true, description: 'Pin the undo history open' },
+  { key: 'ctrl+h', mac: 'meta+h', action: 'undoWalk.pin', when: 'undoWalk', skipInputCheck: true, description: 'Pin the undo history open' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
@@ -439,19 +461,23 @@ export const SHORTCUTS: ShortcutDef[] = [
   // otherwise. Escape fires from the filter field too, so it can clear it.
   { key: '[', action: 'changes.prevDay', when: 'changes', description: 'Previous day (week in week view)' },
   { key: ']', action: 'changes.nextDay', when: 'changes', description: 'Next day (week in week view)' },
-  { key: 't', action: 'changes.today', when: 'changes', description: 'Today' },
+  { key: 't', action: 'changes.today', when: 'changes', noRepeat: true, description: 'Today' },
   { key: 'j', action: 'changes.next', when: 'changes', description: 'Next story' },
   { key: 'k', action: 'changes.prev', when: 'changes', description: 'Previous story' },
-  { key: 'e', action: 'changes.evidence', when: 'changes', description: 'Open or close the story evidence' },
-  { key: 'enter', action: 'changes.evidence', when: 'changes', description: 'Open or close the story evidence' },
-  { key: 'o', action: 'changes.open', when: 'changes', description: 'Open the story session, else its largest commit' },
-  { key: 'u', action: 'changes.waiting', when: 'changes', description: 'What is waiting to ship' },
-  { key: 'r', action: 'changes.risks', when: 'changes', description: 'Risks only' },
-  { key: 'b', action: 'changes.branches', when: 'changes', description: 'Main or all branches' },
-  { key: 'w', action: 'changes.mode', when: 'changes', description: 'Day or week' },
-  { key: '/', action: 'changes.filter', when: 'changes', description: 'Filter stories' },
-  { key: 'c', action: 'changes.copyLink', when: 'changes', description: 'Copy a link to the story' },
+  { key: 'e', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story evidence' },
+  { key: 'enter', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story evidence' },
+  { key: 'o', action: 'changes.open', when: 'changes', noRepeat: true, description: 'Open the story session, else its largest commit' },
+  { key: 'u', action: 'changes.waiting', when: 'changes', noRepeat: true, description: 'What is waiting to ship' },
+  { key: 'r', action: 'changes.risks', when: 'changes', noRepeat: true, description: 'Risks only' },
+  { key: 'b', action: 'changes.branches', when: 'changes', noRepeat: true, description: 'Main or all branches' },
+  { key: 'w', action: 'changes.mode', when: 'changes', noRepeat: true, description: 'Day or week' },
+  { key: '/', action: 'changes.filter', when: 'changes', noRepeat: true, description: 'Filter stories' },
+  { key: 'c', action: 'changes.copyLink', when: 'changes', noRepeat: true, description: 'Copy a link to the story' },
   { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Clear the filter text and leave the field, else close the evidence, then clear filters' },
+  // The Evals area (components/evals, spec 4). Its walks use the list
+  // context (j/k/Enter); these are the verbs an Evals view adds. Each page
+  // activates the context while it is the active pane.
+  { key: 'b', action: 'evals.attribute', when: 'evals', description: 'Attribute a regression: the newest worse pair on the wall, the pinned pair on a surface' },
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },
@@ -460,6 +486,21 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 't', action: 'doc.type', when: 'docs', description: 'Set doc type' },
   { key: 'l', action: 'doc.labels', when: 'docs', description: 'Edit labels' },
   { key: 'ctrl+e', mac: 'meta+e', action: 'doc.toggleEdit', when: 'docs', description: 'Toggle edit mode (doc page)' },
+  // One eval run in full (components/evals/RunView, evals-ui.md 4.4). The page
+  // activates the context while it is the active pane.
+  { key: 'j', action: 'evalsRun.nextSeed', when: 'evalsRun', description: 'Next seed of this freeze in the batch' },
+  { key: 'k', action: 'evalsRun.prevSeed', when: 'evalsRun', description: 'Previous seed of this freeze in the batch' },
+  { key: '[', action: 'evalsRun.prevBatch', when: 'evalsRun', description: 'The same freeze in the previous batch' },
+  { key: ']', action: 'evalsRun.nextBatch', when: 'evalsRun', description: 'The same freeze in the next batch' },
+  { key: 'c', action: 'evalsRun.compare', when: 'evalsRun', description: 'Pick a second rep to compare with' },
+  // One Multiplayer sim run (components/evals/SimRunView, evals-ui.md 4.7): the
+  // playhead walks the deliveries. The view activates the context while it is
+  // the active pane.
+  { key: 'arrowleft', action: 'evalsSim.prev', when: 'evalsSim', description: 'Playhead back one delivery' },
+  { key: 'arrowright', action: 'evalsSim.next', when: 'evalsSim', description: 'Playhead forward one delivery' },
+  { key: 'home', action: 'evalsSim.first', when: 'evalsSim', description: 'Playhead to the first delivery' },
+  { key: 'end', action: 'evalsSim.last', when: 'evalsSim', description: 'Playhead to the failing delivery, else the last' },
+  { key: 'p', action: 'evalsSim.play', when: 'evalsSim', description: 'Play or pause the deliveries' },
 ];
 
 export const shortcutCatalog = createShortcutCatalog(SHORTCUTS);

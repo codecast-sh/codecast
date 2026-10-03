@@ -41,7 +41,9 @@ test("a section block renders its rows, the stamp between them, and reserved dek
   // A pending dek holds its line with a shimmer; a written one is plain text.
   expect(html).toContain('aria-label="Notes pending"');
   expect(html).toContain("Dek late");
-  expect(html).toContain('aria-label="Risk"');
+  // The risk is said once, in words, inside the row's trigger; the tick itself is decoration.
+  expect(html).toMatch(/<span class="sr-only">Risk: schema \(abc1234\)<\/span>/);
+  expect(html).not.toContain('aria-label="Risk"');
   // Accents are theme variables, never Solarized hex.
   expect(html).not.toMatch(/#[0-9a-f]{6}/i);
 });
