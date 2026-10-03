@@ -253,7 +253,11 @@ export type UndoCtx = {
 export type UndoSpec = {
   /** null = do not record this call. */
   label: (ctx: UndoCtx) => string | null;
-  /** Overrides the store-derived server half. */
+  /**
+   * Overrides the store-derived server half. Derive the invocations from
+   * `ctx.changes`: a partial undo asks again with the skipped rows taken out,
+   * and refuses whole if an invocation still names one.
+   */
   inverse?: (ctx: UndoCtx) => Invocation[] | null;
   ignoreFields?: readonly string[];
   /** Restore view fields if the view has not moved since. */
@@ -263,7 +267,7 @@ export type UndoSpec = {
   coalesce?: boolean;
   /** A display-only history item (org); never on the stack. */
   external?: string;
-  /** Blind keyboard undo skips it with a notice; the toast and the timeline may undo it. */
+  /** Blind keyboard undo stops at it with a notice; only the toast and the timeline may undo it. */
   confirm?: boolean;
 };
 

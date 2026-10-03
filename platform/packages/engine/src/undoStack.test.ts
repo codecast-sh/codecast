@@ -242,6 +242,40 @@ describe("confirm", () => {
     expect(undoEntry(e.id)).toBe(true);
     expect(value).toEqual([]);
   });
+
+  it("blind undo stops at a confirm entry and leaves the ones below it", () => {
+    generic("Older");
+    generic("Old");
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual(["Older", "Old", "Made public"]);
+    expect(notices).toEqual([
+      "Undo Made public from its toast or the history",
+      "Undo Made public from its toast or the history",
+    ]);
+    expect(getUndoHistory().head).toBe(e.id);
+  });
+
+  it("once the confirm entry is undone from its toast, blind undo reaches the next one", () => {
+    generic("Old");
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(undoEntry(e.id)).toBe(true);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual([]);
+  });
+
+  it("a manual entry below a confirm entry is left alone", () => {
+    let n = 1;
+    pushUndo({ label: "inc", undo: () => { n--; }, redo: () => { n++; } });
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(n).toBe(1);
+    expect(notices).toEqual(["Undo Made public from its toast or the history"]);
+  });
 });
 
 describe("_resetUndoStacks", () => {
