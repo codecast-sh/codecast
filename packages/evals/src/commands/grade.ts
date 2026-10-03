@@ -120,7 +120,7 @@ export function registerRescore(program: Command): void {
       for (const name of names) {
         const r = await rescoreRun(join(root, name));
         if (!r) {
-          console.log(`${name}  skipped: no score (a stop or a dry rep)`);
+          console.log(`${name}  skipped: no score (a stop, a crash or a dry rep)`);
           continue;
         }
         const failed = (s: Score) => s.gates.filter((g) => !g.pass).map((g) => g.id).join(',') || 'none';

@@ -247,6 +247,14 @@ const callsLog = (dir: string): string[] => {
 };
 
 /** Assembles the dir's proposals (an old single proposal.json is read as is), grades it, and writes grade-auto.json beside it as grade.py did. */
+const WRONG_CLOSE_TAIL = ', which the labels say must stay open';
+
+/** The records a scored rep closed that the labels say must stay open, read back from its `no-wrong-close` evidence. */
+export function wrongClosesOf(score: Score): string[] {
+  const summary = score.gates.find((g) => g.id === 'no-wrong-close')?.evidence.summary ?? '';
+  return summary.endsWith(WRONG_CLOSE_TAIL) ? summary.slice('closes '.length, -WRONG_CLOSE_TAIL.length).split(', ') : [];
+}
+
 export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
   refuseArchive(dir);
   const files = proposalFiles(dir);
@@ -260,7 +268,7 @@ export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
   const r = auto.records;
   const gates: GateResult[] = [
     gate('spec-parses', files.length > 0 && !broken.length, !files.length ? 'no proposals/op-*.json was written' : broken.length ? broken.map((b) => `${b.file}: ${JSON.stringify(b.errors).slice(0, 300)}`).join('; ') : `${files.length} proposal file(s) parse`),
-    gate('no-wrong-close', !r.wrong_close.length, r.wrong_close.length ? `closes ${r.wrong_close.join(', ')}, which the labels say must stay open` : `closes ${r.closed_total}, none the labels say must stay open`),
+    gate('no-wrong-close', !r.wrong_close.length, r.wrong_close.length ? `closes ${r.wrong_close.join(', ')}${WRONG_CLOSE_TAIL}` : `closes ${r.closed_total}, none the labels say must stay open`),
     gate('no-never-name', !auto.sessions.named_bad.length, auto.sessions.named_bad.length ? `names ${auto.sessions.named_bad.join(', ')}, which the labels say is a finished job` : 'names no session the labels rule out'),
     gate('no-phantom-handle', !auto.roles_named.phantom.length, auto.roles_named.phantom.length ? `the letter names ${auto.roles_named.phantom.map((h) => `@${h}`).join(', ')}, a role neither the inputs nor this proposal has` : 'every role the letter names exists'),
   ];
