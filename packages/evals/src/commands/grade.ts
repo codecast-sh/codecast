@@ -1,26 +1,32 @@
-import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 
 import type { Command } from 'commander';
-import type { Score } from '@platform/evals';
+import { mapLimit } from '@codecast/shared/async';
+import type { CheckResult, Score } from '@platform/evals';
 import { renderScore } from '@platform/evals/render';
 import { renderOpts } from '@platform/cli-kit/render';
 
 import { readAgentRun, readCallRun } from '../adapters/dryRun';
 import { codecastFreezeStore } from '../adapters/freezes';
+import { criteriaCheck, judgeMomentOf, rejudgeStored, storedReply } from '../adapters/judge';
 import { routeGates, scoreOf } from '../adapters/replay';
-import { loadSnapshot } from '../adapters/resolver';
+import { hasSnapshot, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
 import type { RunJson } from '../layout';
 import { homePaths } from '../paths';
 import { loadSurface, surfaceMeta, surfaces } from '../registry';
-import type { AgentResult, CallResult } from '../surface';
+import { addSpend } from '../state';
+import type { AgentResult, CallResult, SurfaceImpl } from '../surface';
+import { positiveNumber } from './verdict';
 
 // `./evals grade <surface> <dir>`: grade an output dir that already exists
 // (an old org round) with the surface's own grader, without replaying.
 // `./evals rescore`: grade a replay rep's route gates again from the files its
 // harness runs wrote, so a gate fixed after a run reaches the stored score,
-// and a rep found to have run outside its world becomes a crash.
+// and a rep found to have run outside its world becomes a crash. With
+// --rejudge it also asks today's judge again, so a run set judged before a
+// judge change can be weighed on the same ruler as one judged after.
 
 export function registerGrade(program: Command): void {
   program
@@ -73,8 +79,17 @@ const ROUTE_GATES = new Set(['model-as-pinned', 'ok', 'prod-budget', 'frozen-rea
  * the crash a fresh run would have recorded: no score.json, its result ended
  * `failed`, so `check --batch` runs it again. The first score is kept beside
  * it as score.before-rescore.json.
+ *
+ * `rejudge` grades the judged check again with today's judge prompt and the
+ * freeze's criteria, and takes the check's floor from the freeze's tags as
+ * they stand (criteriaCheck, as a fresh rep builds it): the reply its stored
+ * judge prompt held, against the
+ * moment judgeMomentOf renders from the freeze's snapshot today, so every rep
+ * of a comparison, whichever arm it ran in, is graded against one moment. The
+ * first judged score and judge run are kept beside the new ones as
+ * score.before-rejudge.json and judge.before-rejudge/.
  */
-export async function rescoreRun(runDir: string): Promise<{ before: Score; after: Score | null; crash?: string } | null> {
+export async function rescoreRun(runDir: string, opts: { rejudge?: boolean } = {}): Promise<{ before: Score; after: Score | null; crash?: string } | null> {
   const stored = readJson(join(runDir, 'score.json')) as (Score & Record<string, unknown>) | null;
   const run = readJson(join(runDir, 'run.json')) as RunJson | null;
   if (!stored || !run || run.dry) return null;
@@ -97,9 +112,32 @@ export async function rescoreRun(runDir: string): Promise<{ before: Score; after
   const allowedHere = freeze && impl.allowedRefusals ? impl.allowedRefusals(loadSnapshot(freeze).snap) : [];
   const fresh = routeGates(meta, harnessRuns, allowedHere);
   const gates = [...fresh, ...stored.gates.filter((g) => !ROUTE_GATES.has(g.id))];
-  const after = scoreOf(gates, stored.checks, stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
+  const judged = opts.rejudge ? await rejudgeRun(runDir, impl, run.freezeId, stored) : null;
+  const checks = judged ? stored.checks.map((c) => (c.id === 'criteria' ? judged.check : c)) : stored.checks;
+  const judge = judged ?? (stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
+  const after = scoreOf(gates, checks, judge);
   writeFileSync(join(runDir, 'score.json'), JSON.stringify({ ...after, scenario: stored.scenario, title: stored.title, seed: stored.seed }, null, 2));
   return { before: stored, after };
+}
+
+/** The judged check of one rep graded again (see rescoreRun); null when the rep was never judged or its judge prompt is not one this judge can read. */
+async function rejudgeRun(runDir: string, impl: SurfaceImpl, freezeId: string | undefined, stored: Score): Promise<{ check: CheckResult; costUsd: number; model: string } | null> {
+  const promptPath = join(runDir, 'judge', 'prompt.md');
+  if (!stored.checks.some((c) => c.id === 'criteria') || !freezeId || !existsSync(promptPath)) return null;
+  const prompt = readFileSync(promptPath, 'utf8');
+  const f = await codecastFreezeStore().get(freezeId);
+  if (!f?.judge || !hasSnapshot(f) || !storedReply(prompt)) return null;
+  const next = join(runDir, 'judge.rejudge');
+  rmSync(next, { recursive: true, force: true });
+  const v = await rejudgeStored(f, judgeMomentOf(impl, loadSnapshot(f).snap, f.asOf), prompt, next);
+  if (!v) return null;
+  addSpend(v.costUsd);
+  const keep = join(runDir, 'score.before-rejudge.json');
+  if (!existsSync(keep)) writeFileSync(keep, JSON.stringify(stored, null, 2));
+  if (existsSync(join(runDir, 'judge.before-rejudge'))) rmSync(join(runDir, 'judge'), { recursive: true, force: true });
+  else renameSync(join(runDir, 'judge'), join(runDir, 'judge.before-rejudge'));
+  renameSync(next, join(runDir, 'judge'));
+  return { check: criteriaCheck(f, v), costUsd: v.costUsd, model: v.model };
 }
 
 export function registerRescore(program: Command): void {
@@ -108,7 +146,9 @@ export function registerRescore(program: Command): void {
     .description("grade replay reps' route gates again from their harness files and rewrite score.json (a gate fixed after the run)")
     .option('--batch <id>', "every rep of this check's run set")
     .option('--surface <id>', 'with --batch: only this surface')
-    .action(async (ids: string[], flags: { batch?: string; surface?: string }) => {
+    .option('--rejudge', "also grade the judged check again with today's judge and moment, on the reply each rep's judge saw (spends a judge call per rep)")
+    .option('--parallel <n>', 'reps graded at once', positiveNumber('--parallel', true), 1)
+    .action(async (ids: string[], flags: { batch?: string; surface?: string; rejudge?: boolean; parallel: number }) => {
       const root = homePaths().runs;
       const names = ids.map((id) => basename(id));
       if (flags.batch) {
@@ -117,17 +157,28 @@ export function registerRescore(program: Command): void {
       }
       if (!names.length) throw new Error('name the reps to rescore, or --batch <id>');
       let changed = 0;
-      for (const name of names) {
-        const r = await rescoreRun(join(root, name));
+      const criteria = (sc: Score) => sc.checks.find((c) => c.id === 'criteria')?.score;
+      // A rep whose judge call fails keeps the score it had; the rest still run.
+      const results = await mapLimit(names, flags.parallel, (name) => rescoreRun(join(root, name), { rejudge: flags.rejudge }).catch((e: unknown) => (e instanceof Error ? e : new Error(String(e)))));
+      let errors = 0;
+      names.forEach((name, i) => {
+        const r = results[i];
+        if (r instanceof Error) {
+          errors++;
+          console.log(`${name}  unchanged: ${r.message}`);
+          return;
+        }
         if (!r) {
-          console.log(`${name}  skipped: no score (a stop or a dry rep)`);
-          continue;
+          console.log(`${name}  skipped: no score (a stop, a crash or a dry rep)`);
+          return;
         }
         const failed = (s: Score) => s.gates.filter((g) => !g.pass).map((g) => g.id).join(',') || 'none';
         if (!r.after || r.before.score !== r.after.score || r.before.pass !== r.after.pass) changed++;
+        const judged = flags.rejudge && r.after && criteria(r.before) != null ? `  judged ${criteria(r.before)!.toFixed(2)} -> ${criteria(r.after)!.toFixed(2)}` : '';
         if (!r.after) console.log(`${name}  ${r.before.score.toFixed(3)} -> crash  ${r.crash}`);
-        else console.log(`${name}  ${r.before.score.toFixed(3)} -> ${r.after.score.toFixed(3)}  ${r.after.pass ? 'pass' : 'fail'}  gates failed: ${failed(r.before)} -> ${failed(r.after)}`);
-      }
-      console.log(`${names.length} rep(s) graded again, ${changed} changed`);
+        else console.log(`${name}  ${r.before.score.toFixed(3)} -> ${r.after.score.toFixed(3)}  ${r.after.pass ? 'pass' : 'fail'}  gates failed: ${failed(r.before)} -> ${failed(r.after)}${judged}`);
+      });
+      console.log(`${names.length - errors} rep(s) graded again, ${changed} changed${errors ? `, ${errors} left as they were (run them again by name)` : ''}`);
+      if (errors) process.exitCode = 1;
     });
 }

@@ -1,6 +1,6 @@
 // The scope page as a conversation (docs/architecture/scopes-and-feed.md
 // F4), mounted in jsdom against the org fixture. Proves: the page opens as
-// the role's standing conversation with the board beside it, in its three
+// the role's standing conversation with the board collapsed to a glance, in its three
 // widths (a column, an overlay, a phone sheet); the header's control closes
 // and reopens the panel; a role has six tabs and opens on Overview, whose
 // briefing (F5.1) holds no number outside its own lines (F5.4); a link
@@ -104,7 +104,7 @@ function world() {
     mock.module("./ScopeSettings", () => ({ ScopeSettings: (props: any) => React.createElement("div", { "data-scope-settings": "1" }, "settings") }));
     mock.module("./ScopeLineTab", () => ({ ScopeLineTab: () => React.createElement("div", { "data-scope-line": true }) }));
     mock.module("./ScopeTriggersTab", () => ({ ScopeTriggersTab: () => React.createElement("div", { "data-scope-triggers": true }) }));
-    mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children) }));
+    mock.module("../../KeyboardShortcutsHelp", () => ({ ShortcutTooltip: ({ children }: any) => children, KeyCap: ({ children }: any) => React.createElement("kbd", null, children), MenuKeyCaps: () => null }));
     mock.module("../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }), TimeAgo: () => null, UserBadge: () => null, TaskCommentComposer: () => null, TaskCommentItem: () => null }));
     mock.module("../RoleFace", () => ({ RoleFace: ({ role }: any) => React.createElement("span", { "data-role-face": role.handle }) }));
     const realPill = { ...(await import("../../EntityIdPill")) };
@@ -179,7 +179,13 @@ async function verifyScopePage() {
   assert.equal(qa("button").filter((b) => /^(Talk|Wake)$/.test(b.textContent?.trim() ?? "")).length, 0, "Talk and Wake left the header");
   assert.ok(q("[data-scope-reports-to]"), "the header keeps the reports to line");
   assert.equal(q("[data-scope-state]")!.getAttribute("data-scope-state"), "awake");
-  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "the panel is open by default");
+  assert.equal(q("[data-scope-aside]"), null, "the page opens on the conversation, the panel collapsed");
+  assert.ok(q("[data-scope-glance]"), "the collapsed panel is a glance under the header");
+  assert.match(q("[data-scope-glance-charter]")!.textContent!, /Owns organic search/, "with no goal written down, its top line is what the role is for");
+  assert.ok(q("[data-scope-glance] [data-scope-doing]"), "and it says what the role is doing");
+  await click(q("[data-scope-glance]"));
+  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "side", "a click on the glance opens the panel");
+  assert.equal(q("[data-scope-glance]"), null, "the glance gives way to the panel");
   // A role's page opens on Overview (org-roles-run-work.md R3): what it is
   // for, the briefing, its notes behind a fold, then what happened lately.
   assert.equal(q("[data-scope-tab-active]")!.getAttribute("data-scope-tab-active"), "scope", "a role's page opens on Overview");
@@ -292,7 +298,7 @@ async function verifyScopePage() {
   assert.match(q("[data-scope-stripe]")!.textContent!, /Not started yet/);
   await click(q("[data-scope-provision]"));
   assert.ok(calls.some((c) => c === `mutation:{"role_id":"${growth._id}"}`), "the one gesture starts the role");
-  assert.ok(q("[data-scope-aside]"), "the panel is still beside it");
+  assert.equal(q("[data-scope-aside]"), null, "the panel stays collapsed");
   // A person who cannot reshape the role is told who can.
   env.tree = { ...unseated, people: unseated.people.map((p) => ({ ...p, is_me: false, role: "member" as const })) };
   state.currentUser = { _id: "fixture-user-sam" };

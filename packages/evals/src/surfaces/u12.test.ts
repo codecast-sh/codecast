@@ -6,6 +6,7 @@ import { pickSpineRows, selectTitleInput, titleRequest } from '../../../convex/c
 import { insightRequest, selectInsightContext } from '../../../convex/convex/sessionInsights';
 import { callSummaryRequest, callSummarySource } from '../../../convex/convex/transcripts';
 import { routeGates } from '../adapters/replay';
+import { defaultJudgeFor } from '../adapters/resolver';
 import type { CallResult, ReplayResult, SurfaceRequest } from '../surface';
 import callSummary, { callSnapshot, callSummarySurfaceRequest, type CallSummarySnap } from './callSummary';
 import { meta as callSummaryMeta } from './callSummary/meta';
@@ -131,7 +132,8 @@ describe('call-summary', () => {
     expect(r.out.calls).toHaveLength(0);
     expect(r.gates).toEqual({ 'skip-honored': true });
     expect(routeGates(callSummaryMeta, r.out).every((g) => g.pass)).toBe(true);
-    expect(fixture('call-summary', 'too-short-to-summarize').judge).toBeNull();
+    // Its freeze holds no criterion: only gates grade it.
+    expect(defaultJudgeFor({ meta: { surface: 'call-summary', visibility: 'public', snapshot: 'fixtures/call-summary/too-short-to-summarize.json' } })).toBeNull();
   });
 
   test('gates: a summary passes; a long call keeps its tail; no JSON fails parse', async () => {

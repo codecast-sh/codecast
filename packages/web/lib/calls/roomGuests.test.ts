@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { guestsSig, rosterWithGuests, withGuestMedia } from "./roomGuests";
+import { guestsJoining, guestsSig, rosterWithGuests, withGuestMedia } from "./roomGuests";
 
 const seat = (id: string, name: string) => ({ user_id: id, user_name: name });
 const guest = (id: string, name: string, joined_at: number) => ({ guest_id: id, identity: `guest:${id}`, name, joined_at });
@@ -48,4 +48,14 @@ test("the media decides who is drawn in the call and whether their microphone is
   expect(drawn[1]).toMatchObject({ guest: true, muted: true });
   // A seat is never filtered by the guests' media.
   expect(withGuestMedia([seat("u1", "Sam")], [])).toEqual([seat("u1", "Sam")]);
+});
+
+test("a guest let in but not connected yet is on their way, not gone", () => {
+  const rows = rosterWithGuests([seat("u1", "Sam")], [guest("g1", "Ada", 100), guest("g2", "Bo", 200)]);
+  // Bo was admitted and is still at the lobby: the stage draws him arriving.
+  expect(guestsJoining(rows, [{ identity: "guest:g1", muted: true }]).map((r) => r.user_id)).toEqual(["guest:g2"]);
+  // Nobody can say who is in the media: nobody is drawn as arriving.
+  expect(guestsJoining(rows, null)).toEqual([]);
+  // A seat is never one of them, and a guest the server stopped listing is in neither list.
+  expect(guestsJoining([seat("u1", "Sam")], [])).toEqual([]);
 });

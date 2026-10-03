@@ -83,6 +83,46 @@ export function isRowTerminal(status: string): boolean {
   return status === "done" || status === "failed" || status === "cancelled";
 }
 
+/** One session in a migration batch, as sessionMigrations.listBatches returns it. */
+export type MigrationBatchRow = {
+  migration_id: string;
+  conversation_id: string;
+  title: string | null;
+  short_id: string | null;
+  direction: "to_cloud" | "to_local";
+  from_device_id: string | null;
+  to_device_id: string;
+  executor_device_id: string;
+  status: MigrationRowStatus;
+  stage: string | null;
+  error: string | null;
+  attempt: number;
+  started_at: number | null;
+  finished_at: number | null;
+  updated_at: number;
+  destination_path: string | null;
+  verification: string | null;
+};
+
+export type MigrationBatch = {
+  batch_id: string;
+  to_device_id: string;
+  created_at: number;
+  updated_at: number;
+  cancelled_at: number | null;
+  wait_for_idle_ms: number;
+  concurrency: number;
+  executor_device_ids: string[];
+  total: number;
+  done: number;
+  failed: number;
+  cancelled: number;
+  active: number;
+  queued: number;
+  state: "running" | "done" | "partial" | "failed" | "cancelled" | "empty";
+  rows: MigrationBatchRow[];
+};
+
 /** Wait-for-idle presets, in ms. 0 = interrupt a running turn immediately. */
 export const WAIT_PRESETS: Array<{ value: number; label: string }> = [
   { value: 0, label: "Interrupt right away" },

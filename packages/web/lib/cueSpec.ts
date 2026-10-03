@@ -111,6 +111,17 @@ export const WALKIE_SQUELCH: CueSpec = {
   noise: [{ start: 0, dur: 0.09, gain: 0.6, band: 1800, q: 0.8 }],
 };
 
+/** Someone joined the room you are in, or you connected: a soft rising
+ *  triad, C5, E5, G5. Also what a guest hears when the room lets them in. */
+export const CALL_JOIN: CueSpec = {
+  master: 0.05,
+  tones: [
+    { freq: 523.25, start: 0, dur: 0.15, gain: 0.4, type: "sine" },
+    { freq: 659.25, start: 0.08, dur: 0.18, gain: 0.35, type: "sine" },
+    { freq: 783.99, start: 0.16, dur: 0.25, gain: 0.3, type: "sine" },
+  ],
+};
+
 /** Someone stepped into your burst: it is a call now. Rising E5, B5, E6. */
 export const WALKIE_JOINED: CueSpec = {
   master: 0.1,
@@ -155,14 +166,14 @@ export const KILL_DOOR: CueSpec = {
   tones: [{ freq: 95, sweepTo: 70, start: 0.09, dur: 0.18, gain: 0.9, attack: 0.003, type: "triangle", lowpass: 400 }],
 };
 
-/** Dormant: the session settles down to wait for a machine to wake it. Two
- *  soft sines falling a fifth (E5 to A4), the second sagging a semitone as it
- *  fades, so it reads as easing off rather than as the rising idle motif. Slow
- *  attacks keep it a sigh, not a ping; it sits beside stash and kill. */
+/** Dormant: the session settles down to wait for a machine to wake it. The
+ *  stash swoosh run backwards and slowed: a breath whose band sinks from 1.3
+ *  kHz to 320 Hz, swelling in over 130 ms, with a faint low sine (E4 sagging
+ *  to D4) under it as the one tonal trace that tells it apart from stash and
+ *  kill. Its RMS matches theirs, so it sits with your own gestures rather than
+ *  with the session chimes. */
 export const DORMANT_SETTLE: CueSpec = {
-  master: 0.04,
-  tones: [
-    { freq: 659.25, start: 0, dur: 0.28, gain: 0.55, attack: 0.04, type: "sine" },
-    { freq: 440, sweepTo: 415, start: 0.13, dur: 0.42, gain: 0.5, attack: 0.05, type: "sine", lowpass: 1200 },
-  ],
+  master: 0.054,
+  noise: [{ start: 0, dur: 0.36, attack: 0.13, gain: 0.55, band: 1300, sweepTo: 320, q: 0.9 }],
+  tones: [{ freq: 329.63, sweepTo: 293.66, start: 0.05, dur: 0.38, gain: 0.22, attack: 0.09, type: "sine" }],
 };

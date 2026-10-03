@@ -387,6 +387,10 @@ export interface CreateConversationParams {
 }
 
 export class SyncService {
+  async reportMachineResources(snapshot: import("@codecast/shared/contracts").MachineResourceSnapshot): Promise<void> {
+    await this.mutate("machineResources:report" as any, { api_token: this.apiToken, snapshot });
+  }
+
   private client: ConvexHttpClient;
   // Lazy: ConvexClient opens its websocket at construction and reconnects
   // forever. The daemon opens it twice in spirit — once at the start of boot

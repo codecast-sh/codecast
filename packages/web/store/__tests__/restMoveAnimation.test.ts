@@ -47,6 +47,8 @@ describe("a rest verdict animates the row between sections", () => {
     expect((useInboxStore.getState().sessions[ID] as any).user_rest).toBeUndefined();
 
     from.wrapper.dispatchEvent(new Event("animationend"));
+    // Every row's collapse is awaited, then the rows are filed as one undo.
+    await tick();
     expect((useInboxStore.getState().sessions[ID] as any).user_rest).toBe("dormant");
 
     // React moves the row: the old section unmounts it, the dormant one mounts it.
@@ -68,10 +70,10 @@ describe("a rest verdict animates the row between sections", () => {
     expect(at.wrapper.classList.contains("session-entering")).toBe(false);
   });
 
-  test("with no card on screen the verdict lands at once", () => {
+  test("with no card on screen the verdict lands at once", async () => {
     document.body.innerHTML = "";
     seed();
-    animatedSetSessionRest(ID, "done");
+    await animatedSetSessionRest(ID, "done");
     expect((useInboxStore.getState().sessions[ID] as any).user_rest).toBe("done");
   });
 });

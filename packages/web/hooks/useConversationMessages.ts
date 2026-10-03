@@ -1,5 +1,5 @@
 import { useCallback, useState, useRef, useMemo, useEffect } from "react";
-import { useQuery, useConvex } from "convex/react";
+import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, isConvexId, ensureHydrated } from "../store/inboxStore";
@@ -169,20 +169,20 @@ export function useConversationMessages(
   const effectiveTargetMessageId = targetMessageId ?? hashTarget;
 
   // --- Target resolution ---
-  const targetMessageTimestamp = useQuery(
+  const targetMessageTimestamp = useQueryNoThrow(
     api.messages.getMessageTimestamp,
     canQuery && effectiveTargetMessageId
       ? { conversation_id: convId, message_id: effectiveTargetMessageId as Id<"messages">, ...shareArg }
       : "skip"
-  );
+  ).data;
 
   const cleanedHighlightQuery = highlightQuery?.replace(/^"|"$/g, "").trim();
-  const highlightMessageResult = useQuery(
+  const highlightMessageResult = useQueryNoThrow(
     api.messages.findMessageByContent,
     canQuery && cleanedHighlightQuery
       ? { conversation_id: convId, search_term: cleanedHighlightQuery, ...shareArg }
       : "skip"
-  );
+  ).data;
 
   // The beginning is a target like any other: the around-window centered on
   // timestamp 0 is the first page, and no tail subscription runs for it.
@@ -347,12 +347,12 @@ export function useConversationMessages(
   // The live tail. Anchored one ms before the newest known row so the
   // in-flight streaming row is always inside the subscribed range and its
   // in-place patches replace the local copy.
-  const tailResult = useQuery(
+  const tailResult = useQueryNoThrow(
     api.conversations.listMessagesTail,
     useNormalMode && tailState.id === conversationId && tailState.anchor !== null
       ? { conversation_id: convId, after_timestamp: tailState.anchor, ...shareArg }
       : "skip"
-  );
+  ).data;
   useConvexSync(tailResult, useCallback((res: any) => {
     if (!res) return;
     const anchor = tailAnchorRef.current;
@@ -394,10 +394,10 @@ export function useConversationMessages(
   // The transcript watermark: message_count feeds the recovery poll,
   // transcript_revision flags backfill edits behind the tail anchor. A few
   // integers, so it re-pushes only when one of them actually moves.
-  const watermark = useQuery(
+  const watermark = useQueryNoThrow(
     api.conversations.getTranscriptWatermark,
     canQuery ? { conversation_id: convId, ...shareArg } : "skip"
-  );
+  ).data;
   useConvexSync(watermark, useCallback((w: any) => {
     if (!w) return;
     useInboxStore.getState().syncRecord("conversations", conversationId, w);
@@ -419,10 +419,10 @@ export function useConversationMessages(
   // One subscription, shared by every ConversationView consumer (sticky
   // header, message browser, rewind navigator). Caching the complete list
   // means those features never depend on which message window is paginated in.
-  const userMessages = useQuery(
+  const userMessages = useQueryNoThrow(
     api.conversations.getUserMessages,
     canQuery ? { conversation_id: convId, ...shareArg } : "skip"
-  );
+  ).data;
   useConvexSync(userMessages, useCallback((msgs: any) => {
     useInboxStore.getState().setUserMessages(conversationId, msgs);
   }, [conversationId]));
@@ -628,7 +628,7 @@ export function useConversationMessages(
   // 50/50 window paints from the Convex cache on the first frame. Jump-to-start
   // and jump-to-timestamp are one-shots (jumpToStart / jumpToTimestamp) — a live
   // subscription on a long session re-runs the whole window on every heartbeat.
-  const aroundData = useQuery(
+  const aroundData = useQueryNoThrow(
     api.conversations.getMessagesAroundTimestamp,
     canQuery && targetMode && !targetInitializedRef.current && jumpMode === null && targetTimestampReady
       ? {
@@ -639,7 +639,7 @@ export function useConversationMessages(
           ...shareArg,
         }
       : "skip"
-  );
+  ).data;
 
   // eslint-disable-next-line no-restricted-syntax -- Convex query to local target state with ref guard
   useEffect(() => {

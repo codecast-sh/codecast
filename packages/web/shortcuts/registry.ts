@@ -53,6 +53,7 @@ export type ShortcutAction =
   | 'ui.undo'
   | 'ui.redo'
   | 'ui.undoHistory'
+  | 'undoWalk.pin'
   | 'inbox.toggleFlatView'
   | 'inbox.toggleTriageBar'
   | 'nav.inbox'
@@ -267,6 +268,12 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, description: 'Redo' },
   { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, description: 'Redo' },
   { key: 'ctrl+alt+z', mac: 'meta+alt+z', action: 'ui.undoHistory', description: 'Undo history' },
+  // H pins the held undo peek (hooks/useUndoWalk). The context is live only
+  // while the peek shows or fades, and these rows sit above conv.toggleThinking
+  // so they win the H there. ⌘H belongs to the OS on mac, so H pins during the
+  // fade; off mac, Ctrl+H pins with the modifier still held.
+  { key: 'h', action: 'undoWalk.pin', when: 'undoWalk', description: 'Pin the undo history open' },
+  { key: 'ctrl+h', mac: 'meta+h', action: 'undoWalk.pin', when: 'undoWalk', description: 'Pin the undo history open' },
 
   { key: 'meta+shift+alt+1', action: 'nav.inbox', skipInputCheck: true, description: 'Go to inbox' },
 
@@ -444,7 +451,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   { key: 'w', action: 'changes.mode', when: 'changes', description: 'Day or week' },
   { key: '/', action: 'changes.filter', when: 'changes', description: 'Filter stories' },
   { key: 'c', action: 'changes.copyLink', when: 'changes', description: 'Copy a link to the story' },
-  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Close the evidence, then clear filters' },
+  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Clear the filter text and leave the field, else close the evidence, then clear filters' },
   { key: 's', action: 'task.status', when: 'tasks', description: 'Set status' },
   { key: 'p', action: 'task.priority', when: 'tasks', description: 'Set priority' },
   { key: 'l', action: 'task.labels', when: 'tasks', description: 'Edit labels' },

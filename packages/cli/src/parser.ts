@@ -515,6 +515,8 @@ export function detectCliFlags(content: string): string | null {
       if (parsed.permissionMode === "bypassPermissions") {
         flags.push("--dangerously-skip-permissions");
       }
+      // `claude -p`: a program wrote the prompt and nobody is at a terminal.
+      if (parsed.entrypoint === "sdk-cli") flags.push("--print");
     } catch {}
   }
   if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {

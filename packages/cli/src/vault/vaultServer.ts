@@ -73,7 +73,7 @@ let hub: VaultWatchHub | null = null;
 // handleVaultHttp).
 let legacyBearerUrlLogged = false;
 
-function sendJson(res: http.ServerResponse, status: number, headers: Record<string, string>, body: unknown): void {
+export function sendJson(res: http.ServerResponse, status: number, headers: Record<string, string>, body: unknown): void {
   res.writeHead(status, { "Content-Type": "application/json", ...headers });
   res.end(JSON.stringify(body));
 }

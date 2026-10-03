@@ -103,6 +103,14 @@ export function offsetIntoRecording<R extends CallRecordingSpan>(rec: R, callSta
   return wall - w.start;
 }
 
+/** Does the call's public link show its video? Only when somebody chose it
+ *  for this very link (setCallShareVideo): a link made to share a transcript
+ *  never starts handing out faces and screens because Record was pressed
+ *  later, and a link turned off and on is a new token that starts without. */
+export function shareIncludesVideo(call: { share_token?: string | null; share_video_token?: string | null }): boolean {
+  return !!call.share_token && call.share_video_token === call.share_token;
+}
+
 export type CallMomentPrefer = "composite" | "screen";
 
 /**
@@ -308,6 +316,35 @@ export function callRecordingUrlWindow(now: number = Date.now()): number {
   return Math.floor(now / CALL_RECORDING_URL_WINDOW_MS);
 }
 
+// ── A press is a moment ───────────────────────────────────────────────────
+//
+// Record and Stop are things a person does to a room NOW. The client's
+// writes ride a durable outbox, which is right for a message and wrong for
+// this: a press parked through a network blip and delivered a minute later,
+// or replayed when the tab reloads, would start filming a room nobody just
+// asked to film (or end a run somebody else has since started). So a press
+// carries the wall clock it was made at, and both ends refuse one that is no
+// longer a moment: the client before it leaves the browser (the stale row is
+// dropped from the outbox), the server when it arrives (dispatch
+// setRoomRecording), which is what holds for a client that did not check.
+// Half a minute rather than a few seconds because the stamp is the client's
+// clock read against the server's: a machine running a little behind must
+// not have every press refused.
+export const RECORDING_PRESS_FRESH_MS = 30_000;
+
+/** Is a press made at `pressedAt` too old to act on at `now`? A press with no
+ *  stamp (a client older than the rule) is taken as made now. */
+export function recordingPressStale(pressedAt: unknown, now: number): boolean {
+  return typeof pressedAt === "number" && now - pressedAt > RECORDING_PRESS_FRESH_MS;
+}
+
+/** What a person is told when their press was dropped as stale. */
+export function recordingPressStaleWords(on: boolean): string {
+  return on
+    ? "That press did not reach the server in time, so nothing was recorded. Press Record again."
+    : "That press did not reach the server in time, so the recording was not stopped. Press Stop again.";
+}
+
 // ── Words ─────────────────────────────────────────────────────────────────
 //
 // What people are told about a recording, written once, so the member's
@@ -335,11 +372,12 @@ export function recordingKeptWords(roomKey?: string | null): string {
 }
 
 /** A failed run's reason as a sentence a person reads. The server's own
- *  reasons ("The recording ...", "Stopped before ...") already are one;
- *  LiveKit's raw errors get the plain prefix. */
+ *  reasons (convex callRecordings: "Recording is not set up ...", "Stopped
+ *  before ...", "LiveKit lost track ...") already are one; LiveKit's raw
+ *  errors get the plain prefix. */
 export function recordingFailureWords(error: string | null | undefined): string {
   const e = (error ?? "").trim();
   if (!e) return "The recording failed.";
-  if (/^(the recording|stopped before)/i.test(e)) return e;
+  if (/^(the recording|recording is|stopped before|livekit (lost|accepted))/i.test(e)) return e;
   return `The recording failed. ${e}`;
 }

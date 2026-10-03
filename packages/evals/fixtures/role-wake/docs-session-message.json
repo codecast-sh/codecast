@@ -1,7 +1,6 @@
 {
   "asOf": "2026-09-28T11:00:00.000Z",
   "notes": "A lead woken by another session's message (org-staffing.md S25: a role wakes through triggers and messages, nothing else). jx7bil3, the session rewriting the billing page under the docs role, asks a question that is the lead's to answer, and says it cannot open its pull request until it hears back. The turn under test is the reply: the lead answers that session with `cast send jx7bil3`, not Mara, not its own thread, not silence. Catches the regression where a lead reads a session's message, writes its brief, and never answers. Its own reads answer what a lead looks up before answering, whatever words it searches with (a one-word prefix serves every `cast search`): the record names ct-418 and jx7bil3 and nothing decided; the world holds the rest.",
-  "judge": "answers jx7bil3 with `cast send`, in its own words, choosing one of the two options and saying why in a sentence; it does not raise the question to Mara and does not end the turn without the reply",
   "label": {
     "replies": [
       "jx7bil3"

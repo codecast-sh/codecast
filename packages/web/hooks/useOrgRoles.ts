@@ -7,8 +7,9 @@
 // roles array. Fields outside the signature (counts, sessions, caps) can be
 // stale between re-renders; a surface that renders them reads the tree.
 //
-// Reader only: it mounts no feeder. Mount useSyncOrgTree once on a page that
-// is not guaranteed to follow the org page.
+// Reader only: it mounts no feeder. Mount useSyncOrgTreeFeeder once on a page
+// that is not guaranteed to follow the org page; it reads roles and seats
+// without scanning a session, which is all this hook needs.
 import { useMemo } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import type { OrgRole, OrgTree } from "../components/org/orgTypes";

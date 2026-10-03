@@ -34,8 +34,10 @@ export function ElsewhereCallPill({ className = "" }: { className?: string }) {
     >
       <Headphones className="h-3 w-3 shrink-0" aria-hidden="true" />
       In a huddle in another window
-      {/* The window behind this one is recording the room: said here too. */}
-      <CallCardRecordingMark />
+      {/* The window behind this one is recording the room: said here too.
+          The mark alone: this pill is itself the button that raises the
+          window where the recording can be stopped. */}
+      <CallCardRecordingMark inert />
     </button>
   );
 }

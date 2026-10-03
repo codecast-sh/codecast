@@ -1,0 +1,79 @@
+import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
+import { mutation } from "./functions";
+import { RESOURCE_STALE_MS, evaluateOffloadRequirements } from "@codecast/shared/contracts";
+import { performCreateBatch, planMigration } from "./sessionMigrations";
+
+export const start = mutation({
+  args: {
+    source_device_id: v.string(),
+    selections: v.array(v.object({ conversation_id: v.id("conversations"), session_id: v.string(), destination_id: v.string(), attested: v.array(v.string()) })),
+    wait_for_idle_ms: v.number(),
+    dry_run: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Authentication required");
+    if (!args.selections.length || args.selections.length > 50) throw new Error("Select between 1 and 50 sessions");
+    if (!Number.isFinite(args.wait_for_idle_ms) || args.wait_for_idle_ms < 60_000) throw new Error("Allow at least a minute to reach a safe turn boundary");
+    if (new Set(args.selections.map(s => s.session_id)).size !== args.selections.length) throw new Error("A session may only be selected once");
+    if (args.selections.some(s => s.attested.length > 20 || s.attested.some(a => a.length > 500))) throw new Error("Too many prerequisite attestations");
+    const now = Date.now();
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", q => q.eq("user_id", userId)).collect();
+    const sourceDevice = devices.find(d => d.device_id === args.source_device_id);
+    if (!sourceDevice || sourceDevice.is_remote || now - sourceDevice.last_seen > RESOURCE_STALE_MS) throw new Error("The source laptop is not online");
+    const reports = await ctx.db.query("machine_resources").withIndex("by_user", q => q.eq("user_id", userId)).collect();
+    const fresh = (r: typeof reports[number] | undefined) => r && now - r.received_at <= RESOURCE_STALE_MS && now - r.snapshot.sample.at <= RESOURCE_STALE_MS && r.snapshot.sample.at <= now + 30_000;
+    const source = reports.find(r => r.device_id === args.source_device_id);
+    if (!fresh(source) || !source) throw new Error("Refresh the laptop's resource measurements before moving sessions");
+    const checks = [];
+    const groups = new Map<string, string[]>();
+    for (const selection of args.selections) {
+      const conv = await ctx.db.get(selection.conversation_id);
+      if (!conv || conv.user_id !== userId || conv.session_id !== selection.session_id || conv.owner_device_id !== args.source_device_id) throw new Error("Session ownership changed; refresh the selection");
+      const blockers: string[] = [];
+      const activeMove = await ctx.db.query("session_migrations").withIndex("by_conversation", q => q.eq("conversation_id", conv._id))
+        .filter(q => q.and(q.neq(q.field("status"), "done"), q.neq(q.field("status"), "failed"), q.neq(q.field("status"), "cancelled"))).first();
+      if (activeMove) blockers.push("This session already has a queued or active move");
+      if (conv.inbox_pinned_at) blockers.push("Pinned sessions are not offered for resource offload");
+      const children = await ctx.db.query("conversations").withIndex("by_parent_conversation_id", q => q.eq("parent_conversation_id", conv._id)).collect();
+      const teammates = await ctx.db.query("conversations").withIndex("by_spawned_by", q => q.eq("spawned_by_conversation_id", conv._id)).collect();
+      if ([...children, ...teammates.filter(c => c.agent_team_name)].some(c => c.status !== "completed" && !c.inbox_killed_at)) blockers.push("This session has unfinished subagents");
+      const processes = source.snapshot.processes.filter(p => p.sessionId === selection.session_id);
+      if (!processes.length) blockers.push("Exclusive process ownership is no longer measured");
+      if (source.snapshot.processes.some(p => p.sharedSessionIds?.includes(selection.session_id))) blockers.push("This session shares a process with other sessions");
+      const target = devices.find(d => d.device_id === selection.destination_id);
+      if (!target?.is_remote) blockers.push("Choose a registered cloud destination");
+      const targetReport = reports.find(r => r.device_id === selection.destination_id);
+      const policy = evaluateOffloadRequirements({ processes, targetPlatform: target?.platform,
+        targetOnline: !!target && now - target.last_seen <= RESOURCE_STALE_MS,
+        targetWakeable: !!target?.cloud_host, readiness: target?.host_readiness,
+        targetSample: fresh(targetReport) ? targetReport?.snapshot.sample : undefined, now });
+      const plan = planMigration({ conversations: [conv], devices, targetDeviceId: selection.destination_id, now });
+      blockers.push(...policy.blockers, ...plan.skipped.map(s => s.reason));
+      const unconfirmed = policy.pending.filter(p => !selection.attested.includes(p));
+      checks.push({ session_id: selection.session_id, destination_id: selection.destination_id, blockers, pending: policy.pending, passed: policy.passed, unconfirmed });
+      const ids = groups.get(selection.destination_id) ?? [];
+      ids.push(selection.conversation_id);
+      groups.set(selection.destination_id, ids);
+    }
+    for (const [destination, ids] of groups) {
+      const targetReport = reports.find(r => r.device_id === destination);
+      const selected = new Set(args.selections.filter(s => s.destination_id === destination).map(s => s.session_id));
+      const total = source.snapshot.processes.filter(p => p.sessionId && selected.has(p.sessionId)).reduce((n, p) => n + p.rss, 0);
+      if (ids.length > 1 && fresh(targetReport) && targetReport && total > targetReport.snapshot.sample.memoryAvailable) {
+        for (const check of checks.filter(c => c.destination_id === destination)) check.blockers.push("The selected group exceeds the destination's measured available memory; choose fewer sessions");
+      }
+    }
+    if (args.dry_run) return { checks, batches: [] };
+    const failed = checks.find(c => c.blockers.length || c.unconfirmed.length);
+    if (failed) throw new Error([...failed.blockers, ...failed.unconfirmed.map(p => `Confirm: ${p}`)].join("; "));
+    const batches = [];
+    for (const [to_device_id, conversation_ids] of groups) {
+      const result = await performCreateBatch(ctx, userId, { conversation_ids, to_device_id, wait_for_idle_ms: args.wait_for_idle_ms, interrupt_on_timeout: false }, now);
+      if (result.skipped.length) throw new Error("The selection changed during preflight; refresh and try again");
+      batches.push(result);
+    }
+    return { checks, batches };
+  },
+});

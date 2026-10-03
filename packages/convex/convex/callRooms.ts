@@ -68,7 +68,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { createTeamFeedFilter, isTeamMember } from "./privacy";
 import { canAccessChannel, isCommunity, isRestricted } from "./chatAccess";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
-import { endGuestAdmissions } from "./lib/callGuestAdmission";
+import { checkGuestRoster, endGuestAdmissions, roomHasGuestLinks } from "./lib/callGuestAdmission";
 // Key shapes, builders and lease timings are the shared contract
 // (@codecast/shared/contracts/callRoomKeys) so the web client can build keys
 // and share staleness math without importing server code. This module adds
@@ -276,7 +276,25 @@ export async function expireRoomGrants(ctx: any, roomKey: string): Promise<void>
   // the huddle that just ended. Whoever is still holding the media open from
   // it is put out, so the next huddle starts with only the people its own
   // door lets in. Guests still WAITING stay (endGuestAdmissions says why).
-  await endGuestAdmissions(ctx, roomKey);
+  // With nobody admitted the media room is checked all the same whenever a
+  // guest link ever opened this room: a guest put out of an earlier huddle
+  // whose client reconnected on a token LiveKit kept refreshing after the
+  // roster tail ended would otherwise sit in this one, listening.
+  if ((await endGuestAdmissions(ctx, roomKey)) === 0 && (await roomHasGuestLinks(ctx, roomKey))) {
+    await checkGuestRoster(ctx, roomKey);
+  }
+  // A guest link made from a SEAT was the seat-holder's standing in that
+  // huddle and nothing more (callGuests.creatorStillVouches): it dies with
+  // it, turned off here so the new huddle's door is only the links its own
+  // people made.
+  const seatLinks = await ctx.db
+    .query("call_guest_links")
+    .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
+    .collect();
+  const now = Date.now();
+  for (const l of seatLinks) {
+    if (l.created_via === "seat" && !l.revoked_at) await ctx.db.patch(l._id, { revoked_at: now });
+  }
 }
 
 /** The room's one state row (lock, transcription opt-out), or null for the
@@ -305,7 +323,7 @@ export async function upsertRoomState(
   ctx: any,
   roomKey: string,
   seat: { team_id: Id<"teams">; user_id: Id<"users"> },
-  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number },
+  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number; emptied_at?: number },
   now: number,
 ): Promise<void> {
   const existing = await readRoomState(ctx, roomKey);
@@ -324,6 +342,7 @@ export async function upsertRoomState(
     locked_by: seat.user_id,
     transcribe_off: patch.transcribe_off,
     transcribe_off_at: patch.transcribe_off_at,
+    emptied_at: patch.emptied_at,
     updated_at: now,
   });
 }

@@ -19,6 +19,7 @@ import { SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
 import { AUTO_AT, PHASE_CUES, PHASES, phaseAt } from "./automation.motion";
 import { FilmSwap } from "../film";
+import { clamp, fade } from "../timeline";
 import type { PartProps } from "./contract";
 
 const noop = () => {};
@@ -40,6 +41,49 @@ const VERB_STATUS: Record<Parameters<TriggerVerbAction>[1], TaskRow["status"]> =
  */
 const GRAPH = { width: 860, height: 128 };
 
+/** How long a node takes to hand the run's active style to the next one (s). */
+const NODE_FADE = 0.35;
+
+function PhaseGraph({ now, phase }: { now: number; phase: RunPhase }) {
+  const statuses = useMemo(() => nodeStatuses(phase), [phase]);
+  const current = workflowRun(now, phase).current_node_id;
+  return useMemo(
+    () => <WorkflowGraphView nodes={GRAPH_CROP.nodes} edges={GRAPH_CROP.edges} nodeStatuses={statuses} currentNodeId={current} chrome={false} fitPadding={0.03} />,
+    [statuses, current],
+  );
+}
+
+/**
+ * The graph across a change of phase: the next phase's graph is always laid
+ * out over the settled one, unseen, and dissolves in across each cue, so a
+ * node's active border and fill hand over to the next node rather than
+ * jumping in one frame. Both stay mounted, so React Flow has fitted each long
+ * before it shows.
+ */
+function GraphCrossfade({ now }: { now: number }) {
+  const base = useFilmTime((t) => {
+    const n = PHASE_CUES.filter((c) => t >= c).length;
+    return n > 0 && t < PHASE_CUES[n - 1] + NODE_FADE ? n - 1 : n;
+  });
+  const k = useFilmTime((t) => {
+    const n = PHASE_CUES.filter((c) => t >= c).length;
+    if (n === 0) return 0;
+    const u = (t - PHASE_CUES[n - 1]) / NODE_FADE;
+    return u >= 1 ? 0 : Math.round(fade(clamp(u)) * 40) / 40;
+  });
+  const next = Math.min(base + 1, PHASES.length - 1);
+  return (
+    <div className="relative h-full w-full">
+      <div className="absolute inset-0">
+        <PhaseGraph now={now} phase={PHASES[base]} />
+      </div>
+      <div className="absolute inset-0 bg-sol-bg" style={{ opacity: k }} aria-hidden>
+        <PhaseGraph now={now} phase={PHASES[next]} />
+      </div>
+    </div>
+  );
+}
+
 export function AutomationSurface({ now }: PartProps) {
   // The countdown's seconds, then the run's phase: each a discrete step of the film.
   // Ten minutes out until the surface comes into view, then the last seconds.
@@ -55,8 +99,6 @@ export function AutomationSurface({ now }: PartProps) {
   const step = `${phase}:${fireIn}`;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const wall = useMemo(() => Date.now(), [step]);
-  const run = workflowRun(now, phase);
-  const statuses = useMemo(() => nodeStatuses(phase), [phase]);
 
   const act: TriggerVerbAction = (id, verb) => setEdits((e) => ({ ...e, [id]: { ...e[id], status: VERB_STATUS[verb] } }));
 
@@ -95,7 +137,7 @@ export function AutomationSurface({ now }: PartProps) {
         className="mx-5 mt-4 shrink-0 overflow-hidden rounded-lg border border-sol-border/40"
         {...fly("auto/automation.graph", { ...GRAPH, pointerEvents: "none" })}
       >
-        <WorkflowGraphView nodes={GRAPH_CROP.nodes} edges={GRAPH_CROP.edges} nodeStatuses={statuses} currentNodeId={run.current_node_id} chrome={false} fitPadding={0.03} />
+        <GraphCrossfade now={now} />
       </div>
       {/* The trigger that starts the run and the lead's pinned state beside the run it started. */}
       <div className="grid min-h-0 flex-1 grid-cols-[1fr_420px] items-start gap-4 px-5 pt-3">
@@ -106,7 +148,8 @@ export function AutomationSurface({ now }: PartProps) {
             </div>
           ))}
           <div className="-mx-2 mt-1" {...fly("auto/automation.state")}>
-            <FilmSwap cues={PHASE_CUES} render={pinnedView} />
+            {/* The state is rewritten, not extended: out, then in (through), so two texts never overlap mid-dissolve. */}
+            <FilmSwap cues={PHASE_CUES} through render={pinnedView} />
           </div>
         </div>
         <div className="min-w-0 overflow-hidden rounded-lg border border-sol-border/40" {...fly("auto/automation.run")}>

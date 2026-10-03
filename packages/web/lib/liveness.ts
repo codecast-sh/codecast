@@ -13,6 +13,7 @@ export function liveFactsOf(s: {
   inbox_stashed_at?: number | null;
   inbox_snoozed_until?: number | null;
   agent_status?: string | null;
+  agent_status_raw?: string | null;
   agent_status_updated_at?: number | null;
   last_heartbeat?: number | null;
   daemon_alive_until?: number | null;
@@ -33,6 +34,7 @@ export function liveFactsOf(s: {
     inbox_stashed_at: s.inbox_stashed_at ?? null,
     inbox_snoozed_until: s.inbox_snoozed_until ?? null,
     agent_status: s.agent_status ?? null,
+    agent_status_raw: s.agent_status_raw ?? null,
     agent_status_updated_at: s.agent_status_updated_at ?? null,
     last_heartbeat: s.last_heartbeat ?? null,
     daemon_alive_until: s.daemon_alive_until ?? null,

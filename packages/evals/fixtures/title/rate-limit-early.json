@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:14:15.000Z",
  "notes": "synthetic session: per-sender webhook rate limiting, cut at line 10",
- "judge": "names the rate limiting of the billing webhook, specific enough to find it later; the subtitle reflects the move to Redis",
  "snapshot": {
   "mode": "title",
   "spine": [

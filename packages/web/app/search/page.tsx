@@ -24,6 +24,8 @@ import { ContextMenu, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from ".
 import { SessionMenuItems } from "../../components/menus/ObjectContextMenus";
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
 import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
+import { SearchOrigin } from "../../components/search/SearchOrigin";
+import { searchedTermsText } from "@codecast/shared/search";
 import { useInstantSessionRows, mergeSearchRows } from "../../lib/instantSessionSearch";
 import { copyToClipboard, shareOrigin } from "../../lib/utils";
 import { SessionGlyph } from "../../components/identity";
@@ -241,7 +243,7 @@ export default function SearchPage() {
 
   const hrefFor = (result: any, messageId?: string) =>
     `/conversation/${result.conversationId}${
-      parsedQuery.text ? `?highlight=${encodeURIComponent(parsedQuery.text)}` : ""
+      parsedQuery.text ? `?highlight=${encodeURIComponent(searchedTermsText(parsedQuery.text))}` : ""
     }${messageId ? `#msg-${messageId}` : ""}`;
 
   const openResult = (result: any, newTab = false) => {
@@ -518,6 +520,7 @@ export default function SearchPage() {
                           )}
                         </div>
                       )}
+                      <SearchOrigin row={result} query={hlQuery} className="mt-1.5 pl-8" />
                     </Link>
                     {result.matches.length === 0 && result.instantSnippet && (
                       <p className="px-4 py-2.5 text-[12px] text-sol-text-dim leading-relaxed">

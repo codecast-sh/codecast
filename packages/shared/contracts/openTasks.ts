@@ -7,14 +7,15 @@
 // open the transcript still says it is (the harness loses a completion notice
 // now and then, and a restart takes every child with it).
 //
-// Reported on every settle verdict and re-verified on the heartbeat reconcile,
-// so `open_tasks_at` is fresh while a daemon is watching. It is what lets the
+// Reported on every settle verdict, and re-published whenever the heartbeat
+// reconcile's re-verification changes it. It is what lets the
 // inbox draw the "↳ Background …" row under a Dormant card without the
 // conversation's messages loaded, and what makes a "waiting" status a checked
 // claim instead of a transcript guess.
 //
 // PURE isomorphic data — consumed by the CLI (producer), Convex (validator +
 // overlay) and the web (renderer).
+import { HEARTBEAT_ALIVE_MS } from "./agentStatus";
 export const OPEN_TASK_KINDS = ["background", "promoted", "monitor", "workflow"] as const;
 export type OpenTaskKind = (typeof OPEN_TASK_KINDS)[number];
 
@@ -28,12 +29,20 @@ export type OpenTaskReport = {
   tool_use_id?: string;
 };
 
-// How long a daemon's open-task report vouches for a "waiting" status. The
-// reconcile refreshes it every heartbeat while the session is parked, so a
-// report older than this means the daemon stopped looking — the status decays
-// like any unverified one.
-export const OPEN_TASKS_FRESH_MS = 10 * 60 * 1000;
-
-export function openTasksVouchForWaiting(openTasksAt: number | null | undefined, openTaskCount: number, now: number): boolean {
-  return !!openTasksAt && openTaskCount > 0 && now - openTasksAt < OPEN_TASKS_FRESH_MS;
+// Whether a daemon's open-task report vouches for a "waiting" status: the
+// report names work, and the daemon that made it is still heartbeating the
+// session. Every settle rewrites the report (an empty list included), so a
+// non-empty one stands until the daemon publishes otherwise; a daemon that died
+// or let the session go stops heartbeating, and the vouch lapses with it.
+// Liveness is the heartbeat's job, not the report's age: the re-verification
+// rides the slow maintenance pass, which under load reaches a session minutes
+// late, and an age window there flipped parked workflow sessions to needs
+// input every time a pass ran behind (2026-10-03).
+export function openTasksVouchForWaiting(
+  openTasksAt: number | null | undefined,
+  openTaskCount: number,
+  lastHeartbeat: number | null | undefined,
+  now: number,
+): boolean {
+  return !!openTasksAt && openTaskCount > 0 && lastHeartbeat != null && now - lastHeartbeat < HEARTBEAT_ALIVE_MS;
 }

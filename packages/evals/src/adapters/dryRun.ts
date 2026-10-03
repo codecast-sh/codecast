@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { stripAnsi } from '@platform/cli-kit/render';
+
 import { DRY_RUN_SCRIPT } from '../paths';
 import type { AgentOptions, AgentResult, CallResult, SurfaceRequest } from '../surface';
 
@@ -102,7 +104,7 @@ export async function runAgent(opts: AgentOptions, dir: string, flags: { dry: bo
   const runSubdir = join(dir, 'agent');
   const started = Date.now();
   if (flags.dry) {
-    return { runSubdir, said: ['(dry run: no agent ran)'], turns: [['(dry run: no agent ran)']], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
+    return { runSubdir, said: ['(dry run: no agent ran)'], turns: [['(dry run: no agent ran)']], wrote: [[]], calls: [], costUsd: 0, modelUsage: { [opts.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: opts.model, realMs: 0 };
   }
   const thenFiles = (opts.then ?? []).map((text, i) => {
     const file = join(dir, `then${i + 2}.md`);
@@ -180,10 +182,39 @@ export function outsideWorldCommands(streamText: string): string[] {
       if (c?.type === 'tool_use') commands.set(String(c.id), String(c.input?.command ?? JSON.stringify(c.input ?? {})));
       if (c?.type !== 'tool_result') continue;
       const text = typeof c.content === 'string' ? c.content : Array.isArray(c.content) ? c.content.map((x: any) => (typeof x?.text === 'string' ? x.text : '')).join('\n') : '';
-      if (text.split('\n').some((l: string) => REAL_CLI_SIGNED_OUT.test(l.replace(/\x1b\[[0-9;]*m/g, '').trim()))) hits.push(commands.get(String(c.tool_use_id)) ?? 'a command the stream does not name');
+      if (text.split('\n').some((l: string) => REAL_CLI_SIGNED_OUT.test(stripAnsi(l).trim()))) hits.push(commands.get(String(c.tool_use_id)) ?? 'a command the stream does not name');
     }
   }
   return hits;
+}
+
+/** The tools that write a file, and the input field that names it. */
+const FILE_TOOLS: Record<string, string> = { Write: 'file_path', Edit: 'file_path', MultiEdit: 'file_path', NotebookEdit: 'notebook_path' };
+
+/**
+ * The files a run's turn wrote, read from its stream: each write tool's path,
+ * and each shell redirect or `tee` target in a Bash command. A file write is
+ * work the agent's messages need not mention, so a gate on it reads here.
+ */
+export function filesWrittenOf(streamText: string): string[] {
+  const out: string[] = [];
+  for (const line of streamText.split('\n')) {
+    if (!line.includes('"tool_use"')) continue;
+    let e: any;
+    try {
+      e = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (e?.type !== 'assistant') continue;
+    for (const c of Array.isArray(e.message?.content) ? e.message.content : []) {
+      if (c?.type !== 'tool_use') continue;
+      const field = FILE_TOOLS[String(c.name)];
+      if (field && typeof c.input?.[field] === 'string') out.push(c.input[field]);
+      if (c.name === 'Bash' && typeof c.input?.command === 'string') for (const m of c.input.command.matchAll(/(?:>>?|\btee(?:\s+-a)?)\s*["']?([^\s"'|;&<>]+)/g)) out.push(m[1]!);
+    }
+  }
+  return [...new Set(out)];
 }
 
 /** What a finished agent run of `turnCount` turns wrote, read back: a fresh run and `rescore` read it the same way. */
@@ -193,7 +224,8 @@ export function readAgentRun(runSubdir: string, model: string, turnCount: number
   const outs = names.map((n) => readJson(join(runSubdir, `out${n}.json`)));
   const turns = names.map((n) => ((readJson(join(runSubdir, `said${n}.json`)) ?? []) as string[]).map((s) => s.trim()).filter(Boolean));
   const last = outs.at(-1);
-  const stream = names.map((n) => readText(join(runSubdir, `stream${n}.jsonl`))).join('\n');
+  const streams = names.map((n) => readText(join(runSubdir, `stream${n}.jsonl`)));
+  const stream = streams.join('\n');
   const outside = outsideWorldCommands(stream);
   return {
     runSubdir,
@@ -203,6 +235,7 @@ export function readAgentRun(runSubdir: string, model: string, turnCount: number
     costUsd: outs.reduce((sum, o) => sum + Number(o?.total_cost_usd ?? 0), 0),
     modelUsage: mergeUsage(outs.map(usageOf)),
     loopTurns: loopTurnsOf(stream),
+    wrote: streams.map(filesWrittenOf),
     isError: Boolean(last?.is_error) || exitCode !== 0 || !last,
     // A later turn missing its out.json may only follow an earlier turn's own failure. A run whose
     // agent reached the real CLI answered, but outside the world it is graded in.

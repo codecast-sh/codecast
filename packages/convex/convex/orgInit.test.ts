@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readLanding, sessionUseOf, withLanding } from "./orgInit";
+import { ANALYSIS_CAPS, computeAnalysisActivity, computeAnalysisInputs, computeAnalysisOrg, computeAnalysisSignals, computeAnalysisWork, landingRecordsOf, mergeAnalysisInputs, performApplyDecision, readLanding, readStatedGoals, sessionUseOf, withLanding } from "./orgInit";
 import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // Org init (docs/architecture/org-init.md O1, O2): the analyzer's inputs are
@@ -242,7 +242,7 @@ describe("org.analysisInputs", () => {
     const db = fixtures({
       org_roles: [{ _id: "org_roles_g", user_id: ME, team_id: TEAM, short_id: "or-1", handle: "growth", name: "Growth lead", status: "active", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, created_at: 1, updated_at: 1 }],
       transcripts: [
-        { _id: "transcripts_1", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, title: "Pricing huddle", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary: "Agreed to raise the price.", action_items: ["Me: update the page"], routes: [], last_seq: 3 },
+        { _id: "transcripts_1", short_id: "cl-1", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, title: "Pricing huddle", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary: "Agreed to raise the price.", action_items: ["Me: update the page"], routes: [], last_seq: 3 },
         // A private channel's huddle the caller was not in: not readable.
         { _id: "transcripts_2", room_key: `channel:${PRIV}`, team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - 3 * D, ended_at: NOW - 3 * D + H, title: "Private", participants: [{ id: MATE, name: "Mate" }], summary: "secret", action_items: [], routes: [], last_seq: 3 },
         // A recording its creator never shared, a live call, one outside the window, and one with nothing said.
@@ -252,13 +252,19 @@ describe("org.analysisInputs", () => {
         // A huddle that ended before a word was spoken or written.
         { _id: "transcripts_6", room_key: "channel:chat_channels_1", team_key: TEAM, team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - D, participants: [], routes: [], last_seq: 0 },
         // A short huddle, too little said for a summary: its own lines are read, the ones that decide or ask.
-        { _id: "transcripts_7", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, title: "Quick sync", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary_status: "skipped", routes: [], last_seq: 4 },
+        { _id: "transcripts_7", short_id: "cl-7", room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, title: "Quick sync", participants: [{ id: ME, name: "Me" }, { id: MATE, name: "Mate" }], summary_status: "skipped", routes: [], last_seq: 4 },
       ],
       transcript_segments: [
         { _id: "ts_1", transcript_id: "transcripts_7", seq: 1, speaker_id: ME, speaker_name: "Me", text: "Morning.", t0: 1000, t1: 2000 },
         { _id: "ts_2", transcript_id: "transcripts_7", seq: 2, speaker_id: ME, speaker_name: "Me", text: "Let's drop the ads this month.", t0: 2000, t1: 5000 },
         { _id: "ts_3", transcript_id: "transcripts_7", seq: 3, speaker_id: MATE, speaker_name: "Mate", text: "Can you tell the growth lead?", t0: 6000, t1: 8000 },
         { _id: "ts_4", transcript_id: "transcripts_7", seq: 4, speaker_id: ME, speaker_name: "Me", text: "Sure.", t0: 9000, t1: 9500 },
+        // A summarised call's own words: the summary kept the decision and dropped the number.
+        { _id: "ts_5", transcript_id: "transcripts_1", seq: 1, speaker_id: MATE, speaker_name: "Mate", text: "Our goal is 250 dollars", t0: 1000, t1: 2000 },
+        { _id: "ts_6", transcript_id: "transcripts_1", seq: 2, speaker_id: MATE, speaker_name: "Mate", text: "or less per introduction.", t0: 2000, t1: 3000 },
+        { _id: "ts_7", transcript_id: "transcripts_1", seq: 3, speaker_id: ME, speaker_name: "Me", text: "Fine by me.", t0: 4000, t1: 5000 },
+        // The private huddle states one too: never read.
+        { _id: "ts_8", transcript_id: "transcripts_2", seq: 1, speaker_id: MATE, speaker_name: "Mate", text: "The goal is to sell.", t0: 1000, t1: 2000 },
       ],
       chat_channels: [
         { _id: "chat_channels_1", team_id: TEAM, name: "general", kind: "public", created_by: ME, created_at: 1, updated_at: 1 },
@@ -281,25 +287,35 @@ describe("org.analysisInputs", () => {
         // A private channel the caller is not in, and a direct message: never.
         { _id: "cm_priv", team_id: TEAM, channel_id: PRIV, user_id: MATE, content: "We decided to fire everyone?", created_at: NOW - D },
         { _id: "cm_dm", team_id: TEAM, channel_id: "chat_channels_dm", user_id: MATE, content: "Can you decide?", created_at: NOW - D },
+        // A person states the company's priorities, weeks back; an agent, a private channel and a direct message state goals nobody reads.
+        { _id: "cm_goal", team_id: TEAM, channel_id: "chat_channels_1", user_id: MATE, content: "Core initiatives:\n- Make revenue\n- Grow the funnel", created_at: NOW - 20 * D },
+        { _id: "cm_goal_agent", team_id: TEAM, channel_id: "chat_channels_1", user_id: ME, author_kind: "agent", content: "The goal is inbox zero.", created_at: NOW - 19 * D },
+        { _id: "cm_goal_priv", team_id: TEAM, channel_id: PRIV, user_id: MATE, content: "Our real target is an exit.", created_at: NOW - 18 * D },
+        { _id: "cm_goal_dm", team_id: TEAM, channel_id: "chat_channels_dm", user_id: MATE, content: "My goal is a raise.", created_at: NOW - 18 * D },
       ],
     });
     const r = await computeAnalysisInputs(ctxOf(db), ME as any, TEAM, NOW);
     expect(r.channels.map((c: any) => c.name)).toEqual(["general", "me-mate"]);
     expect(r.said.calls).toEqual([
-      { title: "Quick sync", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, participants: ["Me", "Mate"], summary: null, summary_status: "skipped", action_items: [], lines: [
+      { id: "cl-7", title: "Quick sync", started_at: NOW - 6 * H, ended_at: NOW - 6 * H + 120_000, participants: ["Me", "Mate"], summary: null, summary_status: "skipped", action_items: [], lines: [
         { at: NOW - 6 * H + 1000, by: "Me", line: "Morning. Let's drop the ads this month." },
         { at: NOW - 6 * H + 6000, by: "Mate", line: "Can you tell the growth lead?" },
       ] },
-      { title: "Pricing huddle", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, participants: ["Me", "Mate"], summary: "Agreed to raise the price.", summary_status: null, action_items: ["Me: update the page"] },
+      { id: "cl-1", title: "Pricing huddle", started_at: NOW - 2 * D, ended_at: NOW - 2 * D + H, participants: ["Me", "Mate"], summary: "Agreed to raise the price.", summary_status: null, action_items: ["Me: update the page"] },
     ]);
     expect(r.said.chat).toEqual([
       { channel: "#general", at: NOW - 4 * D, by: "Mate", line: "@growth is on Growth this week", why: ["named"], replies: [] },
       { channel: "#general", at: NOW - 5 * D, by: "Me", line: "We decided to drop the old funnel.", why: ["decided", "asked"], replies: [{ at: NOW - 5 * D + H, by: "Mate", line: "Can you own the migration?" }] },
     ]);
     expect(r.said.truncated).toBe(false);
+    // The goals people stated: the written line first, then the call's own turn, joined, with where to read it.
+    expect(r.said.goals).toEqual({ truncated: false, lines: [
+      { at: NOW - 20 * D, by: "Mate", line: "Core initiatives:\n- Make revenue\n- Grow the funnel", where: "#general" },
+      { at: NOW - 2 * D + 1000, by: "Mate", line: "Our goal is 250 dollars or less per introduction.", where: "cl-1" },
+    ] });
     // A personal workspace reads no team chat and no calls.
     const mine = await computeAnalysisInputs(ctxOf(db), ME as any, undefined, NOW);
-    expect(mine.said).toEqual({ calls: [], chat: [], truncated: false });
+    expect(mine.said).toEqual({ calls: [], chat: [], truncated: false, goals: { lines: [], truncated: false } });
   });
 
   // The reviewer proposes a hire only from what the hire form could carry out (org-hire.md H3).
@@ -460,7 +476,7 @@ describe("org.analysisInputs", () => {
     const org = await computeAnalysisOrg(ctx, ME as any, TEAM, NOW, JSON.parse(JSON.stringify(work.handoff)));
     const activity = await computeAnalysisActivity(ctx, ME as any, TEAM, NOW);
     const landing = await readLanding(ctx, ME as any, TEAM, NOW, activity.repos, landingRecordsOf(activity.activity));
-    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), activity.coverage)).toEqual(whole);
+    expect(mergeAnalysisInputs(ME as any, TEAM, "Acme", work, org, signals, NOW, withLanding(activity.activity, landing), activity.coverage, await readStatedGoals(ctx, ME as any, TEAM, NOW))).toEqual(whole);
     expect(work.handoff.latest_event).toBe(NOW - H);
     expect(Object.keys(whole.truncated).sort()).toEqual(["docs", "insights", "plans", "projects", "tasks", "templates"]);
     // The activity block is its own slice (S9): areas, people and stale lists.

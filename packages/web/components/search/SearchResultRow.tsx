@@ -3,6 +3,7 @@ import { highlightMatch, getSnippet } from "../../lib/searchHighlight";
 import type { SessionSearchRow } from "../../lib/instantSessionSearch";
 import { SessionGlyph } from "../identity";
 import { formatSearchTimestamp } from "../../lib/searchTimestamp";
+import { SearchOrigin } from "./SearchOrigin";
 
 /** One session in the top bar's search results: its face, title and counts,
  *  then up to three matched messages with the query highlighted. */
@@ -41,7 +42,8 @@ export function SearchResultRow({ session, query, selected, onClick, onContextMe
           {formatSearchTimestamp(session.updatedAt)}
         </span>
       </div>
-      <div className={`ml-4 space-y-1 border-l-2 border-sol-border/40 pl-3 ${session.matches.length || session.instantSnippet ? "pb-2" : ""}`}>
+      <div className={`ml-4 space-y-1 border-l-2 border-sol-border/40 pl-3 ${session.matches.length || session.instantSnippet || session.origin || session.workerCount ? "pb-2" : ""}`}>
+        <SearchOrigin row={session} query={query} className="px-2 pt-0.5" />
         {/* No message hits yet (or ever): show where the name
             match landed rather than a bare header row. When the
             content tier lands, its snippets replace this. */}

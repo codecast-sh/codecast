@@ -130,6 +130,11 @@ interface SearchConversation extends SessionPresence {
   matches: SearchMatch[];
   context: ContextMessage[];
   title_match?: boolean;
+  /** What the session began as and was called before, when that answers the
+   *  query and its current title may not. */
+  origin?: { started_as?: string; earlier_titles?: string[] };
+  /** Worker sessions that matched and are folded into this row. */
+  workers?: number;
 }
 
 interface SearchResult {
@@ -438,6 +443,14 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
       const shown = conv.recent_files.slice(0, 3).map((p) => feedFilePath(p, conv.project_path)).join(", ");
       const more = conv.recent_files.length > 3 ? ` +${conv.recent_files.length - 3}` : "";
       lines.push(`${c.dim}edits:${c.reset} ${shown}${c.dim}${more}${c.reset}`);
+    }
+    // A long session drifts: say what it was before its title moved on.
+    if (conv.origin?.earlier_titles?.length) {
+      lines.push(`${c.dim}earlier titled:${c.reset} ${conv.origin.earlier_titles.join(" · ")}`);
+    }
+    if (conv.origin?.started_as) lines.push(`${c.dim}began as:${c.reset} ${conv.origin.started_as}`);
+    if (conv.workers) {
+      lines.push(`${c.dim}${conv.workers} worker session${conv.workers === 1 ? "" : "s"} of this one matched too${c.reset}`);
     }
     lines.push("");
 

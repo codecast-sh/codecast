@@ -259,6 +259,13 @@ export function repoObjectRoute(id: string): string | null {
 // conversation's repository or prints the label back unchanged, so a surface
 // with no repository never alters the text.
 //
+// A lone `#N` is weaker evidence than `PR N`: prose uses it for ranks,
+// positions and counts too ("moved from #10 to #2"). Its payload is marked
+// bare (`pr:?#N|<label>`), and the renderer completes it only when the
+// conversation already knows that pull request: linked to the session, made
+// by its shell calls, or named outright elsewhere in it. Otherwise it stays
+// the text it was written as.
+//
 // Group 1 is the words in front of the number (kept as prose), group 2 the
 // number. A `#` glued to a word, a path or an entity (`page.html#12`,
 // `&#123;`) is not a reference; `owner/repo#12` is matched first by the bare
@@ -280,7 +287,7 @@ export function contextualPrRefRegex(): RegExp {
   return new RegExp(`(\\bPRs?\\s+#?|\\bpull requests?\\s+#?|(?<![\\w/&#])#)(\\d{1,6})\\b((?:${PR_LIST_SEP_SOURCE}\\d{1,6}\\b)*)`, "gi");
 }
 
-export type ContextualPrToken = { text: string } | { number: number; label: string };
+export type ContextualPrToken = { text: string } | { number: number; label: string; bare: boolean };
 
 /**
  * The tokens of one contextualPrRefRegex match: prose to keep as written, and
@@ -289,8 +296,9 @@ export type ContextualPrToken = { text: string } | { number: number; label: stri
  * third — the list that followed the first number.
  */
 export function splitContextualPrRefs(lead: string, digits: string, tail: string): ContextualPrToken[] {
+  const bare = lead === "#";
   const numberToken = (prefix: string, n: string): ContextualPrToken =>
-    ({ number: Number(n), label: prefix.endsWith("#") ? `#${n}` : n });
+    ({ number: Number(n), label: prefix.endsWith("#") ? `#${n}` : n, bare });
   const tokens: ContextualPrToken[] = [];
   if (lead !== "#") tokens.push({ text: lead });
   tokens.push(numberToken(lead, digits));
@@ -310,15 +318,34 @@ export function splitContextualPrRefs(lead: string, digits: string, tail: string
   return tokens;
 }
 
-/** The link-text payload for a contextual reference: `pr:#3263|<label as written>`. */
-export function contextualPrRefPayload(number: number, label: string): string {
-  return `${CONTEXTUAL_PR_REF_PREFIX}#${number}|${label}`;
+/** The link-text payload for a contextual reference: `pr:#3263|<label as written>`, `pr:?#3263|…` when bare. */
+export function contextualPrRefPayload(number: number, label: string, bare = false): string {
+  return `${CONTEXTUAL_PR_REF_PREFIX}${bare ? "?" : ""}#${number}|${label}`;
 }
 
-/** Reads a `pr:#N|label` payload back; null for anything else. */
-export function parseContextualPrRef(payload: string | undefined | null): { number: number; label: string } | null {
-  const m = /^pr:#(\d{1,6})\|(.*)$/.exec((payload ?? "").trim());
-  return m ? { number: Number(m[1]), label: m[2] } : null;
+/** Reads a `pr:#N|label` / `pr:?#N|label` payload back; null for anything else. */
+export function parseContextualPrRef(payload: string | undefined | null): { number: number; label: string; bare: boolean } | null {
+  const m = /^pr:(\?)?#(\d{1,6})\|(.*)$/.exec((payload ?? "").trim());
+  return m ? { number: Number(m[2]), label: m[3], bare: !!m[1] } : null;
+}
+
+/**
+ * The pull requests a piece of prose names beyond doubt: `PR 3263`, `pull
+ * request 12`, and GitHub pull request links, as repo object ids. A bare
+ * number is completed from `repository`; a lone `#N` is left out, since it is
+ * what this evidence exists to vouch for.
+ */
+export function namedPullRequestIds(text: string, repository: string): string[] {
+  const ids: string[] = [];
+  for (const m of text.matchAll(contextualPrRefRegex())) {
+    for (const token of splitContextualPrRefs(m[1], m[2], m[3] ?? "")) {
+      if ("number" in token && !token.bare) ids.push(repoObjectId({ type: "pr", repository, number: token.number }));
+    }
+  }
+  for (const m of text.matchAll(/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/gi)) {
+    ids.push(repoObjectId({ type: "pr", repository: m[1], number: Number(m[2]) }));
+  }
+  return ids;
 }
 
 function isGitHubHost(host: string): boolean {

@@ -11,13 +11,16 @@
 //
 // Editions are upserted per day and never deleted, so their feed only adds:
 // an answer that lacks one (a team-wide read stops at a row cap) removes
-// nothing from the cache.
+// nothing from the cache. One more editions feed reads every repository's last
+// 14 days up to today, so the repository list and the default repository do
+// not depend on which day is on screen.
+// In week mode a last feed reads the week edition, keyed by its ISO week.
 //
 // Readers subscribe to signatures of the fields the page renders. Story rows
 // change only when a rebuild writes them, so the lists stay still between
 // rebuilds whatever else moves in the store.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { EditionRow, LiveRow, StoryRow, WorksRow } from "@codecast/convex/convex/changesQueries";
+import type { EditionRow, LiveRow, StoryRow, StorySessionRow, WorksRow } from "@codecast/convex/convex/changesQueries";
 import { addDays } from "@codecast/convex/convex/lib/teamDay";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { useCallback, useMemo } from "react";
@@ -29,7 +32,7 @@ import { useCommits } from "./useSyncTimeline";
 
 const api = _api as any;
 
-export type { EditionRow, LiveRow, StoryRow, WorksRow };
+export type { EditionRow, LiveRow, StoryRow, StorySessionRow, WorksRow };
 
 /** Days fed on each side of the viewed day. */
 export const CHANGES_WINDOW_RADIUS = 3;
@@ -39,6 +42,19 @@ export type DateWindow = { from_date: string; to_date: string };
 /** The fed window around a YYYY-MM-DD day. */
 export function changesWindow(date: string): DateWindow {
   return { from_date: addDays(date, -CHANGES_WINDOW_RADIUS), to_date: addDays(date, CHANGES_WINDOW_RADIUS) };
+}
+
+/** A week edition's window: the one ISO week (`2026-W40`), as listEditions keys week rows. */
+export function weekWindow(week: string): DateWindow {
+  return { from_date: week, to_date: week };
+}
+
+/** Days back from today whose editions name the team's active repositories (spec 4.1). */
+export const CHANGES_REPO_DAYS = 14;
+
+/** The last CHANGES_REPO_DAYS days ending today, whatever day is on screen. */
+export function recentWindow(today: string): DateWindow {
+  return { from_date: addDays(today, -(CHANGES_REPO_DAYS - 1)), to_date: today };
 }
 
 /** The repository as the server stores it, so store rows compare equal. */
@@ -80,14 +96,26 @@ export type ChangesView = {
   repository?: string;
   /** The viewed day, YYYY-MM-DD in the team's day. */
   date: string | undefined;
+  /** The team's today. With it, every repository's editions of the last
+   *  CHANGES_REPO_DAYS feed the repository list, whichever day is viewed. */
+  today?: string;
+  /** In week mode, the ISO week (`2026-W40`) whose week edition is fed. */
+  week?: string;
 };
 
 export type ChangesFeedState = {
   /** The viewed day's stories and the window's editions have answered. With
    *  rows in the store, `false` is the ordinary paint-from-cache state. */
   ready: boolean;
+  /** Every story of the fed window and its editions have answered: in week
+   *  mode the window is the week, so this is the week's `ready`. */
+  windowReady: boolean;
   /** The server refused the caller: not a member, signed out, or Changes is off for the team. */
   refused: boolean;
+  /** The team-wide recent editions have answered (never, without `today`). */
+  recentReady: boolean;
+  /** The live strip has answered (never, without a repository). */
+  liveReady: boolean;
   error?: Error;
 };
 
@@ -99,6 +127,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
   const teamId = view.teamId && isConvexId(view.teamId) ? view.teamId : undefined;
   const repository = canonical(view.repository);
   const date = view.date;
+  const today = view.today;
+  const week = view.week;
 
   const feeds = useMemo(() => {
     if (!teamId || !date) return null;
@@ -116,27 +146,46 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
         opts: { select: selectStories, syncOpts: storySyncOpts(scope, around, date) },
       },
       editions: { team_id: teamId, ...repoArg, scope: "day", ...around },
+      recent: today ? { team_id: teamId, scope: "day", ...recentWindow(today) } : "skip",
+      week: week ? { team_id: teamId, ...repoArg, scope: "week", ...weekWindow(week) } : "skip",
       live: repository ? { team_id: teamId, repository } : "skip",
       works: { team_id: teamId, ...repoArg },
     } as const;
-  }, [teamId, repository, date]);
+  }, [teamId, repository, date, today, week]);
 
   const day = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.day.args ?? "skip", feeds?.day.opts);
   const around = useSyncCollection("changeStories", api.changesQueries.listStories, feeds?.around.args ?? "skip", feeds?.around.opts);
   const editions = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.editions ?? "skip");
+  const recent = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.recent ?? "skip");
+  const weekEdition = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.week ?? "skip");
   const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live ?? "skip");
   const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works ?? "skip");
 
   return {
     ready: day.ready && editions.ready,
+    windowReady: around.ready && editions.ready,
     refused: day.refused || editions.refused,
-    error: day.error ?? editions.error ?? around.error ?? live.error ?? works.error,
+    recentReady: recent.ready,
+    liveReady: live.ready,
+    error: day.error ?? editions.error ?? around.error ?? recent.error ?? weekEdition.error ?? live.error ?? works.error,
   };
 }
 
 /** A story's commits into the `commits` collection, for its evidence drawer. */
 export function useSyncStoryEvidence(storyId: string | undefined) {
   return useSyncCollection("commits", api.changesQueries.storyEvidence, entityIdArgs("story_id", storyId));
+}
+
+/** Rows of one story's sessions: each storySessions answer is the story's whole
+ *  visible set, so a cached row it lacks (a session made private, an owner who
+ *  narrowed or left) is dropped from memory and disk. Not pruneAbsentScope,
+ *  whose tombstone would keep the session out for good once shared again. */
+export const storySessionsScope = (storyId: string) => (row: StorySessionRow) => String(row.story_id) === storyId;
+
+/** The sessions behind a story (headline and gated turns) into `changeStorySessions`, for its evidence drawer. */
+export function useSyncStorySessions(storyId: string | undefined) {
+  const opts = useMemo(() => (storyId ? { dropAbsent: storySessionsScope(storyId) } : undefined), [storyId]);
+  return useSyncCollection("changeStorySessions", api.changesQueries.storySessions, entityIdArgs("story_id", storyId), opts);
 }
 
 // ── Readers ──────────────────────────────────────────────────────────────
@@ -156,6 +205,7 @@ const editionSig = (e: EditionRow) =>
     e.headline ?? "", e.status ?? "", e.inputs_hash ?? "", e.narrative, e.lead_story_key ?? "", e.generated_at,
     (e.section_order ?? []).join(","), (e.brief_story_keys ?? []).join(","), JSON.stringify(e.stats ?? null),
     (e.releases ?? []).map((r) => `${r.surface}@${r.version ?? r.sha}`).join(","), e.dirty_since ?? "",
+    (e.top_story_keys ?? []).join(","), JSON.stringify(e.area_totals ?? null), e.capped_at ?? "",
   ].join("|");
 
 const liveSig = (l: LiveRow) => `${l.version ?? ""}|${l.sha}|${l.at}|${l.kind}|${l.waiting}|${l.waiting_exact ? 1 : 0}`;
@@ -168,6 +218,8 @@ const worksSig = (w: WorksRow) =>
       : `${w.headline}|${w.at}`;
 
 /** Newest day first, then the edition's ranking inputs: importance, then size. */
+const storySessionSig = (r: StorySessionRow) => `${r.headline ?? ""}|${r.summary ?? ""}|${JSON.stringify(r.turns)}`;
+
 const byDayThenWeight = (a: StoryRow, b: StoryRow) =>
   b.date.localeCompare(a.date) ||
   b.importance - a.importance ||
@@ -220,6 +272,22 @@ export function useChangeLive(teamId: string | undefined, repository: string | u
 export function useChangeWorks(teamId: string | undefined): WorksRow[] {
   const where = useCallback((w: WorksRow) => !!teamId && String(w.team_id) === teamId, [teamId]);
   return useCollectionRows<WorksRow>("changeWorks", { where, sig: worksSig, sort: byWorksGroup });
+}
+
+/** The sessions behind a story, in the story's own order. Only ids the story
+ *  still names are read, so a session the gate dropped at the last rebuild
+ *  leaves the drawer even while its cached row lingers. */
+export function useStorySessions(story: Pick<StoryRow, "_id" | "conversation_ids"> | undefined): StorySessionRow[] {
+  const storyId = story ? String(story._id) : "";
+  const ids = story?.conversation_ids.map(String).join(",") ?? "";
+  const { where, sort } = useMemo(() => {
+    const order = new Map((ids ? ids.split(",") : []).map((id, i) => [id, i]));
+    return {
+      where: (r: StorySessionRow) => String(r.story_id) === storyId && order.has(String(r.conversation_id)),
+      sort: (a: StorySessionRow, b: StorySessionRow) => order.get(String(a.conversation_id))! - order.get(String(b.conversation_id))!,
+    };
+  }, [storyId, ids]);
+  return useCollectionRows<StorySessionRow>("changeStorySessions", { where, sig: storySessionSig, sort });
 }
 
 /** The story's commit rows from the `commits` collection, newest first. */

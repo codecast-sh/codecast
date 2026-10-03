@@ -170,6 +170,10 @@ declare global {
       // answer and the recording are the web layer's. All absent on older
       // builds — gate on them, and the feature simply does not exist there.
       onMeetingDetected?: (cb: (offer: MeetingOffer) => void) => void;
+      // Edit > Undo/Redo (or its ⌘Z) with focus outside a text field: the
+      // menu takes the key before the page, so the shell hands the press to
+      // the app's undo (packages/electron/editUndo.js). Absent on older builds.
+      onAppEditCommand?: (cb: (command: "undo" | "redo") => void) => () => void;
       getMeetingDetect?: () => Promise<MeetingDetectConfig>;
       setMeetingDetect?: (patch: {
         mode?: MeetingDetectMode;

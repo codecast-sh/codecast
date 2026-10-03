@@ -104,6 +104,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   upsertAgentChain: CREATE,
 
   // Deletes
+  deleteCallRecording: DELETE,
+  admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
+  denyGuestKnock: never("door: the guest was told no; they can ask again"),
+  removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),
   deleteComment: DELETE,
   deleteSavedView: DELETE,
   deleteSession: DELETE,
@@ -137,6 +141,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setChatSlackMember: SETTINGS,
   setCloudSessionMode: SETTINGS,
   setCloudSessionSync: SETTINGS,
+  adoptTimezone: never("internal: fills an unset timezone from the browser once, never a gesture"),
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
@@ -165,6 +170,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
 
   // Sharing
+  setCallShareVideo: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setTeamMembershipVisibility: SHARING,

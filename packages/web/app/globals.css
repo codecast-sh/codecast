@@ -1099,6 +1099,22 @@ html[data-idle] *::after {
   background: var(--beacon);
   animation: ccBeaconDot 2s ease-in-out infinite;
 }
+/* The message rail's "you are here" tick: brighter, longer, and breathing a
+   soft glow so it reads at a glance among the dim ticks. */
+.cc-rail-here {
+  width: 1.5rem;
+  height: 3px;
+  background: var(--sol-text);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--sol-text) 55%, transparent);
+  animation: ccRailHere 2.4s ease-in-out infinite;
+}
+@keyframes ccRailHere {
+  0%, 100% { opacity: 0.85; box-shadow: 0 0 3px color-mix(in srgb, var(--sol-text) 35%, transparent); }
+  50% { opacity: 1; box-shadow: 0 0 8px color-mix(in srgb, var(--sol-text) 65%, transparent); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-rail-here { animation: none; }
+}
 @keyframes ccBeaconDot {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -3953,7 +3969,7 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-cc-topbar-search] input {
-  height: 32px;
+  height: 28px;
   min-height: 0;
   border-color: transparent;
   border-radius: 9px;
@@ -4004,6 +4020,17 @@ pre[class*="language-"] {
 .minimal-style [data-cc-topbar] .people-bar {
   gap: 2px;
   padding-inline: 3px;
+}
+
+/* Below 1024px the row cannot hold faces, status and controls at once. The
+   people row steps aside unless something is live on it (a call, a ring),
+   and the status tray keeps only an alert, as Minimal does at every width. */
+@media (max-width: 1023px) {
+  [data-cc-topbar] .people-bar:not([data-live], [data-floating]),
+  [data-cc-topbar-tray]:not(:has([data-topbar-chip="alert"])),
+  [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])) {
+    display: none !important;
+  }
 }
 
 /* Text fields show focus with their caret and container, never a ring. */
@@ -4603,8 +4630,8 @@ pre[class*="language-"] {
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
 .minimal-style [data-cc-topbar] .people-bar:not([data-live], [data-floating]),
-.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child,
-.minimal-style [data-cc-topbar-actions] > [data-cc-topbar-group]:first-child + div,
+.minimal-style [data-cc-topbar-tray]:not(:has([data-topbar-chip="alert"])),
+.minimal-style [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])),
 .minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])) {
   display: none !important;
 }
@@ -4619,29 +4646,29 @@ pre[class*="language-"] {
   color: var(--sol-text-muted);
 }
 
-/* What this session belongs to: the trigger that runs it, its plan, its
-   workflow. One quiet line each, in the page's own ink instead of an accent
-   per kind. The trigger's run history rail opens with the strip, not before. */
-.minimal-style [data-cc-context-panel] {
-  border-bottom: 1px solid var(--cc-panel-rule);
+/* What this session belongs to: the task it owns, the trigger that runs it,
+   its plan, its workflow (components/ContextRail). One quiet row of chips in
+   the page's own ink instead of an accent per kind. */
+/* A rail with one item gives it the whole row and its full fields; items
+   that share the row drop theirs (components/ContextRail). */
+[data-cc-context-row] > div:has(> :nth-child(2)) [data-rail-full] {
+  display: none;
+}
+[data-cc-context-row] > div > :only-child > [data-cc-rail-item],
+[data-cc-context-row] > div > [data-cc-rail-item]:only-child {
+  flex: 1 1 auto;
+  max-width: none;
+}
+.minimal-style [data-cc-context-row] {
+  border-bottom-color: var(--cc-panel-rule);
   background: transparent;
   font-family: var(--font-ui);
 }
-.minimal-style [data-cc-context-panel] > button {
-  padding: 6px 16px;
-  color: var(--sol-text-muted);
-}
-.minimal-style [data-cc-context-panel] > button:hover {
-  background: var(--sol-bg-alt);
-}
-.minimal-style [data-cc-context-panel] > button :is(.text-sol-cyan, .text-sol-orange, .text-sol-violet, .text-sol-green):not([class*="border"]) {
+.minimal-style [data-cc-context-panel] button :is(.text-sol-cyan, .text-sol-orange, .text-sol-violet, .text-sol-green):not([class*="border"]) {
   color: var(--sol-text-secondary);
 }
 .minimal-style [data-cc-context-panel] > button > svg:first-child {
   color: var(--sol-text-dim);
-}
-.minimal-style [data-cc-context-panel]:not(:has(> button ~ div:not([data-cc-context-rail]))) > [data-cc-context-rail] {
-  display: none;
 }
 
 /* One column: the prose, your bubbles, the pinned bubble, the thread state and
@@ -4794,13 +4821,8 @@ pre[class*="language-"] {
   font-size: var(--t-mark);
   font-weight: 500;
 }
-.minimal-style [data-cc-context-panel] > button {
-  min-height: 34px;
-  padding: 0 var(--cc-inset);
-  font-size: var(--t-sub);
-}
-.minimal-style [data-cc-context-panel] > button .font-mono {
-  font-size: var(--t-mark);
+.minimal-style [data-cc-context-row] > div:first-child {
+  padding-inline: var(--cc-inset);
 }
 
 /* Top bar and tab strip */
@@ -5159,7 +5181,8 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-cc-tech],
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-feed-card][data-status="completed"],
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-wf-summary]:has(> .line-clamp-2),
-.minimal-style [data-cc-conversation]:not([data-cc-context]) [data-cc-context-panel] {
+.minimal-style [data-cc-conversation]:not([data-cc-context]) [data-cc-context-panel],
+.minimal-style [data-cc-conversation]:not([data-cc-context]) [data-cc-context-row]:not(:has([data-work-unit])) {
   display: none !important;
 }
 
@@ -6445,6 +6468,12 @@ mark.search-hit[data-search-active] {
   letter-spacing: -0.02em;
   font-variant-ligatures: none;
   text-wrap: balance;
+  /* A height guard: a headline is one sentence, and never more than three lines of the page. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .chg-rule {
   height: 3px;
@@ -6452,14 +6481,29 @@ mark.search-hit[data-search-active] {
   border-bottom: 1px solid color-mix(in srgb, var(--sol-text) 70%, transparent);
 }
 .chg-grid { display: grid; grid-template-columns: minmax(0, 1fr); row-gap: 28px; }
+/* No region stretches to the tallest in its row: the works column runs long,
+   and a stretched main cell opens a hole under its last child. */
+.chg-grid > * { align-self: start; }
 .chg-sections { display: grid; grid-template-columns: minmax(0, 1fr); gap: 24px 32px; grid-auto-flow: row; align-items: start; }
 .chg-works-inner { position: sticky; top: 16px; }
+@container changes (max-width: 760px) {
+  .chg-headline { font-size: 24px; line-height: 1.2; }
+}
 @container changes (min-width: 1100px) {
-  .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: 32px; }
+  /* Head, main column, In brief. The last row takes whatever height the
+     works column needs past the other two, so In brief stays under the
+     sections however long the works run. */
+  .chg-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); grid-template-rows: auto auto 1fr; column-gap: 32px; }
   .chg-span-12 { grid-column: 1 / -1; }
   .chg-span-8 { grid-column: 1 / span 8; }
-  .chg-works { grid-column: 9 / span 4; grid-row: 2 / span 2; }
-  .chg-sections { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  /* Beside the main column and In brief under it, so no other region's
+     presence moves it. Sticky, and never taller than the pane. */
+  .chg-works { grid-column: 9 / span 4; grid-row: 2 / span 2; align-self: stretch; }
+  .chg-works-inner { max-height: calc(100cqh - 32px); overflow-y: auto; }
+  /* One column of areas while the main column is a reading width: a row needs
+     about 30rem for its headline to read in two lines. Areas pair up only
+     where two such columns fit. */
+  .chg-sections { grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); }
   .chg-standfirst { max-width: calc(8 / 12 * 100%); }
 }
 /* The release stamp: a perforated line through a centred pill. */
@@ -6485,7 +6529,15 @@ mark.search-hit[data-search-active] {
   animation: ccShimmer 2.4s linear infinite;
 }
 .chg-story[data-focused="true"] { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
-.chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
+/* A row is one control: the whole of it answers the pointer. */
+.chg-row { cursor: pointer; }
+.chg-row:not([data-focused="true"]):hover { background: color-mix(in srgb, var(--sol-text) 3%, transparent); transition: background-color 120ms; }
+/* References on the page (sessions, pull requests) are quiet ink, not the
+   loudest thing on it; they still answer as links on hover and focus. */
+.chg-root .entity-ref { background: transparent; color: color-mix(in srgb, var(--sol-text) 62%, transparent); font-weight: 400; }
+.chg-root .entity-ref:hover, .chg-root .entity-ref:focus-visible { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.chg-story { scroll-margin: 24px 0 96px; }
+.chg-story:has(:focus-visible), .chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
 /* The open drawer's height animation, opening only: a drawer that closes goes
    at once, so the story that opens keeps its place on screen. */
 @keyframes chgOpen { from { height: 0; } to { height: var(--radix-accordion-content-height); } }
@@ -6507,4 +6559,5 @@ mark.search-hit[data-search-active] {
 .chg-pulse { animation: chgPulse 700ms ease-out 1; }
 @media (prefers-reduced-motion: reduce) {
   .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] { animation: none; }
+  .chg-row:not([data-focused="true"]):hover { transition: none; }
 }

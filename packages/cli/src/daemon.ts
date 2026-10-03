@@ -4,6 +4,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
 import { pairDeliveryAcks } from "@codecast/shared/contracts";
+import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
@@ -310,13 +311,15 @@ import { attachWatchServer } from "./browser/watchServer.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { handleNotificationHttp } from "./notificationDelivery.js";
 import { handleFsBrowseHttp } from "./fs/browseHttp.js";
+import { handleMemoryHttp } from "./memory/memoryServer.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { atomicWriteFile } from "./atomicWrite.js";
-import { AwakeIdleClock, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
+import { collectMachineResources } from "./systemResources.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -2101,13 +2104,11 @@ function sendAgentStatus(
       conversationId, status, clientTs, payload.permissionMode, payload.openTasks, presumed, opts?.hibernatedAt, settle,
     );
     if (acknowledged && payload.openTasks !== undefined) {
-      lastOpenTasksSentAt.set(sessionId, Date.now());
       lastOpenTasksSentJson.set(sessionId, JSON.stringify(payload.openTasks));
     }
     return acknowledged;
   }, "status", payload);
   if (withTasks) {
-    lastOpenTasksSentAt.set(sessionId, Date.now());
     lastOpenTasksSentJson.set(sessionId, JSON.stringify(openTasks));
   }
 }
@@ -2115,7 +2116,6 @@ function sendAgentStatus(
 // One-shot handoff from resolveTurnEndStatus / the reconciles to sendAgentStatus:
 // the verified open tasks behind the verdict about to be sent.
 const pendingOpenTaskReports = new Map<string, OpenTaskReport[]>();
-const lastOpenTasksSentAt = new Map<string, number>();
 const lastOpenTasksSentJson = new Map<string, string>();
 // True when the report a settle just computed differs from the last one sent
 // for this session — a settle whose STATUS is unchanged (idle → idle again,
@@ -2136,13 +2136,6 @@ export function hasOpenBackgroundWork(sessionId: string): boolean {
   return reported !== undefined && reported !== "[]";
 }
 const SETTLE_STATUSES_WITH_TASKS: ReadonlySet<string> = new Set(["idle", "waiting", "dormant", "done"]);
-// A parked "waiting" re-publishes its (re-verified) tasks this often so the
-// server's report stays fresh enough to vouch for the status past the
-// quiet-time decay (OPEN_TASKS_FRESH_MS is 10 min; the reconciles run ~90s).
-const OPEN_TASKS_REFRESH_MS = 4 * 60_000;
-export function openTasksRefreshDue(status: AgentStatus | undefined, taskCount: number, lastSentAt: number | undefined, now: number): boolean {
-  return (status === "waiting" || status === "dormant") && taskCount > 0 && now - (lastSentAt ?? 0) >= OPEN_TASKS_REFRESH_MS;
-}
 
 // Log the status carried on a heartbeat. Throttled per-session to once every
 // 5 minutes for same-status heartbeats; always logs on status change. The
@@ -2453,6 +2446,7 @@ function startHookServer(): http.Server {
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
     if (handleNotificationHttp(req, res, terminalServerOptions())) return;
     if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
+    if (handleMemoryHttp(req, res, terminalServerOptions())) return;
 
     res.writeHead(404);
     res.end();
@@ -15249,10 +15243,9 @@ function reconcileStatusFromPane(
   // turn whose hook was lost still lands on its declared / inferred status.
   if (target === "idle") target = resolveTurnEndStatus(sessionId);
   if (target === stored) {
-    // Unchanged status: send only to publish a report that moved, or the
-    // periodic re-publish that keeps a "waiting" vouched for; otherwise
-    // nothing.
-    if (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, pendingOpenTaskReports.get(sessionId)?.length ?? 0, lastOpenTasksSentAt.get(sessionId), Date.now())) {
+    // Unchanged status: send only to publish a report that moved; otherwise
+    // nothing (the heartbeat keeps an unchanged report vouched for).
+    if (pendingOpenTasksChanged(sessionId)) {
       sendAgentStatus(syncService, conversationId, sessionId, target);
     } else {
       pendingOpenTaskReports.delete(sessionId);
@@ -20118,19 +20111,15 @@ function ensureHeartbeatFlushLoop(): void {
 // One item's failure is logged and the pool moves on: a fleet pass must not
 // stop at its first bad session.
 export async function runBounded<T>(items: T[], concurrency: number, fn: (item: T) => Promise<void>, label = "bounded worker"): Promise<void> {
-  let idx = 0;
   const describe = (item: T): string => (typeof item === "string" ? item : JSON.stringify(item)?.slice(0, 200) ?? String(item));
-  const worker = async () => {
-    while (idx < items.length) {
-      const item = items[idx++];
-      try {
-        await fn(item);
-      } catch (err) {
-        log(`${label} failed for ${describe(item)}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+  // One failed item is logged and the rest still run.
+  await mapLimit(items, concurrency, async (item) => {
+    try {
+      await fn(item);
+    } catch (err) {
+      log(`${label} failed for ${describe(item)}: ${err instanceof Error ? err.message : String(err)}`);
     }
-  };
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
+  });
 }
 
 // Deterministically place a session in one of `mod` buckets — used to spread the
@@ -22327,12 +22316,10 @@ export async function reconcileStatusFromTranscript(sessionId: string, syncServi
   // is on the table (same gate as the task scan).
   const declared = needsTaskScan || reconciledStatus(stored, turn) === "idle" ? declaredSettleVerdict(sessionId) : null;
   const corrected = reconciledStatusWithTasks(stored, turn, hasOpenTasks, declared);
-  // A parked "waiting" that still checks out re-publishes its tasks on a slow
-  // cadence so the server's report keeps vouching for it (see
-  // OPEN_TASKS_REFRESH_MS); nothing else about the status changes.
+  // A parked "waiting" whose re-verified tasks moved re-publishes them; an
+  // unchanged report stays vouched for by the heartbeat.
   if (needsTaskScan) pendingOpenTaskReports.set(sessionId, toOpenTaskReports(openTasks));
-  const refresh = !corrected && needsTaskScan &&
-    (pendingOpenTasksChanged(sessionId) || openTasksRefreshDue(stored, openTasks.length, lastOpenTasksSentAt.get(sessionId), Date.now()));
+  const refresh = !corrected && needsTaskScan && pendingOpenTasksChanged(sessionId);
   if (!corrected && !refresh) { pendingOpenTaskReports.delete(sessionId); return; }
   // Only now (a correction is warranted) pay the conversation-cache read.
   const conversationId = readConversationCache()[sessionId];
@@ -23095,9 +23082,19 @@ export function getSessionAwakeIdleMs(sessionId: string): number {
   return sessionAwakeIdleMs.get(sessionId);
 }
 
+let resourceCollectionInFlight = false;
+
 async function collectResourceSnapshot(): Promise<void> {
-  if (process.platform !== "darwin") return;
-  if (sessionProcessCache.size === 0) return;
+  if (resourceCollectionInFlight || !["darwin", "linux"].includes(process.platform)) return;
+  resourceCollectionInFlight = true;
+  try {
+    await collectResourceSnapshotNow();
+  } finally {
+    resourceCollectionInFlight = false;
+  }
+}
+
+async function collectResourceSnapshotNow(): Promise<void> {
 
   // Sessions whose cached pid is borrowed rather than owned (a Codex subagent
   // thread shares its parent's process): they must not be credited with a subtree
@@ -23110,7 +23107,18 @@ async function collectResourceSnapshot(): Promise<void> {
   for (const [sessionId, info] of sessionProcessCache) sessionPids.set(sessionId, info.pid);
 
   try {
-    const resources = await collectSessionResources(sessionPids, sharedPidSessions);
+    const collectionStartedAt = Date.now();
+    const processSnapshot = await captureProcessSnapshot().catch(err => {
+      log(`[RESOURCES] Process details unavailable: ${String(err)}`, "debug");
+      return undefined;
+    });
+    const machine = await collectMachineResources(deviceId(), processSnapshot, sessionPids);
+    machine.collectionDurationMs = Date.now() - collectionStartedAt;
+    const machineReport = syncServiceRef
+      ? syncServiceRef.reportMachineResources(machine).catch(err => log(`[RESOURCES] Machine report failed: ${String(err)}`, "debug"))
+      : Promise.resolve();
+    if (!processSnapshot) { await machineReport; return; }
+    const resources = await collectSessionResources(sessionPids, sharedPidSessions, processSnapshot);
     latestSessionResources.clear();
     for (const [sessionId, r] of resources) {
       latestSessionResources.set(sessionId, r);
@@ -23193,6 +23201,8 @@ async function collectResourceSnapshot(): Promise<void> {
         ).catch(() => {});
       }, "Metrics worker");
     }
+
+    await machineReport;
 
     if (resources.size > 0) {
       log(`[RESOURCES] metrics reported=${metricsReported} skipped=${metricsSkipped} (${resources.size} sessions)`);

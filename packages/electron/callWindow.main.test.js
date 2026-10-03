@@ -25,6 +25,8 @@ test("the window is born frameless and see-through, whatever size it opens in", 
   assert.equal(win.options.transparent, true);
   assert.equal(win.options.backgroundColor, "#00000000");
   assert.equal(win.options.hasShadow, false);
+  // A press on the float while another app is in front reaches the faces.
+  assert.equal(win.options.acceptFirstMouse, true);
   // No traffic lights to sit under, and no OS title bar: the stage's own header
   // row is the drag surface and its own button closes the window.
   assert.equal(win.options.titleBarStyle, undefined);
@@ -51,7 +53,7 @@ test("the float sits over the work, lets the mouse through and cannot be dragged
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
   rig.handlers.get("set-call-window-size")(sender, "float");
-  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
   assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
@@ -307,7 +309,7 @@ test("an opener may ask for a size, and the window is born in it", () => {
   rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { mic: true, size: "float" });
   const win = rig.windows[rig.windows.length - 1];
   assert.match(win.last("loadURL")[0], /size=float/);
-  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.equal(readSettings().callPanelWindow.size, "float");
   // Asked again on the window that exists, the shape changes in place.
   rig.handlers.get("open-call-panel")(rig.event(), "dm:a:b", { size: "panel" });

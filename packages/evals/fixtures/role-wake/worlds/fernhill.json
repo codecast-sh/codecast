@@ -28,7 +28,8 @@
       "argv": [
         "sessions"
       ],
-      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans"
+      "out": "Sessions · you\nneeds input 1  ·  working 1\n\nNeeds input (1)\n  jx7ref2  Regenerate the webhooks reference   asks whether to drop the v1 events table (sd-55)\nWorking (1)\n  jx7bil3  Rewrite the billing page for the new plans",
+      "prefix": true
     },
     {
       "argv": [
@@ -172,7 +173,8 @@
         "search",
         "webhooks"
       ],
-      "out": "No messages match \"webhooks\"."
+      "out": "No messages match \"webhooks\".",
+      "prefix": true
     },
     {
       "argv": [
@@ -198,7 +200,8 @@
         "-q",
         "billing"
       ],
-      "out": "  ct-418  backlog  Billing page still describes the old plans  · docs"
+      "out": "  ct-418  backlog  Billing page still describes the old plans  · docs",
+      "prefix": true
     },
     {
       "argv": [
@@ -358,6 +361,102 @@
         "ls"
       ],
       "out": "No open pull requests.",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "initiative",
+        "ls"
+      ],
+      "out": "No initiatives yet. Create one with: cast initiative create \"Title\" --owner @role --project <ref>",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "initiative",
+        "ls",
+        "--json"
+      ],
+      "out": "[]",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "sessions",
+        "-q"
+      ],
+      "out": "error: unknown option '-q'",
+      "exit": 1,
+      "prefix": true
+    },
+    {
+      "argv": [
+        "sessions",
+        "-s"
+      ],
+      "out": "error: unknown option '-s'",
+      "exit": 1,
+      "prefix": true
+    },
+    {
+      "argv": [
+        "plan",
+        "ls",
+        "-q",
+        "webhooks"
+      ],
+      "out": "No plans match \"webhooks\".",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "chat",
+        "search",
+        "webhooks",
+        "reference"
+      ],
+      "out": "No messages match \"webhooks reference\".",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "feed"
+      ],
+      "out": "Recent conversations (2)\n\n── Regenerate the webhooks reference ───────────────────────\n   jx7ref2 | ● needs input | 2h ago | 38 msgs | docs\n\n     1: [user] Regenerate the webhooks section from the schema.\n       ⋮\n     38: [assistant] Six customer guides still link to the v1 events table. Dropping it needs your call: sd-55.\n\n── Rewrite the billing page for the new plans ──────────────\n   jx7bil3 | ○ working | 20m ago | 24 msgs | docs\n\n     1: [user] Rewrite the billing page for the new plans.\n       ⋮\n     24: [assistant] Opening the pull request once the discount matches.",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "stack",
+        "ls"
+      ],
+      "out": "No decision stacks. Create one: cast stack create \"<title>\" [--policy auto-default:24h].",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "stack",
+        "show",
+        "sd-55"
+      ],
+      "out": "Usage: cast stack create \"<title>\" | ls | show ds-N | add ds-N sd-N | remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N … | delegate ds-N @handle",
+      "exit": 1
+    },
+    {
+      "argv": [
+        "chat",
+        "search",
+        "webhooks reference"
+      ],
+      "out": "No messages match \"webhooks reference\".",
+      "prefix": true
+    },
+    {
+      "argv": [
+        "doc",
+        "search"
+      ],
+      "out": "No documents found.",
       "prefix": true
     }
   ]

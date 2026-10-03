@@ -3461,7 +3461,10 @@ describe("agent channels: roles and sessions in chat", () => {
   const quota = (ctx: any, key: string) =>
     ctx.db._tables.chat_agent_quota.find((q: any) => q.key === key && q.bucket === hourBucket())?.count ?? 0;
 
-  test("a session's mention reply spends both hourly caps and folds past the sender's", async () => {
+  const relayRate = (ctx: any) =>
+    ctx.db._tables.rate_limits?.find((r: any) => r.endpoint === "chat.session_relay")?.request_count ?? 0;
+
+  test("a session's mention reply spends both hourly caps, the sender's charged to the replying session", async () => {
     const ctx = context(ALICE, seed());
     const thread = await askBob(ctx);
     const answer = await call(sendMessage, as(ctx, BOB), {
@@ -3469,12 +3472,26 @@ describe("agent channels: roles and sessions in chat", () => {
       origin: "agent", origin_session_id: "sess-bob",
     });
     expect(answer.session_relay.delivered).toBe(true);
-    // The answer is an agent waking an agent: it costs what a mention costs.
-    expect(quota(ctx, `mention_from:${BOB}`)).toBe(1);
+    // The answer is an agent waking an agent: it costs what a mention costs,
+    // charged to the session that answered rather than to Bob.
+    expect(quota(ctx, `mention_from:${BOB}:conv-bob`)).toBe(1);
+    expect(quota(ctx, `mention_from:${BOB}`)).toBe(0);
     expect(quota(ctx, "mention_to:conv-alice")).toBe(1);
 
-    const capped = context(ALICE, seed({
+    // Bob's own budget being spent (his typed mentions, his other sessions'
+    // mentions) does not fold the answer.
+    const personSpent = context(ALICE, seed({
       chat_agent_quota: [{ _id: "q1", key: `mention_from:${BOB}`, bucket: hourBucket(), count: MENTION_WAKES_PER_SENDER_HOUR, updated_at: 1 }],
+    }));
+    const spentThread = await askBob(personSpent);
+    const still = await call(sendMessage, as(personSpent, BOB), {
+      channel_id: CHANNEL, thread_root_id: spentThread, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(still.session_relay.delivered).toBe(true);
+
+    const capped = context(ALICE, seed({
+      chat_agent_quota: [{ _id: "q1", key: `mention_from:${BOB}:conv-bob`, bucket: hourBucket(), count: MENTION_WAKES_PER_SENDER_HOUR, updated_at: 1 }],
     }));
     const thread2 = await askBob(capped);
     const folded = await call(sendMessage, as(capped, BOB), {
@@ -3483,11 +3500,43 @@ describe("agent channels: roles and sessions in chat", () => {
     });
     expect(folded.session_relay).toEqual({ delivered: false, skipped: "folded", session_short_id: "jx7alic", conversation_id: "conv-alice" });
     expect(row(capped, folded.message_id).mention_folded).toBe(true);
-    // Only the ask reached a session; Alice's reads the answer on its next wake.
+    // Only the ask reached a session; the answer stays in the thread.
     expect(pending(capped).map((p: any) => p.conversation_id)).toEqual(["conv-bob"]);
+    // A folded reply spends neither the target's hourly credit nor the
+    // per-minute relay credit.
+    expect(quota(capped, "mention_to:conv-alice")).toBe(0);
+    expect(relayRate(capped)).toBe(0);
   });
 
-  test("a folded mention reply that also names the asker does not charge the sender twice", async () => {
+  test("one session naming several of its owner's sessions hears every answer", async () => {
+    // Alice's orchestrator names six of Alice's own workers; each answers.
+    const workers = Array.from({ length: 6 }, (_, i) => ({
+      _id: `conv-w${i}`, user_id: ALICE, session_id: `sess-w${i}`, short_id: `jx7wrk${i}`,
+      title: `worker ${i}`, agent_type: "claude_code", status: "active", updated_at: 1,
+    }));
+    const ctx = context(ALICE, seed({ conversations: [...seed().conversations, ...workers] }));
+    const root = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "fan out", origin: "agent", origin_session_id: "sess-alice",
+    });
+    const ask = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, thread_root_id: root.message_id,
+      content: `${workers.map((w) => `@${w.short_id}`).join(" ")} report in`,
+      origin: "agent", origin_session_id: "sess-alice",
+    });
+    expect(ask.mention_wakes.sessions).toBe(6);
+    for (const w of workers) {
+      const answer = await call(sendMessage, ctx, {
+        channel_id: CHANNEL, thread_root_id: root.message_id, content: `${w.title} done`,
+        origin: "agent", origin_session_id: w.session_id,
+      });
+      expect(answer.session_relay.skipped).toBeNull();
+      expect(answer.session_relay.conversation_id).toBe("conv-alice");
+    }
+    expect(quota(ctx, `mention_from:${ALICE}`)).toBe(6);
+    expect(pending(ctx).filter((p: any) => p.conversation_id === "conv-alice").length).toBe(6);
+  });
+
+  test("a folded mention reply that also names the asker charges nothing", async () => {
     // Alice's session is team visible here, so Bob's reply can name it.
     const ctx = context(ALICE, seed({
       conversations: seed().conversations.map((c: any) =>
@@ -3502,7 +3551,9 @@ describe("agent channels: roles and sessions in chat", () => {
     expect(answer.session_relay.skipped).toBe("folded");
     // The rail sees the line already folded into that session and spends nothing.
     expect(answer.mention_wakes).toEqual({ roles: 0, sessions: 0, folded: 0, skipped: ["relayed:jx7alic"] });
-    expect(quota(ctx, `mention_from:${BOB}`)).toBe(1);
+    // The target cap refused, so the sender's credit is not spent either.
+    expect(quota(ctx, `mention_from:${BOB}:conv-bob`)).toBe(0);
+    expect(quota(ctx, `mention_from:${BOB}`)).toBe(0);
     expect(row(ctx, answer.message_id).mention_folded).toBe(true);
   });
 

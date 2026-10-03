@@ -38,7 +38,7 @@ import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
 import { projectTasks } from "./lib/projectWork";
-import { attachCommentSessionInfo } from "./lib/commentSessionInfo";
+import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { enqueuePendingMessage, tellRole } from "./pendingMessages";
@@ -1821,10 +1821,7 @@ export const get = query({
     if (!task) return null;
     if (!(await canAccessTask(ctx, auth.userId, task))) return null;
 
-    const comments = await attachCommentSessionInfo(ctx, await ctx.db
-      .query("task_comments")
-      .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
-      .collect(), auth.userId);
+    const comments = await taskCommentsWithSessionInfo(ctx, task!._id, auth.userId);
 
     // Nesting context, so `cast task show` answers both "what larger work is
     // this part of" and "what did I break this into". Children come off the
@@ -2552,10 +2549,7 @@ export const context = query({
       .first();
     if (!task || !(await canAccessTask(ctx, auth.userId, task))) return null;
 
-    const comments = await attachCommentSessionInfo(ctx, await ctx.db
-      .query("task_comments")
-      .withIndex("by_task_id", (q) => q.eq("task_id", task._id))
-      .collect(), auth.userId);
+    const comments = await taskCommentsWithSessionInfo(ctx, task._id, auth.userId);
 
     // Linked sessions (short id + title), each with its insight summary when
     // one exists. `sessionSummaries` stays as the flat list of summaries for
@@ -2678,9 +2672,11 @@ export const context = query({
 
 // --- Web-facing queries (use Convex auth, no api_token) ---
 
-// Enrich a page of task rows in place with creator/assignee/plan/source info.
-// Shared by webList (the live delta channel) and webListPaginated (the full
-// reconcile crawl) so both return identical task shapes. Mutates `result` in
+// Enrich a page of task rows in place with comments and creator/assignee/plan
+// info. The one row builder of the tasks collection: webList (the bootstrap
+// floor), webListPaginated (the reconcile crawl) and webGetByIds (the sync
+// log's refetch) all call it, so every channel returns one row shape for a
+// viewer (tasks.convergence.test.ts). Mutates `result` in
 // place — the spread form `{...t, ...}` doubled peak heap and was a top
 // contributor to TooMuchMemoryCarryOver on these UDFs.
 async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promise<any[]> {
@@ -2746,6 +2742,17 @@ async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promis
   // system operations" timeouts under load). The live overlay is
   // `webActiveSessions`; the dormant origin badge is `webTaskOrigins`, fetched
   // one-shot by the client (a dormant session's badge data no longer changes).
+  //
+  // Comments are the one join every channel carries, so the bootstrap floor,
+  // the crawl and byIds write one row shape: a row that arrived by a list and
+  // a row refetched by byIds (the sync log's refetch on last_comment_at) are
+  // the same row. Every caller is one-shot (webList is the E8 bootstrap floor,
+  // the crawl and byIds are convex.query calls), so the conversation reads the
+  // session_info join makes re-run nothing. One cache serves the whole list.
+  const sessionInfo: CommentSessionCache = new Map();
+  await Promise.all(result.map(async (t) => {
+    t.comments = await taskCommentsWithSessionInfo(ctx, t._id, userId, sessionInfo);
+  }));
 
   for (const t of result) {
     t.creator = userMap.get(t.user_id.toString()) || null;
@@ -2992,9 +2999,10 @@ export const webList = query({
 });
 
 // Change-feed batch fetch: current state for a set of task ids the user can
-// access (own or team). Same enriched row shape as webList (reuses enrichTasks),
-// so the client merges via syncTable("tasks"). No status filter — a dropped task
-// comes back with status:"dropped" and the client's read-time filter hides it.
+// access (own or team). Same enriched row shape as webList, comments included
+// (reuses enrichTasks), so the client merges via syncTable("tasks"). No status
+// filter — a dropped task comes back with status:"dropped" and the client's
+// read-time filter hides it.
 // Inaccessible / gone ids are omitted; callers prune ids the response omits
 // (authorized absence). Consumers: the sync-log applier (syncLog.ts / web
 // useSyncChangeFeed.ts) and, for deployed old bundles, changeFeed.ts.
@@ -3012,18 +3020,6 @@ export const webGetByIds = query({
       result.push(task);
     }
     await enrichTasks(ctx, userId, result);
-    // Carry comments so the change-feed catch-up keeps each client's cached
-    // activity fresh (the store preserves the field across list deltas, which
-    // never send it). Bounded: ≤300 ids, one indexed lookup each. History is
-    // heavier (needs user enrichment) and still rides only webGetTaskDetail.
-    // session_info must ride along: this merges into the same tasks[id].comments
-    // the enriched detail query fills, and a raw row here clobbers it.
-    for (const task of result) {
-      task.comments = await attachCommentSessionInfo(ctx, await ctx.db
-        .query("task_comments")
-        .withIndex("by_task_id", (q: any) => q.eq("task_id", task._id))
-        .collect(), userId);
-    }
     return { items: result };
   },
 });
@@ -3062,13 +3058,14 @@ export const webListPaginated = query({
       throw new Error("team_id is required for the team workspace");
     }
 
-    // Defensive clamp. Task docs are small (~2 KB avg, ~8 KB max observed), so
-    // 1000/page is ~16 MB worst case — still well under the 64 MB query memory cap
-    // — but cap it so a future task with a huge body can't blow the isolate
-    // mid-crawl. Bigger pages = fewer round trips = a faster cold-cache backfill.
+    // Defensive clamp. Each row carries its comments and their sessions'
+    // session_info (enrichTasks), so a page reads several documents per task;
+    // 300 matches webList's floor and keeps a page of comment-heavy tasks well
+    // inside the isolate's read and return caps. The client pages on isDone,
+    // so a smaller page only adds round trips to a cold-cache backfill.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 1000),
+      numItems: Math.min(args.paginationOpts.numItems, 300),
     };
 
     const since = args.since;
@@ -3399,10 +3396,7 @@ export const webGet = query({
 
     if (!task || !(await canAccessTask(ctx, userId, task))) return null;
 
-    const comments = await attachCommentSessionInfo(ctx, await ctx.db
-      .query("task_comments")
-      .withIndex("by_task_id", (q) => q.eq("task_id", task!._id))
-      .collect(), userId);
+    const comments = await taskCommentsWithSessionInfo(ctx, task!._id, userId);
 
     let plan = null;
     if (task.plan_id) {

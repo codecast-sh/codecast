@@ -366,6 +366,18 @@ export function removeParticipantRequest(room: string, identity: string) {
   return { room, identity };
 }
 
+/** Take every right a participant holds: nothing to hear, nothing to send.
+ *  LiveKit refreshes a connected participant's token from its CURRENT
+ *  permission, so a client that reconnects on a token refreshed after this
+ *  gets back in deaf and mute (and the next roster check removes it again). */
+export function revokeParticipantRequest(room: string, identity: string) {
+  return {
+    room,
+    identity,
+    permission: { can_subscribe: false, can_publish: false, can_publish_data: false, can_update_metadata: false },
+  };
+}
+
 const TRACK_TYPES = ["audio", "video", "data"] as const;
 const TRACK_SOURCES = ["unknown", "camera", "microphone", "screen_share", "screen_share_audio"] as const;
 const PARTICIPANT_STATES = ["joining", "joined", "active", "disconnected"] as const;
@@ -486,6 +498,18 @@ export async function listParticipants(cfg: LivekitServerConfig, room: string): 
     if (e instanceof LivekitApiError && e.code === "not_found") return [];
     throw e;
   }
+}
+
+/** Put a participant out of a room for good: take their rights first
+ *  (revokeParticipantRequest), then drop the connection. Someone already
+ *  gone is not an error at either step. */
+export async function putOutOfRoom(cfg: LivekitServerConfig, room: string, identity: string): Promise<void> {
+  try {
+    await livekitTwirp(cfg, "RoomService/UpdateParticipant", revokeParticipantRequest(room, identity), { room, grant: { roomAdmin: true } });
+  } catch (e) {
+    if (!(e instanceof LivekitApiError && e.code === "not_found")) throw e;
+  }
+  await removeParticipant(cfg, room, identity);
 }
 
 /** Put a participant out of a room. Someone already gone is not an error:

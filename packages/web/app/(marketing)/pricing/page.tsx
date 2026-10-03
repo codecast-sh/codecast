@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { useRouteMeta } from "../pageMeta";
+import { earlyAccessMailto } from "@/lib/siteLinks";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
@@ -66,7 +67,7 @@ const TIERS: Tier[] = [
     ],
     cta: {
       label: "Request early access",
-      href: "mailto:support@codecast.sh?subject=Codecast%20Team%20early%20access",
+      href: earlyAccessMailto("Team"),
       external: true,
     },
   },
@@ -258,7 +259,7 @@ export default function PricingPage() {
                 Get started free
               </Button>
             </Link>
-            <a href="mailto:support@codecast.sh?subject=Codecast%20Team%20early%20access">
+            <a href={earlyAccessMailto("Team")}>
               <Button
                 size="lg"
                 variant="outline"

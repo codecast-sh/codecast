@@ -5,7 +5,8 @@
 // media stands in for the microphone and camera without a prompt.
 import { execSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { sleep } from "./cdp.mjs";
+import { connect, sleep } from "./cdp.mjs";
+import { signIn } from "./auth.mjs";
 
 export const CHROME = process.env.RIG_CHROME || "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
@@ -31,10 +32,10 @@ export function chromeArgs({ port, profile, extra = [] }) {
 }
 
 /** Launch, wait for the DevTools port, hand back the process. */
-export async function launchChrome({ port, profile, fresh = false, log }) {
+export async function launchChrome({ port, profile, fresh = false, log, extra = [] }) {
   if (fresh && existsSync(profile)) rmSync(profile, { recursive: true, force: true });
   mkdirSync(profile, { recursive: true });
-  const child = spawn(CHROME, chromeArgs({ port, profile }), { stdio: ["ignore", "ignore", log ? "pipe" : "ignore"] });
+  const child = spawn(CHROME, chromeArgs({ port, profile, extra }), { stdio: ["ignore", "ignore", log ? "pipe" : "ignore"] });
   if (log && child.stderr) child.stderr.on("data", (d) => log(String(d)));
   const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
@@ -48,6 +49,19 @@ export async function launchChrome({ port, profile, fresh = false, log }) {
   }
   child.kill("SIGKILL");
   throw new Error(`chrome on ${port} never answered`);
+}
+
+/** One person in their own browser: Chrome up, its page connected with
+ *  focus emulated (a headless page is never focused otherwise), signed in as
+ *  `userId` on `dep` and landed on `path`. `prepare(page)` runs before the
+ *  sign in, for init scripts and emulation the app must boot under. */
+export async function launchSignedIn({ port, profile, fresh = true, dep, userId, path, extra = [], prepare }) {
+  const child = await launchChrome({ port, profile, fresh, extra });
+  const page = await connect(port, /about:blank|localhost/);
+  await page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+  if (prepare) await prepare(page);
+  await signIn(page, dep, userId, path);
+  return { child, page };
 }
 
 /** SIGKILL: the page gets no unload, no leave, no last heartbeat. That is

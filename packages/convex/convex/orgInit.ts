@@ -116,6 +116,13 @@ export const ANALYSIS_CAPS = {
   calls_without_summary: 8,
   call_segments: 150,
   call_lines: 8,
+  /** The goals people stated (readStatedGoals): the lines of chat and of every call's own transcript that name a goal, a priority, a metric or a target, read in their own query part under their own budget. */
+  goal_bytes: 24_000,
+  goal_line_chars: 500,
+  goal_messages_per_channel: 1200,
+  goal_segments_per_call: 1500,
+  goal_segments: 12_000,
+  goal_lines_per_call: 8,
   /** The landing read (readLanding): commits per repository over its own window, newest first; at the cap the search says so. */
   landing_commits_per_repo: 1200,
   /** The templates the workspace may hire (its own and Codecast's), one line each: under 4 KB of the inputs at both caps. */
@@ -753,8 +760,13 @@ export type SaidThread = SaidLine & { channel: string; why: SaidWhy[]; replies: 
  *  order, from its own transcript (bounded); `summary_status` says why there
  *  is no summary ("skipped": too little said; "failed"; "pending"; null: never
  *  tried). A summarised call carries no lines. */
-export type SaidCall = { title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; summary_status: string | null; action_items: string[]; lines?: SaidLine[] };
-export type Said = { calls: SaidCall[]; chat: SaidThread[]; truncated: boolean };
+export type SaidCall = { id: string | null; title: string | null; started_at: number; ended_at: number | null; participants: string[]; summary: string | null; summary_status: string | null; action_items: string[]; lines?: SaidLine[] };
+/** A goal as a person stated it: a chat line (`where` its channel) or a
+ *  speaker's turn on a call (`where` the call's short id, which
+ *  `cast call <id> --transcript` opens). */
+export type StatedGoal = SaidLine & { where: string };
+export type StatedGoals = { lines: StatedGoal[]; truncated: boolean };
+export type Said = { calls: SaidCall[]; chat: SaidThread[]; truncated: boolean; goals?: StatedGoals };
 /** Why a line matters: what it decides, asks, or names (a role by handle or
  *  mention, a project by short id or two title words). Empty when nothing. */
 export function saidWhyOf(m: { content?: string; mentions?: any[] }, roles: string[], projects: Array<{ ref: ProjectRef; words: string[] }>): SaidWhy[] {
@@ -773,13 +785,20 @@ export function saidWhyOf(m: { content?: string; mentions?: any[] }, roles: stri
  *  and the person written replies that decide or ask, newest three in time
  *  order; it qualifies when the root or such a reply carries a signal. An
  *  agent's line is context, never a signal. */
-export async function saidChatFrom(ctx: Ctx, read: Array<{ channel: any; msgs: any[] }>, roles: string[], projects: ProjectRef[]): Promise<SaidThread[]> {
-  const refs = projects.map((ref) => ({ ref, words: recordWords(ref.title) }));
+/** Who wrote a chat line, and whether a person did: an agent's line is context, never a signal. */
+function chatAuthors(ctx: Ctx) {
   const users = new Map<string, any>();
   const userOf = async (id: any) => { const k = String(id); if (!users.has(k)) users.set(k, await ctx.db.get(id)); return users.get(k); };
-  const nameOf = async (m: any) => { const u = await userOf(m.user_id); return (u?.name ?? u?.email ?? "?") as string; };
-  const isPerson = async (m: any) => m.author_kind !== "agent" && !(await userOf(m.user_id))?.is_bot;
-  const usable = (m: any) => m && !m.deleted_at && typeof m.content === "string" && m.content.trim();
+  return {
+    nameOf: async (m: any) => { const u = await userOf(m.user_id); return (u?.name ?? u?.email ?? "?") as string; },
+    isPerson: async (m: any) => m.author_kind !== "agent" && !(await userOf(m.user_id))?.is_bot,
+  };
+}
+const usableChat = (m: any) => m && !m.deleted_at && typeof m.content === "string" && m.content.trim();
+export async function saidChatFrom(ctx: Ctx, read: Array<{ channel: any; msgs: any[] }>, roles: string[], projects: ProjectRef[]): Promise<SaidThread[]> {
+  const refs = projects.map((ref) => ({ ref, words: recordWords(ref.title) }));
+  const { nameOf, isPerson } = chatAuthors(ctx);
+  const usable = usableChat;
   const out: SaidThread[] = [];
   for (const { channel, msgs } of read) {
     const roots = new Map<string, any>();
@@ -815,6 +834,12 @@ export async function saidChatFrom(ctx: Ctx, read: Array<{ channel: any; msgs: a
  *  short call is still read as what it was. Consecutive lines of one speaker
  *  join, the way a person hears them. */
 export function saidCallLines(segments: Array<{ at: number; by: string; text: string }>): SaidLine[] {
+  const joined = speakerTurns(segments);
+  const signal = joined.filter((l) => DECIDED_RE.test(l.line) || ASKED_RE.test(l.line));
+  return (signal.length ? signal : joined).slice(0, ANALYSIS_CAPS.call_lines).map((l) => ({ ...l, line: l.line.slice(0, ANALYSIS_CAPS.said_reply_chars) }));
+}
+/** One speaker's consecutive segments as one turn, the way a person hears them. */
+function speakerTurns(segments: Array<{ at: number; by: string; text: string }>): SaidLine[] {
   const joined: SaidLine[] = [];
   for (const s of segments) {
     const text = s.text.trim();
@@ -823,30 +848,39 @@ export function saidCallLines(segments: Array<{ at: number; by: string; text: st
     if (last && last.by === s.by) last.line = `${last.line} ${text}`;
     else joined.push({ at: s.at, by: s.by, line: text });
   }
-  const signal = joined.filter((l) => DECIDED_RE.test(l.line) || ASKED_RE.test(l.line));
-  return (signal.length ? signal : joined).slice(0, ANALYSIS_CAPS.call_lines).map((l) => ({ ...l, line: l.line.slice(0, ANALYSIS_CAPS.said_reply_chars) }));
+  return joined;
 }
-export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now: number, chatRead: Array<{ channel: any; msgs: any[] }>, projects: ProjectRef[]): Promise<Said> {
+const segmentsOf = async (ctx: Ctx, t: any, take: number) =>
+  ((await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(take)) as any[]).map((x) => ({ at: t.started_at + (x.t0 ?? 0), by: x.speaker_name ?? "?", text: x.text ?? "" }));
+/** The window's calls the caller may read and in which something was said,
+ *  newest first, up to the cap. The cap counts these, never the huddles that
+ *  ended before words: Union had 30 such rows in a month, and counted against
+ *  the cap they pushed two weeks of real calls out of the read. */
+async function readableCalls(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now: number): Promise<any[]> {
   const cutoff = now - ANALYSIS_WINDOW_MS;
-  const calls: SaidCall[] = [];
-  const callRows: any[] = await ctx.db.query("transcripts").withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gte("started_at", cutoff)).order("desc").take(ANALYSIS_CAPS.calls);
-  let unsummarised = 0;
-  for (const t of callRows) {
+  const out: any[] = [];
+  for await (const t of ctx.db.query("transcripts").withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gte("started_at", cutoff)).order("desc")) {
+    if (out.length >= ANALYSIS_CAPS.calls) break;
     if ((t.started_at ?? 0) < cutoff || t.status !== "ended") continue;
     if (isRecRoomKey(t.room_key) && !t.rec_shared) continue;
-    // A call nobody spoke in and nothing was written about (a huddle that
-    // ended before words) is not something said: Union had 30 such rows.
     if (!t.summary && !(t.action_items ?? []).length && !(t.participants ?? []).length) continue;
     if (!(await canReadCall(ctx as any, userId, t))) continue;
-    const call: SaidCall = { title: t.title ?? null, started_at: t.started_at, ended_at: t.ended_at ?? null, participants: (t.participants ?? []).map((p: any) => p.name), summary: t.summary ? String(t.summary).slice(0, ANALYSIS_CAPS.call_summary_chars) : null, summary_status: t.summary_status ?? null, action_items: (t.action_items ?? []).slice(0, ANALYSIS_CAPS.call_action_items).map((a: any) => String(a).slice(0, 200)) };
+    out.push(t);
+  }
+  return out;
+}
+export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">, now: number, chatRead: Array<{ channel: any; msgs: any[] }>, projects: ProjectRef[]): Promise<Said> {
+  const calls: SaidCall[] = [];
+  let unsummarised = 0;
+  for (const t of await readableCalls(ctx, userId, teamId, now)) {
+    const call: SaidCall = { id: t.short_id ?? null, title: t.title ?? null, started_at: t.started_at, ended_at: t.ended_at ?? null, participants: (t.participants ?? []).map((p: any) => p.name), summary: t.summary ? String(t.summary).slice(0, ANALYSIS_CAPS.call_summary_chars) : null, summary_status: t.summary_status ?? null, action_items: (t.action_items ?? []).slice(0, ANALYSIS_CAPS.call_action_items).map((a: any) => String(a).slice(0, 200)) };
     // A huddle with people in it and no summary (too short for one, or the
     // summary failed) is the gap the reviewer used to read as silence: its
     // own words are read instead, bounded to a few calls and the lines that
     // decide or ask, so a two minute "let's drop the ads" still reaches it.
     if (!call.summary && !call.action_items.length && unsummarised < ANALYSIS_CAPS.calls_without_summary) {
       unsummarised++;
-      const segments: any[] = await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(ANALYSIS_CAPS.call_segments);
-      call.lines = saidCallLines(segments.map((x) => ({ at: t.started_at + (x.t0 ?? 0), by: x.speaker_name ?? "?", text: x.text ?? "" })));
+      call.lines = saidCallLines(await segmentsOf(ctx, t, ANALYSIS_CAPS.call_segments));
     }
     calls.push(call);
   }
@@ -865,6 +899,62 @@ export async function readSaid(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"
   return { calls, chat, truncated };
 }
 
+// ── The goals people stated (2026-10-03) ─────────────────────────────────────
+// A goal comes from a person, and the place a person states one is a chat
+// line or a moment on a call. `said` could carry neither: a call arrives as
+// its generated summary, which keeps decisions and drops the "our goal is
+// $250 or less per introduction", and a busy channel's newest fifty lines
+// reach back days, not the weeks since someone posted the company's
+// priorities. So the goal lines are read on their own, in their own query
+// part: every person written chat line of the window and every speaker's turn
+// of every readable call that names a goal, a priority, a metric or a target,
+// written lines first (they are the firmest), then the calls newest first,
+// under one byte budget with `truncated` when lines were left out.
+const GOAL_RE = /\b(goals?|initiatives?|priorities|north star|objectives?|milestones?|mission|metrics?)\b/i;
+export const statesGoal = (text: string) => GOAL_RE.test(text);
+/** The part of a line that states the goal: a long turn is cut around the
+ *  words that name it, never at its opening, so the number said after two
+ *  minutes of talk is the part that is kept. */
+export function goalExcerpt(text: string): string {
+  const at = text.search(GOAL_RE);
+  const from = text.length <= ANALYSIS_CAPS.goal_line_chars || at < 0 ? 0 : Math.max(0, Math.min(at - 120, text.length - ANALYSIS_CAPS.goal_line_chars));
+  return text.slice(from, from + ANALYSIS_CAPS.goal_line_chars);
+}
+export function statedGoalsOfCall(where: string, segments: Array<{ at: number; by: string; text: string }>): StatedGoal[] {
+  return speakerTurns(segments).filter((l) => statesGoal(l.line)).slice(0, ANALYSIS_CAPS.goal_lines_per_call).map((l) => ({ ...l, line: goalExcerpt(l.line), where }));
+}
+export async function readStatedGoals(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams"> | undefined, now: number): Promise<StatedGoals> {
+  if (!teamId) return { lines: [], truncated: false };
+  const cutoff = now - ANALYSIS_WINDOW_MS;
+  const { nameOf, isPerson } = chatAuthors(ctx);
+  const written: StatedGoal[] = [];
+  const channels: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
+  for (const ch of channels) {
+    if (!ch.name || ch.archived_at || ch.kind === "dm" || !(await canAccessChannel(ctx as any, userId, ch))) continue;
+    const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.goal_messages_per_channel);
+    for (const m of msgs) if (usableChat(m) && statesGoal(m.content) && (await isPerson(m))) written.push({ at: m.created_at, by: await nameOf(m), line: goalExcerpt(m.content.trim()), where: `#${ch.name}` });
+  }
+  written.sort((a, b) => b.at - a.at);
+  const spoken: StatedGoal[] = [];
+  let segmentsLeft = ANALYSIS_CAPS.goal_segments;
+  for (const t of await readableCalls(ctx, userId, teamId, now)) {
+    if (segmentsLeft <= 0) break;
+    const segments = await segmentsOf(ctx, t, Math.min(ANALYSIS_CAPS.goal_segments_per_call, segmentsLeft));
+    segmentsLeft -= segments.length;
+    spoken.push(...statedGoalsOfCall(t.short_id ?? t.title ?? "a call", segments));
+  }
+  const lines: StatedGoal[] = [];
+  let bytes = 0;
+  let truncated = segmentsLeft <= 0;
+  for (const l of [...written, ...spoken]) {
+    const size = JSON.stringify(l).length;
+    if (bytes + size > ANALYSIS_CAPS.goal_bytes) { truncated = true; break; }
+    bytes += size;
+    lines.push(l);
+  }
+  return { lines, truncated };
+}
+
 export function mergeAnalysisInputs(
   userId: Id<"users">,
   teamId: Id<"teams"> | undefined,
@@ -875,6 +965,7 @@ export function mergeAnalysisInputs(
   now: number,
   activity?: ReturnType<typeof computeOrgActivity>,
   coverage?: ReturnType<typeof computeCoverage>,
+  goals?: StatedGoals,
 ) {
   const { handoff: _handoff, truncated, ...rest } = work;
   return {
@@ -889,7 +980,7 @@ export function mergeAnalysisInputs(
     insights: signals.insights,
     channels: signals.channels,
     // What people said (calls and chat), read for the reviewer's eye.
-    said: signals.said,
+    said: goals ? { ...signals.said, goals } : signals.said,
     // The roles that can be hired from a template, one line each.
     templates: signals.templates,
     decisions_open_by_category: signals.decisions_open_by_category,
@@ -919,7 +1010,7 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   const evidence = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionEvidence(ctx, r.id, r.started_at, now, work.handoff.projects)));
   org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
   const landing = await readLanding(ctx, userId, teamId, now, activity.repos, landingRecordsOf(activity.activity));
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), activity.coverage);
+  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), activity.coverage, await readStatedGoals(ctx, userId, teamId, now));
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -928,7 +1019,7 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use"), v.literal("landing")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("use"), v.literal("landing"), v.literal("goals")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
     session: v.optional(v.id("conversations")),
@@ -954,6 +1045,7 @@ export const analysisPart = query({
     if (args.part === "work") return computeAnalysisWork(ctx, userId, args.team_id);
     if (args.part === "signals") return { ...(await computeAnalysisSignals(ctx, userId, args.team_id, now, args.work as AnalysisHandoff | undefined)), label: await workspaceLabelOf(ctx, userId, args.team_id), user_id: userId };
     if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now);
+    if (args.part === "goals") return readStatedGoals(ctx, userId, args.team_id, now);
     if (args.part === "landing") return readLanding(ctx, userId, args.team_id, now, args.repos ?? [], (args.records as RecordRef[] | undefined) ?? []);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
     return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
@@ -972,9 +1064,10 @@ export const analysisInputs = action({
       ctx.runQuery(part, { ...args, part: "activity", now }),
     ]);
     if (!work) return null;
-    const [org, signals] = await Promise.all([
+    const [org, signals, goals] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff }),
       ctx.runQuery(part, { ...args, part: "signals", now, work: work.handoff }),
+      ctx.runQuery(part, { ...args, part: "goals", now }),
     ]);
     if (!org || !signals) return null;
     const [evidence, landing] = await Promise.all([
@@ -983,7 +1076,7 @@ export const analysisInputs = action({
     ]);
     org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
     const { label, user_id, ...rest } = signals;
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage);
+    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage, goals ?? undefined);
   },
 });
 

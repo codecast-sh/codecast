@@ -10,9 +10,10 @@ import { changesDayLabel } from "../../lib/changesDay";
 import { DottedRow } from "../entityDisplay";
 import { Pill } from "../feed/ExternalEventRow";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { areaColor, areaFill, ink } from "./areaColor";
+import { areaFill, areaLabel, ink } from "./areaColor";
 import type { EditionStats } from "./editionModel";
-import { Tip, clockOf } from "./StoryParts";
+import { AreaDot, Tip, clockOf } from "./StoryParts";
+import { useAreaColors } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 import { hasFilters, type ChangesUrl, type SetChangesUrl } from "./useChangesUrlState";
 
@@ -66,26 +67,28 @@ function DayStrip({ days, date, today, volumes, onDay }: {
         const v = volumes[d];
         const future = d > today;
         const selected = d === date;
+        const label = `${changesDayLabel(d)}${v != null ? `, ${plural(v, "commit")}` : ""}`;
         return (
-          <button
-            key={d}
-            type="button"
-            disabled={future}
-            onClick={() => onDay(d)}
-            aria-current={selected ? "date" : undefined}
-            title={`${changesDayLabel(d)}${v != null ? `, ${plural(v, "commit")}` : ""}`}
-            className={`flex w-8 flex-col items-center rounded-[4px] pb-1 pt-0.5 font-mono transition-colors disabled:cursor-default disabled:opacity-30 ${
-              selected ? "bg-sol-bg-alt text-sol-text" : "text-sol-text/55 hover:bg-sol-bg-alt/60 hover:text-sol-text"
-            }`}
-          >
-            <span className="text-[9px] leading-none">{WEEKDAY_INITIAL[weekdayOf(d)]}</span>
-            <span className={`mt-0.5 text-[12px] leading-none tabular-nums ${selected ? "font-semibold" : ""}`}>{dayNumber(d)}</span>
-            <span
-              aria-hidden
-              className="mt-1 h-[2px] w-5 rounded-full"
-              style={{ background: v == null || future ? ink(6) : ink(15 + (55 * v) / max) }}
-            />
-          </button>
+          <Tip key={d} text={label} side="bottom">
+            <button
+              type="button"
+              disabled={future}
+              onClick={() => onDay(d)}
+              aria-current={selected ? "date" : undefined}
+              aria-label={label}
+              className={`flex w-8 flex-col items-center rounded-[4px] pb-1 pt-0.5 font-mono transition-colors disabled:cursor-default disabled:opacity-30 ${
+                selected ? "bg-sol-bg-alt text-sol-text" : "text-sol-text/55 hover:bg-sol-bg-alt/60 hover:text-sol-text"
+              }`}
+            >
+              <span className="text-[9px] leading-none">{WEEKDAY_INITIAL[weekdayOf(d)]}</span>
+              <span className={`mt-0.5 text-[12px] leading-none tabular-nums ${selected ? "font-semibold" : ""}`}>{dayNumber(d)}</span>
+              <span
+                aria-hidden
+                className="mt-1 h-[2px] w-5 rounded-full"
+                style={{ background: v == null || future ? ink(6) : ink(15 + (55 * v) / max) }}
+              />
+            </button>
+          </Tip>
         );
       })}
     </div>
@@ -127,12 +130,14 @@ function Chip({ active, onClick, children, color }: { active: boolean; onClick: 
   );
 }
 
-function FilterBar({ url, setUrl, options, inputRef, personName }: {
+function FilterBar({ url, setUrl, options, inputRef, personName, hasSignals }: {
   url: ChangesUrl;
   setUrl: SetChangesUrl;
   options: FilterOptions;
   inputRef: RefObject<HTMLInputElement | null>;
   personName: (id: string) => string;
+  /** Any ship is known, so a story can wait behind one. */
+  hasSignals: boolean;
 }) {
   // The field holds what is typed; the URL holds it trimmed. A change from
   // outside (Escape, clear filters, a pasted link) resets the field.
@@ -140,6 +145,7 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
   useWatchEffect(() => {
     setQ((typed) => ((url.q ?? "") !== typed.trim() ? url.q ?? "" : typed));
   }, [url.q]);
+  const colors = useAreaColors();
   const toggleArea = (area: string) =>
     setUrl((s) => ({ ...s, areas: s.areas.includes(area) ? s.areas.filter((a) => a !== area) : [...s.areas, area] }));
   return (
@@ -156,9 +162,9 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
         className="h-[22px] w-44 rounded-full border border-sol-border/30 bg-transparent px-2.5 font-mono text-[11px] text-sol-text outline-none placeholder:text-sol-text/40 focus:border-sol-border/70"
       />
       {options.areas.map((a) => (
-        <Chip key={a} active={url.areas.includes(a)} onClick={() => toggleArea(a)} color={areaFill(a)}>
-          <span aria-hidden className="h-1.5 w-1.5 rounded-[1px]" style={{ background: areaColor(a) }} />
-          {a}
+        <Chip key={a} active={url.areas.includes(a)} onClick={() => toggleArea(a)} color={areaFill(a, 14, colors)}>
+          <AreaDot area={a} />
+          {areaLabel(a)}
         </Chip>
       ))}
       {options.people.map((p) => (
@@ -169,8 +175,8 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
       {url.person && !options.people.some((p) => p.id === url.person) && (
         <Chip active onClick={() => setUrl({ person: undefined })}>{personName(url.person)}</Chip>
       )}
-      <Chip active={url.risk} onClick={() => setUrl({ risk: !url.risk })}>risks</Chip>
-      <Chip active={url.waiting} onClick={() => setUrl({ waiting: !url.waiting })}>waiting</Chip>
+      <Chip active={url.risk} onClick={() => setUrl((s) => ({ ...s, risk: !s.risk }))}>risks</Chip>
+      {(hasSignals || url.waiting) && <Chip active={url.waiting} onClick={() => setUrl((s) => ({ ...s, waiting: !s.waiting }))}>waiting</Chip>}
       {url.surface && (
         <Chip active onClick={() => setUrl({ surface: undefined })} color={areaFill(url.surface)}>
           {url.surface} surface <X className="h-2.5 w-2.5" />
@@ -187,12 +193,15 @@ export function ChangesHeader(props: {
   today: string;
   weekDays: readonly string[];
   volumes: Record<string, number | null>;
-  stats: EditionStats;
+  /** The view's counts; null while the view is still loading, when a count would be a guess. */
+  stats: EditionStats | null;
   summarizing: Summarizing;
   url: ChangesUrl;
   setUrl: SetChangesUrl;
   mode: "day" | "week";
   onDay: (day: string) => void;
+  /** Today in the mode on screen: the day, or this week. */
+  onToday: () => void;
   onStep: (delta: number) => void;
   onMode: (mode: "day" | "week") => void;
   filterOpen: boolean;
@@ -200,17 +209,19 @@ export function ChangesHeader(props: {
   filterRef: RefObject<HTMLInputElement | null>;
   options: FilterOptions;
   personName: (id: string) => string;
+  /** Any ship is known, so the waiting filter has something to show. */
+  hasSignals: boolean;
 }) {
   const { url, setUrl, date, today, stats } = props;
   const label = props.mode === "week" ? `Week of ${changesDayLabel(props.weekDays[0])}` : changesDayLabel(date);
   const atToday = props.mode === "week" ? props.weekDays.includes(today) : date >= today;
   const filtering = hasFilters(url);
-  const parts = [
+  const parts = !stats ? null : [
     { key: "commits", node: plural(stats.commits, "commit") },
     { key: "stories", node: plural(stats.stories, "story", "stories") },
     ...(stats.releases ? [{ key: "releases", node: plural(stats.releases, "release") }] : []),
     { key: "people", node: plural(stats.people, "person", "people") },
-    { key: "sessions", node: plural(stats.sessions, "session") },
+    ...(stats.sessions ? [{ key: "sessions", node: plural(stats.sessions, "session") }] : []),
   ];
   return (
     <header className="pt-6">
@@ -221,7 +232,7 @@ export function ChangesHeader(props: {
             <Tip text={props.summarizing.stale && props.summarizing.since
               ? `Notes are queued to be rewritten (since ${clockOf(props.summarizing.since)})`
               : "Summarizing: notes for this edition are being written"}>
-              <span aria-label="Summarizing" className="h-1.5 w-1.5 rounded-full" style={{ background: ink(props.summarizing.stale ? 55 : 30) }} />
+              <span role="img" aria-label="Summarizing" className="h-1.5 w-1.5 rounded-full" style={{ background: ink(props.summarizing.stale ? 55 : 30) }} />
             </Tip>
           )}
         </div>
@@ -235,7 +246,7 @@ export function ChangesHeader(props: {
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
           {!atToday && (
-            <button type="button" onClick={() => props.onDay(today)} className="ml-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text">
+            <button type="button" onClick={props.onToday} className="ml-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text">
               today
             </button>
           )}
@@ -252,7 +263,14 @@ export function ChangesHeader(props: {
       </div>
       <div className="chg-rule mt-3" />
       <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-        <DottedRow parts={parts} className="font-mono !text-[11px] tabular-nums !text-sol-text/55" />
+        {parts ? (
+          <DottedRow parts={parts} className="font-mono !text-[11px] tabular-nums !text-sol-text/55" />
+        ) : (
+          // The counts' line, held open by a bar, so nothing shifts when they arrive.
+          <span aria-hidden className="inline-flex items-center font-mono text-[11px]">
+            <span className="inline-block h-[0.7em] w-44 rounded bg-sol-bg-alt/70" />&nbsp;
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
           <Segmented
             label="Branches"
@@ -275,7 +293,7 @@ export function ChangesHeader(props: {
         </div>
       </div>
       {(props.filterOpen || filtering) && (
-        <FilterBar url={url} setUrl={setUrl} options={props.options} inputRef={props.filterRef} personName={props.personName} />
+        <FilterBar url={url} setUrl={setUrl} options={props.options} inputRef={props.filterRef} personName={props.personName} hasSignals={props.hasSignals} />
       )}
     </header>
   );

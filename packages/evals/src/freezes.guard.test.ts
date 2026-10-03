@@ -35,5 +35,9 @@ describe('committed freezes and fixtures', () => {
     expect(problems).toContain('freezes/bad.json: notes is 301 characters');
     expect(problems).toContain('freezes/bad.json: looks like a Convex document id');
     expect(problems).toContain('fixtures/echo/leak.json: carries a secret');
+
+    // A criterion has one home: once a freeze points at a fixture, the fixture's own judge is a second copy.
+    writeFileSync(join(copy, 'fixtures', 'echo', 'ok.json'), JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', judge: 'old words', snapshot: { text: 'hi' } }));
+    expect(auditPublicTree(copy).join('\n')).toContain('fixtures/echo/ok.json: carries a judge, but freeze f1 holds its criterion');
   });
 });

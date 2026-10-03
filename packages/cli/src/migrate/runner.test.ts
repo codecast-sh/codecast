@@ -145,6 +145,23 @@ describe("migrateRow — a session to the cloud", () => {
     expect(w.calls.filter((c) => c[0] === "facts").length).toBeLessThanOrEqual(3);
   });
 
+  test("a resource offload timeout leaves the live turn and its files untouched", async () => {
+    const w = world({ batch: { wait_for_idle_ms: 12_000, interrupt_on_timeout: false }, statuses: Array(10).fill("working") });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(w.kinds()).not.toContain("quiesce");
+    expect(w.kinds()).not.toContain("transferToCloud");
+    expect(w.calls.find(c => c[0] === "fail")?.join(" ")).toContain("left running");
+  });
+
+  test("a turn racing the safe offload stop is never force-stopped", async () => {
+    const w = world({ batch: { wait_for_idle_ms: 0, interrupt_on_timeout: false }, statuses: ["idle"], quiesceResults: [{ quiesced: false, reason: "working" }] });
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(w.calls.filter(c => c[0] === "quiesce")).toEqual([["quiesce", "m1", "idle"]]);
+    expect(w.kinds()).not.toContain("transferToCloud");
+  });
+
   test("wait window of zero interrupts at once", async () => {
     const w = world({ batch: { wait_for_idle_ms: 0 }, statuses: ["working"] });
     await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
@@ -202,6 +219,15 @@ describe("migrateRow — a session to the cloud", () => {
     expect(w.calls.find((c) => c[0] === "confirm")?.[3]).toContain("has not confirmed the resume yet");
   });
 
+  test("safe offload never marks an unconfirmed destination resume successful", async () => {
+    const w = world({ statuses: ["idle"], resumeNeverExecutes: true });
+    w.batch.interrupt_on_timeout = false;
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(w.calls.find((c) => c[0] === "confirm")?.[2]).toBe(false);
+    expect(out.detail).toContain("not confirmed the resume");
+  });
+
   test("a refused begin is a skip, not a failure", async () => {
     const w = world({ begin: { m1: { ok: false, reason: "row is cancelled" } } });
     const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
@@ -223,6 +249,15 @@ describe("migrateRow — a session to the cloud", () => {
     expect(out.outcome).toBe("failed");
     expect(out.detail).toBe("Linux box never came online");
     expect(w.calls.some((c) => c[0] === "transferToCloud")).toBe(false);
+  });
+
+  test("safe offload verifies the host is online before stopping the source", async () => {
+    const w = world({ statuses: ["idle"], deviceOnline: false });
+    w.batch.interrupt_on_timeout = false;
+    const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+    expect(out.outcome).toBe("failed");
+    expect(out.detail).toContain("left running locally");
+    expect(w.calls.some(c => c[0] === "quiesce" || c[0] === "transferToCloud")).toBe(false);
   });
 });
 

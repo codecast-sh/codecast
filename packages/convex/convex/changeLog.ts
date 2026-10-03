@@ -22,6 +22,7 @@ import {
   type SyncAckCollector,
 } from "./syncLog";
 import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/accessKeys";
+import { withdrawDeletedConversation } from "./lib/changesDirty";
 
 // One memoized POST-WRITE document read per tracked write. The sync log reads
 // it for three things (sync-log-cargo): the access-derived fan-out scopes, the
@@ -327,6 +328,8 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;
       const res = await rawDb.delete(id);
+      // Changes stories built from a deleted session lose it in this transaction.
+      if (table === "conversations") await withdrawDeletedConversation({ db: rawDb }, id);
       if (table && scope) {
         // `undefined`: find the entity's existing upsert row and flip it to a
         // delete tombstone, rather than inserting a duplicate.

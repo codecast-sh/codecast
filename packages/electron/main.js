@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
+const { app, BrowserWindow, WebContentsView, webContents, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -79,7 +79,8 @@ const {
 } = require("./meetingDetector");
 const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
-const { createShellAuthority, originOf, installShellCapabilities } = require("./shellAuthority");
+const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
+const { createEditUndo } = require("./editUndo");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
 const { createShareCursors } = require("./shareCursors");
 const { attachSpellMenu } = require("./spellMenu");
@@ -139,6 +140,12 @@ const shellAuthority = createShellAuthority({
   openExternal: (url) => shell.openExternal(url),
 });
 const shellIpc = shellAuthority.ipc;
+// Edit > Undo/Redo: text undo in a focused field, the web app's undo
+// everywhere else (editUndo.js says why the stock roles cannot do this).
+const editUndo = createEditUndo({
+  focusedContents: () => webContents.getFocusedWebContents() ?? BrowserWindow.getFocusedWindow()?.webContents,
+  isShell: (contents) => trustedShellUrl(contents.getURL(), [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean)),
+});
 function createShellWindow(options) {
   return shellAuthority.register(new BrowserWindow(options));
 }
@@ -1356,6 +1363,12 @@ function ensureCallWindow(roomKey, opts) {
     // No taskbar entry: in its small shapes it has no title bar to recover it
     // from, and the elsewhere pill in the app is what brings it back.
     skipTaskbar: true,
+    // The float sits over another app's work, so a press on it is usually
+    // the first this window has had since that app took the front. macOS
+    // spends a first press on an inactive window activating it and never
+    // delivers it: a face held to drag the row did nothing, and only the
+    // next press (the grip, by then) moved it.
+    acceptFirstMouse: true,
     webPreferences: {
       ...preloadPrefs(),
       zoomFactor: zoom,
@@ -2690,8 +2703,7 @@ function buildAppMenu() {
     {
       label: "Edit",
       submenu: [
-        { role: "undo" },
-        { role: "redo" },
+        ...editUndo.menuItems(),
         { type: "separator" },
         { role: "cut" },
         { role: "copy" },
@@ -3292,6 +3304,7 @@ function registerShortcuts() {
 // ("remote") draws its own.
 app.on("web-contents-created", (_event, contents) => {
   if (contents.getType() !== "remote") attachSpellMenu(contents, Menu);
+  editUndo.observe(contents);
 });
 
 app.whenReady().then(() => {

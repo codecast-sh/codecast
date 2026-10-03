@@ -10,12 +10,13 @@ import { codecastConvoSource } from './adapters/convo';
 import { codecastFreezeStore } from './adapters/freezes';
 import { codecastReplyJudge } from './adapters/judge';
 import { codecastReplayer } from './adapters/replay';
-import { codecastFreezeResolver, defaultJudgeFor, describeFreeze, productionReplyOf } from './adapters/resolver';
+import { codecastFreezeResolver, defaultJudgeFor, describeFreeze, judgeMomentOfFreeze, productionReplyOf } from './adapters/resolver';
 import { codecastRunSource } from './adapters/runs';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
 import { registerDoctor } from './commands/doctor';
 import { registerGrade, registerRescore } from './commands/grade';
+import { registerLabel } from './commands/label';
 import { registerLine } from './commands/line';
 import { registerPublish } from './commands/publish';
 import { registerSnapshot } from './commands/snapshot';
@@ -56,7 +57,7 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
     freezes,
     freezeResolver: lazy(() => codecastFreezeResolver()),
     replayer: codecastReplayer,
-    judge: lazy(() => codecastReplyJudge(describeFreeze)),
+    judge: lazy(() => codecastReplyJudge(judgeMomentOfFreeze)),
     productionReply: productionReplyOf,
     runs: codecastRunSource(),
     htmlDir: homePaths().html,
@@ -67,6 +68,7 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   registerStale(program);
   registerLine(program, sources);
   registerEvals(program, sources);
+  registerLabel(program, sources);
   registerSnapshot(program);
   registerGrade(program);
   registerRescore(program);

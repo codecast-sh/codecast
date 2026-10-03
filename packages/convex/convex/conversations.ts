@@ -22,7 +22,6 @@ import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import {
   openTasksVouchForWaiting,
-  OPEN_TASKS_FRESH_MS,
   LOOP_OVERDUE_GRACE_MS,
   computeBucketStale,
   digestProjection,
@@ -97,13 +96,17 @@ import {
   parseSearchTerms,
   contentMatchesAnyTerm,
   conversationMatchesAllTerms,
-  calculateProximityScore,
   rankConversationsByCoverage,
   groupMessagesByConversation,
+  relevanceWithFields,
+  bestMessages,
+  searchFieldsOf,
+  originMatch,
+  type RankedConversation,
   type ParsedTerms,
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
-import { parseSessionQuery, type SessionQuery } from "@codecast/shared/search";
+import { emptyEvidence, parseSessionQuery, relevanceTier, snippetAround, type SessionQuery } from "@codecast/shared/search";
 import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { liveConversationIdSet } from "./lib/liveSessions";
@@ -235,7 +238,7 @@ async function fetchMessageSearchPool(
   scope?: { userId: Id<"users">; teamIds: Id<"teams">[] },
 ): Promise<{ pool: SearchPoolMessage[]; tier: "recent" | "deep" }> {
   if (terms.all.length === 0) return { pool: [], tier: "deep" };
-  const searchQuery = terms.all.join(" ");
+  const searchQuery = terms.lookup;
   const { tier, search } = await messageSearchTier(ctx);
   // Scoped lookups FIRST: coverage ranking downstream is a stable sort, so
   // within a coverage tier pool order decides who survives the candidate
@@ -275,7 +278,7 @@ const OPERATOR_TEXT_LOOKUPS = 150;
 const OPERATOR_TEXT_BATCH = 25;
 const OPERATOR_TEXT_TAKE = 20;
 
-type OperatorHit = OperatorCandidate & { messages: SearchPoolMessage[]; coverage: number };
+type OperatorHit = OperatorCandidate & { messages: SearchPoolMessage[]; scores: number[]; coverage: number; relevance: number };
 
 // Session query operators (file:, commit:, pr:, ...) narrow the conversations
 // first (sessionQuerySearch.ts); the query's free text then runs over only
@@ -294,7 +297,7 @@ async function searchByOperators(
   const terms = parseSearchTerms(q.text);
   const tier = await messageSearchTier(ctx);
   if (terms.all.length === 0) {
-    return { terms, tier: tier.tier, truncated, hits: narrowed.candidates.map((c) => ({ ...c, messages: [], coverage: 1 })) };
+    return { terms, tier: tier.tier, truncated, hits: narrowed.candidates.map((c) => ({ ...c, messages: [], scores: [], coverage: 1, relevance: 1 })) };
   }
 
   const byId = new Map(narrowed.candidates.map((c) => [c.conv._id.toString(), c]));
@@ -318,7 +321,7 @@ async function searchByOperators(
   const TITLE_ROW = "title" as unknown as Id<"messages">;
   if (!opts.userOnly) {
     for (const c of narrowed.candidates) {
-      const fields = [c.conv.title, c.conv.subtitle, c.conv.idle_summary].filter(Boolean).join(" ");
+      const fields = searchFieldsOf(c.conv).join(" ");
       if (!fields || !contentMatchesAnyTerm(fields, terms)) continue;
       const id = c.conv._id.toString();
       groups.set(id, [...(groups.get(id) ?? []), {
@@ -327,7 +330,7 @@ async function searchByOperators(
     }
   }
 
-  const searchQuery = terms.all.join(" ");
+  const searchQuery = terms.lookup;
   const unmatched = narrowed.candidates.filter((c) => {
     const found = groups.get(c.conv._id.toString());
     return !found || !conversationMatchesAllTerms(found, terms);
@@ -341,11 +344,17 @@ async function searchByOperators(
     truncated.push(`searched the text in the newest ${lookups.length} of ${unmatched.length} narrowed sessions; narrow further to reach the rest`);
   }
 
-  const hits: OperatorHit[] = rankConversationsByCoverage(groups, terms).map((r) => ({
-    ...byId.get(r.convId)!,
-    coverage: r.coverage,
-    messages: r.messages.filter((m) => m._id !== TITLE_ROW),
-  }));
+  const hits: OperatorHit[] = rankConversationsByCoverage(groups, terms).map((r) => {
+    const candidate = byId.get(r.convId)!;
+    const real = r.messages.map((m, i) => ({ m, score: r.scores[i] })).filter(({ m }) => m._id !== TITLE_ROW);
+    return {
+      ...candidate,
+      coverage: r.coverage,
+      relevance: relevanceWithFields(r, searchFieldsOf(candidate.conv), terms),
+      messages: real.map(({ m }) => m),
+      scores: real.map(({ score }) => score),
+    };
+  });
   hits.sort((a, b) => b.coverage - a.coverage || b.matchedAt - a.matchedAt);
   return { hits, terms, tier: tier.tier, truncated };
 }
@@ -427,7 +436,7 @@ async function loadConversationSearchScope(
 // full-text search can't (see the fetchMessageSearchPool NOTE) — which is why
 // searchConversationTitles exposes them on their own.
 async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
-  const searchQuery = terms.all.join(" ");
+  const searchQuery = terms.lookup;
   const fieldHits = await Promise.all([
     ctx.db
       .query("conversations")
@@ -451,9 +460,108 @@ async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
     const convId = conv._id.toString();
     if (convs.has(convId)) continue;
     convs.set(convId, conv);
-    groups.set(convId, [{ content: `${conv.title || ""} ${conv.subtitle || ""} ${conv.idle_summary || ""}` }]);
+    groups.set(convId, [{ content: searchFieldsOf(conv).join(" ") }]);
   }
-  return new Map(rankConversationsByCoverage(groups, terms).map((r) => [r.convId, { conv: convs.get(r.convId)!, coverage: r.coverage }]));
+  return new Map(rankConversationsByCoverage(groups, terms).map((r) => {
+    const conv = convs.get(r.convId)!;
+    return [r.convId, searchCandidate(conv, { coverage: r.coverage }, terms)];
+  }));
+}
+
+// One search result in the making: a conversation, the pooled messages that
+// matched in it, and how well the whole answers the query once its own fields
+// (title, summaries, opening prompt, earlier titles) count. Every search
+// surface ranks and renders from this shape.
+type SearchCandidate = {
+  conv: Doc<"conversations">;
+  messages: SearchPoolMessage[];
+  /** Parallel to `messages`: which rows show the query best. */
+  scores: number[];
+  coverage: number;
+  relevance: number;
+  /** Worker sessions folded into this row (foldWorkersUnderParents). */
+  workers: number;
+};
+
+function searchCandidate(
+  conv: Doc<"conversations">,
+  ranked: Partial<Pick<RankedConversation<SearchPoolMessage>, "messages" | "scores" | "evidence">> & { coverage: number },
+  terms: ParsedTerms,
+): SearchCandidate {
+  return {
+    conv,
+    messages: ranked.messages ?? [],
+    scores: ranked.scores ?? [],
+    coverage: ranked.coverage,
+    relevance: relevanceWithFields({ evidence: ranked.evidence ?? emptyEvidence(terms) }, searchFieldsOf(conv), terms),
+    workers: 0,
+  };
+}
+
+// The matches a result row shows: the messages that hold the most of the
+// query, the person's own first, each cut to the stretch that shows it.
+function searchSnippets(c: Pick<SearchCandidate, "messages" | "scores">, terms: ParsedTerms, limit = 5) {
+  return bestMessages(c, limit).map((m) => ({ message: m, content: snippetAround(m.content || "", terms, 300) }));
+}
+
+// The session a worker's results belong under: a subagent's parent, or the
+// primary session of the workflow run a workflow sub ran in.
+async function searchParentId(
+  ctx: QueryCtx,
+  conv: Doc<"conversations">,
+): Promise<Id<"conversations"> | undefined> {
+  if (conv.parent_conversation_id) return conv.parent_conversation_id;
+  if (conv.is_workflow_sub && conv.workflow_run_id) {
+    const run = await ctx.db.get(conv.workflow_run_id);
+    const parent = run?.primary_conversation_id ?? run?.spawner_conversation_id;
+    return parent && parent !== conv._id ? parent : undefined;
+  }
+  return undefined;
+}
+
+// Workers fold into the session that ran them. A worker's brief repeats its
+// parent's words, so one piece of work otherwise fills a page of results with
+// its own subagents (six "Workflow harness" rows for one landing page). The
+// parent stands for the family, ranked by its best member, and says how many
+// workers matched; a worker whose parent the viewer cannot see stays a row.
+async function foldWorkersUnderParents(
+  ctx: QueryCtx,
+  candidates: SearchCandidate[],
+  terms: ParsedTerms,
+  isVisible: (conv: Doc<"conversations">) => boolean,
+): Promise<SearchCandidate[]> {
+  const byId = new Map(candidates.map((c) => [c.conv._id.toString(), c]));
+  const loaded = new Map<string, Doc<"conversations"> | null>();
+  const load = async (id: Id<"conversations">) => {
+    const key = id.toString();
+    if (!loaded.has(key)) loaded.set(key, byId.get(key)?.conv ?? (await ctx.db.get(id)));
+    return loaded.get(key)!;
+  };
+  const folded = new Set<string>();
+  const added: SearchCandidate[] = [];
+  for (const c of candidates) {
+    let root: Doc<"conversations"> | null = null;
+    let at = c.conv;
+    for (let hops = 0; hops < 4; hops++) {
+      const parentId = await searchParentId(ctx, at);
+      const parent = parentId ? await load(parentId) : null;
+      if (!parent || !isVisible(parent)) break;
+      root = at = parent;
+    }
+    if (!root) continue;
+    const rootKey = root._id.toString();
+    let host = byId.get(rootKey);
+    if (!host) {
+      host = searchCandidate(root, { coverage: c.coverage }, terms);
+      byId.set(rootKey, host);
+      added.push(host);
+    }
+    host.relevance = Math.max(host.relevance, c.relevance);
+    host.coverage = Math.max(host.coverage, c.coverage);
+    host.workers++;
+    folded.add(c.conv._id.toString());
+  }
+  return [...candidates, ...added].filter((c) => !folded.has(c.conv._id.toString()));
 }
 
 // First-message fetch only feeds a title fallback, so it's only needed for
@@ -3478,23 +3586,53 @@ export const searchConversations = query({
         });
     const matchedAt = new Map(operatorRun?.hits.map((h) => [h.conv._id.toString(), h.matchedAt]));
 
-    // Best coverage, as cast search ranks it: a short query needs every word,
-    // a longer one at least half, so a sentence degrades to its best matches
-    // instead of to nothing. Quoted phrases stay required.
-    const conversationMatches = new Map(
-      rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms)
-        .map((r) => [r.convId, r]),
-    );
+    // Which conversations qualify, as cast search decides it: a short query
+    // needs every word, a longer one at least half, so a sentence degrades to
+    // its best matches instead of to nothing. Quoted phrases stay required.
+    const ranked = rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms);
 
-    const titleConvs = new Map<string, { conv: Doc<"conversations">; coverage: number }>();
+    // Hydrate conversation docs for message matches in parallel (was a serial
+    // await-in-loop, the dominant source of latency on common queries).
+    const matchConvs = await Promise.all(ranked.map(({ messages }) => ctx.db.get(messages[0].conversation_id)));
+    const candidates: SearchCandidate[] = [];
+    const seen = new Set<string>();
+    ranked.forEach((r, i) => {
+      const conv = matchConvs[i];
+      if (!conv) return;
+      seen.add(r.convId);
+      candidates.push(searchCandidate(conv, r, terms));
+    });
+    // A session only its title or summaries matched has no message rows.
     if (!userOnly && !operatorRun) {
       for (const [convId, hit] of await fetchTitleFieldHits(ctx, terms)) {
-        // A session whose title covers more of the query than its messages
-        // ranks by the better of the two.
-        const content = conversationMatches.get(convId);
-        if (content) content.coverage = Math.max(content.coverage, hit.coverage);
-        else titleConvs.set(convId, hit);
+        if (!seen.has(convId)) candidates.push(hit);
       }
+    }
+    for (const hit of operatorRun?.hits ?? []) {
+      candidates.push({ ...hit, workers: 0 });
+    }
+
+    // Visibility filter is synchronous (no DB): drop non-visible candidates
+    // first, then fold workers into the sessions that ran them.
+    const visible = await foldWorkersUnderParents(ctx, candidates.filter(({ conv }) => scope.isVisible(conv)), terms, scope.isVisible);
+
+    // Time-range filter applies before totals so the counts reflect what's
+    // actually browsable under the current filters.
+    const scored = args.since
+      ? visible.filter((c) => c.conv.updated_at >= args.since!)
+      : visible;
+
+    if (args.sort === "relevance") {
+      scored.sort((a, b) =>
+        b.relevance - a.relevance ||
+        b.messages.length - a.messages.length ||
+        b.conv.updated_at - a.conv.updated_at);
+    } else {
+      // Newest first within a relevance tier: a near tie goes to the recent
+      // session, a clear win does not. An operator match is as recent as the
+      // change that matched it.
+      const at = (c: SearchCandidate) => matchedAt.get(c.conv._id.toString()) ?? c.conv.updated_at;
+      scored.sort((a, b) => relevanceTier(b.relevance) - relevanceTier(a.relevance) || at(b) - at(a));
     }
 
     const results: Array<{
@@ -3512,7 +3650,12 @@ export const searchConversations = query({
       authorAvatar: string | null;
       isOwn: boolean;
       messageCount: number;
-      proximityScore: number;
+      relevance: number;
+      // What the session began as and was called before, when that answers the
+      // query and the current title may not (searchCore.originMatch).
+      origin?: { started_as?: string; earlier_titles?: string[] };
+      // Worker sessions that matched and are folded into this row.
+      workerCount: number;
       titleMatch: boolean;
       projectPath: string | null;
       agentType: string | null;
@@ -3520,58 +3663,14 @@ export const searchConversations = query({
       // search result wears the same face as its inbox card.
       identity: Awaited<ReturnType<typeof identityFieldsOf>>;
     }> = [];
-
-    // Hydrate conversation docs for message matches in parallel (was a serial
-    // await-in-loop, the dominant source of latency on common queries).
-    const matchEntries = [...conversationMatches.values()];
-    const matchConvs = await Promise.all(
-      matchEntries.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
-    );
-    const candidates: Array<{ conv: Doc<"conversations">; messages: typeof searchResults; coverage: number }> = [];
-    matchEntries.forEach(({ messages, coverage }, i) => {
-      const conv = matchConvs[i];
-      if (conv) candidates.push({ conv, messages, coverage });
-    });
-    for (const { conv, coverage } of titleConvs.values()) {
-      candidates.push({ conv, messages: [], coverage });
-    }
-    for (const hit of operatorRun?.hits ?? []) {
-      candidates.push({ conv: hit.conv, messages: hit.messages, coverage: hit.coverage });
-    }
-
-    // Visibility filter is synchronous (no DB) — drop non-visible candidates first.
-    const visible = candidates.filter(({ conv }) => scope.isVisible(conv));
-
-    // Time-range filter applies before totals so the counts reflect what's
-    // actually browsable under the current filters.
-    const scoped = args.since
-      ? visible.filter((c) => c.conv.updated_at >= args.since!)
-      : visible;
-
-    // Score once up front — the relevance sort and the per-result payload share it.
-    const scored = scoped.map((c) => ({
-      ...c,
-      proximityScore: calculateProximityScore(c.messages, terms),
-    }));
-    // Either sort ranks full matches above partial ones first.
-    if (args.sort === "relevance") {
-      scored.sort((a, b) =>
-        b.coverage - a.coverage ||
-        b.proximityScore - a.proximityScore ||
-        b.messages.length - a.messages.length ||
-        b.conv.updated_at - a.conv.updated_at);
-    } else {
-      // An operator match is as recent as the change that matched it.
-      const at = (c: (typeof scored)[number]) => matchedAt.get(c.conv._id.toString()) ?? c.conv.updated_at;
-      scored.sort((a, b) => b.coverage - a.coverage || at(b) - at(a));
-    }
     const totalMatches = scored.reduce((sum, c) => sum + c.messages.length, 0);
     const totalSessions = scored.length;
     const top = scored.slice(0, limit);
 
     const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map((c) => c.conv));
 
-    for (const { conv, messages, proximityScore } of top) {
+    for (const candidate of top) {
+      const { conv, messages } = candidate;
       const isOwn = conv.user_id.toString() === userId.toString();
       const conversationUser = scope.userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
@@ -3585,34 +3684,20 @@ export const searchConversations = query({
         conversationId: conv._id,
         title,
         matchCount: messages.length,
-        matches: messages.slice(0, 5).map((m) => {
-          const content = m.content || "";
-          const lowerContent = content.toLowerCase();
-          let bestIdx = -1;
-          for (const term of terms.all) {
-            const idx = lowerContent.indexOf(term);
-            if (idx !== -1 && (bestIdx === -1 || idx < bestIdx)) {
-              bestIdx = idx;
-            }
-          }
-          const start = Math.max(0, bestIdx > -1 ? bestIdx - 80 : 0);
-          const end = Math.min(content.length, bestIdx > -1 ? bestIdx + 220 : 300);
-          let snippet = content.slice(start, end);
-          if (start > 0) snippet = "..." + snippet;
-          if (end < content.length) snippet = snippet + "...";
-          return {
-            messageId: m._id,
-            content: snippet,
-            role: m.role,
-            timestamp: m.timestamp,
-          };
-        }),
+        matches: searchSnippets(candidate, terms).map(({ message, content }) => ({
+          messageId: message._id,
+          content,
+          role: message.role,
+          timestamp: message.timestamp,
+        })),
         updatedAt: conv.updated_at,
         authorName: conversationUser?.name || "Unknown",
         authorAvatar: (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null,
         isOwn,
         messageCount: conv.message_count || 0,
-        proximityScore,
+        relevance: candidate.relevance,
+        origin: originMatch(conv, terms),
+        workerCount: candidate.workers,
         titleMatch: messages.length === 0 && terms.all.length > 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
@@ -3675,11 +3760,11 @@ export const searchConversationTitles = query({
     const scoped = args.since
       ? visible.filter(({ conv }) => conv.updated_at >= args.since!)
       : visible;
-    scoped.sort((a, b) => b.coverage - a.coverage || b.conv.updated_at - a.conv.updated_at);
-    const top = scoped.slice(0, args.limit ?? 20).map(({ conv }) => conv);
-    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top);
+    scoped.sort((a, b) => relevanceTier(b.relevance) - relevanceTier(a.relevance) || b.conv.updated_at - a.conv.updated_at);
+    const top = scoped.slice(0, args.limit ?? 20);
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map(({ conv }) => conv));
 
-    const results = await Promise.all(top.map(async (conv) => {
+    const results = await Promise.all(top.map(async ({ conv, relevance }) => {
       const conversationUser = scope.userById.get(conv.user_id.toString());
       const title = conv.title
         || firstMsgByConv.get(conv._id.toString())
@@ -3700,7 +3785,9 @@ export const searchConversationTitles = query({
         authorAvatar: (conversationUser as any)?.image || (conversationUser as any)?.github_avatar_url || null,
         isOwn: conv.user_id.toString() === userId.toString(),
         messageCount: conv.message_count || 0,
-        proximityScore: 0,
+        relevance,
+        origin: originMatch(conv, terms),
+        workerCount: 0,
         titleMatch: true,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
@@ -4418,9 +4505,10 @@ export const searchForCLI = query({
 
     if (args.titles_only && !operatorHits) {
       const hits = await fetchTitleFieldHits(ctx, terms);
+      const tierOf = new Map([...hits.values()].map((h) => [h.conv._id.toString(), relevanceTier(h.relevance)]));
       const visibleConvs = [...hits.values()].map(({ conv }) => conv)
         .filter(isEligibleConv)
-        .sort(byRankThenRecency);
+        .sort((a, b) => tierOf.get(b._id.toString())! - tierOf.get(a._id.toString())! || byRankThenRecency(a, b));
       const page = visibleConvs.slice(offset, offset + limit);
       const firstMsgByConv = await resolveFirstMessageTitles(ctx, page);
       const conversations = await Promise.all(page.map(async (conv) => {
@@ -4436,8 +4524,9 @@ export const searchForCLI = query({
           project_path: conv.project_path || null,
           updated_at: new Date(conv.updated_at).toISOString(),
           message_count: conv.message_count || 0,
-          proximityScore: 0,
+          relevance: hits.get(conv._id.toString())?.relevance ?? 0,
           coverage: 1,
+          origin: originMatch(conv, terms),
           user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
           ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
           ...((conv as any).worktree_name &&
@@ -4477,8 +4566,13 @@ export const searchForCLI = query({
       project_path: string | null;
       updated_at: string;
       message_count: number;
-      proximityScore: number;
+      relevance: number;
       coverage: number;
+      // What the session began as and was called before, when that answers
+      // the query and the current title may not (searchCore.originMatch).
+      origin?: { started_as?: string; earlier_titles?: string[] };
+      // Worker sessions that matched and are folded into this row.
+      workers?: number;
       user?: { name: string | null; email: string | null };
       recent_files?: string[];
       worktree?: string;
@@ -4522,100 +4616,48 @@ export const searchForCLI = query({
     const hydratedConvs = await Promise.all(
       candidates.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
     );
-    const eligible: Array<{ conv: any; messages: typeof searchResults; coverage: number }> = [];
-    candidates.forEach(({ messages, coverage }, i) => {
-      const conv = hydratedConvs[i] as any;
+    const matched: SearchCandidate[] = [];
+    candidates.forEach((r, i) => {
+      const conv = hydratedConvs[i];
       if (!conv) return;
       if (!isEligibleConv(conv)) return;
-      eligible.push({ conv, messages, coverage });
+      matched.push(searchCandidate(conv, r, terms));
     });
-    // Stable: coverage order from rankConversationsByCoverage, then recency rank.
-    eligible.sort((a, b) => b.coverage - a.coverage || convRank(a.conv) - convRank(b.conv));
+    // Workers fold into the session that ran them, then relevance tier, then
+    // recency rank (live and recent above long-quiet above killed), then the
+    // better answer, then the newer session.
+    const eligible = await foldWorkersUnderParents(ctx, matched, terms, isEligibleConv);
+    eligible.sort((a, b) =>
+      relevanceTier(b.relevance) - relevanceTier(a.relevance) ||
+      convRank(a.conv) - convRank(b.conv) ||
+      b.relevance - a.relevance ||
+      b.conv.updated_at - a.conv.updated_at);
     // Operator hits arrive ranked: coverage, then the newest matching change.
-    if (operatorHits) eligible.push(...operatorHits);
+    if (operatorHits) eligible.push(...operatorHits.map((hit) => ({ ...hit, workers: 0 })));
 
     const page = eligible.slice(offset, offset + limit);
 
-    // Title-fallback first messages only for the returned page, in parallel.
-    const pageFirstMessages = await Promise.all(
-      page.map(({ conv }) =>
-        ctx.db
-          .query("messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-          .order("asc")
-          .take(20)
-      )
-    );
+    const pageFirstMessages = await resolveFirstMessageTitles(ctx, page.map(({ conv }) => conv));
 
-    for (let pageIdx = 0; pageIdx < page.length; pageIdx++) {
-      const { conv, messages, coverage } = page[pageIdx];
-      const firstMessages = pageFirstMessages[pageIdx];
-
-      let firstUserMessage = "";
-      for (const msg of firstMessages) {
-        const hasToolResults = msg.tool_results && msg.tool_results.length > 0;
-        if (msg.role === "user" && !hasToolResults) {
-          const text = msg.content?.trim();
-          if (text) {
-            firstUserMessage = text.slice(0, 120);
-            if (text.length > 120) firstUserMessage += "...";
-            break;
-          }
-        }
-      }
+    for (const candidate of page) {
+      const { conv, coverage, relevance, workers } = candidate;
 
       const title = conv.title
-        || firstUserMessage
+        || pageFirstMessages.get(conv._id.toString())
         || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
         || "New Session";
 
-      const matchedMessages = messages.slice(0, 5);
-      totalMatches += matchedMessages.length;
-
-      // For CLI search, we estimate line numbers without fetching all messages
-      // Line numbers are approximate (based on message order in matches)
-      const messageIdToLine = new Map<string, number>();
-      matchedMessages.forEach((m, idx) => {
-        // Use index + 1 as approximate line number for display
-        // Exact line numbers would require fetching all messages which hits read limits
-        messageIdToLine.set(m._id.toString(), idx + 1);
-      });
-
-      // Extract snippets around matches (same logic as web search)
-      const formattedMatches = matchedMessages.map((m) => {
-        const content = m.content || "";
-        const lowerContent = content.toLowerCase();
-
-        // Find best position to show snippet around
-        let bestIdx = -1;
-        for (const term of terms.all) {
-          const idx = lowerContent.indexOf(term);
-          if (idx !== -1 && (bestIdx === -1 || idx < bestIdx)) {
-            bestIdx = idx;
-          }
-        }
-
-        // Extract ~300 char snippet around match
-        const start = Math.max(0, bestIdx > -1 ? bestIdx - 80 : 0);
-        const end = Math.min(content.length, bestIdx > -1 ? bestIdx + 220 : 300);
-        let snippet = content.slice(start, end);
-        if (start > 0) snippet = "..." + snippet;
-        if (end < content.length) snippet = snippet + "...";
-
-        return {
-          line: messageIdToLine.get(m._id.toString()) || 0,
-          role: m.role,
-          content: snippet,
-          timestamp: new Date(m.timestamp).toISOString(),
-          tool_calls_count: m.tool_calls_count,
-          tool_results_count: m.tool_results_count,
-        };
-      });
-
-      // Sort matches by line number (chronological order)
-      formattedMatches.sort((a, b) => a.line - b.line);
-
-      const proximityScore = calculateProximityScore(messages, terms);
+      // Line numbers are the match's rank, not its place in the transcript:
+      // exact ones would need every message, which hits read limits.
+      const formattedMatches = searchSnippets(candidate, terms).map(({ message: m, content }, idx) => ({
+        line: idx + 1,
+        role: m.role,
+        content,
+        timestamp: new Date(m.timestamp).toISOString(),
+        tool_calls_count: m.tool_calls_count,
+        tool_results_count: m.tool_results_count,
+      }));
+      totalMatches += formattedMatches.length;
 
       const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
       const isOwnConv = conv.user_id.toString() === authUserId.toString();
@@ -4642,8 +4684,10 @@ export const searchForCLI = query({
         project_path: conv.project_path || null,
         updated_at: new Date(conv.updated_at).toISOString(),
         message_count: conv.message_count || 0,
-        proximityScore,
+        relevance,
         coverage,
+        origin: originMatch(conv, terms),
+        ...(workers ? { workers } : {}),
         user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
         ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
         ...((conv as any).worktree_name &&
@@ -4657,21 +4701,6 @@ export const searchForCLI = query({
         context: [],
       });
     }
-
-    // Sort by term coverage (full matches first), then recency rank (live and
-    // recent above long-quiet above killed), then proximity (lower = better),
-    // then recency.
-    if (!operatorHits) results.sort((a, b) => {
-      if (a.coverage !== b.coverage) {
-        return b.coverage - a.coverage;
-      }
-      const rankDelta = (a.recency_rank ?? 0) - (b.recency_rank ?? 0);
-      if (rankDelta !== 0) return rankDelta;
-      if (a.proximityScore !== b.proximityScore) {
-        return a.proximityScore - b.proximityScore;
-      }
-      return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
-    });
 
     // A dated window usually points at history the content mirror no longer
     // holds (it only covers the last CONTENT_WINDOW_DAYS days), so a windowed
@@ -4706,8 +4735,9 @@ export const searchForCLI = query({
           project_path: conv.project_path || null,
           updated_at: new Date(conv.updated_at).toISOString(),
           message_count: conv.message_count || 0,
-          proximityScore: 0,
+          relevance: 0,
           coverage: 0,
+          origin: originMatch(conv, terms),
           user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
           ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
           ...((conv as any).worktree_name &&
@@ -6907,7 +6937,7 @@ export function cliSessionClassifier(ctx: any, now: number) {
       !!managed?.last_heartbeat && now - managed.last_heartbeat < HEARTBEAT_ALIVE_MS;
     const agentStatus = trustedAgentStatus(
       managed?.agent_status, conv.updated_at, now, heartbeatFresh,
-      openTasksVouchForWaiting(managed?.open_tasks_at, managed?.open_tasks?.length ?? 0, now),
+      openTasksVouchForWaiting(managed?.open_tasks_at, managed?.open_tasks?.length ?? 0, managed?.last_heartbeat, now),
     );
     const daemonAlive = agentStatus === "stopped" ? false : isLive;
     const hasPending = !!(conv as any).has_pending_messages;
@@ -8330,10 +8360,11 @@ function noteHeartbeat(maps: Pick<InboxSessionMaps, "lastHeartbeatMap" | "liveCo
 }
 
 // Whether the daemon's open-task report vouches for a "waiting" on this
-// conversation right now (fresh, non-empty) — the fifth trustedAgentStatus arg.
-function verifiedWaitingFor(maps: Pick<InboxSessionMaps, "openTasksMap">, cid: string, now: number): boolean {
+// conversation right now (non-empty, daemon heartbeating) — the fifth
+// trustedAgentStatus arg.
+function verifiedWaitingFor(maps: Pick<InboxSessionMaps, "openTasksMap" | "lastHeartbeatMap">, cid: string, now: number): boolean {
   const rep = maps.openTasksMap.get(cid);
-  return openTasksVouchForWaiting(rep?.at, rep?.tasks.length ?? 0, now);
+  return openTasksVouchForWaiting(rep?.at, rep?.tasks.length ?? 0, maps.lastHeartbeatMap.get(cid), now);
 }
 
 // Build the per-user managed-session maps once, then look up by conversation id.
@@ -8870,6 +8901,7 @@ async function enrichInboxSessionRow(
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
     agent_status: agentStatus,
+    agent_status_raw: maps.agentStatusMap.get(conv._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
@@ -9062,6 +9094,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_rest: userRestStampOf(child)?.rest ?? null,
     inbox_rest_at: userRestStampOf(child)?.at ?? null,
     agent_status: childAgentStatus,
+    agent_status_raw: maps.agentStatusMap.get(child._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
@@ -9865,6 +9898,10 @@ export const listTeamInboxSessions = query({
 // full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
 type LivenessFields = {
   agent_status: any;
+  // The daemon's raw status the verdict above came from: a replica re-runs the
+  // trust rules over it at its own clock, since a verdict does not replay at a
+  // later instant (ct-56054).
+  agent_status_raw: string | null;
   is_idle: boolean;
   is_unresponsive: boolean;
   awaiting_input: boolean;
@@ -10131,12 +10168,15 @@ export async function buildAskingParents(
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
-      if ((c.message_count ?? 0) === 0) continue;
       const status = trustedAgentStatus(
         maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
       );
+      // A permission prompt is the child's own ask (ownAsk) whatever its
+      // message count, so it lifts the parent the same way on every side.
       if (status === "permission_blocked") { asking.add(pid); break; }
-      if (status !== undefined && status !== "idle") {
+      // Only a child with content can hold an AskUserQuestion poll: an empty
+      // one never spends the probe's message read.
+      if ((c.message_count ?? 0) > 0 && status !== undefined && status !== "idle") {
         const key = `${cid}:${c.message_count ?? 0}`;
         const hit = childAuqProbeCache.get(key);
         if (hit !== undefined) {
@@ -10311,6 +10351,7 @@ function deriveLivenessAt(
     // outlived the managed row and filed a declared-done session under Needs
     // Input on every replica while this stamp said done (prod, 2026-09-01).
     agent_status: live.agent_status,
+    agent_status_raw: facts.agent_status,
     is_idle: live.is_idle,
     is_unresponsive: live.is_unresponsive,
     awaiting_input: live.awaiting_input,

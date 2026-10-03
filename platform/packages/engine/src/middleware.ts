@@ -4,6 +4,7 @@ import { sameShape } from "./syncProtocol";
 import { createUndoController, enumerateTouchedCells, type UndoController } from "./undo";
 export { enumerateTouchedCells, type TouchedCell, type TouchedCellShape, type CellShapeKind } from "./undo";
 import { markUndoOutboxRefused } from "./undoStack";
+import { claimOutboxOwner, defaultLockManager, liveOutboxOwners, newOutboxOwnerId, ownedByAnotherLiveWindow, type LockManagerLike } from "./outboxOwner";
 import type {
   ActionFieldLock,
   DispatchFn,
@@ -731,6 +732,9 @@ export type MiddlewareOptions = {
   storageWatchdogRecheckMs?: number;
   // Reuse maps already derived from the same registry.
   registryMaps?: RegistryMaps;
+  // Test seam for the outbox owner locks (outboxOwner.ts); production uses
+  // navigator.locks. null = no lock manager: every row is drainable.
+  lockManager?: LockManagerLike | null;
 };
 
 export function mutativeMiddleware(
@@ -768,6 +772,11 @@ export function mutativeMiddleware(
   const outboxFailureDisposition = makeOutboxFailureDisposition(isMustDeliverEntry);
 
   return (set: any, get: any, api: any) => {
+    // This window's outbox rows carry its owner id; a drain leaves rows another
+    // live window owns to that window (outboxOwner.ts).
+    const lockManager = opts?.lockManager !== undefined ? opts.lockManager : defaultLockManager();
+    const outboxOwner = newOutboxOwnerId();
+    claimOutboxOwner(outboxOwner, lockManager);
     let dispatchBinding: DispatchBinding | null = null;
     let dispatchEpoch = 0;
     let lastOutboxTs = 0;
@@ -1074,7 +1083,11 @@ export function mutativeMiddleware(
       draining = true;
       try {
         const drainGeneration = outboxGeneration;
-        const loaded = await capturedLoad();
+        const live = await liveOutboxOwners(lockManager);
+        // Rows a sibling window owns and is still alive to deliver are not
+        // this drain's: re-sending one it already delivered would land after
+        // that window's later writes and revert them on the server.
+        const loaded = (await capturedLoad()).filter((entry) => !ownedByAnotherLiveWindow(entry, outboxOwner, live));
         assertDispatchCurrent(captured);
         // Coalesce across reloads: rows written by a previous page load can
         // hold several generations of the same key. Keep the newest per key,
@@ -1275,6 +1288,7 @@ export function mutativeMiddleware(
         // causal call order even when several dependent actions (create →
         // delete, fork → send) are queued in the same millisecond.
         ts: nextOutboxTimestamp(),
+        owner: outboxOwner,
         ...(coalesceKey ? { coalesceKey } : {}),
         ...(fieldLocks.length > 0 ? { locks: fieldLocks } : {}),
       };
@@ -1604,10 +1618,12 @@ export function mutativeMiddleware(
           shape: {
             declaredKind: (key) => maps.syncKindOf?.(key) ?? platformConfig.syncRegistry?.[key]?.kind,
             rowKeyOf: syncRowKeyOf,
+            rowGroupOf: (key) => maps.dispatchTableMap[key]?.table ?? key,
             isProtected: maps.isProtectedSyncCollection,
             isUnprotectedField: maps.isUnprotectedField,
             viewFields: new Set(viewGuard?.fields ?? []),
             ignoreKeys: platformConfig.undo.ignoreKeys,
+            optionalClearFields: platformConfig.optionalClearFields,
           },
         })
       : null;

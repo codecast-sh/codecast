@@ -6,6 +6,7 @@ export interface ProcessInfo {
   ppid: number;
   cpu: number;
   rss: number;
+  command?: string;
   /** Wall-clock start, derived from ps `etime` at snapshot time. Identifies the
    *  process GENERATION: a restarted agent keeps its session id and often its
    *  place in the tree, but never its start time. */
@@ -315,9 +316,9 @@ export class AwakeIdleClock {
 }
 
 export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>> {
-  if (process.platform !== "darwin") return new Map();
+  if (process.platform !== "darwin" && process.platform !== "linux") return new Map();
 
-  const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss=,etime="], {
+  const { stdout } = await execFileAsync("ps", ["-eo", "pid=,ppid=,pcpu=,rss=,etime=,comm="], {
     timeout: 5000,
     killSignal: "SIGKILL",
   });
@@ -342,6 +343,7 @@ export async function captureProcessSnapshot(): Promise<Map<number, ProcessInfo>
       ppid,
       cpu,
       rss: rss * 1024,
+      command: parts.slice(5).join(" "),
       ...(elapsedSec !== undefined ? { startedAt: collectedAt - elapsedSec * 1000 } : {}),
     });
   }
@@ -420,10 +422,11 @@ export function getSubtreeResources(
 export async function collectSessionResources(
   sessionPids: Map<string, number>,
   sharedPidSessions: ReadonlySet<string>,
+  providedSnapshot?: Map<number, ProcessInfo>,
 ): Promise<Map<string, SessionResources>> {
-  if (process.platform !== "darwin") return new Map();
+  if (process.platform !== "darwin" && process.platform !== "linux") return new Map();
 
-  const snapshot = await captureProcessSnapshot();
+  const snapshot = providedSnapshot ?? await captureProcessSnapshot();
   if (snapshot.size === 0) return new Map();
 
   const ownerByRootPid = new Map<number, string>();

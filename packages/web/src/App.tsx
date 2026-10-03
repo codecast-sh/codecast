@@ -1,5 +1,6 @@
 import { lazy, Suspense, ReactNode } from "react";
 import { BootFallback } from "@/components/BootFallback";
+import { ReloadOutsideApp } from "@/components/ReloadOutsideApp";
 import { RouteFallback } from "@/components/RouteFallback";
 import { Routes, Route } from "react-router";
 import { Providers } from "./providers";
@@ -131,6 +132,7 @@ const Roadmap = lazy(() => import("@/app/roadmap/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
+const Memory = lazy(() => import("@/app/memory/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 
@@ -282,6 +284,7 @@ export function App() {
               <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
               <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
               <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
+              <Route path="memory" element={<E name="Memory"><Memory /></E>} />
             </Route>
 
             {/* Standalone shell pages — kept outside the shared shell because they
@@ -309,6 +312,13 @@ export function App() {
             <Route path="share/stack/:token" element={<E name="ShareStack"><ShareStack /></E>} />
             <Route path="share/trigger/:token" element={<E name="ShareTrigger"><ShareTrigger /></E>} />
             <Route path="share/run/:token" element={<E name="ShareRun"><ShareRun /></E>} />
+            {/* A guest's meeting page boots standalone (shareBoot), never inside
+                the app: a full load of /meet/<token> never reaches this router.
+                A navigation from INSIDE the app does (a member following their
+                own guest link from a message, the desktop window, which never
+                reboots), and would land on the catch-all's blank page, so it
+                is turned into the full load the page needs. */}
+            <Route path="meet/:token" element={<ReloadOutsideApp />} />
 
             {/* Browsing a repository, inside the dashboard: its source, its
                 commits, the refs it has, its pull requests, its search. Every

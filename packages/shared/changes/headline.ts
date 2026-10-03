@@ -16,6 +16,25 @@ export function clip(text: string, max: number): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.]+$/, "")}…`;
 }
 
+/** Where a sentence can stop and still be a whole thought. */
+const CLAUSE_BREAKS = [", ", "; ", " and ", " while ", " with "];
+
+/**
+ * Model prose held to a length without an ellipsis. Text within `hard` chars
+ * stays whole, since a headline a little over its target reads better than a
+ * cut one. Past `hard` it is cut back to the last clause boundary that keeps
+ * at least 60% of `max`, and ends there as a complete clause; a cut
+ * mid-clause can invert the meaning ("stops emailing people never..."). Only
+ * text with no boundary at all falls back to `clip`.
+ */
+export function fitProse(text: string, max: number, hard: number): string {
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= hard) return t;
+  const head = t.slice(0, hard + 1);
+  const at = Math.max(...CLAUSE_BREAKS.map((b) => head.lastIndexOf(b)));
+  return at >= max * 0.6 ? t.slice(0, at).replace(/[\s,;:]+$/, "") : clip(t, max);
+}
+
 /** Tools whose names are written in lowercase; a subject leading with one keeps it. */
 const LOWERCASE_NAMES = new Set(["npm", "npx", "pnpm", "bunx", "gh", "tmux", "iterm", "eas", "cast"]);
 

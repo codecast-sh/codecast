@@ -1,5 +1,6 @@
 import { ReactRenderer, ReactNodeViewRenderer } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import Link from "@tiptap/extension-link";
 import Placeholder from "@tiptap/extension-placeholder";
 import TaskList from "@tiptap/extension-task-list";
 import TaskItem from "@tiptap/extension-task-item";
@@ -106,6 +107,51 @@ export function createMentionSuggestion(queryFn: MentionQueryFn) {
   };
 }
 
+/** True when the link at `index` is one text node whose text IS its href: a
+ *  URL typed or pasted bare. Same rule as serializeEntityRef. */
+function isBareUrlLink(mark: any, parent: any, index: number): boolean {
+  if (mark.attrs.title) return false;
+  const node = parent.child(index);
+  if (!node.isText || node.text !== mark.attrs.href) return false;
+  const next = index + 1 < parent.childCount ? parent.child(index + 1) : null;
+  return !(next && mark.isInSet(next.marks));
+}
+
+/**
+ * Links, with the markdown contract every editor shares: a bare URL in a body
+ * (a task description, a doc, a plan) parses as a link, and writes back as the
+ * same bare URL rather than `<url>` or `[url](url)`. Only text with a scheme
+ * links: fuzzy matching would turn `deploy.sh` and `README.md` into sites.
+ */
+const MarkdownLink = Link.extend({
+  addStorage() {
+    return {
+      ...this.parent?.(),
+      markdown: {
+        serialize: {
+          open(state: any, mark: any, parent: any, index: number) {
+            state.inAutolink = isBareUrlLink(mark, parent, index);
+            return state.inAutolink ? "" : "[";
+          },
+          close(state: any, mark: any) {
+            const bare = state.inAutolink;
+            state.inAutolink = undefined;
+            if (bare) return "";
+            const title = mark.attrs.title ? ` "${String(mark.attrs.title).replace(/"/g, '\\"')}"` : "";
+            return `](${String(mark.attrs.href).replace(/[()"]/g, "\\$&")}${title})`;
+          },
+          mixable: true,
+        },
+        parse: {
+          setup(md: any) {
+            md.linkify.set({ fuzzyLink: false, fuzzyEmail: false });
+          },
+        },
+      },
+    };
+  },
+});
+
 export function createBaseExtensions(opts: {
   placeholder?: string;
   withTables?: boolean;
@@ -121,10 +167,7 @@ export function createBaseExtensions(opts: {
     StarterKit.configure({
       codeBlock: false,
       heading: { levels: [1, 2, 3] },
-      link: {
-        openOnClick: true,
-        HTMLAttributes: { class: "editor-link" },
-      },
+      link: false,
       ...(opts.titleFirst ? { document: false } : {}),
     }),
     ...(opts.titleFirst
@@ -140,6 +183,10 @@ export function createBaseExtensions(opts: {
           }),
         ]
       : [Placeholder.configure({ placeholder: bodyPlaceholder })]),
+    MarkdownLink.configure({
+      openOnClick: true,
+      HTMLAttributes: { class: "editor-link" },
+    }),
     TaskList,
     TaskItem.configure({ nested: true }),
     SlashCommandExtension,
@@ -153,6 +200,7 @@ export function createBaseExtensions(opts: {
     }).configure({ lowlight }),
     Markdown.configure({
       html: true,
+      linkify: true,
       transformPastedText: true,
       transformCopiedText: true,
     }) as any,

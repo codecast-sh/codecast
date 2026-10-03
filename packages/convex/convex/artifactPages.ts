@@ -1406,8 +1406,8 @@ function pageShell(title: string, body: string, extra = ""): string {
   button.ghost { all: unset; cursor: pointer; font: inherit; padding: 6px 12px; border-radius: 7px; color: var(--ink);
     background: rgba(0,0,0,.05); -webkit-tap-highlight-color: transparent; }
   button.ghost:hover { background: rgba(0,0,0,.1); }
-  input[type=password], input[type=email], input[type=text] { font: inherit; padding: 10px 12px; border: 1px solid rgba(0,0,0,.18);
-    border-radius: 8px; width: 100%; background: #fff; color: var(--ink); transition: border-color .12s ease, box-shadow .12s ease; }
+  input[type=password], input[type=email], input[type=text] { font: inherit; padding: 10px 12px; border: 1px solid var(--dim);
+    border-radius: 8px; width: 100%; background: var(--bg); color: var(--ink); transition: border-color .12s ease, box-shadow .12s ease; }
   input:focus { outline: none; border-color: var(--coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
   .err { color: #b3372a; min-height: 1.2em; }
   .glyph { width: 44px; height: 44px; border-radius: 12px; background: rgba(232,108,93,.1); display: flex;

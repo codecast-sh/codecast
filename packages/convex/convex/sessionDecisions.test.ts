@@ -665,6 +665,29 @@ describe("review wave 1 regressions", () => {
     expect(guardClientResolution({ status: "pending" }, { status: "answered", answer_index: 1 })).toEqual({ status: "answered", answer_index: 1 });
   });
 
+  test("dispatch guard: an answered advisory ask still takes a person's new answer, never a dismiss", () => {
+    const patch = { status: "answered", answer_index: 1, resolved_at: 2 };
+    expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "policy" } }, patch)).toEqual(patch);
+    expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "user" } }, patch)).toEqual(patch);
+    expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "user" } }, { status: "dismissed", resolved_at: 2 })).toEqual({});
+    expect(guardClientResolution({ status: "answered", blocking: true, answered_by: { kind: "user" } }, patch)).toEqual({});
+    expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "role" } }, patch)).toEqual({});
+    expect(guardClientResolution({ status: "answered", blocking: false, workflow_run_id: "workflow_runs_1", answered_by: { kind: "user" } }, patch)).toEqual({});
+    expect(guardClientResolution({ status: "withdrawn", blocking: false }, patch)).toEqual({});
+  });
+
+  test("changing an advisory answer stamps who answered last and runs no side effects again", async () => {
+    const { ctx, tables } = seed();
+    const a = await askCore(ctx, { userId: HOST }, { session_id: "sess-ask", question: "Q", options: twoOptions, context_md: "ctx", category: "approach", blocking: false, default_option: 0 });
+    await ctx.db.patch(a.id, { status: "answered", answer_index: 0, resolved_at: NOW, answered_by: { kind: "policy", id: "stack:x" } });
+    const before = { ...tables.session_decisions[0] };
+    await ctx.db.patch(a.id, { status: "answered", answer_index: 1, resolved_at: NOW + 5 });
+    await settleClientResolution(ctx, before as any, { status: "answered", answer_index: 1 }, BOSS, NOW + 5);
+    expect(tables.session_decisions[0].answered_by).toEqual({ kind: "user", id: BOSS });
+    expect(tables.session_decisions[0].answer_index).toBe(1);
+    expect(tables.pending_messages).toHaveLength(0);
+  });
+
   test("listForSession --stack / --task refuse a stack or task outside the caller's boundary", async () => {
     const STRANGER = "users_stranger" as any;
     const { ctx } = seed({

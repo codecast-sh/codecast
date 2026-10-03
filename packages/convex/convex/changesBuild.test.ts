@@ -9,6 +9,8 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
+import type { ChangeCommit } from "@codecast/shared/changes";
+import { editionStats } from "./changes";
 
 setDefaultTimeout(60_000);
 
@@ -268,5 +270,20 @@ describe("changes.buildDay", () => {
     expect(result.deleted).toBe(1);
     expect((await stories()).some((s) => s._id === web._id)).toBe(false);
     expect(await inputs()).toEqual([]);
+  });
+});
+
+describe("changes.editionStats", () => {
+  const by = (sha: string, author_name: string, author_email: string): ChangeCommit =>
+    ({ sha, subject: "fix: x", author_name, author_email, timestamp: at("10:00"), branch: "main", insertions: 1, deletions: 0, areas: {} });
+
+  test("one person committing under two emails is one person, the way the page's chips count them", () => {
+    const commits = [by("a", "Sam Rao", "sam@work.example"), by("b", "Sam Rao", "sam@home.example"), by("c", "sam rao ", "sam@work.example"), by("d", "Ada Li", "ada@work.example")];
+    expect(editionStats(commits, {}, [], "main", new Set(), 0).people).toBe(2);
+    expect(editionStats(commits.slice(0, 3), {}, [], "main", new Set(), 0).people).toBe(1);
+  });
+
+  test("a commit with no author name counts by its email", () => {
+    expect(editionStats([by("a", "", "one@x.example"), by("b", " ", "two@x.example")], {}, [], "main", new Set(), 0).people).toBe(2);
   });
 });

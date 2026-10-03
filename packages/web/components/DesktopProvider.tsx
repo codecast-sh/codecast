@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
 import { useLocation } from "react-router";
-import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useMutation, useConvexAuth } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { floorRequestDue, isBelowFloor } from "../lib/desktopFloor";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -122,7 +122,7 @@ export function DesktopProvider() {
   // while you're here (pushRouter.ts). Runs on web and Electron alike.
   usePresenceReporter();
 
-  const notifications = useQuery(api.notifications.list);
+  const notifications = useQueryNoThrow(api.notifications.list, {}).data;
   useNotificationDelivery(isAuthenticated && notifications !== undefined);
   const mountedAtRef = useRef<number>(Date.now());
   const seenIdsRef = useRef<Set<string>>(new Set());

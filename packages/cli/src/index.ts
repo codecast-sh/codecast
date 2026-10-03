@@ -6,7 +6,7 @@ import { headForward, isSeatedAnchor } from "./anchorAlias.js";
 import { planProgressLabel } from "./planProgress.js";
 import { registerSessionSendCommand, printSendResult } from "./sessionSendCommand.js";
 import { fleetCountText, type FleetCounts } from "./fleetCounts.js";
-import { Command } from "commander";
+import { Command, Help, type Option } from "commander";
 import { randomUUID } from "node:crypto";
 import { probeDaemonPid, readDaemonPid } from "./daemonPid.js";
 import { activateGroup, groupTokenInArgv, registerGroupStubs, type GroupDeps } from "./commandGroups.js";
@@ -10086,9 +10086,18 @@ async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): P
   if (exact) return exact._id;
   const matches = rows.filter((r) => r._id.startsWith(ref));
   if (matches.length === 1) return matches[0]._id;
-  const err = (code: "not_found" | "ambiguous", message: string) => Object.assign(new Error(message), { code });
-  if (matches.length > 1) throw err("ambiguous", `"${ref}" matches ${matches.length} recent calls; use more characters, or the short id from \`cast calls\``);
-  throw err("not_found", `No recent call matches "${ref}"; \`cast calls\` lists them`);
+  // `try` holds the commands the sentence names, for a caller that answers
+  // in JSON (`cast call snap --json`).
+  const err = (code: "not_found" | "ambiguous", message: string, tries: string[]) => Object.assign(new Error(message), { code, try: tries });
+  if (matches.length > 1) throw err("ambiguous", `"${ref}" matches ${matches.length} recent calls; use more characters, or the short id from \`cast calls\``, ["cast calls"]);
+  // A short id typed without its prefix (`107` for cl-107) is the likeliest
+  // miss: say the spelling that works, and whether that call is there.
+  if (/^\d+$/.test(ref)) {
+    const short = `cl-${Number(ref)}`;
+    const there = rows.some((r) => r.short_id === short);
+    throw err("not_found", `No recent call matches "${ref}"${there ? `; did you mean ${short}?` : `; a call's short id is written ${short}.`} \`cast calls\` lists them`, there ? [`cast call ${short}`, "cast calls"] : ["cast calls"]);
+  }
+  throw err("not_found", `No recent call matches "${ref}"; \`cast calls\` lists them`, ["cast calls"]);
 }
 
 async function resolveCallId(ref: string): Promise<string> {
@@ -10110,7 +10119,8 @@ program
     "  cast calls                   # Recent calls across your teams\n" +
     "  cast calls -n 50             # More history\n" +
     "  cast call <id>               # One call: summary + action items\n" +
-    "  cast call <id> --transcript  # Full attributed transcript"
+    "  cast call <id> --transcript  # Full attributed transcript\n" +
+    "  cast call snap cl-42:15      # A frame of a recorded call's video, as a PNG"
   )
   .option("-n, --limit <n>", "How many calls to list", "20")
   .option("--json", "Machine-readable output")
@@ -10143,50 +10153,101 @@ program
     console.log(`\n${c.dim}cast call <id> for summary + transcript${c.reset}`);
   });
 
+// The snap part of `cast call`'s help, in one place: the description below
+// prints it, and `cast call snap --help` prints it alone (snapHelp), since
+// an agent asking how to snap should not have to find it under the words,
+// the links and hold.
+const CALL_SNAP_EXAMPLES =
+  "  cast call snap cl-42:15         # the moment line 15 was said (or: snap cl-42 15)\n" +
+  "  cast call snap cl-42@12:34      # 12m34s into the call (also @754s, @754 and @12m34s)\n" +
+  "  cast call snap cl-42:15-25      # frames across lines 15 to 25 (where the screen changed)\n" +
+  "  cast call snap cl-42            # right now, while the call records\n";
+const CALL_SNAP_ABOUT =
+  "A frame shows the shared screen from its own full-resolution file whenever one was\n" +
+  "recorded, else the room (--composite prefers the room, and says so where only a share\n" +
+  "was recorded). Each frame prints with the line being said and its citation: cl-42@12:34\n" +
+  "alone on a line in a message renders as that same picture for anyone who can read the\n" +
+  "call. --json gives each frame's path, kind (screen or composite) and what it shows; a\n" +
+  "refusal gives its code and a `try` list of the commands that will work. `cast call <id>`\n" +
+  "says what was recorded. --share uploads frames as public images, only for readers\n" +
+  "outside codecast. The stretch still being recorded has only its live picture until\n" +
+  "Record is stopped; stretches already saved can be snapped at once. Needs ffmpeg.";
+const SNAP_OPTION_PREFIX = "With `snap`";
+/** Options that mean something to snap: its own, --json and help. */
+const snapOption = (o: Option) => o.description.startsWith(SNAP_OPTION_PREFIX) || o.long === "--json" || o.long === "--help";
+
+/** `cast call snap --help`: the snap part of `cast call`'s help, alone. */
+function snapHelp(cmd: Command, helper: Help): string {
+  const opts = helper.visibleOptions(cmd).filter(snapOption);
+  const width = Math.max(...opts.map((o) => helper.optionTerm(o).length));
+  const rows = opts.map((o) => `  ${helper.optionTerm(o).padEnd(width)}  ${helper.optionDescription(o).replace(/^(?:With `snap`(?::)? )?(\w)/, (_m, c: string) => c.toUpperCase())}`);
+  return (
+    "Usage: cast call snap <moment> [options]\n\n" +
+    "A frame of a recorded call's video, as a PNG you can open:\n" +
+    CALL_SNAP_EXAMPLES +
+    "\n" +
+    CALL_SNAP_ABOUT +
+    "\n\nOptions:\n" +
+    rows.join("\n") +
+    "\n"
+  );
+}
+
 program
   .command("call")
   .description(
-    "Show one call: title, participants, summary, action items — and the\n" +
-    "full speaker-attributed transcript with --transcript. Each transcript line\n" +
-    "is labeled with the reference that cites it, so a message can name the exact words:\n" +
+    "Show one call: title, participants, summary, action items, frames of its\n" +
+    "video (cast call snap), and the full speaker-attributed transcript with\n" +
+    "--transcript. Each transcript line is labeled with the reference that cites\n" +
+    "it, so a message can name the exact words:\n" +
     "  cl-42           # in a message: the call, as a live pill (a card alone on its line)\n" +
     "  cl-42:15-25     # in a message: lines 15 to 25, embedded alone on a line\n" +
     "  cast call cl-42 15:25   # print just those lines\n" +
+    "  cast call cl-42@12:34   # the lines being said at 12m34s\n" +
     "and a link can too:\n" +
     "  https://codecast.sh/calls/<id>?turns=<from>-<to>   # those lines, selected\n" +
     "  https://codecast.sh/calls/<id>?part=summary        # the summary\n" +
     "  https://codecast.sh/calls/<id>?part=action-<n>     # action item n (from 1)\n\n" +
     "cast call hold <duration>|off   # from a session a live huddle feeds: hold\n" +
     "                                # the room's words for a stretch of work\n\n" +
-    "  cast call cl-42@12:34   # the lines being said at 12m34s\n" +
-    "A recorded call has video, and snap pulls a frame of it as a PNG you can open:\n" +
-    "  cast call snap cl-42:15         # the moment line 15 was said (or: snap cl-42 15)\n" +
-    "  cast call snap cl-42@12:34      # 12m34s into the call\n" +
-    "  cast call snap cl-42:15-25      # frames across lines 15 to 25 (where the screen changed)\n" +
-    "  cast call snap cl-42            # right now, while the call records\n" +
-    "A frame shows the shared screen from its own full-resolution file whenever one was\n" +
-    "recorded, else the room (--composite for the room regardless). Each frame prints with\n" +
-    "the line being said and its citation: cl-42@12:34 alone on a line in a message renders\n" +
-    "as that same picture for anyone who can read the call. --json gives each frame's path,\n" +
-    "kind (screen or composite) and what it shows. `cast call <id>` says what was recorded.\n" +
-    "A call still recording has only its live picture until Record is stopped. Needs ffmpeg."
+    "A recorded call has video, and snap pulls a frame of it as a PNG you can open\n" +
+    "(`cast call snap --help` for this part alone):\n" +
+    CALL_SNAP_EXAMPLES +
+    CALL_SNAP_ABOUT
   )
   .argument("<id>", "Call short id (cl-42), id or unique prefix from `cast calls`; or the verb `hold` or `snap`")
   .argument("[arg]", "Lines to print (15:25, 15-25 or 15); after `hold`: 3m, 90s, 1h or `off`; after `snap`: the moment (cl-42:15, cl-42@12:34, cl-42 15)")
   .option("--transcript", "Print the full attributed transcript")
-  .option("--json", "Machine-readable output (always includes segments)")
+  .option("--json", "Machine-readable output (a call always includes segments; a snap gives frames, or {error, code, try})")
   .option("--for <session>", "With `hold`: the fed session (default: the current one)")
   .option("--screen", "With `snap`: only a shared screen will do; refuse (code no_screen) where none was recorded")
-  .option("--composite", "With `snap`: the room view (faces and the share as everyone saw it)")
+  .option("--composite", "With `snap`: prefer the room view (faces and the share as everyone saw it)")
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
-  .option("--share", "With `snap`: upload each frame as an image anyone with its link can open, for readers outside the team (cite cl-42@12:34 for the team)")
-  .action(async (ref: string, duration: string | undefined, options: any, command: { args: string[] }) => {
+  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
+  .configureHelp({
+    formatHelp: (cmd, helper) => (cmd.args[0] === "snap" ? snapHelp(cmd, helper) : Help.prototype.formatHelp.call(helper, cmd, helper)),
+  })
+  .action(async (ref: string, duration: string | undefined, options: any, command: Command) => {
+    // The verb goes first. `cast call cl-42 snap` reads as lines named "snap".
+    if (ref !== "snap" && ref !== "hold" && (duration === "snap" || duration === "hold")) {
+      const rest = command.args.slice(2).join(" ");
+      console.error(`The verb comes first: cast call ${duration} ${duration === "snap" ? ref : rest || "3m"}${duration === "snap" && rest ? ` ${rest}` : ""}`);
+      process.exit(1);
+    }
     if (ref === "snap") {
+      // An option snap does not read is refused, the way a snap option
+      // without snap is below, rather than silently ignored.
+      const foreign = command.options.find((o) => !snapOption(o) && options[o.attributeName()] !== undefined);
+      if (foreign) {
+        console.error(`${foreign.long} does not work with \`cast call snap\`; \`cast call snap --help\` lists what does`);
+        process.exit(1);
+      }
       const { runCallSnap } = await import("./callSnap.js");
       const { uploadOne } = await import("./imageCommand.js");
       const deps = { getCliEndpoint, detectCurrentSessionId };
-      // `snap cl-42 15` and `snap cl-42 12:34`: the moment as its own word.
+      // `snap cl-42 15`: the moment as its own word. A colon pair there
+      // (`snap cl-42 12:34`) is refused as ambiguous, lines or a time.
       const extra = command.args.slice(2).join(" ") || undefined;
       await runCallSnap(
         duration,
@@ -10200,6 +10261,15 @@ program
         extra,
       );
       return;
+    }
+    // The video options mean nothing to the words: say where they go
+    // rather than print words as if they had been honored.
+    const snapOnly = command.options.find((o) => o.description.startsWith(SNAP_OPTION_PREFIX) && options[o.attributeName()] !== undefined);
+    if (snapOnly) {
+      const flag = snapOnly.short ?? snapOnly.long!;
+      const arg = snapOnly.flags.match(/<[^>]+>/)?.[0];
+      console.error(`${flag} works with \`cast call snap\`: cast call snap ${ref === "hold" ? "cl-42@12:34" : ref} ${flag}${arg ? ` ${arg}` : ""}`);
+      process.exit(1);
     }
     if (ref === "hold") {
       // The agent asks its huddle for time. The words keep flowing into the
@@ -10321,12 +10391,16 @@ program
       console.log(`\n${c.dim}The picture at that moment: ${c.reset}cast call snap ${momentRef}`);
       return;
     }
-    const { callVideoSpans, describeSpans, nearestRecordedMs } = await import("./callSnap.js");
+    const { callVideoSpans, describeSpans, nearestRecordedMs, spanDetails } = await import("./callSnap.js");
     const video = recs && Array.isArray(recs.recordings) ? callVideoSpans(recs) : [];
     const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
     if (options.json) {
-      const videoJson = video.map((v) => ({ kind: v.kind, from: formatCallTime(v.fromMs), to: formatCallTime(v.toMs), from_ms: v.fromMs, to_ms: v.toMs, saving: v.pending, participant_name: v.participant_name }));
-      console.log(JSON.stringify({ url: callUrl(), ...call, video: videoJson }, null, 2));
+      // The share link's token is the whole secret of the public page, and
+      // this output lands in a session transcript that can be read more
+      // widely than the call. It says whether the call is shared, never how
+      // to open it (a server from before `shared` still sends the token).
+      const { share_token, ...rest } = call;
+      console.log(JSON.stringify({ url: callUrl(), ...rest, shared: rest.shared ?? !!share_token, video: spanDetails(video) }, null, 2));
       return;
     }
     const live = call.status === "live";
@@ -10335,6 +10409,10 @@ program
     console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
+    // People from outside the team who were let in, spoken or not (each name
+    // already carries its "(guest)" mark).
+    const guests = (call.guests || []).map((g: any) => g.name).join(", ");
+    if (guests) console.log(`${c.dim}guests:${c.reset} ${guests}`);
     if (video.length) {
       const first = nearestRecordedMs(video, video[0].fromMs);
       const hint = first !== null ? ` ${c.dim}(a frame: cast call snap ${callRefId(handle, null, first)} or ${handle}:<line>)${c.reset}` : "";

@@ -641,7 +641,7 @@ export const rollback = httpAction(async (ctx, request) => {
     const resolved = await ctx.runQuery(internal.artifacts.resolveTargetForCLI, { api_token, target });
     if ("error" in resolved && resolved.error) return json({ error: resolved.error }, 403);
     const artifact = (resolved as { artifact: { slug: string } }).artifact;
-    if (!artifact) return json({ error: `No artifact matches "${target}"` }, 404);
+    if (!artifact) return json({ error: `No page matches "${target}"` }, 404);
     const err = await performRollback(ctx, artifact.slug, version);
     if (err) return json({ error: err }, 400);
     const fresh = await ctx.runQuery(internal.artifacts.bySlug, { slug: artifact.slug });
@@ -927,12 +927,12 @@ export const serve = httpAction(async (ctx, request) => {
   const rest = url.pathname.replace(/^\/cli\/a\//, "");
   const [slug, ...tailParts] = rest.split("/");
   const tail = tailParts.join("/");
-  if (!slug) return notFound("Artifact not found");
+  if (!slug) return notFound("Page not found");
   const apiBase = apiBaseFrom(request);
   const q = url.searchParams;
 
   const artifact = await ctx.runQuery(internal.artifacts.bySlug, { slug });
-  if (!artifact) return notFound("Artifact not found");
+  if (!artifact) return notFound("Page not found");
   const kind = artifact.kind ?? "html";
   const shareUrl = artifactUrl(artifact.slug);
 
@@ -962,7 +962,7 @@ export const serve = httpAction(async (ctx, request) => {
   // --- ?meta=1 — version/state JSON for the in-page bar (never cached) ---
   if (q.get("meta") === "1") {
     const art = await ctx.runQuery(internal.artifacts.historyBySlug, { slug });
-    if (!art) return notFound("Artifact not found");
+    if (!art) return notFound("Page not found");
     return new Response(
       JSON.stringify({
         version: art.version,
@@ -1056,7 +1056,7 @@ export const serve = httpAction(async (ctx, request) => {
     if (!m) return notFound("Bad diff range (use ?diff=2..5)");
     const [a, b] = [parseInt(m[1], 10), parseInt(m[2], 10)];
     const art = await withHistory();
-    if (!art) return notFound("Artifact not found");
+    if (!art) return notFound("Page not found");
     const va = (art.versions as HistoryVersion[]).find((x) => x.version === a);
     const vb = (art.versions as HistoryVersion[]).find((x) => x.version === b);
     if (!va || !vb) return notFound("One of those versions is no longer available (history keeps the last 20)");
