@@ -16,6 +16,12 @@
 // not depend on which day is on screen.
 // In week mode a last feed reads the week edition, keyed by its ISO week.
 //
+// The live strip and In the works are per repository too, and each answer is
+// the whole of its repository: what it lacks there has stopped, and what
+// another repository holds stays cached, so a return paints at once. Their
+// row ids are composed, never Convex ids, so the drop reaches disk and plants
+// no tombstone: a surface or a session that comes back shows again.
+//
 // Readers subscribe to signatures of the fields the page renders. Story rows
 // change only when a rebuild writes them, so the lists stay still between
 // rebuilds whatever else moves in the store.
@@ -28,7 +34,7 @@ import { isConvexId } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useCollectionRows } from "./useCollectionRows";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
-import { useCommits } from "./useSyncTimeline";
+import { byTimestampDesc } from "./useSyncTimeline";
 
 const api = _api as any;
 
@@ -86,6 +92,26 @@ export function storySyncOpts(scope: TeamScope, window: DateWindow, except?: str
     };
   };
 }
+
+/**
+ * The live strip's answer is every surface of one repository in the team: a
+ * cached surface of that repository it lacks has gone, and every other
+ * repository's surfaces stay cached for a return to them.
+ */
+export const liveScope = (scope: TeamScope) => (row: LiveRow) => String(row.team_id) === scope.teamId && row.repository === scope.repository;
+
+/**
+ * In the works answers for one repository, or the whole team: its session
+ * rows name the repository they were read for, and its reviews and branches
+ * name their own. A cached row the answer covers and lacks has stopped
+ * moving; another repository's rows stay cached for a return to it.
+ */
+export const worksScope = (scope: TeamScope) => (row: WorksRow) => {
+  if (String(row.team_id) !== scope.teamId) return false;
+  const repo = row.repository ? normalizeRepository(row.repository) : undefined;
+  if (row.kind === "stuck" || row.kind === "building") return repo === scope.repository;
+  return !scope.repository || repo === scope.repository;
+};
 
 /** listStories answers `{ stories, covered_from, complete }`, or null when it refused the caller (nothing synced). */
 export const selectStories = (data: any): StoryRow[] | undefined => (data && Array.isArray(data.stories) ? data.stories : undefined);
@@ -148,8 +174,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
       editions: { team_id: teamId, ...repoArg, scope: "day", ...around },
       recent: today ? { team_id: teamId, scope: "day", ...recentWindow(today) } : "skip",
       week: week ? { team_id: teamId, ...repoArg, scope: "week", ...weekWindow(week) } : "skip",
-      live: repository ? { team_id: teamId, repository } : "skip",
-      works: { team_id: teamId, ...repoArg },
+      live: repository ? { args: { team_id: teamId, repository }, opts: { dropAbsent: liveScope(scope) } } : null,
+      works: { args: { team_id: teamId, ...repoArg }, opts: { dropAbsent: worksScope(scope) } },
     } as const;
   }, [teamId, repository, date, today, week]);
 
@@ -158,8 +184,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
   const editions = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.editions ?? "skip");
   const recent = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.recent ?? "skip");
   const weekEdition = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.week ?? "skip");
-  const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live ?? "skip");
-  const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works ?? "skip");
+  const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live?.args ?? "skip", feeds?.live?.opts);
+  const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works.args ?? "skip", feeds?.works.opts);
 
   return {
     ready: day.ready && editions.ready,
@@ -195,7 +221,7 @@ const storySig = (s: StoryRow) =>
     s.story_key, s.headline, s.dek, s.body ?? "", s.importance, s.prose_status, s.why_source ?? "", s.generated_at ?? "",
     s.kind, s.area, s.branch, s.on_default_branch ? 1 : 0, s.commit_shas.length, s.insertions, s.deletions, s.last_at,
     s.release ? `${s.release.surface}@${s.release.version ?? s.release.sha}` : "",
-    s.risks.map((r) => r.code).join(","), JSON.stringify(s.risk_lines ?? null),
+    s.risks.map((r) => `${r.code}:${r.evidence.join(",")}`).join(";"), JSON.stringify(s.risk_lines ?? null), JSON.stringify(s.area_counts),
     s.conversation_ids.join(","), s.actor_user_ids.join(","), s.author_names.join(","), s.pr_ids.join(","),
     s.private_session_count,
   ].join("|");
@@ -290,12 +316,48 @@ export function useStorySessions(story: Pick<StoryRow, "_id" | "conversation_ids
   return useCollectionRows<StorySessionRow>("changeStorySessions", { where, sig: storySessionSig, sort });
 }
 
-/** The story's commit rows from the `commits` collection, newest first. */
-export function useStoryEvidence(story: Pick<StoryRow, "commit_shas"> | undefined): any[] {
-  const shas = story?.commit_shas.join(",") ?? "";
-  const where = useMemo(() => {
-    const wanted = new Set(shas ? shas.split(",") : []);
-    return (c: any) => wanted.has(c.sha);
-  }, [shas]);
-  return useCommits(where);
+// The drawer paints far more of a commit than the timeline lane does (its
+// diffstat, files, joins and author), so it wakes on its own signature.
+const evidenceSig = (c: any) =>
+  [
+    c.message, c.timestamp, c.pr_number ?? "", c.conversation_id ?? "", c.insertions ?? "", c.deletions ?? "",
+    c.files_changed ?? "", (c.files ?? []).length, (c.task_ids ?? []).join(","), c.author_name ?? "",
+  ].join("|");
+
+type StoryCommitScope = Pick<StoryRow, "commit_shas" | "repository" | "team_id">;
+
+/**
+ * Whether a commit row is one of a story's: one of its shas, in the story's
+ * repository and team. A sha alone is not enough, since the `commits`
+ * collection holds rows of every repository and team the viewer reads. The
+ * server joins the same way (changesQueries).
+ */
+export function storyCommitMatcher(story: StoryCommitScope): (c: any) => boolean {
+  const wanted = new Set(story.commit_shas);
+  const repository = normalizeRepository(story.repository);
+  const team = String(story.team_id);
+  return (c) => !!c && wanted.has(c.sha) && String(c.team_id) === team && normalizeRepository(c.repository ?? "") === repository;
+}
+
+/** One row per sha, the newest written (a commit synced twice), in the order given. */
+export function newestBySha<T extends { sha: string; _creationTime?: number }>(rows: readonly T[]): T[] {
+  const best = new Map<string, T>();
+  for (const r of rows) {
+    const had = best.get(r.sha);
+    if (!had || (r._creationTime ?? 0) > (had._creationTime ?? 0)) best.set(r.sha, r);
+  }
+  return rows.filter((r) => best.get(r.sha) === r);
+}
+
+/** A story's commit rows out of any set of commit rows, one per sha, newest first. */
+export const storyCommits = (story: StoryCommitScope, rows: Iterable<any>): any[] =>
+  newestBySha([...rows].filter(storyCommitMatcher(story)).sort(byTimestampDesc));
+
+/** The story's commit rows from the `commits` collection, one per sha, newest first. */
+export function useStoryEvidence(story: StoryCommitScope | undefined): any[] {
+  const key = story ? `${String(story.team_id)}|${story.repository}|${story.commit_shas.join(",")}` : "";
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- key is the story's team, repository and shas
+  const where = useMemo(() => (story ? storyCommitMatcher(story) : () => false), [key]);
+  const rows = useCollectionRows<any>("commits", { where, sig: evidenceSig, sort: byTimestampDesc });
+  return useMemo(() => newestBySha(rows), [rows]);
 }

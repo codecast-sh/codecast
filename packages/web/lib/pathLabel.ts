@@ -9,6 +9,7 @@ import { isConvexId } from "@codecast/shared/entities";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 import { changesDayLabel } from "./changesDay";
 import { evalsTabLabel } from "../components/evals/evalsPaths";
+import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -95,6 +96,7 @@ export function pathLabel(path: string): string {
     return inPath || REPO_SECTION_LABEL[section] || clean.split("/")[3] || "Repository";
   }
   if (clean === "/evals" || clean.startsWith("/evals/")) return evalsTabLabel(path);
+  if (isOpsPath(clean)) return opsTabLabel(path);
   if (clean.startsWith("/commit/")) {
     const sha = clean.split("/")[4] ?? "";
     return sha ? sha.slice(0, 7) : "Commit";

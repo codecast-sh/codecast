@@ -18,6 +18,8 @@ import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
+import { externalEventDataValidator, ingestTables } from "./ingestSchema";
+import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -88,6 +90,8 @@ export default defineSchema({
   ...machineResourceTables,
   ...googleOAuthTables,
   ...oauthConnectorTables,
+  // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
+  ...ingestTables,
   ...authTables,
   users: defineTable({
     email: v.optional(v.string()),
@@ -3499,7 +3503,9 @@ export default defineSchema({
   // one component. Access follows the PR/commit rule: team membership, or
   // access to the linked conversation.
   external_events: defineTable({
-    team_id: v.id("teams"),
+    // Required on git and issue rows. Absent only on an ingestion row from a
+    // personal workspace source, which has no team (external-data.md X1).
+    team_id: v.optional(v.id("teams")),
     // github | linear | codecast
     source: v.string(),
     // owner/name for git events; absent for issue trackers without a repo.
@@ -3559,10 +3565,22 @@ export default defineSchema({
       version: v.optional(v.string()),
       tag: v.optional(v.string()),
     })),
+    // Ingestion rows (external-data.md X3): a group transition or a deploy a
+    // source reported. `workspace` is their access key (equality, like
+    // signals); git and issue rows keep the team rule and leave these unset.
+    workspace: v.optional(v.string()),
+    source_id: v.optional(v.id("event_sources")),
+    group_id: v.optional(v.id("event_groups")),
+    data: v.optional(externalEventDataValidator),
     dedupe_key: v.string(),
     created_at: v.number(),
   })
     .index("by_team_created", ["team_id", "created_at"])
+    // listForTeam and the Changes scans read source_id = undefined here, so a
+    // noisy product never pushes git activity out of the team feed.
+    .index("by_team_source_created", ["team_id", "source_id", "created_at"])
+    .index("by_source_created", ["source_id", "created_at"])
+    .index("by_workspace_created", ["workspace", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
     .index("by_pr_created", ["pr_id", "created_at"])
     .index("by_conversation_created", ["conversation_id", "created_at"])
@@ -4652,12 +4670,11 @@ export default defineSchema({
     // the arming after the run returns to the cadence. Absent otherwise:
     // run_at is then the slot.
     cadence_slot_at: v.optional(v.number()),
-    event_filter: v.optional(v.object({
-      event_type: v.string(),
-      action: v.optional(v.string()),
-      repository: v.optional(v.string()),
-      pr_number: v.optional(v.number()),
-    })),
+    event_filter: v.optional(eventFilterValidator),
+    // Events fired at this trigger since its last claim, newest last and
+    // capped at PENDING_EVENTS_CAP (external-data.md X4). Two firings before a
+    // claim are one run that knows about both; the claim clears them.
+    pending_events: v.optional(v.array(pendingEventValidator)),
 
     mode: v.union(v.literal("propose"), v.literal("apply")),
     max_runtime_ms: v.optional(v.number()),
@@ -4746,6 +4763,8 @@ export default defineSchema({
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
     .index("by_event_filter", ["status"])
+    // A firing reads only the triggers armed on its name (matchTaskTriggers).
+    .index("by_status_event_type", ["status", "event_filter.event_type"])
     .index("by_short_id", ["short_id"])
     // Anchor lookups for conversation-scoped visibility (webListForConversation):
     // a trigger armed from a session is findable from that session even when a
@@ -4777,12 +4796,7 @@ export default defineSchema({
       schedule_type: v.union(v.literal("once"), v.literal("recurring"), v.literal("event")),
       run_at: v.optional(v.number()),
       interval_ms: v.optional(v.number()),
-      event_filter: v.optional(v.object({
-        event_type: v.string(),
-        action: v.optional(v.string()),
-        repository: v.optional(v.string()),
-        pr_number: v.optional(v.number()),
-      })),
+      event_filter: v.optional(eventFilterValidator),
       mode: v.union(v.literal("propose"), v.literal("apply")),
       agent_type: v.optional(v.string()),
       model: v.optional(v.string()),
@@ -6407,6 +6421,11 @@ export default defineSchema({
     // never shows faces and screens by itself, and a link turned off and on
     // again is a new token, so it never inherits the choice.
     share_video_token: v.optional(v.string()),
+    // The moment the video was chosen for that link: room videos pressed for
+    // up to then are on it, and a run recorded later waits for a fresh choice
+    // (lib/callRecordingRuns.sharedVideoRuns). Absent on links shared before
+    // the cutoff existed, which show every finished room video.
+    share_video_through: v.optional(v.number()),
     // Everyone a recording of this huddle showed: seated when a run started,
     // or seated while one ran (lib/callRecordingRuns.noteRecordedPeople).
     // canReadCall admits them like speakers, so a person who was filmed but
@@ -6496,6 +6515,10 @@ export default defineSchema({
     // id or `guest:<id>`), since any participant may stop a recording.
     stop_reason: v.optional(callRecordingStopReasonValidator),
     stopped_by: v.optional(v.string()),
+    // When the stop was asked for (lib/callRecordingRuns.stopRoomRecording).
+    // Its own stamp because updated_at moves with every later write: the
+    // restart cooldown and the stuck-save timeout both count from here.
+    stop_requested_at: v.optional(v.number()),
     // LiveKit's words when it failed, shown as they are.
     error: v.optional(v.string()),
     // Written only when something a reader shows changes. The reconcile
@@ -6508,6 +6531,19 @@ export default defineSchema({
     .index("by_egress", ["egress_id"])
     // The reconciler's worklist: every row LiveKit is still working on.
     .index("by_status", ["status"]),
+
+  // A frame of a recording uploaded as a public image (`cast call snap
+  // --share`). The image itself is an ordinary storage object anyone with its
+  // link can open; this row ties it to the file it was taken from, so
+  // deleting the recording (callRecordings.deleteRecordingRun) deletes every
+  // frame shared from it too, screens and guests' faces included.
+  call_frame_shares: defineTable({
+    recording_id: v.id("call_recordings"),
+    transcript_id: v.id("transcripts"),
+    storage_id: v.id("_storage"),
+    user_id: v.id("users"),
+    created_at: v.number(),
+  }).index("by_recording", ["recording_id"]),
 
   // One row per recording run: its reconcile loop's bookkeeping, kept apart
   // from call_recordings because every room and call page subscribes to

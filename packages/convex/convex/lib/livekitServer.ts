@@ -134,9 +134,19 @@ export function roomCompositeEgressRequest(opts: {
     layout: opts.layout ?? "speaker",
     audio_only: opts.audioOnly ?? false,
     preset: opts.preset ?? "H264_1080P_30",
-    file_outputs: [{ file_type: "MP4", filepath: opts.filepath, s3: opts.upload }],
+    file_outputs: [mp4Output(opts.filepath, opts.upload)],
     ...liveFrameOutputs(opts.liveFrame, opts.upload),
   };
+}
+
+/** One MP4 into the bucket, with no manifest. LiveKit otherwise writes a JSON
+ *  beside every file (the room's name, who was in it, the file), outside the
+ *  run's folder and named by the egress: data the recording's own row
+ *  already holds, which a run's delete would then have to chase. Every
+ *  output this module asks for turns it off (DirectFileOutput,
+ *  EncodedFileOutput and ImageOutput all carry the field). */
+function mp4Output(filepath: string, upload: ReturnType<typeof egressS3Upload>) {
+  return { file_type: "MP4", filepath, disable_manifest: true, s3: upload };
 }
 
 /** A still of the egress, rewritten in place every few seconds while it
@@ -161,21 +171,10 @@ function liveFrameOutputs(frame: LiveFrameOutput | undefined, upload: ReturnType
   };
 }
 
-/** One track exactly as it was published, with no transcode: a screen share
- *  at the sharer's own resolution and codec. The container follows the codec
- *  (VP8/VP9 to WebM, H.264 to MP4); a filepath without an extension gets the
- *  right one from LiveKit, and the file result names what was written. */
-export function trackEgressRequest(opts: { room: string; trackSid: string; filepath: string; upload: ReturnType<typeof egressS3Upload> }) {
-  return {
-    room_name: opts.room,
-    track_id: opts.trackSid,
-    file: { filepath: opts.filepath, s3: opts.upload },
-  };
-}
-
-/** One video track (and optionally one audio track) transcoded to an MP4.
- *  The alternative to a raw track egress when the file must be H.264/MP4;
- *  pass `advanced` to keep a share's resolution rather than a preset's. */
+/** One video track (and optionally one audio track) transcoded to an MP4,
+ *  the form every screen file takes (callRecordingRuns.screenEncoding says
+ *  why it is not a raw track egress); pass `advanced` to keep a share's
+ *  resolution rather than a preset's. */
 export function trackCompositeEgressRequest(opts: {
   room: string;
   videoTrackSid: string;
@@ -183,7 +182,8 @@ export function trackCompositeEgressRequest(opts: {
   filepath: string;
   upload: ReturnType<typeof egressS3Upload>;
   preset?: string;
-  advanced?: { width: number; height: number; framerate?: number; video_codec?: string; key_frame_interval?: number };
+  /** `video_bitrate` is in kbps; LiveKit's default applies without it. */
+  advanced?: { width: number; height: number; framerate?: number; video_codec?: string; key_frame_interval?: number; video_bitrate?: number };
   liveFrame?: LiveFrameOutput;
 }) {
   return {
@@ -191,7 +191,7 @@ export function trackCompositeEgressRequest(opts: {
     video_track_id: opts.videoTrackSid,
     ...(opts.audioTrackSid ? { audio_track_id: opts.audioTrackSid } : {}),
     ...(opts.advanced ? { advanced: opts.advanced } : { preset: opts.preset ?? "H264_1080P_30" }),
-    file_outputs: [{ file_type: "MP4", filepath: opts.filepath, s3: opts.upload }],
+    file_outputs: [mp4Output(opts.filepath, opts.upload)],
     ...liveFrameOutputs(opts.liveFrame, opts.upload),
   };
 }
@@ -450,10 +450,6 @@ const RECORD = { roomRecord: true };
 
 export async function startRoomCompositeEgress(cfg: LivekitServerConfig, req: ReturnType<typeof roomCompositeEgressRequest>): Promise<LivekitEgress> {
   return parseEgressInfo(await livekitTwirp(cfg, "Egress/StartRoomCompositeEgress", req, { room: req.room_name, grant: RECORD }));
-}
-
-export async function startTrackEgress(cfg: LivekitServerConfig, req: ReturnType<typeof trackEgressRequest>): Promise<LivekitEgress> {
-  return parseEgressInfo(await livekitTwirp(cfg, "Egress/StartTrackEgress", req, { room: req.room_name, grant: RECORD }));
 }
 
 export async function startTrackCompositeEgress(cfg: LivekitServerConfig, req: ReturnType<typeof trackCompositeEgressRequest>): Promise<LivekitEgress> {

@@ -18,19 +18,20 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { useMemo, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ShareControl } from "../../components/ShareControl";
 import { GuestInvite } from "../../components/calls/GuestDoor";
-import { GuestTag } from "../../components/calls/GuestTag";
+import { GuestTag, ParticipantTag } from "../../components/calls/GuestTag";
 import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useCallDetail, useCallList } from "../../hooks/useSyncCalls";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError, isRecRoomKey, parseCallAnchor, parseCallMomentParam } from "@codecast/shared/contracts";
+import { humanizeConvexError, isRecRoomKey, parseCallAnchor, parseCallMomentParam, parseCallViewParam } from "@codecast/shared/contracts";
 import { callRefId } from "@codecast/shared/entities";
 import { joinCall } from "../../lib/calls/callManager";
+import { callTitle } from "../../lib/calls/roomLabels";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
 import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
@@ -38,8 +39,9 @@ import { useLiveRooms } from "../../hooks/useLiveRooms";
 import { RoomThread } from "../../components/calls/RoomThread";
 import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
 import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
-import { copyCallLink } from "../../lib/calls/callLinks";
+import { copyCallFrameLink, copyCallLink } from "../../lib/calls/callLinks";
 import { copyText } from "../../lib/copyText";
+import { scrollIntoContainer } from "../../lib/scrollWithin";
 import { callVideoNotice, callVideoRuns, playableFiles, shownMomentNear, turnIndexAt, type CallVideoRun } from "../../lib/calls/callVideo";
 import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn } from "../../hooks/useRoomRecording";
 import {
@@ -56,7 +58,7 @@ import {
   type FeedTarget,
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
-import { firstName, fmtCallLength, fmtClock, speakerColor, speakerShortName } from "../../components/calls/speakers";
+import { firstName, fmtCallLength, fmtClock, speakerColor } from "../../components/calls/speakers";
 import { CallSessionChips } from "../../components/calls/CallSessionChips";
 import { useMutation } from "convex/react";
 import {
@@ -69,6 +71,7 @@ import {
 import {
   ArrowDownToLine,
   Check,
+  ChevronLeft,
   Copy,
   Link2,
   Lock,
@@ -84,10 +87,12 @@ import {
 import { getRecorderStatus, startRecording } from "../../lib/calls/recorder";
 import { useRecorderStatus } from "../../hooks/useRecorder";
 import "../../components/calls/recorder.css";
+import "../../components/calls/callMedia.css";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
+import { seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
 import { RecordingMark } from "../../components/calls/RecordingMark";
 import { RecorderMic } from "../../components/calls/RecorderMic";
 import { fmtClock as fmtWhen } from "../../components/triggerCadence";
@@ -123,6 +128,11 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
   const recording = isRecRoomKey(call.room_key);
   const people: any[] = call.participants || [];
   const silent = !recording && !live && people.length === 0;
+  // A string out of the selector, so the row re-renders only when the name
+  // itself changes, not on every write to the collections it reads.
+  const title = useInboxStore((s) =>
+    callTitle(call, s as any, { untitled: silent ? "Typed huddle, nothing said" : undefined }),
+  );
   return (
     <Link
       href={`/calls/${call._id}`}
@@ -149,7 +159,7 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
             silent ? "font-normal text-sol-text-muted" : "font-medium text-sol-text"
           }`}
         >
-          {call.title || (recording ? "Untitled recording" : silent ? "Typed huddle, nothing said" : "Untitled huddle")}
+          {title}
         </span>
         <span className={`shrink-0 text-[11px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
           {fmtCallLength(call.started_at, call.ended_at)}
@@ -176,7 +186,8 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
           <span className="min-w-0 truncate text-[11px]">
             {people.map((p: any, i: number) => (
               <span key={p.id} className={speakerColor(p.id)}>
-                {speakerShortName(p.name)}
+                {firstName(p.name)}
+                <ParticipantTag identity={p.id} name={p.name} className="ml-1 align-[1px]" />
                 {i < people.length - 1 ? ", " : ""}
               </span>
             ))}
@@ -250,10 +261,53 @@ function RecordingScopePicker({ call }: { call: any }) {
   );
 }
 
-function CallDetail({ id }: { id: string }) {
-  // Plain useQuery: a live call's transcript streams into this subscription
-  // in real time — segments appear as people speak.
-  const call = useQuery(api.transcripts.webGetCall, { transcript_id: id as any });
+/** The call page before its record answers: the header painted from the
+ *  history list's row when the list has it (title, when, how long), and the
+ *  thread's shape under it, so the page does not open on a word and then
+ *  jump. Only the header is drawn from the row; nothing else is guessed (no
+ *  video box, since the list cannot say whether the call was filmed). */
+function CallDetailSkeleton({ preview }: { preview?: any }) {
+  const bar = "rounded bg-sol-text-muted/10 animate-pulse motion-reduce:animate-none";
+  return (
+    <div className="flex h-full min-h-0 min-w-0 flex-col" aria-busy="true">
+      <div className="shrink-0 border-b border-sol-border/20 px-6 py-4">
+        {preview?.title ? (
+          <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">{preview.title}</h1>
+        ) : (
+          <div className={`${bar} h-[22px] w-72 max-w-full`} />
+        )}
+        <div className="mt-2 flex items-center gap-3 text-[12px] text-sol-text-dim">
+          {preview?.started_at ? (
+            <>
+              <span>{fmtWhen(preview.started_at)}</span>
+              <span>{fmtCallLength(preview.started_at, preview.ended_at)}</span>
+            </>
+          ) : (
+            <div className={`${bar} h-3.5 w-40`} />
+          )}
+        </div>
+      </div>
+      <div className="space-y-4 px-6 pt-5" aria-hidden="true">
+        {[64, 88, 52, 76, 40].map((w, i) => (
+          <div key={i} className="flex gap-2.5">
+            <div className={`${bar} mt-0.5 h-4 w-4 shrink-0 rounded-full`} />
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <div className={`${bar} h-3 w-20`} />
+              <div className={`${bar} h-3`} style={{ width: `${w}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CallDetail({ id, preview }: { id: string; preview?: any }) {
+  // A live call's transcript streams into this subscription in real time
+  // (segments appear as people speak), and every push lands in the store, so
+  // a call opened before paints from cache on the next visit instead of a
+  // skeleton.
+  const call = useCallDetail(id);
   const myCall = useInboxStore((s) => s.call);
   // A recording has no room: nobody can join it, nobody else can see it, and
   // the room chat those affordances open would have no second person in it.
@@ -297,7 +351,6 @@ function CallDetail({ id }: { id: string }) {
   // said under the picture until the next seek that lands, so the picture
   // and the lit line never disagree without a word.
   const [missed, setMissed] = useState<number | null>(null);
-  const seekVideo = (ms: number, opts?: { play?: boolean }) => setMissed(playerRef.current?.seek(ms, opts) === false ? ms : null);
   const removeRun = (run: CallVideoRun) => {
     const anyId = run.composite?.id ?? run.screens[0]?.id;
     if (anyId) deleteRecordingRun(anyId);
@@ -364,35 +417,23 @@ function CallDetail({ id }: { id: string }) {
     setEnd(hit[hit.length - 1]);
   }, [id, focus, turns]);
 
-  // A link to a moment (`?t=754`, what `cl-42@12:34` opens): the player waits
-  // there (not playing: the page was opened, not pressed) and the line being
-  // said then is lit and brought into view. Without video it still lands on
-  // the line. Waits for the recordings to answer before deciding there is no
-  // video, so a slow query does not land on the words alone. The picture and
-  // the line land separately: the recordings can answer before the words do,
-  // and the line is brought into view once there are lines to bring.
+  // A link to a moment (`?t=754`, what `cl-42@12:34` opens) lands there
+  // (useCallMomentLanding), once the recordings have answered whether there
+  // is video.
   const momentMs = useMemo(() => parseCallMomentParam(searchParams), [searchParams]);
-  const landedMoment = useRef<string | null>(null);
-  const landedLine = useRef<string | null>(null);
-  useWatchEffect(() => {
-    // A huddle recorded with transcription off has video and no lines: it
-    // still lands, on the picture alone.
-    if (momentMs === null || (turns.length === 0 && !hasVideo)) return;
-    if (!recording && callRecs === undefined) return;
-    const key = `${id}@${momentMs}`;
-    if (landedMoment.current !== key) {
-      landedMoment.current = key;
-      if (hasVideo) seekVideo(momentMs, { play: false });
-      else if (audioRef.current) audioRef.current.currentTime = momentMs / 1000;
-      setMediaAt({ ms: momentMs, playing: false });
-    }
-    if (landedLine.current === key || turns.length === 0) return;
-    landedLine.current = key;
-    const i = turnIndexAt(turns, momentMs, true);
-    // A timer, not a frame: the fold opens the passage first, and frames
-    // stall in a background tab.
-    if (i !== null) setTimeout(() => lineEl(i)?.scrollIntoView({ block: "center" }), 80);
-  }, [id, momentMs, turns.length, hasVideo, callRecs === undefined]);
+  // And on the picture it names: a frame of a shared screen opens on that
+  // screen, not on the room the player otherwise starts from.
+  const momentView = useMemo(() => parseCallViewParam(searchParams), [searchParams]);
+  const mediaTarget: CallMediaTarget = { hasVideo, player: playerRef, audio: audioRef, media, setMissed };
+  useCallMomentLanding({
+    scope: id,
+    momentMs,
+    view: momentView,
+    turns,
+    ready: recording || callRecs !== undefined,
+    target: mediaTarget,
+    lineEl: (i) => lineEl(i),
+  });
 
   // While it plays, the thread follows the line being said, the way lyrics
   // follow a song: only while the reader is following. A wheel or a touch in
@@ -401,6 +442,10 @@ function CallDetail({ id }: { id: string }) {
   // the scroll alone and offers the way back. A line clicked, or the way
   // back taken, follows again.
   const lineEl = (i: number) => detailRef.current?.querySelector<HTMLElement>(`[data-turn="${i}"]`) ?? null;
+  const withLine = (i: number, fn: (el: HTMLElement) => void) => {
+    const el = lineEl(i);
+    if (el) fn(el);
+  };
   const [following, setFollowing] = useState(true);
   const playingIndex = seekable && mediaAt?.playing ? turnIndexAt(turns, mediaAt.ms) : null;
   const followedIndex = useRef<number | null>(null);
@@ -412,7 +457,7 @@ function CallDetail({ id }: { id: string }) {
     const root = threadRef.current?.getBoundingClientRect();
     const was = prev === null ? null : lineEl(prev)?.getBoundingClientRect();
     if (root && was && (was.bottom < root.top || was.top > root.bottom)) return setFollowing(false);
-    lineEl(playingIndex)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    withLine(playingIndex, (el) => scrollIntoContainer(el, { block: "nearest", smooth: true }));
   }, [playingIndex]);
   const threadRef = useRef<HTMLDivElement>(null);
   const threadShown = !!call;
@@ -430,14 +475,15 @@ function CallDetail({ id }: { id: string }) {
   const backToMoment = () => {
     setFollowing(true);
     const i = mediaAt ? turnIndexAt(turns, mediaAt.ms, true) : null;
-    if (i !== null) lineEl(i)?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (i !== null) withLine(i, (el) => scrollIntoContainer(el, { block: "center", smooth: true }));
   };
 
   const live = isLive;
 
-  if (call === undefined) {
-    return <div className="p-8 text-sm text-sol-text-dim">Loading…</div>;
-  }
+  // Named by the one rule the history list uses, so a row and the page it
+  // opens never call the same call two things.
+  const title = useInboxStore((s) => (call ? callTitle(call, s as any) : ""));
+  if (call === undefined) return <CallDetailSkeleton preview={preview} />;
   if (call === null) {
     return <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>;
   }
@@ -479,14 +525,7 @@ function CallDetail({ id }: { id: string }) {
   };
 
   const isSelected = (i: number) => selLo !== null && i >= selLo && i <= (selHi as number);
-  const seekTo = (ms: number) => {
-    if (hasVideo) return seekVideo(ms);
-    const el = audioRef.current;
-    if (!el) return;
-    el.currentTime = Math.max(0, ms / 1000);
-    void el.play().catch(() => {});
-    setMediaAt({ ms, playing: true });
-  };
+  const seekTo = (ms: number) => seekCallMedia(mediaTarget, ms);
 
   // A recording's start or stop in the thread jumps to the picture it is
   // about (shownMomentNear snaps a press to the file's first frame).
@@ -536,7 +575,7 @@ function CallDetail({ id }: { id: string }) {
         <div className="flex items-center gap-2.5">
           {recording && <Mic className="h-4 w-4 shrink-0 text-sol-text-dim" />}
           <h1 className="min-w-0 line-clamp-2 text-[17px] font-medium leading-snug text-sol-text">
-            {call.title || (recording ? "Untitled recording" : "Untitled huddle")}
+            {title}
           </h1>
           {live && (
             <span
@@ -594,7 +633,14 @@ function CallDetail({ id }: { id: string }) {
             publicShare={{ kind: "call", id: String(call._id), token: call.share_token }}
             linkExtra={
               callRecs && videoRuns.some((r) => r.composite?.status === "ready") ? (
-                <ShareVideoSwitch call={String(call._id)} shared={callRecs.video_shared} linkOn={!!call.share_token} />
+                <ShareVideoSwitch
+                  call={String(call._id)}
+                  shared={callRecs.video_shared}
+                  linkOn={!!call.share_token}
+                  canShare={callRecs.can_share_video ?? true}
+                  later={callRecs.video_later ?? 0}
+                  guests={(call.guests ?? []).map((g: { name: string }) => g.name)}
+                />
               ) : undefined
             }
           />
@@ -642,8 +688,14 @@ function CallDetail({ id }: { id: string }) {
         </div>
       </div>
 
-      {/* The huddle's video, in step with the thread below, or what to know
-          about it while there is none to play: being filmed, saving, failed,
+      {/* The media and the thread that follows it (components/calls/callMedia.css):
+          stacked on a laptop, side by side on a wide screen when there is a
+          picture to stand beside the words. */}
+      <div className="call-media">
+      <div className="call-media-body" data-side={!recording && (hasVideo || videoExpected) ? "" : undefined}>
+      <div className="call-media-side">
+      {/* The huddle's video, in step with the thread, or what to know about
+          it while there is none to play: being filmed, saving, failed,
           deleted. */}
       {!recording && (hasVideo || videoNotice || recordingDeleted) && callRecs && (
         <div className="shrink-0 space-y-2 px-6 pt-4">
@@ -677,9 +729,9 @@ function CallDetail({ id }: { id: string }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => copyCallLink(String(call._id), null, callMs)}
+                      onClick={() => copyCallFrameLink(String(call._id), callMs, file)}
                       className={copy}
-                      title="Copy a link that opens the call at this moment"
+                      title={file.kind === "screen" ? "Copy a link that opens the call at this moment, on this screen" : "Copy a link that opens the call at this moment"}
                     >
                       <Link2 className="h-3 w-3" /> Link
                     </button>
@@ -714,11 +766,13 @@ function CallDetail({ id }: { id: string }) {
           />
         </div>
       )}
+      </div>
 
       {/* The room's one thread: the words as passages (open by default here),
           the typed lines, the agents' answers, who came and went, and the
-          recap. Turn selection rides on the passages' turns. */}
-      <div ref={threadRef} className="relative flex min-h-0 flex-1 flex-col">
+          recap. Turn selection rides on the passages' turns. Never shorter
+          than about six lines, however much the video takes. */}
+      <div ref={threadRef} className="call-media-thread">
       <RoomThread
         roomKey={call.room_key}
         call={call}
@@ -758,6 +812,8 @@ function CallDetail({ id }: { id: string }) {
           </button>
         </div>
       )}
+      </div>
+      </div>
       </div>
 
       {/* The selection action bar: an in-flow footer, never absolute — the
@@ -917,10 +973,12 @@ export default function CallsPage() {
   // only under its own team's feature gate, a recording under its creator's
   // ownership). Gating the query on the active team made someone's private
   // recordings vanish when they switched teams.
-  const { data: callsData, error: callsError, retry: retryCalls } = useQueryNoThrow(api.transcripts.webListCalls, { limit: 100 });
-  const calls = callsData as any[] | undefined;
+  // Local first: the history paints from the cached list on the first frame
+  // and the live answer only keeps it current. A skeleton is honest only
+  // while nothing is cached and nothing has answered.
+  const { calls, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100);
   const { liveCalls, pastCalls, transcribedRoomKeys } = useMemo(() => {
-    const rows = calls ?? [];
+    const rows = calls;
     const live = rows.filter(isCallLive);
     return {
       liveCalls: live,
@@ -932,8 +990,12 @@ export default function CallsPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
+        {/* Master and detail side by side from md up (the breakpoint the
+            sidebar folds at). Below it one at a time: the list until a call
+            is picked, then the call alone with a way back, so a frame link
+            opened on a phone lands on a page the width of the phone. */}
         <div className="flex h-full min-h-0">
-          <div className="flex w-72 shrink-0 flex-col border-r border-sol-border/20">
+          <div className={`${selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-sol-border/20 md:w-72`}>
             <div className="shrink-0 border-b border-sol-border/20 px-4 py-3">
               <h2 className="text-sm font-medium text-sol-text">Calls</h2>
               <p className="mt-0.5 text-[11px] text-sol-text-dim">
@@ -955,14 +1017,14 @@ export default function CallsPage() {
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
               {callsOn && <LiveNowSection transcribedRoomKeys={transcribedRoomKeys} />}
-              {calls === undefined && callsError ? (
+              {calls.length === 0 && callsError ? (
                 <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
                   Your calls could not be loaded.{" "}
                   <button type="button" onClick={retryCalls} className="text-sol-cyan hover:underline">
                     Try again
                   </button>
                 </div>
-              ) : calls === undefined ? (
+              ) : calls.length === 0 && !callsReady ? (
                 <div className="p-4 text-[12px] text-sol-text-dim">Loading…</div>
               ) : calls.length === 0 ? (
                 <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
@@ -993,17 +1055,29 @@ export default function CallsPage() {
               )}
             </div>
           </div>
-          <div className="relative min-w-0 flex-1">
-            {selectedId && !shortRef ? (
-              <CallDetail id={selectedId} />
-            ) : (
-              <div className="flex h-full items-center justify-center">
-                <div className="text-center text-sol-text-dim">
-                  <Phone className="mx-auto mb-2 h-6 w-6 opacity-40" />
-                  <div className="text-sm">Select a call</div>
-                </div>
-              </div>
+          <div className={`${selectedId ? "flex" : "hidden md:flex"} relative min-w-0 flex-1 flex-col`}>
+            {selectedId && (
+              // Back to the list, without the moment or the anchor: the
+              // list has no place in a call to keep.
+              <Link
+                href="/calls"
+                className="flex shrink-0 items-center gap-1 border-b border-sol-border/20 px-3 py-2 text-[12px] text-sol-text-muted transition-colors hover:text-sol-text md:hidden"
+              >
+                <ChevronLeft className="h-4 w-4" /> Calls
+              </Link>
             )}
+            <div className="relative min-h-0 flex-1">
+              {selectedId && !shortRef ? (
+                <CallDetail id={selectedId} preview={calls.find((r) => String(r._id) === selectedId)} />
+              ) : (
+                <div className="flex h-full items-center justify-center">
+                  <div className="text-center text-sol-text-dim">
+                    <Phone className="mx-auto mb-2 h-6 w-6 opacity-40" />
+                    <div className="text-sm">Select a call</div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </DashboardLayout>

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { AudioLines, CloudOff, Copy, DoorOpen, EyeOff, Hourglass, Loader2, Mic, MicOff, MonitorUp, PhoneOff, Settings2, UserX, Video, VideoOff, Volume2, WifiOff, X } from "lucide-react";
-import { canPickSpeaker, canShareScreen, type GuestCall } from "../../../lib/calls/guestRoom";
+import { canPickSpeaker, canShareScreen, type CallSnapshot, type GuestCall } from "../../../lib/calls/guestRoom";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useScreenWakeLock } from "../../../lib/calls/useScreenWakeLock";
 import { AutoStage, GridStage, SpeakerStage } from "../../../components/calls/StageViews";
@@ -30,8 +30,10 @@ export function GuestInCall({
   myName,
   transcribed,
   recording,
+  videoPublic = false,
   accepted,
   reconnecting,
+  ended: endedAs,
   serverTrouble,
   awayNotice = false,
   onDismissAway,
@@ -44,6 +46,8 @@ export function GuestInCall({
   myName: string;
   transcribed: boolean;
   recording: boolean;
+  /** The recording's video will be on the call's public link. */
+  videoPublic?: boolean;
   /** The notice the guest joined under. What the room keeps beyond it (a
    *  recording or a transcript that started since, or one running that this
    *  notice did not say) is said in words on the way in, not left to a mark
@@ -51,6 +55,10 @@ export function GuestInCall({
   accepted: GuestNotice | null;
   /** The page is making a new connection in place of a dropped one. */
   reconnecting: boolean;
+  /** Why the media let go as the page reads it, the server's view having
+   *  overruled the media where they disagree (guestMediaEnding). The call's
+   *  own reason when absent. */
+  ended?: CallSnapshot["ended"];
   /** The page lost touch with codecast's server (the media may be fine). */
   serverTrouble: boolean;
   /** The room let them in while they were looking at another tab, so the
@@ -64,7 +72,8 @@ export function GuestInCall({
    *  anyone in it (callRecordings.guestStopRecording). Rejects with why. */
   onStopRecording: () => Promise<unknown>;
 }) {
-  const c = useSyncExternalStore(call.subscribe, call.getSnapshot, call.getSnapshot);
+  const snap = useSyncExternalStore(call.subscribe, call.getSnapshot, call.getSnapshot);
+  const c = endedAs === undefined || endedAs === snap.ended ? snap : { ...snap, ended: endedAs };
   const [view, setView] = useState<StageView>("auto");
   const [pinned, setPinned] = useState<string | null>(null);
   const [lastSpeaker, setLastSpeaker] = useState<string | null>(null);
@@ -102,13 +111,21 @@ export function GuestInCall({
   // a recording that starts while they are inside, a transcript switched on,
   // or either already running when the notice they joined under said less.
   // A thing that stops is forgotten, so starting it again is said again.
+  // A recording whose video goes to the call's public link is more than one
+  // the guest was told of, so it is said again when that changes.
   const [told, setTold] = useState<GuestNotice>(() => accepted ?? { recording: false, transcribed: false });
   useWatchEffect(() => {
-    setTold((t) => (t.recording && !recording) || (t.transcribed && !transcribed) ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed } : t);
+    setTold((t) =>
+      (t.recording && !recording) || (t.transcribed && !transcribed) || (t.video_public && !videoPublic)
+        ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed, video_public: !!t.video_public && videoPublic }
+        : t,
+    );
     if (!recording) setAskStop(false);
-  }, [recording, transcribed]);
-  const fresh = guestNoticeLines({ recording: recording && !told.recording, transcribed: transcribed && !told.transcribed }, "short");
-  const dismiss = (key: "rec" | "words") => setTold((t) => (key === "rec" ? { ...t, recording: true } : { ...t, transcribed: true }));
+  }, [recording, transcribed, videoPublic]);
+  const recordingNews = recording && (!told.recording || (videoPublic && !told.video_public));
+  const fresh = guestNoticeLines({ recording: recordingNews, transcribed: transcribed && !told.transcribed, video_public: videoPublic }, "short");
+  const dismiss = (key: "rec" | "words") =>
+    setTold((t) => (key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true }));
   // Stop is for everyone, so it is asked once more, from the mark in the bar
   // or from the line that said it started.
   const [askStop, setAskStop] = useState(false);

@@ -66,14 +66,14 @@ digraph line {
 
   analyze [label="Analyze", backend=session, agent=claude, prompt="@line/analyze.md"]
 
-  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, prompt="@line/prove.md"]
+  prove [label="Prove", backend=session, agent=claude, isolated=true, max_visits=2, timeout=5400, prompt="@line/prove.md"]
 
   red [label="Red", shape=parallelogram, timeout=1800, script="@line/red.sh"]
 
   dissolve [label="Dissolve", shape=parallelogram,
     script="cast task done $task_id -m \"Dissolved: the miss did not reproduce. The evidence is in the prove comment.\""]
 
-  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, prompt="@line/implement.md"]
+  implement [label="Implement", backend=session, agent=claude, isolated=true, max_visits=3, timeout=5400, prompt="@line/implement.md"]
 
   verify [label="Verify", shape=parallelogram,
     timeout=1800,

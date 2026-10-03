@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { EXACT_MAX_STEPS, mannWhitney, separate, separationLine } from './stats';
+import { EXACT_MAX_STEPS, holdsAcross, mannWhitney, separate, separateNights, separationLine } from './stats';
 
 describe('exact Mann-Whitney', () => {
   test('5 vs 5, every value greater: p = 1/252', () => {
@@ -80,4 +80,53 @@ describe('Mann-Whitney past the exact count', () => {
     // A rise is reported as better, never as a regression.
     expect(separate(Array.from({ length: 24 }, () => 1), [...Array.from({ length: 120 }, () => 1), ...Array.from({ length: 48 }, () => 0)]).kind).toBe('better');
   }, 60_000);
+});
+
+describe('the exact count runs over the smaller sample', () => {
+  test('either order gives mirrored tails, and a large first sample costs what a small one does', () => {
+    const big = Array.from({ length: 210 }, (_, i) => (i % 7) / 7);
+    const small = [0.1, 0.3, 0.5, 0.2, 0.4];
+    // Under the old count the first order filled 211 rows of the table and took 17s on a loaded machine; now both fill 6.
+    const t = performance.now();
+    const ab = mannWhitney(big, small);
+    const ba = mannWhitney(small, big);
+    expect(performance.now() - t).toBeLessThan(10_000);
+    expect(ab.pGreater).toBeCloseTo(ba.pLess, 12);
+    expect(ab.pLess).toBeCloseTo(ba.pGreater, 12);
+    // And the exact tails still match the hand count when the first sample is the larger.
+    expect(mannWhitney([1, 2, 3, 4, 5], [6, 7, 8]).pLess).toBeCloseTo(1 / 56, 12);
+  }, 60_000);
+});
+
+describe('night by night per freeze', () => {
+  const nights = (n: number, v: number) => Array.from({ length: n }, () => v);
+
+  test('the design decides too-few, whatever the scores', () => {
+    // One freeze among 7 nights can reach p = 1/8 at best.
+    expect(separateNights([{ current: 0, previous: nights(7, 1) }]).kind).toBe('too-few');
+    expect(separateNights([{ current: 0, previous: nights(19, 1) }])).toEqual({ kind: 'worse', p: 0.05 });
+    expect(separateNights([]).kind).toBe('too-few');
+    // A freeze with no earlier night is no stratum.
+    expect(separateNights([{ current: 0, previous: [] }, { current: 0, previous: nights(7, 1) }]).kind).toBe('too-few');
+  });
+
+  test('a fall on several freezes separates; ties are exact; a steady night does not', () => {
+    const fall = [0, 1, 2].map(() => ({ current: 0.4, previous: [0.9, 0.8, 0.95, 0.85, 0.9, 0.9, 0.88] }));
+    expect(separateNights(fall)).toEqual({ kind: 'worse', p: 1 / 512 });
+    expect(separateNights(fall.map((x) => ({ ...x, current: 1 }))).kind).toBe('better');
+    // Every night equal on every freeze: tonight sits at the midrank, nowhere near a tail.
+    expect(separateNights([0, 1, 2].map(() => ({ current: 1, previous: nights(7, 1) })))).toEqual({ kind: 'not-separated', p: 1 });
+  });
+});
+
+describe('a regression across the surfaces one check weighs', () => {
+  test("Holm: one surface's p = 0.03 among ten is no regression; p = 0.001 is", () => {
+    const quiet = Array.from({ length: 9 }, () => ({ kind: 'not-separated' as const, p: 0.4 }));
+    expect(holdsAcross([{ kind: 'worse', p: 0.03 }, ...quiet])[0]).toBe(false);
+    expect(holdsAcross([{ kind: 'worse', p: 0.001 }, ...quiet])[0]).toBe(true);
+    // Alone, a worse at 0.05 holds; a too-few is no test and does not count.
+    expect(holdsAcross([{ kind: 'worse', p: 0.05 }, { kind: 'too-few' }])).toEqual([true, false]);
+    // Step-down: the smallest holds against 0.05/3, the next against 0.05/2.
+    expect(holdsAcross([{ kind: 'worse', p: 0.016 }, { kind: 'worse', p: 0.024 }, { kind: 'better', p: 0.01 }])).toEqual([true, true, false]);
+  });
 });

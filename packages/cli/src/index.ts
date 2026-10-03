@@ -59,6 +59,7 @@ import {
   type TeamFeatureKey,
   fromConvexAgentType,
   toConvexAgentType,
+  callDisplayTitle,
   AGENT_CLIENTS,
   PROVIDER_KEYS,
   getProviderKeySpec,
@@ -67,7 +68,9 @@ import {
   TRIGGER_EVENT_SHORTHANDS,
   TRIGGER_EVENT_NAMES,
   isPrTriggerEvent,
-  triggerEventShorthand,
+  isIngestTriggerEvent,
+  describeEventScope,
+  type TriggerScopeFilter,
   inlineForeignText,
   fenceForeignText,
   FOREIGN_TEXT_CAPS,
@@ -104,7 +107,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
@@ -3182,46 +3185,7 @@ registerSessionParkingCommands(program, { post: cliPost, print: text => console.
 // default is to manage nothing — clients use whatever auth is already on the
 // system. See PROVIDER_KEYS / providerKeyLaunch.ts (pl-207).
 
-/** Read a secret from the tty with echo suppressed, so a pasted key never shows on
- *  screen or lands in shell history. Falls back to piped stdin for scripting. */
-async function promptHiddenSecret(promptText: string): Promise<string> {
-  if (!process.stdin.isTTY) {
-    // Piped: read the first line of stdin.
-    const chunks: Buffer[] = [];
-    for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-    return Buffer.concat(chunks).toString("utf-8").split("\n")[0].trim();
-  }
-  process.stdout.write(promptText);
-  const stdin = process.stdin;
-  const wasRaw = stdin.isRaw;
-  stdin.setRawMode?.(true);
-  stdin.resume();
-  let value = "";
-  return await new Promise<string>((resolve) => {
-    const onData = (buf: Buffer) => {
-      const s = buf.toString("utf-8");
-      for (const ch of s) {
-        if (ch === "\r" || ch === "\n") {
-          stdin.removeListener("data", onData);
-          stdin.setRawMode?.(wasRaw ?? false);
-          stdin.pause();
-          process.stdout.write("\n");
-          resolve(value.trim());
-          return;
-        } else if (ch === "\x03") { // Ctrl-C
-          stdin.setRawMode?.(wasRaw ?? false);
-          process.stdout.write("\n");
-          process.exit(130);
-        } else if (ch === "\x7f" || ch === "\x08") { // DEL / backspace
-          value = value.slice(0, -1);
-        } else if (ch >= " ") { // append printable, ignore stray control chars
-          value += ch;
-        }
-      }
-    };
-    stdin.on("data", onData);
-  });
-}
+import { promptHiddenSecret } from "./hiddenSecret.js";
 
 const keysCmd = program
   .command("keys")
@@ -4335,6 +4299,9 @@ accountsCmd
       // After a token switch the fleet runs on the launch profile while the
       // keychain login stays: the lit row is where sessions run.
       const launchProfile = launchProfileName();
+      // The keychain login can be signed out while the fleet runs fine on a
+      // token: say so on its row, since a `claude` started by hand runs on it.
+      const machineSignedOut = !credentialHealth(readActiveCredential()).usable;
       for (const p of profiles) {
         const onFleet = launchProfile ? p.name === launchProfile : p.active;
         const mark = onFleet ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
@@ -4342,7 +4309,9 @@ accountsCmd
           ? p.name === launchProfile
             ? ` ${c.green}— sessions run here (token)${c.reset}`
             : p.active
-              ? ` ${c.dim}— machine login${c.reset}`
+              ? machineSignedOut
+                ? ` ${c.yellow}— machine login, signed out (claude /login)${c.reset}`
+                : ` ${c.dim}— machine login${c.reset}`
               : ""
           : p.active
             ? ` ${c.dim}— active${c.reset}`
@@ -10069,6 +10038,14 @@ function fmtCallWhen(ms: number): string {
   return sameDay ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }
 
+/** A call's name in the terminal: the same rule the web uses, fed the place
+ *  names the server resolved with this viewer's rights (`place` on
+ *  /cli/calls/list and /cli/calls/get). Never the room key. */
+function callTitle(call: { title?: string | null; room_key: string; place?: { session_title?: string | null; peer_name?: string | null; channel_name?: string | null } | null }): string {
+  const p = call.place;
+  return callDisplayTitle(call, { sessionTitle: p?.session_title, peerName: p?.peer_name, channelName: p?.channel_name });
+}
+
 function fmtCallDuration(row: { started_at: number; ended_at: number | null }): string {
   if (!row.ended_at) return "live";
   const min = Math.max(1, Math.round((row.ended_at - row.started_at) / 60_000));
@@ -10100,15 +10077,6 @@ async function findCallId(ref: string, opts: { throwOnError?: boolean } = {}): P
   throw err("not_found", `No recent call matches "${ref}"; \`cast calls\` lists them`, ["cast calls"]);
 }
 
-async function resolveCallId(ref: string): Promise<string> {
-  try {
-    return await findCallId(ref);
-  } catch (err) {
-    console.error((err as Error).message);
-    process.exit(1);
-  }
-}
-
 program
   .command("calls")
   .description(
@@ -10118,33 +10086,39 @@ program
     "Examples:\n" +
     "  cast calls                   # Recent calls across your teams\n" +
     "  cast calls -n 50             # More history\n" +
+    "  cast calls --video           # Only calls with video (video+screen: a share has its own file)\n" +
     "  cast call <id>               # One call: summary + action items\n" +
     "  cast call <id> --transcript  # Full attributed transcript\n" +
     "  cast call snap cl-42:15      # A frame of a recorded call's video, as a PNG"
   )
   .option("-n, --limit <n>", "How many calls to list", "20")
+  .option("--video", "Only calls with video (what `cast call snap` can show)")
   .option("--json", "Machine-readable output")
   .action(async (options: any) => {
-    const rows: any[] = await cliPost("/cli/calls/list", {
-      limit: Number(options.limit) || 20,
-    });
+    const limit = Number(options.limit) || 20;
+    // Filtered here, from a deeper page of history: the server lists calls,
+    // not recorded calls, so asking for `limit` would leave a short list.
+    const all: any[] = await cliPost("/cli/calls/list", { limit: options.video ? 200 : limit });
+    const rows = (options.video ? all.filter((r) => r.video) : all).slice(0, limit);
     if (options.json) {
-      console.log(JSON.stringify(rows, null, 2));
+      // Each row with the link and the reference `cast call --json` gives.
+      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(String(r._id))}`, ...r })), null, 2));
       return;
     }
     if (rows.length === 0) {
-      console.log("No calls yet. Start a huddle and toggle Transcribe.");
+      console.log(options.video ? "No recent call has video. A call is filmed while someone in the huddle has pressed Record." : "No calls yet. Start a huddle and toggle Transcribe.");
       return;
     }
     for (const r of rows) {
       const live = r.status === "live";
       const dot = live ? `${c.green}●${c.reset}` : `${c.dim}○${c.reset}`;
       const who = (r.participants || []).map((p: any) => p.name.split("@")[0]).join(", ") || "—";
-      const title = r.title || r.room_key;
+      const title = callTitle(r);
       const sum = r.summary ? "" : live ? "" : ` ${c.dim}(no summary)${c.reset}`;
       // Video `cast call snap` can show (a server that does not say leaves
-      // the field out, and the row reads as before).
-      const video = r.video === "recording" ? ` ${c.red}rec${c.reset}` : r.video === "ready" ? ` ${c.dim}video${c.reset}` : "";
+      // the field out, and the row reads as before), and whether a shared
+      // screen has its own full-resolution file, the picture worth reading.
+      const video = r.video === "recording" ? ` ${c.red}rec${c.reset}` : r.video === "ready" ? ` ${c.dim}${r.video_screen ? "video+screen" : "video"}${c.reset}` : "";
       console.log(
         `${dot} ${c.cyan}${r.short_id ?? r._id.slice(0, 8)}${c.reset} ${fmtCallWhen(r.started_at)} ${c.dim}${fmtCallDuration(r)}${c.reset}${video}  ${c.bold}${title}${c.reset}${sum}`,
       );
@@ -10161,6 +10135,7 @@ const CALL_SNAP_EXAMPLES =
   "  cast call snap cl-42:15         # the moment line 15 was said (or: snap cl-42 15)\n" +
   "  cast call snap cl-42@12:34      # 12m34s into the call (also @754s, @754 and @12m34s)\n" +
   "  cast call snap cl-42:15-25      # frames across lines 15 to 25 (where the screen changed)\n" +
+  "  cast call snap cl-42:15 --crop top-left   # a quarter of the frame at full size, for small text\n" +
   "  cast call snap cl-42            # right now, while the call records\n";
 const CALL_SNAP_ABOUT =
   "A frame shows the shared screen from its own full-resolution file whenever one was\n" +
@@ -10169,9 +10144,13 @@ const CALL_SNAP_ABOUT =
   "alone on a line in a message renders as that same picture for anyone who can read the\n" +
   "call. --json gives each frame's path, kind (screen or composite) and what it shows; a\n" +
   "refusal gives its code and a `try` list of the commands that will work. `cast call <id>`\n" +
-  "says what was recorded. --share uploads frames as public images, only for readers\n" +
-  "outside codecast. The stretch still being recorded has only its live picture until\n" +
-  "Record is stopped; stretches already saved can be snapped at once. Needs ffmpeg.";
+  "says what was recorded and marks each filmed line with ▸. Each frame prints its size: a\n" +
+  "wide one is shrunk before a model reads it, so for small text on a shared screen take\n" +
+  "part of it (--crop) or all of it in quarters (--tiles 2x2). Times may carry a fraction\n" +
+  "(cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
+  "outside codecast; deleting the recording deletes them. The stretch still being\n" +
+  "recorded has only its live picture, for people in the call, until Record is stopped;\n" +
+  "stretches already saved can be snapped at once. Needs ffmpeg.";
 const SNAP_OPTION_PREFIX = "With `snap`";
 /** Options that mean something to snap: its own, --json and help. */
 const snapOption = (o: Option) => o.description.startsWith(SNAP_OPTION_PREFIX) || o.long === "--json" || o.long === "--help";
@@ -10224,6 +10203,8 @@ program
   .option("--composite", "With `snap`: prefer the room view (faces and the share as everyone saw it)")
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
+  .option("--crop <region>", "With `snap`: only part of each frame, at full resolution: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right, center, or x,y,w,h in pixels or percent")
+  .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br)")
   .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
   .configureHelp({
     formatHelp: (cmd, helper) => (cmd.args[0] === "snap" ? snapHelp(cmd, helper) : Help.prototype.formatHelp.call(helper, cmd, helper)),
@@ -10326,73 +10307,117 @@ program
       }
     }
     const turns = lines ?? asRef?.turns ?? null;
-    const id = await resolveCallId(asRef ? asRef.call : ref);
-    // The video, when the call has any: what `cast call snap` can show. Asked
-    // alongside the call, and quiet when the server cannot say.
-    const wantVideo = !turns && asRef?.at_ms == null;
+    const snapLib = await import("./callSnap.js");
+    // A call that is not there answers the way snap's lookup does: why, and
+    // the command that lists the calls, as JSON under --json.
+    const lookupFailed = (err: unknown): never => {
+      // A lookup error (findCallId) carries `try` itself, a refusal
+      // (unreadableCall) in its details.
+      const e = err as Error & { code?: string; try?: string[]; details?: { try?: string[] } };
+      const code = e.code ?? "server";
+      const tries = e.try ?? e.details?.try ?? ["cast calls"];
+      if (options.json) console.log(JSON.stringify({ error: e.message, code, try: tries }, null, 2));
+      else console.error(e.message);
+      process.exit(1);
+    };
+    const id = await findCallId(asRef ? asRef.call : ref, { throwOnError: true }).catch(lookupFailed);
+    // The video, when the call has any: which lines were filmed and what
+    // `cast call snap` can show. Asked alongside the call, and quiet when the
+    // server cannot say (null: nothing is claimed either way).
     const [call, recs]: [any, any] = await Promise.all([
       cliPost("/cli/calls/get", { transcript_id: id }),
-      wantVideo ? cliPost("/cli/calls/recordings", { call: id }, { throwOnError: true }).catch(() => null) : null,
+      cliPost("/cli/calls/recordings", { call: id }, { throwOnError: true }).catch(() => null),
     ]);
-    if (!call) {
-      console.error("Call not found or not accessible");
-      process.exit(1);
-    }
+    if (!call) lookupFailed(snapLib.unreadableCall(asRef ? asRef.call : ref));
     const handle = call.short_id ?? String(call._id);
+    const video = recs && Array.isArray(recs.recordings) ? snapLib.callVideoSpans(recs) : [];
+    const knowsVideo = !!recs && Array.isArray(recs.recordings);
+    const allSegs: any[] = call.segments || [];
     // A line is labeled with what cites it (`cl-42:563`), because an agent
     // quotes the label it reads: a bare `#563` renders as pull request 563 in
     // any conversation bound to a repository. A full id per line would bury
     // the words, so a call without a short id shows the number alone.
     const lineLabel = (seq: number) => (call.short_id ? callRefId(call.short_id, { from_seq: seq, to_seq: seq }) : String(seq));
-    if (turns) {
-      const segs = (call.segments || []).filter((s: any) => s.seq >= turns.from_seq && s.seq <= turns.to_seq);
-      if (options.json) {
-        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs }, null, 2));
-        return;
-      }
-      console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+    const filmed = (s: any) => snapLib.lineFilmed(video, s);
+    // Each line as JSON carries its citation and whether it was on camera.
+    const segJson = (s: any) => ({ ...s, ref: callRefId(handle, { from_seq: s.seq, to_seq: s.seq }), filmed: filmed(s) });
+    // Lines under their speakers: the citation, when it was said (the call's
+    // clock, which `cl-42@m:ss` and the video's spans are written in), a mark
+    // on a line that was filmed, and the words. `here` is the line a moment
+    // falls on, marked and bold.
+    // Columns as wide as the call's widest, so the words line up in every
+    // view of it.
+    const labelWidth = Math.max(0, ...allSegs.map((s: any) => lineLabel(s.seq).length));
+    const clockWidth = Math.max(0, ...allSegs.map((s: any) => formatCallTime(s.t0).length));
+    const printLines = (segs: any[], here: any = null) => {
       let lastSpeaker = "";
       for (const s of segs) {
         if (s.speaker_name !== lastSpeaker) {
           console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
           lastSpeaker = s.speaker_name;
         }
-        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
+        const mark = video.length ? (filmed(s) ? `${c.dim}▸${c.reset} ` : "  ") : "";
+        const lead = here ? (s === here ? `${c.yellow}>${c.reset} ` : "  ") : "  ";
+        const label = lineLabel(s.seq).padEnd(labelWidth);
+        const clock = formatCallTime(s.t0).padStart(clockWidth);
+        console.log(`${lead}${c.dim}${label} ${clock}${c.reset} ${mark}${s === here ? `${c.bold}${s.text}${c.reset}` : s.text}`);
       }
+      if (video.length && segs.some(filmed)) console.log(`${c.dim}▸ on video${c.reset}`);
+    };
+    if (turns) {
+      const segs = allSegs.filter((s: any) => s.seq >= turns.from_seq && s.seq <= turns.to_seq);
+      // Frames across these lines, when any of their words were filmed.
+      const snap = segs.length
+        ? snapLib.snapHint(handle, video, {
+            from: segs[0].seq,
+            to: segs[segs.length - 1].seq,
+            fromMs: snapLib.lineFrameMs(segs[0]),
+            toMs: Math.max(...segs.map((s: any) => Math.max(s.t0, s.t1))),
+          })
+        : null;
+      if (options.json) {
+        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs.map(segJson), snap }, null, 2));
+        return;
+      }
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+      printLines(segs);
       if (segs.length === 0) console.log(`${c.dim}(no lines in that range; this call runs 1-${call.last_seq})${c.reset}`);
       console.log(`\n${c.dim}Embed these words in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
+      if (snap) console.log(`${c.dim}Frames across these lines: ${c.reset}${snap}`);
       return;
     }
     if (asRef?.at_ms != null) {
       // A moment (`cl-42@12:34`, what a frame citation names): the words
-      // around it, with the line being said marked, and the way to its frame.
+      // around it, with the line being said marked, and the way to its frame
+      // when one was filmed.
       const at = asRef.at_ms;
-      const segs: any[] = call.segments || [];
-      const hit = segmentAt(segs, at, { holdMs: Infinity });
+      const hit = segmentAt(allSegs, at, { holdMs: Infinity });
       const center = hit?.index ?? 0;
-      const near = segs.slice(Math.max(0, center - 2), center + 3);
+      const near = allSegs.slice(Math.max(0, center - 2), center + 3);
       const momentRef = callRefId(handle, null, at);
+      const snap = snapLib.snapHint(handle, video, { atMs: at });
+      const saving = !snap && video.some((s) => s.pending && s.fromMs <= at && at < s.toMs);
+      const nearest = snap || saving ? null : snapLib.nearestRecordedMs(video, at);
       if (options.json) {
-        const under = hit ? segs[hit.index] : null;
-        console.log(JSON.stringify({ ref: momentRef, at: formatCallTime(at), at_ms: at, title: call.title, line: under?.seq ?? null, during: hit?.during ?? false, segments: near }, null, 2));
+        const under = hit ? allSegs[hit.index] : null;
+        console.log(
+          JSON.stringify(
+            { ref: momentRef, at: formatCallTime(at), at_ms: at, title: call.title, line: under?.seq ?? null, during: hit?.during ?? false, segments: near.map(segJson), snap, ...(nearest !== null ? { nearest: callRefId(handle, null, nearest) } : {}) },
+            null,
+            2,
+          ),
+        );
         return;
       }
-      const said = hit ? `line ${segs[hit.index].seq} ${hit.during ? "was being said" : "was the last said"}` : segs.length ? "before the first line" : "no transcript";
-      console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${c.dim}at ${formatCallTime(at)} (${said})${c.reset}`);
-      let lastSpeaker = "";
-      for (const s of near) {
-        if (s.speaker_name !== lastSpeaker) {
-          console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
-          lastSpeaker = s.speaker_name;
-        }
-        const here = hit && s === segs[hit.index];
-        console.log(`${here ? `${c.yellow}>${c.reset} ` : "  "}${c.dim}${lineLabel(s.seq)}${c.reset} ${here ? `${c.bold}${s.text}${c.reset}` : s.text}`);
-      }
-      console.log(`\n${c.dim}The picture at that moment: ${c.reset}cast call snap ${momentRef}`);
+      const said = hit ? `line ${allSegs[hit.index].seq} ${hit.during ? "was being said" : "was the last said"}` : allSegs.length ? "before the first line" : "no transcript";
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}at ${snapLib.preciseCallTime(at)} (${said})${c.reset}`);
+      printLines(near, hit ? allSegs[hit.index] : null);
+      if (snap) console.log(`\n${c.dim}The picture at that moment: ${c.reset}${snap}`);
+      else if (saving) console.log(`\n${c.dim}That moment was recorded and is still saving; cast call snap ${momentRef} works once Record is stopped and the file lands.${c.reset}`);
+      else if (nearest !== null) console.log(`\n${c.dim}Not recorded at that moment. Nearest recorded: ${c.reset}cast call snap ${callRefId(handle, null, nearest)}`);
+      else if (knowsVideo && video.length === 0) console.log(`\n${c.dim}This call has no video.${c.reset}`);
       return;
     }
-    const { callVideoSpans, describeSpans, nearestRecordedMs, spanDetails } = await import("./callSnap.js");
-    const video = recs && Array.isArray(recs.recordings) ? callVideoSpans(recs) : [];
     const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
     if (options.json) {
       // The share link's token is the whole secret of the public page, and
@@ -10400,12 +10425,25 @@ program
       // widely than the call. It says whether the call is shared, never how
       // to open it (a server from before `shared` still sends the token).
       const { share_token, ...rest } = call;
-      console.log(JSON.stringify({ url: callUrl(), ...rest, shared: rest.shared ?? !!share_token, video: spanDetails(video) }, null, 2));
+      const lines = snapLib.spanLines(video, allSegs);
+      console.log(
+        JSON.stringify(
+          {
+            url: callUrl(),
+            ...rest,
+            segments: allSegs.map(segJson),
+            shared: rest.shared ?? !!share_token,
+            video: snapLib.spanDetails(video).map((d, i) => ({ ...d, lines: lines[i] })),
+          },
+          null,
+          2,
+        ),
+      );
       return;
     }
     const live = call.status === "live";
-    console.log(`${c.bold}${call.title || call.room_key}${c.reset} ${live ? `${c.green}LIVE${c.reset}` : c.dim + fmtCallDuration(call) + c.reset}`);
-    console.log(`${c.dim}${handle} · ${fmtCallWhen(call.started_at)} · ${call.room_key}${c.reset}`);
+    console.log(`${c.bold}${callTitle(call)}${c.reset} ${live ? `${c.green}LIVE${c.reset}` : c.dim + fmtCallDuration(call) + c.reset}`);
+    console.log(`${c.dim}${handle} · ${fmtCallWhen(call.started_at)}${c.reset}`);
     console.log(`${c.dim}${callUrl()}${c.reset}`);
     const who = (call.participants || []).map((p: any) => p.name).join(", ");
     if (who) console.log(`${c.dim}speakers:${c.reset} ${who}`);
@@ -10414,9 +10452,14 @@ program
     const guests = (call.guests || []).map((g: any) => g.name).join(", ");
     if (guests) console.log(`${c.dim}guests:${c.reset} ${guests}`);
     if (video.length) {
-      const first = nearestRecordedMs(video, video[0].fromMs);
-      const hint = first !== null ? ` ${c.dim}(a frame: cast call snap ${callRefId(handle, null, first)} or ${handle}:<line>)${c.reset}` : "";
-      console.log(`${c.dim}video:${c.reset} ${describeSpans(video)}${hint}`);
+      // The way to a frame names a real line: the first one filmed, the
+      // moment `cast call snap` shows best (words and picture together).
+      const done = video.filter((s) => !s.pending);
+      const firstLine = allSegs.find((s: any) => snapLib.lineFilmed(done, s));
+      const first = snapLib.nearestRecordedMs(video, video[0].fromMs);
+      const example = firstLine ? callRefId(handle, { from_seq: firstLine.seq, to_seq: firstLine.seq }) : first !== null ? callRefId(handle, null, first) : null;
+      const hint = example ? ` ${c.dim}(a frame: cast call snap ${example})${c.reset}` : "";
+      console.log(`${c.dim}video:${c.reset} ${snapLib.describeSpansByLine(video, allSegs)}${hint}`);
     }
     if (call.summary) {
       console.log(`\n${call.summary}`);
@@ -10437,15 +10480,8 @@ program
     }
     if (options.transcript) {
       console.log(`\n${c.bold}Transcript${c.reset}`);
-      let lastSpeaker = "";
-      for (const s of call.segments || []) {
-        if (s.speaker_name !== lastSpeaker) {
-          console.log(`${c.cyan}${s.speaker_name}${c.reset}`);
-          lastSpeaker = s.speaker_name;
-        }
-        console.log(`  ${c.dim}${lineLabel(s.seq)}${c.reset} ${s.text}`);
-      }
-      const segs = call.segments || [];
+      printLines(allSegs);
+      const segs = allSegs;
       if (segs.length > 0) {
         const sample = { from_seq: segs[0].seq, to_seq: segs[Math.min(2, segs.length - 1)].seq };
         console.log(
@@ -10454,8 +10490,8 @@ program
           ` (?turns=<from>-<to>; ?part=summary or ?part=action-<n> for the recap)${c.reset}`,
         );
       }
-    } else if ((call.segments || []).length > 0) {
-      console.log(`\n${c.dim}${call.segments.length} transcript lines — add --transcript to print them${c.reset}`);
+    } else if (allSegs.length > 0) {
+      console.log(`\n${c.dim}${allSegs.length} transcript lines; add --transcript to print them${c.reset}`);
     }
   });
 
@@ -13028,17 +13064,27 @@ const EVENT_NAMES = TRIGGER_EVENT_NAMES.join(", ");
  */
 async function buildEventFilter(
   eventName: string,
-  opts: { repo?: string; pr?: string },
-): Promise<{ event_type: string; action?: string; repository?: string; pr_number?: number }> {
+  opts: { repo?: string; pr?: string; source?: string },
+): Promise<TriggerFilter> {
   const shorthand = EVENT_SHORTHANDS[eventName];
   if (!shorthand) {
     console.error(`Unknown event: ${eventName}. Valid: ${EVENT_NAMES}`);
     process.exit(1);
   }
 
-  const filter: { event_type: string; action?: string; repository?: string; pr_number?: number } = {
+  const filter: TriggerFilter = {
     ...shorthand,
   };
+
+  // A product event comes from one of the workspace's sources; --source
+  // narrows it the way --repo narrows a pull request event.
+  if (opts.source !== undefined) {
+    if (!isIngestTriggerEvent(eventName)) {
+      console.error(`--source only narrows an event a source reports, and ${eventName} is not one.`);
+      process.exit(1);
+    }
+    if (opts.source.trim()) filter.source = opts.source.trim();
+  }
 
   if (opts.pr !== undefined) {
     if (!isPrTriggerEvent(eventName)) {
@@ -13063,14 +13109,15 @@ async function buildEventFilter(
   return filter;
 }
 
-/** What a trigger is watching, in one line, so nobody has to guess its scope. */
-function describeEventScope(filter: { event_type: string; action?: string; repository?: string; pr_number?: number }): string {
-  const name = triggerEventShorthand(filter) ?? filter.event_type;
-  const where = filter.repository
-    ? `${filter.repository}${filter.pr_number ? `#${filter.pr_number}` : ""}`
-    : "every repository you can see";
-  return `on ${name} in ${where}`;
+type TriggerFilter = TriggerScopeFilter;
+
+/** The narrowing flag passed without --on, if any: it would be dropped. */
+function narrowingWithoutOn(opts: { on?: string; repo?: string; pr?: string; source?: string }): string | undefined {
+  if (opts.on) return undefined;
+  return opts.repo !== undefined ? "--repo" : opts.pr !== undefined ? "--pr" : opts.source !== undefined ? "--source" : undefined;
 }
+
+
 
 // ── The workspace's agent ────────────────────────────────────────────────────
 // One standing agent per workspace (personal or team): the root role of its
@@ -14979,6 +15026,7 @@ trigger
   .option("--on <event>", `Run on event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (pull request events default to the checkout's origin; pass \"\" for every repository)")
   .option("--pr <number>", "Only fire for this pull request")
+  .option("--source <name>", "Only fire for this source (with --on and an event a source reports: error_new, job_failed, check_failed, ...; see cast sources ls)")
   .option("--title <title>", stdinText("Short title (defaults to first 60 chars of prompt)"))
   .option("--context <mode>", "Context capture: 'current' to grab running session")
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked. A run that continues an existing session inherits that session's rules instead.")
@@ -15009,7 +15057,7 @@ trigger
     let schedule_type: "once" | "recurring" | "event" = "once";
     let run_at: number | undefined;
     let interval_ms: number | undefined;
-    let event_filter: { event_type: string; action?: string; repository?: string; pr_number?: number } | undefined;
+    let event_filter: TriggerFilter | undefined;
     const delay = options.in ? parseDuration(options.in) : undefined;
     if (options.in && !delay) {
       console.error(`Invalid duration: ${options.in}`);
@@ -15059,10 +15107,12 @@ trigger
       process.exit(1);
     }
 
-    // --repo and --pr narrow an event filter, so they mean nothing without one.
-    // Silently ignoring them would arm a trigger far wider than the caller asked.
-    if (!options.on && (options.repo !== undefined || options.pr !== undefined)) {
-      console.error(`${options.repo !== undefined ? "--repo" : "--pr"} narrows an event trigger. Add --on <event>, or drop it.`);
+    // --repo, --pr and --source narrow an event filter, so they mean nothing
+    // without one. Silently ignoring them would arm a trigger far wider than
+    // the caller asked.
+    const strayNarrowing = narrowingWithoutOn(options);
+    if (strayNarrowing) {
+      console.error(`${strayNarrowing} narrows an event trigger. Add --on <event>, or drop it.`);
       process.exit(1);
     }
 
@@ -15179,10 +15229,7 @@ trigger
       } else if (schedule_type === "event") {
         // The scope is half the meaning of an event trigger, and --repo is
         // often filled in from the checkout rather than typed, so say it.
-        const scope = event_filter?.repository
-          ? `${event_filter.repository}${event_filter.pr_number ? `#${event_filter.pr_number}` : ""}`
-          : "every repository you can see";
-        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} on ${c.yellow}${options.on}${c.reset} in ${fmt.highlight(scope)}: ${c.bold}${title}${c.reset}`);
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} ${fmt.highlight(describeEventScope(event_filter!))}: ${c.bold}${title}${c.reset}`);
       } else if (options.in) {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
       } else {
@@ -15259,7 +15306,7 @@ trigger
         const scheduleInfo = t.schedule_type === "recurring"
           ? fmt.muted(`every ${formatMs(t.interval_ms)}`)
           : t.schedule_type === "event"
-            ? fmt.muted(`on ${t.event_filter?.event_type || "event"}`)
+            ? fmt.muted(t.event_filter ? describeEventScope(t.event_filter) : "on event")
             : t.run_at
               ? fmt.muted(formatRunAt(t.run_at))
               : "";
@@ -15394,6 +15441,7 @@ trigger
   .option("--on <event>", `Reschedule on an event (${EVENT_NAMES})`)
   .option("--repo <owner/name>", "Only fire for this repository (with --on; pull request events default to the checkout's origin)")
   .option("--pr <number>", "Only fire for this pull request (with --on)")
+  .option("--source <name>", "Only fire for this source (with --on and an event a source reports)")
   .option("--safe", "Read-only: a spawned run gets write tools removed and state-changing commands blocked")
   .option("--mode <mode>", "Agent mode: apply (can act) or propose (read-only). Prefer --safe.")
   .option("--project <path>", "Project path for agent cwd")
@@ -15427,8 +15475,9 @@ trigger
       process.exit(1);
     }
     // The filter is rebuilt from --on, so narrowing without it would be dropped.
-    if (!options.on && (options.repo !== undefined || options.pr !== undefined)) {
-      console.error(`${options.repo !== undefined ? "--repo" : "--pr"} narrows an event trigger. Pass --on <event> with it.`);
+    const strayNarrowing = narrowingWithoutOn(options);
+    if (strayNarrowing) {
+      console.error(`${strayNarrowing} narrows an event trigger. Pass --on <event> with it.`);
       process.exit(1);
     }
 

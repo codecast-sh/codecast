@@ -1325,7 +1325,7 @@ export function newPageCommentClientId(): string {
  *  hidden even after the server sends it again. Here the server's word wins: a
  *  row carried by a push is readable, so its tombstone is lifted and the row
  *  lands. Runs after the merge, which skipped the row on the tombstone. */
-function liftExcludesForIncoming(collection: "chatChannels" | "chatReads") {
+export function liftExcludesForIncoming(collection: string) {
   return (draft: any, _table: any, incoming: Array<{ _id: string }>) => {
     let lifted: Record<string, unknown> | null = null;
     for (const row of incoming) {

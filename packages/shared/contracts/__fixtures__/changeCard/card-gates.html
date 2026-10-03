@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Change card: Session titles repeat the first message instead of naming the work</title>
+<style>
+:root{
+  --bg:#eef1ee; --paper:#fbfcfa; --ink:#18211d; --muted:#5b6862; --faint:#8b9792; --rule:#dde3df;
+  --red:#c2412d; --red-soft:#f8e5df; --green:#17845a; --green-soft:#dcf1e6; --blue:#2f5fb3; --blue-soft:#e2eaf8;
+  --neutral:#5b6862; --neutral-soft:#e4e9e6;
+  --sans:"Avenir Next","Seravek","Segoe UI Variable Text","Ubuntu","Helvetica Neue",sans-serif;
+  --mono:"JetBrains Mono","SF Mono","Cascadia Code",ui-monospace,Menlo,monospace;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0c1311; --paper:#121b18; --ink:#e3ebe7; --muted:#9aa9a2; --faint:#6c7a74; --rule:#23302b;
+  --red:#ff8a73; --red-soft:#3a1d18; --green:#5fd4a2; --green-soft:#12301f; --blue:#8fb2f2; --blue-soft:#18233a;
+  --neutral:#9aa9a2; --neutral-soft:#1b2622;
+}}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;font:16px/1.55 var(--sans);color:var(--ink);-webkit-font-smoothing:antialiased;
+  background:radial-gradient(1200px 380px at 50% -120px,var(--tone-soft),transparent 70%) no-repeat,var(--bg)}
+main{max-width:880px;margin:0 auto;padding:40px 24px 64px}
+.sheet{background:var(--paper);border:1px solid var(--rule);border-radius:18px;padding:36px 40px;box-shadow:0 1px 0 var(--rule),0 24px 48px -32px rgba(0,0,0,.25)}
+.meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;font-size:13.5px;color:var(--muted)}
+.verdict{display:inline-flex;align-items:center;gap:8px;font-weight:650;color:var(--tone);background:var(--tone-soft);padding:4px 12px 4px 10px;border-radius:999px}
+.verdict::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--tone)}
+.task{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+.risk{margin-left:auto;font-weight:600;color:var(--ink);border:1px solid var(--rule);padding:3px 10px;border-radius:8px}
+h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.015em;margin:18px 0 10px}
+.goal{color:var(--muted);margin:0}
+.goal b{color:var(--ink);font-weight:600}
+.why{margin:6px 0 0;color:var(--muted);font-size:15px;max-width:62ch}
+.big.mid{font-size:18px}
+.goal code{font:12px var(--mono);background:var(--bg);border:1px solid var(--rule);padding:1px 6px;border-radius:6px;margin-left:4px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:28px 0 8px}
+.say{border-radius:12px;padding:16px 18px;background:var(--bg)}
+.say .lbl{display:block;font-size:13px;font-weight:650;margin-bottom:4px}
+.say.wrong .lbl{color:var(--red)} .say.change .lbl{color:var(--green)}
+.say p{margin:0;font-size:17px;line-height:1.5}
+.block{margin-top:32px}
+h2{font-size:15px;font-weight:650;margin:0 0 12px;display:flex;align-items:baseline;gap:12px}
+h2 .count{font-weight:500;color:var(--muted);font-size:14px}
+h3{font-size:13px;font-weight:650;color:var(--muted);margin:0 0 6px}
+.lbl{font-size:12.5px;font-weight:650;color:var(--muted)}
+.dim{color:var(--faint)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mark{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;flex:none}
+.mark svg{width:13px;height:13px}
+.mark.ok{color:var(--green);background:var(--green-soft)} .mark.bad{color:var(--red);background:var(--red-soft)}
+.beads{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+.bead{display:inline-flex;border-radius:6px;overflow:hidden;box-shadow:0 0 0 1px var(--rule)}
+.bead i{width:16px;height:12px} .bead i.ok{background:var(--green)} .bead i.bad{background:var(--red)} .bead i.none{background:var(--rule)}
+.proof{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule)}
+.proof li{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 28px minmax(0,1fr);align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.pname{font-size:14.5px;font-weight:550;overflow-wrap:anywhere}
+.pill{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;font-size:13px;line-height:1.35;min-width:0}
+.pill span{overflow-wrap:anywhere}
+.pill.ok{background:var(--green-soft)} .pill.bad{background:var(--red-soft)} .pill.none{background:var(--bg);color:var(--faint)}
+.arrow{color:var(--faint);display:grid;place-items:center} .arrow svg{width:24px;height:12px}
+.example{border:1px solid var(--rule);border-radius:14px;padding:16px;margin-bottom:14px;break-inside:avoid}
+.example blockquote{margin:6px 0 14px;padding:10px 14px;background:var(--bg);border-radius:10px;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.side{border-radius:10px;padding:10px 14px;border-top:3px solid}
+.side.before{border-color:var(--red);background:color-mix(in srgb,var(--red-soft) 55%,transparent)}
+.side.after{border-color:var(--green);background:color-mix(in srgb,var(--green-soft) 55%,transparent)}
+.reply{margin-top:4px;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:15.5em;overflow:auto}
+.note{margin:12px 2px 0;font-size:14px;color:var(--muted)}
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:grid;grid-template-columns:20px 110px 1fr;gap:12px;align-items:start;padding:8px 0;border-bottom:1px solid var(--rule);font-size:14.5px}
+.cname{font-weight:600} .cdetail{color:var(--muted);overflow-wrap:anywhere}
+.panels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:32px}
+.panel{background:var(--bg);border-radius:12px;padding:14px 16px}
+.big{font-size:24px;font-weight:600;line-height:1.2} .big small{font-size:13px;color:var(--muted);font-family:var(--sans);font-weight:500}
+.delta{font-size:13.5px;margin-top:2px} .delta .add{color:var(--green)} .delta .del{color:var(--red)}
+.dbar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin:8px 0 6px;gap:2px}
+.dbar .add{background:var(--green)} .dbar .del{background:var(--red)}
+.sub{font-size:13px;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.sub a{color:var(--blue);text-decoration:none;font-family:var(--mono);font-size:12.5px}
+.costs{display:flex;flex-direction:column;gap:2px;font-size:14px}
+.costs .num{font-size:15px;color:var(--ink)}
+.rec{margin-top:28px;border-radius:14px;padding:18px 20px;background:var(--tone-soft);display:flex;gap:16px;align-items:baseline}
+.rec .word{font-size:22px;font-weight:700;color:var(--tone);flex:none}
+.rec p{margin:0;font-size:16px}
+footer{margin-top:18px;text-align:center;font-size:12.5px;color:var(--faint)}
+@media (max-width:640px){
+  main{padding:16px 10px 40px} .sheet{padding:22px 18px;border-radius:14px}
+  h1{font-size:24px} .two,.pair,.panels{grid-template-columns:1fr} .risk{margin-left:0}
+  .proof li{grid-template-columns:1fr 24px 1fr} .pname{grid-column:1/-1}
+  .checks li{grid-template-columns:20px 1fr} .cdetail{grid-column:2}
+  .rec{flex-direction:column;gap:4px}
+}
+@media print{
+  :root{--bg:#f2f4f2;--paper:#fff;--ink:#111;--muted:#4a5550;--faint:#7a8580;--rule:#d5dbd7;
+    --red:#b3361f;--red-soft:#f8e3dc;--green:#11744d;--green-soft:#dcf0e4;--blue:#2a56a3;--blue-soft:#e2eaf8}
+  html,body{background:#fff} body{font-size:11pt}
+  main{max-width:none;padding:0} .sheet{border:0;box-shadow:none;padding:0}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .reply{max-height:none;overflow:visible} .block,.panels,.rec,.proof li{break-inside:avoid}
+  footer{display:none}
+}
+:root{--tone:var(--blue);--tone-soft:var(--blue-soft)}</style>
+</head>
+<body>
+<main>
+<div class="sheet">
+<header>
+  <div class="meta"><span class="verdict">Recommends Revise</span><span class="task">ct-56301</span><span>14 signals since Sep 28</span><span>eval drift, judge finding, user report</span><span class="risk">Low risk</span></div>
+  <h1>Session titles repeat the first message instead of naming the work</h1>
+  <p class="goal">Serves <b>Inbox scan time under 20 seconds</b><code>in-12.m2</code></p><p class="why">A title that repeats the opener makes every row in the inbox look the same, so people open sessions to find out what they are</p>
+</header>
+<div class="two">
+  <div class="say wrong"><span class="lbl">What is wrong</span><p>Session titles copy the first message, so the inbox fills with rows like &quot;hey can you look at&quot; and people open each one to learn what it is.</p></div>
+  <div class="say change"><span class="lbl">What this changes</span><p>The title prompt now names the work in a short imperative phrase, ignoring greetings and pasted errors.</p></div>
+</div>
+<section class="block"><h2>Proof <span class="count">4 proven misses, all fixed</span></h2><div class="beads" aria-hidden="true"><span class="bead"><i class="bad"></i><i class="ok"></i></span><span class="bead"><i class="bad"></i><i class="ok"></i></span><span class="bead"><i class="bad"></i><i class="ok"></i></span><span class="bead"><i class="bad"></i><i class="ok"></i></span></div><ul class="proof"><li><div class="pname">titlePrompt.test.ts · greeting is never the title</div><div class="pill bad"><span class="mark bad" title="fails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>got &quot;Hey can you look at why…&quot;</span></div><div class="arrow"><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5L21 6l-5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pill ok"><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>12 of 12 pass</span></div></li><li><div class="pname">title · opener is a greeting</div><div class="pill bad"><span class="mark bad" title="fails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>fails before the change</span></div><div class="arrow"><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5L21 6l-5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pill ok"><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>passes after the change</span></div></li><li><div class="pname">title · pasted stack trace</div><div class="pill bad"><span class="mark bad" title="fails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>fails before the change</span></div><div class="arrow"><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5L21 6l-5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pill ok"><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>passes after the change</span></div></li><li><div class="pname">title · long opener with a plan</div><div class="pill bad"><span class="mark bad" title="fails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span>fails before the change</span></div><div class="arrow"><svg viewBox="0 0 24 12" aria-hidden="true"><path d="M1 6h20M16 1.5L21 6l-5 4.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><div class="pill ok"><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span>passes after the change</span></div></li></ul></section>
+<section class="block"><h2>Before and after</h2><article class="example">
+  <div class="input"><span class="lbl">Example 1</span><blockquote>hey can you look at why the deploy keeps failing on railway, it started after the bun upgrade</blockquote></div>
+  <div class="pair">
+    <div class="side before"><span class="lbl">Before</span><div class="reply">Hey can you look at why the deploy keeps failing</div></div>
+    <div class="side after"><span class="lbl">After</span><div class="reply">Railway deploy fails after bun upgrade</div></div>
+  </div>
+  <p class="note">Names the problem and where it happens; drops the greeting.</p>
+</article>
+<article class="example">
+  <div class="input"><span class="lbl">Example 2</span><blockquote>TypeError: Cannot read properties of undefined (reading &#39;short_id&#39;)
+    at TaskRow (TaskRow.tsx:88)
+this shows up when I open the board</blockquote></div>
+  <div class="pair">
+    <div class="side before"><span class="lbl">Before</span><div class="reply">TypeError: Cannot read properties of undefined</div></div>
+    <div class="side after"><span class="lbl">After</span><div class="reply">Task board crashes on a row without a short id</div></div>
+  </div>
+  <p class="note">Says what breaks for the person, not the exception text.</p>
+</article>
+<article class="example">
+  <div class="input"><span class="lbl">Example 3</span><blockquote>I want to move the decision queue to the store. First read how it loads today, then propose the smallest change.</blockquote></div>
+  <div class="pair">
+    <div class="side before"><span class="lbl">Before</span><div class="reply">I want to move the decision queue to the store</div></div>
+    <div class="side after"><span class="lbl">After</span><div class="reply">Move the decision queue into the store</div></div>
+  </div>
+  <p class="note">Imperative and short, the way the inbox reads.</p>
+</article></section>
+<section class="block"><h2>Checks</h2><ul class="checks"><li><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="cname">Verify</span><span class="cdetail">cast check convex: 0 errors. bun test convex/lib/titlePrompt.test.ts: 12 pass.</span></li><li><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="cname">Eval</span><span class="cdetail">Session title: separated better (p 0.004)</span></li><li><span class="mark bad" title="fails"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></span><span class="cname">Suite gates</span><span class="cdetail">2 scenarios failed: handoff-keeps-owner, dup-merge-keeps-newest</span></li><li><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="cname">Review</span><span class="cdetail">Diff matches the cause; rewrites the instruction at its own site, no filter added.</span></li></ul></section>
+<div class="panels">
+  <div class="panel"><h3>Diff</h3><div class="big num">2 <small>files</small></div>
+<div class="num delta"><span class="add">+18</span> <span class="del">&minus;7</span></div><div class="dbar"><i class="add" style="width:72%"></i><i class="del" style="width:28%"></i></div><div class="sub"><a href="https://github.com/codecast-sh/codecast/pull/912">codecast-sh/codecast#912</a></div></div>
+  <div class="panel"><h3>Risk</h3><div class="big mid">Low risk</div><div class="sub">One prompt, one surface, no schema or code path changes.</div></div>
+  <div class="panel"><h3>Cost</h3><div class="costs"><span><span class="num">$1.96</span></span><span><span class="num">412k</span> tokens</span><span><span class="num">38 min</span> of agent time</span></div></div>
+</div>
+<div class="rec"><span class="word">Revise</span><p>Two suite scenarios fail on the branch, so the change needs another pass.</p></div>
+</div>
+<footer>Change card for ct-56301</footer>
+</main>
+</body>
+</html>

@@ -131,3 +131,52 @@ describe("set", () => {
     expect(calls.length).toBe(0);
   });
 });
+
+describe("connect with a token", () => {
+  const withSecret = (secret: string) => ({ ...deps, readSecret: async () => secret });
+  async function runWith(d: any, ...argv: string[]) {
+    const program = new Command();
+    program.exitOverride();
+    registerIntegrationsCommand(program, d);
+    await program.parseAsync(["node", "cast", "integrations", ...argv]);
+  }
+
+  test("posts the token and the provider's settings to connect-token, never argv", async () => {
+    answer = () => ({ ok: true, id: "ai_1", label: "Acme" });
+    await runWith(withSecret("sntrys_SECRET"), "connect", "sentry", "--org", "acme", "--host", "https://sentry.acme.dev");
+    expect(calls).toEqual([
+      {
+        path: "/cli/integrations/connect-token",
+        body: { provider: "sentry", token: "sntrys_SECRET", config: { org: "acme", host: "https://sentry.acme.dev" } },
+      },
+    ]);
+    const out = logs.join("\n");
+    expect(out).toContain("Acme");
+    expect(out).not.toContain("sntrys_SECRET");
+  });
+
+  test("maps --project and --base-url to their config keys", async () => {
+    answer = () => ({ ok: true });
+    await runWith(withSecret("phx"), "connect", "posthog", "--project", "7", "--personal");
+    expect(calls[0].body).toEqual({ provider: "posthog", token: "phx", config: { project_id: "7" }, scope: "personal" });
+    calls.length = 0;
+    await runWith(withSecret("s"), "connect", "app", "--base-url", "https://api.acme.com");
+    expect(calls[0].body).toMatchObject({ provider: "app", config: { base_url: "https://api.acme.com" } });
+  });
+
+  test("a flag that belongs to another provider is refused before anything is sent", async () => {
+    answer = () => ({ ok: true });
+    await expect(runWith(withSecret("t"), "connect", "posthog", "--org", "acme")).rejects.toThrow(/exit/);
+    await expect(runWith(withSecret("t"), "connect", "linear", "--host", "https://x.com")).rejects.toThrow(/exit/);
+    expect(calls.length).toBe(0);
+    expect(logs.join("\n")).toContain("--org does not apply to PostHog");
+  });
+
+  test("an empty token stops without a call; a server refusal is shown verbatim", async () => {
+    await expect(runWith(withSecret(""), "connect", "sentry", "--org", "acme")).rejects.toThrow(/exit/);
+    expect(calls.length).toBe(0);
+    answer = () => ({ ok: false, error: "Sentry refused the token (401)" });
+    await expect(runWith(withSecret("bad"), "connect", "sentry", "--org", "acme")).rejects.toThrow(/exit/);
+    expect(logs.join("\n")).toContain("Sentry refused the token (401)");
+  });
+});

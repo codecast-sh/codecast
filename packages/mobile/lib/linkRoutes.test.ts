@@ -54,6 +54,14 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('not a url')).toBeNull();
   });
 
+  test('a call opens its recording screen, at the moment or lines it names', () => {
+    expect(mobileEntityRoute('call', 'cl-117')).toBe('/recording/cl-117');
+    expect(mobileEntityRoute('call', 'cl-117@2:30')?.startsWith('/recording/cl-117?t=150')).toBe(true);
+    expect(mobileEntityRoute('call', 'cl-117:5-9')).toBe('/recording/cl-117?turns=5-9');
+    // A pasted call page link keeps its moment.
+    expect(mobileRouteForUrl('https://codecast.sh/calls/cl-117?t=150')?.startsWith('/recording/cl-117?t=150')).toBe(true);
+  });
+
   test('triggers have no mobile screen yet, so they stay external', () => {
     expect(mobileEntityRoute('trigger', 'tr-42')).toBeNull();
     expect(mobileRouteForUrl('https://codecast.sh/triggers?task=tr-42')).toBeNull();

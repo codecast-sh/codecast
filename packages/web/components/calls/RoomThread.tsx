@@ -26,6 +26,7 @@ import { settleComposerAttachments } from "../../lib/draftImages";
 import { getRoom, startTranscribing } from "../../lib/calls/callManager";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { scrollIntoContainer } from "../../lib/scrollWithin";
 import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
 import { useConversationFileDrop } from "../../hooks/useConversationFileDrop";
 import { AgentTypeIcon } from "../AgentTypeIcon";
@@ -452,7 +453,8 @@ export function RoomThread({
     setTimeout(() => {
       const el = scrollRef.current?.querySelector<HTMLElement>(selector);
       if (!el) return;
-      el.scrollIntoView({ block: "center" });
+      // The thread alone: scrollIntoView would move the page it sits in.
+      scrollIntoContainer(el, { block: "center" });
       el.classList.add("cc-msg-flash");
       setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
     }, 60);

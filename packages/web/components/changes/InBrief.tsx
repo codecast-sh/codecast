@@ -1,13 +1,17 @@
-// In brief (spec 4.6): the small stories, one line each, with a dotted leader
+// In brief (spec 4.6): the small stories, a line each (two at most), with a dotted leader
 // to their area. Each line is still a story: j/k visits it and `e` opens its
 // evidence. Each line is its own component, so it can carry the story's hooks.
+// The area tags sit in one column, as wide as a section row's size column,
+// so their squares line up; the headline starts under the heading, and the
+// hover fill bleeds past it.
 import * as Accordion from "@radix-ui/react-accordion";
+import { memo } from "react";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { AreaTag, FadeText } from "./StoryParts";
-import { useStoryAttrs, useStoryCtx } from "./storyContext";
+import { AreaTag, FadeText, Tip } from "./StoryParts";
+import { useStoryAttrs, useStoryCtx, useTriggerTab } from "./storyContext";
 
-export function InBrief({ stories }: { stories: readonly StoryRow[] }) {
+export const InBrief = memo(function InBrief({ stories }: { stories: readonly StoryRow[] }) {
   if (!stories.length) return null;
   return (
     <section aria-label="In brief">
@@ -17,28 +21,34 @@ export function InBrief({ stories }: { stories: readonly StoryRow[] }) {
       </div>
     </section>
   );
-}
+});
 
-function BriefItem({ story: s }: { story: StoryRow }) {
+const BriefItem = memo(function BriefItem({ story: s }: { story: StoryRow }) {
   const ctx = useStoryCtx();
   const attrs = useStoryAttrs(s.story_key);
+  const tab = useTriggerTab(s.story_key);
   return (
     <Accordion.Item
       value={s.story_key}
       {...attrs}
-      className="chg-story chg-row rounded-md px-2 py-0.5"
+      className="chg-story chg-row -mx-2 rounded-md px-2 py-0.5"
       style={{ opacity: ctx.dimmed.has(s.story_key) ? 0.35 : 1 }}
       onClick={() => ctx.pick(s.story_key)}
     >
       <Accordion.Header asChild>
         <div>
-          <Accordion.Trigger data-story-trigger className="flex w-full min-w-0 items-center gap-2 text-left outline-none">
-            <span className="chg-ui min-w-0 shrink truncate text-[13px] leading-[1.55] text-sol-text/70">
-              <FadeText text={s.headline} />
-            </span>
-            <span aria-hidden className="chg-leader" />
-            <AreaTag area={s.area} className="shrink-0" />
-          </Accordion.Trigger>
+          {/* The whole headline on hover or keyboard focus, only while the line clamp cuts it. */}
+          <Tip text={s.headline} whenClipped>
+            <Accordion.Trigger data-story-trigger tabIndex={tab} className="flex w-full min-w-0 items-baseline gap-2 text-left outline-none">
+              <span data-clip className="chg-ui line-clamp-2 min-w-0 shrink text-[13px] leading-[1.55] text-sol-text/70 [overflow-wrap:anywhere]">
+                <FadeText text={s.headline} />
+              </span>
+              <span aria-hidden className="chg-leader" />
+              <span className="w-[5.5rem] shrink-0">
+                <AreaTag area={s.area} />
+              </span>
+            </Accordion.Trigger>
+          </Tip>
         </div>
       </Accordion.Header>
       <Accordion.Content className="chg-drawer">
@@ -46,4 +56,4 @@ function BriefItem({ story: s }: { story: StoryRow }) {
       </Accordion.Content>
     </Accordion.Item>
   );
-}
+});

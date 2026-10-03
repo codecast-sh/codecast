@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 import { _resetUndoStacks, getUndoHistory } from "@platform/engine";
 import { performUndo, performRedo } from "../undoStack";
+import { withClearedInboxStamps } from "../syncProtocol";
 
 // An inbox row that was never opened in this window has no conversations
 // meta. toggleFavorite and patchConversation create a thin `{_id}` row there
@@ -216,5 +217,44 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expect(performRedo()).toBe(true);
     expect(conv().is_favorite).toBe(true);
     expect(state().sessions[ID].is_favorite).toBe(true);
+  });
+});
+
+// Each session lives twice in the store, and the conversations copy can hold a
+// hide stamp the server already cleared (a restore elsewhere merges field by
+// field, and the server leaves a cleared stamp out). A snooze writes the clear
+// on both copies; only the stale copy changes. The undo must not send that
+// stale stamp back: on the server it re-kills the session.
+describe("undo of a gesture whose conversations copy held a stale stamp", () => {
+  const SID = "jx7stalecopy00000000000000000000";
+  const STALE = 1791071693350;
+  beforeEach(() => {
+    _resetUndoStacks();
+    useInboxStore.setState({
+      pending: {},
+      sessions: { [SID]: { _id: SID, title: "Live", updated_at: 1, inbox_dismissed_at: null } } as any,
+      conversations: { [SID]: { _id: SID, _creationTime: 1, title: "Live", inbox_dismissed_at: STALE } } as any,
+    });
+  });
+
+  test("snooze then undo sends no inbox_dismissed_at and keeps the copies clear", () => {
+    const sent = captureUndoPatches();
+    try {
+      state().snoozeSession(SID, Date.now() + 3_600_000);
+      expect(performUndo()).toBe(true);
+      expect(sent.patches.length).toBeGreaterThan(0);
+      expect(JSON.stringify(sent.patches)).not.toContain("inbox_dismissed_at");
+      expect(state().sessions[SID].inbox_dismissed_at ?? null).toBe(null);
+      expect(state().conversations[SID].inbox_dismissed_at ?? null).toBe(null);
+      expect(state().sessions[SID].inbox_snoozed_until ?? null).toBe(null);
+    } finally {
+      sent.stop();
+    }
+  });
+
+  test("the meta feeder reads a stamp the server left out as cleared", () => {
+    state().syncRecord("conversations", SID, withClearedInboxStamps({ _id: SID, _creationTime: 1, title: "Live" }));
+    expect(state().conversations[SID].inbox_dismissed_at).toBe(null);
+    expect(state().conversations[SID].title).toBe("Live");
   });
 });

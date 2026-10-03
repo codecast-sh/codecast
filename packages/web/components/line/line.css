@@ -24,25 +24,41 @@
 }
 .line-num[data-zero="true"] { opacity: 0.45; font-weight: 400; }
 
-/* The display face, for the few things read from across the room: the
-   headline, the start title and the big counts. Mono stays for ids, commands
-   and the numbers inside rows. */
-.line-display, .line-headline, .line-start-title, .line-display-num {
-  font-family: var(--font-serif), serif;
-  font-optical-sizing: auto;
-  letter-spacing: 0;
+/* One voice: the app's mono for words and numbers alike. A count reads as a
+   quantity by its size and weight, not by a second typeface. */
+.line-display, .line-headline, .line-start-title {
+  font-family: var(--font-mono), monospace;
+  letter-spacing: -0.01em;
 }
-.line-display-num { font-weight: 500; font-variant-numeric: lining-nums tabular-nums; }
-.line-display-num[data-zero="true"] { font-weight: 400; opacity: 0.4; }
+.line-display-num {
+  font-family: var(--font-mono), monospace;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+}
+.line-display-num[data-zero="true"] { font-weight: 300; opacity: 0.38; }
+.line-col-count { font-size: 34px; }
+.line-meter-num { font-size: 24px; }
+.line-col[data-empty="true"] .line-col-count { font-size: 24px; }
+/* Beside the count, what it measures: quieter than the count, louder than
+   the dim rows, and on its own baseline under the station name. */
+.line-unit { color: var(--sol-text-muted); }
+/* What entered this week: a dimmer line under the count, never a delta. */
+.line-week { color: var(--sol-text-dim); }
 
-/* The display level: the one sentence that says how the line is doing. */
+/* The one sentence that says how the line is doing. Its counts are bold;
+   color marks only what needs action. */
 .line-headline {
-  font-size: clamp(24px, 3.2cqi, 34px);
-  line-height: 1.12;
-  font-weight: 450;
+  font-size: 23px;
+  line-height: 1.3;
+  font-weight: 500;
+  letter-spacing: -0.025em;
   text-wrap: balance;
-  max-width: 30ch;
+  max-width: 64ch;
 }
+.line-headline b { font-weight: 800; }
+@container line-floor (max-width: 640px) { .line-headline { font-size: 17px; } }
 .line-subtitle { display: none; }
 @container line-floor (min-width: 700px) { .line-subtitle { display: inline; } }
 
@@ -55,10 +71,17 @@
   min-width: min-content;
 }
 .line-flow { container-type: inline-size; }
+/* Content past an edge (stations in the flow, pills in the project row):
+   the edge fades, so the scroller says there is more (useScrollEdges). */
+.line-edge-fade { --edge-fade: 56px; }
+.line-edge-fade[data-edge-right="true"] { mask-image: linear-gradient(to right, #000 calc(100% - var(--edge-fade)), transparent); }
+.line-edge-fade[data-edge-left="true"] { mask-image: linear-gradient(to left, #000 calc(100% - var(--edge-fade)), transparent); }
+.line-edge-fade[data-edge-left="true"][data-edge-right="true"] { mask-image: linear-gradient(to right, transparent, #000 var(--edge-fade), #000 calc(100% - var(--edge-fade)), transparent); }
+[data-line-projects].line-edge-fade, .line-tabs.line-edge-fade { --edge-fade: 40px; }
+.line-scroll-quiet { scrollbar-width: none; }
+.line-scroll-quiet::-webkit-scrollbar { display: none; }
 @container (max-width: 1360px) {
   .line-track { grid-template-columns: var(--line-cols-tight); }
-  /* No room on a 16px rail: the station's header line carries the count. */
-  .line-rail-chip { display: none; }
 }
 @container (max-width: 1000px) {
   .line-track { grid-template-columns: var(--line-cols-compact); }
@@ -74,25 +97,34 @@
 }
 @media (max-width: 639px) {
   .line-track { grid-template-columns: var(--line-cols-narrow); }
+  /* One station per screen: the tabs carry the flow, and a rail stub at the
+     screen's edge would read as a stray border. */
+  .line-rail { display: none; }
 }
-.line-track > .line-col { align-self: stretch; }
+/* Every station runs the floor's full height, so the row reads as one band
+   with one bottom edge; a station holding more than fits scrolls its body
+   and says how many rows sit below the fold (.line-col-more). */
+.line-track > .line-col { align-self: stretch; max-height: 100%; }
 
-/* Throughput: two lead numbers, then the flow counts as a quieter set. */
+/* Throughput: two lead numbers, then the flow counts as a quieter set, all
+   at fixed widths in one cluster that ends where its content does. */
 .line-meter {
   display: flex;
   flex-wrap: wrap;
+  width: 100%;
   align-items: stretch;
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background: color-mix(in srgb, var(--sol-card) 82%, transparent);
   backdrop-filter: blur(2px);
   overflow: hidden;
 }
-.line-meter-lead { display: flex; gap: 32px; padding: 14px 20px; flex: 0 0 auto; }
+.line-meter-lead { display: flex; gap: 28px; padding: 12px 20px; flex: 0 0 auto; }
+.line-meter-lead > * { min-width: 104px; }
 .line-meter-flow {
-  flex: 1 1 420px;
+  flex: 1 1 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px 16px;
+  grid-template-columns: repeat(5, minmax(88px, 1fr));
+  gap: 6px 12px;
   align-content: center;
   padding: 12px 20px;
   box-shadow: -1px 0 0 color-mix(in srgb, var(--sol-border) 35%, transparent);
@@ -101,6 +133,7 @@
 /* Too narrow for five across: the flow counts take their own band as a
    fixed three by two grid, so no count is ever left alone on a row. */
 @container line-floor (max-width: 900px) {
+  .line-meter { width: auto; }
   .line-meter-lead { flex: 1 1 100%; gap: 24px; padding: 12px 16px; }
   .line-meter-flow {
     flex: 1 1 100%;
@@ -111,16 +144,23 @@
   }
 }
 
-/* All clear, said quietly: green held back toward the text color. */
-.line-tone-clear { color: color-mix(in srgb, var(--sol-green) 72%, var(--sol-text)); }
+/* The week in one line under the headline; a click opens the figures. A
+   phone keeps the first two figures and the chevron moves beside them. */
+.line-meter-summary .line-num { font-weight: 600; }
+.line-sum-chev-narrow { display: none; }
+@container line-floor (max-width: 640px) {
+  .line-sum-extra { display: none; }
+  .line-sum-chev-narrow { display: inline-block; }
+}
 
-/* The headline's links: a station named in the sentence. */
+/* The headline's links: a station named in the sentence. The underline
+   shows on hover and focus only, so the sentence reads as a sentence. */
 .line-headline-link {
   font: inherit;
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.18em;
-  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-decoration-color: transparent;
   transition: text-decoration-color 120ms ease;
 }
 .line-headline-link:hover, .line-headline-link:focus-visible { text-decoration-color: currentColor; outline: none; }
@@ -135,11 +175,11 @@
    and an empty one folds to a labelled slot when its track is 40px. */
 .line-col {
   container: line-col / inline-size;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background-color 160ms ease;
   --stage: var(--sol-text-muted);
   background: color-mix(in srgb, var(--sol-card) 88%, transparent);
   border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
   box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-border) 20%, transparent), 0 14px 32px -24px color-mix(in srgb, var(--sol-text) 40%, transparent);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
   animation: line-rise 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
   animation-delay: calc(var(--i, 0) * 60ms);
 }
@@ -159,29 +199,32 @@
     linear-gradient(180deg, color-mix(in srgb, var(--sol-yellow) 7%, transparent), transparent 140px),
     color-mix(in srgb, var(--sol-card) 92%, transparent);
 }
-.line-col[data-state="ask"][data-focused="true"] {
-  border-color: color-mix(in srgb, var(--sol-yellow) 70%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-yellow) 16%, transparent), 0 18px 40px -26px color-mix(in srgb, var(--sol-yellow) 55%, transparent);
-}
 .line-col[data-state="starved"]::before { background: color-mix(in srgb, var(--sol-orange) 55%, transparent); }
 .line-col[data-state="failing"]::before { background: var(--sol-red); }
-/* Focus is the belt color, so the arrow keys visibly move something. */
-.line-col[data-focused="true"] {
-  border-color: color-mix(in srgb, var(--line-belt) 70%, transparent);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 22%, transparent), 0 18px 40px -26px color-mix(in srgb, var(--line-belt) 60%, transparent);
+/* One focus style: a station holding rows shows the cursor on its row or
+   card, so the column itself carries no ring. Only an empty station, which
+   has no row to hold the cursor, lifts with the belt color. */
+.line-col[data-focused="true"][data-empty="true"] {
+  border-color: color-mix(in srgb, var(--line-belt) 85%, transparent);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--line-belt) 9%, transparent), transparent 160px),
+    var(--sol-card);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 26%, transparent), 0 22px 44px -24px color-mix(in srgb, var(--line-belt) 70%, transparent);
+  transform: translateY(-2px);
 }
+.line-col[data-focused="true"][data-empty="true"]::before { background: var(--line-belt); height: 4px; }
 .line-col[data-empty="true"] {
   background: color-mix(in srgb, var(--sol-card) 62%, transparent);
   box-shadow: none;
 }
 .line-col[data-empty="true"][data-focused="true"] { box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent); }
 .line-name-short, .line-col-slim { display: none; }
-@container line-col (max-width: 128px) {
+@container line-col (max-width: 168px) {
   .line-name-full { display: none; }
   .line-name-short { display: inline; }
 }
 @container line-col (max-width: 64px) {
-  .line-col-head, .line-col-body, .line-col-why { display: none; }
+  .line-col-head, .line-col-body, .line-col-why, .line-col-more { display: none; }
   .line-col-slim {
     display: flex;
     flex-direction: column;
@@ -196,10 +239,54 @@
 /* A narrow column drops its secondary words before anything truncates:
    the week total first, then the state words (the lamp and its tooltip stay). */
 @container line-col (max-width: 280px) { .line-count-of { display: none; } }
-@container line-col (max-width: 220px) { .line-state-text { display: none; } }
+/* A Sense row's week bars give way before its source name truncates. */
+@container line-col (max-width: 150px) {
+  .line-sense-spark { display: none; }
+  .line-sense-count { margin-left: auto; }
+}
+/* A title is what a founder scans: a narrow station gives it a fourth line. */
+@container line-col (max-width: 200px) { .line-col .line-title { -webkit-line-clamp: 4; } }
+@container line-col (max-width: 100px) { .line-state-text { display: none; } }
+/* A narrow live station keeps the pill's lamp; its words move to the tooltip. */
+@container line-col (max-width: 200px) {
+  .line-state:not([data-kind="clear"]):not([data-kind="idle"]) .line-state-text { display: none; }
+  .line-state:not([data-kind="clear"]):not([data-kind="idle"]) { padding: 3px; }
+}
+
+/* The stage state is a pill beside the station name: its lamp and one word
+   ("clear", "oldest 3d", "starved 2d"), so a lone dot never has to speak. */
+.line-state {
+  padding: 2px 8px 2px 6px;
+  border-radius: 9999px;
+  border: 1px solid color-mix(in srgb, currentColor 28%, transparent);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  line-height: 14px;
+}
+/* Calm states are a word, no pill: nothing to look at. Running is the
+   ordinary case, so its age is quiet text with no lamp; pills and lamps are
+   kept for the exceptions (ask, paused, starved, failing). */
+.line-state[data-kind="clear"], .line-state[data-kind="idle"], .line-state[data-kind="running"] {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.line-state[data-kind="running"] { color: var(--sol-text-dim); }
+.line-state[data-kind="running"] .line-lamp { display: none; }
+.line-state[data-kind="clear"] { color: color-mix(in srgb, var(--sol-green) 70%, var(--sol-text-dim)); }
 .line-count-of { color: color-mix(in srgb, var(--sol-text-dim) 80%, transparent); }
 .line-row-quiet { opacity: 0.6; }
+/* The goal a cause serves: a small target mark, then its name. */
+.line-goal::before { content: "\25CE\00a0"; color: var(--sol-text-dim); }
 .line-row-quiet:hover, .line-row-quiet[data-focused="true"] { opacity: 1; }
+/* A station that clips says how much sits below its fold. */
+.line-col-more {
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
+  background: color-mix(in srgb, var(--sol-bg-alt) 35%, transparent);
+}
+.line-col-more:last-child { border-radius: 0 0 10px 10px; }
+/* A declared finder silent for a day: the warning ink the project pill
+   uses, on a mark at the row's edge, so it is never dimmed with quiet rows. */
+.line-row-silent { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sol-orange) 70%, transparent); background: color-mix(in srgb, var(--sol-orange) 6%, transparent); }
 .line-col-why {
   border-top: 1px solid color-mix(in srgb, currentColor 25%, transparent);
   background: color-mix(in srgb, currentColor 6%, transparent);
@@ -212,6 +299,7 @@
   border: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
   background: repeating-linear-gradient(135deg, transparent 0 9px, color-mix(in srgb, var(--sol-border) 12%, transparent) 9px 10px);
 }
+.line-col[data-empty="true"] .line-empty { min-height: 100%; }
 .line-col[data-focused="true"] .line-empty { border-color: color-mix(in srgb, var(--line-belt) 55%, transparent); }
 
 @keyframes line-rise {
@@ -220,8 +308,8 @@
 }
 
 /* The rail between stations, at the height of the station names: the one
-   colored thing on the floor, moving while the next station holds work, with
-   a chip for what entered it this week. */
+   colored thing on the floor, moving while the next station holds work. What
+   entered a station this week is said in its header, beside the count. */
 .line-rail-slot { --rail-y: 25px; }
 .line-rail {
   position: absolute;
@@ -244,42 +332,18 @@
   from { background-position: 0 0; }
   to { background-position: 18px 0; }
 }
-.line-rail-chip {
-  position: absolute;
-  left: 50%;
-  top: var(--rail-y);
-  transform: translate(-50%, -50%);
-  min-width: 20px;
-  padding: 1px 5px;
-  border-radius: 9999px;
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: var(--line-belt);
-  background: var(--sol-card);
-  border: 1px solid color-mix(in srgb, var(--line-belt) 70%, transparent);
-  z-index: 1;
-}
+
 
 /* Stage lamps. */
 .line-lamp { position: relative; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
-.line-lamp[data-kind="running"] { background: var(--line-belt); }
-.line-lamp[data-kind="running"]::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 9999px;
-  border: 1px solid var(--line-belt);
-  animation: line-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
+/* Running is the ordinary case: a still dot. Only exceptions move (ask,
+   failing, starved). */
+.line-lamp[data-kind="running"] { background: color-mix(in srgb, var(--line-belt) 75%, transparent); }
 .line-lamp[data-kind="paused"] {
   background: linear-gradient(90deg, var(--sol-yellow) 0 35%, transparent 35% 65%, var(--sol-yellow) 65%);
   border-radius: 1px;
 }
-.line-lamp[data-kind="starved"] { background: var(--sol-orange); }
+.line-lamp[data-kind="starved"] { background: var(--sol-orange); animation: line-pulse 2.4s ease-in-out infinite; }
 .line-lamp[data-kind="ask"] { background: var(--sol-yellow); }
 .line-lamp[data-kind="ask"]::after {
   content: "";
@@ -300,26 +364,82 @@
 
 /* Rows inside a station. */
 .line-row {
+  position: relative;
   border: 1px solid transparent;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 .line-row:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
+/* The row cursor: a solid bar on the left edge and a tinted surface. */
 .line-row[data-focused="true"] {
-  background: color-mix(in srgb, var(--line-belt) 9%, transparent);
-  border-color: color-mix(in srgb, var(--line-belt) 30%, transparent);
-  box-shadow: inset 3px 0 0 var(--line-belt);
+  background: color-mix(in srgb, var(--line-belt) 15%, transparent);
+  border-color: color-mix(in srgb, var(--line-belt) 40%, transparent);
 }
-.line-card { transition: box-shadow 120ms ease; }
-.line-card[data-focused="true"] { box-shadow: 0 0 0 2px var(--line-belt), -6px 0 0 -3px var(--line-belt); }
+.line-row[data-focused="true"]::before {
+  content: "";
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  bottom: -1px;
+  width: 4px;
+  border-radius: 6px 0 0 6px;
+  background: var(--line-belt);
+}
+.line-card { position: relative; transition: box-shadow 120ms ease; }
+.line-card[data-focused="true"] { box-shadow: 0 0 0 2px var(--line-belt); }
+.line-card[data-focused="true"]::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 6px;
+  bottom: 6px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--line-belt);
+}
 
 .line-live-dot { background: var(--line-belt); animation: line-pulse 1.8s ease-in-out infinite; }
 @keyframes line-pulse { 50% { opacity: 0.4; } }
 
-.line-spark rect { fill: color-mix(in srgb, var(--sol-text-muted) 45%, transparent); }
-.line-spark rect[data-hot="true"] { fill: var(--sol-text); }
 
-.line-bar { background: color-mix(in srgb, var(--sol-border) 30%, transparent); }
-.line-bar > span { background: linear-gradient(90deg, color-mix(in srgb, var(--stage) 55%, transparent), var(--stage)); }
+/* Rank: the order says priority, so every numeral is the same quiet
+   tabular figure, set on the title's first line. */
+.line-rank {
+  font-family: var(--font-mono), monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: right;
+  color: var(--sol-text-dim);
+}
+/* The one state a cause row asks about: a small orange chip on its title line,
+   in the ink a silent finder wears in Sense. */
+.line-chip-warn {
+  display: inline-block;
+  vertical-align: 1px;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 15px;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--sol-orange);
+  border: 1px solid color-mix(in srgb, var(--sol-orange) 40%, transparent);
+  background: color-mix(in srgb, var(--sol-orange) 10%, transparent);
+}
+
+/* Watch: a countdown track that empties as the watch runs, with ticks so it
+   never reads as a progress bar. */
+.line-countdown {
+  position: relative;
+  height: 4px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--sol-border) 45%, transparent) 0 calc(100% / 7 - 2px), transparent calc(100% / 7 - 2px) calc(100% / 7));
+}
+.line-countdown > span {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, var(--sol-text-muted) 0 calc(100% / 7 - 2px), transparent calc(100% / 7 - 2px) calc(100% / 7));
+  clip-path: inset(0 calc(100% - var(--left, 100%)) 0 0);
+}
 
 /* A command chip: wraps at spaces, never clips; the copy button sits inside. */
 .line-cmd {
@@ -345,9 +465,9 @@
 .line-ghost {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(6, minmax(156px, 1fr));
-  gap: 14px;
-  min-width: calc(6 * 156px + 5 * 14px);
+  grid-template-columns: repeat(6, minmax(112px, 1fr));
+  gap: 10px;
+  min-width: calc(6 * 112px + 5 * 10px);
 }
 .line-ghost::before {
   content: "";
@@ -375,13 +495,17 @@
   scroll-snap-align: start;
 }
 .line-ghost-col:hover { background: color-mix(in srgb, var(--sol-card) 80%, transparent); }
+/* Each station's own command, shown on hover or under the cursor; its room is
+   held, so the boxes never jump. */
+.line-ghost-cmd { opacity: 0; transition: opacity 140ms ease; }
+.line-ghost-col:hover .line-ghost-cmd, .line-ghost-col[data-focused="true"] .line-ghost-cmd, .line-ghost-col:focus-within .line-ghost-cmd { opacity: 1; }
 .line-ghost-col[data-focused="true"] {
   border-style: solid;
   border-color: color-mix(in srgb, var(--line-belt) 70%, transparent);
   background: color-mix(in srgb, var(--sol-card) 90%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent);
 }
-.line-start-title { font-size: clamp(26px, 4.4cqi, 36px); line-height: 1.08; font-weight: 450; }
+.line-start-title { font-size: 20px; line-height: 1.3; font-weight: 600; }
 .line-start {
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background:
@@ -403,6 +527,24 @@
   border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
   background: var(--sol-card);
 }
+/* The founder's own station, when a card waits there, wears the ask color. */
+.line-tab[data-ask="true"] {
+  color: var(--sol-yellow);
+  border-color: color-mix(in srgb, var(--sol-yellow) 50%, transparent);
+  background: color-mix(in srgb, var(--sol-yellow) 10%, var(--sol-card));
+}
+.line-tab[data-ask="true"][data-active="true"] { border-color: var(--sol-yellow); }
+
+/* The roll-up's sideways scroller: a shadow on whichever edge hides
+   columns, covered by a background that scrolls with the content once the
+   edge is reached. */
+.line-rollup-scroll {
+  background:
+    linear-gradient(to left, var(--sol-bg) 40%, transparent) right center / 32px 100% no-repeat local,
+    linear-gradient(to right, var(--sol-bg) 40%, transparent) left center / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--sol-text) 22%, transparent), transparent) right center / 14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 0% 50%, color-mix(in srgb, var(--sol-text) 22%, transparent), transparent) left center / 14px 100% no-repeat scroll;
+}
 
 /* The awaiting column hosts the decision cards; tighten their padding. */
 .line-col .decision-card { background: var(--sol-card); }
@@ -418,11 +560,8 @@ html:not(.dark) .line-col {
   box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-border) 14%, transparent), 0 12px 28px -24px color-mix(in srgb, var(--sol-text) 16%, transparent);
 }
 html:not(.dark) .line-col[data-empty="true"] { box-shadow: none; }
-html:not(.dark) .line-col[data-focused="true"] {
+html:not(.dark) .line-col[data-focused="true"][data-empty="true"] {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 16%, transparent), 0 14px 32px -26px color-mix(in srgb, var(--line-belt) 35%, transparent);
-}
-html:not(.dark) .line-col[data-state="ask"][data-focused="true"] {
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-yellow) 18%, transparent), 0 14px 32px -26px color-mix(in srgb, var(--sol-yellow) 35%, transparent);
 }
 html:not(.dark) .line-rail[data-live="true"] { box-shadow: none; }
 

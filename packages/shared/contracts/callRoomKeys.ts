@@ -134,6 +134,39 @@ export function isRecRoomKey(roomKey: string | null | undefined): boolean {
   return !!roomKey && parseRoomKey(roomKey)?.kind === "rec";
 }
 
+/** The names a call's room points at, as far as the reader is allowed to
+ *  know them. Each surface resolves these its own way (the web from its
+ *  store, the CLI from the server) and hands them here, so the title rule
+ *  itself lives once. */
+export type CallPlaceNames = {
+  /** The session a session room belongs to. */
+  sessionTitle?: string | null;
+  /** The people of a people room besides the reader ("Ann, Bo"). */
+  peerName?: string | null;
+  /** A channel room's name, without the "#". */
+  channelName?: string | null;
+  /** What a call with no title and no known place is called, when the
+   *  surface has a truer word than "Untitled huddle" for it. */
+  untitled?: string;
+};
+
+/** What a call is called on every surface that lists it: its own title, else
+ *  the place it happened, else a plain word. Never the room key: a key is an
+ *  opaque id that tells a person nothing and costs an agent tokens. */
+export function callDisplayTitle(
+  call: { title?: string | null; room_key: string },
+  names: CallPlaceNames = {},
+): string {
+  const title = call.title?.trim();
+  if (title) return title;
+  const parsed = parseRoomKey(call.room_key);
+  if (parsed?.kind === "rec") return "Untitled recording";
+  if (names.peerName) return `Call with ${names.peerName}`;
+  if (parsed?.kind === "session" && names.sessionTitle) return `Huddle in ${names.sessionTitle}`;
+  if (parsed?.kind === "channel" && names.channelName) return `Huddle in #${names.channelName}`;
+  return names.untitled ?? "Untitled huddle";
+}
+
 // The room a chat channel huddles in. A DM or group thread's identity IS its
 // member set, so its huddle is the member-set room — the same room the avatar
 // bar's 1:1 ring and the "new huddle" picker reach for the same people. A

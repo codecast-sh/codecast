@@ -15,7 +15,7 @@
 // - Expiry is not stored: a done entry is past ⌘Z's reach once it is older
 //   than the engine's keyboard window. A generic entry stays reachable from the
 //   timeline (the guard makes that safe); a manual one is closed for good.
-import { DEFAULT_UNDO_KEYBOARD_WINDOW_MS, type UndoHistoryItem, type UndoHistorySnapshot } from "@platform/engine";
+import { DEFAULT_UNDO_KEYBOARD_WINDOW_MS, undoKeyboardSince, type UndoHistoryItem, type UndoHistorySnapshot } from "@platform/engine";
 import type { RecentVisit } from "../store/inboxStore";
 import { resolveVisit, type ResolvedVisit, type VisitResolveMemo } from "./recentVisits";
 import { visitDetailParts } from "./recentVisitDetails";
@@ -187,6 +187,20 @@ export function undoSetAsideLine(count: number, label: string): string {
   return `${count} undone ${count === 1 ? "step" : "steps"} set aside when you ${lowerFirst(label)}`;
 }
 
+/** Whether a label already names the object: its title appears in it, or a
+ *  quoted part of it is that title cut short (labels cut titles at 40). */
+export function undoLabelNamesTitle(label: string, title: string): boolean {
+  const norm = (t: string) => t.replace(/\s+/g, " ").trim().toLowerCase();
+  const t = norm(title);
+  if (!t) return true;
+  if (norm(label).includes(t)) return true;
+  for (const m of label.matchAll(/“([^”]*)”/g)) {
+    const q = norm(m[1]!.replace(/…$/, ""));
+    if (q.length >= 8 && t.startsWith(q)) return true;
+  }
+  return false;
+}
+
 /** The button's words for a row's act. */
 export function undoActLabel(act: UndoRowAct): string | null {
   if (!act) return null;
@@ -203,7 +217,7 @@ function stateOf(item: UndoHistoryItem): UndoRowState {
 }
 
 function keyboardLeft(item: UndoHistoryItem, now: number, windowMs: number): number {
-  return windowMs - (now - item.ts);
+  return windowMs - (now - undoKeyboardSince(item));
 }
 
 /** Seconds left in 10s steps during the window's last minute, else null. */
@@ -243,9 +257,18 @@ function detailOf(row: Omit<UndoTimelineRow, "detail">, item: UndoHistoryItem, n
     case "dropped":
       return "set aside by a later change";
     case "done": {
+      // The keyboard stops at it (its undo widens access): say where it goes back from.
+      if (item.confirm) {
+        const where = row.visits[0] ? visitDetailParts(row.visits[0], teams).join(" · ") : "";
+        return `${where ? `${where} · ` : ""}its undo widens access: take it back from here`;
+      }
       if (row.secondsLeft !== null) return `can undo for ${row.secondsLeft}s more`;
       if (row.expired && item.mode === "manual") return "too old to take back";
-      const where = row.visits[0] ? visitDetailParts(row.visits[0], teams).join(" · ") : "";
+      // A group spans several places, and its fold names them; a single row
+      // says where it happened, minus what its label already says (a short id).
+      const where = row.visits[0] && !row.fold
+        ? visitDetailParts(row.visits[0], teams).filter((p) => !row.label.includes(p)).join(" · ")
+        : "";
       if (!row.expired) return where;
       // Past the keyboard window: only a row that still has its button is reachable.
       const older = `older than ${undoWindowWords(windowMs)}`;

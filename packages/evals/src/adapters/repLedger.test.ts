@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -67,6 +67,20 @@ describe('the rep ledger', () => {
     expect(laneRepUsd(ledger.lanes!['org-review claude-opus-5-5']!)).toBeCloseTo(7);
     expect(reservedUsd(ledger)).toBeCloseTo(28);
     expect(laneRepUsd({ est: 2, running: 0, done: 3, doneUsd: 3 })).toBe(2);
+  });
+
+  test("a rep in flight is reserved at its lane's costliest rep, so a budget holds against an agent rep at several times the average", async () => {
+    // The opus org-review round: reps from $2.90 to $17.97, averaging about $7. Reserved at the average, --budget 18 started four and spent $22.85.
+    const lane = { est: 7, peak: 17.97, running: 0, done: 0, doneUsd: 0 };
+    expect(laneRepUsd(lane)).toBeCloseTo(17.97);
+    const ledger: RepLedger = { usd: 0, lanes: { [`echo ${echoMeta.model}`]: { ...lane, running: 1 } } };
+    const r = await replayRep(prepared(), 1, 2, { reps: 2, model: null, budgetUsd: 18, spent: ledger, estPerRep: 7, peakPerRep: 17.97 });
+    expect(r.stopped).toBe(true);
+    expect(readFileSync(join(root, folders()[0]!, 'result.json'), 'utf8')).toContain('budget $18 reached');
+    // A finished rep dearer than anything seen raises the lane's reservation for the rest of the check.
+    const fresh: RepLedger = { usd: 0 };
+    await replayRep(prepared(), 1, 1, { reps: 1, model: null, budgetUsd: 100, spent: fresh, estPerRep: 0.2, peakPerRep: 0.5 });
+    expect(fresh.lanes![`echo ${echoMeta.model}`]!.peak).toBe(0.5);
   });
 
   test('a stop counts the reps still running at their measured cost', async () => {

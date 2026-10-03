@@ -6,10 +6,10 @@ import { RisingCard } from "../components/RisingCard";
 // What a running window shows when the service worker reports a new deploy.
 //
 // Every deploy is applied silently: boot's onNeedReload reloads the window the
-// next time it is hidden (@platform/update-prompt's serviceWorkerHooks). A
-// window that never hides (a desktop main window on its own screen) would
-// otherwise run the old bundle for days, so two cases also raise a card asking
-// the person to reload:
+// next time it is hidden or left untouched for a few minutes
+// (@platform/update-prompt's serviceWorkerHooks). A window that is always in
+// use stays on the old bundle, so two cases also raise a card asking the
+// person to reload:
 //
 //  - release: the deploy bumped release-prompt.json's generation past this
 //    bundle's (scripts/release-prompt.ts). Later dismisses that generation for

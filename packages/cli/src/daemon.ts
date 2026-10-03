@@ -198,7 +198,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
-import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCodexProgramLaunch, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -11759,6 +11759,8 @@ async function processCodexSessionPass(
             parentMessageUuid: undefined,
             parentConversationId,
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
+            // The mark the claude path stamps for `claude -p`.
+            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row

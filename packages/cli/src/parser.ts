@@ -995,6 +995,13 @@ export function extractCodexSessionMetadata(content: string): CodexSessionMetada
   return undefined;
 }
 
+// A Codex thread no person started: `codex exec` (Codex's headless mode, the
+// counterpart of `claude -p`) or a thread Codex spawned itself (a reviewer, an
+// approval assessor). Its user turns are prompts a program wrote.
+export function isCodexProgramLaunch(metadata: CodexSessionMetadata | undefined): boolean {
+  return metadata?.source === "exec" || (typeof metadata?.source === "object" && !!metadata.source.subagent);
+}
+
 export function isCompletedStandaloneCodexReview(
   metadata: CodexSessionMetadata | undefined,
   content: string,

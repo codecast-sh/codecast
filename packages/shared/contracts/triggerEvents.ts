@@ -58,6 +58,18 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   issue_labeled: { event_type: "issues", action: "labeled" },
   issue_closed: { event_type: "issues", action: "closed" },
   issue_commented: { event_type: "issue_comment", action: "created" },
+
+  // ── Derived ingestion events (docs/architecture/external-data.md X4) ──
+  // Fired by the group upsert on a transition (ingest.transitionTriggerEvent),
+  // narrowed by `source` rather than a repository.
+  error_new: derived("error_new"),
+  error_regressed: derived("error_regressed"),
+  error_spike: derived("error_spike"),
+  job_failed: derived("job_failed"),
+  check_failed: derived("check_failed"),
+  check_recovered: derived("check_recovered"),
+  metric_alert: derived("metric_alert"),
+  deploy: derived("deploy"),
 };
 
 /**
@@ -105,6 +117,14 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   issue_labeled: "issue labeled",
   issue_closed: "issue closed",
   issue_commented: "issue comment",
+  error_new: "new error",
+  error_regressed: "error came back",
+  error_spike: "error spiked",
+  job_failed: "job failed",
+  check_failed: "check went red",
+  check_recovered: "check recovered",
+  metric_alert: "metric crossed its line",
+  deploy: "deploy",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
   [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",
 };
@@ -118,6 +138,26 @@ export const PR_TRIGGER_EVENTS = TRIGGER_EVENT_NAMES.filter((name) => name.start
 
 export function isPrTriggerEvent(name: string | undefined): boolean {
   return !!name && PR_TRIGGER_EVENTS.includes(name);
+}
+
+/**
+ * The events a running product reports through a source. These are the ones
+ * `--source <name>` narrows, the way a repository narrows the pull request
+ * events.
+ */
+export const INGEST_TRIGGER_EVENTS = [
+  "error_new",
+  "error_regressed",
+  "error_spike",
+  "job_failed",
+  "check_failed",
+  "check_recovered",
+  "metric_alert",
+  "deploy",
+];
+
+export function isIngestTriggerEvent(name: string | undefined): boolean {
+  return !!name && INGEST_TRIGGER_EVENTS.includes(name);
 }
 
 /**
@@ -141,4 +181,42 @@ export function triggerEventLabel(nameOrFilter: string | TriggerEventFilter | un
   const name = typeof nameOrFilter === "string" ? nameOrFilter : triggerEventShorthand(nameOrFilter);
   if (!name) return "event";
   return TRIGGER_EVENT_LABELS[name] ?? name.replace(/_/g, " ");
+}
+
+/** A stored event filter with the narrowings an event can carry. */
+export interface TriggerScopeFilter extends TriggerEventFilter {
+  repository?: string;
+  pr_number?: number;
+  source?: string;
+}
+
+/** What a trigger is watching, in one line, so nobody has to guess its scope. */
+export function describeEventScope(filter: TriggerScopeFilter): string {
+  const name = triggerEventShorthand(filter) ?? filter.event_type;
+  if (isIngestTriggerEvent(filter.event_type)) {
+    return `on ${name} from ${filter.source ? `source ${filter.source}` : "every source you can see"}`;
+  }
+  const where = filter.repository
+    ? `${filter.repository}${filter.pr_number ? `#${filter.pr_number}` : ""}`
+    : "every repository you can see";
+  return `on ${name} in ${where}`;
+}
+
+/**
+ * The filter a form saves for the event it shows: the event's own filter,
+ * keeping the narrowings of the stored one that still apply to it (a source
+ * for a source event, a repository and pull request for a pull request
+ * event). A form that offers only the event must not widen a trigger armed
+ * from the CLI with --source or --repo when it saves.
+ */
+export function eventFilterForSave(eventName: string, prior: TriggerScopeFilter | undefined): TriggerScopeFilter | undefined {
+  const base = TRIGGER_EVENT_SHORTHANDS[eventName];
+  if (!base) return undefined;
+  const out: TriggerScopeFilter = { ...base };
+  if (prior && isIngestTriggerEvent(eventName) && prior.source) out.source = prior.source;
+  if (prior && isPrTriggerEvent(eventName)) {
+    if (prior.repository) out.repository = prior.repository;
+    if (prior.pr_number !== undefined) out.pr_number = prior.pr_number;
+  }
+  return out;
 }

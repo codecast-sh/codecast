@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
-import { evalSignals, reportSignals, signalArgv, type SurfaceVerdict } from './signals';
+import type { BisectState, CommitRef } from '@codecast/shared/contracts/evalsApi';
+
+import { bisectSignal, evalSignals, evalsSurfacePath, reportSignals, signalArgv, type SurfaceVerdict } from './signals';
 
 const held: SurfaceVerdict = { surface: 'title', regression: false, gatesFailed: [], failingFreezes: [], summary: ['title  pass 5/5'] };
 
@@ -58,5 +60,55 @@ describe('reportSignals', () => {
   test('dry runs nothing', () => {
     const lines = reportSignals(signals, { dry: true, run: () => { throw new Error('ran'); } });
     expect(lines[0]).toStartWith('would file regression evals:title:json');
+  });
+});
+
+describe('the in-app path', () => {
+  test('a verdict signal names the surface page with its batch pinned', () => {
+    const [s] = evalSignals({ ...held, batch: '2026-10-03T00:53:31.614Z', gatesFailed: ['json'] });
+    expect(s.detail).toContain('/evals/s/title?batch=2026-10-03T00%3A53%3A31.614Z');
+    expect(evalsSurfacePath('settle')).toBe('/evals/s/settle');
+  });
+});
+
+describe('bisectSignal', () => {
+  const reply = 'I looked at the session and the agent is waiting on review';
+  const commit = (sha: string): CommitRef => ({ sha, subject: `subject of ${sha}`, author: 'a', at: '2026-10-02T00:00:00Z', session: null, mainSha: sha, onMain: true });
+  const state = (answer: BisectState['answer'], status: BisectState['status'] = 'done'): BisectState =>
+    ({
+      id: 'settle-20261004-004540',
+      surface: 'settle',
+      status,
+      answer,
+      range: { good: '2026-10-01T07:00:00.000Z', bad: '2026-10-03T07:33:53.398Z' },
+      plan: { freezes: [{ id: 'abcdef1234567890', name: reply, role: 'flipped' }, { id: '99999999aaaa', name: 'stable', role: 'control' }] },
+    }) as unknown as BisectState;
+
+  test('a culprit files one regression carrying the in-app paths, the sha and freeze prefixes only', () => {
+    const s = bisectSignal(state({ kind: 'culprit', commit: commit('0ae504f0123456789'), separation: { kind: 'worse', p: 0.01 }, tier: 2 } as BisectState['answer']))!;
+    expect(s.kind).toBe('regression');
+    expect(s.fingerprint).toBe('evals:settle:bisect:0ae504f01');
+    expect(s.title).toBe('settle eval regression traced to 0ae504f01');
+    expect(s.detail).toContain('/evals/s/settle?batch=2026-10-03T07%3A33%3A53.398Z');
+    expect(s.detail).toContain('/evals/bisect/settle-20261004-004540');
+    expect(s.detail).toContain('abcdef12');
+    expect(s.detail).not.toContain('99999999');
+    // No reply, no freeze name, no commit subject: the signal leaves the laptop.
+    for (const text of [s.title, s.detail]) {
+      expect(text).not.toContain(reply);
+      expect(text).not.toContain('subject of');
+    }
+  });
+
+  test('a range names its ends, the patch candidate included', () => {
+    const s = bisectSignal(state({ kind: 'range', candidates: [{ kind: 'commit', commit: commit('1111111aaaa'), renderClass: 0 }, { kind: 'patch', base: '1111111aaaa', treePatch: '87d03bffff', renderClass: 1 }], separation: null, tier: 2 } as BisectState['answer']))!;
+    expect(s.fingerprint).toBe('evals:settle:bisect:1111111aa..patch:87d03bff');
+    expect(s.detail).toContain('uncommitted edits 87d03bff on 1111111aa');
+  });
+
+  test('drift, a non-source answer, or an unfinished bisect files nothing', () => {
+    expect(bisectSignal(state({ kind: 'drift', detail: 'does not reproduce' }))).toBeNull();
+    expect(bisectSignal(state({ kind: 'attribution', answer: { kind: 'noise', separation: { kind: 'too-few' } } } as BisectState['answer']))).toBeNull();
+    expect(bisectSignal(state(null, 'probing'))).toBeNull();
   });
 });

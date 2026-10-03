@@ -160,6 +160,63 @@
   height: 14px;
 }
 
+/* A guest: the face row's guest mark, the same disc with a link in it in the
+   guest's yellow (faceRow.css .face-guest), at the circle's lower left where
+   it never meets the mute badge. It sits on the slot because the circle clips
+   itself, so it follows the circle out when speaker mode fades a face away. */
+.faces-window .face-guest-mark {
+  position: absolute;
+  left: 14.64%;
+  bottom: 14.64%;
+  transform: translate(-50%, 50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--sol-bg-alt);
+  box-shadow: 0 0 0 2px var(--sol-bg);
+  color: #b58900;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 220ms ease;
+}
+.faces-window .face-guest-mark svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.5;
+}
+.faces-window [data-face-tier="mini"] .face-guest-mark {
+  width: 12px;
+  height: 12px;
+}
+.faces-window [data-face-tier="mini"] .face-guest-mark svg {
+  width: 8px;
+  height: 8px;
+}
+.faces-window .face-slot:has(.face--hidden) .face-guest-mark {
+  opacity: 0;
+}
+
+/* The room is being filmed: said at rest, on the row's top left corner, in
+   the stage's own REC mark on the chrome's solid plate. It is the one fact
+   that may not wait for a hover: somebody working in another app is still
+   on camera, and the circles are all of the call they can see. */
+.faces-rec {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 6px 2px 5px;
+  border-radius: 999px;
+  background: #101418;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
+  pointer-events: none;
+}
+
 /* The name, only while the pointer is on that face, and under the face rather
    than on it. A name printed on every circle all call is a caption on somebody
    you already recognize; a name written across their chin is a caption on their
@@ -302,4 +359,13 @@
   .faces-btn {
     transition: none;
   }
+}
+
+/* At the menu-bar size the word would cover the face: the dot alone. */
+[data-face-tier="mini"] .faces-rec {
+  padding: 3px;
+}
+[data-face-tier="mini"] .faces-rec > span {
+  gap: 0;
+  font-size: 0;
 }

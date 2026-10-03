@@ -353,7 +353,17 @@ type GuardOpts = {
   stampFields?: ReadonlySet<string>;
   optionalClearFields?: ReadonlySet<string>;
   serverAssignedFields?: ReadonlySet<string>;
+  tombstone?: UndoConfig["tombstone"];
 };
+
+// A cell as the guard sees it: a row the server keeps as a tombstone (an
+// archived doc the sync log still delivers) is a row that is gone.
+function readLive(state: Record<string, any>, cell: CellChange, opts: GuardOpts) {
+  const cur = readCell(state, cell, opts.rowKeyOf);
+  if (!opts.tombstone || cur.rowGone || cell.shape === "scalar" || cell.shape === "singleton") return cur;
+  const row = cell.field === undefined ? cur.value : readCell(state, { ...cell, field: undefined }, opts.rowKeyOf).value;
+  return opts.tombstone(cell.store, row) ? { has: false, value: undefined, rowGone: true } : cur;
+}
 
 // Whether a cell's current value is `target`. On an optional-clear field a
 // null and a missing field are the same clear: the server's echo of a null
@@ -389,7 +399,7 @@ function rowStillAsAdded(cur: unknown, added: unknown, opts: GuardOpts): boolean
 }
 
 function verdictForUndo(cell: CellChange, state: Record<string, any>, opts: GuardOpts): Verdict {
-  const cur = readCell(state, cell, opts.rowKeyOf);
+  const cur = readLive(state, cell, opts);
   if (cell.field === undefined && cell.shape !== "scalar") {
     // Forward added the row: take it back only while it is the row it added.
     if (!cell.hadBefore && cell.hadAfter) {
@@ -409,10 +419,14 @@ function verdictForUndo(cell: CellChange, state: Record<string, any>, opts: Guar
 }
 
 function holdsBefore(cell: CellChange, state: Record<string, any>, opts: GuardOpts): boolean {
-  const cur = readCell(state, cell, opts.rowKeyOf);
+  const cur = readLive(state, cell, opts);
   if (cell.field === undefined && cell.shape !== "scalar") {
     if (!cell.hadBefore && cell.hadAfter) return !cur.has;
     if (cell.hadBefore && !cell.hadAfter) return cur.has;
+  } else if (cur.rowGone && cell.shape !== "scalar") {
+    // The row was deleted since the undo: an absent field on a gone row is
+    // not the before value, and re-running the action would recreate it.
+    return false;
   }
   return holds(cell, cur, cell.before, cell.hadBefore, opts) || sameShape(cur.value, cell.before);
 }
@@ -775,6 +789,11 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   // The inverse invocations and the applied cells live here, not on the
   // entry, so a stub rekey reaches them through the stack's hook.
   onUndoRekey((entry, oldId, newId) => {
+    const sends = lastSend.get(`#${oldId}`);
+    if (sends) {
+      lastSend.delete(`#${oldId}`);
+      lastSend.set(`#${newId}`, new Map([...sends, ...(lastSend.get(`#${newId}`) ?? [])]));
+    }
     const internal = internals.get(entry);
     if (!internal) return false;
     const inverse = internal.inverse?.map((inv) => ({ ...inv, args: rekeyIds(inv.args, oldId, newId) })) ?? null;
@@ -791,6 +810,44 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     stampFields: config.stampFields,
     optionalClearFields: shape.optionalClearFields,
     serverAssignedFields: config.serverAssignedFields,
+    tombstone: config.tombstone,
+  };
+
+  // The last send that wrote each cell, from a forward, an undo replay or a
+  // redo. A step of a walk reverses what those sends wrote, so it goes out
+  // after them; sends wait for the sends they follow, so the newest per cell
+  // is enough. Keyed by row id (two stores can hold copies of one row) and
+  // field, "\u0001" for the whole row; a row with no id is keyed by store.
+  const lastSend = new Map<string, Map<string, string>>();
+  const SEND_ROWS_LIMIT = 1000;
+  const scopeOf = (c: { store: string; id: string }) => (c.id !== "" ? `#${c.id}` : `@${c.store}`);
+  const WHOLE = "\u0001";
+  const noteSends = (cells: readonly CellChange[], outboxId: string) => {
+    for (const c of cells) {
+      if (isStamp(c)) continue;
+      const scope = scopeOf(c);
+      const fields = lastSend.get(scope) ?? new Map<string, string>();
+      lastSend.delete(scope);
+      fields.set(c.field ?? WHOLE, outboxId);
+      lastSend.set(scope, fields);
+    }
+    while (lastSend.size > SEND_ROWS_LIMIT) lastSend.delete(lastSend.keys().next().value!);
+  };
+  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): string[] => {
+    const out = new Set(own);
+    for (const c of cells) {
+      if (isStamp(c)) continue;
+      const fields = lastSend.get(scopeOf(c));
+      if (!fields) continue;
+      if (c.field === undefined) for (const id of fields.values()) out.add(id);
+      else {
+        const field = fields.get(c.field);
+        const whole = fields.get(WHOLE);
+        if (field) out.add(field);
+        if (whole) out.add(whole);
+      }
+    }
+    return [...out];
   };
 
   const internalOf = (spec: UndoSpec, ctx: UndoCtx): Internal => ({
@@ -808,6 +865,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     first: boolean,
     skippedRows: Array<{ store: string; id: string }>,
     after: readonly string[],
+    writes: readonly CellChange[],
   ) => {
     const target = deps.rawCreator(pass.inv.action);
     const flags: Flags = target ? deps.flagsOf(target) : { act: true, asyncAct: false, receipt: false, syn: false };
@@ -822,8 +880,9 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       deps.runAction(pass.inv.action, flags, recipe, pass.inv.args as any[], {
         onCommitted: ({ outboxId }) => {
           entry.replayOutboxIds = [...(entry.replayOutboxIds ?? []), outboxId];
+          noteSends(writes, outboxId);
         },
-        // A reversal never overtakes the write it reverses.
+        // A reversal never overtakes a write it reverses.
         after,
       }),
     );
@@ -870,10 +929,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     }
     config.beforeReplay?.(entry, "undo");
     const passes = planReplayPasses(apply, state, config, inverse, rowKeyOf);
-    const after = [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])];
+    const after = sendsBefore(apply, [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])]);
     entry.replayOutboxIds = [];
     entry.replayDir = "undo";
-    passes.forEach((pass, i) => runPass(entry, pass, i === 0, held, after));
+    passes.forEach((pass, i) => runPass(entry, pass, i === 0, held, after, apply));
     if (internal) internal.applied = apply;
     config.afterReplay?.(entry, "undo", apply);
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
@@ -891,10 +950,10 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     if (!apply.some((c) => !isStamp(c))) return { ok: false, reason: "conflict" };
     config.beforeReplay?.(entry, "redo");
     const passes = planReplayPasses(apply, state, config, null, rowKeyOf);
-    const after = [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])];
+    const after = sendsBefore(apply, [...(entry.outboxIds ?? []), ...(entry.replayOutboxIds ?? [])]);
     entry.replayOutboxIds = [];
     entry.replayDir = "redo";
-    passes.forEach((pass) => runPass(entry, pass, false, [], after));
+    passes.forEach((pass) => runPass(entry, pass, false, [], after, apply));
     config.afterReplay?.(entry, "redo", apply);
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
   };
@@ -933,7 +992,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     config.beforeReplay?.(entry, "redo");
     // The undo's replay is settled business now: a late refusal of it must
     // not move a redone entry.
-    const after = entry.replayOutboxIds ?? [];
+    const after = sendsBefore(entry.changes ?? [], entry.replayOutboxIds ?? []);
     entry.replayOutboxIds = undefined;
     entry.replayDir = undefined;
     const priorAfter = redoAfter;
@@ -978,6 +1037,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         refresh.changes = changes;
         refresh.planted = planted;
         refresh.outboxIds = [commit.outboxId];
+        noteSends(changes, commit.outboxId);
         refresh.objects = objectsOf(changes);
         internals.set(refresh, internal);
         return;
@@ -1019,6 +1079,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         redo: () => redoGeneric(entry),
       };
       internals.set(entry, internalOf(spec, ctx));
+      noteSends(changes, commit.outboxId);
       recordUndoEntry(entry, { toast: spec.toast, coalesce: spec.coalesce });
     },
   };

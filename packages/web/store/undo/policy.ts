@@ -32,7 +32,7 @@ const keepingConversationRows = (spec: UndoSpec): UndoSpec => {
   return {
     ...spec,
     label: (ctx) => (priorUnknown(ctx) ? null : spec.label(ctx)),
-    spell: own ? (cells, ctx) => own(keepConversationRows(cells), ctx) : (cells) => keepConversationRows(cells),
+    spell: own ? (cells, ctx) => own(keepConversationRows(cells, ctx), ctx) : (cells, ctx) => keepConversationRows(cells, ctx),
   };
 };
 

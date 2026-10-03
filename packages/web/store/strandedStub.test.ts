@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from "bun:test";
 import { useInboxStore, isConvexId } from "./inboxStore";
-import { DispatchNotWiredError } from "./mutativeMiddleware";
+import { DispatchNotWiredError, StaleDispatchBindingError } from "./mutativeMiddleware";
 
 // Regression coverage for ct-37441 — a "New Session" whose createSession was
 // given up (offline / outage / createConversation rate-limit) strands a stub
@@ -836,6 +836,27 @@ describe("sendMessageWhenReady", () => {
     const sendIndex = calls.findIndex((c) => c.action === "sendMessage");
     expect(createIndex).toBeGreaterThanOrEqual(0);
     expect(sendIndex).toBeGreaterThan(createIndex);
+  });
+
+  // A cold start rewires the dispatch binding under in-flight writes. The
+  // create's outbox row redelivers, so the bubble must stay pending, not fail.
+  it("keeps the bubble pending when the create is fenced by a binding rewire", async () => {
+    installFakeDispatch();
+    const store = useInboxStore.getState();
+    const started = store.beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/Users/me/proj",
+      create: async () => {
+        throw new StaleDispatchBindingError();
+      },
+    });
+    const clientId = store.addOptimisticMessage(started.stubId, "first message");
+    store.sendMessageWhenReady(started.stubId, "first message", undefined, clientId);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const bubble = (useInboxStore.getState().pendingMessages[started.stubId] ?? [])
+      .find((m: any) => m._clientId === clientId || m._id === clientId) as any;
+    expect(bubble).toBeTruthy();
+    expect(bubble._isFailed).toBeFalsy();
   });
 
   it("sends at once when the id is already real", () => {

@@ -7,6 +7,15 @@ argument-hint: "[window, e.g. 7d] [write]"
 Every session captures its own corrections at best. Nobody reads the
 corrections across the team, so the same one is made in ten threads.
 
+Lessons belong to a project (docs/architecture/line-profile.md LP5). Run from
+the root of the repository whose lessons you are mining, and read its profile
+first with `cast line profile --json`: its `project` is where the signals go,
+and its `principles` are the project's own files, which new principles are
+written into. The clusters are matched against those files and the shared set
+together; `cast goals --json` returns both as one text (`principles`). A
+repository without a profile is mined the same way against the shared set
+alone, and its signals carry no project.
+
 ## Find the corrections
 
 ```bash
@@ -14,7 +23,8 @@ cast search "don't|do not|never|stop|wrong|not like that|instead|revert" -s <win
 cast search "why did you|I said|again" -s <window> -n 30
 ```
 
-For each hit, `cast read <id> <line>` with a few messages of context to see
+When mining one project, keep the search to its sessions (add
+`repo:<name>` to the query). For each hit, `cast read <id> <line>` with a few messages of context to see
 what the agent did and what the human wanted instead. Keep the ones where a
 human corrected an agent; drop agent to agent messages and corrections that
 were about a one time misunderstanding.
@@ -28,13 +38,13 @@ short ids, and whether the repository's instructions already say it (read
 them; a rule that is written and still ignored is a different problem than
 one that is missing).
 
-Then match each cluster against docs/principles.md, when the repository has
-one. A cluster is that principle when the principle, as written, would have
+Then match each cluster against the shared set and the project's principles files. A cluster is that principle when the principle, as written, would have
 prevented every correction in it; one that only shares a topic is not. A
 match is a repeat of a rule the team already holds, and its count belongs to
 that principle. A cluster with no match, seen in two or more sessions, is a
 candidate principle: write it as the file writes them (the principle, why it
-matters, the evidence) under the next free id in its area.
+matters, the evidence) under the next free id in its area, in that file's own
+id scheme, so a project's ids keep its prefix.
 
 ## Propose
 
@@ -54,7 +64,7 @@ take it up as a cause, and the same rule seen next week counts toward that
 cause instead of opening another:
 
 ```bash
-cast signal add --source lesson --kind cohesion \
+cast signal add --source lesson --kind cohesion --project "<the profile's project>" \
   --fingerprint lesson:<rule-slug> \
   --title "<the rule, one line>" \
   --subject <the instruction file or area it concerns> \
@@ -70,11 +80,12 @@ that principle's cause, and the detail says what the principle failed to
 prevent this time: missing from the instruction the agent read, or present
 and ignored. A candidate principle uses its own slug and carries the
 proposed text in the detail. A signal only suggests a cause, so file it in
-both modes.
+both modes. File from the repository's root, so the profile's workspace
+applies along with its project.
 
 Report as a table ordered by frequency, with the signal and the cause each
 cluster reached. With `write`, apply the instruction
 lines, record the decisions, add each candidate principle to
-docs/principles.md and update the evidence line of each matched one, then
+the project's principles file and update the evidence line of each matched one, then
 say what went where. Without it, the
 table is the deliverable and the human chooses.

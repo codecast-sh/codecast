@@ -26,8 +26,17 @@ interface LockInfo {
   acquired_at: string;
 }
 
-function lockPathFor(root: string): string {
-  return path.join(root, ".codecast-capability.lock");
+/** Another holder of the same machinery: a lock file of its own under `root`,
+ *  and the age past which it is stale whatever its pid. A holder that runs
+ *  for hours (an eval check on one batch) passes Infinity and is reclaimed
+ *  only when its pid is gone. */
+export interface LockOptions {
+  name?: string;
+  ceilingMs?: number;
+}
+
+function lockPathFor(root: string, o: LockOptions = {}): string {
+  return path.join(root, o.name ?? ".codecast-capability.lock");
 }
 
 function pidAlive(pid: number): boolean {
@@ -47,9 +56,10 @@ export interface AcquireResult {
   heldBy?: LockInfo;
 }
 
-export function acquireLock(root: string, log: (line: string) => void = console.error): AcquireResult {
+export function acquireLock(root: string, log: (line: string) => void = console.error, o: LockOptions = {}): AcquireResult {
   fs.mkdirSync(root, { recursive: true });
-  const file = lockPathFor(root);
+  const file = lockPathFor(root, o);
+  const ceilingMs = o.ceilingMs ?? LOCK_CEILING_MS;
   const info: LockInfo = { pid: process.pid, acquired_at: new Date().toISOString() };
 
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -70,12 +80,12 @@ export function acquireLock(root: string, log: (line: string) => void = console.
       const stale =
         holder === undefined ||
         !pidAlive(holder.pid) ||
-        !(age < LOCK_CEILING_MS); // NaN age (mangled timestamp) counts as stale
+        !(age < ceilingMs); // NaN age (mangled timestamp) counts as stale
 
       if (!stale) return { acquired: false, heldBy: holder };
 
       log(
-        `[capabilities] reclaiming stale lock at ${file} (pid ${holder?.pid ?? "?"}, acquired ${holder?.acquired_at ?? "unknown"})`,
+        `reclaiming stale lock at ${file} (pid ${holder?.pid ?? "?"}, acquired ${holder?.acquired_at ?? "unknown"})`,
       );
       try {
         fs.unlinkSync(file);
@@ -102,8 +112,8 @@ function tryReclaimedAcquire(file: string, info: LockInfo, reclaimed: LockInfo):
   }
 }
 
-export function releaseLock(root: string): void {
-  const file = lockPathFor(root);
+export function releaseLock(root: string, o: LockOptions = {}): void {
+  const file = lockPathFor(root, o);
   try {
     const holder: LockInfo = JSON.parse(fs.readFileSync(file, "utf-8"));
     // Only our own lock: releasing someone else's would reopen the race.

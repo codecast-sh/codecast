@@ -14,7 +14,6 @@ import {
   screenShareTracks,
   stopEgress,
   trackCompositeEgressRequest,
-  trackEgressRequest,
 } from "./livekitServer";
 
 const cfg = { url: "wss://lk.example", apiKey: "APIkey", apiSecret: "secret" };
@@ -47,17 +46,9 @@ describe("request bodies", () => {
       layout: "speaker",
       audio_only: false,
       preset: "H264_1080P_30",
-      file_outputs: [{ file_type: "MP4", filepath: "calls/t1/composite-1.mp4", s3: upload }],
+      file_outputs: [{ file_type: "MP4", filepath: "calls/t1/composite-1.mp4", disable_manifest: true, s3: upload }],
     });
     expect(roomCompositeEgressRequest({ room: "r", filepath: "f", upload, layout: "grid", preset: "H264_720P_30" })).toMatchObject({ layout: "grid", preset: "H264_720P_30" });
-  });
-
-  test("a screen track is recorded as published, one file per track", () => {
-    expect(trackEgressRequest({ room: "r", trackSid: "TR_x", filepath: "calls/t1/screen-TR_x", upload })).toEqual({
-      room_name: "r",
-      track_id: "TR_x",
-      file: { filepath: "calls/t1/screen-TR_x", s3: upload },
-    });
   });
 
   test("a track composite takes either a preset or the share's own size", () => {
@@ -65,7 +56,7 @@ describe("request bodies", () => {
       room_name: "r",
       video_track_id: "TR_v",
       preset: "H264_1080P_30",
-      file_outputs: [{ file_type: "MP4", filepath: "f.mp4", s3: upload }],
+      file_outputs: [{ file_type: "MP4", filepath: "f.mp4", disable_manifest: true, s3: upload }],
     });
     const sized = trackCompositeEgressRequest({ room: "r", videoTrackSid: "TR_v", audioTrackSid: "TR_a", filepath: "f.mp4", upload, advanced: { width: 2880, height: 1800, framerate: 15 } });
     expect(sized).toMatchObject({ audio_track_id: "TR_a", advanced: { width: 2880, height: 1800, framerate: 15 } });

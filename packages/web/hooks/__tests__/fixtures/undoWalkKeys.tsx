@@ -21,7 +21,7 @@ afterAll(() => { restore(); closeDomWindow(dom); });
 
 const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { ShortcutProvider, useShortcutAction, useShortcutContext } = await import("../../../shortcuts/ShortcutProvider");
+const { ShortcutProvider, useShortcutAction, useShortcutContext, useShortcuts } = await import("../../../shortcuts/ShortcutProvider");
 const { useUndoWalk } = await import("../../useUndoWalk");
 const { pushUndo, _resetUndoStacks } = await import("@platform/engine");
 const undoTimeline = await import("../../../lib/undoTimelineOpen");
@@ -29,6 +29,7 @@ const { PEEK_DELAY_MS } = await import("../../../lib/undoWalk");
 
 let thinking = 0;
 let diffs = 0;
+let dispatch: (action: "ui.undo" | "ui.redo") => boolean;
 
 // A conversation page: its H toggles thinking blocks and its D the diff panel.
 function Page() {
@@ -36,6 +37,7 @@ function Page() {
   useShortcutAction("conv.toggleThinking", () => { thinking += 1; });
   useShortcutAction("conv.toggleDiff", () => { diffs += 1; });
   useUndoWalk();
+  dispatch = useShortcuts().dispatchAction;
   return null;
 }
 
@@ -168,4 +170,56 @@ test("the desktop Edit menu's undo passes the dispatcher's focus guards", async 
   } finally {
     delete (window as any).__CODECAST_ELECTRON__;
   }
+});
+
+// The palette's Undo and Redo rows dispatch the action by name while focus is
+// still in the palette input the user just typed the query into. That input's
+// edit is newer than the entry, but it is no history of the step's: a named
+// step always runs. The same chord pressed in that field still defers to it.
+test("a named undo or redo from a just-edited field steps; the chord there defers to the field", async () => {
+  let undone = 0;
+  let redone = 0;
+  pushUndo({ label: "a", undo: () => { undone += 1; }, redo: () => { redone += 1; } });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const input = document.body.appendChild(document.createElement("input"));
+  input.focus();
+  const typed = () => act(() => { input.dispatchEvent(new Event("input", { bubbles: true })); });
+  typed();
+  act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true, cancelable: true })); });
+  expect(undone).toBe(0);
+  expect(document.activeElement).toBe(input);
+  act(() => { dispatch("ui.undo"); });
+  expect(undone).toBe(1);
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  typed();
+  act(() => { dispatch("ui.redo"); });
+  expect(redone).toBe(1);
+});
+
+// The field keeps a chord only while the browser has something to take back
+// in it. Once its own edits are undone (no input answers the press), the
+// press reaches the app, and so does every later one.
+test("a chord the field declines reaches the app once the field's history is spent", async () => {
+  let undone = 0;
+  pushUndo({ label: "a", undo: () => { undone += 1; }, redo: () => {} });
+  pushUndo({ label: "b", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const input = document.body.appendChild(document.createElement("textarea"));
+  input.focus();
+  const typed = () => act(() => { input.dispatchEvent(new Event("input", { bubbles: true })); });
+  const chord = () => act(() => { input.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true, cancelable: true })); });
+  const tick = () => act(() => new Promise((r) => setTimeout(r, 5)));
+  typed();
+  typed();
+  // The browser's own undo answers with an input: the field keeps the press.
+  chord();
+  typed();
+  await tick();
+  expect(undone).toBe(0);
+  // Nothing answers: the field is spent and the app takes the press.
+  chord();
+  await tick();
+  expect(undone).toBe(1);
+  chord();
+  expect(undone).toBe(2);
 });

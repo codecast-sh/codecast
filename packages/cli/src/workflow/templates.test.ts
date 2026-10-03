@@ -298,7 +298,7 @@ describe("line.cast template", () => {
     expect(scripts.eval).toContain("cmd=''");
     expect(scripts.ship).toContain("cmd=''");
     const all = prompts.join("\n");
-    expect(all).toContain("principles, each with a stable id: none");
+    expect(all).toContain("principles, each with a stable id: https://github.com/codecast-sh/codecast/blob/main/docs/principles.md (the shared set)\n");
     expect(all).toContain("github.com/codecast-sh/codecast/blob/main/docs/prompting.md");
   });
 
@@ -560,7 +560,7 @@ describe("line.cast offline run through the session path", () => {
         effects[stationOf[id]]?.();
         out = { sessions: [{ id, work_state: "done", is_live: false }] };
       } else if (route === "/cli/sessions/state/get") {
-        out = { status: "done", text: pinned[stationOf[body.session]] ?? "" };
+        out = { ok: true, status: "done", state: pinned[stationOf[body.session]] ?? null };
       } else if (route === "/cli/workflow-runs/poll-gate") {
         out = { status: "paused", gate_response: gateAnswers.shift() ?? null };
       } else if (route === "/cli/work/update" || route === "/cli/work/comment" || route === "/cli/decide") out = { success: true, id: "sd-1" };

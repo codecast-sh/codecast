@@ -43,6 +43,11 @@ export function keepsOwnEnter(active: Element | null): boolean {
   return !!ctl && !ctl.matches("[data-story-trigger]") && !ctl.matches("button[data-story-key]");
 }
 
+/** The commit page the focused control belongs to, when focus is in a commit row of an evidence drawer (`o` opens it, spec 3.3). */
+export function focusedCommitHref(active: Element | null): string | null {
+  return active?.closest<HTMLElement>("[data-commit-href]")?.dataset.commitHref ?? null;
+}
+
 export type EscapeStep = "clear-text" | "leave-field" | "close-story" | "clear-filters" | "close-filter" | null;
 
 /**
@@ -83,4 +88,16 @@ export function KeyHint({ action, size = "xs" }: { action: ShortcutAction; size?
   const def = getShortcutsForAction(action)[0];
   if (!def) return null;
   return <>{formatShortcutParts(def).map((k) => <KeyCap key={k} size={size}>{k}</KeyCap>)}</>;
+}
+
+/**
+ * After a day or week travel, the keyboard lands on the header's date label
+ * when the control it was on left with the old view (a story's trigger, now
+ * unmounted) and fell to the body; the label is a polite live region, so the
+ * new day is said. Focus anywhere else on the page stays where it is.
+ */
+export function landTravelFocus(root: HTMLElement) {
+  const active = document.activeElement as HTMLElement | null;
+  if (active && active !== document.body && active.isConnected) return;
+  root.querySelector<HTMLElement>("[data-changes-date]")?.focus({ preventScroll: true });
 }

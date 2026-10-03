@@ -515,7 +515,7 @@ describe("capture", () => {
 });
 
 describe("replay mechanics", () => {
-  it("a patch replay restores locally, re-locks, drops the planted locks and dispatches the prior values", async () => {
+  it("a patch replay restores locally, re-locks, drops the planted locks and dispatches the prior values", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "t", snoozed_until: SNOOZE });
     h.wrapped.defer(A);
@@ -531,7 +531,6 @@ describe("replay mechanics", () => {
     expect(h.state.pending[`items:${A}:deferred_at`]).toMatchObject({ type: "field", value: undefined });
     expect(h.state.pending[`items:${A}:snoozed_until`]).toMatchObject({ type: "field", value: SNOOZE });
 
-    await sleep(5); // the replay waits for the forward send it follows
     const replay = lastDispatch(h, "applyUndoPatches")!;
     expect(replay.args).toEqual([]);
     expect(replay.patches).toEqual({ item_rows: { [A]: { deferred_at: null, snoozed_until: SNOOZE } } });
@@ -567,20 +566,18 @@ describe("replay mechanics", () => {
     expect(h.state.items[A].title).toBe("t");
   });
 
-  it("a writer invocation runs the target draft plus the overlay and dispatches the target", async () => {
+  it("a writer invocation runs the target draft plus the overlay and dispatches the target", () => {
     const h = makeStore();
     h.setState({ docs: { [A]: { _id: A, title: "Doc", labels: ["x"] } } });
     h.wrapped.editDoc(A, { title: "Renamed", labels: ["y"] });
     performUndo();
     expect(h.state.docs[A]).toMatchObject({ title: "Doc", labels: ["x"] });
-    await sleep(5); // the replay waits for the forward send it follows
     const save = lastDispatch(h, "saveDoc")!;
     expect(save.args).toEqual([A, { title: "Doc", labels: ["x"] }]);
-    await sleep(5);
     expect(lastDispatch(h, "applyUndoPatches")).toBeUndefined();
   });
 
-  it("a writer's clears spell an unset before value the way the server stores the clear", async () => {
+  it("a writer's clears spell an unset before value the way the server stores the clear", () => {
     const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
     const base = undoConfig(calls);
     const h = makeStore({
@@ -594,7 +591,6 @@ describe("replay mechanics", () => {
     // The row holds the server's spelling of the clear, the writer sends it,
     // and the lock asserts it, so the echo of the clear retires the lock.
     expect(h.state.docs[A].labels).toEqual([]);
-    await sleep(5); // the replay waits for the forward send it follows
     expect(lastDispatch(h, "saveDoc")!.args).toEqual([A, { labels: [] }]);
     expect(h.state.pending[`docs:${A}:labels`]).toMatchObject({ type: "field", value: [] });
     // Redo finds the row where the undo left it.
@@ -621,13 +617,12 @@ describe("replay mechanics", () => {
     expect(Object.keys(draft.pending).filter((k) => k.startsWith(`items:${A}:`))).toEqual([]);
   });
 
-  it("a spell that turns an added row into a field cell keeps the row, plants no exclude, and redo finds it", async () => {
+  it("a spell that turns an added row into a field cell keeps the row, plants no exclude, and redo finds it", () => {
     const h = makeStore();
     h.wrapped.shelveDoc(A, "top");
     expect(performUndo()).toBe(true);
     // The row stays, unshelved, and the writer sends the clear.
     expect(h.state.docs[A]).toEqual({ _id: A });
-    await sleep(5); // the replay waits for the forward send it follows
     expect(lastDispatch(h, "saveDoc")!.args).toEqual([A, { shelf: undefined }]);
     expect(h.state.pending[`docs:${A}`]?.type).not.toBe("exclude");
     expect(performRedo()).toBe(true);
@@ -648,7 +643,23 @@ describe("replay mechanics", () => {
     expect(h.dispatched.filter((d) => d.action === "shelveDoc")).toHaveLength(1);
   });
 
-  it("a removed row comes back through the writer's restoreRow, and its exclude goes", async () => {
+  it("a redo over a row deleted since the undo is a conflict and recreates nothing", () => {
+    const h = makeStore();
+    h.setState({ docs: { [A]: { _id: A, title: "d" } } });
+    h.wrapped.shelveDoc(A, "x");
+    expect(performUndo()).toBe(true);
+    // A push drops the row after the undo.
+    const docs = { ...h.state.docs };
+    delete docs[A];
+    h.setState({ docs });
+    performRedo();
+    expect(getUndoHistory().items[0]?.status).toBe("conflict");
+    expect(h.state.docs[A]).toBeUndefined();
+    expect(h.state.pending[`docs:${A}`]).toBeUndefined();
+    expect(h.dispatched.filter((d) => d.action === "shelveDoc")).toHaveLength(1);
+  });
+
+  it("a removed row comes back through the writer's restoreRow, and its exclude goes", () => {
     const h = makeStore();
     h.setState({ docs: { [A]: { _id: A, title: "Doc", updated_at: 1 } } });
     h.wrapped.archiveDoc(A);
@@ -659,18 +670,40 @@ describe("replay mechanics", () => {
     // Restamped, never compared.
     expect(h.state.docs[A].updated_at).toBeGreaterThan(1);
     expect(h.state.pending[`docs:${A}`]).toMatchObject({ type: "include" });
-    await sleep(5); // the replay waits for the forward send it follows
     expect(lastDispatch(h, "restoreDoc")!.args).toEqual([A]);
   });
 
-  it("an inverse with runDraft false dispatches the inverse without running its draft", async () => {
+  // The server keeps an archived row, marked, and its sync delivers it that
+  // way. A tombstone predicate tells the guard that row is still gone, so the
+  // undo restores it instead of calling it already undone, and a redo reads
+  // it as removed.
+  it("a removed row that synced back as a tombstone is still taken back", () => {
+    const calls: Calls = { beforeReplay: [], afterReplay: [], restoreView: [] };
+    const tombstone = (store: string, row: unknown) => store === "docs" && (row as any)?.archived_at != null;
+    const h = makeStore({ undo: undoConfig(calls, { tombstone }) });
+    h.setState({ docs: { [A]: { _id: A, title: "Doc", updated_at: 1 } } });
+    h.wrapped.archiveDoc(A);
+    h.setState({ docs: { [A]: { _id: A, title: "Doc", archived_at: 5, updated_at: 2 } } });
+    expect(performUndo()).toBe(true);
+    expect(top().status).toBe("undone");
+    expect(h.state.docs[A]).toMatchObject({ _id: A, title: "Doc" });
+    expect(h.state.docs[A].archived_at).toBeUndefined();
+    expect(lastDispatch(h, "restoreDoc")!.args).toEqual([A]);
+
+    // Archived again elsewhere: the redo finds the row removed, as it left it.
+    h.setState({ docs: { [A]: { _id: A, title: "Doc", archived_at: 9, updated_at: 3 } } });
+    performRedo();
+    expect(notices.at(-1)).toBe("Can't redo Archived doc: changed since");
+    expect(h.state.docs[A].archived_at).toBe(9);
+  });
+
+  it("an inverse with runDraft false dispatches the inverse without running its draft", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "t", hidden_at: null });
     h.wrapped.stash(A);
     performUndo();
     expect(h.state.items[A].hidden_at).toBeNull();
     expect(h.state.items[A].restoredByDraft).toBeUndefined();
-    await sleep(5); // the replay waits for the forward send it follows
     const restore = lastDispatch(h, "restore")!;
     expect(restore.args).toEqual([A]);
     // The overlay rides the inverse's own grouped patches.
@@ -818,16 +851,14 @@ describe("conflicts and partial undo", () => {
     expect(h.state.favorites).toEqual([{ _id: B }]);
   });
 
-  it("a partial undo of an inverse entry dispatches nothing for the skipped row", async () => {
+  it("a partial undo of an inverse entry dispatches nothing for the skipped row", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
     h.wrapped.seed(B, { title: "b" });
     h.wrapped.stashBoth(A, B);
     h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
-    await sleep(5); // the replay waits for the forward send it follows
     const before = h.dispatched.length;
     performUndo();
-    await sleep(5);
     const sent = h.dispatched.slice(before);
     expect(sent.map((d) => [d.action, d.args])).toEqual([["restore", [A]]]);
     expect(sent[0]!.patches).toEqual({ item_rows: { [A]: { hidden_at: null } } });
@@ -942,22 +973,19 @@ describe("redo and groups", () => {
     expect(notices.at(-1)).toBe("Can't redo Renamed to x: changed since");
   });
 
-  it("redo after a partial undo restores only the rows the undo applied", async () => {
+  it("redo after a partial undo restores only the rows the undo applied", () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
     h.wrapped.seed(B, { title: "b" });
     h.wrapped.renameBoth(A, B, "both");
     h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
     performUndo();
-    await sleep(5); // the replay waits for the forward send it follows
     const renames = h.dispatched.filter((d) => d.action === "renameBoth").length;
     expect(performRedo()).toBe(true);
     expect(h.state.items[A].title).toBe("both");
     expect(h.state.items[B].title).toBe("someone");
     // The applied cells went back on the undo's route; the action never re-ran.
-    await sleep(5);
     expect(h.dispatched.filter((d) => d.action === "renameBoth")).toHaveLength(renames);
-    await sleep(5);
     expect(lastDispatch(h, "applyUndoPatches")!.patches).toBeTruthy();
     expect(h.state.pending[`items:${A}:title`]).toMatchObject({ value: "both" });
     expect(notices.at(-1)).toBe("Redid: Both (1 changed since, left as they are)");
@@ -1098,7 +1126,7 @@ describe("refusal and rekey", () => {
     expect(getUndoHistory().head).not.toBe(id);
   });
 
-  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", async () => {
+  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", () => {
     const h = makeStore();
     h.wrapped.seed("stub_1", { title: "a" });
     h.wrapped.drop("stub_1");
@@ -1111,7 +1139,6 @@ describe("refusal and rekey", () => {
     h.setState({ items: { ...h.state.items, [B]: { ...h.state.items["stub_2"], _id: B } } });
     rekeyUndoIds("stub_2", B);
     performUndo();
-    await sleep(5); // the replay waits for the forward send it follows
     expect(lastDispatch(h, "restore")!.args).toEqual([B]);
     expect(h.state.items[B].hidden_at).toBeUndefined();
   });
@@ -1330,7 +1357,6 @@ describe("ADV sanity (expected to pass)", () => {
     expect(h.state.items[A].title).toBe("t");
     performRedo();
     expect(h.state.items[A].title).toBe("async");
-    await sleep(5); // the replay waits for the forward send it follows
     expect(h.dispatched.filter((d) => d.action === "pokeAsync")).toHaveLength(2);
   });
 
@@ -1440,15 +1466,13 @@ const chanSpecs = () =>
   });
 
 describe("mirror cells changed since", () => {
-  it("an inverse is narrowed to the mirror cells the undo restores", async () => {
+  it("an inverse is narrowed to the mirror cells the undo restores", () => {
     const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
     h.setState({ chans: { [A]: { _id: A, name: "general", topic: "old" } } });
     h.wrapped.editChan(A, { name: "renamed", topic: "new" });
     h.setState({ chans: { [A]: { ...h.state.chans[A], name: "teammate" } } });
-    await sleep(5); // the replay waits for the forward send it follows
     const before = h.dispatched.length;
     performUndo();
-    await sleep(5);
     const sent = h.dispatched.slice(before).filter((d) => d.action === "editChan").map((d) => d.args);
     expect({ local: h.state.chans[A], sent }).toEqual({
       local: { _id: A, name: "teammate", topic: "old" },
@@ -1756,6 +1780,69 @@ describe("a coalesced run with one call refused", () => {
   });
 });
 
+describe("a coalesced run on a stub row that is rekeyed", () => {
+  // The server row supersedes the stub mid-run (codecast types a new task's
+  // title while its client_key rekey lands).
+  function rekeyStub(h: ReturnType<typeof makeStore>, stub: string) {
+    const engine = createSyncEngine({
+      dbName: "t",
+      dbVersion: 1,
+      registry: REGISTRY,
+      syncRegistry: { items: { isDelta: true, altKey: "client_id" } },
+    });
+    const draft: any = {
+      items: { ...h.state.items, [stub]: { ...h.state.items[stub], client_id: stub } },
+      pending: { ...h.state.pending },
+    };
+    engine.syncTable(draft, "items", [{ ...h.state.items[stub], _id: A, client_id: stub }]);
+    h.setState({ items: draft.items, pending: draft.pending });
+  }
+
+  it("merges a later call under the server id into one cell and undoes to the origin", async () => {
+    const h = makeStore();
+    h.wrapped.seed("stub-9", { title: "t", priority: "low" });
+    await waitFor(() => h.outbox.size === 0);
+    h.wrapped.cycle("stub-9", "mid");
+    h.wrapped.cycle("stub-9", "high");
+    await waitFor(() => h.outbox.size === 0);
+    rekeyStub(h, "stub-9");
+    h.wrapped.cycle(A, "urgent");
+    const cells = top().changes!.filter((c) => c.field === "priority").map((c) => [c.id, c.before, c.after]);
+    expect(cells).toEqual([[A, "low", "urgent"]]);
+    performUndo();
+    expect(h.state.items[A].priority).toBe("low");
+    expect(notices.at(-1)).toBe("Undid: Priority urgent");
+  });
+
+  it("a refusal after the rekey rebuilds the entry under the server id", async () => {
+    const h = makeStore();
+    h.wrapped.seed("stub_c", { title: "t", priority: "low" });
+    await waitFor(() => h.outbox.size === 0);
+    let n = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    h.respond(async (a) => {
+      if (a !== "cycle") return {};
+      if (n++ === 1) {
+        await gate;
+        throw new Error("Uncaught Error: no");
+      }
+      return {};
+    });
+    h.wrapped.cycle("stub_c", "mid");
+    h.wrapped.cycle("stub_c", "high");
+    const id = top().id;
+    await waitFor(() => n === 2);
+    rekeyStub(h, "stub_c");
+    release();
+    await waitFor(() => h.outbox.size === 0);
+    const entry = items().find((i) => i.id === id)!;
+    expect(entry.status).toBe("done");
+    expect(entry.args).toEqual([A, "mid"]);
+    expect(entry.changes!.every((c) => c.id === A)).toBe(true);
+  });
+});
+
 describe("a group holding a confirm child", () => {
   it("is not taken back by a blind press", () => {
     const h = makeStore();
@@ -1802,6 +1889,33 @@ describe("a group whose every child is already back", () => {
 });
 
 describe("dispatch order", () => {
+  it("a forward write whose first attempt fails after its undo went out is not retried", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    h.wrapped.seed(A, { title: "t" });
+    await waitFor(() => h.outbox.size === 0);
+    const arrived: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    h.respond(async (a) => {
+      if (a === "rename" && calls++ === 0) {
+        await gate;
+        throw new Error("Server Error");
+      }
+      arrived.push(a);
+      return {};
+    });
+    h.wrapped.rename(A, "x");
+    performUndo();
+    // The undo goes out at once, behind the rename's first attempt.
+    expect(h.dispatched.map((d) => d.action).slice(-2)).toEqual(["rename", "applyUndoPatches"]);
+    release();
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(20);
+    expect(arrived).toEqual(["applyUndoPatches"]);
+    expect(h.state.items[A].title).toBe("t");
+  });
+
   it("an undo never overtakes a forward write that is retrying", async () => {
     const h = makeStore({ retryDelays: [20] });
     h.wrapped.seed(A, { title: "t" });
@@ -1835,6 +1949,8 @@ describe("dispatch order", () => {
       return {};
     });
     h.wrapped.rename(A, "x");
+    // The rename's retries run out and it parks; then the undo.
+    await sleep(40);
     performUndo();
     await sleep(40);
     expect(arrived).toEqual([]);
@@ -1843,5 +1959,121 @@ describe("dispatch order", () => {
     h.wrapped._drainOutbox();
     await waitFor(() => h.outbox.size === 0);
     expect(arrived).toEqual(["rename", "applyUndoPatches"]);
+  });
+});
+
+// A server that applies what it receives, in arrival order, to one title.
+function titleServer(h: ReturnType<typeof makeStore>, fails: (action: string, title: string, attempt: number) => boolean) {
+  const server = { title: "t", arrived: [] as string[] };
+  const attempts = new Map<string, number>();
+  h.respond(async (a) => {
+    const d = h.dispatched[h.dispatched.length - 1]!;
+    const title = a === "retitle" ? String(d.args[1]) : String(JSON.stringify(d.patches).match(/"title":"(\w*)"/)?.[1]);
+    const key = `${a}:${title}`;
+    const n = attempts.get(key) ?? 0;
+    attempts.set(key, n + 1);
+    if (fails(a, title, n)) throw new Error("Server Error");
+    server.arrived.push(key);
+    server.title = title;
+    return {};
+  });
+  return server;
+}
+
+describe("a walk of several steps reaches the server in order", () => {
+  const seeded = async (retryMs = 30) => {
+    const h = makeStore({ retryDelays: [retryMs] });
+    h.wrapped.seed(A, { title: "t" });
+    await waitFor(() => h.outbox.size === 0);
+    return h;
+  };
+
+  it("two presses over two edits of one cell, the newer forward retrying, end at the origin", async () => {
+    const h = await seeded();
+    const server = titleServer(h, (a, title, n) => a === "retitle" && title === "y" && n === 0);
+    h.wrapped.retitle(A, "x");
+    h.wrapped.retitle(A, "y");
+    await sleep(2);
+    performUndo();
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(h.state.items[A].title).toBe("t");
+    expect(server.title).toBe("t");
+  });
+
+  it("undoTo the oldest, the newer replay failing once, ends at the origin", async () => {
+    const h = await seeded();
+    const server = titleServer(h, (a, title, n) => a === "applyUndoPatches" && title === "x" && n === 0);
+    h.wrapped.retitle(A, "x");
+    h.wrapped.retitle(A, "y");
+    await waitFor(() => h.outbox.size === 0);
+    const oldest = items()[1]!.id;
+    expect(undoTo(oldest)).toBe(2);
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(h.state.items[A].title).toBe("t");
+    expect(server.title).toBe("t");
+  });
+
+  it("a group of two edits of one cell, undone in one press, ends at the origin", async () => {
+    const h = await seeded();
+    const server = titleServer(h, (a, title, n) => a === "applyUndoPatches" && title === "x" && n === 0);
+    undoGroup("Two", () => {
+      h.wrapped.retitle(A, "x");
+      h.wrapped.retitle(A, "y");
+    });
+    await waitFor(() => h.outbox.size === 0);
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(h.state.items[A].title).toBe("t");
+    expect(server.title).toBe("t");
+  });
+
+  it("redoTo the newest, the older redo failing once, ends at the newest", async () => {
+    const h = await seeded();
+    let redoing = false;
+    const server = titleServer(h, (a, title, n) => redoing && a === "retitle" && title === "x" && n === 1);
+    h.wrapped.retitle(A, "x");
+    h.wrapped.retitle(A, "y");
+    await waitFor(() => h.outbox.size === 0);
+    const newest = items()[0]!.id;
+    performUndo();
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    redoing = true;
+    expect(redoTo(newest)).toBe(2);
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(h.state.items[A].title).toBe("y");
+    expect(server.title).toBe("y");
+  });
+
+  it("an undo does not cut off a later write of another field on the same row", async () => {
+    const h = await seeded(5);
+    const arrived: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let calls = 0;
+    h.respond(async (a) => {
+      if (a === "cycle" && calls++ === 0) {
+        await gate;
+        throw new Error("Server Error");
+      }
+      arrived.push(a);
+      return {};
+    });
+    h.wrapped.retitle(A, "x");
+    const retitled = items()[0]!.id;
+    h.wrapped.cycle(A, "high");
+    // A selective undo of the retitle, while the priority write is on its
+    // first attempt: the undo reverses nothing that write sent.
+    expect(undoEntry(retitled)).toBe(true);
+    release();
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(20);
+    expect(arrived).toContain("cycle");
+    expect(h.state.items[A].priority).toBe("high");
   });
 });

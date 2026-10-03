@@ -14,6 +14,10 @@
 //   github-app-install  The GitHub App install URL (github.com/apps/<slug>/
 //                       installations/new; convex/githubApp.ts stores the
 //                       installation the webhook reports back).
+//   token-paste         The person pastes a token and the settings in
+//                       `tokenConfig`; convex/tokenConnectors.ts validates it
+//                       with one live call and stores it encrypted
+//                       (docs/architecture/external-data.md X1).
 //   coming-soon         No connector exists yet. The card renders, says so,
 //                       and is not clickable. No app sits here today; the kind
 //                       stays for the next service that arrives before its
@@ -31,12 +35,42 @@
 // `scopes` names which of the two a connector can bind to; Gmail is personal
 // by nature (mail belongs to a person), the rest take either.
 
-export const APP_IDS = ["slack", "github", "gmail", "linear", "notion"] as const;
+export const APP_IDS = ["slack", "github", "gmail", "linear", "notion", "sentry", "posthog", "app"] as const;
 
 export type AppId = (typeof APP_IDS)[number];
 
 /** Which existing connect flow the card's button runs. */
-export type AppConnectKind = "oauth-popup" | "github-app-install" | "coming-soon";
+export type AppConnectKind = "oauth-popup" | "github-app-install" | "token-paste" | "coming-soon";
+
+/**
+ * Every app whose connection is a row in convex `app_installations`: the
+ * generic OAuth connectors and the token connectors. One list, so the
+ * connection card, the CLI disconnect and the web revoke all find these rows
+ * the same way instead of each naming providers.
+ */
+export const APP_INSTALLATION_APPS: readonly AppId[] = ["linear", "notion", "sentry", "posthog", "app"];
+
+export function isAppInstallationApp(id: AppId): boolean {
+  return APP_INSTALLATION_APPS.includes(id);
+}
+
+/**
+ * One non-secret setting a token connector needs beside the token. The web
+ * form draws a field per entry, the CLI takes `--<flag>`, and the server
+ * applies `default` and refuses a missing required one, so all three read
+ * the same list.
+ */
+export interface TokenConfigField {
+  /** Key in `app_installations.config`. */
+  key: string;
+  label: string;
+  /** CLI flag name, without the dashes. */
+  flag: string;
+  placeholder?: string;
+  /** Applied when the field is left empty; a field with a default is optional. */
+  default?: string;
+  optional?: boolean;
+}
 
 /** Who a connection belongs to once made: the whole team, or one person. */
 export type AppConnectionScope = "team" | "personal";
@@ -62,6 +96,10 @@ export interface AppDescriptor {
   /** The scopes the shipped connect flow can bind to, in the order a
    *  resolver prefers them (team before personal). */
   scopes: readonly AppConnectionScope[];
+  /** token-paste only: the settings that ride beside the token, and what
+   *  the token itself is called where the person goes to make one. */
+  tokenConfig?: readonly TokenConfigField[];
+  tokenLabel?: string;
 }
 
 export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
@@ -123,6 +161,56 @@ export const APP_DESCRIPTORS: Record<AppId, AppDescriptor> = {
     ],
     connectKind: "oauth-popup",
     scopes: ["team", "personal"],
+  },
+  sentry: {
+    id: "sentry",
+    name: "Sentry",
+    tagline: "Bring your product's errors to the agents that wrote the code.",
+    bullets: [
+      "Mirror unresolved issues into Ops as error groups, with release and stack",
+      "Wake a trigger when an error is new, regresses or spikes",
+      "Resolve or ignore an issue only when a person grants it",
+    ],
+    connectKind: "token-paste",
+    scopes: ["team", "personal"],
+    tokenLabel: "Auth token",
+    tokenConfig: [
+      { key: "org", label: "Organization slug", flag: "org", placeholder: "acme" },
+      { key: "host", label: "Host", flag: "host", default: "https://sentry.io", placeholder: "https://sentry.io" },
+    ],
+  },
+  posthog: {
+    id: "posthog",
+    name: "PostHog",
+    tagline: "Watch the product metrics a change was meant to move.",
+    bullets: [
+      "Poll a HogQL query or insight and alert when it crosses a line",
+      "Run a HogQL query on demand; nothing it returns is stored",
+      "Read a session recording as a text timeline and a repro",
+    ],
+    connectKind: "token-paste",
+    scopes: ["team", "personal"],
+    tokenLabel: "Personal API key",
+    tokenConfig: [
+      { key: "project_id", label: "Project id", flag: "project", placeholder: "12345" },
+      { key: "host", label: "Host", flag: "host", default: "https://us.posthog.com", placeholder: "https://us.posthog.com" },
+    ],
+  },
+  app: {
+    id: "app",
+    name: "Your app",
+    tagline: "Let agents read and act through the routes your product declares.",
+    bullets: [
+      "Call the readers your app's /codecast/manifest lists; responses are not stored",
+      "Run a declared action only after a person grants it",
+      "Turn polled readers into checks and job failures that wake triggers",
+    ],
+    connectKind: "token-paste",
+    scopes: ["team", "personal"],
+    tokenLabel: "Connector secret",
+    tokenConfig: [
+      { key: "base_url", label: "Base URL", flag: "base-url", placeholder: "https://api.example.com" },
+    ],
   },
 };
 

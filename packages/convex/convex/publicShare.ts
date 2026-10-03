@@ -39,8 +39,14 @@ export async function claimShareToken(
   row: { _id: Id<ShareTable>; share_token?: string | null },
   token: string | null,
 ): Promise<void> {
+  // A call's link may also carry its video (callRecordings.setCallShareVideo).
+  // That choice belongs to the link it was made for: a link cleared or
+  // re-aimed drops it, so a link turned on again (even with the old token,
+  // which any free UUID may be) starts with the transcript alone and video is
+  // always a fresh choice.
+  const dropVideo = table === "transcripts" ? { share_video_token: undefined, share_video_through: undefined } : {};
   if (token === null) {
-    if (row.share_token) await ctx.db.patch(row._id, { share_token: undefined } as any);
+    if (row.share_token) await ctx.db.patch(row._id, { share_token: undefined, ...dropVideo } as any);
     return;
   }
   if (row.share_token === token) return;
@@ -49,7 +55,7 @@ export async function claimShareToken(
     .withIndex("by_share_token", (q: any) => q.eq("share_token", token))
     .first();
   if (taken) throw new Error("Invalid share token");
-  await ctx.db.patch(row._id, { share_token: token } as any);
+  await ctx.db.patch(row._id, { share_token: token, ...dropVideo } as any);
 }
 
 // Who may turn a kind's link on or off: whoever may read the object. Docs,

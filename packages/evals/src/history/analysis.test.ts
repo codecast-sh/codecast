@@ -5,7 +5,8 @@ import { join } from 'node:path';
 
 import { runRowProblems, type CommitRef, type RunRow } from '@codecast/shared/contracts/evalsApi';
 
-import { batchVerdict, upTo, verdictLinesOf } from '../commands/verdict';
+import { batchVerdict, BISECT_CADENCE, upTo, verdictLinesOf } from '../commands/verdict';
+import { separate } from '../stats';
 import type { HeadsFile } from '../provenance';
 import { attribute, type AttributionGit, type AttributionInput } from './attribution';
 import { epochPromptDiffs, epochsOf, footingMarkers, type PromptReader } from './epochs';
@@ -66,6 +67,7 @@ function verdictHistory(): Rep[] {
 }
 
 // Captured from the verdict lines `check` printed before batchVerdict existed; the real-history replay of the same check found every one of 515 recorded batches byte-identical.
+// The nightly cases since read night by night per freeze (separateNights): two freezes over at most three nights cannot separate, so they print too-few.
 const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches?: number; lines: string[]; regression: boolean }> = [
   {
     batch: '2026-09-01T00:00:00.000Z',
@@ -73,7 +75,7 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
       'demo  pass 15/15 (100%)  mean 0.87  0.80-0.90  flips 0  $0.150  m1',
       '  not separated: medians 0.90 vs 0.90, ranges 0.80-0.90 vs 0.75-0.90',
       '  passed over 2026-09-09T00:00:00.000Z: another model on the same freezes',
-      "  passed over 2026-09-09T00:00:00.000Z: judged on another ruler; ./evals rescore --batch <it> --rejudge brings it onto today's",
+      "  passed over 2026-09-09T00:00:00.000Z: graded on another ruler (judge or write guard); ./evals rescore --batch <it> --rejudge brings it onto today's (a guard alone needs no --rejudge)",
     ],
     regression: false,
   },
@@ -83,7 +85,7 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
       'demo  pass 10/16 (63%)  mean 0.63  0.00-0.90  flips 1  $0.170  m1',
       '  not separated: medians 0.90 vs 0.80, ranges 0.00-0.90 vs 0.75-0.90 (over the 3 freeze(s) the previous set ran)',
       '  passed over 2026-09-09T00:00:00.000Z: another model on the same freezes',
-      "  passed over 2026-09-09T00:00:00.000Z: judged on another ruler; ./evals rescore --batch <it> --rejudge brings it onto today's",
+      "  passed over 2026-09-09T00:00:00.000Z: graded on another ruler (judge or write guard); ./evals rescore --batch <it> --rejudge brings it onto today's (a guard alone needs no --rejudge)",
       '  gates failed: no-leak',
       '  live reads: 2/16 reps read the live workspace (6 reads; ./evals runs show <run> lists them)',
       '  1 crashed, left out of the numbers above: ./evals runs list --scenario demo- --status crash; ./evals check demo --batch 2026-09-03T00:00:00.000Z with the same --reps and --freeze runs them again',
@@ -93,24 +95,24 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
   { batch: '2026-09-04T00:00:00.000Z', lines: ['demo  dry: 3 rep(s) ran through the wiring on canned output; nothing is graded or compared'], regression: false },
   {
     batch: '2026-09-05T00:00:00.000Z',
-    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches pooled (2026-09-06T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): not separated: medians 0.93 vs 0.90, ranges 0.90-0.95 vs 0.75-0.95'],
+    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches night by night (2026-09-06T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
     regression: false,
   },
   {
     batch: '2026-09-06T00:00:00.000Z',
-    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches pooled (2026-09-05T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): not separated: medians 0.93 vs 0.90, ranges 0.90-0.95 vs 0.75-0.95'],
+    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches night by night (2026-09-05T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
     regression: false,
   },
   {
     batch: '2026-09-08T00:00:00.000Z',
-    lines: ['demo  pass 6/6 (100%)  mean 0.83  0.75-0.90  flips 0  $0.060  m1', '  against the last 3 nightly batches pooled (2026-09-05T00:00:00.000Z to 2026-09-07T00:00:00.000Z, 18 reps): separated: worse (p=0.0016)'],
-    regression: true,
+    lines: ['demo  pass 6/6 (100%)  mean 0.83  0.75-0.90  flips 0  $0.060  m1', '  against the last 3 nightly batches night by night (2026-09-05T00:00:00.000Z to 2026-09-07T00:00:00.000Z, 18 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
+    regression: false,
   },
   {
     batch: '2026-09-08T00:00:00.000Z',
     baselineBatches: 1,
-    lines: ['demo  pass 6/6 (100%)  mean 0.83  0.75-0.90  flips 0  $0.060  m1', '  against the last nightly batch (2026-09-07T00:00:00.000Z, 6 reps): separated: worse (p=0.0216)'],
-    regression: true,
+    lines: ['demo  pass 6/6 (100%)  mean 0.83  0.75-0.90  flips 0  $0.060  m1', '  against the last nightly batch (2026-09-07T00:00:00.000Z, 6 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
+    regression: false,
   },
   {
     batch: '2026-09-09T00:00:00.000Z',
@@ -119,7 +121,7 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
       'demo  pass 2/2 (100%)  mean 0.90  0.90-0.90  flips 0  $0.020  m3,m1',
       '  against 2026-09-01T00:00:00.000Z: too few samples to separate (need 5+ per side)',
       '  another model: aaaaaaaa (m1 then, m3 now): the comparison weighs the model as well as the prompt',
-      "  another judge: bbbbbbbb graded on a different judge prompt or criterion: ./evals rescore --batch 2026-09-01T00:00:00.000Z --rejudge puts the baseline on today's",
+      "  another judge: bbbbbbbb graded on a different judge prompt, criterion or write guard: ./evals rescore --batch 2026-09-01T00:00:00.000Z --rejudge puts the baseline on today's (a guard alone needs no --rejudge)",
     ],
     regression: false,
   },
@@ -130,7 +132,7 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
       'demo  pass 10/16 (63%)  mean 0.63  0.00-0.90  flips 1  $0.170  m1',
       '  against 2026-09-02T00:00:00.000Z: separated: worse (p=0.0031) (over the 2 freeze(s) the previous set ran)',
       '  another model: aaaaaaaa (m2 then, m1 now): the comparison weighs the model as well as the prompt',
-      "  another judge: bbbbbbbb graded on a different judge prompt or criterion: ./evals rescore --batch 2026-09-02T00:00:00.000Z --rejudge puts the baseline on today's",
+      "  another judge: bbbbbbbb graded on a different judge prompt, criterion or write guard: ./evals rescore --batch 2026-09-02T00:00:00.000Z --rejudge puts the baseline on today's (a guard alone needs no --rejudge)",
       '  gates failed: no-leak',
       '  live reads: 2/16 reps read the live workspace (6 reads; ./evals runs show <run> lists them)',
       '  1 crashed, left out of the numbers above: ./evals runs list --scenario demo- --status crash; ./evals check demo --batch 2026-09-03T00:00:00.000Z with the same --reps and --freeze runs them again',
@@ -166,6 +168,45 @@ describe('batchVerdict: the verdict check prints, as one value', () => {
     const v = batchVerdict(meta, '2026-09-05T00:00:00.000Z', history, { earlierOnly: true });
     expect(v.baseline).toMatchObject({ kind: 'pooled', batches: [], reps: 0 });
     expect(plain(verdictLinesOf(v))[1]).toBe('  nightly: building its baseline: no previous run set to compare with');
+  });
+});
+
+describe('batchVerdict: a cadence batch night by night, and bisect probes never a baseline', () => {
+  const meta = { id: 'demo', model: 'm1' };
+  const nightOf = (n: number) => `2026-09-${String(10 + n).padStart(2, '0')}T00:00:00.000Z`;
+  const newestFirst = (h: Rep[]) => h.sort((x, y) => (x.createdAt < y.createdAt ? 1 : x.createdAt > y.createdAt ? -1 : 0));
+  const night = (n: number, scores: Partial<Record<keyof typeof F, number>>, reps = 5) => Object.entries(scores).flatMap(([f, score]) => seeds(nightOf(n), F[f as keyof typeof F], reps, () => ({ cadence: 'nightly', score })));
+
+  test('a change in which freezes ran is no drift when no freeze moved', () => {
+    // a scores 0.9 every night; b scores 0.6 every time it runs, but joined the cadence only on the last pooled night. Tonight repeats both.
+    const history = newestFirst([...[0, 1, 2, 3, 4, 5].flatMap((n) => night(n, { a: 0.9 })), ...night(6, { a: 0.9, b: 0.6 }), ...night(7, { a: 0.9, b: 0.6 })]);
+    const v = batchVerdict(meta, nightOf(7), history);
+    expect(v.baseline).toMatchObject({ kind: 'pooled', reps: 40 });
+    // Every rep pooled flat weighs a seven times over b, and reads the mix as a fall.
+    expect(separate(v.compared.current, v.compared.previous).kind).toBe('worse');
+    expect(v.separation.kind).not.toBe('worse');
+    expect(v.regression).toBe(false);
+  });
+
+  test('a fall several freezes show tonight separates, however many reps each ran', () => {
+    const steady = { a: 0.9, b: 0.8, c: 0.95, d: 0.85 };
+    const history = newestFirst([...[0, 1, 2, 3, 4, 5, 6].flatMap((n) => night(n, steady, n % 2 ? 3 : 5)), ...night(7, { a: 0.5, b: 0.4, c: 0.6, d: 0.5 }, 3)]);
+    const v = batchVerdict(meta, nightOf(7), history);
+    expect(v.separation).toMatchObject({ kind: 'worse' });
+    expect(v.regression).toBe(true);
+    expect(plain(verdictLinesOf(v))[1]).toMatch(/^ {2}against the last 7 nightly batches night by night \(.+\): separated: worse \(p=0\.0002\)$/);
+  });
+
+  test('a bisect probe is never the baseline a later check is weighed against, and a probe is weighed against real runs only', () => {
+    const plainBatch = (batch: string, score: number) => [...seeds(batch, F.a, 5, () => ({ score })), ...seeds(batch, F.b, 5, () => ({ score }))];
+    const probe = (batch: string, score: number) => [...seeds(batch, F.a, 5, () => ({ score, cadence: BISECT_CADENCE })), ...seeds(batch, F.b, 5, () => ({ score, cadence: BISECT_CADENCE }))];
+    const history = newestFirst([...plainBatch('2026-09-20T00:00:00.000Z', 0.9), ...probe('2026-09-21T00:00:00.000Z', 0.2), ...probe('2026-09-22T00:00:00.000Z', 0.3), ...plainBatch('2026-09-23T00:00:00.000Z', 0.9)]);
+    const v = batchVerdict(meta, '2026-09-23T00:00:00.000Z', history);
+    expect(v.baseline).toMatchObject({ kind: 'previous', batches: ['2026-09-20T00:00:00.000Z'] });
+    expect(v.regression).toBe(false);
+    // A probe, weighed as the history views weigh an older batch: against the real batch before it, never the other probe.
+    const p = batchVerdict(meta, '2026-09-22T00:00:00.000Z', history, { earlierOnly: true });
+    expect(p.baseline).toMatchObject({ kind: 'previous', batches: ['2026-09-20T00:00:00.000Z'], cadence: null });
   });
 });
 

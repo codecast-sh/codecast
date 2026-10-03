@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { Freeze, RunEvent, RunSend, Score } from '@platform/evals';
@@ -67,11 +67,32 @@ export interface RunRecord {
 
 const readText = (path: string): string => (existsSync(path) ? readFileSync(path, 'utf8') : '');
 
-/** took.txt says "<n>s". */
-const tookMs = (a: AgentResult): number => {
-  const m = /(\d+)s/.exec(readText(join(a.runSubdir, 'took.txt')));
-  return m ? Number(m[1]) * 1000 : a.realMs;
-};
+// A rep folder's units and the harness files inside them, read the same way
+// by everything that reads a rep back (grade, the api child, this writer).
+
+/** A rep folder's numbered units (`call1`, `call2`, … or `agent1`, …), in number order; none when the folder is absent. */
+export function unitDirs(dir: string, kind: 'call' | 'agent'): string[] {
+  const re = new RegExp(`^${kind}(\\d+)$`);
+  return (existsSync(dir) ? readdirSync(dir) : []).filter((n) => re.test(n)).sort((a, b) => Number(a.slice(kind.length)) - Number(b.slice(kind.length)));
+}
+
+/** An agent unit's follow-up turn files (`then2.md`, `then3.md`, …), in turn order. */
+export function thenFiles(unitDir: string): string[] {
+  return (existsSync(unitDir) ? readdirSync(unitDir) : []).filter((f) => /^then\d+\.md$/.test(f)).sort((a, b) => Number(a.slice(4, -3)) - Number(b.slice(4, -3)));
+}
+
+/** The harness's exit code in its run folder (exit.txt); 1 when it left none or garbage, so a harness that died before writing it reads as failed. */
+export function harnessExit(runDir: string): number {
+  const text = readText(join(runDir, 'exit.txt')).trim();
+  const n = Number(text);
+  return text && Number.isInteger(n) ? n : 1;
+}
+
+/** The harness's wall time in its run folder: took.txt says "<n>s". Null when it left none. */
+export function harnessTookMs(runDir: string): number | null {
+  const m = /(\d+(?:\.\d+)?)s/.exec(readText(join(runDir, 'took.txt')));
+  return m ? Math.round(Number(m[1]) * 1000) : null;
+}
 
 export function writeRunFolder(rec: RunRecord): string {
   mkdirSync(rec.dir, { recursive: true });
@@ -105,7 +126,7 @@ export function writeRunFolder(rec: RunRecord): string {
   emit('run_finished', { endedBecause: rec.endedBecause });
 
   const costUsd = calls.reduce((s, c) => s + c.costUsd, 0) + agents.reduce((s, a) => s + a.costUsd, 0);
-  const realElapsedMs = Math.max(Date.now() - rec.startedAt, calls.reduce((s, c) => s + c.realMs, 0) + agents.reduce((s, a) => s + tookMs(a), 0));
+  const realElapsedMs = Math.max(Date.now() - rec.startedAt, calls.reduce((s, c) => s + c.realMs, 0) + agents.reduce((s, a) => s + (harnessTookMs(a.runSubdir) ?? a.realMs), 0));
   const result = { scenario: rec.scenario, seed: rec.rep, title: rec.freeze.name, startedAt, endedBecause: rec.endedBecause, stopReason: rec.error ?? null, steps: calls.length + agents.length, virtualElapsedMs: 0, realElapsedMs, costUsd, captures: calls.length + agents.length };
 
   writeFileSync(join(rec.dir, 'result.json'), JSON.stringify(result, null, 2));

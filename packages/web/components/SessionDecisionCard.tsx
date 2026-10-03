@@ -11,7 +11,7 @@ import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
-import { ChangeCardView } from "./decisions/ChangeCardView";
+import { ChangeCardHeadline, ChangeCardView } from "./decisions/ChangeCardView";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
@@ -184,6 +184,9 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // controls, which hold the digits and the Revise note.
   const card = decisionRow?.card;
   const richControls = (kind !== "single" || !!card) && !!decisionRow;
+  // A card's Ship / Revise / Drop sit in the decision page's pinned bar, above
+  // the card, so the card takes the sheet's width and the call stays in view.
+  const cardBar = !!card && richControls;
   const pageSlugs = item.source === "decide" ? optionPageSlugs(item.options) : [];
   const documentHref = item.source === "decide" && item.decisionId && needsDocumentPage(item) ? decisionHref({ _id: item.decisionId, short_id: item.shortId }) : null;
 
@@ -445,7 +448,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
   const contextBlock = (card || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
-      {card && <ChangeCardView card={card} density="inline" recommend={!richControls} />}
+      {/* The headline above already says the change and its cause. */}
+      {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -532,7 +536,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           </div>
         </div>
       )}
-      {escapeHatch}
+      {!cardBar && escapeHatch}
     </div>
   );
 
@@ -547,6 +551,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         // body's leading), so the sheet reads like the page it stands for.
         // decision-sheet: the container the two-column layout queries.
         className="decision-doc decision-sheet absolute inset-0 z-40 flex flex-col bg-sol-bg outline-none"
+        data-card={cardBar ? "true" : undefined}
         onWheel={(e) => {
           // Scrolling up at the top of the question hands the pane to the thread.
           if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrinkByScroll();
@@ -577,11 +582,25 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           <div className="decision-sheet-col mx-auto w-full px-6 pt-4 pb-6">
             {(askedLine || documentLink) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
             <DecisionProposalOrigin contextMd={item.contextMd} className="mb-2 text-[12px]" size="md" />
-            {question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
-            <div className="decision-sheet-grid" data-split={contextBlock ? "true" : "false"}>
-              {contextBlock}
-              {answerBlock}
-            </div>
+            {/* A card leads with its change, the way its page does. */}
+            {card
+              ? <ChangeCardHeadline card={card} question={question} className="mb-2" />
+              : question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
+            {cardBar ? (
+              <>
+                <div className="cc-verdict-bar" data-verdict-bar>
+                  <ChangeCardView card={card!} density="line" recommend={false} change={false} />
+                  {answerBlock}
+                </div>
+                <div className="mt-6">{contextBlock}</div>
+                {escapeHatch}
+              </>
+            ) : (
+              <div className="decision-sheet-grid" data-split={contextBlock ? "true" : "false"}>
+                {contextBlock}
+                {answerBlock}
+              </div>
+            )}
           </div>
         </div>
         {optionsBelow && options.length > 0 && (

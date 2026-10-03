@@ -16,7 +16,9 @@ import { verifyApiToken } from "./apiTokens";
 import { deleteInstallationRows, requireInstallationRevoker } from "./githubApp";
 import {
   APP_DESCRIPTORS,
+  APP_IDS,
   isAppConnectionScope,
+  isAppInstallationApp,
   type AppConnectionScope,
   type AppId,
 } from "@codecast/shared/contracts";
@@ -40,6 +42,9 @@ const PROVIDER_ALIASES: Record<string, AppId> = {
   mail: "gmail",
   linear: "linear",
   notion: "notion",
+  sentry: "sentry",
+  posthog: "posthog",
+  app: "app",
 };
 
 function resolveProvider(raw: string): AppId | null {
@@ -48,7 +53,7 @@ function resolveProvider(raw: string): AppId | null {
 
 const unknownProvider = (raw: string) => ({
   ok: false as const,
-  error: `Unknown integration "${raw}" — try slack, github, gmail, linear or notion`,
+  error: `Unknown integration "${raw}": try ${APP_IDS.join(", ")}`,
 });
 
 /* ==========================================================================
@@ -63,6 +68,10 @@ export const cliConnectUrl = action({
     const scope = scopeArg(args.scope, provider);
     if (typeof scope !== "string") return { ok: false, error: scope.error };
 
+    // A pasted-token app has no URL to open; the CLI sends the token instead.
+    if (APP_DESCRIPTORS[provider].connectKind === "token-paste") {
+      return { ok: false, error: `${APP_DESCRIPTORS[provider].name} connects with a token: cast integrations connect ${provider} reads it from stdin` };
+    }
     if (provider === "linear" || provider === "notion") {
       return await ctx.runAction(api.oauthConnectors.getConnectUrl, {
         provider,
@@ -84,6 +93,35 @@ export const cliConnectUrl = action({
     // scope list, only the install intent githubApp.getInstallUrl mints for the
     // caller — the same one the web button and the callback use.
     return await ctx.runAction(api.githubApp.getInstallUrl, { scope, api_token: args.api_token });
+  },
+});
+
+/** `cast integrations connect sentry|posthog|app`: the token arrives in the
+ *  body (the CLI reads it from stdin or a hidden prompt, never argv) and goes
+ *  through the same validate-and-store the web form runs. */
+export const cliConnectToken = action({
+  args: {
+    api_token: v.string(),
+    provider: v.string(),
+    token: v.string(),
+    config: v.optional(v.record(v.string(), v.string())),
+    scope: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ ok: boolean; id?: string; label?: string; error?: string }> => {
+    const provider = resolveProvider(args.provider);
+    if (!provider) return unknownProvider(args.provider);
+    if (APP_DESCRIPTORS[provider].connectKind !== "token-paste") {
+      return { ok: false, error: `${APP_DESCRIPTORS[provider].name} connects in the browser: cast integrations connect ${provider}` };
+    }
+    const scope = scopeArg(args.scope, provider);
+    if (typeof scope !== "string") return { ok: false, error: scope.error };
+    return await ctx.runAction(api.tokenConnectors.connectWithToken, {
+      provider,
+      token: args.token,
+      config: args.config,
+      scope,
+      api_token: args.api_token,
+    });
   },
 });
 
@@ -133,7 +171,7 @@ export const cliDisconnect = action({
         installation_id: app.disconnect_id,
       });
     }
-    if (provider === "linear" || provider === "notion") {
+    if (isAppInstallationApp(provider)) {
       const me: any = await ctx.runQuery(internal.oauthConnectors.resolveTeam, {
         api_token: args.api_token,
       });

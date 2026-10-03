@@ -7,14 +7,14 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useEventListener } from "./useEventListener";
 import { subscribeShortcutUsed, useShortcutAction, useShortcuts } from "../shortcuts/ShortcutProvider";
-import { shortcutAllowedAt } from "@platform/keys";
+import { isEditableTarget, shortcutAllowedAt, type DispatchSource } from "@platform/keys";
 import { getShortcutsForAction, isMac, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { KEY_OWNERSHIP } from "../shortcuts/keyOwnership";
 import { bridge, isElectron } from "../lib/desktop";
 import { getUndoHistory, performRedo, performUndo } from "../store/undoStack";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { fireUndoHistoryMilestone } from "../lib/undoHistory";
-import { WALK_IDLE, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
+import { WALK_IDLE, createFieldUndoGuard, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
 
 const CARD_SELECTOR = "[data-undo-timeline]";
 /** The shortcut context live while the card peeks or fades: it routes H to
@@ -39,6 +39,20 @@ function landingTop(dir: "undo" | "redo"): string | undefined {
   return (dir === "undo" ? h.redoOrder : h.undoOrder)[0];
 }
 
+const CAPTURE: AddEventListenerOptions = { capture: true };
+
+/** Whether the browser has an undo (redo) of its own left, where it can say
+ *  reliably: Chromium answers queryCommandEnabled from its undo stack. */
+function nativeCanStep(dir: "undo" | "redo"): boolean | undefined {
+  if (typeof document === "undefined" || typeof navigator === "undefined") return undefined;
+  if (!isElectron() && !/\bChrom(e|ium)\//.test(navigator.userAgent)) return undefined;
+  try {
+    return document.queryCommandEnabled(dir);
+  } catch {
+    return undefined;
+  }
+}
+
 function pointerOverCard(): boolean {
   const card = typeof document !== "undefined" ? document.querySelector(CARD_SELECTOR) : null;
   return !!card?.matches(":hover");
@@ -49,6 +63,10 @@ export function useUndoWalk(): void {
   const held = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { setContext } = useShortcuts();
+  // When each text field was last edited, and whether a press it declined
+  // found anything to take back there.
+  const fields = useRef<ReturnType<typeof createFieldUndoGuard> | null>(null);
+  fields.current ??= createFieldUndoGuard({ now: Date.now, defer: (fn) => setTimeout(fn, 0) });
 
   const feed = useCallback((event: WalkEvent) => {
     const prev = state.current;
@@ -74,7 +92,19 @@ export function useUndoWalk(): void {
   // A press commits first, then tells the walk. A card some other doorway
   // opened (the palette, the chord, a toast) is left as it is: the walk only
   // drives a card it opened itself.
-  const step = useCallback((dir: "undo" | "redo") => {
+  const step = useCallback((dir: "undo" | "redo", source: DispatchSource): boolean => {
+    // The chords reach here from an empty text field too. One whose own
+    // history is newer than the entry declines, so the browser's undo runs;
+    // when the browser finds nothing left in the field, the press comes back
+    // here. A named step (the palette's row, typed into its input) is no edit
+    // of the field it was picked from, so it never defers.
+    const focus = typeof document !== "undefined" ? document.activeElement : null;
+    if (source === "key" && focus && isEditableTarget(focus)) {
+      const declined = fields.current!.declines(dir, focus, getUndoHistory(), () => {
+        if (document.activeElement === focus) step(dir, source);
+      }, nativeCanStep(dir));
+      if (declined) return false;
+    }
     const landed = landingTop(dir);
     const done = dir === "undo" ? performUndo() : performRedo();
     // Only a press that took something back is a step. One with nothing to
@@ -90,8 +120,8 @@ export function useUndoWalk(): void {
     return done;
   }, [feed]);
 
-  useShortcutAction("ui.undo", useCallback(() => step("undo"), [step]));
-  useShortcutAction("ui.redo", useCallback(() => step("redo"), [step]));
+  useShortcutAction("ui.undo", useCallback((source: DispatchSource) => step("undo", source), [step]));
+  useShortcutAction("ui.redo", useCallback((source: DispatchSource) => step("redo", source), [step]));
 
   // H while the card peeks or fades pins it. The binding exists only in the
   // walk's context, so it never takes an H from anyone else.
@@ -119,7 +149,7 @@ export function useUndoWalk(): void {
     return bridge("onAppEditCommand")?.((dir) => {
       const focus = document.activeElement;
       const action = dir === "undo" ? "ui.undo" : "ui.redo";
-      if (getShortcutsForAction(action).some((d) => shortcutAllowedAt(focus, d, KEY_OWNERSHIP))) step(dir);
+      if (getShortcutsForAction(action).some((d) => shortcutAllowedAt(focus, d, KEY_OWNERSHIP))) step(dir, "key");
     });
   }, [step]);
 
@@ -149,6 +179,10 @@ export function useUndoWalk(): void {
     held.current = false;
     feed({ type: "release", hovered: pointerOverCard() });
   });
+
+  useEventListener("input", (e: Event) => {
+    if (e.target instanceof Element) fields.current!.edited(e.target);
+  }, undefined, CAPTURE);
 
   // Leaving the window drops the key state with it.
   useEventListener("blur", () => {

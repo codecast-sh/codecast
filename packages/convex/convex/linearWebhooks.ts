@@ -9,6 +9,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
+import { verifyHmacHex } from "./lib/hmac";
 
 /**
  * HMAC SHA-256 of the RAW body under LINEAR_WEBHOOK_SECRET, hex, compared in
@@ -23,23 +24,8 @@ export async function verifyLinearSignature(
   signature: string | null,
   secret: string | undefined,
 ): Promise<boolean> {
-  // Fail closed: an unset secret would otherwise accept every unsigned payload.
-  if (!secret || !signature) return false;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody));
-  const expected = Array.from(new Uint8Array(sig))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-  if (signature.length !== expected.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < signature.length; i++) mismatch |= signature.charCodeAt(i) ^ expected.charCodeAt(i);
-  return mismatch === 0;
+  // Fails closed: an unset secret would otherwise accept every unsigned payload.
+  return verifyHmacHex(rawBody, signature, secret);
 }
 
 /**

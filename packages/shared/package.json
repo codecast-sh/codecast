@@ -25,6 +25,9 @@
     "./contracts/evalsApi": "./contracts/evalsApi.ts",
     "./contracts/projectRef": "./contracts/projectRef.ts",
     "./contracts/signalFingerprint": "./contracts/signalFingerprint.ts",
+    "./contracts/ingest": "./contracts/ingest.ts",
+    "./contracts/replay": "./contracts/replay.ts",
+    "./contracts/appConnector": "./contracts/appConnector.ts",
     "./contracts/changeCard": "./contracts/changeCard.ts",
     "./contracts/orgLog": "./contracts/orgLog.ts",
     "./contracts/orgCapacity": "./contracts/orgCapacity.ts",
@@ -62,6 +65,7 @@
     "./docs/drafting": "./docs/drafting.ts",
     "./files": "./files/index.ts",
     "./time": "./time/index.ts",
+    "./replay": "./replay/index.ts",
     "./team": "./team/index.ts",
     "./team/directoryRules": "./team/directoryRules.ts",
     "./team/visibility": "./team/visibility.ts",
@@ -81,6 +85,7 @@
     "./agents": "./agents/index.ts",
     "./search": "./search/index.ts",
     "./async": "./async/index.ts",
+    "./random": "./random/index.ts",
     "./changes": "./changes/index.ts"
   },
   "dependencies": {

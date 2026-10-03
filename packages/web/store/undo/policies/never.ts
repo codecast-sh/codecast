@@ -102,6 +102,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   promoteDocToPlan: CREATE,
   publishToDirectory: CREATE,
   addIssueSyncSource: CREATE,
+  createOpsSource: CREATE,
+  rotateOpsSourceKey: never("key rotation: the old ingest key stops working at once and cannot be restored"),
   upsertAgentDefinition: CREATE,
   upsertAgentChain: CREATE,
 
@@ -120,6 +122,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   removeAgentDefinition: DELETE,
   removeFromStack: never("delete: re-adding to a stack needs an addToStack server verb (follow-up)"),
   removeIssueSyncSource: DELETE,
+  removeOpsSource: DELETE,
   removeMachines: DELETE,
   unlinkChatSlack: DELETE,
 
@@ -160,9 +163,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   snoozeWalkie: SETTINGS,
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,
+  setOpsSourceStatus: SETTINGS,
+  setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
+  grantOpsAction: never("permission: a grant changes what agents may do; revoke it explicitly"),
+  revokeOpsAction: never("permission: a revoke changes what agents may do; grant it again explicitly"),
   updateChatSlackLink: SETTINGS,
   persistClientTips: SETTINGS,
   updateClientUI: SETTINGS,
+  setActiveTeamPointer: never("navigation: switching workspace moves the view, it changes no work"),
 
   // Machine and agent control
   convCommand: MACHINE,

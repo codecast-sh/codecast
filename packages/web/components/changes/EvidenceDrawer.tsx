@@ -22,6 +22,7 @@ import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
 import { AreaTag, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
+import { plural } from "./format";
 import { useAreaColors } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 
@@ -81,7 +82,7 @@ function AreaFiles({ area, paths }: { area: string; paths: readonly FileLines[] 
       ))}
       {more > 0 && (
         <button type="button" onClick={() => setAll((a) => !a)} className="text-sol-text/45 transition-colors hover:text-sol-text">
-          {all ? "fewer files" : `+${more} more ${more === 1 ? "file" : "files"}`}
+          {all ? "fewer files" : `+${plural(more, "more file")}`}
         </button>
       )}
     </div>
@@ -121,7 +122,7 @@ export function InsightTurns({ turns }: { turns: readonly Turn[] }) {
         </li>
       ))}
       {more > 0 && (
-        <li className="font-mono text-[10px] text-sol-text/40">{more} more {more === 1 ? "turn" : "turns"} in the session</li>
+        <li className="font-mono text-[10px] text-sol-text/40">{plural(more, "more turn")} in the session</li>
       )}
     </ol>
   );
@@ -159,7 +160,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           {commits.map((c) => {
             const [subject, ...rest] = String(c.message ?? "").split("\n");
             return (
-              <li key={c.sha} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px]">
+              <li key={c.sha} data-commit-href={commitPath(story.repository, c.sha)} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px]">
                 <Link href={commitPath(story.repository, c.sha)} className="shrink-0 text-sol-text/70 underline-offset-2 hover:text-sol-text hover:underline">
                   {c.sha.slice(0, 7)}
                 </Link>
@@ -181,7 +182,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           {missing > 0 && (
             <li className="font-mono text-[10px] text-sol-text/45">
               {feed.ready || feed.refused
-                ? `${missing} ${missing === 1 ? "commit is" : "commits are"} not readable here`
+                ? `${plural(missing, "commit is", "commits are")} not readable here`
                 : commits.length ? `${missing} more loading` : "Loading commits"}
             </li>
           )}
@@ -202,7 +203,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
               ))}
               {story.private_session_count > 0 && (
                 <span className="font-mono text-[10px] text-sol-text/45">
-                  {story.private_session_count} {story.private_session_count === 1 ? "session is" : "sessions are"} not shared with the team
+                  {plural(story.private_session_count, "session is", "sessions are")} not shared with the team
                 </span>
               )}
             </div>
