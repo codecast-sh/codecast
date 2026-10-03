@@ -137,7 +137,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           <RoleFace role={picked.role} size={20} />
           <button type="button" onClick={openPicker} className="flex items-center gap-1.5 min-w-0 flex-1 text-left hover:opacity-90" aria-label={`Sending to ${picked.name}, ${picked.title}. Change role`}>
             <span className="text-sol-text-dim shrink-0">To</span>
-            <RoleLine r={picked} />
+            <RoleLine r={picked} handle />
           </button>
           <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim/70 shrink-0">
             <KeyCap size="xs">{ALT_CAP}</KeyCap><KeyCap size="xs">R</KeyCap> change
@@ -165,6 +165,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
   }
 
   const firstOther = shown.findIndex((r) => !r.mine);
+  const byHandle = query.trimStart().startsWith("@");
   return (
     <div ref={rootRef} className="w-full rounded-lg border border-sol-violet/40 bg-sol-bg-alt/40 ring-1 ring-sol-violet/20 text-xs" role="combobox" aria-expanded="true" aria-haspopup="listbox" aria-controls="compose-role-list">
       <div className="flex items-center gap-2 px-2.5 py-1.5 border-b border-sol-border/40">
@@ -180,11 +181,6 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           aria-autocomplete="list"
           className="flex-1 min-w-0 bg-transparent outline-none border-0 p-0 text-sm text-sol-text placeholder:text-sol-text-dim/60"
         />
-        <span className="hidden sm:inline-flex items-center gap-2 text-[10px] text-sol-text-dim/70 shrink-0">
-          <Hint keys={["↑", "↓"]} label="move" />
-          <Hint keys={["↵"]} label="pick" />
-          <Hint keys={["Esc"]} label="back" />
-        </span>
       </div>
       <ul id="compose-role-list" role="listbox" className="max-h-56 overflow-y-auto py-1">
         {shown.length === 0 && <li className="px-2.5 py-2 text-sol-text-dim">No role matches &ldquo;{query}&rdquo;</li>}
@@ -199,6 +195,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
               )}
               <button
                 type="button"
+                data-handle={r.handle}
                 disabled={dead}
                 onMouseDown={(e) => e.preventDefault()}
                 onMouseEnter={() => { if (idx >= 0) setHi(idx); }}
@@ -208,7 +205,7 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
                 } ${r.mine ? "" : "opacity-70"} ${dead ? "opacity-50" : ""}`}
               >
                 <RoleFace role={r.role} size={20} />
-                <RoleLine r={r} />
+                <RoleLine r={r} handle={byHandle} />
                 {r.role.status === "paused" && <span className="shrink-0 text-[10px] text-sol-yellow/80">paused</span>}
                 {dead && <span className="shrink-0 text-[10px] text-sol-text-dim">no agent yet</span>}
               </button>
@@ -216,18 +213,25 @@ export function ComposeRolePicker({ picked, onPick, onDone }: {
           );
         })}
       </ul>
+      <div className="flex items-center gap-3 px-2.5 py-1.5 border-t border-sol-border/40 text-[10px] text-sol-text-dim/70">
+        <Hint keys={["↑", "↓"]} label="move" />
+        <Hint keys={["↵"]} label="pick" />
+        <Hint keys={["Esc"]} label="back" />
+        {picked && <Hint keys={["⌫"]} label="fresh session" />}
+      </div>
     </div>
   );
 }
 
-/** Face aside, the role's one line: name, title, area, handle. */
-function RoleLine({ r }: { r: RoleRecipient }) {
+/** Face aside, the role's one line: name, title, area; the handle only where
+ *  there is room for it (the picked row) or the query asked by handle. */
+function RoleLine({ r, handle }: { r: RoleRecipient; handle?: boolean }) {
   return (
     <span className="flex items-center gap-1.5 min-w-0 flex-1">
       <span className="font-medium text-sol-text shrink-0">{r.name}</span>
       <span className="text-sol-text-muted truncate">{r.title}</span>
       {r.area && <span className="text-sol-text-dim truncate min-w-0 shrink-[2]">· {r.area}</span>}
-      <span className="ml-auto pl-2 text-sol-text-dim/60 font-mono shrink-0">@{r.handle}</span>
+      {handle && <span className="ml-auto pl-2 text-sol-text-dim/60 font-mono shrink-0">@{r.handle}</span>}
     </span>
   );
 }
