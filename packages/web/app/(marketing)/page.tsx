@@ -18,6 +18,7 @@ import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { AppBadges, AppleIcon } from "@/components/marketing/AppBadges";
 import { TourSection, WatchChapter } from "./TourFilm";
 import { SUITE } from "./suite";
+import { earlyAccessMailto } from "@/lib/siteLinks";
 
 function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
   const colors: Record<string, string> = {
@@ -157,57 +158,55 @@ export default function LandingPage() {
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: '#fdf6e3' }}>
       <MarketingNav active="/" />
 
-      {/* Hero: the headline and the ways in, then the film, then the rest of the pitch. */}
+      {/* Hero: the headline, the pitch and the install strip, then the film, then the ways in. */}
       <section className="mx-auto px-6 pt-6 pb-6">
         <div className="text-center max-w-3xl mx-auto">
-          <h1 className="text-4xl sm:text-5xl lg:text-[56px] font-bold leading-[1.1] tracking-tight mb-5 font-mono lg:-mx-24" style={{ color: '#002b36' }}>
-            Your team and its agents,<br className="hidden sm:block" /> in one workspace
-            <span className="block mt-3 font-normal text-lg sm:text-[22px]" style={{ color: '#657b83' }}>Raise your AI army. Stay in command.</span>
+          {/* One line from 1280px up, two balanced lines below it. */}
+          <h1 className="font-mono font-bold text-[32px] sm:text-[40px] lg:text-[44px] leading-[1.12] tracking-[-0.035em] mb-5 [text-wrap:balance] xl:whitespace-nowrap xl:-mx-56" style={{ color: '#002b36' }}>
+            Run your team and <Highlight color="amber">its agents</Highlight> in one workspace<span aria-hidden className="inline-block w-[0.48em] h-[0.8em] ml-[0.14em] align-baseline translate-y-[0.08em] motion-safe:animate-pulse" style={{ backgroundColor: '#cb4b16' }} />
+            <span className="block mt-3 font-normal text-lg sm:text-[21px] tracking-normal whitespace-normal" style={{ color: '#657b83' }}>Raise your AI army. Stay in command.</span>
           </h1>
 
-          <div className="flex flex-wrap gap-3 justify-center items-center mb-6">
-            <Link href="/signup">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                Get started free
-              </Button>
-            </Link>
-            <Link href="/download">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                <AppleIcon className="w-4 h-4" />
-                Download for Mac
-              </Button>
-            </Link>
-            <Link href="#tour">
-              <Button variant="outline" className="bg-transparent text-sm px-5 h-10 font-medium gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#cb4b16] hover:border-[#cb4b16] hover:text-[#fdf6e3] transition-colors">
-                <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
-                Watch the tour
-              </Button>
-            </Link>
+          <p className="text-[15px] leading-relaxed mb-4 lg:-mx-24" style={{ color: '#657b83' }}>
+            Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
+          </p>
+          <div className="max-w-xl mx-auto mb-2">
+            <div className="relative">
+              <div className="absolute -inset-2 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-60"></div>
+              <div className="relative">
+                <InstallTabs location="landing_hero" showAlternatives={false} compact />
+              </div>
+            </div>
+            <p className="mt-2 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
           </div>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 230px of headline and 56px of buttons above, 90px of scrubber and caption below), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 402px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (about 170px of headline, 48px of pitch and 112px of install strip above; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 380px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
+        </div>
+        <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
+          <Link href="/signup">
+            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-110" style={{ background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', boxShadow: '0 6px 20px -6px rgba(203,75,22,0.55)' }}>
+              Get started free
+            </Button>
+          </Link>
+          <Link href="/download">
+            <Button className="text-[15px] px-6 h-11 font-semibold gap-2 text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-125" style={{ backgroundColor: '#002b36', boxShadow: '0 6px 20px -8px rgba(0,43,54,0.6)' }}>
+              <AppleIcon className="w-4 h-4" />
+              Download for Mac
+            </Button>
+          </Link>
+          <Link href="#tour">
+            <Button variant="outline" className="bg-transparent text-[15px] px-6 h-11 font-semibold gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#eee8d5] hover:text-[#002b36] transition-colors">
+              <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
+              Watch the tour
+            </Button>
+          </Link>
         </div>
       </section>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
         <div className="text-center max-w-3xl mx-auto">
-          <p className="text-lg leading-loose mb-6" style={{ color: '#657b83' }}>
-            Chat, calls, tasks, docs, pull requests and decisions, with <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="rose">Gemini</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight> as teammates in every one. Everything links back to the session that did it.
-          </p>
-          <div className="max-w-2xl mx-auto mb-6">
-            <div className="relative">
-              <div className="absolute -inset-3 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-70"></div>
-              <div className="relative">
-                <InstallTabs location="landing_hero" showAlternatives={false} />
-              </div>
-            </div>
-            <p className="mt-4 text-sm" style={{ color: '#93a1a1' }}>
-              One command installs the CLI. The agents you already run join the workspace as they are.
-            </p>
-          </div>
-
           <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
             Imagine <TypingEffect />
           </p>
@@ -252,7 +251,7 @@ export default function LandingPage() {
               <div className="flex items-center justify-between mb-4">
                 <span className="w-9 h-9 rounded-lg flex items-center justify-center font-mono text-lg transition-transform group-hover:-rotate-6" style={{ backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, color }} aria-hidden>{mark}</span>
                 {early ? (
-                  <span className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ color: '#6c71c4', backgroundColor: 'rgba(108,113,196,0.1)' }}>Early access</span>
+                  <a href="#org" className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded hover:brightness-95" style={{ color: '#6c71c4', backgroundColor: 'rgba(108,113,196,0.1)' }}>Early access</a>
                 ) : chapter ? (
                   <WatchChapter title={chapter} compact />
                 ) : null}
@@ -299,7 +298,7 @@ export default function LandingPage() {
                 ))}
               </div>
               <p className="text-sm leading-relaxed" style={{ color: '#839496' }}>
-                Claude Code, Codex, Cursor, Gemini, OpenCode and pi, on your laptop or a cloud host.
+                Claude Code, Codex, Cursor, OpenCode and pi, on your laptop or a cloud host.
                 Bring your own subscriptions: Codecast never resells tokens.
               </p>
             </div>
@@ -468,6 +467,93 @@ export default function LandingPage() {
                   <p className="text-[#586e75] text-[10px] pt-1">3 agents keep working while you decide</p>
                 </div>
             </PhoneFrame>
+          </div>
+        </div>
+      </section>
+
+      {/* ── 4. The org: the next step ──────────────────────────────────── */}
+      <section id="org" className="py-20" style={{ backgroundColor: 'rgba(108,113,196,0.07)', borderTop: '1px solid rgba(108,113,196,0.18)', borderBottom: '1px solid rgba(108,113,196,0.18)' }}>
+        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <div className="flex items-center gap-3 font-mono text-sm mb-4" style={{ color: '#6c71c4' }}>
+              <span>04</span>
+              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(108,113,196,0.14)' }}>Next &middot; early access</span>
+            </div>
+            <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono [text-wrap:balance]">
+              From a team of agents to an org
+            </h2>
+            <p className="text-lg text-[#657b83] leading-relaxed mb-6">
+              A session ends when its task does. A role stays. It is a standing agent that looks after
+              one area: it checks on it every day, starts the sessions the work needs, and comes to you
+              only with a decision that is yours.
+            </p>
+            <dl className="space-y-4 mb-8">
+              {[
+                ["Roles look after areas", "A release lead, a growth lead, an infra lead. Each has a brief and a daily check you can edit, pause or cancel, and its sessions stay out of your inbox."],
+                ["A Head of People keeps the structure true", "It reviews the org every week and proposes small changes: a new lead, a split, a goal. You accept, skip or ask. It applies nothing on its own."],
+                ["An Executive Assistant is your right hand", "It answers anything across your workspaces and routes the rest to the role that owns it."],
+                ["Requests travel up the reporting line", "A stuck session asks its lead first. Only a lead that reports to you reaches you."],
+              ].map(([term, detail]) => (
+                <div key={term} className="pl-4" style={{ borderLeft: '2px solid rgba(108,113,196,0.45)' }}>
+                  <dt className="font-mono font-semibold text-[15px]" style={{ color: '#002b36' }}>{term}</dt>
+                  <dd className="text-sm leading-relaxed mt-1" style={{ color: '#657b83' }}>{detail}</dd>
+                </div>
+              ))}
+            </dl>
+            <div className="flex flex-wrap items-center gap-4">
+              <a href={earlyAccessMailto("Org")} onClick={() => track("early_access_requested", { what: "org", location: "landing" })}>
+                <Button className="h-10 px-5 text-sm font-medium text-[#fdf6e3] bg-[#6c71c4] hover:bg-[#5a5fb0]">
+                  Request early access
+                </Button>
+              </a>
+              <span className="text-sm" style={{ color: '#93a1a1' }}>Running on our own teams today.</span>
+            </div>
+          </div>
+
+          <div className="font-mono text-[13px]" role="img" aria-label="An org chart: you at the top, a Head of People, an Executive Assistant and two leads with their sessions, and a proposal to split one lead in two">
+            <div className="rounded-xl p-5" style={{ backgroundColor: '#fdf6e3', border: '1px solid #e4ddc8' }}>
+              <div className="flex items-center gap-2.5 mb-3">
+                <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold" style={{ backgroundColor: '#268bd2', color: '#fdf6e3' }}>Y</span>
+                <span style={{ color: '#002b36' }}>You</span>
+              </div>
+              <div className="ml-3.5 pl-5 space-y-2.5" style={{ borderLeft: '1px solid #d6cfb8' }}>
+                {[
+                  { name: "Head of People", note: "reviews the org weekly", status: "on track", color: "#6c71c4" },
+                  { name: "Executive Assistant", note: "your right hand", status: "on track", color: "#2aa198" },
+                  { name: "Release lead", note: "2 sessions", status: "on track", color: "#859900" },
+                  { name: "Growth lead", note: "5 sessions", status: "overloaded", color: "#cb4b16" },
+                ].map((r) => (
+                  <div key={r.name} className="flex items-center gap-2.5">
+                    <span className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0" style={{ backgroundColor: `color-mix(in srgb, ${r.color} 16%, transparent)`, color: r.color }}>{r.name[0]}</span>
+                    <span style={{ color: '#073642' }}>{r.name}</span>
+                    <span className="text-[11px] hidden sm:inline" style={{ color: '#93a1a1' }}>{r.note}</span>
+                    <span className="ml-auto text-[11px]" style={{ color: r.status === "on track" ? '#859900' : '#cb4b16' }}>{r.status}</span>
+                  </div>
+                ))}
+                <div className="ml-8 pl-4 space-y-2" style={{ borderLeft: '1px dashed #6c71c4' }}>
+                  {["Paid lead", "Organic lead"].map((name) => (
+                    <div key={name} className="flex items-center gap-2.5 rounded-md px-2 py-1" style={{ border: '1px dashed rgba(108,113,196,0.6)', color: '#6c71c4' }}>
+                      <span>+ {name}</span>
+                      <span className="ml-auto text-[11px]">proposed</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-xl p-5 -mt-3 ml-6 sm:ml-12 relative shadow-lg" style={{ backgroundColor: '#fffbee', border: '1px solid rgba(108,113,196,0.45)' }}>
+              <div className="text-[11px] mb-2" style={{ color: '#6c71c4' }}>Head of People proposes</div>
+              <p className="text-[14px] mb-1.5" style={{ color: '#002b36' }}>Split Growth into Paid and Organic</p>
+              <p className="text-[12px] leading-relaxed mb-3 font-sans" style={{ color: '#657b83' }}>
+                More reached the growth lead this week than one role can answer, and most of it was ad spend.
+                Three sessions move to the paid lead. Nothing changes until you accept.
+              </p>
+              <div className="flex gap-2 text-[12px]">
+                <span className="px-3 py-1 rounded" style={{ backgroundColor: '#6c71c4', color: '#fdf6e3' }}>Accept</span>
+                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: '#586e75' }}>Skip</span>
+                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: '#586e75' }}>Ask</span>
+              </div>
+            </div>
           </div>
         </div>
       </section>

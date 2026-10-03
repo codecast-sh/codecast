@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "convex/react";
+import { useMutation } from "convex/react";
 import { useAuthGate } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
@@ -14,6 +14,7 @@ import type { ConversationData } from "../../../components/conversation/types";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { LogoMark } from "../../../components/Logo";
 import { useConversationMessages } from "../../../hooks/useConversationMessages";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useInboxStore, isConvexId } from "../../../store/inboxStore";
 import { isForeignSession } from "../../../lib/liveEntities";
 import { PREFILL_PARAM, buildPrefillText } from "../../../lib/composerPrefill";
@@ -214,10 +215,10 @@ function RedirectToLogin({ id }: { id: string }) {
 }
 
 /** Deleted, private to someone else, or never existed: one honest note. */
-function UnavailableView() {
+function UnavailableView({ onRetry }: { onRetry?: () => void }) {
   return (
     <DashboardLayout>
-      <ConversationUnavailable />
+      <ConversationUnavailable failed={!!onRetry} actionLabel={onRetry ? "Try again" : undefined} onAction={onRetry} />
     </DashboardLayout>
   );
 }
@@ -243,7 +244,10 @@ export default function ConversationPage() {
     return undefined;
   });
 
-  const resolved = useQuery(
+  // A failed resolve (a backend without the function, a server error) must
+  // not take the page down: a cached session still opens from the cache, and
+  // anything else reads as unavailable rather than as a crash.
+  const { data: resolved, error: resolveError, retry: retryResolve } = useQueryNoThrow(
     api.conversations.resolveConversation,
     id ? { id, ...(shareToken ? { share_token: shareToken } : {}) } : "skip"
   );
@@ -283,6 +287,7 @@ export default function ConversationPage() {
         />
       );
     }
+    if (resolveError) return <UnavailableView onRetry={retryResolve} />;
     return <ConversationLoadingSkeleton id={id} />;
   }
   if (effective.access_level === "denied") {

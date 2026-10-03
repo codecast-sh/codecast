@@ -1,17 +1,14 @@
 import { describe, expect, it } from "bun:test";
 import { recordingMarkStatus, type RoomRecordingLive } from "../useRoomRecording";
 
-// The red mark from three reads that arrive by different roads: this
-// window's press in flight, the room's flag (getLiveRooms through the store,
-// replicated to follower windows), and the detail (getRoomRecording). The
-// four races the reviewers named: a press before either server read moves,
-// the detail landing before the flag on somebody else's press, the flag
-// trailing the detail at a run's end, and a server too old for the detail.
+// The red mark from what a window knows: its own press in flight, and the
+// room's row in the store (the flag, and the run behind it when the server
+// sends one; both ride calls.getLiveRooms). A press decides while it is in
+// flight, then the run, and the flag alone only on a server too old to send
+// the run.
 const live = (status: RoomRecordingLive["status"]): RoomRecordingLive => ({
   status,
   run_id: "run1",
-  transcript_id: "t1",
-  call_short_id: "cl-1",
   started_by: { id: "u1", name: "Ann" },
   requested_at: 1,
   started_at: status === "starting" ? null : 2,

@@ -30,7 +30,10 @@
 //   SIM_SEEDS=a,b   pin the seeds          SIM_SWEEP=N   N interleave seeds
 //   SIM_ORDER=...   replay one order       SIM_RED=1     only red scenarios
 //   SIM_TRACE=lbl   stream the deliveries touching a label ("1": all of them)
-//   SIM_OUT=dir     write artifacts on a pass too
+//   SIM_OUT=dir     write artifacts under dir, on a pass too
+//   SIM_SESSION=dir the run's session folder (sim/history.ts): each run appends
+//                   a runs.jsonl row, and artifacts go inside it
+//   SIM_KEEP=1      write a pass's artifacts into the session too
 //
 // RED AND KNOWN. A scenario names the bugs it runs into. `red` markers are
 // the failures its runs end in: a red run must stop on a SimFailure whose
@@ -42,6 +45,7 @@
 // a known invariant, so fixing that bug flips it too.
 
 import { describe, test } from "bun:test";
+import { basename, dirname } from "node:path";
 import { fnv1a32 } from "@codecast/shared/contracts";
 import { canonical } from "@codecast/shared/contracts/orgChange";
 import { canAccessConversation } from "@codecast/convex/convex/lib/access";
@@ -50,17 +54,22 @@ import { INVARIANTS, checkInvariants, failureContext, windowContext } from "./in
 import { mentionTarget, mentionWakes, type CheckMode } from "./invariantReads";
 import { SimNetError, parseOrder, type Channel, type Delivery } from "./net";
 import { T0, installRealm, uninstallRealm } from "./realm";
+import { appendRun, sessionProvenance } from "./history";
 import {
   SimFailure,
   artifactDir,
+  artifactRoot,
   renderDeliveries,
   reportFailure,
   writeArtifacts,
   type DeliveryRecord,
   type FailureContext,
   type RunArtifacts,
+  type RunMeta,
   type SimMode,
+  type StepRecord,
 } from "./report";
+import { SCRIPTED_ORDER_MARK } from "./shrink";
 import { SimWorld } from "./world";
 import type { SimWindow } from "./window";
 
@@ -106,13 +115,7 @@ export interface ScenarioRun {
 export type SimEnv = Record<string, string | undefined>;
 
 const DEFAULT_SEEDS = 2;
-/**
- * Leads the --order line of a scripted run. A scripted run drains after each
- * verb and an interleave run only at settle, so a replay must drain where the
- * recorded run did; this word carries which one it was. Channel names always
- * hold a ':' or are "sched", so it cannot be mistaken for one.
- */
-export const SCRIPTED_ORDER_MARK = "scripted";
+export { SCRIPTED_ORDER_MARK };
 /** Per test. Genesis and window boots run hundreds of real handler calls on a loaded machine. */
 const SCENARIO_TIMEOUT_MS = 180_000;
 
@@ -139,7 +142,8 @@ export function scenarioRuns(opts: Pick<ScenarioOptions, "name" | "seeds" | "mod
   if (!Number.isSafeInteger(count) || count < 1) throw new Error(`sim dsl: a scenario needs at least one seed, got ${count}`);
   const base = seedBase(opts.name);
   const seeds = env.SIM_SEEDS ? parseSeeds(env.SIM_SEEDS) : Array.from({ length: count }, (_, i) => base + i);
-  if (env.SIM_ORDER) {
+  // Set at all, even empty: an empty order is a replay too (a shrink can end there).
+  if (env.SIM_ORDER !== undefined) {
     const tokens = parseOrder(env.SIM_ORDER);
     const scripted = tokens[0] === SCRIPTED_ORDER_MARK;
     const order = scripted ? tokens.slice(1) : tokens;
@@ -280,6 +284,10 @@ export interface ScenarioWorldOptions {
   expected?: readonly RedMarker[];
   /** SIM_TRACE: a label, or "1" for every delivery. */
   trace?: string;
+  /** This run's artifact folder. Default: artifactDir of the run under artifactRoot(). */
+  artifacts?: string;
+  /** When the run began, on the real clock (the realm's clock is virtual), and what it ran on. */
+  started?: { at: string; ns: number; gitHead?: string | null; dirty?: boolean };
 }
 
 /** A SimWorld with the DSL's verbs, point checks, and the run's report state. */
@@ -289,13 +297,20 @@ export class ScenarioWorld extends SimWorld {
   readonly drainPerVerb: boolean;
   /** Every delivery of the run, in order (events.jsonl). */
   readonly events: DeliveryRecord[] = [];
+  /** Verbs, settles and point checks, placed among the deliveries (events.jsonl). */
+  readonly steps: StepRecord[] = [];
   readonly expect: Expect;
+  /** Where this run's artifacts go. */
+  readonly artifactPath: string;
 
   private readonly checkIds: readonly string[] | undefined;
   private readonly expected: readonly RedMarker[];
   private readonly trace: string | undefined;
   private stepName = "start";
   private settles = 0;
+  private readonly runClock: NonNullable<ScenarioWorldOptions["started"]>;
+  // Verbs issued whose actor delivery has not run yet, by its seq.
+  private readonly issued = new Map<number, { verb: string; label: string }>();
   // The world as the last full check saw it; an unchanged one is not checked again.
   private checkedAt: string | null = null;
 
@@ -319,6 +334,8 @@ export class ScenarioWorld extends SimWorld {
     this.checkIds = Object.keys(skip).length ? INVARIANTS.map((i) => i.id).filter((id) => !(id in skip)) : undefined;
     this.net.mode = opts.run.mode === "order" ? { order: opts.run.order ?? [] } : opts.run.mode;
     this.expect = this.makeExpect();
+    this.artifactPath = opts.artifacts ?? artifactDir(opts.scenario, opts.run.mode, opts.run.seed);
+    this.runClock = opts.started ?? { at: new Date().toISOString(), ns: Bun.nanoseconds() };
   }
 
   // -- Verbs --
@@ -341,7 +358,7 @@ export class ScenarioWorld extends SimWorld {
 
   /** Moves the virtual clock; what comes due runs at the next drain. */
   advance(ms: number): Step {
-    return this.verb(`advance ${ms}ms`, this.actors.clock.advance(ms));
+    return this.verb("advance", `advance ${ms}ms`, this.actors.clock.advance(ms));
   }
 
   private stepped<T extends object>(actor: T): Stepped<T> {
@@ -349,12 +366,13 @@ export class ScenarioWorld extends SimWorld {
       get: (target, key) => {
         const value = Reflect.get(target, key);
         if (typeof value !== "function") return value;
-        return (...args: unknown[]) => this.verb(`${String(key)} ${args.map((a) => (typeof a === "string" ? a : canonical(a))).join(" ")}`.trim(), value.apply(target, args));
+        return (...args: unknown[]) => this.verb(String(key), `${String(key)} ${args.map((a) => (typeof a === "string" ? a : canonical(a))).join(" ")}`.trim(), value.apply(target, args));
       },
     }) as Stepped<T>;
   }
 
-  private verb(what: string, seq: number): Step {
+  private verb(name: string, what: string, seq: number): Step {
+    this.issued.set(seq, { verb: name, label: what });
     return new Step(seq, async () => {
       if (!this.drainPerVerb) return;
       this.stepName = what;
@@ -391,10 +409,18 @@ export class ScenarioWorld extends SimWorld {
     };
   }
 
+  /** result.json's facts about the run: what it ran on, when it began, and its wall time so far. */
+  meta(): RunMeta {
+    const { at, ns, ...tree } = this.runClock;
+    return { ...tree, startedAt: at, realMs: Math.round((Bun.nanoseconds() - ns) / 1e6) };
+  }
+
   /** What the artifacts hold besides the report: no raw server rows, so no denylisted field. */
   artifacts(): RunArtifacts {
     return {
       events: this.events,
+      steps: this.steps,
+      meta: this.meta(),
       world: {
         scenario: this.scenario,
         mode: this.mode,
@@ -416,7 +442,7 @@ export class ScenarioWorld extends SimWorld {
   /** Writes the artifacts, prints the block and throws it as a SimFailure; a failure a marker names prints as expected. */
   fail(ctx: FailureContext): never {
     const marker = this.expected.find((m) => m.invariant === ctx.invariant.id);
-    return reportFailure(marker ? { ...ctx, expected: marker.task } : ctx, this.artifacts());
+    return reportFailure(marker ? { ...ctx, expected: marker.task } : ctx, this.artifacts(), this.artifactPath);
   }
 
   private hasBackend(): boolean {
@@ -427,8 +453,9 @@ export class ScenarioWorld extends SimWorld {
     }
   }
 
-  /** settle() under a step name the report prints ("end", "expect ..."). */
-  async settleAs(step: string): Promise<void> {
+  /** settle() under a step name the report prints ("end", "expect ..."); `verb` names it in events.jsonl. */
+  async settleAs(step: string, verb = "settle"): Promise<void> {
+    this.steps.push({ at: this.events.length, seq: 0, verb, actor: "world", label: step });
     this.stepName = step;
     await super.settle();
     // Nothing ran and nothing was written since the last full check: it would see the same world.
@@ -444,6 +471,11 @@ export class ScenarioWorld extends SimWorld {
   }
 
   private delivered(d: Delivery): void {
+    const verb = this.issued.get(d.seq);
+    if (verb) {
+      this.issued.delete(d.seq);
+      this.steps.push({ at: this.events.length, seq: d.seq, actor: d.channel.replace(/^actor:/, ""), ...verb });
+    }
     this.events.push({ seq: d.seq, channel: d.channel, due: d.due, label: d.label, producer: d.producer });
     if (!this.trace) return;
     const text = `${d.channel} ${d.label} ${d.producer}`;
@@ -462,7 +494,7 @@ export class ScenarioWorld extends SimWorld {
 
   /** The server row and every window's copy of it, printed with labels and returned. */
   async inspect(label: string): Promise<Inspection> {
-    await this.settleAs(`inspect ${label}`);
+    await this.settleAs(`inspect ${label}`, "inspect");
     const id = this.idOf(label);
     const windows: Inspection["windows"] = {};
     for (const [name, w] of this.windows) {
@@ -484,7 +516,7 @@ export class ScenarioWorld extends SimWorld {
   // Settles, runs the check, and reports what it returns as a failure.
   private async point(id: string, meaning: string, check: () => Promise<PointFailure | null>): Promise<void> {
     const step = `expect ${meaning}`;
-    await this.settleAs(step);
+    await this.settleAs(step, "expect");
     const f = await check();
     if (f) this.fail({ ...this.reportBase(step), invariant: { id, meaning }, ...f });
   }
@@ -603,9 +635,11 @@ export class ScenarioWorld extends SimWorld {
 export interface ScenarioOutcome {
   /** Every delivery of the run. */
   events: DeliveryRecord[];
+  /** Its step markers. */
+  steps: StepRecord[];
   /** The --order line the run would print. */
   order: Channel[];
-  /** Where the pass artifacts went (SIM_OUT only). */
+  /** Where the pass artifacts went (SIM_OUT or SIM_KEEP only). */
   artifacts?: string;
 }
 
@@ -614,13 +648,16 @@ export interface RunExtra {
   skipInvariants?: KnownInvariants;
   /** The markers the run may fail on (judgeRun's expectation). */
   expected?: readonly RedMarker[];
+  /** This is the known check (nothing left out): its artifacts get their own folder. */
+  known?: boolean;
 }
 
 /**
  * One run of a scenario: a fresh realm and world, the scenario, a final
  * settle, and the artifacts. A failing check throws a SimFailure carrying the
  * report; a net budget or replay error is reported the same way; any other
- * error is a harness error and propagates as is.
+ * error is a harness error and propagates as is. Under a session
+ * (SIM_SESSION) every run, whatever its end, appends one runs.jsonl row.
  */
 export async function runScenario(
   opts: ScenarioOptions,
@@ -629,10 +666,15 @@ export async function runScenario(
   extra: RunExtra = {},
 ): Promise<ScenarioOutcome> {
   const env = extra.env ?? process.env;
-  installRealm(run.seed);
+  // Read before the realm swaps in the virtual clock.
+  const started = { at: new Date().toISOString(), ns: Bun.nanoseconds(), ...sessionProvenance(env) };
+  const dir = artifactDir(opts.name, run.mode, run.seed, artifactRoot(env), extra.known);
   let w: ScenarioWorld | null = null;
+  let passed = false;
+  let wrote: string | undefined;
+  installRealm(run.seed);
   try {
-    w = new ScenarioWorld({ scenario: opts.name, run, budget: opts.budget, skipInvariants: extra.skipInvariants, expected: extra.expected, trace: env.SIM_TRACE });
+    w = new ScenarioWorld({ scenario: opts.name, run, budget: opts.budget, skipInvariants: extra.skipInvariants, expected: extra.expected, trace: env.SIM_TRACE, artifacts: dir, started });
     try {
       await fn(w);
       await w.settleAs("end");
@@ -640,14 +682,29 @@ export async function runScenario(
       if (e instanceof SimNetError) w.fail({ ...w.reportBase(), invariant: { id: `net.${e.code}`, meaning: "the net's budget or the order replay held" }, message: e.message });
       throw e;
     }
-    const outcome: ScenarioOutcome = { events: w.events, order: w.orderLine() };
-    if (env.SIM_OUT) {
-      outcome.artifacts = artifactDir(opts.name, run.mode, run.seed, env.SIM_OUT);
-      writeArtifacts(outcome.artifacts, { scenario: opts.name, mode: run.mode, seed: run.seed, passed: true, deliveries: w.net.deliveries }, w.artifacts());
+    passed = true;
+    const outcome: ScenarioOutcome = { events: w.events, steps: w.steps, order: w.orderLine() };
+    if (env.SIM_OUT || env.SIM_KEEP === "1") {
+      writeArtifacts(dir, { scenario: opts.name, mode: run.mode, seed: run.seed, passed: true, deliveries: w.net.deliveries }, w.artifacts());
+      outcome.artifacts = wrote = dir;
     }
     return outcome;
+  } catch (e) {
+    if (e instanceof SimFailure) wrote = e.artifacts;
+    throw e;
   } finally {
     uninstallRealm();
+    if (env.SIM_SESSION) {
+      appendRun(env.SIM_SESSION, {
+        scenario: opts.name,
+        mode: run.mode,
+        seed: run.seed,
+        passed,
+        deliveries: w?.net.deliveries ?? 0,
+        ms: Math.round((Bun.nanoseconds() - started.ns) / 1e6),
+        ...(wrote && dirname(wrote) === env.SIM_SESSION ? { dir: basename(wrote) } : {}),
+      });
+    }
   }
 }
 
@@ -670,7 +727,7 @@ export async function judgeRun(
   const expected = extra.expected ?? redFor(opts, run);
   let passed: ScenarioOutcome;
   try {
-    passed = await runScenario(opts, run, fn, { ...extra, expected });
+    passed = await runScenario(opts, run, fn, { ...extra, expected, known: extra.known ?? extra.field === "known" });
   } catch (e) {
     if (e instanceof SimFailure && expected.some((m) => m.invariant === e.ctx.invariant.id)) return { expected: e };
     throw e;

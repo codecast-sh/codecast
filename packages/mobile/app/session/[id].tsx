@@ -3,7 +3,7 @@ import { optionalNative } from '@/lib/optionalNative';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
@@ -16,7 +16,10 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { AgentLogoSvg } from '@/components/AgentLogo';
 import { MobileIdentityFace, MobileSessionFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
-import { useInboxStore, isConvexId } from '@codecast/web/store/inboxStore';
+import { useInboxStore, isConvexId, type OptimisticImage } from '@codecast/web/store/inboxStore';
+import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
+import { startUpload, forgetUpload } from '@/components/chat/chatUpload';
+import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from '@codecast/web/lib/sessionImages';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
@@ -33,6 +36,15 @@ import { SentFileBlock, type SentFileData } from '@/components/session/SentFileB
 import { MessageTickRail, MessageListButton } from '@/components/session/MessageTickRail';
 import { StickyPromptBanner, type StickyPrompt } from '@/components/session/StickyPromptBanner';
 import { useConversationMessages } from '@codecast/web/hooks/useConversationMessages';
+import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
+import { usePendingPermissions } from '@codecast/web/hooks/useSyncPendingPermissions';
+import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from '@codecast/web/hooks/useSyncTimeline';
+import { useForkTree, type FlatForkNode } from '@codecast/web/hooks/useForkTree';
+import { useConversationCommentsSync, useConversationCommentRows } from '@codecast/web/hooks/useConversationCommentsSync';
+import { useManagedSessionFields } from '@codecast/web/hooks/useManagedSessionFields';
+import { useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
+import { beginLocalFork } from '@codecast/web/store/beginLocalFork';
+import { useMissingSessionLookup } from '@codecast/web/hooks/useMissingSessionRow';
 import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
@@ -169,7 +181,12 @@ type ImageData = {
   // Ready-to-render src (a trusted markdown image URL or a prebuilt data: URI)
   // for gallery entries that aren't storage-backed message attachments.
   url?: string;
+  // The local file an optimistic attachment paints while it uploads.
+  preview_url?: string;
 };
+
+// A send with attachments and no text carries this as its content.
+const IMAGE_ONLY_CONTENT = '[image]';
 
 type Message = {
   _id: string;
@@ -265,18 +282,6 @@ type ForkChild = {
   parent_message_uuid?: string;
   started_at?: number;
   username?: string;
-};
-
-type TreeNode = {
-  id: string;
-  short_id?: string;
-  title: string;
-  message_count: number;
-  parent_message_uuid?: string;
-  started_at: number;
-  status: string;
-  is_current: boolean;
-  children: TreeNode[];
 };
 
 type ConversationData = {
@@ -717,7 +722,7 @@ function AskUserQuestionBlock({ tool, result, conversationId }: { tool: ToolCall
     const content = JSON.stringify({ __cc_poll: true, keys: [pollKey], display: cleanLabel });
     const store = useInboxStore.getState();
     const clientId = store.addOptimisticMessage(conversationId, content);
-    store.sendMessage(conversationId, content, undefined, clientId);
+    store.sendMessageWhenReady(conversationId, content, undefined, clientId);
   };
 
   return (
@@ -1070,15 +1075,15 @@ function TeamCreateBlock({ tool }: { tool: ToolCall }) {
 
 const IMAGE_COLLAPSED_HEIGHT = 80;
 
+// Storage ids resolve through the shared URL cache, which
+// useConversationMessages warms the moment messages land, so an image that
+// scrolls into view (or remounts) has its URL on the first frame.
 function useImageSrc(image: ImageData) {
-  const storageUrl = useQuery(
-    api.images.getImageUrl,
-    image.storage_id ? { storageId: image.storage_id as Id<"_storage"> } : "skip"
-  );
+  const storageUrl = useStorageImageUrl(image.storage_id);
   return image.storage_id
     ? storageUrl ?? undefined
-    : image.url
-      ? image.url
+    : image.url || image.preview_url
+      ? image.url || image.preview_url
       : image.data
         ? `data:${image.media_type};base64,${image.data}`
         : undefined;
@@ -1089,6 +1094,7 @@ function useImageSrc(image: ImageData) {
 function imageKeyOf(image: ImageData): string | undefined {
   return image.storage_id
     || image.url
+    || image.preview_url
     || (image.data ? `data:${image.media_type};base64,${image.data}` : undefined);
 }
 
@@ -2456,6 +2462,9 @@ function CommandStatusLine({ content, timestamp }: { content: string; timestamp:
 }
 
 // --- Workflow events (mobile twin of web's WorkflowEventBlock) ---
+// A session's public link, in the one /share grammar (shared/entities).
+const conversationShareLink = (token: string) => `${CODECAST_BASE_URL}${sharePath('conversation', token)}`;
+
 // The server posts workflow lifecycle anchors as JSON message content
 // (convex/workflow_runs.ts). Fork/resume can round-trip them without the
 // workflow_event subtype, so detect by content shape, matching web.
@@ -2474,23 +2483,16 @@ const WF_NODE_COLORS: Record<string, string> = {
 function WorkflowGateCard({ event }: { event: Record<string, any> }) {
   const Theme = useTheme();
   const runId = typeof event.run_id === 'string' ? event.run_id : null;
-  const run = useQuery(
-    api.workflow_runs.get,
-    runId && isConvexId(runId) ? { id: runId as Id<'workflow_runs'> } : 'skip'
-  ) as { _id: string; status: string } | null | undefined;
-  const respondToGate = useMutation(api.workflow_runs.respondToGate);
-  const [responding, setResponding] = useState(false);
-
+  const run = useWorkflowRun(runId && isConvexId(runId) ? runId : null) as { _id: string; status: string } | null | undefined;
   const choices = (event.choices ?? []) as Array<{ key: string; label: string }>;
   const waiting = run?.status === 'paused';
 
-  const choose = async (key: string) => {
-    if (!run || responding) return;
+  // Local-first (store respondToGate): the run reads as running on the press,
+  // so the choices fold away without waiting on the server.
+  const choose = (key: string) => {
+    if (!run || !waiting) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setResponding(true);
-    try { await respondToGate({ id: run._id as Id<'workflow_runs'>, response: key }); }
-    catch { /* stays waiting; user can retry */ }
-    finally { setResponding(false); }
+    useInboxStore.getState().respondToGate(run._id, key);
   };
 
   return (
@@ -2508,9 +2510,8 @@ function WorkflowGateCard({ event }: { event: Record<string, any> }) {
           {choices.map((c) => (
             <TouchableOpacity
               key={c.key}
-              style={[styles.wfGateChoice, responding && { opacity: 0.4 }]}
+              style={styles.wfGateChoice}
               onPress={() => choose(c.key)}
-              disabled={responding}
               activeOpacity={0.7}
             >
               <RNText style={styles.wfGateChoiceKey}>[{c.key}]</RNText>
@@ -2613,7 +2614,6 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const [userContentExpanded, setUserContentExpanded] = useState(false);
   const [localExpanded, setLocalExpanded] = useState(false);
   useEffect(() => { setLocalExpanded(false); }, [globalCollapsed]);
-  const toggleBookmark = useMutation(api.bookmarks.toggleBookmark);
   const isBookmarked = bookmarkedSet?.has(message._id);
 
   const handleLongPress = () => {
@@ -2641,14 +2641,10 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       } else if (label === 'Share Message') {
         Share.share({ message: messageText });
       } else if (label === 'Bookmark' || label === 'Remove Bookmark') {
-        try {
-          const result = await toggleBookmark({
-            conversation_id: conversationId as Id<"conversations">,
-            message_id: message._id as Id<"messages">,
-          });
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          showToast?.(result ? 'Bookmarked' : 'Bookmark removed');
-        } catch {}
+        // Store action: the list flips now and the toggle rides the outbox.
+        useInboxStore.getState().toggleBookmark(conversationId as string, message._id);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        showToast?.(isBookmarked ? 'Bookmark removed' : 'Bookmarked');
       } else if (label === 'Fork from Here' && message.message_uuid) {
         onFork!(message.message_uuid);
       }
@@ -3039,23 +3035,25 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     return () => task.cancel();
   }, [autoFocus]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedImages, setSelectedImages] = useState<{ uri: string; storageId?: string; uploading: boolean }[]>([]);
+  const [selectedImages, setSelectedImages] = useState<{ uri: string; mime: string; storageId?: string; uploading: boolean }[]>([]);
   // Mirrors the web composer's pastedImagesRef: the `[Image N]` token paths
   // need each image's current position, and a state read inside an async
   // callback or a state updater would be stale (or double-fire in StrictMode).
   const selectedImagesRef = useRef(selectedImages);
   selectedImagesRef.current = selectedImages;
-  const managedSessionQ = useQuery(
-    api.managedSessions.isSessionManaged,
-    isConvexId(conversationId as string) ? { conversation_id: conversationId } : "skip"
-  );
+  // The session row's live fields (synced with the inbox): is_connected is
+  // the heartbeat verdict, agent_status what the daemon reports.
+  const sessionFields = useManagedSessionFields(conversationId as string);
+  const managedSessionQ = sessionFields
+    ? { managed: !!sessionFields.is_connected, agent_status: sessionFields.agent_status as string | undefined }
+    : undefined;
   // The design-mock session fakes a working agent so the footer status chip is
   // reviewable without server data (see DESIGN_MOCK_CONVO).
   const managedSession = (conversationId as string) === '__designmock__'
     ? { managed: true as const, agent_status: 'working' }
     : managedSessionQ;
 
-  const generateUploadUrl = useMutation(api.images.generateUploadUrl);
+  const convex = useConvex();
 
   const draftRef = useRef(seed);
   // Same store path as web MessageInput: debounce setDraft / clearDraftFinal.
@@ -3096,19 +3094,6 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     return () => clearTimeout(timer);
   }, [conversationId, clearAfterSend, sendingRef]);
 
-  const uploadToStorage = async (uri: string) => {
-    const uploadUrl = await generateUploadUrl({});
-    const response = await fetch(uri);
-    const blob = await response.blob();
-    const uploadResult = await fetch(uploadUrl, {
-      method: "POST",
-      headers: { "Content-Type": blob.type || "image/jpeg" },
-      body: blob,
-    });
-    const { storageId } = await uploadResult.json();
-    return storageId as string;
-  };
-
   // Drops the image and its `[Image N]` token, renumbering the tokens above it
   // so what's left still points at the attachments the agent will receive.
   const removeImage = (uri: string) => {
@@ -3116,6 +3101,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
     if (index < 0) return;
     selectedImagesRef.current = selectedImagesRef.current.filter(img => img.uri !== uri);
     setSelectedImages(selectedImagesRef.current);
+    forgetUpload(uri);
     setMessage(m => dropImagePlaceholder(m, index + 1));
   };
 
@@ -3138,16 +3124,21 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
       if (!result.canceled && result.assets) {
         for (const asset of result.assets) {
           const uri = asset.uri;
+          const mime = asset.mimeType ?? 'image/jpeg';
           // Ref-first so a multi-pick batch numbers sequentially: the state
           // updates are async, so `selectedImages` is still the old array here.
-          selectedImagesRef.current = [...selectedImagesRef.current, { uri, uploading: true }];
+          selectedImagesRef.current = [...selectedImagesRef.current, { uri, mime, uploading: true }];
           setSelectedImages(selectedImagesRef.current);
           // Token numbers follow attach order, which is the order the agent
           // receives the images in — so `[Image 2]` is a real reference.
           setMessage(m => insertImagePlaceholder(m, m.length, selectedImagesRef.current.length).text);
-          uploadToStorage(uri).then(storageId => {
-            setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
-          }).catch(() => {
+          // Registered in pendingImageUploads under the uri, so a send pressed
+          // before the bytes land still finds the upload (dispatchSend).
+          startUpload(convex, { uri, mime }).then(storageId => {
+            if (storageId) {
+              setSelectedImages(prev => prev.map(img => img.uri === uri ? { ...img, storageId, uploading: false } : img));
+              return;
+            }
             removeImage(uri);
             Alert.alert('Upload failed', 'Could not upload image');
           });
@@ -3160,14 +3151,32 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
 
   // The optimistic-send core, shared by the composer's send button and the
   // suggestion pills (which send fixed text with no attachments): pending row
-  // in the store instantly, fire-and-forget delivery via the outbox.
-  const dispatchSend = (content: string, storageIds?: string[]) => {
+  // in the store instantly, fire-and-forget delivery via the outbox (after the
+  // create lands, when this is a session started a moment ago). An image still
+  // uploading rides the bubble as its local preview; the send goes out once
+  // the uploads settle, the same detached path as web MessageInput.
+  const dispatchSend = (content: string, images?: OptimisticImage[]) => {
     const store = useInboxStore.getState();
-    const images = storageIds?.length
-      ? storageIds.map(sid => ({ media_type: 'image/jpeg', storage_id: sid }))
-      : undefined;
-    const clientId = store.addOptimisticMessage(conversationId, content, images);
-    store.sendMessage(conversationId, content, storageIds?.length ? storageIds : undefined, clientId);
+    const clientId = store.addOptimisticMessage(conversationId, content, images?.length ? images : undefined);
+    if (!images?.some(img => img.uploading)) {
+      const ids = images?.map(img => img.storage_id!) ?? [];
+      store.sendMessageWhenReady(conversationId, content, ids.length ? ids : undefined, clientId);
+      return;
+    }
+    void (async () => {
+      const settled = await Promise.all(images.map(async (img): Promise<OptimisticImage> =>
+        img.uploading ? { media_type: img.media_type, storage_id: (await awaitUpload(img.preview_url)) ?? undefined } : img));
+      images.forEach(img => releaseUpload(img.preview_url));
+      const resolved = settled.filter(img => img.storage_id);
+      const s = useInboxStore.getState();
+      // Every upload failed and there was no text: nothing real to send.
+      if (resolved.length === 0 && content === IMAGE_ONLY_CONTENT) {
+        s.markOptimisticAsFailed(conversationId, clientId);
+        return;
+      }
+      s.resolvePendingUploads(conversationId, clientId, resolved);
+      s.sendMessageWhenReady(conversationId, content, resolved.length ? resolved.map(img => img.storage_id!) : undefined, clientId);
+    })();
   };
 
   // Optimistic, non-blocking send (mirrors web ContextChatInput). The message
@@ -3180,18 +3189,15 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
       message,
     ).trim();
     if (!trimmedMessage && selectedImages.length === 0) return;
-
-    if (selectedImages.some(img => img.uploading)) {
-      setError('Images still uploading...');
-      return;
-    }
     setError(null);
 
-    const storageIds = selectedImages.filter(img => img.storageId).map(img => img.storageId!);
-    const content = trimmedMessage || (storageIds.length > 0 ? '[image]' : '');
+    const images: OptimisticImage[] = selectedImages.map(img => img.storageId
+      ? { media_type: img.mime, storage_id: img.storageId }
+      : { media_type: img.mime, preview_url: img.uri, uploading: true });
+    const content = trimmedMessage || IMAGE_ONLY_CONTENT;
 
     try {
-      dispatchSend(content, storageIds);
+      dispatchSend(content, images);
     } catch (error) {
       captureError(error instanceof Error ? error : new Error(String(error)));
       setError(error instanceof Error ? error.message : 'Could not save your message. Please try again.');
@@ -3472,22 +3478,18 @@ function useAndroidImeInset(): number {
   return inset;
 }
 
-function TreeNodeView({ node, depth, router, currentId, onClose }: { node: TreeNode; depth: number; router: any; currentId: string; onClose: () => void }) {
+function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNode; router: any; currentId: string; onClose: () => void }) {
   const Theme = useTheme();
-  const isCurrent = node.id === currentId || node.is_current;
-  const date = new Date(node.started_at);
-  const timeStr = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const isCurrent = node.id === currentId;
+  const timeStr = new Date(node.started_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   return (
-    <>
-      <Pressable onPress={() => { if (!isCurrent) { onClose(); router.push(`/session/${node.id}`); } }} style={[styles.treeNode, { paddingLeft: depth * 16 + 12 }, isCurrent && styles.treeNodeCurrent]}>
-        {depth > 0 && <RNText style={styles.treeNodePrefix}>+-</RNText>}
-        {isCurrent && <FontAwesome name="circle" size={6} color={Theme.violet} style={{ marginRight: 4 }} />}
-        <RNText style={[styles.treeNodeTitle, isCurrent && { color: Theme.violet }]} numberOfLines={1}>{node.title}</RNText>
-        <RNText style={styles.treeNodeMeta}>{node.message_count} msgs</RNText>
-        <RNText style={styles.treeNodeMeta}>{timeStr}</RNText>
-      </Pressable>
-      {node.children.map(child => (<TreeNodeView key={child.id} node={child} depth={depth + 1} router={router} currentId={currentId} onClose={onClose} />))}
-    </>
+    <Pressable onPress={() => { if (!isCurrent) { onClose(); router.push(`/session/${node.id}`); } }} style={[styles.treeNode, { paddingLeft: node.depth * 16 + 12 }, isCurrent && styles.treeNodeCurrent]}>
+      {node.depth > 0 && <RNText style={styles.treeNodePrefix}>+-</RNText>}
+      {isCurrent && <FontAwesome name="circle" size={6} color={Theme.violet} style={{ marginRight: 4 }} />}
+      <RNText style={[styles.treeNodeTitle, isCurrent && { color: Theme.violet }]} numberOfLines={1}>{node.branch_label || node.title}</RNText>
+      <RNText style={styles.treeNodeMeta}>{node.message_count} msgs</RNText>
+      <RNText style={styles.treeNodeMeta}>{timeStr}</RNText>
+    </Pressable>
   );
 }
 
@@ -3613,8 +3615,17 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     jumpToTimestamp: hookJumpToTimestamp,
   } = useConversationMessages(id as string, highlightMessageParam || undefined);
 
-  const conversation = (storeConversation as ConversationData | null)
-    ?? (id === DESIGN_MOCK_ID ? DESIGN_MOCK_CONVO : undefined);
+  // A session the store does not hold (a deep link, a teammate's, one outside
+  // the inbox window) is looked up as an inbox row and seeded, the same as
+  // web's SessionPane. Only the server's answer that it is gone reads as "not
+  // found"; until then the screen is honestly cold.
+  const storeConv = storeConversation as ConversationData | null;
+  const missingLookup = useMissingSessionLookup(!storeConv && typeof id === 'string' && isConvexId(id) ? id : null);
+  useEffect(() => {
+    if (missingLookup.row) useInboxStore.getState().seedSession(missingLookup.row);
+  }, [missingLookup.row]);
+  const conversation = storeConv
+    ?? (id === DESIGN_MOCK_ID ? DESIGN_MOCK_CONVO : missingLookup.row === null && !missingLookup.failed ? null : undefined);
   // Who this session is (its character, or its role): the header wears the
   // same face and name the inbox row does.
   const identityRow = useSessionIdentityRow(conversation?._id ? String(conversation._id) : null, conversation as any);
@@ -3630,45 +3641,45 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // resolves and rekeys the URL to the real id, they activate automatically.
   const isReal = typeof id === "string" && isConvexId(id);
 
-  // git_diff blobs live off the conversation doc now; fetch them lazily (only
-  // when the diff panel is open) via the dedicated side-table query.
+  // git_diff blobs live off the conversation doc (up to 100 KB each, re-pushed
+  // on every edit), so the side-table query subscribes on intent: from the
+  // moment the actions menu opens, which is ahead of the "View Diff" tap.
+  const [diffWanted, setDiffWanted] = useState(false);
   const gitDiffData = useQuery(
     api.conversations.getConversationGitDiff,
-    diffExpanded && isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
+    (diffWanted || diffExpanded) && isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
   );
 
-  const pendingPermissions = useQuery(
-    api.permissions.getPendingPermissions,
-    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
+  const pendingPermissions = usePendingPermissions(isReal ? (id as string) : null);
+
+  // Bookmarks are one store list, synced with the inbox; a toggle flips it
+  // locally (store.toggleBookmark) before the server hears about it.
+  const bookmarks = useInboxStore((s) => s.bookmarks);
+  const bookmarkedSet = useMemo(
+    () => new Set((bookmarks as any[]).filter((b) => b.conversation_id === id).map((b) => String(b.message_id))),
+    [bookmarks, id],
   );
 
-  const bookmarkedMessageIds = useQuery(
-    api.bookmarks.getConversationBookmarks,
-    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
-  );
-  const bookmarkedSet = useMemo(() => new Set(bookmarkedMessageIds?.map(id => id.toString()) || []), [bookmarkedMessageIds]);
-
-  const commits = useQuery(
-    api.commits.getCommitsForConversation,
-    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
-  ) as Array<{
+  // Commits and pull requests linked to this session: the same feeders and
+  // store rows as the web conversation view, so a cached session paints them
+  // with its transcript.
+  const gitLinkConversationId = isReal ? (id as string) : undefined;
+  useSyncConversationCommits(gitLinkConversationId);
+  useSyncConversationPullRequests(gitLinkConversationId);
+  const commits = useConversationCommits(gitLinkConversationId) as Array<{
     _id: string; sha: string; message: string; timestamp: number;
-    files_changed: number; insertions: number; deletions: number;
-  }> | undefined;
-
-  const pullRequests = useQuery(
-    api.pull_requests.getPRsForConversation,
-    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
-  ) as Array<{
-    _id: string; number: number; title: string; state: string;
-    repository: string; additions?: number; deletions?: number;
+  }>;
+  const pullRequests = useConversationPullRequests(gitLinkConversationId) as Array<{
+    _id: string; number: number; title: string;
     created_at: number; merged_at?: number;
-  }> | undefined;
+  }>;
 
-  const treeResult = useQuery(
-    api.conversations.getConversationTree,
-    isReal ? { conversation_id: id as string } : "skip"
-  ) as { tree: TreeNode } | { error: string } | null | undefined;
+  // The fork family, built from the store (inbox rows plus the conversation's
+  // fork fields) the moment the sheet opens; the server tree merges in any
+  // branch this phone has never seen.
+  const [treeModalVisible, setTreeModalVisible] = useState(false);
+  const forkFamily = useForkTree(conversation as any, treeModalVisible);
+  const hasForkFamily = !!conversation?.forked_from || (conversation?.fork_count ?? 0) > 0 || (conversation?.fork_children?.length ?? 0) > 0;
 
   const hasMoreAbove = hookHasMoreAbove;
   const loadingOlder = hookIsLoadingOlder;
@@ -3714,7 +3725,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   const invertedMessages = useMemo(() => [...allMessages].reverse(), [allMessages]);
 
-  const forkFromMessage = useMutation(api.conversations.forkFromMessage);
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const androidImeInset = useAndroidImeInset();
@@ -3858,23 +3868,19 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     setGalleryVisible(true);
   }, [allSessionImages]);
 
-  const handleForkFromMessage = useCallback(async (messageUuid: string) => {
+  // Local-first fork, the same store path as web: the stub opens already
+  // holding the parent's messages up to the fork point, and the screen moves
+  // to the real id when the server create lands (the stub URL self-heal below).
+  const handleForkFromMessage = useCallback((messageUuid: string) => {
     if (!id) return;
-    try {
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      const result = await forkFromMessage({
-        conversation_id: id as string,
-        message_uuid: messageUuid,
-      });
-      if (result?.conversation_id) {
-        router.push(`/session/${result.conversation_id}`);
-      }
-    } catch (e: any) {
-      Alert.alert('Fork failed', e?.message || 'Could not fork conversation');
-    }
-  }, [id, forkFromMessage, router]);
-
-  const [treeModalVisible, setTreeModalVisible] = useState(false);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const fork = beginLocalFork(conversation as any, messageUuid, {
+      currentUser: useInboxStore.getState().currentUser,
+      hasMoreAbove,
+      onError: (message) => Alert.alert('Fork failed', message),
+    });
+    if (fork) router.push(`/session/${fork.forkSessionId}`);
+  }, [id, conversation, hasMoreAbove, router]);
 
   const handleCopyAll = useCallback(async () => {
     if (!allMessages.length) return;
@@ -3964,12 +3970,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
               token = await generateShareLink({ conversation_id: convId });
             }
             if (token) {
-              const url = `https://codecast.sh/share/${token}`;
+              const url = conversationShareLink(token);
               Clipboard.setString(url);
               showToast('Share link copied');
             }
           } else if (label === 'Share Link via...') {
-            const url = `https://codecast.sh/share/${conversation.share_token}`;
+            const url = conversationShareLink(conversation.share_token!);
             await Share.share({ message: url, url });
           }
         } catch (_e) {
@@ -4107,13 +4113,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // so this array ref is stable and safe to memo on.
   const navSourceMessages = useInboxStore(s => s.userMessages[id as string]);
 
-  // Comment counts per message, the same enrichment the web popover shows.
-  // Plain useQuery gated on isReal, matching every other enrichment query on
-  // this screen; rows render without counts until it lands.
-  const commentSummary = useQuery(
-    api.comments.getConversationCommentSummary,
-    isReal ? { conversation_id: id as Id<"conversations"> } : "skip"
-  );
+  // Comment counts per message, the same enrichment the web popover shows,
+  // read from the store's comments (persisted; fed by the same feeder web
+  // mounts per open conversation).
+  useConversationCommentsSync(isReal ? (id as string) : undefined);
+  const commentSummary = useConversationCommentRows(id as string);
   const commentCountsByMessage = useMemo(() => countCommentsByMessage(commentSummary), [commentSummary]);
 
   const navigatorRows = useMemo(
@@ -4389,9 +4393,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
     // if there turns out to be no diff).
     const hasDiff = !!conversation?.git_branch;
-    if (hasDiff) options.push(diffExpanded ? 'Hide Diff' : 'View Diff');
-    const hasTree = treeResult && !('error' in treeResult) && treeResult.tree && treeResult.tree.children.length > 0;
-    if (hasTree) options.push('Fork Tree');
+    if (hasDiff) { setDiffWanted(true); options.push(diffExpanded ? 'Hide Diff' : 'View Diff'); }
+    if (hasForkFamily) options.push('Fork Tree');
     options.push('Dismiss');
     options.push('Cancel');
 
@@ -4442,7 +4445,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       })),
       { text: 'Cancel', style: 'cancel' },
     ]);
-  }, [conversation, collapsed, diffExpanded, treeResult, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
+  }, [conversation, collapsed, diffExpanded, hasForkFamily, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4863,7 +4866,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     onPress={() => {
                       const details = conversation.forked_from_details!;
                       if (details.share_token) {
-                        void openLink(`https://codecast.sh/share/${details.share_token}`);
+                        void openLink(conversationShareLink(details.share_token));
                       } else {
                         router.push(`/session/${details.conversation_id}`);
                       }
@@ -5424,8 +5427,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             </TouchableOpacity>
           </RNView>
           <ScrollView style={styles.treeModalContent}>
-            {treeResult && !('error' in treeResult) && treeResult.tree ? (
-              <TreeNodeView node={treeResult.tree} depth={0} router={router} currentId={id as string} onClose={() => setTreeModalVisible(false)} />
+            {forkFamily.length > 0 ? (
+              forkFamily.map((node) => (
+                <ForkFamilyRow key={node.id} node={node} router={router} currentId={id as string} onClose={() => setTreeModalVisible(false)} />
+              ))
             ) : (
               <RNText style={{ color: Theme.textMuted, padding: 16 }}>No fork tree available</RNText>
             )}

@@ -96,9 +96,15 @@ function Row({ row, index, now, phone, progress, partial, nested }: { row: Initi
       <div className={cn("grid items-center gap-x-4 gap-y-1.5", phone ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_150px_150px_64px_150px]")}>
         <div className={cn("min-w-0 flex items-center gap-2.5", nested && "pl-5")}>
           {nested ? <span className="w-3 h-px shrink-0" style={{ background: "var(--sol-text-dim)" }} aria-hidden /> : <Flag className="w-3.5 h-3.5 shrink-0" style={{ color: ended(row) ? "var(--sol-text-dim)" : INITIATIVE_ACCENT }} />}
-          <span className="min-w-0 truncate text-[13.5px] font-medium" style={{ color: "var(--sol-text)" }}>{row.title}</span>
-          <ShortId id={row.short_id} className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }} />
-          {!nested && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{projects === 0 ? "no projects" : `${projects} ${projects === 1 ? "project" : "projects"}`}</span>}
+          {/* The title owns the column; the id and the project count sit under it,
+              so a narrow pane never cuts the goal's name to a few letters. */}
+          <span className="min-w-0 flex-1 flex flex-col">
+            <span className="truncate text-[13.5px] font-medium" style={{ color: "var(--sol-text)" }} title={row.title}>{row.title}</span>
+            <span className="flex items-center gap-2 min-w-0">
+              <ShortId id={row.short_id} className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }} />
+              {!nested && <span className="truncate text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{projects === 0 ? "no projects" : `${projects} ${projects === 1 ? "project" : "projects"}`}</span>}
+            </span>
+          </span>
         </div>
         {phone ? (
           <div className="flex items-center gap-x-3 gap-y-1 flex-wrap pl-6">

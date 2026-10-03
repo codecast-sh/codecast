@@ -16,7 +16,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenSession } from "../../hooks/useOpenSession";
 import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
-import { useOpenDm } from "../../hooks/useChatSync";
+import { useOpenDm } from "../../hooks/useOpenDm";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { dmUnreadOf } from "../../lib/faces/faceRow";
 import { formatRelative } from "../../lib/utils";
@@ -350,6 +350,7 @@ function useCardShift(anchor: number, density: "bar" | "float") {
  * how long they have been here, and the one thing the room can do about them.
  */
 export function GuestFaceCard({
+  roomKey,
   identity,
   name,
   joinedAgo,
@@ -357,6 +358,8 @@ export function GuestFaceCard({
   density,
   onClose,
 }: {
+  /** The room the guest is in (the face row's room). */
+  roomKey: string;
   identity: string;
   name: string;
   joinedAgo: number | null;
@@ -395,7 +398,7 @@ export function GuestFaceCard({
       <div className="face-card-agent flex items-center gap-2">
         <span className="min-w-0 flex-1">They see and hear the call. They cannot see the team, its sessions or the thread.</span>
         <span className="shrink-0">
-          <GuestRemoveButton identity={identity} name={name} variant="row" always />
+          <GuestRemoveButton roomKey={roomKey} identity={identity} name={name} variant="row" always />
         </span>
       </div>
     </div>

@@ -1,0 +1,145 @@
+"use client";
+// One line per project (docs/architecture/line-profile.md LP1): the switcher
+// in the line page's header, the URL that holds the choice, and the "all
+// projects" roll-up, which only counts. Every number comes from lib/lineFlow
+// (lineRollup builds each project's flow the way its own page does).
+import { useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useInboxStore } from "../../store/inboxStore";
+import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
+import { cn } from "../../lib/utils";
+
+/** The URL names a line by its project's short id (or id), "none" or "all". */
+const paramOf = (key: string, projects: LineProject[]) =>
+  key === ALL_PROJECTS || key === NO_PROJECT ? key : projects.find((p) => p._id === key)?.short_id ?? key;
+
+/**
+ * The selected line: the `?project=` the URL names, else the project of the
+ * repo the viewer is in, else the line with the most open causes. A ref the
+ * viewer cannot see falls back to the default rather than an empty page.
+ */
+export function useLineProject(rollup: RollupRow[], projects: LineProject[]) {
+  const router = useRouter();
+  const pathname = usePathname();
+  const search = useSearchParams();
+  const repoPath = useInboxStore((s) => s.activeProjectPath || s.currentConversation?.gitRoot || s.currentConversation?.projectPath || null);
+  const asked = search?.get("project") ?? null;
+  const key = useMemo(() => {
+    if (asked === ALL_PROJECTS || asked === NO_PROJECT) return asked;
+    const named = asked ? projects.find((p) => p.short_id === asked || p._id === asked) : undefined;
+    if (named) return named._id;
+    return defaultLineKey(rollup, projects, repoPath);
+  }, [asked, projects, rollup, repoPath]);
+  const select = useCallback((next: string) => {
+    const params = new URLSearchParams(search?.toString() ?? "");
+    params.set("project", paramOf(next, projects));
+    router.replace(`${pathname ?? "/line"}?${params.toString()}`, { scroll: false });
+  }, [router, pathname, search, projects]);
+  return { key, select, href: `${pathname ?? "/line"}?project=${encodeURIComponent(paramOf(key, projects))}` };
+}
+
+/** The order the switcher and its keys walk: the roll-up, then each line. */
+export const lineKeys = (rollup: RollupRow[]) => [ALL_PROJECTS, ...rollup.map((r) => r.key)];
+
+/** Pills, one per line, each with its open causes; a card waiting on the
+ *  viewer or a silent finder marks the pill so another line's trouble shows. */
+export function LineProjectSwitcher({ rollup, selected, onSelect }: { rollup: RollupRow[]; selected: string; onSelect: (key: string) => void }) {
+  if (rollup.length === 0) return null;
+  const total = rollup.reduce((n, r) => n + r.causes, 0);
+  return (
+    <nav className="flex items-center gap-1 overflow-x-auto -mx-1 px-1 pb-0.5" aria-label="Projects" data-line-projects>
+      <Pill active={selected === ALL_PROJECTS} onClick={() => onSelect(ALL_PROJECTS)} label="All projects" count={total} />
+      {rollup.map((r) => (
+        <Pill
+          key={r.key}
+          active={selected === r.key}
+          onClick={() => onSelect(r.key)}
+          label={r.title}
+          muted={r.key === NO_PROJECT}
+          count={r.causes}
+          ask={r.awaiting > 0}
+          silent={r.silent}
+          tip={[r.short_id, `${r.causes} open cause${r.causes === 1 ? "" : "s"}`, r.awaiting ? `${r.awaiting} awaiting you` : null, r.finders ? `${r.finders} finder${r.finders === 1 ? "" : "s"}${r.silent ? `, ${r.silent} silent 24h` : ""}` : null].filter(Boolean).join(" · ")}
+        />
+      ))}
+    </nav>
+  );
+}
+
+function Pill({ active, onClick, label, count, ask, silent, muted, tip }: { active: boolean; onClick: () => void; label: string; count: number; ask?: boolean; silent?: number; muted?: boolean; tip?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={tip}
+      data-active={active ? "true" : undefined}
+      data-line-project-pill
+      className={cn("line-tab shrink-0 rounded-full pl-2.5 pr-2 py-1 text-[11px] whitespace-nowrap flex items-center gap-1.5", muted && !active && "italic")}
+    >
+      {ask && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" aria-label="cards waiting on you" />}
+      <span>{label}</span>
+      <span className="tabular-nums" data-zero={count === 0 ? "true" : undefined}>{count}</span>
+      {!!silent && <span className="text-sol-orange tabular-nums" aria-label={`${silent} silent finders`}>{silent} quiet</span>}
+    </button>
+  );
+}
+
+const COLS: Array<{ key: keyof RollupRow; label: string; tip: string }> = [
+  { key: "signalsDay", label: "Sense 24h", tip: "Signals filed in the last 24 hours" },
+  { key: "causes", label: "Causes", tip: "Open causes waiting to be admitted" },
+  { key: "build", label: "In build", tip: "Live runs on a cause" },
+  { key: "awaiting", label: "Awaiting you", tip: "Change cards waiting on your answer" },
+  { key: "watching", label: "Watching", tip: "Shipped causes inside their watch" },
+  { key: "closed", label: "Closed 7d", tip: "Causes shipped, dissolved or resolved this week" },
+];
+
+/** "All projects": every line counted, nothing listed. A row opens that line. */
+export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect: (key: string) => void }) {
+  const sum = (k: keyof RollupRow) => rollup.reduce((n, r) => n + (r[k] as number), 0);
+  const findersTotal = sum("finders");
+  const silentTotal = sum("silent");
+  return (
+    <div className="flex-1 min-h-0 overflow-auto px-4 sm:px-6 pb-5" data-line-rollup>
+      <table className="w-full max-w-[1100px] border-separate border-spacing-0 text-[13px]">
+        <thead>
+          <tr className="text-[11px] text-sol-text-dim">
+            <th className="text-left font-normal py-2 pr-4 border-b border-sol-border/40">Project</th>
+            {COLS.map((c) => <th key={c.key} title={c.tip} className="text-right font-normal py-2 px-3 border-b border-sol-border/40 whitespace-nowrap">{c.label}</th>)}
+            <th className="text-right font-normal py-2 pl-3 border-b border-sol-border/40 whitespace-nowrap" title="Finders the project's line profile declares, and how many filed nothing in 24 hours">Finders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rollup.map((r) => (
+            <tr key={r.key} onClick={() => onSelect(r.key)} className="line-row cursor-pointer" data-line-rollup-row={r.key}>
+              <td className="py-2.5 pr-4 border-b border-sol-border/20">
+                <span className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</span>
+                {r.short_id && <span className="ml-2 font-mono text-[11px] text-sol-text-dim">{r.short_id}</span>}
+              </td>
+              {COLS.map((c) => <Cell key={c.key} value={r[c.key] as number} ask={c.key === "awaiting"} />)}
+              <td className="py-2.5 pl-3 border-b border-sol-border/20 text-right tabular-nums whitespace-nowrap text-[11px]">
+                {r.finders === 0
+                  ? <span className="text-sol-text-dim opacity-60" title="No finders declared: cast line profile --publish in the project's repo">none declared</span>
+                  : <><span className="text-sol-text-muted">{r.finders}</span>{r.silent > 0 && <span className="text-sol-orange">, {r.silent} quiet</span>}</>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+        <tfoot>
+          <tr className="text-sol-text-muted">
+            <td className="pt-2.5 pr-4 text-[11px] text-sol-text-dim">{rollup.length} line{rollup.length === 1 ? "" : "s"}</td>
+            {COLS.map((c) => <Cell key={c.key} value={sum(c.key)} ask={c.key === "awaiting"} foot />)}
+            <td className="pt-2.5 pl-3 text-right tabular-nums text-[11px] text-sol-text-dim">{findersTotal}{silentTotal > 0 && <span className="text-sol-orange">, {silentTotal} quiet</span>}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function Cell({ value, ask, foot }: { value: number; ask?: boolean; foot?: boolean }) {
+  return (
+    <td className={cn("px-3 text-right tabular-nums line-num", foot ? "pt-2.5" : "py-2.5 border-b border-sol-border/20")}>
+      <span className={cn(value === 0 ? "text-sol-text-dim opacity-50" : ask ? "text-sol-yellow" : foot ? "text-sol-text-muted" : "text-sol-text")}>{value}</span>
+    </td>
+  );
+}

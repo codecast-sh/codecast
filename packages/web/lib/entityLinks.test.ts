@@ -23,6 +23,7 @@ import {
   contextualPrRefPayload,
   parseContextualPrRef,
   splitContextualPrRefs,
+  namedPullRequestIds,
   parseClaudeArtifactUrl,
   parseCallRef,
   callRefId,
@@ -508,6 +509,17 @@ describe("parseGitHubLocationUrl", () => {
   });
 });
 
+describe("pull requests named outright", () => {
+  test("PR N, pull request N and GitHub links count; a lone #N does not", () => {
+    expect(
+      namedPullRequestIds(
+        "PR 12 and pull request #13, then #14 moved to #2; see https://github.com/Union-AI/union/pull/15",
+        "Union-AI/union",
+      ),
+    ).toEqual(["union-ai/union#12", "union-ai/union#13", "union-ai/union#15"]);
+  });
+});
+
 describe("contextual pull request references", () => {
   // A number alone names a pull request only inside a conversation bound to a
   // repository, so the scanner reports the number and the words before it,
@@ -539,10 +551,12 @@ describe("contextual pull request references", () => {
     expect(m[0]).toBe("PRs 3254 and 3253 (feedback), 3261");
   });
 
-  test("the payload round-trips number and label", () => {
+  test("the payload round-trips number, label and whether the number stood alone", () => {
     expect(contextualPrRefPayload(3263, "#3263")).toBe("pr:#3263|#3263");
-    expect(parseContextualPrRef("pr:#3263|#3263")).toEqual({ number: 3263, label: "#3263" });
-    expect(parseContextualPrRef("pr:#3247|3247")).toEqual({ number: 3247, label: "3247" });
+    expect(contextualPrRefPayload(3263, "#3263", true)).toBe("pr:?#3263|#3263");
+    expect(parseContextualPrRef("pr:#3263|#3263")).toEqual({ number: 3263, label: "#3263", bare: false });
+    expect(parseContextualPrRef("pr:?#3263|#3263")).toEqual({ number: 3263, label: "#3263", bare: true });
+    expect(parseContextualPrRef("pr:#3247|3247")).toEqual({ number: 3247, label: "3247", bare: false });
     expect(parseContextualPrRef("pr:3247")).toBeNull();
     expect(parseContextualPrRef("doc:abc")).toBeNull();
   });

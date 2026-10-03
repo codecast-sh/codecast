@@ -21,7 +21,7 @@
 // Both the layout and its reader live in this one file, so they cannot drift.
 
 import { execFileSync } from "node:child_process";
-import { rmSync, writeFileSync } from "node:fs";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 
 // ── 5x7 bitmap font ───────────────────────────────────────────────────────
 // Rows top to bottom, five bits each, high bit on the left. Lowercase is
@@ -210,6 +210,21 @@ export function writePng(path, rgbaBytes, width, height) {
     rmSync(raw, { force: true });
   }
   return path;
+}
+
+// Reads a PNG back as RGBA through ffmpeg: { width, height, data }. The size
+// comes from the IHDR chunk, which every PNG carries first.
+export function readPng(path) {
+  const head = readFileSync(path).subarray(0, 24);
+  const width = head.readUInt32BE(16);
+  const height = head.readUInt32BE(20);
+  try {
+    const data = execFileSync("ffmpeg", ["-v", "error", "-i", path, "-f", "rawvideo", "-pix_fmt", "rgba", "-"], { maxBuffer: 1 << 30, stdio: ["ignore", "pipe", "pipe"] });
+    return { width, height, data };
+  } catch (err) {
+    if (err.code === "ENOENT") throw new Error("ffmpeg is not installed. Install it with: brew install ffmpeg");
+    throw err;
+  }
 }
 
 // Finds and reads every strip in a grayscale image (one byte a pixel). A

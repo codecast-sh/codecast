@@ -9,13 +9,15 @@ import {
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { Mono } from "@/constants/fonts";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
-import { useSyncDocs } from "@/hooks/useSyncDocs";
+import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
+import { useSyncDocDetail } from "@codecast/web/hooks/useSyncDocs";
+import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
+import { isConvexId } from "@codecast/web/store/inboxStore";
 import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { describeDates } from "@codecast/shared/time";
@@ -25,7 +27,13 @@ export default function DocDetailScreen() {
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
   const docs = useInboxStore((s) => s.docs);
-  const { ready: docsReady } = useSyncDocs();
+  const docsLoading = useFeedLoading("docs");
+  // The persisted body cache (docDetails): prefetched for recent docs and kept
+  // by every open, so the body paints on the first frame; the live detail
+  // query refreshes it.
+  const docKey = id && isConvexId(id) ? id : undefined;
+  const liveDetail = useSyncDocDetail(docKey);
+  const cachedDetail = useInboxStore((s) => (docKey ? s.docDetails[docKey] : undefined)) as any;
 
   const storeDoc = useMemo(() => {
     if (!id) return undefined;
@@ -35,16 +43,15 @@ export default function DocDetailScreen() {
   // A share link carries the token along (?share=). When the doc isn't in the
   // viewer's store — a guest, or a teammate before docs sync — the public
   // token query renders the same screen from the shared snapshot.
-  const sharedDoc = useQuery(
+  const sharedDoc = useQueryNoThrow(
     (api as any).docs.getShared,
-    !storeDoc && share ? { share_token: share } : "skip",
-  );
-  const doc = storeDoc ?? (sharedDoc || undefined);
-
-  const docDetail = useQuery(api.docs.webGet as any, storeDoc?._id ? { id: storeDoc._id } : "skip");
+    !storeDoc && !cachedDetail && share ? { share_token: share } : "skip",
+  ).data as any;
+  const doc = storeDoc ?? cachedDetail ?? (sharedDoc || undefined);
+  const docDetail = cachedDetail;
 
   // With a token present, "not found" is only true once ITS query settled.
-  const resolved = share ? sharedDoc !== undefined || !!storeDoc : docsReady;
+  const resolved = share ? sharedDoc !== undefined : !docsLoading && liveDetail !== undefined;
 
   if (!doc) {
     return (

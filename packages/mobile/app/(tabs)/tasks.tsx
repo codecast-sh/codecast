@@ -12,26 +12,21 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ActionSheetIOS,
   ActivityIndicator,
 } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
+import { createTaskAndAdopt } from "@codecast/web/lib/taskActions";
 import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { isOnHumanShelf } from "@codecast/shared/docs";
 import { filterToWorkspace } from "@codecast/web/lib/workspaceScope";
-import { useSyncTasks } from "@/hooks/useSyncTasks";
-import { useSyncPlans } from "@/hooks/useSyncPlans";
-import { useSyncDocs } from "@/hooks/useSyncDocs";
-import { useActiveTeam } from "@/hooks/useWorkspaceArgs";
-import { useSyncOrgTree } from "@/hooks/useSyncOrgTree";
+import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
+import { useActiveTeam, useSwitchActiveTeam } from "@/hooks/useWorkspaceArgs";
 import { useOrgRoles } from "@codecast/web/hooks/useOrgRoles";
 import { resolveAssigneeInfo } from "@codecast/web/lib/liveEntities";
 import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
@@ -191,7 +186,7 @@ export default function TasksScreen() {
   const router = useRouter();
 
   const { teamId, activeTeam, validTeams } = useActiveTeam();
-  const saveActiveTeam = useMutation(api.teams.setActiveTeam);
+  const switchTeam = useSwitchActiveTeam();
 
   const showWorkspacePicker = useCallback(() => {
     const options = [
@@ -202,21 +197,21 @@ export default function TasksScreen() {
     ActionSheetIOS.showActionSheetWithOptions(
       { options, cancelButtonIndex: options.length - 1, title: "Switch Workspace" },
       (idx) => {
-        if (idx === 0) saveActiveTeam({ team_id: undefined as any });
-        else if (idx > 0 && idx <= validTeams.length) saveActiveTeam({ team_id: validTeams[idx - 1]._id });
+        if (idx === 0) switchTeam(null);
+        else if (idx > 0 && idx <= validTeams.length) switchTeam(validTeams[idx - 1]._id);
       },
     );
-  }, [validTeams, saveActiveTeam]);
+  }, [validTeams, switchTeam]);
 
-  const { ready: tasksReady } = useSyncTasks();
-  const { ready: plansReady } = useSyncPlans();
-  const { ready: docsReady } = useSyncDocs();
+  // Fed app-wide (useSyncWorkspaceData); this tab only reads the store.
+  const tasksReady = !useFeedLoading("tasks");
+  const plansReady = !useFeedLoading("plans");
+  const docsReady = !useFeedLoading("docs");
 
   const tasks = useInboxStore((s) => s.tasks);
   const plans = useInboxStore((s) => s.plans);
   const docs = useInboxStore((s) => s.docs);
   const updateTask = useInboxStore((s) => s.updateTask);
-  const createTask = useInboxStore((s) => s.createTask);
 
   // Strict workspace boundary at read time: the store caches rows from every
   // workspace (sync never prunes on team switch), so each list re-asserts the
@@ -226,8 +221,8 @@ export default function TasksScreen() {
   // role's `assignee_info` empty (reading a role row from the list query would
   // re-ship the list on every message its sessions sync), so the phone derives
   // it from the org tree the same way the web board does; without this a role
-  // held task groups and filters as "Unassigned".
-  useSyncOrgTree();
+  // held task groups and filters as "Unassigned". The roles are fed app-wide
+  // (useSyncWorkspaceData), so they are in the store before this tab opens.
   const { roles: orgRoles } = useOrgRoles();
   const tasksList = useMemo(() => filterToWorkspace(Object.values(tasks), teamId).map((t) => {
     const info = resolveAssigneeInfo(t.assignee, t.assignee_info, null, null, orgRoles);
@@ -440,17 +435,17 @@ export default function TasksScreen() {
   const handleCreateTask = useCallback(
     (title: string, priority: string, description?: string) => {
       // Stamp the active workspace so the task lives where it was created.
-      createTask({
+      // createTaskAndAdopt paints the row now and drops it again if the server
+      // refuses, so a refusal can't leave a ghost row behind.
+      void createTaskAndAdopt({
         title,
         priority,
         description,
         status: "open",
         ...(teamId ? { workspace: "team", team_id: teamId } : { workspace: "personal" }),
-      }).catch((err: Error) =>
-        Alert.alert("Error", err.message),
-      );
+      });
     },
-    [createTask, teamId],
+    [teamId],
   );
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -719,7 +714,7 @@ export default function TasksScreen() {
       >
         {segment === "tasks" ? (
           <>
-            {!tasksReady ? (
+            {!tasksReady && tasksList.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <ActivityIndicator size="small" color={Theme.textMuted} />
               </RNView>
@@ -759,7 +754,7 @@ export default function TasksScreen() {
           </>
         ) : segment === "plans" ? (
           <>
-            {!plansReady ? (
+            {!plansReady && plansList.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <ActivityIndicator size="small" color={Theme.textMuted} />
               </RNView>
@@ -777,7 +772,7 @@ export default function TasksScreen() {
           </>
         ) : (
           <>
-            {!docsReady ? (
+            {!docsReady && docsList.length === 0 ? (
               <RNView style={styles.emptyState}>
                 <ActivityIndicator size="small" color={Theme.textMuted} />
               </RNView>

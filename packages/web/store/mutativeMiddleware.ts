@@ -18,6 +18,9 @@ import {
   makeOutboxFailureDisposition,
   defaultIsServerId,
   deriveRegistryMaps,
+  isPermanentDispatchError as isPermanentDispatchErrorImpl,
+  isParkedDispatchError as isParkedDispatchErrorImpl,
+  DispatchNotWiredError as DispatchNotWiredErrorImpl,
   type GroupPatchesContext,
   type MiddlewareOptions,
   type OutboxEntry,
@@ -39,6 +42,8 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField } from "./gestureBr
 import { UNDO_SPECS } from "./undo/policy";
 import { UNDO_WRITERS } from "./undo/writers";
 import { runUndoRevert } from "./undo/onRevert";
+import { OPTIONAL_INBOX_TIMESTAMPS } from "./syncProtocol";
+
 
 export {
   action,
@@ -58,6 +63,17 @@ export {
   STORAGE_WATCHDOG_RECHECK_MS,
   CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
 } from "@platform/engine";
+
+/** The write will never land: the server refused it for good, or it was
+ *  dropped before reaching the outbox. A caller holding a painted change
+ *  reverts it and says why. Every other failure (a write parked for the next
+ *  dispatch binding, a transient one left queued) is still on its way, and
+ *  the outbox and the server's echo settle it; reverting then would put back
+ *  what is about to land. */
+export function isRefusedDispatchError(error: unknown): boolean {
+  if (isParkedDispatchErrorImpl(error)) return false;
+  return isPermanentDispatchErrorImpl(error) || error instanceof DispatchNotWiredErrorImpl;
+}
 
 export type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }
@@ -167,6 +183,10 @@ export const OUTBOX_COALESCE_KEYS: Record<string, (args: any[]) => string | null
   // already in flight is unaffected; only queued rows collapse.
   convCommand: (args) =>
     typeof args[0] === "string" && args[1] === "setPermissionMode" ? `setPermissionMode:${args[0]}` : null,
+  // Record and Stop for a room: the args are the room's whole wanted state,
+  // so Record, Stop, Record pressed while offline is one queued row (the
+  // last), not three presses replayed in turn into a room being filmed.
+  setRoomRecording: (args) => (typeof args[0] === "string" ? `setRoomRecording:${args[0]}` : null),
 };
 
 export function outboxCoalesceKeyFor(action: string, args: any[]): string | null {
@@ -400,6 +420,8 @@ const UNDO_CONFIG: UndoConfig = {
   replayAction: "applyUndoPatches",
   writers: UNDO_WRITERS,
   stampFields: new Set(["updated_at"]),
+  // A created row's echo carries the server's own created_at (a bookmark).
+  serverAssignedFields: new Set(["created_at"]),
   ignoreKeys: UNDO_IGNORE_KEYS,
   beforeReplay: () => declareViewNav("undo"),
   restoreView: (draft, field, value) => undoStoreBinding?.restoreView(draft, field, value),
@@ -418,9 +440,21 @@ const UNDO_CONFIG: UndoConfig = {
       fields[cell.field as BridgedField] = value;
       byId.set(cell.id, fields);
     }
-    if (byId.size > 0) {
+    // Rows the forward forgot (a teammate's row, a stub) come back whole.
+    // Siblings that applied the forget hold excludes that drop every later
+    // push of them, so they get the rows themselves.
+    const readded = new Map<string, { id: string; sessions?: Record<string, unknown>; conversations?: Record<string, unknown> }>();
+    for (const cell of applied) {
+      if ((cell.store !== "sessions" && cell.store !== "conversations") || cell.field !== undefined) continue;
+      if (!cell.hadBefore || cell.hadAfter || !cell.before || typeof cell.before !== "object") continue;
+      const row = readded.get(cell.id) ?? { id: cell.id };
+      row[cell.store] = cell.before as Record<string, unknown>;
+      readded.set(cell.id, row);
+    }
+    if (byId.size > 0 || readded.size > 0) {
       const ts = Date.now();
       const userId = undoStoreBinding?.bridgeUserId() ?? null;
+      if (readded.size > 0) broadcastGesture({ kind: "unforget", rows: [...readded.values()], ts }, userId);
       for (const [id, fields] of byId) broadcastGesture({ kind: "fields", id, fields, ts }, userId);
     }
     runUndoRevert(entry, applied);
@@ -444,6 +478,9 @@ const CODECAST_PLATFORM_CONFIG: PlatformConfig = {
   viewGuard: VIEW_GUARD,
   receiptContinuations: RECEIPT_CONTINUATIONS,
   undo: UNDO_CONFIG,
+  // The undo guard's null-equals-absent fields: a loaded conversation's meta
+  // is the raw doc, which leaves a cleared stamp out.
+  optionalClearFields: OPTIONAL_INBOX_TIMESTAMPS,
   storageWatchdogHint:
     'check for IndexedDB errors or a Dexie "blocked" warning above; a slow write alone does not identify the cause',
 };

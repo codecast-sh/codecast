@@ -82,6 +82,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
   clearDraftFinal: never("draft: the composer owns its own text undo"),
   answerDecision: never("send: an answered decision has already been read by the agent that asked"),
+  resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
+  respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Creates
   createBucket: CREATE,
@@ -104,6 +106,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   upsertAgentChain: CREATE,
 
   // Deletes
+  deleteCallRecording: DELETE,
+  admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
+  denyGuestKnock: never("door: the guest was told no; they can ask again"),
+  removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),
   deleteComment: DELETE,
   deleteSavedView: DELETE,
   deleteSession: DELETE,
@@ -137,12 +143,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setChatSlackMember: SETTINGS,
   setCloudSessionMode: SETTINGS,
   setCloudSessionSync: SETTINGS,
+  adoptTimezone: never("internal: fills an unset timezone from the browser once, never a gesture"),
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
   setIsolatedWorktreeMode: SETTINGS,
   setLocalMirror: SETTINGS,
   setMyStatus: SETTINGS,
+  updateMyProfile: SETTINGS,
   setPinnedAgents: SETTINGS,
   setRoomLocked: SETTINGS,
   setRoomRecording: SETTINGS,
@@ -163,8 +171,11 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   hibernateSession: MACHINE,
   moveSessionToDevice: MACHINE,
   markKilling: MACHINE,
+  startResourceOffload: MACHINE,
+  cancelResourceOffload: MACHINE,
 
   // Sharing
+  setCallShareVideo: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setTeamMembershipVisibility: SHARING,

@@ -221,7 +221,7 @@ function VaultLink({ href, children, node: _node, ...props }: any) {
   );
 }
 
-function VaultImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+function VaultImage({ src, alt, title }: { src?: string | Blob; alt?: string; title?: string }) {
   const ctx = useContext(VaultLinkContext);
   const raw = typeof src === "string" ? src : undefined;
   // Vault-relative asset → daemon-served URL; anything else takes the shared
@@ -231,9 +231,9 @@ function VaultImage({ src, alt }: { src?: string | Blob; alt?: string }) {
     const resolved = ctx.assetUrl(clean);
     // A path the vault itself resolved: the bytes come from this machine's own
     // daemon, so it is not the third party the click gate is defending against.
-    if (resolved) return <CollapsibleImage src={resolved} alt={alt} trusted />;
+    if (resolved) return <CollapsibleImage src={resolved} alt={alt} title={title} trusted />;
   }
-  return <CollapsibleImage src={src} alt={alt} />;
+  return <CollapsibleImage src={src} alt={alt} title={title} />;
 }
 
 /** A GFM task item, made live: clicking the checkbox rewrites the bracket on

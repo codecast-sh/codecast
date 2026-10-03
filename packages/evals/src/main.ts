@@ -10,21 +10,27 @@ import { codecastConvoSource } from './adapters/convo';
 import { codecastFreezeStore } from './adapters/freezes';
 import { codecastReplyJudge } from './adapters/judge';
 import { codecastReplayer } from './adapters/replay';
-import { codecastFreezeResolver, defaultJudgeFor, describeFreeze, productionReplyOf } from './adapters/resolver';
+import { codecastFreezeResolver, defaultJudgeFor, describeFreeze, judgeMomentOfFreeze, productionReplyOf } from './adapters/resolver';
 import { codecastRunSource } from './adapters/runs';
 import { registerCapture } from './commands/capture';
 import { registerCheck } from './commands/check';
 import { registerDoctor } from './commands/doctor';
 import { registerGrade, registerRescore } from './commands/grade';
+import { registerIndex } from './commands/indexCmd';
+import { registerLabel } from './commands/label';
 import { registerLine } from './commands/line';
+import { registerPin } from './commands/pin';
 import { registerPublish } from './commands/publish';
 import { registerSnapshot } from './commands/snapshot';
 import { registerSnippet } from './commands/snippetCmd';
 import { registerStale } from './commands/stale';
 import { registerStatus } from './commands/status';
 import { homePaths } from './paths';
+import { writeCheckoutPointer } from './provenance';
 
 export async function main(): Promise<number> {
+  // The daemon's evals bridge runs the code of the checkout that last ran ./evals.
+  writeCheckoutPointer();
   const program = new Command()
     .name('evals')
     .description('Freeze codecast moments, replay the prompts in this tree against them, grade and publish the result')
@@ -56,7 +62,7 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
     freezes,
     freezeResolver: lazy(() => codecastFreezeResolver()),
     replayer: codecastReplayer,
-    judge: lazy(() => codecastReplyJudge(describeFreeze)),
+    judge: lazy(() => codecastReplyJudge(judgeMomentOfFreeze)),
     productionReply: productionReplyOf,
     runs: codecastRunSource(),
     htmlDir: homePaths().html,
@@ -67,6 +73,7 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   registerStale(program);
   registerLine(program, sources);
   registerEvals(program, sources);
+  registerLabel(program, sources);
   registerSnapshot(program);
   registerGrade(program);
   registerRescore(program);
@@ -74,6 +81,8 @@ A ref names its surface (<surface>@<ref>). ${fmt.cmd('./evals')} lists the surfa
   registerDoctor(program);
   registerSnippet(program);
   registerPublish(program);
+  registerPin(program);
+  registerIndex(program);
 
   // A bare `./evals` (flags at most) is the status view. Any word is a command,
   // so a typo gets commander's unknown-command error and its suggestion.

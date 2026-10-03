@@ -21,10 +21,15 @@ export type { PendingEntry } from "@platform/engine";
 // for the same reason as the rest: the /sessions restore gesture nulls it
 // (an un-kill patch clears all three stamps), and the server acknowledges by
 // dropping the field — without the equivalence that pending lock would never
-// retire and would keep re-asserting the clear.
-const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
+// retire and would keep re-asserting the clear. inbox_snoozed_until clears
+// the same way (defer, pin, rest and every hide null it; the server unsets
+// it). The set is every stamp inboxVisibilityFields (convex inboxProjection.ts)
+// spells `?? null`. The undo guard reads the same set (mutativeMiddleware's
+// optionalClearFields), so a lock and an undo never disagree about a clear.
+export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_dismissed_at",
   "inbox_stashed_at",
+  "inbox_snoozed_until",
   "inbox_stash_hidden",
   "inbox_pinned_at",
   "inbox_killed_at",

@@ -106,6 +106,10 @@ export interface FilePathContextValue {
    *  a bare `#3263` or `PR 3263` in its prose refers to. Absent, those stay
    *  the text they were written as. */
   repository?: string | null;
+  /** The pull requests this conversation knows as repo object ids (linked to
+   *  the session, made by its shell calls, or named outright in it). A lone
+   *  `#N` is a pull request only when it is one of these. */
+  pullRequestIds?: ReadonlySet<string>;
   /** The session's checkout root, which turns an absolute path into the
    *  repo-relative one a `file:` search is written with. */
   gitRoot?: string | null;

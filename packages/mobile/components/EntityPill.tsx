@@ -1,10 +1,10 @@
 import React from 'react';
 import { StyleSheet } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { useQuery } from 'convex/react';
+import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { findEntityInStore } from '@codecast/web/lib/liveEntities';
+import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEntities';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
@@ -107,35 +107,41 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   const looksConvex = isConvexId(rawId);
   // A full Convex id carries no type prefix (docs have no short id at all), so
   // resolve its table server-side; prefix detection is for short ids only.
-  const resolvedType = useQuery(api.entities.resolveIdType, !typeProp && looksConvex ? { id: rawId } : 'skip');
-  const type: EntityType | null = typeProp ?? (looksConvex ? resolvedType ?? null : entityTypeFromId(rawId));
+  // The store usually holds the row already, which names the type on the first
+  // frame; the server resolves only ids this phone has never seen.
+  const storeType = React.useMemo(
+    () => (!typeProp && looksConvex ? entityTypeInStore(useInboxStore.getState(), rawId) : undefined),
+    [typeProp, looksConvex, rawId],
+  );
+  const resolvedType = useQueryNoThrow(api.entities.resolveIdType, !typeProp && looksConvex && !storeType ? { id: rawId } : 'skip').data;
+  const type: EntityType | null = typeProp ?? (looksConvex ? storeType ?? resolvedType ?? null : entityTypeFromId(rawId));
   const isSession = type === 'session';
   const personifyAll = usePersonifyAll();
 
-  // Every type resolves its row: the pill reads as the object's title, so the
-  // title is what we came for (the session/doc branches also need the Convex
-  // _id — mobile routes can't resolve short ids).
-  const queryArgs = type ? entityQueryArgs(type, rawId) : null;
-  const task = useQuery(api.tasks.webGet, type === 'task' && queryArgs ? queryArgs : 'skip');
-  const plan = useQuery(api.plans.webGet, type === 'plan' && queryArgs ? queryArgs : 'skip');
-  const session = useQuery(api.conversations.webGet, isSession && queryArgs ? queryArgs : 'skip');
-  const trigger = useQuery(api.agentTasks.webGet, type === 'trigger' && queryArgs ? queryArgs : 'skip');
-  const doc = useQuery(api.docs.webGet, type === 'doc' && looksConvex ? { id: rawId } : 'skip');
-  // A call names its title; a stretch of one (`cl-42:15-25`) adds the lines.
-  const callRef = type === 'call' ? parseCallRef(rawId) : null;
-  const call = useQuery(api.transcripts.webGetCallRef, callRef ? { ref: callRef.call } : 'skip');
-
-  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : undefined;
-
-  // Local-first, same rule as web: the client usually already holds this row, so
-  // paint the title on the FIRST frame instead of flashing the raw id until the
-  // query answers. Read once and non-reactively (getState, not a subscription) —
-  // a pill must not re-render on the churn of a collection with thousands of
-  // rows; the live query above is what keeps the label fresh.
+  // The pill reads as the object's title (the session/doc branches also need
+  // the Convex _id, since mobile routes can't resolve short ids). Local-first,
+  // same rule as web: the client usually already holds this row, so the title
+  // paints on the FIRST frame. Read once and non-reactively (getState,
+  // not a subscription): a pill must not re-render on the churn of a collection
+  // with thousands of rows. A row the store already names needs no server read;
+  // only an id this phone has never cached asks.
   const seed = React.useMemo(
     () => (type ? findEntityInStore(useInboxStore.getState(), type, rawId) : undefined),
     [type, rawId],
-  );
+  ) as any;
+  const named = !!(seed && (seed.title || seed.display_title || seed.name));
+  const queryArgs = type && !named ? entityQueryArgs(type, rawId) : null;
+  const task = useQueryNoThrow(api.tasks.webGet, type === 'task' && queryArgs ? queryArgs : 'skip').data;
+  const plan = useQueryNoThrow(api.plans.webGet, type === 'plan' && queryArgs ? queryArgs : 'skip').data;
+  const session = useQueryNoThrow(api.conversations.webGet, isSession && queryArgs ? queryArgs : 'skip').data;
+  const trigger = useQueryNoThrow(api.agentTasks.webGet, type === 'trigger' && queryArgs ? queryArgs : 'skip').data;
+  const doc = useQueryNoThrow(api.docs.webGet, type === 'doc' && looksConvex && !named ? { id: rawId } : 'skip').data;
+  // A call names its title; a stretch of one (`cl-42:15-25`) adds the lines.
+  const callRef = type === 'call' ? parseCallRef(rawId) : null;
+  const call = useQueryNoThrow(api.transcripts.webGetCallRef, callRef && !named ? { ref: callRef.call } : 'skip').data;
+
+  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : undefined;
+
   const entity: any = served ?? seed;
 
   // Unknown id shape, a Convex id resolving to no entity table, or the

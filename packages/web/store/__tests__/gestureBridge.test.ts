@@ -8,7 +8,7 @@ import {
   type GestureMessage,
 } from "../gestureBridge";
 import { declareViewNav } from "../viewNav";
-import { undoableHideSession, undoablePinSession } from "../undoActions";
+import { _resetUndoStacks } from "@platform/engine";
 import { performUndo } from "../undoStack";
 
 // The desktop app's windows share ONE IndexedDB principal store and persist
@@ -350,23 +350,43 @@ describe("gesture bridge senders", () => {
   });
 
   it("undoing a pin broadcasts the reverted value, not silence", () => {
+    _resetUndoStacks();
     seed({
       sessions: { [REAL_A]: session(REAL_A) },
       conversations: { [REAL_A]: { _id: REAL_A } },
     });
 
-    undoablePinSession(REAL_A);
+    useInboxStore.getState().pinSession(REAL_A);
     expect(hub.posted).toHaveLength(1);
     expect(hub.posted[0].data).toMatchObject({ kind: "pin", pinned: true });
 
     // Undo must retract it: an un-announced undo leaves the sibling holding the
     // pinned row, which both re-puts the undone pin and inverts its next toggle.
+    // The message carries the exact restored value, never a pin toggle.
     expect(performUndo()).toBe(true);
 
     expect(hub.posted).toHaveLength(2);
     expect(hub.posted[1].data).toMatchObject({
-      kind: "pin", id: REAL_A, pinned: false, pinnedAt: null,
+      kind: "fields", id: REAL_A, fields: { inbox_pinned_at: null },
     });
+  });
+
+  it("undoing an unpin broadcasts the original inbox_pinned_at", () => {
+    _resetUndoStacks();
+    const PINNED_AT = 1700000000000;
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: PINNED_AT } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: PINNED_AT } },
+    });
+
+    useInboxStore.getState().pinSession(REAL_A);
+    expect(hub.posted[0].data).toMatchObject({ kind: "pin", pinned: false });
+
+    expect(performUndo()).toBe(true);
+    expect(hub.posted).toHaveLength(2);
+    expect(hub.posted[1].data.kind).toBe("fields");
+    expect(hub.posted[1].data.fields).toMatchObject({ inbox_pinned_at: PINNED_AT, is_pinned: true });
+    expect(useInboxStore.getState().sessions[REAL_A]?.inbox_pinned_at).toBe(PINNED_AT);
   });
 
   it("undoing a hide broadcasts the snapshot flags per id, under one timestamp", () => {
@@ -381,7 +401,8 @@ describe("gesture bridge senders", () => {
       conversations: { [REAL_A]: { _id: REAL_A }, [REAL_B]: { _id: REAL_B, inbox_stashed_at: 111 } },
     });
 
-    undoableHideSession(REAL_A, "kill");
+    _resetUndoStacks();
+    useInboxStore.getState().killSession(REAL_A);
     expect(hub.posted).toHaveLength(1);
     expect(hub.posted[0].data.kind).toBe("hide");
 
@@ -394,8 +415,9 @@ describe("gesture bridge senders", () => {
     // One gesture, one timestamp — the sibling's locks for both rows key off it.
     expect(new Set(undo.map((m) => m.ts)).size).toBe(1);
     const byId = Object.fromEntries(undo.map((m) => [m.id, m]));
+    // Exactly the fields the kill wrote on the row: it had no stash to clear.
     expect(byId[REAL_A]).toMatchObject({
-      kind: "fields", fields: { inbox_dismissed_at: null, inbox_stashed_at: null },
+      kind: "fields", fields: { inbox_dismissed_at: null },
     });
     // Verbatim: the values applyUndoPatches dispatches, so the receiver's lock
     // retires on the matching server echo.
@@ -497,6 +519,21 @@ describe("gesture bridge receiver", () => {
     expect(s.sessions[REAL_A].is_pinned).toBe(false);
     expect(s.sessions[REAL_A].inbox_pinned_at).toBeNull();
     expect((s.conversations[REAL_A] as any).inbox_pinned_at).toBeNull();
+  });
+
+  it("a fields message writes is_pinned on the sessions twin only, so no conversations lock is left", () => {
+    seed({
+      sessions: { [REAL_A]: session(REAL_A, { is_pinned: true, inbox_pinned_at: 500 } as any) },
+      conversations: { [REAL_A]: { _id: REAL_A, inbox_pinned_at: 500 } },
+    });
+    // An undone pin, as afterReplay announces it.
+    useInboxStore.getState().applyGestureBridge({ kind: "fields", id: REAL_A, fields: { is_pinned: false, inbox_pinned_at: null }, ts: 600 });
+    const s = useInboxStore.getState();
+    expect(s.sessions[REAL_A].is_pinned).toBe(false);
+    expect(s.sessions[REAL_A].inbox_pinned_at).toBeNull();
+    expect((s.conversations[REAL_A] as any).inbox_pinned_at).toBeNull();
+    expect("is_pinned" in (s.conversations[REAL_A] as any)).toBe(false);
+    expect((s.pending as any)[`conversations:${REAL_A}:is_pinned`]).toBeUndefined();
   });
 
   it("forget removes every trace of the row and plants the excludes", () => {
@@ -963,8 +1000,8 @@ describe("gesture bridge ordering guards", () => {
       conversations: { [REAL_A]: { _id: REAL_A, inbox_dismissed_at: null, inbox_stashed_at: null, inbox_pinned_at: null } },
     });
 
-    // This is undoableHideSession's real sibling payload when its snapshot was
-    // already visible in this window.
+    // The sibling payload an undo of a hide broadcasts (the undo binding's
+    // afterReplay) when the restored values were already visible here.
     useInboxStore.getState().applyGestureBridge({
       kind: "fields",
       id: REAL_A,

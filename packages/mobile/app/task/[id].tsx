@@ -22,7 +22,7 @@ import { useInboxStore, type TaskItem } from "@codecast/web/store/inboxStore";
 import { directChildren, isActiveTask, subtaskProgressOf } from "@codecast/shared/tasks";
 import { createTaskAndAdopt, openSubtasksOf } from "@codecast/web/lib/taskActions";
 import { useSyncTaskDetail } from "@codecast/web/hooks/useSyncTasks";
-import { useSyncTasks } from "@/hooks/useSyncTasks";
+import { useFeedLoading } from "@/hooks/useSyncWorkspaceData";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { formatRelativeTime } from "@/components/SessionItem";
 import {
@@ -41,7 +41,7 @@ export default function TaskDetailScreen() {
   const tasks = useInboxStore((s) => s.tasks);
   const updateTask = useInboxStore((s) => s.updateTask);
   const addTaskComment = useInboxStore((s) => s.addTaskComment);
-  const { ready: tasksReady } = useSyncTasks();
+  const listLoading = useFeedLoading("tasks");
   // Fetch the per-task detail (full task + comments + history) and seed it into
   // the store row via syncRecord, mirroring web's TaskDetailContent. This is what
   // makes task.comments exist so the optimistic addTaskComment push lands; the
@@ -50,6 +50,7 @@ export default function TaskDetailScreen() {
 
   const task = useMemo(() => {
     return (
+      (id ? tasks[id] : undefined) ??
       Object.values(tasks).find((t) => t.short_id === id) ??
       ((directData as TaskItem | null) ?? undefined)
     );
@@ -165,7 +166,9 @@ export default function TaskDetailScreen() {
     setCommentText("");
   }, [task, commentText, addTaskComment]);
 
-  const hasSynced = tasksReady;
+  // "Not found" only once both the list and the detail have answered; until
+  // then a row we have never cached is genuinely cold.
+  const hasSynced = !listLoading && directData !== undefined;
 
   if (!task) {
     return (

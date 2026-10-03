@@ -8,6 +8,7 @@ import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "@codecast/shared/entities";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 import { changesDayLabel } from "./changesDay";
+import { evalsTabLabel } from "../components/evals/evalsPaths";
 
 const REPO_SECTION_LABEL: Record<string, string> = {
   commits: "Commits",
@@ -93,6 +94,7 @@ export function pathLabel(path: string): string {
     const section = clean.split("/")[4];
     return inPath || REPO_SECTION_LABEL[section] || clean.split("/")[3] || "Repository";
   }
+  if (clean === "/evals" || clean.startsWith("/evals/")) return evalsTabLabel(path);
   if (clean.startsWith("/commit/")) {
     const sha = clean.split("/")[4] ?? "";
     return sha ? sha.slice(0, 7) : "Commit";
@@ -107,6 +109,7 @@ export function pathLabel(path: string): string {
     "/tasks": "Tasks",
     "/docs": "Docs",
     "/files": "Files",
+    "/memory": "Memory",
     "/vault": "Files", // pre-rename alias — old saved tabs keep this path
     "/pages": "Pages",
     "/artifacts": "Pages", // pre-rename alias — old saved tabs keep this path
@@ -116,6 +119,7 @@ export function pathLabel(path: string): string {
     "/inbox": "Inbox",
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
+    "/line": "The line",
     "/org": "Org",
     "/initiatives": "Initiatives",
     "/chat": "Chat",

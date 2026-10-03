@@ -13,6 +13,14 @@ import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { groupTurns, turnsAnchor, type Turn } from "./transcriptTurnModel";
 import { CallLinkButton } from "./CallLinkButton";
 
+/** The start of the line a click landed on, read from its `data-seq`; the
+ *  turn's own start when it landed on the speaker row or between lines. */
+function clickedLineMs(t: Turn, target: EventTarget | null): number {
+  const seq = (target as Element | null)?.closest?.("[data-seq]")?.getAttribute("data-seq");
+  const line = seq == null ? undefined : t.segments.find((s) => String(s.seq) === seq);
+  return line?.t0 ?? t.t0;
+}
+
 // The turn list itself. Selection is the calls page's concern: pass isSelected
 // and onTurnClick to get the clickable variant; leave them off for a read-only
 // transcript (the digest rows).
@@ -26,7 +34,10 @@ export function TranscriptTurnList({
 }: {
   turns: Turn[];
   isSelected?: (index: number) => boolean;
-  onTurnClick?: (index: number, e: React.MouseEvent) => void;
+  /** `atMs` is the moment clicked: the line under the pointer when the click
+   *  landed on one (a turn can hold minutes of one speaker, and "click a line
+   *  to see that moment" means that line), else the turn's start. */
+  onTurnClick?: (index: number, e: React.MouseEvent, atMs: number) => void;
   /** Time plus words, no speaker name. A recording has one microphone. */
   compact?: boolean;
   /** The line the audio is currently in, if any. */
@@ -58,11 +69,11 @@ export function TranscriptTurnList({
                 "aria-label": compact
                   ? `Line at ${fmtClock(t.t0)}`
                   : `Turn by ${speakerShortName(t.speaker_name)} at ${fmtClock(t.t0)}`,
-                onClick: (e: React.MouseEvent) => onTurnClick(t.index, e),
+                onClick: (e: React.MouseEvent) => onTurnClick(t.index, e, clickedLineMs(t, e.target)),
                 onKeyDown: (e: React.KeyboardEvent) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
-                    onTurnClick(t.index, e as any);
+                    onTurnClick(t.index, e as any, t.t0);
                   }
                 },
               }
@@ -86,7 +97,7 @@ export function TranscriptTurnList({
               </span>
               <div className="min-w-0 flex-1">
                 {t.segments.map((s) => (
-                  <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                  <p key={s.seq} data-seq={s.seq} className="text-[13px] leading-relaxed text-sol-text">
                     {s.text}
                   </p>
                 ))}
@@ -102,7 +113,7 @@ export function TranscriptTurnList({
                 {link(t)}
               </div>
               {t.segments.map((s) => (
-                <p key={s.seq} className="text-[13px] leading-relaxed text-sol-text">
+                <p key={s.seq} data-seq={s.seq} className="text-[13px] leading-relaxed text-sol-text">
                   {s.text}
                 </p>
               ))}

@@ -1,5 +1,4 @@
 import { useCallback } from "react";
-import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -11,23 +10,7 @@ import type { AgentStatus } from "@codecast/shared/contracts";
 // session row's live fields, the agent status the composer should believe,
 // and the Escape that interrupts the agent.
 
-/** The session row's composer-facing fields. The row's identity churns every
- *  ~1s heartbeat (updated_at / last_heartbeat / is_idle overlay), so the
- *  selector returns only these six and re-renders only when one changes. */
-export function useManagedSessionFields(conversationId: string | null | undefined) {
-  return useInboxStore(useShallow((s) => {
-    const sess = conversationId ? s.sessions[conversationId] : null;
-    if (!sess) return null;
-    return {
-      agent_status: sess.agent_status,
-      permission_mode: sess.permission_mode,
-      session_id: sess.session_id,
-      is_connected: sess.is_connected,
-      tmux_session: sess.tmux_session,
-      team_id: sess.team_id,
-    };
-  }));
-}
+export { useManagedSessionFields } from "./useManagedSessionFields";
 
 /** What the composer is told about the agent: a parked session says so; a
  *  disconnected or ended one says nothing (its row's status is stale). */

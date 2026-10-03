@@ -1,7 +1,8 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { CloudOff, Copy, DoorOpen, Loader2, Mic, MicOff, MonitorUp, PhoneOff, Settings2, UserX, Video, VideoOff, Volume2, WifiOff, X } from "lucide-react";
+import { AudioLines, CloudOff, Copy, DoorOpen, EyeOff, Hourglass, Loader2, Mic, MicOff, MonitorUp, PhoneOff, Settings2, UserX, Video, VideoOff, Volume2, WifiOff, X } from "lucide-react";
 import { canPickSpeaker, canShareScreen, type GuestCall } from "../../../lib/calls/guestRoom";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useScreenWakeLock } from "../../../lib/calls/useScreenWakeLock";
 import { AutoStage, GridStage, SpeakerStage } from "../../../components/calls/StageViews";
 import {
   STAGE_CTL,
@@ -12,15 +13,16 @@ import {
   type StageView,
 } from "../../../components/calls/stageHost";
 import { DeviceSelect, NoticePills } from "./MeetChrome";
-import { RecordingMark } from "../../../components/calls/RecordingMark";
-import { guestNoticeLines, humanizeConvexError } from "@codecast/shared/contracts";
+import { RecordingMark, RecordingStopControl } from "../../../components/calls/RecordingMark";
+import { guestNoticeLines, humanizeConvexError, type GuestNotice } from "@codecast/shared/contracts";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
 // guest needs and nothing a guest cannot use. No thread, no agents, no
 // transcript: a guest learns what anyone in a call learns, from the media.
 // What they ARE told, always, is whether the call is recorded and transcribed,
-// in the bar for as long as it is true, and in a line the moment it starts.
+// in the bar for as long as it is true, and in words the moment either starts.
+// So is who in it is not a person: an agent's face is marked as an agent.
 
 export function GuestInCall({
   call,
@@ -28,8 +30,11 @@ export function GuestInCall({
   myName,
   transcribed,
   recording,
-  recordingAccepted,
+  accepted,
+  reconnecting,
   serverTrouble,
+  awayNotice = false,
+  onDismissAway,
   onLeave,
   onReconnect,
   onStopRecording,
@@ -39,12 +44,19 @@ export function GuestInCall({
   myName: string;
   transcribed: boolean;
   recording: boolean;
-  /** Whether the notice the guest joined under already said "recorded". A
-   *  recording they did not agree to when they asked is said in words on
-   *  the way in, not left to a mark in the corner. */
-  recordingAccepted: boolean;
+  /** The notice the guest joined under. What the room keeps beyond it (a
+   *  recording or a transcript that started since, or one running that this
+   *  notice did not say) is said in words on the way in, not left to a mark
+   *  in the corner. */
+  accepted: GuestNotice | null;
+  /** The page is making a new connection in place of a dropped one. */
+  reconnecting: boolean;
   /** The page lost touch with codecast's server (the media may be fine). */
   serverTrouble: boolean;
+  /** The room let them in while they were looking at another tab, so the
+   *  page walked them in with the microphone and camera off. */
+  awayNotice?: boolean;
+  onDismissAway?: () => void;
   onLeave: () => void;
   /** The media room let go and could not get back: a new connection. */
   onReconnect: () => void;
@@ -64,34 +76,39 @@ export function GuestInCall({
 
   // The stage reads the room's people as roster rows (StageViews). Mine is
   // the name I typed, and everyone else's is the name the room gave them.
+  // `kind` rides along: the bar counts people and agents apart, and the
+  // stage marks an agent's face (PersonName) the way it marks a guest's.
   const roster = useMemo(
     () =>
       c.people.map((p) => ({
         user_id: p.identity,
         user_name: p.isLocal ? myName : p.name,
         user_image: p.image,
+        kind: p.kind,
         muted: p.muted,
         sharing: p.sharing,
       })),
     [c.people, myName],
   );
+  const agents = roster.filter((r) => r.kind === "agent").length;
+  const people = roster.length - agents;
   const speaking = useMemo(() => new Set(c.speaking), [c.speaking]);
   const screens = c.tiles.filter((t) => t.kind === "screen");
   const cameras = c.tiles.filter((t) => t.kind === "camera");
 
-  // A recording that starts while they are inside is said in words once,
-  // not only by a pill appearing in the corner; so is one already running
-  // that the notice they joined under did not mention.
-  const [recordNote, setRecordNote] = useState(() => recording && !recordingAccepted);
-  const wasRecording = useRef(recording);
+  // What the guest has been told in words: the notice they joined under,
+  // then each line they dismissed. Whatever the room keeps beyond it is said
+  // once, in a line of its own, not only by a mark appearing in the corner:
+  // a recording that starts while they are inside, a transcript switched on,
+  // or either already running when the notice they joined under said less.
+  // A thing that stops is forgotten, so starting it again is said again.
+  const [told, setTold] = useState<GuestNotice>(() => accepted ?? { recording: false, transcribed: false });
   useWatchEffect(() => {
-    if (recording && !wasRecording.current) setRecordNote(true);
-    if (!recording) {
-      setRecordNote(false);
-      setAskStop(false);
-    }
-    wasRecording.current = recording;
-  }, [recording]);
+    setTold((t) => (t.recording && !recording) || (t.transcribed && !transcribed) ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed } : t);
+    if (!recording) setAskStop(false);
+  }, [recording, transcribed]);
+  const fresh = guestNoticeLines({ recording: recording && !told.recording, transcribed: transcribed && !told.transcribed }, "short");
+  const dismiss = (key: "rec" | "words") => setTold((t) => (key === "rec" ? { ...t, recording: true } : { ...t, transcribed: true }));
   // Stop is for everyone, so it is asked once more, from the mark in the bar
   // or from the line that said it started.
   const [askStop, setAskStop] = useState(false);
@@ -117,18 +134,43 @@ export function GuestInCall({
                 action: { label: "Use this tab", onClick: onReconnect },
               }
             : { tone: "orange", icon: <WifiOff className="h-3.5 w-3.5" />, text: "You lost the connection to the call.", action: { label: "Reconnect", onClick: onReconnect } };
-  const resting = c.phase === "disconnected";
+  // The device switches rest whenever the media is not connected, not only
+  // once it is lost: a press while connecting or reconnecting fails inside
+  // the media room and comes back as "Microphone unavailable", which is not
+  // what is wrong.
+  const resting = c.phase !== "connected";
+
+  // A phone left on the desk must not sleep the call away (useScreenWakeLock).
+  useScreenWakeLock(c.phase === "connected" || c.phase === "reconnecting");
+
+  // Everyone from the team has gone and only guests (and agents) are left:
+  // the huddle ends once its grace runs out, and until then the stage would
+  // show a guest their own face and nothing else. Said after a few seconds,
+  // so a teammate's reconnect or a roster still filling in is not an alarm.
+  const teamHere = c.people.some((p) => !p.isLocal && p.kind === "person");
+  const [teamGone, setTeamGone] = useState(false);
+  useWatchEffect(() => {
+    if (c.phase !== "connected" || teamHere) return setTeamGone(false);
+    const t = setTimeout(() => setTeamGone(true), TEAM_GONE_AFTER_MS);
+    return () => clearTimeout(t);
+  }, [c.phase, teamHere]);
 
   return (
-    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-base03 text-sol-text">
+    // Inside the notch and the rounded corners on a phone (index.html sets
+    // viewport-fit=cover): the bottom bar keeps its own inset.
+    <div className="meet dark fixed inset-0 flex flex-col !bg-none bg-sol-base03 pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)] pt-[env(safe-area-inset-top)] text-sol-text">
       {/* The bar: where this is, who is in it, and what is being kept. */}
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-white/[0.06] px-3 sm:px-4">
         <span className="meet-mark max-sm:hidden" aria-hidden>
           <i />
         </span>
         <span className="min-w-0 truncate font-mono text-[12.5px] text-sol-text-secondary">{title}</span>
-        <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted" title="People in the call">
-          {roster.length}
+        <span
+          className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted"
+          title={agents ? `${people} ${people === 1 ? "person" : "people"} and ${agents} AI ${agents === 1 ? "agent" : "agents"} in the call` : "People in the call"}
+        >
+          {people}
+          {agents > 0 && <span className="text-sol-violet"> · {agents} {agents === 1 ? "agent" : "agents"}</span>}
         </span>
         <div className="min-w-2 flex-1" />
         {recording && <GuestRecordingControl asking={askStop} onAsk={setAskStop} onStop={onStopRecording} />}
@@ -153,12 +195,12 @@ export function GuestInCall({
         </div>
       </div>
 
-      {c.phase === "reconnecting" && (
+      {(c.phase === "reconnecting" || reconnecting) && (
         <Banner tone="yellow" icon={<Loader2 className="h-3.5 w-3.5 animate-spin" />}>
           Reconnecting… your connection dropped for a moment.
         </Banner>
       )}
-      {out && (
+      {out && !reconnecting && (
         <Banner tone={out.tone} icon={out.icon} actions={out.action ? [out.action] : undefined}>
           {out.text}
         </Banner>
@@ -168,26 +210,65 @@ export function GuestInCall({
           Lost touch with codecast for a moment. The call itself is still connected.
         </Banner>
       )}
+      {teamGone && !out && (
+        <Banner tone="yellow" wrap icon={<Hourglass className="h-3.5 w-3.5" />} actions={[{ label: "Leave", onClick: onLeave }]}>
+          Everyone from the team has left. The call ends shortly unless someone comes back.
+        </Banner>
+      )}
+      {awayNotice && !out && (
+        <Banner
+          tone="cyan"
+          wrap
+          icon={<EyeOff className="h-3.5 w-3.5" />}
+          actions={
+            resting
+              ? undefined
+              : [
+                  ...(!c.mic ? [{ label: "Unmute", onClick: () => void call.setMic(true) }] : []),
+                  ...(!c.camera ? [{ label: "Turn camera on", onClick: () => void call.setCamera(true) }] : []),
+                ]
+          }
+          onDismiss={onDismissAway}
+        >
+          You were let in while you were away, so you joined with your microphone and camera off.
+        </Banner>
+      )}
       {c.audioBlocked && c.phase === "connected" && (
         <Banner tone="cyan" icon={<Volume2 className="h-3.5 w-3.5" />} actions={[{ label: "Turn on sound", onClick: () => void call.startAudio() }]}>
           Your browser is holding the call's sound until you click.
         </Banner>
       )}
-      {recordNote && recording && (
-        // Wraps rather than truncates: this is the notice a guest's consent
-        // rests on, and it says what they can do about it right where it is.
-        <Banner
-          tone="red"
-          wrap
-          icon={<span className="h-2 w-2 rounded-full bg-sol-red" />}
-          actions={[
-            ...(c.camera ? [{ label: "Turn camera off", onClick: () => void call.setCamera(false) }] : []),
-            { label: "Stop recording", onClick: () => setAskStop(true) },
-          ]}
-          onDismiss={() => setRecordNote(false)}
-        >
-          {guestNoticeLines({ recording: true, transcribed: false }, "short")[0].text}
-        </Banner>
+      {/* Wraps rather than truncates: this is the notice a guest's consent
+          rests on, and each line says what they can do about it right where
+          it is (guestNoticeLines has the words, red for recording, cyan for
+          the transcript, as everywhere they are said). */}
+      {fresh.map((line) =>
+        line.key === "rec" ? (
+          <Banner
+            key={line.key}
+            tone="red"
+            wrap
+            icon={<span className="h-2 w-2 rounded-full bg-sol-red" />}
+            actions={[
+              ...(c.camera ? [{ label: "Turn camera off", onClick: () => void call.setCamera(false) }] : []),
+              { label: "Stop recording", onClick: () => setAskStop(true) },
+            ]}
+            onDismiss={() => dismiss("rec")}
+          >
+            {line.text}
+          </Banner>
+        ) : (
+          <Banner
+            key={line.key}
+            tone="cyan"
+            wrap
+            icon={<AudioLines className="h-3.5 w-3.5" />}
+            actions={c.mic ? [{ label: "Mute", onClick: () => void call.setMic(false) }] : undefined}
+            onDismiss={() => dismiss("words")}
+          >
+            {line.text}
+          </Banner>
+        ),
       )}
       {c.error && (
         <Banner tone="orange" onDismiss={() => call.dismissError()}>
@@ -201,7 +282,7 @@ export function GuestInCall({
             {c.phase === "connecting" && c.people.length <= 1 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 font-mono text-[12.5px] text-sol-text-muted">
                 <Loader2 className="h-5 w-5 animate-spin" />
-                joining…
+                {reconnecting ? "reconnecting…" : "joining…"}
               </div>
             ) : view === "grid" ? (
               <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
@@ -275,6 +356,9 @@ export function GuestInCall({
   );
 }
 
+/** How long the room has to be without a teammate before the guest is told. */
+const TEAM_GONE_AFTER_MS = 5_000;
+
 const BANNER_TONE = {
   yellow: "bg-sol-yellow/10 text-sol-yellow",
   orange: "bg-sol-orange/10 text-sol-orange",
@@ -336,10 +420,10 @@ function Banner({
   );
 }
 
-/** The red mark in the guest's bar, the one every call surface wears
- *  (RecordingMark, store free for this page), and the way to stop the
- *  recording: a press opens the question, a second press stops it for
- *  everyone. */
+/** The red mark in the guest's bar, the one every call surface wears, and
+ *  the way to stop the recording, the one every surface offers
+ *  (RecordingStopControl, store free for this page): a press opens the
+ *  question, a second press stops it for everyone. */
 function GuestRecordingControl({
   asking,
   onAsk,
@@ -349,76 +433,15 @@ function GuestRecordingControl({
   onAsk: (asking: boolean) => void;
   onStop: () => Promise<unknown>;
 }) {
-  const rootRef = useRef<HTMLSpanElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useWatchEffect(() => {
-    if (!asking) return setError(null);
-    const onDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) onAsk(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onAsk(false);
-    document.addEventListener("pointerdown", onDown, true);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onDown, true);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [asking]);
-  const stop = () => {
-    setBusy(true);
-    setError(null);
-    void onStop()
-      .then(() => onAsk(false))
-      .catch((err) => setError(humanizeConvexError(err, "Could not stop the recording")))
-      .finally(() => setBusy(false));
-  };
   return (
-    <span ref={rootRef} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={() => onAsk(!asking)}
-        className="flex items-center rounded-md transition-opacity hover:opacity-80"
-        aria-expanded={asking}
-        aria-label="This call is being recorded. Stop recording"
-      >
-        <RecordingMark size="dot" className="rounded-md bg-sol-red/[0.12] px-2 py-1 ring-1 ring-inset ring-sol-red/25" />
-      </button>
-      {asking && (
-        <div
-          role="dialog"
-          aria-label="Stop recording for everyone?"
-          className="absolute right-0 top-full z-20 mt-2 w-[min(280px,calc(100vw-24px))] rounded-xl bg-sol-bg-alt p-3 text-left shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-top-1 duration-150 motion-reduce:animate-none"
-        >
-          <div className="flex items-center gap-2 font-mono text-[12px] text-sol-text">
-            <span className="h-2 w-2 rounded-full bg-sol-red" aria-hidden />
-            Stop recording for everyone?
-          </div>
-          <p className="mt-1.5 text-[11.5px] leading-relaxed text-sol-text-muted">
-            Anyone in the call can stop it. The video so far is kept with the call.
-          </p>
-          {error && <p className="mt-1.5 text-[11.5px] leading-relaxed text-sol-orange">{error}</p>}
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => onAsk(false)}
-              className="rounded-md px-2.5 py-1.5 font-mono text-[11.5px] text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text"
-            >
-              Keep recording
-            </button>
-            <button
-              type="button"
-              onClick={stop}
-              disabled={busy}
-              className="flex items-center gap-1.5 rounded-md bg-sol-red px-3 py-1.5 font-mono text-[11.5px] font-medium text-white transition-colors hover:bg-sol-red/85 disabled:opacity-60"
-            >
-              {busy && <Loader2 className="h-3 w-3 animate-spin" />}
-              Stop
-            </button>
-          </div>
-        </div>
-      )}
-    </span>
+    <RecordingStopControl
+      asking={asking}
+      onAsk={onAsk}
+      onStop={onStop}
+      describe={(err) => humanizeConvexError(err, "Could not stop the recording")}
+    >
+      <RecordingMark size="pill" />
+    </RecordingStopControl>
   );
 }
 
@@ -460,7 +483,10 @@ function DevicesButton({ call, disabled }: { call: GuestCall; disabled?: boolean
         <Settings2 className="h-[18px] w-[18px]" />
       </button>
       {open && (
-        <div className="absolute bottom-full left-1/2 z-20 mb-3 flex w-[min(320px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2 rounded-xl bg-sol-bg-alt p-3 shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-bottom-1 duration-150 motion-reduce:animate-none">
+        // On a phone the button is off the bar's centre and a popover hung
+        // from it runs off one edge, so there it is pinned to the screen's
+        // sides, just above the bar, instead.
+        <div className="absolute bottom-full left-1/2 z-20 mb-3 flex w-[min(320px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2 rounded-xl bg-sol-bg-alt p-3 shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-bottom-1 duration-150 motion-reduce:animate-none max-sm:fixed max-sm:inset-x-3 max-sm:bottom-[calc(76px+env(safe-area-inset-bottom))] max-sm:mb-0 max-sm:w-auto max-sm:translate-x-0">
           <DeviceSelect kind="mic" devices={devices.mic} choice={c.choice} onChoose={choose} />
           <DeviceSelect kind="camera" devices={devices.camera} choice={c.choice} onChoose={choose} />
           {canPickSpeaker() && devices.speaker.length > 0 && <DeviceSelect kind="speaker" devices={devices.speaker} choice={c.choice} onChoose={choose} />}

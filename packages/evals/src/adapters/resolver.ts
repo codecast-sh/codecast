@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import type { ConvoMessage, Freeze, FreezeResolver, ProductionReply } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
 import { redactSecrets } from '../../../cli/src/secretRedaction';
-import { fixturesDir, homePaths, treeRoot } from '../paths';
+import { labelPath } from '../labels';
+import { fixturesDir, homePaths, publicFreezesDir, treeRoot } from '../paths';
 import { loadSurface, refFormsLine, surfaceMeta } from '../registry';
 import { readConversation } from './convo';
+import { judgeMomentOf } from './judge';
 
 // `freeze create <surface>@<ref>`: the resolver picks the surface from the
 // prefix (the platform hands it only {messageRef, runRef}), turns a fixture
@@ -19,7 +21,7 @@ export interface Fixture {
   asOf: string;
   snapshot: unknown;
   label?: unknown;
-  /** The criteria its freeze is judged by; null means only gates grade it. Unset takes the surface's default. */
+  /** The criteria a new freeze of it starts with; null means only gates grade it, unset takes the surface's default. Once its freeze exists the criterion lives there, not here. */
   judge?: string | null;
   notes?: string;
 }
@@ -40,7 +42,8 @@ export function readFixture(surface: string, kase: string): Fixture {
   return JSON.parse(readFileSync(path, 'utf8')) as Fixture;
 }
 
-const canonical = (value: unknown): unknown => {
+/** A value with every object's keys sorted, so equal content stringifies to equal bytes. */
+export const canonical = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(canonical);
   if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map((k) => [k, canonical((value as Record<string, unknown>)[k])]));
   return value;
@@ -58,7 +61,7 @@ export function writeSnapshot(surface: string, snapshot: unknown): string {
   return rel;
 }
 
-const freezeMeta = (f: Pick<Freeze, 'meta'>) => (f.meta ?? {}) as { surface?: string; visibility?: string; snapshot?: string };
+export const freezeMeta = (f: Pick<Freeze, 'meta'>) => (f.meta ?? {}) as { surface?: string; visibility?: string; snapshot?: string };
 
 /** Where a freeze's snapshot sits: a committed fixture, a content addressed file, or a served dir. */
 export function snapshotPath(f: Pick<Freeze, 'meta'>): string | null {
@@ -106,15 +109,29 @@ export class SnapshotMismatch extends Error {}
 export function loadLabel(f: Freeze, loaded?: LoadedSnapshot): unknown {
   if (loaded?.fixture?.label !== undefined) return loaded.fixture.label;
   const m = freezeMeta(f);
-  const path = join(homePaths().labels, m.surface ?? '', `${f.id}.json`);
+  const path = labelPath(m.surface ?? '', f.id);
   return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : undefined;
 }
 
-/** The criteria a new freeze starts with: its fixture's, else the surface's default. */
+/**
+ * The criteria a new freeze starts with. A fixture's criterion lives on its
+ * committed freeze once one exists (auditPublicTree refuses a second copy in
+ * the fixture), so a freeze made again from that fixture takes the existing
+ * freeze's; a fixture with no freeze yet seeds it from its own `judge`; else
+ * the surface's default.
+ */
 export function defaultJudgeFor(input: Pick<Freeze, 'meta'>): string | null {
   const m = freezeMeta(input);
   if (!m.surface) return null;
   if (m.visibility === 'public' && m.snapshot) {
+    const dir = publicFreezesDir();
+    const committed = existsSync(dir)
+      ? readdirSync(dir)
+          .filter((n) => n.endsWith('.json'))
+          .map((n) => JSON.parse(readFileSync(join(dir, n), 'utf8')) as Freeze)
+          .find((f) => freezeMeta(f).snapshot === m.snapshot)
+      : undefined;
+    if (committed) return committed.judge ?? null;
     const path = join(evalsPkg(), m.snapshot);
     if (existsSync(path)) {
       const fixture = JSON.parse(readFileSync(path, 'utf8')) as Fixture;
@@ -164,11 +181,17 @@ export function codecastFreezeResolver(): FreezeResolver {
 
 const surfaceOf = (f: Pick<Freeze, 'meta'>): string => String(freezeMeta(f).surface ?? '');
 
-/** A freeze's snapshot as the conversation views and the judge see it; null when the snapshot is not on this machine. */
+/** A freeze's snapshot as the conversation views see it; null when the snapshot is not on this machine. */
 export async function describeFreeze(f: Freeze): Promise<ConvoMessage[] | null> {
   if (!hasSnapshot(f) || !surfaceMeta(surfaceOf(f))) return null;
   const impl = await loadSurface(surfaceOf(f));
   return impl.describe(loadSnapshot(f).snap);
+}
+
+/** A freeze's snapshot as the judge reads it (judgeMomentOf); null when the snapshot is not on this machine. */
+export async function judgeMomentOfFreeze(f: Freeze): Promise<ConvoMessage[] | null> {
+  if (!hasSnapshot(f) || !surfaceMeta(surfaceOf(f))) return null;
+  return judgeMomentOf(await loadSurface(surfaceOf(f)), loadSnapshot(f).snap, f.asOf);
 }
 
 /** What prod actually produced after the moment, when the surface knows. */

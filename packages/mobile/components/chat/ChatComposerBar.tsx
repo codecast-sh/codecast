@@ -5,13 +5,12 @@ import {
 import { Text as RNText, TextInput as ThemedTextInput } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
-import { useConvex, useMutation } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useConvex } from 'convex/react';
+import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
-  pickImages, startUpload, settleAttachments,
+  pickImages, startUpload, forgetUpload, sendableAttachments,
   type ChatAttachmentArg, type PickedImage,
 } from './chatUpload';
 import { useComposerField, nativeComposerText } from '@/lib/composerField';
@@ -24,12 +23,8 @@ import { NativePressable } from '@/lib/gestureHandler';
 // parent owns what a send MEANS (optimistic row, thread scope): the composer
 // never talks to chat.sendMessage itself.
 //
-// Typing mirrors web's useTypingReporter: a throttled chatTyping.set while
-// composing, a clear on send / empty / unmount. The throttle interval stays
-// under the server's freshness window so a steadily-typing person never
-// flickers off.
-
-const TYPING_THROTTLE_MS = 2_500;
+// Typing is web's own useTypingReporter: a throttled chatTyping.set while
+// composing, a clear on send / empty / scope change / unmount.
 
 export type ComposerEdit = { messageId: string; content: string };
 
@@ -68,7 +63,6 @@ export function ChatComposerBar({
     clearAfterSend,
   } = useComposerField('');
   const [images, setImages] = useState<PickedImage[]>([]);
-  const [sending, setSending] = useState(false);
 
   // ── Edit mode ─────────────────────────────────────────────────────────────
   // Entering an edit REPLACES the box (the previous draft is small on mobile
@@ -87,28 +81,7 @@ export function ChatComposerBar({
   }, [editingId]);
 
   // ── Typing report ─────────────────────────────────────────────────────────
-  const setTyping = useMutation(api.chatTyping.set);
-  const clearTyping = useMutation(api.chatTyping.clear);
-  const lastTypingRef = useRef(0);
-  const typingArmedRef = useRef(false);
-  const reportTyping = useCallback(() => {
-    if (!channelId) return;
-    const now = Date.now();
-    if (now - lastTypingRef.current < TYPING_THROTTLE_MS) return;
-    lastTypingRef.current = now;
-    typingArmedRef.current = true;
-    void setTyping({
-      channel_id: channelId as Id<'chat_channels'>,
-      ...(threadRootId ? { thread_root_id: threadRootId as Id<'chat_messages'> } : {}),
-    }).catch(() => {});
-  }, [channelId, threadRootId, setTyping]);
-  const stopTyping = useCallback(() => {
-    if (!channelId || !typingArmedRef.current) return;
-    typingArmedRef.current = false;
-    lastTypingRef.current = 0;
-    void clearTyping({ channel_id: channelId as Id<'chat_channels'> }).catch(() => {});
-  }, [channelId, clearTyping]);
-  useEffect(() => stopTyping, [stopTyping]);
+  const { onTyping: reportTyping, stop: stopTyping } = useTypingReporter(channelId, threadRootId);
 
   const onChangeText = useCallback((text: string) => {
     applyChange(text);
@@ -132,12 +105,13 @@ export function ChatComposerBar({
   }, [convex]);
 
   const removeImage = useCallback((uri: string) => {
+    forgetUpload(uri);
     setImages((prev) => prev.filter((p) => p.uri !== uri));
   }, []);
 
   // ── Send ──────────────────────────────────────────────────────────────────
-  const canSend = (draft.trim().length > 0 || images.some((i) => !i.failed)) && !sending;
-  const submit = useCallback(async () => {
+  const canSend = draft.trim().length > 0 || images.some((i) => !i.failed);
+  const submit = useCallback(() => {
     const content = nativeComposerText(
       inputRef.current as { _lastNativeText?: unknown } | null,
       draft,
@@ -149,22 +123,17 @@ export function ChatComposerBar({
       onCancelEdit?.();
       return;
     }
-    const live = images.filter((i) => !i.failed);
-    if (!content && live.length === 0) return;
-    // Clear the box NOW (send must never feel laggy); await only the uploads.
-    // Remount the native field so iOS cannot restore the just-sent buffer.
+    const attachments = sendableAttachments(images);
+    if (!content && attachments.length === 0) return;
+    // Clear the box and hand the send over NOW: the row paints in this tick,
+    // with any image still uploading shown from its local file, and the store
+    // delivers once the bytes land. Remount the native field so iOS cannot
+    // restore the just-sent buffer.
     clearAfterSend(content);
     setImages([]);
     stopTyping();
     if (Platform.OS === 'ios') void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (live.some((i) => !i.storageId)) setSending(true);
-    try {
-      const attachments = await settleAttachments(live);
-      if (!content && attachments.length === 0) return; // every upload failed; tiles already said so
-      onSend(content, attachments);
-    } finally {
-      setSending(false);
-    }
+    onSend(content, attachments);
   }, [draft, images, editing, onSubmitEdit, onCancelEdit, onSend, stopTyping, clearAfterSend, inputRef]);
 
   return (
@@ -230,11 +199,7 @@ export function ChatComposerBar({
           accessibilityRole="button"
           accessibilityLabel="Send"
         >
-          {sending ? (
-            <ActivityIndicator size="small" color={Theme.bg} />
-          ) : (
-            <FontAwesome name={editing ? 'check' : 'arrow-up'} size={14} color={canSend ? Theme.bg : Theme.textMuted0} />
-          )}
+          <FontAwesome name={editing ? 'check' : 'arrow-up'} size={14} color={canSend ? Theme.bg : Theme.textMuted0} />
         </NativePressable>
       </RNView>
     </RNView>

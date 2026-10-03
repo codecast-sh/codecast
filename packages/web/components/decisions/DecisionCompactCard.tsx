@@ -117,6 +117,12 @@ export function DecisionCompactCardView({
   const pending = decision.status === "pending";
   const rec = ladderRecommendation(decision);
   const pageCount = optionPageSlugs(decision.options).length;
+  // The answer controls carry the card's recommendation, so the proof line
+  // does not say it again beside them.
+  const answersHere = pending && kind === "single";
+  // A change card leads with the change, the way its page does; the asker's
+  // own question moves into the meta row.
+  const cardQuestion = decision.card && decision.question.trim() !== decision.card.change.trim() ? decision.question : null;
 
   return (
     <div
@@ -133,6 +139,7 @@ export function DecisionCompactCardView({
           <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} className="max-w-[22rem]" />
           <span>· asked {formatTimeAgo(decision.created_at, now)}</span>
           {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
+          {cardQuestion && <span className="min-w-0 max-w-[20rem] truncate text-sol-text-muted" title={cardQuestion} data-card-question>{cardQuestion}</span>}
           {/* The category decides who may answer, and only a real one says
               anything: "unknown" is the absence of a proposal, so it earns no
               chip here. The document page spells out what it means. */}
@@ -167,7 +174,7 @@ export function DecisionCompactCardView({
           </Link>
         </div>
         <Link href={decisionHref(decision)} className="decision-question block mt-2 text-sol-text hover:text-sol-blue transition-colors">
-          {decision.question}
+          {decision.card?.change || decision.question}
         </Link>
         {/* The reasoning, inline. A decision cannot be made from its title
             and its option labels alone, so the context the asker wrote reads
@@ -201,8 +208,8 @@ export function DecisionCompactCardView({
         {/* A change card (LE11) reads as one dense line of proof here; the
             whole card is on the document page and in the transcript sheet. */}
         {decision.card && (
-          <Link href={decisionHref(decision)} className="block mt-2 rounded-md px-2.5 py-2 -mx-1 hover:bg-sol-bg-alt/60 transition-colors">
-            <ChangeCardView card={decision.card} density="line" />
+          <Link href={decisionHref(decision)} className="block mt-1.5 rounded-md px-2.5 py-1.5 -mx-2.5 hover:bg-sol-bg-alt/60 transition-colors">
+            <ChangeCardView card={decision.card} density="line" change={false} recommend={!answersHere && decision.status === "pending"} />
           </Link>
         )}
         {decision.report_slug && !decision.card && (

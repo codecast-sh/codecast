@@ -788,3 +788,61 @@ describe("healStrandedStub", () => {
     await expect(useInboxStore.getState().awaitConvexId(stubId)).rejects.toThrow(/pick a folder/i);
   });
 });
+
+// Mobile's New Session sheet opens the stub in the same tick as the create, so
+// the first message can be typed before the server answers. The server cannot
+// address a stub id: the send must wait for the real id and keep its client id.
+describe("sendMessageWhenReady", () => {
+  beforeEach(() => {
+    useInboxStore.setState({
+      sessions: {},
+      conversations: {},
+      pendingMessages: {},
+      pendingSessionCreates: {},
+      bucketAssignments: {},
+      activeBucketFilter: null,
+    } as any);
+  });
+
+  it("sends a message typed into a just-started session under the real id", async () => {
+    const { calls } = installFakeDispatch();
+    const store = useInboxStore.getState();
+    const started = store.beginOptimisticSession({
+      agentType: "claude_code",
+      projectPath: "/Users/me/proj",
+      gitRoot: "/Users/me/proj",
+      deferCreate: true,
+      create: (stubId) => useInboxStore.getState().createSession({
+        agent_type: "claude_code",
+        project_path: "/Users/me/proj",
+        git_root: "/Users/me/proj",
+        session_id: stubId,
+      }),
+    });
+    void started.materialize();
+    const clientId = store.addOptimisticMessage(started.stubId, "first message");
+    store.sendMessageWhenReady(started.stubId, "first message", undefined, clientId);
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const sends = calls.filter((c) => c.action === "sendMessage");
+    expect(sends.some((c) => c.args[0] === started.stubId)).toBe(false);
+    expect(sends.length).toBeGreaterThan(0);
+    for (const send of sends) {
+      expect(send.args[0]).toBe(REAL_ID);
+      expect(send.args[3]).toBe(clientId);
+    }
+    const createIndex = calls.findIndex((c) => c.action === "createSession");
+    const sendIndex = calls.findIndex((c) => c.action === "sendMessage");
+    expect(createIndex).toBeGreaterThanOrEqual(0);
+    expect(sendIndex).toBeGreaterThan(createIndex);
+  });
+
+  it("sends at once when the id is already real", () => {
+    const { calls } = installFakeDispatch();
+    useInboxStore.getState().sendMessageWhenReady(REAL_ID, "hello", undefined, "client-x");
+    const send = calls.find((c) => c.action === "sendMessage");
+    expect(send?.args.slice(0, 1)).toEqual([REAL_ID]);
+  });
+});
+

@@ -1,6 +1,4 @@
 import { useState, useCallback } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import { useEventListener } from "../hooks/useEventListener";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -119,6 +117,8 @@ export function PermissionRow({
   );
 }
 
+const NO_INFLIGHT: ReadonlySet<string> = new Set();
+
 export function PermissionStack({
   permissions,
   onAllowAll,
@@ -126,67 +126,26 @@ export function PermissionStack({
   permissions: Permission[];
   onAllowAll?: () => void;
 }) {
-  const updatePermissionStatus = useMutation(api.permissions.updatePermissionStatus);
-  const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
-  const [inflight, setInflight] = useState<Set<string>>(new Set());
+  const resolvePermission = useInboxStore((s) => s.resolvePermission);
 
   const pending = permissions.filter((p) => p.status === "pending");
 
-  // Resolving the LAST pending permission unblocks the session — mark its
-  // question resolved in the store so the rail's QUESTIONS section and the
-  // queue drop it in the same commit, instead of waiting for the daemon's
-  // agent_status heartbeat. Stamped before the mutation: local-first.
-  const markUnblockedIfLast = useCallback((resolvedIds: Array<Id<"pending_permissions">>) => {
-    const remaining = pending.filter((p) => !resolvedIds.includes(p._id));
-    if (remaining.length > 0) return;
-    const convId = pending[0]?.conversation_id;
-    if (convId) resolveSessionQuestion(convId);
-  }, [pending, resolveSessionQuestion]);
-
-  const handleApprove = useCallback(async (id: Id<"pending_permissions">) => {
-    if (inflight.has(id)) return;
-    setInflight((s) => new Set(s).add(id));
-    markUnblockedIfLast([id]);
-    await updatePermissionStatus({ permission_id: id, status: "approved" }).catch(() => {});
-    setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
-  }, [updatePermissionStatus, inflight, markUnblockedIfLast]);
-
-  const handleDeny = useCallback(async (id: Id<"pending_permissions">) => {
-    if (inflight.has(id)) return;
-    setInflight((s) => new Set(s).add(id));
-    markUnblockedIfLast([id]);
-    await updatePermissionStatus({ permission_id: id, status: "denied" }).catch(() => {});
-    setInflight((s) => { const n = new Set(s); n.delete(id); return n; });
-  }, [updatePermissionStatus, inflight, markUnblockedIfLast]);
-
-  const handleApproveAll = useCallback(async () => {
-    markUnblockedIfLast(pending.map((p) => p._id));
-    await Promise.all(
-      pending.map((p) =>
-        updatePermissionStatus({ permission_id: p._id, status: "approved" }).catch(() => {})
-      )
-    );
-  }, [pending, updatePermissionStatus, markUnblockedIfLast]);
-
-  const handleDenyAll = useCallback(async () => {
-    markUnblockedIfLast(pending.map((p) => p._id));
-    await Promise.all(
-      pending.map((p) =>
-        updatePermissionStatus({ permission_id: p._id, status: "denied" }).catch(() => {})
-      )
-    );
-  }, [pending, updatePermissionStatus, markUnblockedIfLast]);
-
-  const handleAllowAll = useCallback(async () => {
+  // Local-first: the store drops the row in the same commit (and marks the
+  // session's question resolved when it was the last one), so the card leaves
+  // on the press and nothing here waits on the server.
+  const handleApprove = useCallback((id: Id<"pending_permissions">) => resolvePermission(id, "approved"), [resolvePermission]);
+  const handleDeny = useCallback((id: Id<"pending_permissions">) => resolvePermission(id, "denied"), [resolvePermission]);
+  const handleApproveAll = useCallback(() => {
+    for (const p of pending) resolvePermission(p._id, "approved");
+  }, [pending, resolvePermission]);
+  const handleDenyAll = useCallback(() => {
+    for (const p of pending) resolvePermission(p._id, "denied");
+  }, [pending, resolvePermission]);
+  const handleAllowAll = useCallback(() => {
     if (!onAllowAll) return;
-    markUnblockedIfLast(pending.map((p) => p._id));
-    await Promise.all(
-      pending.map((p) =>
-        updatePermissionStatus({ permission_id: p._id, status: "approved" }).catch(() => {})
-      )
-    );
+    for (const p of pending) resolvePermission(p._id, "approved");
     onAllowAll();
-  }, [pending, updatePermissionStatus, onAllowAll, markUnblockedIfLast]);
+  }, [pending, resolvePermission, onAllowAll]);
 
   useEventListener("keydown", useCallback((e: KeyboardEvent) => {
     const tag = (e.target as HTMLElement)?.tagName;
@@ -208,7 +167,7 @@ export function PermissionStack({
   return (
     <PermissionStackView
       pending={pending}
-      inflight={inflight}
+      inflight={NO_INFLIGHT}
       onApprove={handleApprove}
       onDeny={handleDeny}
       onApproveAll={handleApproveAll}

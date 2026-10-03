@@ -30,7 +30,7 @@ Phase 2 is done when all of the following hold:
 | Test layout | **One bun test file** (`sim/sim.test.ts`) loads `sim/selftests/*.selftest.ts` and `sim/scenarios/*.scenario.ts` with `Bun.Glob`. Cheap pure tests (net, report) are ordinary test files. | The store and convex import costs about 7s under `--isolate`. One scenario per test file would pay it 11 times. Globbing keeps the scenario units on disjoint files, since nobody edits an index. |
 | DSL | Imperative async. Verbs enqueue deliveries on named channels. Scripted mode drains after each verb. Interleave and order modes drain at `settle()` or at the first `expect`. | The same file runs in every mode, with no recorded-script runtime to build. |
 | Network model | Per-channel FIFO. Interleave permutes only across channels. A request and its response are two events. A mutation response refreshes that window's live feeds before its promise resolves (read-your-writes). Plus offline/online and `dropResponse`. | These are the orderings production can produce. |
-| Randomness | `Math.random` and `crypto.randomUUID` are spied. They draw from the **active window's** stream, else the running server call's stream, else the world stream. Each stream is `makeRng(hash(seed, name))`. | Interleaving one window does not perturb another window's randomness. |
+| Randomness | `Math.random` and `crypto.randomUUID` are spied. They draw from the stream of the store being built, else the running server call's stream, else the **active window's** stream, else the world stream. Each stream is `makeRng(hash(seed, name))`. | Interleaving one window does not perturb another window's randomness, and a store that draws as it is built moves no stream but its own. |
 | Seeds | Scenario seeds are `hash(scenarioName) + i`. Legacy seeds are unchanged. | Adding a scenario never shifts another scenario's seeds. |
 | Budgets | Hard failures come from delivery and write counts per scenario. Wall time is only reported. | This machine's load average (around 370) makes wall time flaky. |
 | Disposable Convex deployment | **Documented recipe only**, in `sync-sim.md`. No script. | No red-list assertion needs it. The OCC half of two-humans-one-role is noted as uncovered. |
@@ -151,7 +151,7 @@ With no options, behaviour is byte-identical for the existing tests.
 **`sim/realm.ts`** owns the process-wide spies, installed by `installRealm(seed, opts?)` and removed by `uninstallRealm()`. The world builds its net and backend after the realm, so it wires them in later with `attachRealm({ timers: net, serverCall: () => backend.activeCall() })`; `timers` is typed `Pick<Net, "enqueue" | "cancel">`, the realm's only use of `Net`. `stream(name)` hands out ``makeRng(fnv1a32(`${seed}:${name}`))`` for any other named stream.
 
 - **Clock.** The existing virtual clock moves here (`now`, `mono`, `advance`, `resetClock`, `T0`; the legacy harness imports and re-exports them). It covers `Date.now` and `performance.now`.
-- **Random.** `Math.random` and `crypto.randomUUID` are spied. UUIDs are formatted as v4 from rng bytes. Routing uses the running server call, then the active window, then the world stream. The server call goes first so a handler always draws from `rngFor(callSeq)`, even if one ever runs inside a window's turn.
+- **Random.** `Math.random` and `crypto.randomUUID` are spied. UUIDs are formatted as v4 from rng bytes. Routing uses the store being built, then the running server call, then the active window, then the world stream. Windows build their stores through `createWindowStore(name)`, which routes every draw made during construction to `stream("store:<name>")`: production may draw randomness as a store is created (the engine's outbox owner id), and that must not shift the world's, a window's or a call's sequence whatever runs around the construction. The server call goes before the window so a handler always draws from `rngFor(callSeq)`, even if one ever runs inside a window's turn.
 - **Timer shim.** `setTimeout/clearTimeout/setInterval/clearInterval` are shimmed.
   - A timer records its owner: the active window, or `global`.
   - Delay 0 enqueues a `timer:<owner>` delivery. A window's timer runs inside that window's `runInWindow`; `setInterval` re-enqueues itself after each run.
@@ -193,7 +193,7 @@ The classification below is the core. The full table, as the guard enforces it, 
 **`sim/windowSlots.guard.test.ts`** is static and imports no store.
 - It uses `buildBootGraph` (packages/cli/src/bench/bootGraph.ts) from every `.ts` file under `sim/` with an `@/` alias resolver and `calls: true` (so `import()` and lazy `require` edges count), restricted to `packages/web/{store,hooks,lib}`.
 - It extracts top-level `let`/`var` bindings, and `const` bindings whose line assigns `new Map|Set` (which also catches `= (globalThis.x ??= new Set())`).
-- It fails on any binding missing from `WINDOW_SLOTS`, and prints the classification line to add. It also fails on a `WINDOW_SLOTS` entry whose binding no longer exists. This follows the frozen-baseline style of `nativeDeps.guard.test.ts`.
+- It fails on any binding missing from `WINDOW_SLOTS`, and prints the classification line to add with one line saying how to choose the class. It also fails on a `WINDOW_SLOTS` entry whose binding no longer exists. This follows the frozen-baseline style of `nativeDeps.guard.test.ts`.
 
 **`sim/window.ts`** defines `class SimWindow`:
 
@@ -375,7 +375,7 @@ The rules live in `sim/invariants.ts`; the structural view and the helpers they 
 | `INV-pending-sends` (always: uniqueness) | Every bubble is echoed (a `messages` row with its client id), settled or failed. Each `client_id` appears at most once in `pending_messages` (mention wakes are INV-chat's). No queued text waits on a conversation the server no longer has. | server rows |
 | `INV-chat` (always: dedupe and caps) | At most one wake (`pending_messages` with client id `chat-mention:<msg>:<target>`) exists per mention and target. Per `hourBucket(created_at)`, wakes per sender stay within `MENTION_WAKES_PER_SENDER_HOUR` and per target within `MENTION_WAKES_PER_TARGET_HOUR`. For each channel the replica holds lines of, those lines equal the newest `chat:listMessages` page. | chat.ts constants (now exported), `lib/chatQuota.hourBucket` |
 | `INV-roles` | For each role, the `chat_agent_quota` counter `mention_to:<role>` of an hour equals the wakes enqueued for that role in that hour. `anchors:listAnchors` equals `visibleAnchorsForUser`, and the replica holds no anchor outside it. | anchors.ts, chat quota rows |
-| `INV-ping-pong` | Wakes from an agent (a row with `from_conversation_id`, or a chat wake carrying an `origin: "agent"` line: its mention, `chat-mention:<line>:<target>`, or its thread reply relayed to the session that mentioned it, `chat-relay:<line>`) per virtual hour stay under the mention caps, per target session and per sender. | `pending_messages` rows |
+| `INV-ping-pong` | Wakes from an agent (a row with `from_conversation_id`, or a chat wake carrying an `origin: "agent"` line: its mention, `chat-mention:<line>:<target>`, or its thread reply relayed to the session that mentioned it, `chat-relay:<line>`) per virtual hour stay under the mention caps, per target session and per sender. The sender is the one the server charges, through the same `agentPosterKey` (lib/chatQuota.ts): the person for a mention, the replying session for a relayed reply. A person's total also stays under a ceiling read from ownership, one sender cap for their mentions plus one per session they own, so a charge key narrower than a real session cannot hide behind the per-sender check. | `pending_messages` rows |
 | `INV-row-shape` | Every sessions row (Convex ids) holds only the inbox row's fields, `INBOX_ROW_FIELDS` plus `INBOX_FACT_FIELDS`, and any field a pending local write holds. A key outside them rode in on sync-log cargo or a local write, and the next list or byIds push removes it (ct-56050). The store's own writes keep to the row (`isInboxRowField`): the sharing actions patch only row fields onto the sessions copy, and a field an action writes for its dispatch (`inbox_deferred_at`, `team_visibility`) is one the row carries. | `INBOX_ROW_FIELDS`, which a convex test pins to what the feeders write |
 | `INV-fixpoint` | Re-running every mounted feeder (`refeed`), one `catchUp`, and `applyEntityIds` over every held id yields no store write outside `FIXPOINT_BOOKKEEPING` (`syncMeta`, `syncProgress`). The liveness overlays (`LIVENESS_FEEDS`) are refed once first, unmeasured, as production's stale-payload probe would: they are the one writer of the time-derived facts, so a push from an earlier epoch minute differs from a fresh execution because time moved. The base lists are measured, so a value cargo or a local write put on a row differently from the list shows. A field held as null on one side and absent on the other counts as a write: those are two spellings, and the delta merge replaces the row between them. Writes are counted through the window's `onWrite` tee (its `_setIDBWrite`), so a row two feeders write two ways shows even when it lands where it started. Held session ids are limited to the rows byIds serves (the principal runs or owns them). It runs last, so its writes cannot reach the other checks. | the feeders themselves |
 
@@ -414,7 +414,10 @@ export function scenario(
   - `w.expect(role).wokenTimes(n)`: chat mention wakes enqueued with the role as target;
   - `w.inspect(label)`: the server row and every window collection holding it, printed and returned.
 - Every point check settles first. A failing one reports with the id `expect.<check>`.
-- `SIM_TRACE` prints each delivery whose channel, label or producer names the label (all of them for `1`), one report-style row each. `SIM_OUT` writes the artifacts on a pass too.
+- `SIM_TRACE` prints each delivery whose channel, label or producer names the label (all of them for `1`), one report-style row each. `SIM_OUT` writes the artifacts there, on a pass too; `SIM_KEEP=1` writes a pass's artifacts into the session (section 3.12).
+- `SIM_ORDER` set at all, even empty, makes the runs order replays: an empty order is a replay that runs as scripted from the first delivery, and a shrink can end there.
+- **Step markers.** The world keeps `steps` beside `events`: a verb's marker when its `actor:` delivery runs (`{seq, verb, actor, label}`, the actor read off the channel), and a settle or point check's when it begins (`seq` 0, actor `world`, verb `settle`, `expect` or `inspect`). They go into `events.jsonl` between the deliveries.
+- The known check (a scenario's first run again with nothing left out) writes its artifacts to `<scenario>-<mode>-<seed>-known`, so a failure there never overwrites the first run's.
 - A red run that passes fails with `red scenario "<name>" now passes; it was marked to fail on <invariant> (<task>). Remove those red: markers and close <task>`.
 
 **`sim/sim.test.ts`** is the only store-importing sim test file.
@@ -431,8 +434,13 @@ export function scenario(
 - `--red` sets `SIM_RED=1`: the DSL runs only scenarios with a red marker or a known invariant
 - `--list` prints the scenario catalog from a static scan: name, red markers, known invariants, modes
 - `--invariants` prints the catalog
+- `--json`, with `--list` or `--invariants`, prints the rows as JSON (`SimScenario[]` and `SimInvariant[]` of `packages/shared/contracts/evalsApi.ts`; an invariant's `keys` are its `keys:` string literals, empty when it names them through a constant)
+- `--keep` sets `SIM_KEEP=1`
 - `--out dir` sets `SIM_OUT` (resolved to an absolute path)
 - `--order "<channels>"` sets `SIM_ORDER`
+- `--shrink <artifactDir>` shrinks a failure's recorded order (section 3.12)
+
+A filter that matches no file but is exactly a scenario's name runs that scenario alone: its file, narrowed with bun's `-t "^<name> "`. Replay lines name the scenario, and one file can register several (`agentPingPongOwnSessions` lives in `agentPingPong.scenario.ts`).
 
 The env vars remain the source of truth. The filter sets `SIM_SCENARIO`, `--seed` sets `SIM_SEEDS` and `--sweep` sets `SIM_SWEEP`. A bare word after `--trace` is read as its label, so the filter goes first; `--trace=label` also works, and `--trace` alone sets `SIM_TRACE=1`.
 
@@ -448,10 +456,10 @@ The env vars remain the source of truth. The filter sets `SIM_SCENARIO`, `--seed
 **`sim/report.ts`** formats a failure block.
 - `formatFailure(ctx, artifactsDir)` takes a `FailureContext`: scenario, mode, seed, step, delivery number; invariant id and meaning, plus the check's own message; window (name, principal, scope); the row as `{ table, id, server, replica }`; the delivery ring; the channel order so far; the labels; and the clock origin `t0`.
 - It covers all of those, and renders the row as a field-only server vs replica diff (`fieldDiff`, key-order blind through `canonical`) that omits `PAYLOAD_DENYLIST` (imported from `convex/syncLog.ts`). `fieldDiff` is the only place the denylist is applied, so the artifacts omit those fields too. The last 12 deliveries print as aligned rows with every id relabelled.
-- It prints two replay lines, `bun run sim <name> --seed N --trace <label>` and `bun run sim <name> --seed N --order "<net.orderSoFar()>"`, serialized with net's own `formatOrder`. With no row, the first line is a bare `--trace`. A run `bun run sim` does not drive (the legacy suites) passes its own `replay` lines in the context instead.
+- It prints two replay lines, `bun run sim <name> --seed N --trace <label>` and `bun run sim <name> --seed N --order "<net.orderSoFar()>"`, serialized with net's own `formatOrder`. With no row, the first line is a bare `--trace`. A run `bun run sim` does not drive (the legacy suites) passes its own `replay` lines in the context instead. `replayLines(ctx, minimal)` adds a third, the minimal order, once a shrink has run; `replayCommands` builds the same lines from result.json's plain facts.
 - It prints the artifacts path.
-- `reportFailure(ctx, { events, world, final })` writes the artifacts, prints the block, and throws a `SimFailure` with the same text. Artifacts go to `$SIM_OUT/<scenario>-<mode>-<seed>/{result.json,events.jsonl,world.json,final.json}`, or under `<tmpdir>/codecast-sim` when `SIM_OUT` is unset (`artifactDir`). They are always written on failure. On a pass the DSL calls `writeArtifacts` itself, and only when `SIM_OUT` is set.
-- `events` is every delivery of the run, not the 64-entry ring, so the DSL collects it through the net's `onDeliver` option. `eventsJsonl` writes one canonical JSON line per delivery (seq, channel, due, label, producer). `result.json` holds the rendered diff, never the raw rows.
+- `reportFailure(ctx, { events, steps, world, final, meta }, dir)` writes the artifacts, prints the block, and throws a `SimFailure` with the same text. Artifacts go to `<root>/<scenario>-<mode>-<seed>/{result.json,events.jsonl,world.json,final.json}` (`artifactDir`), where the root is `$SIM_OUT`, else the session folder `$SIM_SESSION`, else `<tmpdir>/codecast-sim` (`artifactRoot`). They are always written on failure. On a pass the DSL calls `writeArtifacts` itself, and only with `SIM_OUT` or `SIM_KEEP=1`.
+- `events` is every delivery of the run, not the 64-entry ring, so the DSL collects it through the net's `onDeliver` option. `eventsJsonl(events, steps)` writes one canonical JSON line per delivery (seq, channel, due, label, producer), with the step markers between them as `{kind: "step", seq, verb, actor, label}`. Delivery rows carry no `kind`, so older files read the same. `result.json` holds the rendered diff, never the raw rows, plus `meta`: `gitHead` and `dirty` from the session, `startedAt` and `realMs` from the real clock (read before the realm swaps in the virtual one; `realMs` uses `Bun.nanoseconds`).
 - **Determinism self-test:** the same scenario and seed run twice must produce identical `events.jsonl` hashes.
 
 ### 3.10 Typecheck, CI, budget
@@ -491,6 +499,37 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 5. **Act as users.** Use `ConvexHttpClient.setAdminAuth(adminKey, actingAsIdentity)`, with the admin key from the deployment's state `config.json`.
 6. **Never** use `deploy.sh`, `gated-push.ts`, `bun run dev`, or the package `deploy` script.
 
+### 3.12 Run history and shrink (evals-ui.md U11)
+
+The Evals UI's Multiplayer sim pages (docs/architecture/evals-ui.md, sections 3.7, 4.6 and 4.7) read this history. Their shapes are the `Sim*` types in `packages/shared/contracts/evalsApi.ts`.
+
+**`sim/history.ts`** is a leaf (no store import, so `--list` stays instant). Every `bun run sim` that runs tests writes one session folder; `--list`, `--invariants`, `--help` and `--shrink` write none.
+
+```
+<home>/sessions/<stamp>/session.json   {id, argv, gitHead, dirty, treePatch, startedAt, finishedAt, exit}
+<home>/sessions/<stamp>/runs.jsonl     {scenario, mode, seed, passed, deliveries, ms, dir?} per run
+<home>/sessions/<stamp>/<scenario>-<mode>-<seed>/   a failure's artifacts (a pass's with --keep)
+<home>/trees/<sha256>.patch.gz         uncommitted edits, gzipped, named by the sha of the patch
+```
+
+- `<home>` is `$CODECAST_SIM_HOME`, else `~/.local/share/codecast/sim`. The stamp is the UTC start to the millisecond, then the pid, so names sort by time.
+- The runner writes `session.json` before it spawns the tests, with `gitHead` and `dirty` (`treeState`: any tracked or untracked edit under `packages/web`, `packages/convex`, `packages/shared` or `platform/packages`, through a shadow copy of the index so the real one is never touched). It passes the folder as `SIM_SESSION`. While the tests run it stores the patch (`storeTreePatch`: `git diff HEAD --binary` over the same paths, untracked files included as intent to add), then rewrites `session.json` with `treePatch`, `finishedAt` and `exit`. `gunzip` plus `git apply` of the patch on `gitHead` rebuilds the tree the session ran. Ctrl-C waits for the tests to exit, so the exit is recorded.
+- The DSL appends one `runs.jsonl` row per run, whatever its end (`passed` false for a failure or a harness error). `dir` names the artifact folder when it was written inside the session; artifacts written to `--out` elsewhere get no `dir`.
+- Pruning runs after each session: the 200 newest are kept, and an older one survives only if a run in it failed or it exited nonzero. A session with no `finishedAt` is left alone for a day. Patches no remaining session names are removed with them.
+- A bare `bun test` (no runner) has no session: artifacts go to `<tmpdir>/codecast-sim` as before, and the Evals UI shows those folders read-only as "unsessioned".
+
+**`sim/shrink.ts`** is pure: `shrinkOrder(length, reproduces, opts)` over the indexes of the recorded channels.
+1. The full recorded order must fail the same way again; otherwise nothing else runs and nothing is written.
+2. The empty order is tried next: when it fails, no pinned order is needed.
+3. A binary search finds the shortest failing prefix. An order replay runs as scripted once its list is used up (net.ts), so every prefix is a whole run.
+4. ddmin runs over that prefix's entries: chunks, then complements, at doubling granularity, until removing any one entry no longer fails (1-minimal).
+
+Candidates are memoized. The caps are 400 attempts and 10 minutes (`SHRINK_MAX_*`); a cap returns the best order so far with `oneMinimal: false`.
+
+**`bun run sim --shrink <artifactDir>`** (scripts/sim.ts) reads `result.json`, finds the scenario's file through the catalog, and runs each candidate as `bun test sim.test.ts --isolate -t "^<scenario> order seed <seed>( \(|$)"` (the known check's own test for a `-known` folder) with `SIM_SCENARIO`, `SIM_SEEDS`, `SIM_ORDER` and `SIM_OUT` set to a scratch folder and every other `SIM_*` variable dropped. A candidate reproduces only when its `result.json` fails with the same invariant id on the same row (table and label); an `order-mismatch`, a pass, a crash, or a failure elsewhere does not. A scripted run's `scripted` mark leads every candidate and is never removed.
+- While it runs, `minimal.json.tmp` holds `{phase, attempts, best, recorded}`, rewritten after each attempt and removed at the end.
+- At the end it writes `minimal.json` as `{order, removed, attempts, ms, oneMinimal}`, where `order` is the kept channels and `removed` indexes the recorded channels (the `scripted` mark is neither), adds `minimalOrder` (the `--order` value, mark included) to `result.json`, and prints the three replay lines.
+
 ## 4. Files
 
 **Create**
@@ -517,6 +556,9 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 | packages/web/store/__tests__/sim/labels.ts | U8 |
 | packages/web/store/__tests__/sim/report.ts | U8 |
 | packages/web/store/__tests__/sim/report.test.ts | U8 |
+| packages/web/store/__tests__/sim/history.ts | evals-ui U11 (run history, section 3.12) |
+| packages/web/store/__tests__/sim/shrink.ts | evals-ui U11 |
+| packages/web/store/__tests__/sim/shrink.test.ts | evals-ui U11 |
 | packages/web/store/__tests__/sim/window.ts | U9 |
 | packages/web/store/__tests__/sim/device.ts | U9 |
 | packages/web/store/__tests__/sim/selftests/window.selftest.ts | U9 |
@@ -577,7 +619,7 @@ It is used only for real OCC, real scheduler timing, HTTP routes, the prod error
 | packages/web/store/__tests__/sim/windowSlots.ts | U13d | `useConversationMessages.ts:LIVENESS_ONLY_CONV_FIELDS` classified (constant), reached through `mergeUnconfirmedMessages` |
 | packages/web/store/__tests__/inboxSimHarness.ts | U14 | thin adapter over sim/ |
 | packages/web/store/__tests__/inboxConvergenceSim.test.ts | U14 | imports; failures through report.ts |
-| packages/web/store/__tests__/inboxMultiWindowSim.test.ts | U14 | same; one `it.failing` on ct-56048, and the heal pin names the seeds ct-56048 makes heal and keeps its old bound over the rest |
+| packages/web/store/__tests__/inboxMultiWindowSim.test.ts | U14 | same; the heal check logs any seed that converged only through the heal and requires that none did |
 | packages/web/store/__tests__/sim/net.ts | U14 | `ChannelFilter`: `step(only)`, `drain({ only })`, `queued(only)`; a step scans only channels with queued deliveries, and scripted mode takes the first ready channel in one pass |
 | packages/web/store/__tests__/sim/realm.ts | U14 | `runInWindowSync`; a window's slots are saved, and the memo slots reset, only when another window takes a turn; a turn settles by draining the microtask queue; the facade's methods are getters over one target |
 | packages/web/store/__tests__/sim/window.ts | U14 | `catchUp()`; optional world hooks `settleBoot` and `holdCatchUp` |
@@ -679,6 +721,7 @@ What it builds:
 - `realm.selftest.ts` covers:
   - two store instances bound in turn: a write in window A is invisible in B, and each `window` slot round-trips;
   - `Math.random` from window A's stream is unaffected by draws made in window B;
+  - building a store (with a server call running, with none, inside a window's turn) moves no other stream;
   - a `setTimeout(fn, 0)` armed inside A runs inside A;
   - `uninstallRealm` restores `Date.now`, `Math.random`, `setTimeout` and the facade.
 
@@ -761,7 +804,7 @@ What changes:
 Outcomes on the new substrate (recorded in ct-55688):
 - Every convergence seed (21 to 32) and every fixed convergence test keeps its outcome; no seed needs the heal.
 - `a restore elsewhere reaches every window through the log` (seed 72) passes. It was red on ct-56048 until the host kept the bridged acknowledgement on the kill's locks: the follower's replicated write re-planted them without it, so no ack and no echo retired them and B's restore could not land on A.
-- The randomized multi-window seeds converge, and the pin (fewer than half the seeds heal) holds over all twelve. Seeds 83 and 86 still take one host heal.
+- The randomized multi-window seeds converge through the channels alone, and the check now requires that no seed needs the heal (seeds 81 to 150 checked on 2026-10-03). Seeds 83 and 86 took one host heal until a replicated field write older than the host's own lock on the field stopped overwriting it (`applyReplicatedFields`); seed 110 diverged until a permission-blocked child with no messages lifted its parent on the server as it does on the replica (`buildAskingParents`).
 
 Acceptance:
 - Record the old wall times first with `bun test store/__tests__/inboxConvergenceSim.test.ts` and the multi-window suite on the pre-port tree.
@@ -791,15 +834,16 @@ Then run `cd packages/convex && bun test convex/`. Time `bun run sim` and the le
 | File | Setup | Steps | Must hold | Likely outcome |
 |---|---|---|---|---|
 | visibilityFlip | acme {ada, bo}; ada session s is private, with a linked task t | ada `setPrivacy(s, team)`, settle, then back to private | bo's team slot gains and then loses s; after the flip back, `bo cannotRead(t)`; `INV-sweep` is clean | passes in every mode and seed of a 20-seed sweep (sweep seed 174197 found ct-56051, now fixed) |
-| viewerHideVsOwner | ada session s, team-visible and working; A = ada (1 follower), B = bo (scope acme) | B.host `kill(s)`; ada.daemon `settles(s)` | `inbox_hides` row for bo; `A shows s` with an unchanged status; B's team slot excludes s | **red** ct-56045 on `expect.shows`, interleave seed 239423 (bo's inbox floor probe prunes the team row it fed in before the floor, a durable exclude) |
+| viewerHideVsOwner | ada session s, team-visible and working; A = ada (1 follower), B = bo (scope acme) | B.host `kill(s)`; ada.daemon `settles(s)` | `inbox_hides` row for bo; `A shows s` with an unchanged status; B's team slot excludes s | passes; guards ct-56045, which was red on `expect.shows` at interleave seed 239423 (bo's inbox floor probe pruned the team row it fed in before the floor, a durable exclude). The probe now asks byIds only about rows the principal runs |
 | reapVsFollowerLock | ada's empty s (message_count 0, a live managed session); A has 1 follower | the follower kills s; ada.daemon heartbeats during the dispatch; the clock passes the 24h empty-row grace and `cleanup:gcEmptyConversations` fires (a kill of an empty row only queues the teardown; the gc reaps the row) | the row is gone on the server and in every window; no lock survives; cursors equal heads | passes in every mode and seed of a 20-seed sweep. It was red on ct-56048: the bridged hide planted fields the follower's kill never wrote, and the host's re-plants dropped the bridged acknowledgement. Getting to settle #2 also found that a follower kept a fact the host's overlay had cleared (replicated rows now carry facts verbatim) |
-| queuedSendVsLaggingTail | ada's s is working; A mounts the tail of s (`A.tail(s)`) | lag the tail's channel; ada `send(s)`; daemon `claimPending` then `ack` (paste, the transcript echo wrapped in `<pasted_content>` as Claude Code writes it, and the ack with `delivery_acks` paired by `pairDeliveryAcks`), twice; `A.coverage()`; release | the send renders exactly once (`mergeUnconfirmedMessages`): the settled bubble while the tail lags, the echo after; each `client_id` unique | passes in every default run; sweep seed 157409 fails INV-sessions-mine on ct-56054 |
+| queuedSendVsLaggingTail | ada's s is working; A mounts the tail of s (`A.tail(s)`) | lag the tail's channel; ada `send(s)`; daemon `claimPending` then `ack` (paste, the transcript echo wrapped in `<pasted_content>` as Claude Code writes it, and the ack with `delivery_acks` paired by `pairDeliveryAcks`), twice; `A.coverage()`; release | the send renders exactly once (`mergeUnconfirmedMessages`): the settled bubble while the tail lags, the echo after; each `client_id` unique | passes in every default run and `--sweep 20` (sweep seed 157409 guards ct-56054) |
 | roleTriggerScope | acme with the org flag, role anchor R; bo's s filed under R (`orgRoles:reparentSession`); ada and bo feed `agentTasks` from `webList` | daemon `updateAgentStatus(permission_blocked)` twice at one message count, with a `working` turn between (a `waiting` settle schedules no needs-input check, so it never reaches R) | one role event per `hand_wake_notified_key`; `INV-triggers`; ada and bo each see only the triggers `webList` returns | passes in every mode and seed of a 20-seed sweep. It was red on ct-56051 at interleave seed 114430 (bo's generated parent sat in Questions on the server only, lifted by a teammate the replica never held) |
-| agentPingPong | two agent sessions in acme (ada's and bo's, chat on) mention each other by short id | the opening line, then `agent.says` replies in its thread in a loop; clock advances 1h | caps hold; settle quiesces within budget | **red** ct-56047 on `INV-ping-pong` (the mention-reply relay never takes the hourly caps, about 30 wakes per sender per hour) |
-| personalAnchorOwnedByTeammate | ada's personal standing session (private, `persistent`); ada adds bo as a second owner through `sessionOwnership:addSessionOwner` before the devices boot | bo `pin`, then `kill`; the clock moves past `HIDDEN_OVERRIDE_SETTLE_MS` | bo's ack retires the lock (`INV-pending-locks`) | **red** ct-56044 on `INV-pending-locks` (second-party owner fan-out gap) |
+| agentPingPong | two agent sessions in acme (ada's and bo's, chat on) mention each other by short id | the opening line, then `agent.says` replies in its thread in a loop; clock advances 1h | caps hold; settle quiesces within budget | passes; guards ct-56047, which was red on `INV-ping-pong` (the mention-reply relay never took the hourly caps, about 30 wakes per sender per hour) |
+| agentPingPongOwnSessions (same file) | ada's lead session and six of her worker sessions in acme (chat on) | the lead's root line, then one line in its thread naming all six workers; each worker answers in the thread | every answer is relayed to the lead (`expect.answersRelayed`); caps hold | passes; red when the relay charged answers to the person, which folded the last two answers into a thread nobody was woken for |
+| personalAnchorOwnedByTeammate | ada's personal standing session (private, `persistent`); ada adds bo as a second owner through `sessionOwnership:addSessionOwner` before the devices boot | bo `pin`, then `kill`; the clock moves past `HIDDEN_OVERRIDE_SETTLE_MS` | bo's ack retires the lock (`INV-pending-locks`) | passes; guards ct-56044, which was red on `INV-pending-locks` (the sync log fanned a conversation out to its runner only, so a second owner's acks never retired) |
 | twoHumansOneRole | ada and bo in acme (chat and org on), role R | both `tellRole(R)` 200ms apart, in two rounds: ada first, then bo first (the DSL has no in-scenario order mode, so scripted pins both orders and the interleave seeds race them) | two wakes per round (`wokenTimes`); the hourly `mention_to` counter equals the wakes (`INV-roles`); R's standing session takes its wakes, oldest first, in channel order (and in scripted runs from ada, bo, bo, ada). The file notes OCC is not covered. | passes in every mode and seed of a 20-seed sweep, INV-fixpoint included (ct-56011, ct-56053 and ct-56050 fixed) |
-| memberRemovedMidTurn | acme (org on, role R) {ada, bo}; ada's team-visible s with a task t; bo's s is working; device B (scope acme) feeds the acme task floor and the anchor list; B's team list lands after its first inbox floor (the other order is ct-56045, guarded by viewerHideVsOwner) | B goes offline; admin `remove(acme, bo)`; B kills ada's s while it still holds it; B comes back online | B purges acme rows, tasks and the acme anchor (no unreadable row); acme cursor gone; the server refuses the kill silently (dispatch's viewer hide checks `canAccessConversation`, so no `inbox_hides` row and no error), and B's outbox drains; anchor list check (`INV-roles`) holds | known INV-fixpoint (ct-56354: the task's first byIds adds the comments the task list never carries); every run of a 20-seed sweep passes with it left out (sweep seed 473531 found ct-56051, now fixed) |
-| resumeVsSend | ada's two parked (hibernated) sessions s1 and s2, owned by her daemon's device; her window has both transcript tails open | ada `send(s1)` then daemon `resume(s1)`; daemon `resume(s2)` then ada `send(s2)`; the daemon polls, pastes, echoes and acks, then polls again | one delivery; one `client_id` on one pending row and one transcript line; bubble settles | passes in every default run; ct-56054 (overlay ships the derived agent_status as the fact) shows on some sweep seeds |
+| memberRemovedMidTurn | acme (org on, role R) {ada, bo}; ada's team-visible s with a task t; bo's s is working; device B (scope acme) feeds the acme task floor and the anchor list; B's team list and first inbox floor land in either order | B goes offline; admin `remove(acme, bo)`; B kills ada's s while it still holds it; B comes back online | B purges acme rows, tasks and the acme anchor (no unreadable row); acme cursor gone; the server refuses the kill silently (dispatch's viewer hide checks `canAccessConversation`, so no `inbox_hides` row and no error), and B's outbox drains; anchor list check (`INV-roles`) holds | passes `--sweep 20`; guards ct-56354, which was red on INV-fixpoint (the task's first byIds added the comments the task floor never carried; every tasks channel now builds its rows with `enrichTasks`, comments included). Sweep seed 473531 found ct-56051, now fixed |
+| resumeVsSend | ada's two parked (hibernated) sessions s1 and s2, owned by her daemon's device; her window has both transcript tails open | ada `send(s1)` then daemon `resume(s1)`; daemon `resume(s2)` then ada `send(s2)`; the daemon polls, pastes, echoes and acks, then polls again | one delivery; one `client_id` on one pending row and one transcript line; bubble settles | passes in every default run and `--sweep 20` (sweep seed 671520 guards ct-56054) |
 | daemonRestartParked | ada has 3 parked (hibernated) sessions, each keyed by its `session_id`, one live working session, and a due trigger on a parked one | daemon heartbeat gap past `HEARTBEAT_ALIVE_MS`; `restart` of the live pane only (parking kills a pane, so the warm restart in daemon.ts cannot recover it); `claimTask` | no duplicate sessions; parked rows stay dormant during and after the gap, the live row is working again; `armed_trigger_kind` is consistent | passes in every mode and seed of a 20-seed sweep |
 
 ## 7. Risks and mitigations
@@ -821,6 +865,7 @@ Then run `cd packages/convex && bun test convex/`. Time `bun run sim` and the le
 
 ## 8. Decisions for the founder
 
-Nothing blocks Phase 2. One item is flagged for Phase 3, when the red scenario lands:
+Nothing is open. The one item Phase 2 flagged is decided and built:
 
-- **Co-owner sync-log fan-out.** A second-party owner (`session_owners`), or a teammate triaging someone else's session, gets no sync-log actions for that conversation, because fan-out goes to `user:<runner>` only (syncLog.ts:305-308). Their acks never retire their locks. Phase 2 lands `personalAnchorOwnedByTeammate` as `test.failing`. The fix, fanning conversations out to the owners' scopes as well, changes who receives which rows. That is an access and routing product decision, so it is queued for the founder when Phase 3 starts.
+- **Co-owner sync-log fan-out (ct-56044).** A conversation's access stamp carries its session owners as `access_grants` (`lib/accessKeys.ts`), and `scopesForChange` (`syncLog.ts`) fans each conversation action out to the runner's user scope and to every grant's. A new owner gets the row in their own scope through `emitOwnerAdded` (`changeLog.ts`). Owner removal deliberately emits nothing: a revocation in the departed owner's scope would reach their client as a byIds probe and a durable exclude, pruning a row that may still be team-visible to them. Their client settles the claim through `settleDisownClaims`, which never prunes. `personalAnchorOwnedByTeammate` guards it.
+- **A teammate triaging someone else's session** needs no fan-out. A viewer who neither runs nor owns the row never writes it: their stash or kill is an `inbox_hides` row for them alone (`dispatch.ts` `hideForViewerByClientId`), which `viewerHideVsOwner` guards. Undoing that hide is tracked separately (`undo-history.md` B6).

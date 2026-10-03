@@ -15,6 +15,7 @@ import { convexIdFor } from "@codecast/shared/contracts/__fixtures__/inboxProjec
 import { genTeamWorld, membershipIdFor, teamIdFor, userIdFor } from "@codecast/shared/contracts/__fixtures__/teamWorldGen";
 import { hourBucket } from "@codecast/convex/convex/lib/chatQuota";
 import { MENTION_WAKES_PER_SENDER_HOUR, MENTION_WAKES_PER_TARGET_HOUR } from "@codecast/convex/convex/chat";
+import { chatRelayClientId } from "@codecast/convex/convex/lib/chatWakeIds";
 import { makeSimBackend, type SimBackend } from "@codecast/convex/convex/simBackend.testing";
 import { snapshotEntries } from "@platform/engine";
 import { __createInboxStoreForTests, syncLogScopeMetaKey, useInboxStore } from "../../../inboxStore";
@@ -485,6 +486,25 @@ describe("invariants", () => {
       }, `ping:${i}`);
     }
     expect(await planted(world, "INV-ping-pong", "ada/s0")).toContain(`agent wakes into one session in hour ${hourBucket(now())}`);
+  });
+
+  // A charge key narrower than a real session (here one per line) keeps every
+  // sender under its cap; the person's ceiling, read from ownership, catches it.
+  test("INV-ping-pong: one person's relayed replies past their ceiling", async () => {
+    const world = fixture(23);
+    await world.host("ada", ADA);
+    await clean(world, "INV-ping-pong");
+    const ceiling = MENTION_WAKES_PER_SENDER_HOUR * (1 + world.convs.ada.length);
+    for (let i = 0; i <= ceiling; i++) {
+      const line = await world.insert("chat_messages", { origin: "agent", origin_session_id: `line-${i}`, content: "pong", created_at: now() }, `line:${i}`);
+      await world.insert("pending_messages", {
+        conversation_id: world.convs.bo[i % world.convs.bo.length], from_user_id: ADA, owner_user_id: BO,
+        content: "pong", client_id: chatRelayClientId(line), status: "pending", created_at: now(),
+      }, `relay:${i}`);
+    }
+    const text = await planted(world, "INV-ping-pong", "ada");
+    expect(text).toContain(`${ceiling + 1} agent wakes from one person in hour ${hourBucket(now())} ada, over their ceiling of ${ceiling}`);
+    expect(text).not.toContain("from one sender");
   });
 
   // The real world (sim/world.ts genesis, sim/window.ts windows and their

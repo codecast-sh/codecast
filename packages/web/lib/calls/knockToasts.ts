@@ -1,5 +1,6 @@
 import { toast as sonner } from "sonner";
-import type { RoomKnock } from "../../store/inboxStore";
+import { guestDisplayName } from "@codecast/shared/contracts";
+import type { GuestWaiting, RoomKnock } from "../../store/inboxStore";
 import { firstName } from "../../components/calls/speakers";
 
 // SOMEBODY AT THE DOOR, wherever the person inside is looking.
@@ -94,4 +95,66 @@ export function syncKnockToasts(opts: {
     next.add(id);
   }
   return next;
+}
+
+// A GUEST AT A DOOR NOBODY IS BEHIND.
+//
+// The knocks above are for the room the person is seated in. An outside
+// invitee usually arrives BEFORE the meeting, at a room with nobody in it,
+// and there is no door on any screen for them to appear at: the person who
+// sent the link is at their desk doing something else. So the guests waiting
+// on the viewer's own links (callGuests.listGuestsWaiting) each get a toast
+// that stays until they are answered or give up, with the one thing that
+// answers them on it: Join, which seats the viewer in the room, where the
+// door (and the knock's own Admit) is. A window not in front also gets the
+// system notification. The same rules as a knock: one window tells (the
+// notification leader), and a toast leaves with its reason, never on a timer.
+
+/** The guests still at their door: inside their lease, and not at the room
+ *  the viewer is seated in (that room's door already shows them). */
+export function guestsStillWaiting(waiting: readonly GuestWaiting[], now: number, seatedRoomKey: string | null): GuestWaiting[] {
+  return waiting.filter((g) => g.present_until > now && g.room_key !== seatedRoomKey);
+}
+
+const waitingId = (g: Pick<GuestWaiting, "guest_id">) => `guest-waiting:${g.guest_id}`;
+
+/** What the toast, the banner and the Live now row call it. */
+export function guestWaitingTitle(g: Pick<GuestWaiting, "name" | "title">): string {
+  return `${guestDisplayName(g.name)} is waiting to join ${g.title ?? "your call"}`;
+}
+
+/** Put up a toast for each guest in `waiting` that has none, take down the
+ *  toast of each one no longer there, and report the guests newly shown
+ *  through `told` (the server stamps those as "the inviter was told", which
+ *  is what the guest's own page then says). `shown` is carried by the caller. */
+export function syncGuestWaitingToasts(opts: {
+  waiting: GuestWaiting[];
+  shown: Set<string>;
+  join: (roomKey: string) => void;
+  told: (guestIds: string[]) => void;
+  leader?: boolean;
+  notify?: Notify;
+  toast?: Toaster;
+}): Set<string> {
+  const toast = opts.toast ?? (sonner as unknown as Toaster);
+  if (opts.leader === false) {
+    for (const id of opts.shown) toast.dismiss(id);
+    return new Set();
+  }
+  const live = new Set(opts.waiting.map(waitingId));
+  for (const id of opts.shown) if (!live.has(id)) toast.dismiss(id);
+  const fresh = opts.waiting.filter((g) => !opts.shown.has(waitingId(g)));
+  for (const g of fresh) {
+    const title = guestWaitingTitle(g);
+    const description = "They opened your guest link, and nobody is in the call yet. Join to let them in.";
+    opts.notify?.(title, description, `${waitingId(g)}:${g.knocked_at}`);
+    toast(title, {
+      id: waitingId(g),
+      duration: Infinity,
+      description,
+      action: { label: "Join", onClick: () => opts.join(g.room_key) },
+    });
+  }
+  if (fresh.length > 0) opts.told(fresh.map((g) => g.guest_id));
+  return live;
 }

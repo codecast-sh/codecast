@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react';
 import { StyleSheet, ActivityIndicator, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
-import { useQuery } from 'convex/react';
+import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -41,22 +41,22 @@ export default function ShareLinkScreen() {
   const kind = parsed?.kind;
   const token = parsed?.token;
 
-  const conv = useQuery(
+  const conv = useQueryNoThrow(
     api.conversations.getSharedConversationMeta,
     kind === 'conversation' && token ? { share_token: token } : 'skip',
-  );
-  const msg = useQuery(
+  ).data as any;
+  const msg = useQueryNoThrow(
     api.messages.getSharedMessage,
     kind === 'message' && token ? { share_token: token } : 'skip',
-  );
-  const doc = useQuery(
+  ).data as any;
+  const doc = useQueryNoThrow(
     (api as any).docs.getShared,
     kind === 'doc' && token ? { share_token: token } : 'skip',
-  );
-  const plan = useQuery(
+  ).data as any;
+  const plan = useQueryNoThrow(
     (api as any).plans.getShared,
     kind === 'plan' && token ? { share_token: token } : 'skip',
-  );
+  ).data as any;
 
   // undefined = still resolving, null = dead link, else the destination.
   const target = useMemo(():

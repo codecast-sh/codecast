@@ -4,7 +4,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { useIsSyncHost } from "./useSyncRole";
 import { useSyncCollection } from "./useSyncCollection";
-import { settingsDataKey } from "../lib/settingsData";
+import { settingsDataKey, TEAM_SCOPED_SETTINGS } from "../lib/settingsData";
 
 const queries = {
   directoryMappings: api.users.getDirectoryTeamMappings,
@@ -12,6 +12,8 @@ const queries = {
   accountProfiles: api.accountSwitch.listAccountProfiles,
   connections: api.appConnections.listConnections,
   teamMembers: api.teams.getTeamMembers,
+  // The active team's own record (name, invite code) for the team settings row.
+  team: api.teams.getTeam,
   githubInstallations: api.githubApp.listInstallations,
   // The same query with no team named answers with the caller's own installs.
   personalGithubInstallations: api.githubApp.listInstallations,
@@ -26,7 +28,7 @@ function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null
   const teamId = requestedTeamId === undefined ? activeTeamId : requestedTeamId;
   const isHost = useIsSyncHost();
   const key = settingsDataKey(name, userId, teamId);
-  const teamQuery = name === "teamMembers" || name === "githubInstallations";
+  const teamQuery = TEAM_SCOPED_SETTINGS.has(name);
   const args = !key || !isHost || (teamQuery && !isConvexId(String(teamId)))
     ? "skip"
     : teamQuery ? { team_id: teamId }

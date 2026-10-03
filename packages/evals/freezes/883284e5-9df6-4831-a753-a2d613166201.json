@@ -18,7 +18,7 @@
     "visibility": "public",
     "snapshot": "fixtures/anchor-brief/team-anchor-opening.json"
   },
-  "judge": "orients the agent to the workspace it serves and how it works there, saves its role to memory as the opening asks, says a one-line hello, and changes nothing through cast",
+  "judge": "its hello is one line that says it is online and names the workspace it serves, the Fernhill team",
   "notes": null,
   "tags": [],
   "id": "883284e5-9df6-4831-a753-a2d613166201",

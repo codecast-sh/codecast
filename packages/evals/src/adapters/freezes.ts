@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 import type { Freeze, FreezeStore } from '@platform/evals';
 import { fsFreezeStore } from '@platform/evals/fs';
@@ -78,8 +78,25 @@ const visibility = (f: Pick<Freeze, 'meta'>): string | undefined => (f.meta as {
 /** A fixture freeze, committed to the public repo; anything else is a real moment and stays private. */
 export const isPublicFreeze = (f: Pick<Freeze, 'meta'>): boolean => visibility(f) === 'public';
 
+/**
+ * A fixture's `judge` seeds the first freeze made from it and then lives on
+ * that freeze: the key is dropped from the fixture, so the criterion has one
+ * home and `freeze judge` is the one way to change it.
+ */
+function moveFixtureJudge(pkgRoot: string, snapshot: string | undefined): void {
+  const path = snapshot ? join(pkgRoot, snapshot) : '';
+  if (!path || !existsSync(path)) return;
+  const text = readFileSync(path, 'utf8');
+  const fixture = JSON.parse(text) as Record<string, unknown>;
+  if (!('judge' in fixture)) return;
+  const { judge: _seed, ...rest } = fixture;
+  const indent = /^\{\n( +)"/.exec(text)?.[1]?.length ?? 1;
+  writeFileSync(path, `${JSON.stringify(rest, null, indent)}${text.endsWith('\n') ? '\n' : ''}`);
+}
+
 export function codecastFreezeStore(opts: CodecastFreezeStoreOptions = {}): FreezeStore {
-  const pub = fsFreezeStore({ dir: opts.publicDir ?? publicFreezesDir() });
+  const publicDir = opts.publicDir ?? publicFreezesDir();
+  const pub = fsFreezeStore({ dir: publicDir });
   const priv = fsFreezeStore({ dir: opts.privateDir ?? homePaths().freezes });
 
   const owner = async (id: string): Promise<{ store: FreezeStore; freeze: Freeze } | null> => {
@@ -93,7 +110,10 @@ export function codecastFreezeStore(opts: CodecastFreezeStoreOptions = {}): Free
   return {
     async create(input) {
       const withJudge = { ...input, judge: input.judge ?? opts.defaultJudge?.(input) ?? null };
-      return isPublicFreeze(input) ? pub.create(committedFreeze(withJudge)) : priv.create(withJudge);
+      if (!isPublicFreeze(input)) return priv.create(withJudge);
+      const created = await pub.create(committedFreeze(withJudge));
+      moveFixtureJudge(dirname(publicDir), (input.meta as { snapshot?: string } | undefined)?.snapshot);
+      return created;
     },
     async list(filter) {
       const all = [...(await pub.list(filter)), ...(await priv.list(filter))];
@@ -157,6 +177,14 @@ export function auditPublicTree(pkgRoot: string): string[] {
     if (!snapshot.startsWith('fixtures/') || snapshot.includes('..') || !existsSync(join(pkgRoot, snapshot))) problems.push(`${rel}: meta.snapshot "${snapshot}" is not a committed fixture`);
     if ((f.judge ?? '').length > 1000) problems.push(`${rel}: judge is ${(f.judge ?? '').length} characters (limit 1000)`);
     for (const s of stringsIn({ ...f, judge: undefined })) if (s.text.length > 300) problems.push(`${rel}: ${s.path} is ${s.text.length} characters (limit 300)`);
+    // A freeze's criterion has one home, the freeze: a fixture's `judge` only seeds a freeze that does not exist yet.
+    if (snapshot && existsSync(join(pkgRoot, snapshot))) {
+      try {
+        if ('judge' in (JSON.parse(readFileSync(join(pkgRoot, snapshot), 'utf8')) as object)) problems.push(`${snapshot}: carries a judge, but freeze ${f.id.slice(0, 8)} holds its criterion; drop it from the fixture (./evals freeze judge ${f.id.slice(0, 8)} "..." edits the criterion)`);
+      } catch {
+        // A fixture that is not JSON fails where it is read.
+      }
+    }
   }
   return problems;
 }

@@ -45,12 +45,14 @@ import {
   useInboxStore,
   sortLabels,
   convBucketMap,
+  isFavoriteInStore,
   type InboxSession,
   type TaskItem,
   type DocItem,
 } from "../../store/inboxStore";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, animatedSetSessionRest } from "../../store/undoActions";
+import { animatedSetSessionRest, undoAsOne } from "../../store/undoActions";
+import { counted } from "../../store/undo/labels";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -142,7 +144,9 @@ export function TaskMenuItems({
 
   const applyAll = (fields: Record<string, any>) => {
     const { updateTask } = useInboxStore.getState();
-    for (const t of tasks) updateTask(t.short_id, fields);
+    undoAsOne(`Changed ${counted(count, "task")}`, () => {
+      for (const t of tasks) updateTask(t.short_id, fields);
+    });
   };
 
   const setStatus = (key: string) => {
@@ -153,9 +157,12 @@ export function TaskMenuItems({
     // subtasks gets the shared dialog instead of a stranded local Done.
     if (fields.status === "done" || fields.status === "dropped") {
       let deferred = false;
-      for (const t of tasks) {
-        if (closeTaskWithGuard(t.short_id, fields.status, undefined, fields.status_id).needsConfirm) deferred = true;
-      }
+      const status = fields.status;
+      undoAsOne(`Moved ${counted(count, "task")} to ${target.name}`, () => {
+        for (const t of tasks) {
+          if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
+        }
+      });
       if (!deferred) toast.success(`${bulkLabel} → ${target.name}`);
     } else {
       applyAll(fields);
@@ -229,7 +236,9 @@ export function TaskMenuItems({
         <CtxItem
           icon={CornerDownRight}
           onSelect={() => {
-            for (const t of tasks) if ((t as any).parent_id) setTaskParent(t.short_id, "");
+            undoAsOne(`Removed the parent of ${counted(count, "task")}`, () => {
+              for (const t of tasks) if ((t as any).parent_id) setTaskParent(t.short_id, "");
+            });
             toast.success("Parent removed");
           }}
         >
@@ -299,7 +308,9 @@ export function DocMenuItems({
         currentKey={(single as any)?.doc_type}
         onPick={(key) => {
           const { updateDoc } = useInboxStore.getState();
-          for (const d of docs) updateDoc(d._id, { doc_type: key });
+          undoAsOne(`Changed the type of ${counted(docs.length, "document")}`, () => {
+            for (const d of docs) updateDoc(d._id, { doc_type: key });
+          });
           toast.success(`Type → ${DOC_TYPE_OPTIONS.find((o) => o.key === key)?.label ?? key}`);
         }}
       />
@@ -343,7 +354,10 @@ export function DocMenuItems({
         danger
         icon={Archive}
         onSelect={() => {
-          for (const d of docs) undoableArchiveDoc(d._id);
+          const { archiveDoc } = useInboxStore.getState();
+          undoAsOne(`Archived ${counted(docs.length, "document")}`, () => {
+            for (const d of docs) archiveDoc(d._id);
+          });
         }}
       >
         {single ? "Archive document" : `Archive ${docs.length} documents`}
@@ -430,6 +444,8 @@ export function SessionMenuItems({
   onPickCharacter?: () => void;
 }) {
   const id = session._id;
+  // The card's row can predate a toggle; the store says what the star shows now.
+  const isFavorite = isFavoriteInStore(useInboxStore.getState(), id);
   // One-shot snapshots — labels don't churn while a menu is open.
   const labels = React.useMemo(() => sortLabels(useInboxStore.getState().buckets as any), []);
   const currentBucketId = React.useMemo(
@@ -491,10 +507,10 @@ export function SessionMenuItems({
         shortcut="conv.favorite"
         onSelect={() => {
           useInboxStore.getState().toggleFavorite(id);
-          toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
+          toast.success(isFavorite ? "Removed from favorites" : "Added to favorites");
         }}
       >
-        {session.is_favorite ? "Remove from favorites" : "Add to favorites"}
+        {isFavorite ? "Remove from favorites" : "Add to favorites"}
       </CtxItem>
       <CtxSub>
         <CtxSubTrigger icon={Tag}>Label</CtxSubTrigger>
@@ -561,14 +577,14 @@ export function SessionMenuItems({
           <CtxItem
             icon={Archive}
             shortcut="session.stash"
-            onSelect={onStash ?? (() => undoableHideSession(id, "stash"))}
+            onSelect={onStash ?? (() => useInboxStore.getState().stashSession(id))}
           >
             Stash
           </CtxItem>
           <CtxItem
             icon={EyeOff}
             shortcut="session.stashHide"
-            onSelect={() => undoableHideSession(id, "stash", { hidden: true })}
+            onSelect={() => useInboxStore.getState().stashSession(id, { hidden: true })}
           >
             Stash and hide — stays out through trigger wakes
           </CtxItem>
@@ -589,7 +605,7 @@ export function SessionMenuItems({
           <CtxItem
             icon={Clock}
             shortcut="session.deferAdvance"
-            onSelect={onDefer ?? (() => undoableDeferSession(id))}
+            onSelect={onDefer ?? (() => useInboxStore.getState().deferSession(id))}
           >
             Defer
           </CtxItem>

@@ -276,3 +276,29 @@ lines that decide or ask (the chat rules, `DECIDED_RE` and `ASKED_RE`) and
 falls back to the first few when none does, as `lines` on the call beside
 `summary_status`. A summarised call carries no lines, and the whole block
 stays under the one `said_bytes` budget.
+
+**The goals people stated** (2026-10-03, measured on Union against an answer
+key read from every call transcript and the team's chat). The review could
+not build the tree because it never saw the statements a tree is made of: a
+summarised call reached it as its summary, which keeps decisions and drops
+"our goal is $250 or less per introduction"; a busy channel's newest fifty
+lines reached back days, not the weeks since someone posted the company's
+goals as a list; an initiative reached it as a title, without the description
+that carried its numbers; and the call cap counted the thirty huddles that
+ended before words, so two weeks of real calls fell outside it. Three samples
+on those inputs found 3 to 6 of 8 goals under three different tops. So:
+`readStatedGoals` (query part `goals`, its own execution and its own
+`goal_bytes` budget) reads every person written chat line of the window
+(`goal_messages_per_channel`) and every speaker's turn of every readable
+call's own transcript, keeps the ones that name a goal, a priority list, a
+mission or a metric (`statesGoal`), cuts a long turn around those words
+(`goalExcerpt`) and returns them as `said.goals`, written lines first, each
+with `where` (the channel, or the call's short id that `cast call <id>
+--transcript` opens). `said.calls` rows carry that `id` too.
+`coverage.initiatives` rows carry `description`. `readableCalls` applies the
+cap to calls in which something was said. The prompt names `said.goals` as
+where goals come from, takes a list a person wrote as the tree's first
+draft, says the top of the tree is what the company is for, that the tree
+has two levels, that a goal with an initiative is reshaped and never
+restated, and that a target the reviewer worked out is not a stated one.
+The goal tree focus asks for the whole tree in one run.

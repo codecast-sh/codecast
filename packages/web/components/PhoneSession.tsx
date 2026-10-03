@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react";
-import { ArrowUp, ChevronLeft, Cpu, Ellipsis, GitBranch, Plus } from "lucide-react";
+import { ChevronDown, Cpu, Ellipsis, List } from "lucide-react";
 import {
   MOBILE_AGENT_LABEL,
   MOBILE_AGENT_LOGO_BG,
@@ -12,19 +12,20 @@ import {
 import { formatToolName, toolIcon, toolResultHint, toolSummary, type ToolCallLike, type ToolColorToken } from "@codecast/shared/render";
 import { ClaudeIcon, CursorIcon, GeminiIcon, GrokIcon, OpenAIIcon } from "./BrandIcons";
 import { formatModel } from "../lib/conversationProcessor";
+import { FaArrowUp, FaChevronLeft, FaCodeFork, FaLevelUp, FaPlus, FaServer, IonHeadsetOutline } from "./PhoneGlyphs";
 
 /**
  * The mobile app's session screen (packages/mobile/app/session/[id].tsx)
  * drawn with DOM elements from the screen's own spec
  * (@codecast/shared/render/mobileSessionStyle), for the marketing hero's
- * phone. Colours are the theme's tokens, so it follows the `.dark` the
- * phone's screen carries; RN's column flex is spelled out where it lays out.
+ * phone, in the app's default light theme. Colours are the theme's tokens;
+ * RN's column flex is spelled out where it lays out.
  * A hairline is half a pixel.
  */
 
 const HAIRLINE = 0.5;
-/** RN's `borderLight`: the dark palette's highlight. */
-const BORDER_LIGHT = "var(--sol-bg-highlight)";
+/** RN's `borderLight` in the app's light palette (constants/Theme.ts), which the web tokens have no name for. */
+const BORDER_LIGHT = "#c5c8c6";
 const tint = (color: string, alpha: number) => `color-mix(in srgb, ${color} ${alpha}%, transparent)`;
 const col: CSSProperties = { display: "flex", flexDirection: "column" };
 /** A spec style as DOM style: RN reads a numeric lineHeight as px, the DOM as a multiple of the font size. */
@@ -47,51 +48,112 @@ function PhoneAgentLogo({ agentType }: { agentType: string }) {
 
 const agentTint = (agentType: string) => MOBILE_AGENT_TINT[agentType] ?? "var(--sol-yellow)";
 
-/** The pinned title bar: back, the session's title, more. `top` is the status bar's inset, which the bar's colour runs under. */
-export function PhoneSessionHeader({ title, top = 0 }: { title: string; top?: number }) {
+/**
+ * The pinned title bar: back, the session's title, then the huddle button
+ * (when the team has calls), the message list (once the session has
+ * messages), and more. `top` is the status bar's inset, which the bar's
+ * colour runs under.
+ */
+export function PhoneSessionHeader({ title, top = 0, huddle, messageList }: { title: string; top?: number; huddle?: boolean; messageList?: boolean }) {
+  const btn = css({ ...S.headerIconBtn, display: "flex" });
   return (
     <div className="shrink-0 bg-sol-bg-alt" style={css({ ...S.pinnedHeader, display: "flex", paddingTop: top, height: top + MOBILE_SESSION_HEADER_HEIGHT, boxSizing: "border-box" })}>
-      <span className="text-sol-text" style={css({ ...S.headerIconBtn, display: "flex" })}>
-        <ChevronLeft size={20} strokeWidth={3} />
+      <span className="text-sol-text" style={btn}>
+        <FaChevronLeft size={18} />
       </span>
       <span className="truncate font-semibold text-sol-text" style={css({ ...S.headerTitleText, minWidth: 0 })}>{title}</span>
-      <span className="text-sol-text-muted" style={css({ ...S.headerIconBtn, display: "flex" })}>
+      {huddle && (
+        <span className="text-sol-text-muted" style={{ display: "flex", alignItems: "center", padding: "4px 6px" }}>
+          <IonHeadsetOutline size={17} />
+        </span>
+      )}
+      {messageList && (
+        <span className="text-sol-text-muted" style={btn}>
+          <List size={17} strokeWidth={2} />
+        </span>
+      )}
+      <span className="text-sol-text-muted" style={btn}>
         <Ellipsis size={18} />
       </span>
     </div>
   );
 }
 
-function Chip({ color, icon, children }: { color: string; icon: ReactNode; children: ReactNode }) {
+function Chip({ color, icon, trailing, children }: { color: string; icon: ReactNode; trailing?: ReactNode; children: ReactNode }) {
   return (
     <span className="shrink-0" style={css({ ...MOBILE_CHIP_STYLE.shell, display: "flex", borderWidth: HAIRLINE, borderStyle: "solid", borderColor: tint(color, 25), background: tint(color, 8), boxSizing: "border-box" })}>
       {icon}
       <span className="truncate" style={css({ ...MOBILE_CHIP_STYLE.text, color })}>{children}</span>
+      {trailing && <span style={{ display: "flex", color }}>{trailing}</span>}
     </span>
   );
 }
 
-/** The strip under the title bar: the agent, when it last moved, the live dot, the model and the branch. */
-export function PhoneSessionMeta({ agentType, ago, live, model, branch, dot }: { agentType: string; ago: string; live: boolean; model?: string; branch?: string; dot?: ReactNode }) {
+/** The machine a session runs on and who owns it, as the app's AssignmentChip draws them: two lobes in one shell, their tints meeting edge to edge. */
+function AssignmentChip({ device, owner }: { device: { name: string; remote: boolean; online: boolean }; owner: string }) {
+  // The app's deviceColor: a cloud host violet, a Linux box orange, a Mac cyan.
+  const color = device.remote ? "var(--sol-violet)" : "var(--sol-cyan)";
+  const lobe: CSSProperties = { display: "flex", alignItems: "center", gap: 4, paddingLeft: 7, paddingRight: 7 };
+  const initials = owner.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  return (
+    <span className="shrink-0" style={{ display: "flex", alignItems: "stretch", height: MOBILE_CHIP_STYLE.shell.height, borderWidth: HAIRLINE, borderStyle: "solid", borderColor: "var(--sol-border)", borderRadius: 6, overflow: "hidden", maxWidth: 210, boxSizing: "border-box" }}>
+      <span style={{ ...lobe, background: tint(color, 8) }}>
+        <FaServer size={10} color={color} />
+        <span className="truncate" style={css({ ...MOBILE_CHIP_STYLE.text, color })}>{device.name}</span>
+        <span style={{ width: 6, height: 6, borderRadius: 3, flexShrink: 0, background: device.online ? "var(--sol-green)" : "var(--sol-text-muted0)" }} />
+      </span>
+      <span style={{ ...lobe, background: tint("var(--sol-cyan)", 8) }}>
+        <span className="text-sol-text-muted" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 14, height: 14, borderRadius: 7, flexShrink: 0, background: "var(--sol-bg-alt)", border: `${HAIRLINE}px solid var(--sol-border)`, fontSize: 14 * 0.42, fontWeight: 600, boxSizing: "border-box" }}>{initials}</span>
+        <span className="truncate" style={css({ ...MOBILE_CHIP_STYLE.text, color: "var(--sol-cyan)" })}>{owner}</span>
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The strip under the title bar, in the app's order: the agent, when it last
+ * moved, the live dot, the model (with its switcher's chevron on your own
+ * session), the branch, where it runs and who owns it, and the parent it was
+ * spawned by. The app's strip scrolls sideways, so what runs past the edge
+ * is clipped there.
+ */
+export function PhoneSessionMeta({ agentType, ago, live, model, modelEditable, branch, assignment, parent, dot }: {
+  agentType: string;
+  ago: string;
+  live: boolean;
+  model?: string;
+  modelEditable?: boolean;
+  branch?: string;
+  assignment?: { device: { name: string; remote: boolean; online: boolean }; owner: string };
+  parent?: boolean;
+  dot?: ReactNode;
+}) {
   return (
     <div className="shrink-0 bg-sol-bg-alt" style={css({ ...S.floatingSessionCard, borderBottom: `${HAIRLINE}px solid ${BORDER_LIGHT}` })}>
-      <div className="overflow-hidden" style={css({ ...S.sessionMeta, display: "flex" })}>
-        <span style={css({ ...S.metaBadgeIcon, display: "flex" })}>
+      {/* The app's strip is a horizontal scroller: nothing in it wraps or squeezes, and what runs past the edge is clipped. */}
+      <div className="overflow-hidden whitespace-nowrap" style={css({ ...S.sessionMeta, display: "flex" })}>
+        <span className="shrink-0" style={css({ ...S.metaBadgeIcon, display: "flex" })}>
           <PhoneAgentLogo agentType={agentType} />
           <span style={css({ ...MOBILE_CHIP_STYLE.text, color: agentTint(agentType) })}>{MOBILE_AGENT_LABEL[agentType] ?? agentType}</span>
         </span>
         <span className="shrink-0 text-sol-text-muted" style={css(S.messageCountText)}>· {ago}</span>
-        {live && (dot ?? <PhoneStatusDot color="#10b981" />)}
-        {model && <Chip color="var(--sol-cyan)" icon={<Cpu size={10} />}>{formatModel(model)}</Chip>}
-        {branch && <Chip color="var(--sol-green)" icon={<GitBranch size={10} />}>{branch}</Chip>}
+        {live && (dot ?? <PhoneStatusDot color="#10b981" glow />)}
+        {model && (
+          <Chip color="var(--sol-cyan)" icon={<Cpu size={10} />} trailing={modelEditable && <ChevronDown size={9} style={{ opacity: 0.7, flexShrink: 0 }} />}>
+            {formatModel(model)}
+          </Chip>
+        )}
+        {branch && <Chip color="var(--sol-green)" icon={<FaCodeFork size={10} />}>{branch}</Chip>}
+        {assignment && <AssignmentChip {...assignment} />}
+        {parent && <Chip color="var(--sol-violet)" icon={<FaLevelUp size={10} />}>Parent</Chip>}
       </div>
     </div>
   );
 }
 
-/** A status dot; `opacity` is the pulse's phase, which the caller drives. */
-export function PhoneStatusDot({ color, opacity = 1 }: { color: string; opacity?: number }) {
-  return <span className="shrink-0" style={css({ ...S.dot, display: "block", background: color, opacity })} />;
+/** A status dot; `opacity` is the pulse's phase, which the caller drives. The strip's live dot glows (the app's activeDot shadow). */
+export function PhoneStatusDot({ color, opacity = 1, glow }: { color: string; opacity?: number; glow?: boolean }) {
+  return <span className="shrink-0" style={css({ ...S.dot, display: "block", background: color, opacity, boxShadow: glow ? `0 0 4px color-mix(in srgb, ${color} 80%, transparent)` : undefined })} />;
 }
 
 /** One message as the screen's MessageBubble draws it: the header (avatar or agent dot, role, model, time) when it opens a turn, then its body. */
@@ -144,7 +206,7 @@ export function PhoneMessageText({ children }: { children: ReactNode }) {
   );
 }
 
-/** The concrete colour of each tool tint, as the app's toolColorHex resolves it in its dark palette. */
+/** The concrete colour of each tool tint, as the app's toolColorHex resolves it. */
 const TOOL_COLOR: Record<ToolColorToken, string> = {
   green: "var(--sol-green)",
   blue: "var(--sol-blue)",
@@ -188,12 +250,14 @@ export function PhoneToolCalls({ calls, only }: { calls: { call: ToolCallLike; r
  * empty, and `caret` marks a focused field. `bottom` is the home indicator's
  * inset under it.
  */
-export function PhoneComposer({ value, placeholder, status, statusDot, caret, bottom, send }: {
+export function PhoneComposer({ value, placeholder, status, statusDot, statusWrap, caret, bottom, send }: {
   value: string;
   placeholder: string;
   status?: string;
   /** The status's pulsing dot, drawn by the caller (its phase is the caller's clock). */
   statusDot?: ReactNode;
+  /** Wraps the status, for a fade the caller drives. */
+  statusWrap?: (status: ReactNode) => ReactNode;
   caret?: boolean;
   bottom: number;
   /** Wraps the send button, for a press the caller animates. */
@@ -203,7 +267,7 @@ export function PhoneComposer({ value, placeholder, status, statusDot, caret, bo
   const canSend = value.length > 0;
   const button = (
     <span className={`text-white ${canSend ? "bg-sol-blue" : "bg-sol-bg-highlight"}`} style={css({ ...S.sendButton, display: "flex", boxSizing: "border-box" })}>
-      <ArrowUp size={16} strokeWidth={2.6} />
+      <FaArrowUp size={14} />
     </span>
   );
   return (
@@ -216,15 +280,16 @@ export function PhoneComposer({ value, placeholder, status, statusDot, caret, bo
         </div>
         <div style={css({ ...S.composerActions, display: "flex" })}>
           <span className="text-sol-text-muted" style={css({ ...S.imageButton, display: "flex" })}>
-            <Plus size={20} strokeWidth={2.6} />
+            <FaPlus size={18} />
           </span>
           <span style={css({ ...S.composerSpacer, display: "flex" })}>
-            {meta && (
-              <span style={css({ ...S.composerStatus, display: "flex" })}>
-                {statusDot ?? <PhoneStatusDot color={meta.color} />}
-                <span style={css({ ...MOBILE_CHIP_STYLE.text, color: meta.color })}>{meta.label}</span>
-              </span>
-            )}
+            {meta &&
+              (statusWrap ?? ((n: ReactNode) => n))(
+                <span style={css({ ...S.composerStatus, display: "flex" })}>
+                  {statusDot ?? <PhoneStatusDot color={meta.color} />}
+                  <span style={css({ ...MOBILE_CHIP_STYLE.text, color: meta.color })}>{meta.label}</span>
+                </span>,
+              )}
           </span>
           {send ? send(button) : button}
         </div>

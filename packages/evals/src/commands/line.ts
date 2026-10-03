@@ -6,7 +6,7 @@ import type { Command } from 'commander';
 import type { EvalSources, Freeze, RunSummary } from '@platform/evals';
 import { fmt } from '@platform/cli-kit/colors';
 import { formatCost } from '@platform/cli-kit/format';
-import type { EvalFlip, EvalResult, EvalRunSet, EvalSurfaceResult } from '@codecast/shared/contracts/evalResult';
+import type { EvalRep, EvalRepsFile, EvalRepsFreeze, EvalRepsSide, EvalRepsSurface } from '@codecast/shared/contracts/evalResult';
 
 import { describeFreeze, hasSnapshot } from '../adapters/resolver';
 import { repPassed } from '../adapters/replay';
@@ -14,17 +14,21 @@ import { codecastRunSource, surfaceRuns } from '../adapters/runs';
 import { homePaths, REPO_ROOT, treeRoot } from '../paths';
 import { surfaces } from '../registry';
 import { changedSince, dirtySurfaces, gitHead, mergeBase } from '../state';
-import { median, separate } from '../stats';
+import { buildEvalResult, evalResultLines } from '../evalResult';
 import type { SurfaceMeta } from '../surface';
-import { majority, positiveNumber, runCheck, scoreOrZero } from './check';
+import { runCheck } from './check';
+import { positiveNumber, scoreOrZero } from './verdict';
 import { pickSurfaces } from './stale';
 
 // `./evals line`: the line's eval station (design LE8). It names the surfaces
 // a branch touches since it left --base, runs `check` on each twice (once in
-// a detached worktree at the merge base, once in this tree), and writes
-// eval-result.json: per surface the separation of the branch's scores from
-// the base's, the gates that failed, whether the proven freezes now pass, and
-// the freezes whose verdict flipped with both replies. A touched surface with
+// a detached worktree at the merge base, once in this tree), writes the reps
+// as reps.json (line-profile.md LP4, the file every project's eval writes),
+// and builds eval-result.json from it with buildEvalResult, the builder
+// `cast line eval-result` runs for every other project: per surface the
+// separation of the branch's scores from the base's, the gates that failed,
+// whether the proven freezes now pass, and the freezes whose verdict flipped
+// with both replies. A touched surface with
 // no freeze to replay is skipped, and says so: there is nothing to measure it
 // by. Exit 0 only when every proven freeze passes, no gate fails, nothing
 // crashed and nothing separates worse.
@@ -37,6 +41,7 @@ export interface LineFlags {
   model?: string;
   budget?: number;
   out?: string;
+  repsOut?: string;
   dry?: boolean;
 }
 
@@ -170,101 +175,53 @@ const checkArgs = (ids: string[], batch: string, flags: LineFlags): string[] => 
   'line base run',
 ];
 
-function runSet(batch: string, runs: RunSummary[]): EvalRunSet | null {
-  if (!runs.length) return null;
-  const scores = runs.map(scoreOrZero);
-  return { batch, reps: runs.length, passed: runs.filter(repPassed).length, median: median(scores), mean: scores.reduce((s, x) => s + x, 0) / scores.length, costUsd: runs.reduce((s, r) => s + r.costUsd, 0) };
-}
+const clip = (s: string, n: number): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-const clip = (s: string, n = 600): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
-
-/** What the reader needs to see a flip: the moment, one reply from each side with the verdict it got, and why. */
-async function flipOf(f: Freeze, direction: EvalFlip['direction'], base: RunSummary[], branch: RunSummary[]): Promise<EvalFlip> {
-  const runs = codecastRunSource();
-  // A representative rep per side: one whose verdict matches that side's majority.
-  const pick = (rs: RunSummary[], pass: boolean) => rs.find((r) => repPassed(r) === pass) ?? rs[0];
-  const [before, after] = await Promise.all([pick(base, direction === 'broke'), pick(branch, direction === 'fixed')].map((r) => (r ? runs.get(r.id) : null)));
-  const replyOf = (d: typeof before) => clip(d?.messages.filter((m) => m.direction === 'out').map((m) => m.text).join('\n\n') || d?.error || '(no reply)');
-  const moment = await describeFreeze(f).catch(() => null);
-  const lastIn = moment?.filter((m) => m.direction === 'in').pop()?.text;
-  const verdict = after?.verdict;
-  const judged = verdict?.checks.find((c) => c.id === 'criteria')?.reasoning;
+/** One scored run as a reps.json rep: its verdict, its reply, and the judge's note (or the failed gates). */
+async function repOf(r: RunSummary, runs: ReturnType<typeof codecastRunSource>): Promise<EvalRep> {
+  const d = await runs.get(r.id).catch(() => null);
+  const verdict = d?.verdict;
   const gates = verdict?.gates.filter((g) => !g.pass).map((g) => `${g.id}: ${g.evidence.summary}`).join('; ');
+  const judged = verdict?.checks.find((c) => c.id === 'criteria')?.reasoning;
   return {
-    freeze: f.id,
-    name: f.name,
-    direction,
-    input: clip(lastIn ? `${f.name}: ${lastIn}` : f.name, 400),
-    before: replyOf(before),
-    after: replyOf(after),
-    note: clip(gates || judged || (verdict ? `score ${verdict.score.toFixed(2)}` : 'no verdict'), 400),
+    passed: repPassed(r),
+    score: scoreOrZero(r),
+    reply: clip(d?.messages.filter((m) => m.direction === 'out').map((m) => m.text).join('\n\n') || d?.error || '', 4000),
+    judge_note: clip(gates || judged || (verdict ? `score ${verdict.score.toFixed(2)}` : ''), 1000),
+    cost_usd: r.costUsd,
+    ...(r.status === 'crash' ? { error: clip(d?.error || 'crashed', 1000) } : {}),
+    ...(r.gatesFailed.length ? { gates_failed: r.gatesFailed } : {}),
   };
 }
 
 /**
- * Each proven freeze of a surface with its majority verdict on both sides, and
- * the reasons it fails the station. A proven freeze is the miss shown first
- * (P9 step 2): one that already passes on the base proves nothing, since the
- * bug is not where the change looks, so the station fails and says so.
+ * One surface's reps from the two run sets in EVALS_HOME, in the reps.json
+ * shape every project's eval writes (line-profile.md LP4). The verdict is
+ * buildEvalResult's, the same for codecast as for any project.
  */
-export function provenVerdicts(
-  proven: Freeze[],
-  surface: string,
-  before: Map<string, boolean>,
-  after: Map<string, boolean>,
-): { proven: EvalSurfaceResult['proven']; reasons: string[] } {
-  const here = proven
-    .filter((f) => surfaceOf(f) === surface)
-    .map((f) => ({ freeze: f.id, basePasses: before.get(f.id) ?? null, passes: after.get(f.id) === true }));
-  const reasons = here.flatMap((p) => [
-    ...(p.basePasses === true ? [`proven freeze ${p.freeze.slice(0, 8)} already passes on the base, so it shows no miss; find where the bug is before changing this surface`] : []),
-    ...(p.passes ? [] : [`proven freeze ${p.freeze.slice(0, 8)} still fails`]),
-  ]);
-  return { proven: here, reasons };
-}
-
-/** Base against branch for one surface, from the two run sets in EVALS_HOME. */
-export async function compareSurface(meta: SurfaceMeta, freezes: Freeze[], proven: Freeze[], batches: { base: string; branch: string }, baseFailure?: string): Promise<EvalSurfaceResult> {
+export async function repsSurface(meta: SurfaceMeta, freezes: Freeze[], proven: Freeze[], batches: { base: string; branch: string }, shas: { base: string; head: string }, baseFailure?: string): Promise<EvalRepsSurface> {
   const all = await surfaceRuns(meta.id);
-  const of = (batch: string) => all.filter((r) => r.batch === batch && r.status !== 'unscored');
-  const base = of(batches.base);
-  const branch = of(batches.branch);
-  const sep = separate(branch.map(scoreOrZero), base.map(scoreOrZero));
-  const before = majority(base);
-  const after = majority(branch);
-  const flips: EvalFlip[] = [];
+  const runs = codecastRunSource();
+  const of = (batch: string, id: string) => all.filter((r) => r.batch === batch && r.status !== 'unscored' && r.freezeId === id);
+  const side = async (batch: string, sha: string, rs: RunSummary[]): Promise<EvalRepsSide | null> => (rs.length ? { batch, sha, reps: await Promise.all(rs.map((r) => repOf(r, runs))) } : null);
+  const out: EvalRepsFreeze[] = [];
   for (const f of freezes) {
-    const a = before.get(f.id);
-    const b = after.get(f.id);
-    if (a === undefined || b === undefined || a === b) continue;
-    flips.push(await flipOf(f, b ? 'fixed' : 'broke', base.filter((r) => r.freezeId === f.id), branch.filter((r) => r.freezeId === f.id)));
+    const isProven = proven.some((p) => p.id === f.id);
+    const base = of(batches.base, f.id);
+    const branch = of(batches.branch, f.id);
+    if (!base.length && !branch.length && !isProven) continue;
+    const moment = await describeFreeze(f).catch(() => null);
+    out.push({
+      freeze: f.id,
+      name: f.name,
+      kind: isProven ? 'miss' : 'guard',
+      proven: isProven,
+      input: clip(moment?.filter((m) => m.direction === 'in').pop()?.text ?? '', 1500),
+      base: await side(batches.base, shas.base, base),
+      branch: await side(batches.branch, shas.head, branch),
+    });
   }
-  const gatesFailed = [...new Set(branch.flatMap((r) => r.gatesFailed))];
-  const crashes = branch.filter((r) => r.status === 'crash').length;
-  const provenHere = provenVerdicts(proven, meta.id, before, after);
-  const reasons = [
-    // Without a base run set nothing can be called worse and no miss was shown: fail closed.
-    ...(base.length ? [] : [baseFailure ?? 'no base reps were scored']),
-    ...(branch.length ? [] : ['no branch reps were scored']),
-    ...provenHere.reasons,
-    ...(gatesFailed.length ? [`gates failed: ${gatesFailed.join(', ')}`] : []),
-    ...(crashes ? [`${crashes} rep(s) crashed`] : []),
-    ...(sep.kind === 'worse' ? [`separated worse than the base (p=${sep.p.toFixed(4)})`] : []),
-  ];
-  return {
-    surface: meta.id,
-    title: meta.title,
-    separation: sep.kind,
-    p: 'p' in sep ? sep.p : null,
-    base: runSet(batches.base, base),
-    branch: runSet(batches.branch, branch),
-    gatesFailed,
-    crashes,
-    proven: provenHere.proven,
-    flips,
-    ok: reasons.length === 0,
-    reasons,
-  };
+  return { surface: meta.id, title: meta.title, route: null, freezes: out, ...(baseFailure ? { base_failure: baseFailure } : {}) };
 }
 
 export async function runLine(flags: LineFlags, sources: EvalSources): Promise<number> {
@@ -293,16 +250,18 @@ export async function runLine(flags: LineFlags, sources: EvalSources): Promise<n
   const stamp = new Date().toISOString();
   const batches = { base: `${stamp}~line-base`, branch: `${stamp}~line-branch` };
   const out = resolve(flags.out ?? 'eval-result.json');
-  const result: EvalResult = {
+  const repsOut = resolve(flags.repsOut ?? join(dirname(out), 'reps.json'));
+  const repsFile: EvalRepsFile = {
     version: 1,
     base: { ref: flags.base, sha },
     head: { sha: gitHead(), dirty: dirtySurfaces(metas).size > 0 },
-    createdAt: stamp,
+    created_at: stamp,
     dry: Boolean(flags.dry),
     reps: flags.reps ?? Math.max(0, ...metas.map((m) => m.reps.check)),
     surfaces: [],
-    ok: true,
-    costUsd: 0,
+    gates_failed: [],
+    gate: null,
+    cost_usd: 0,
   };
 
   const baseFailure = new Map<string, string>();
@@ -331,33 +290,26 @@ export async function runLine(flags: LineFlags, sources: EvalSources): Promise<n
     } finally {
       dropBaseTree(wt);
     }
-    console.log(fmt.bold(`\nbranch (${result.head.sha.slice(0, 9)}${result.head.dirty ? ', with the checkout' : ''}): ${ids.join(', ')}`));
+    console.log(fmt.bold(`\nbranch (${repsFile.head.sha.slice(0, 9)}${repsFile.head.dirty ? ', with the checkout' : ''}): ${ids.join(', ')}`));
     await runCheck(ids, { reps: flags.reps, model: flags.model, budget: flags.budget, dry: flags.dry, batch: batches.branch, state: false, notes: 'line branch run' }, sources);
   }
   for (const meta of metas) {
     const why = skipped.get(meta.id);
-    result.surfaces.push(
+    repsFile.surfaces.push(
       why
-        ? { surface: meta.id, title: meta.title, separation: 'too-few', p: null, base: null, branch: null, gatesFailed: [], crashes: 0, proven: [], flips: [], ok: true, reasons: [], skipped: why }
-        : await compareSurface(meta, freezesOf(meta.id), proven, batches, baseFailure.get(meta.id)),
+        ? { surface: meta.id, title: meta.title, route: null, freezes: [], skipped: why }
+        : await repsSurface(meta, freezesOf(meta.id), proven, batches, { base: sha, head: repsFile.head.sha }, baseFailure.get(meta.id)),
     );
   }
-  result.ok = result.surfaces.every((s) => s.ok);
-  result.costUsd = result.surfaces.reduce((s, x) => s + (x.base?.costUsd ?? 0) + (x.branch?.costUsd ?? 0), 0);
+  repsFile.cost_usd = repsFile.surfaces.flatMap((s) => s.freezes).flatMap((f) => [...(f.base?.reps ?? []), ...(f.branch?.reps ?? [])]).reduce((a, r) => a + r.cost_usd, 0);
+  writeFileSync(repsOut, `${JSON.stringify(repsFile, null, 2)}\n`);
+  const result = buildEvalResult(repsFile);
   writeFileSync(out, `${JSON.stringify(result, null, 2)}\n`);
 
   console.log('');
   if (!metas.length) console.log(`no surface's sources differ from ${flags.base}; nothing to run`);
-  for (const s of result.surfaces) {
-    if (s.skipped) {
-      console.log(`${fmt.warning('skip')} ${s.surface}  ${s.skipped}`);
-      continue;
-    }
-    const sep = s.separation === 'too-few' ? 'too few reps to separate' : `${s.separation}${s.p != null ? ` (p=${s.p.toFixed(4)})` : ''}`;
-    console.log(`${s.ok ? fmt.success('ok  ') : fmt.error('FAIL')} ${s.surface}  ${sep}  medians ${s.base?.median?.toFixed(2) ?? '-'} -> ${s.branch?.median?.toFixed(2) ?? '-'}  flips ${s.flips.length}`);
-    for (const r of s.reasons) console.log(`       ${r}`);
-  }
-  console.log(`\n${result.ok ? 'pass' : 'fail'}  ${formatCost(result.costUsd)}  wrote ${out}`);
+  for (const l of evalResultLines(result, { ok: fmt.success, fail: fmt.error, skip: fmt.warning })) console.log(l);
+  console.log(`\n${result.ok ? 'pass' : 'fail'}  ${formatCost(result.costUsd)}  wrote ${out} (reps ${repsOut})`);
   return result.ok ? 0 : 1;
 }
 
@@ -372,6 +324,7 @@ export function registerLine(program: Command, sources: EvalSources): void {
     .option('--model <id>', 'ablate the model under test on both sides')
     .option('--budget <usd>', 'per side, as check', positiveNumber('--budget'))
     .option('--out <file>', 'where to write the result', 'eval-result.json')
+    .option('--reps-out <file>', 'where to write the reps the result is built from (default: reps.json beside --out)')
     .option('--dry', 'canned model output on both sides: proves the wiring, spends nothing')
     .action(async (flags: LineFlags) => {
       process.exitCode = await runLine(flags, sources);

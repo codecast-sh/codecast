@@ -72,7 +72,7 @@ for (const platform of ["ios", "android"] as const) {
     // shipped ~300 files of a second Sentry version to the phone. Shared code
     // reports through ../lib/analytics, which has a native twin.
     test("no web only SDK reaches the native bundle", () => {
-      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie"];
+      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie", "next"];
       const hit = [...graph.externals].filter((spec) => WEB_ONLY.some((pkg) => spec === pkg || spec.startsWith(pkg + "/")));
       expect(hit).toEqual([]);
     });

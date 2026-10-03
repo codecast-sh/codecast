@@ -1,10 +1,11 @@
 "use client";
 
-import { Lock } from "lucide-react";
+import { DoorOpen, Lock } from "lucide-react";
+import { guestDisplayName } from "@codecast/shared/contracts";
 import { Facepile } from "./OccupancyChip";
 import { LiveRoomLabel } from "./LiveRoomLabel";
 import { joinCall, knockRoom } from "../../lib/calls/actions";
-import { useLiveRooms, type LiveRoomRow } from "../../hooks/useLiveRooms";
+import { useGuestsWaiting, useLiveRooms, type GuestsWaitingRow, type LiveRoomRow } from "../../hooks/useLiveRooms";
 
 export { LiveRoomLabel };
 
@@ -88,6 +89,17 @@ export function LiveRoomAction({
   );
 }
 
+/** Who is at the door, in a few words: "Ada (guest)", "Ada (guest) +2". */
+function waitingNames(row: GuestsWaitingRow): string {
+  const first = guestDisplayName(row.names[0] ?? "A guest");
+  return row.names.length > 1 ? `${first} +${row.names.length - 1}` : first;
+}
+
+/** What a waiting row says in full, for a title and a screen reader. */
+function waitingLine(row: GuestsWaitingRow): string {
+  return `${waitingNames(row)} ${row.names.length > 1 ? "are" : "is"} waiting to join ${row.title ?? "your call"}`;
+}
+
 // The sidebar cluster, mounted under the Calls row. Always mounted, so every
 // store read here is a wake signature (useLiveRooms) rather than a collection.
 export function LiveNowRail({
@@ -98,13 +110,36 @@ export function LiveNowRail({
   onNavigate?: () => void;
 }) {
   const rooms = useLiveRooms();
-  if (rooms.length === 0) return null;
+  // A guest at the door of a room nobody is in, on a link I made. That room
+  // is not live (an empty room does not exist), yet somebody is standing at
+  // it waiting for me, which is exactly what this cluster is for: things
+  // happening now that I would want to walk into. Yellow, the guest link's
+  // own colour, so it never reads as one more running huddle.
+  const waiting = useGuestsWaiting();
+  if (rooms.length === 0 && waiting.length === 0) return null;
+  const letIn = (row: GuestsWaitingRow) => {
+    void joinCall(row.roomKey, { intent: "deliberate" });
+    onNavigate?.();
+  };
 
   if (isNarrow) {
     // Icon rail: the faces ARE the row. One click walks into an open room;
     // a locked one knocks, same as the wide rail.
     return (
       <div className="flex flex-col items-center gap-1.5 py-1.5">
+        {waiting.map((row) => (
+          <button
+            key={`waiting:${row.roomKey}`}
+            type="button"
+            onClick={() => letIn(row)}
+            className="relative rounded-full p-1 text-sol-yellow transition-colors hover:bg-sol-yellow/15 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow"
+            aria-label={`${waitingLine(row)}. Join to let them in`}
+            title={`${waitingLine(row)}. Join to let them in`}
+          >
+            <DoorOpen className="h-4 w-4" />
+            <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-sol-yellow motion-reduce:animate-none" aria-hidden />
+          </button>
+        ))}
         {rooms.map((row) => {
           const glyph = (
             <>
@@ -157,6 +192,33 @@ export function LiveNowRail({
           reaches and a screen reader announces. A role="button" here would
           both nest an interactive element inside another (invalid ARIA) and
           promise a keyboard affordance the div never had. */}
+      {waiting.map((row) => (
+        <div
+          key={`waiting:${row.roomKey}`}
+          onClick={() => letIn(row)}
+          title={waitingLine(row)}
+          className="flex cursor-pointer items-center gap-2 px-4 py-1 text-[12px] text-sol-text-muted hover:bg-sol-bg-highlight/60 hover:text-sol-text"
+        >
+          <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full bg-sol-yellow/15 text-sol-yellow">
+            <DoorOpen className="h-3 w-3" />
+          </span>
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-sol-text">{waitingNames(row)}</span> waiting{row.title ? ` · ${row.title}` : ""}
+          </span>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              letIn(row);
+            }}
+            className="shrink-0 rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-[11px] font-medium text-sol-yellow opacity-90 transition-colors hover:bg-sol-yellow/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow"
+            aria-label={`${waitingLine(row)}. Join to let them in`}
+            title="Join the call to let them in"
+          >
+            join
+          </button>
+        </div>
+      ))}
       {rooms.map((row) => (
         <div
           key={row.roomKey}

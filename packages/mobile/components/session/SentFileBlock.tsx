@@ -8,9 +8,7 @@
 
 import { View as RNView, TouchableOpacity, Image } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { useQuery } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
-import { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import Feather from '@expo/vector-icons/Feather';
 import { fileKind, formatFileSize, fileTypeLabel, type FileKind } from '@codecast/shared/files';
 import { Theme } from '@/constants/Theme';
@@ -46,10 +44,9 @@ const ERROR_TEXT: Record<string, string> = {
 };
 
 function FileCard({ file }: { file: SentFileData }) {
-  const url = useQuery(
-    api.images.getImageUrl,
-    file.storage_id ? { storageId: file.storage_id as Id<'_storage'> } : 'skip',
-  );
+  // The shared storage URL cache (same as web's file card): resolved once,
+  // held across remounts, batched with every other id on screen.
+  const url = useStorageImageUrl(file.storage_id);
   const kind = fileKind(file.media_type, file.name);
   const color = KIND_COLOR[kind];
   const label = fileTypeLabel(file.name, file.media_type);

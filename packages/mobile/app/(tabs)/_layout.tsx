@@ -2,8 +2,7 @@ import React from 'react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import {
   Tabs } from 'expo-router';
-import { useQuery } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { View as RNView,
   StyleSheet,
 } from 'react-native';
@@ -11,9 +10,7 @@ import { Text as RNText } from '@/components/Themed';
 import { Theme, TAB_BAR_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
-import { useActiveTeamFeature } from '@/lib/teamFeatures';
-import { useChatRail } from '@/components/chat/ChannelList';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useChatUnread } from '@codecast/web/hooks/useChatSync';
 import {
   MOBILE_HEADER_STYLE,
   MOBILE_HEADER_TITLE_STYLE,
@@ -75,16 +72,20 @@ const badgeStyles = themedStyles((Theme) => StyleSheet.create({
 
 export default function TabLayout() {
   const Theme = useTheme();
-  const unreadCount = useQuery(api.notifications.getUnreadCount);
+  // The badge counts unread rows in the persisted store list, so it paints at
+  // boot and clears in the same tick as a mark-read (web NotificationBell).
+  const unreadCount = useInboxStore((s) => {
+    let n = 0;
+    for (const row of Object.values(s.notifications) as any[]) if (!row.read) n++;
+    return n;
+  });
   // The Chat tab's signal: mentions of you get a number; a live huddle
   // anywhere in your teams gets a dot. Both subscriptions are the ones the
   // tab itself holds, so the bar adds no traffic.
-  const currentUser = useQuery(api.users.getCurrentUser);
-  const activeTeamId = (currentUser?.active_team_id || currentUser?.team_id) as Id<'teams'> | undefined;
-  const chatOn = useActiveTeamFeature('chat') === true;
-  const chatRail = useChatRail(activeTeamId, chatOn);
-  const callConfig = useQuery(api.calls.getCallConfig);
-  const liveRooms = useQuery(api.calls.getLiveRooms, callConfig?.enabled ? {} : 'skip');
+  // Both read the store the sync bridge feeds: the shared rail's mention
+  // count (empty when chat is off for the team) and the live rooms.
+  const { mentions: chatMentions } = useChatUnread();
+  const anyLive = useInboxStore((s) => (s.liveRooms?.length ?? 0) > 0);
 
   return (
     <>
@@ -134,8 +135,8 @@ export default function TabLayout() {
             <TabBarIcon
               name={MOBILE_TAB.chat.icon}
               color={color}
-              badge={chatRail?.mentionTotal ?? 0}
-              live={(liveRooms?.length ?? 0) > 0}
+              badge={chatMentions}
+              live={anyLive}
             />
           ),
         }}

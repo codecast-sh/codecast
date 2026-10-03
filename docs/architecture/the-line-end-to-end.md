@@ -120,13 +120,25 @@ node reads that and the cause with its signals, and writes four fields:
 Priority is computed, not judged: goal priority × severity × signal count,
 in `lib/linePriority.ts`.
 
+A fresh cause is grounded before admission, so admission can rank it and
+spends a hand only on causes worth one. `lineGround.sweep` takes the oldest
+open causes with no `readiness` and no run, and makes one model call each over
+the cause, its signals and latest comments, and the goals brief of its project
+(of its workspace when it names none). The meaning of each field has one home,
+`GROUND_FIELDS` in `shared/contracts/goalsBrief.ts`, which the ground node's
+prompt carries verbatim. A reply it cannot use (a goal_ref the brief does not
+offer, a value outside the vocabulary) leaves the cause `needs_context` with
+the reason, for a person; no reply at all leaves it for the next pass.
+
 ## LE6. Admit: work starts at the rate decisions finish
 
 `orgLine.sweep` (the-line.md L9) admits causes, highest priority first, while
 both hold:
 
-- the owner's open card decisions on this line are fewer than `caps.cards`
-  (default 5), and
+- the open cards of the person the role reports to (the top of its chain),
+  counted across every line they answer for, are fewer than the smallest
+  `caps.cards` among their live line roles (default 5; line-profile.md LP6),
+  and
 - `counters.hands < caps.hands_per_day`.
 
 When the person answers a card, a slot frees and the next cause starts. A
@@ -152,27 +164,32 @@ information during build sends the run back here instead of steering build.
 
 - `code` / `ux` / `infra`: a failing test or a reproduction script, committed
   on the branch, its failing output kept as evidence.
-- `prompt`: the signals' moments become freezes (`./evals freeze create
-  <surface>@<ref>` with a judge sentence stating the expected behavior), and
-  `./evals check <surface> --freeze …` on the base must fail them. The run
-  saves the verdict and the failing replies as the **before** set.
+- `prompt`: the signals' moments become the misses, each with a judge
+  sentence stating the expected behavior, plus a few guards the prompt already
+  gets right. The project's prove command (line-profile.md LP4) must exit 0 on
+  the base: every miss fails and every guard passes. It writes
+  `$run_dir/proven.json`, the **before** set. codecast's runs the freezes
+  through `./evals freeze replay` (`scripts/line.ts prove`).
 
 A miss that cannot be reproduced closes the cause as `dissolved` with the
 evidence; it is a success, not a failure.
 
-**Build.** One change, in the worktree, within the size budget (400 changed
-lines by default; more splits or returns to plan). Prompt changes follow the
-prompting standard (`docs/prompting.md`).
+**Build.** One change, in the worktree, within the profile's size budget
+(400 changed lines by default; more splits or returns to plan). Prompt changes
+follow the profile's prompting standard (codecast's `docs/prompting.md` by
+default).
 
-**Verify.** `cast ws check` in the worktree, then targeted tests. Cheapest
-first. Two failed rounds stop the run with a decision to the owner.
+**Verify.** The profile's check command in the worktree (`cast ws check` by
+default). Two failed rounds stop the run with a decision to the owner.
 
-**Eval.** `./evals stale --base <default_branch>` names the surfaces the
-branch touches. For each, `./evals check <surface> --reps 5` on the branch,
-against the base run set. The node passes only when the proven freezes now
-pass, no gate fails, and no surface is `separated: worse`. The run saves the
-**after** set and the flipped examples (before reply, after reply, judge
-note).
+**Eval.** The profile's eval command picks the surfaces the branch owes,
+replays them on the base and on the branch, and writes `$run_dir/reps.json`;
+`cast line eval-result` turns the reps into `eval-result.json` and its exit
+code is the station's. It passes only when the proven freezes now pass, no
+gate fails, nothing crashed, and no surface is `separated: worse`. The result
+carries the **after** set and the flipped examples (before reply, after reply,
+judge note). A project with no eval command passes the station with a note on
+the task.
 
 ## LE9. Review: the diff against the intent
 
@@ -219,10 +236,12 @@ relayed by a session.
 
 ## LE12. Ship, watch, learn
 
-**Ship.** The merge station (the-line.md L12, `cast line merge`) lands the
-branch. A prompt surface change records the eval run set as the new baseline.
+**Ship.** The profile's ship command lands the change the project's way and
+prints one line saying what is true now, which goes on the task. A project
+with none lands it through the merge station (the-line.md L12, `cast line
+merge`). A prompt surface change records the eval run set as the new baseline.
 
-**Watch.** The cause enters `watch` for `watch_days` (default 7):
+**Watch.** The cause enters `watch` for the profile's `watch_days` (default 7):
 `tasks.watch_until`. A signal with one of its fingerprints during watch
 reopens it with the signal attached. A watch that ends quiet closes the cause
 as `resolved`. `cast task update --watch-days N` sets the watch (0 ends it);

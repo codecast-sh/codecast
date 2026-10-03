@@ -2,7 +2,8 @@ import { StyleSheet, SectionList, RefreshControl, TouchableOpacity, View as RNVi
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
-import { useQuery, useMutation } from 'convex/react';
+import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { useNavigation, useRouter } from 'expo-router';
@@ -226,9 +227,19 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
 
-  const notifications = useQuery(api.notifications.list) as Notification[] | undefined;
-  const markAsRead = useMutation(api.notifications.markAsRead);
-  const markAllAsRead = useMutation(api.notifications.markAllAsRead);
+  // The persisted store list (fed app-wide by useSyncWorkspaceData), newest
+  // first. The live answer only tells a cold cache apart from an empty inbox;
+  // Convex shares the feeder's subscription, so it costs nothing.
+  const notificationsMap = useInboxStore((s) => s.notifications);
+  const notifications = useMemo(
+    () => (Object.values(notificationsMap) as Notification[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
+    [notificationsMap],
+  );
+  const answered = useQueryNoThrow(api.notifications.list, {}).data !== undefined;
+  // Store actions: the `read` flip is optimistic and field-protected, so the
+  // bold state and the badge clear in the same tick as the tap.
+  const markAsRead = useInboxStore((s) => s.markNotificationRead);
+  const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
 
   const unreadCount = useMemo(
     () => (notifications ?? []).filter((n) => !n.read).length,
@@ -240,7 +251,7 @@ export default function NotificationsScreen() {
     navigation.setOptions({
       headerRight: () =>
         unreadCount > 0 ? (
-          <TouchableOpacity onPress={() => markAllAsRead({})} activeOpacity={0.7} style={styles.headerAction}>
+          <TouchableOpacity onPress={() => markAllAsRead()} activeOpacity={0.7} style={styles.headerAction}>
             <RNText style={styles.headerActionText}>Read all</RNText>
           </TouchableOpacity>
         ) : null,
@@ -268,10 +279,7 @@ export default function NotificationsScreen() {
   };
 
   const handlePress = (notification: Notification) => {
-    // Fire mark-as-read best-effort; don't block navigation on the round-trip.
-    if (!notification.read) {
-      markAsRead({ notificationId: notification._id }).catch(() => {});
-    }
+    if (!notification.read) markAsRead(notification._id);
     // A deep link wins (artifact comments open the published page).
     if (notification.link) {
       void openLink(notification.link);
@@ -302,9 +310,7 @@ export default function NotificationsScreen() {
   };
 
   const handleMarkRead = (notification: Notification) => {
-    if (!notification.read) {
-      markAsRead({ notificationId: notification._id }).catch(() => {});
-    }
+    if (!notification.read) markAsRead(notification._id);
   };
 
   const tabs: { key: FilterTab; label: string }[] = [
@@ -373,7 +379,7 @@ export default function NotificationsScreen() {
             tintColor={Theme.textMuted}
           />
         }
-        ListEmptyComponent={notifications === undefined ? <NotificationListSkeleton /> : renderEmpty()}
+        ListEmptyComponent={!answered ? <NotificationListSkeleton /> : renderEmpty()}
         contentContainerStyle={sections.length === 0 ? styles.emptyList : styles.listContent}
         showsVerticalScrollIndicator={false}
       />

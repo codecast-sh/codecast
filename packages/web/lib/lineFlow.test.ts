@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildLineFlow, goalChip, groupBuild, lineHeadline, runName, DAY, HOUR, type LineCauseTask, type LineDecision, type LineFlowRun, type LineSignal } from "./lineFlow";
+import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -223,6 +223,13 @@ describe("lineHeadline", () => {
     expect(text(flow({ runs: [run("r1")] }))).toBe("Nothing has reached the line yet");
     expect(text(flow({}))).toBe("Nothing has reached the line yet");
   });
+  it("points the actionable parts at their stations and says all clear in its own tone", () => {
+    const parts = lineHeadline(flow({ tasks: [cause("a"), cause("b")] }), NOW);
+    expect(parts.map((p) => [p.text, p.tone, p.station ?? null])).toEqual([
+      ["2 causes ready to admit", "live", "causes"],
+      ["nothing waiting on you", "clear", null],
+    ]);
+  });
 });
 
 describe("groupBuild", () => {
@@ -234,5 +241,72 @@ describe("groupBuild", () => {
       ["implement", [["a", null, 0], ["b", null, 1]]],
       [null, [["c", "verify", 2]]],
     ]);
+  });
+});
+
+describe("per project lines (line-profile.md LP1, LP3)", () => {
+  const rows = {
+    tasks: [
+      cause("a", { project_id: "pA" }),
+      cause("b", { project_id: "pA" }),
+      cause("c", { project_id: "pB" }),
+      cause("d"),
+      { _id: "plain", title: "plain task", status: "open", created_at: NOW, project_id: "pA" },
+    ] as LineCauseTask[],
+    signals: [
+      signal("s1", { task_id: "a", project_id: "pA", source: "agentwatch" }),
+      signal("s2", { task_id: "c", project_id: "pB", source: "union.error" }),
+      // Filed before signals carried a project: it follows its cause.
+      signal("s3", { task_id: "b", source: "agentwatch" }),
+      signal("s4", { task_id: "d", source: "person" }),
+    ],
+    runs: [run("r1", { task_id: "a" }), run("r2", { task_id: "plain" }), run("r3", { task_id: "c" })],
+    decisions: [card("k1", { task_id: "c" }), card("k2")],
+  };
+  const projects: LineProject[] = [
+    { _id: "pA", short_id: "pj-a", title: "Agent Quality", line_profile: { finders: [
+      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"] },
+      { id: "guards", source: "union.guard", kind: ["prompt_miss"], runs: "daily" },
+    ], root: "/src/union", default: true, changed_at: NOW } },
+    { _id: "pB", short_id: "pj-b", title: "Infrastructure", project_path: "/src/infra" },
+    { _id: "pC", short_id: "pj-c", title: "Quiet" },
+  ];
+
+  it("scopes causes, signals, runs and cards to one project", () => {
+    const a = scopeLine(rows, "pA");
+    expect(a.tasks.map((t) => t._id)).toEqual(["a", "b", "plain"]);
+    expect(a.signals.map((s) => s._id)).toEqual(["s1", "s3"]);
+    expect(a.runs.map((r) => r._id)).toEqual(["r1", "r2"]);
+    expect(a.decisions).toEqual([]);
+    const none = scopeLine(rows, NO_PROJECT);
+    expect([none.tasks.map((t) => t._id), none.signals.map((s) => s._id)]).toEqual([["d"], ["s4"]]);
+    expect(scopeLine(rows, ALL_PROJECTS)).toBe(rows);
+  });
+
+  it("a declared finder is a Sense row even when silent, and an undeclared source is flagged", () => {
+    const f = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders });
+    const bySource = Object.fromEntries(f.sense.items.map((s) => [s.source, s]));
+    expect(bySource.agentwatch).toMatchObject({ day: 2, silent: false, undeclared: false, finder: { id: "clusters" } });
+    expect(bySource["union.guard"]).toMatchObject({ day: 0, week: 0, newest: null, silent: true, finder: { id: "guards" } });
+    expect(f.sense.state.why).toBe("signals arriving, 1 of 2 finders silent");
+    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any" }] });
+    expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(true);
+  });
+
+  it("the roll-up counts each line, busiest first, no project last", () => {
+    const r = lineRollup(rows, projects, NOW);
+    expect(r.map((x) => [x.key, x.causes, x.build, x.awaiting, x.signalsDay, x.finders, x.silent])).toEqual([
+      ["pA", 1, 1, 0, 2, 2, 1],
+      ["pB", 0, 1, 1, 1, 0, 0],
+      [NO_PROJECT, 1, 0, 0, 1, 0, 0],
+    ]);
+  });
+
+  it("opens on the repo's project, else the busiest line", () => {
+    const r = lineRollup(rows, projects, NOW);
+    expect(defaultLineKey(r, projects, "/src/union/outreach")).toBe("pA");
+    expect(defaultLineKey(r, projects, "/src/infra")).toBe("pB");
+    expect(defaultLineKey(r, projects, "/elsewhere")).toBe("pA");
+    expect(defaultLineKey([], projects, null)).toBe(ALL_PROJECTS);
   });
 });

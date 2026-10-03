@@ -38,11 +38,18 @@ const castJson = (args: string[]): any => {
   return JSON.parse(r.stdout);
 };
 
-/** The roster as the CLI's org tree carries it (charter, areas, the standing line, what it holds). */
-export function rosterFromTree(tree: any): { roster: RouterRoster; roles: Array<LeadRole & { handle: string }> } {
+/** The roster as the CLI's org tree carries it (charter, areas, the standing line, what it holds), plus the areas no role names. */
+export function rosterFromTree(tree: any, projects: any[] = [], plans: any[] = []): { roster: RouterRoster; roles: Array<LeadRole & { handle: string }> } {
   const roles: any[] = (tree.roles ?? []).filter((r: any) => r.status !== 'retired' && !r.assistant);
+  const namedProjects = new Set(roles.flatMap((r) => (r.scope?.project_ids ?? []).map(String)));
+  const namedPlans = new Set(roles.flatMap((r) => (r.scope?.plan_ids ?? []).map(String)));
+  const live = projects.filter((p) => p.status !== 'done' && p.status !== 'archived');
   const roster: RouterRoster = {
     workspace: tree.workspace?.name ?? 'workspace',
+    unled: [
+      ...live.filter((p) => !namedProjects.has(String(p._id))).map((p) => ({ kind: 'project' as const, title: p.title, goal: p.goal ?? undefined })),
+      ...plans.filter((pl) => pl.status === 'active' && !namedPlans.has(String(pl._id)) && !namedProjects.has(String(pl.project_id ?? '')) && live.some((p) => String(p._id) === String(pl.project_id))).map((pl) => ({ kind: 'plan' as const, title: pl.title, goal: pl.goal ?? undefined })),
+    ],
     roles: roles.map((r) => ({
       handle: r.handle,
       name: r.name,
@@ -62,6 +69,8 @@ export function rosterFromTree(tree: any): { roster: RouterRoster; roles: Array<
 
 export const routeRequestFor = (snap: RouteSnap) => routerRequest(snap.roster, snap.request);
 
+const DESCRIBE_CLOCK = Date.parse('2026-01-01T00:01:00.000Z');
+
 const impl: SurfaceImpl = {
   refForms: REF_FORMS,
 
@@ -72,7 +81,11 @@ const impl: SurfaceImpl = {
     const { siteUrl, apiToken } = apiConfig();
     const task: any = await (await fetch(`${siteUrl}/cli/work/get`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_token: apiToken, short_id: taskRef }) })).json();
     if (!task?._id) throw new UsageError(`no task ${taskRef} readable here`);
-    const { roster, roles } = rosterFromTree(castJson(['org', 'ls', '--team', team]));
+    const tree = castJson(['org', 'ls', '--team', team]);
+    const teamId = tree.workspace?.id;
+    const projects: any[] = teamId ? await (await fetch(`${siteUrl}/cli/projects/list`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_token: apiToken, workspace: 'team', team_id: teamId }) })).json() : [];
+    const plans: any[] = castJson(['plan', 'ls', '--team', team]);
+    const { roster, roles } = rosterFromTree(tree, Array.isArray(projects) ? projects : [], Array.isArray(plans) ? plans : []);
     let anchor = { project_id: task.project_id, plan_id: task.plan_id };
     if (!anchor.project_id && anchor.plan_id) {
       const plan: any = await (await fetch(`${siteUrl}/cli/plans/get`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_token: apiToken, id: anchor.plan_id }) })).json();
@@ -86,7 +99,7 @@ const impl: SurfaceImpl = {
       roster,
       expected,
       task: { short_id: task.short_id, title: task.title },
-      approximate: ['the roster is the org tree as the CLI prints it: charter text, area titles without goals, the pinned standing line, up to six held sessions; prod also reads the charter doc, the brief\'s dated lines and open tasks'],
+      approximate: ['the roster is the org tree as the CLI prints it: charter text, area titles without goals, the pinned standing line, up to six held sessions, and the unled areas from the project and plan lists; prod also reads the charter doc, the brief\'s dated lines and open tasks'],
     };
     return {
       snapshot,
@@ -120,7 +133,9 @@ const impl: SurfaceImpl = {
   },
 
   describe(snap: RouteSnap): ConvoMessage[] {
-    const now = Date.now();
+    // The judge keeps transcript lines at or before the freeze's asOf, so the
+    // roster and request carry a clock before any capture (a snapshot has none).
+    const now = DESCRIBE_CLOCK;
     return toConvoMessages([
       { role: 'user', content: rosterText(snap.roster), line: 1, timestamp: now - 60_000 },
       { role: 'user', content: `The request${snap.task ? ` (${snap.task.short_id})` : ''}:\n\n${snap.request}${snap.expected ? `\n\n(expected by the rule: @${snap.expected.handle}, by its ${snap.expected.by})` : ''}`, line: 2, timestamp: now },

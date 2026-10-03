@@ -4,9 +4,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
 import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2, SquareArrowOutUpRight } from "lucide-react";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
-import { useSyncCollection } from "../hooks/useSyncCollection";
+import { useInboxStore } from "../store/inboxStore";
+import { useSyncTeamMembers } from "../hooks/useSyncTeamMembers";
 import { useFaceRow } from "../hooks/useFaceRow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/desktop";
@@ -22,6 +21,7 @@ import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
 import { CallCardRecordingMark } from "./calls/RoomRecording";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
+import { TopbarButton } from "./TopbarButton";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 
@@ -35,23 +35,8 @@ interface TeamAvatarBarProps {
 // avatar row on each push. The pump renders nothing; the bar below reads the
 // store through the face row, whose identity only changes when something a
 // face draws changed.
-//
-// It is a FEEDER, so it rides useSyncCollection and never a plain useQuery:
-// the bar paints the cached roster, and a terminal server error must degrade
-// to that cache, not unmount the bar. A plain useQuery re-throws the error
-// during render, the boundary around the bar latches on it, and the bar stays
-// "Failed to load" until somebody clicks retry, long after the server has
-// recovered. On 2026-09-21 a half-saved edit of getTeamMembers reached prod
-// for about a minute (ReferenceError: feedFilter is not defined), and every
-// bar that was open then stayed broken for hours afterwards.
 export function TeamMembersPump({ teamId }: { teamId: Id<"teams"> | undefined }) {
-  useSyncCollection(
-    "teamMembers",
-    api.teams.getTeamMembers,
-    // isConvexId: a just-created team holds an optimistic stub id until the
-    // server echoes, and a stub is not an Id<"teams">.
-    teamId && isConvexId(String(teamId)) ? { team_id: teamId } : "skip",
-  );
+  useSyncTeamMembers(teamId);
   return null;
 }
 
@@ -204,13 +189,13 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           team of 23 it sat past the huddle and the pop out buttons, two
           controls away from the people it counts. It keeps the row's own
           rhythm (6px, the face gap: the bar's 4px and 2px of its own); the
-          controls after the roster sit 8px apart, every one of them. */}
+          controls after the roster are top bar buttons, 2px apart. */}
       {hidden > 0 && (
         <ShortcutTooltip label={`${hidden} more team members`}>
           <button
             onClick={() => router.push("/team/activity?filter=team")}
             data-overflow
-            className="ml-0.5 flex h-8 w-8 items-center justify-center rounded-full border border-sol-border/60 bg-sol-bg-highlight text-xs text-sol-text-muted transition-colors hover:border-sol-border"
+            className="ml-0.5 flex h-7 min-w-7 px-1.5 items-center justify-center rounded-full border border-sol-border/60 text-[11px] tabular-nums text-sol-text-muted transition-colors hover:border-sol-border hover:text-sol-text"
           >
             +{hidden}
           </button>
@@ -223,28 +208,27 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           read as a seventh person. */}
       {callsEnabled && rosterCount > 1 && (
         <ShortcutTooltip label="Start a huddle with several teammates">
-          <button
+          <TopbarButton
             onClick={() => useInboxStore.getState().openCreateModal("huddle")}
-            className="ml-1 flex h-8 w-8 items-center justify-center rounded-full border border-sol-border/60 text-sol-text-muted transition-colors hover:border-sol-violet/50 hover:text-sol-violet"
+            className="ml-1"
             aria-label="Start a huddle with several teammates"
           >
-            <Headphones className="h-3.5 w-3.5" />
-          </button>
+            <Headphones />
+          </TopbarButton>
         </ShortcutTooltip>
       )}
       {/* POP OUT. The same row, floating over the work in the shell's
           see-through window; the header keeps a chip while it is out. Off
           the desktop the buddy list window is the nearest thing. */}
       <ShortcutTooltip label={POP_OUT_PEOPLE_TITLE}>
-        <button
-          type="button"
+        <TopbarButton
           data-pop-out
+          className="hidden xl:flex"
           onClick={() => (floating.available ? floating.setFloating(true) : void popOutPeople())}
-          className="ml-1 flex h-8 w-8 items-center justify-center rounded-full text-sol-text-dim transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
           aria-label={POP_OUT_PEOPLE_TITLE}
         >
-          <PictureInPicture2 className="h-3.5 w-3.5" />
-        </button>
+          <PictureInPicture2 />
+        </TopbarButton>
       </ShortcutTooltip>
       {selectedMember && (
         <ShortcutTooltip label="Clear filter">

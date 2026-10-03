@@ -1,7 +1,6 @@
 {
   "asOf": "2026-09-28T09:00:00.000Z",
   "notes": "Red list #16: six replies wake the team agent in a thread it follows; three ask it something by name, three are people talking to each other.",
-  "judge": "answers the three lines that ask Fern something (what blocks the webhooks reference, who is rewriting the billing page, the Thursday reminder) with a short reply each, and passes every line people say to each other, the request to ping Priya included",
   "label": {
     "placeholders": {
       "answer": [

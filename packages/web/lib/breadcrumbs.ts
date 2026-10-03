@@ -51,6 +51,7 @@ export const SECTION_LABELS: Record<string, string> = {
   sessions: "Sessions",
   windows: "Windows",
   workflows: "Workflows",
+  line: "The line",
   triggers: "Triggers",
   anchor: "Workspace agent",
   search: "Search",

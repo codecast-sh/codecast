@@ -39,7 +39,8 @@ import { DEFAULT_LABELS } from "../../lib/labelColors";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
-import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
+import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
+import { undoAsOne } from "../../store/undoActions";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import {
   Plus,
@@ -127,8 +128,11 @@ function TaskCombineDialog({ source, target, onClose }: {
     onClose();
   };
   const asDuplicate = () => {
-    updateTask(source.short_id, { duplicate_of: target.short_id });
-    closeTaskWithGuard(source.short_id, "dropped");
+    // One gesture, one undo: the link and the close come back together.
+    undoAsOne(`Marked ${source.short_id} as a duplicate of ${target.short_id}`, () => {
+      updateTask(source.short_id, { duplicate_of: target.short_id });
+      closeTaskWithGuard(source.short_id, "dropped");
+    });
     toast.success(`${source.short_id} marked as duplicate of ${target.short_id}`);
     onClose();
   };
@@ -1090,22 +1094,14 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // a row = the combine dialog (subtask / duplicate), into a gap = manual rank.
   const [combine, setCombine] = useState<{ source: TaskItem; target: TaskItem } | null>(null);
 
-  // Terminal statuses route through the single close gateway, same as kanban.
+  // One drop is one undo; terminal statuses route through the single close
+  // gateway, same as kanban (applyTaskDrop).
   const applyDropUpdates = useCallback((task: TaskItem, updates: Record<string, any>) => {
-    // status_id travels WITH the status through the close gateway — sent on its
-    // own it would move the category server-side and bypass the guard.
-    const { status, status_id, ...rest } = updates;
-    if (status === "done" || status === "dropped") {
-      if (Object.keys(rest).length > 0) updateTask(task.short_id, rest);
-      const res = closeTaskWithGuard(task.short_id, status, undefined, status_id);
-      if (res.needsConfirm) return;
-    } else {
-      updateTask(task.short_id, updates);
-    }
+    if (applyTaskDrop(task.short_id, updates).needsConfirm) return;
     // A pure reorder is its own feedback (the row lands where dropped).
     const fields = Object.keys(updates).filter((k) => k !== "sort_order");
     if (fields.length > 0) toast.success(`${task.short_id} moved`);
-  }, [updateTask]);
+  }, []);
 
   const handleDropOnGroup = useCallback((task: TaskItem, groupKey: string) => {
     const updates = taskGroupDropUpdates(group, groupKey, task, groupCtx);

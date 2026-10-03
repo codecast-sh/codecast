@@ -5,6 +5,16 @@ export type RecentProjectPath = {
   suggested?: boolean;
 };
 
+// A recent-project row. `suggested` marks a padding entry — a root the picked
+// machine has but has no session history in, so it reads dimmer than a real recent.
+export type RecentProject = RecentProjectPath & {
+  /** repositoryKeyOfRemote of the folder's checkout; absent for a plain folder. */
+  repository?: string;
+  /** The team a session started here is shared with, by the folder's rule or its repository's; null for only me. */
+  team_id?: string | null;
+  team_name?: string | null;
+};
+
 type ProjectSession = {
   user_id?: string;
   project_path?: string;

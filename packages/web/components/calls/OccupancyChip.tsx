@@ -7,7 +7,8 @@ import { Headphones, Link2 } from "lucide-react";
 import { GuestInvite } from "./GuestDoor";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { joinCall, startHuddle } from "../../lib/calls/actions";
-import { CHANNEL_HUDDLE_WARNING_SIZE, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
+import { CHANNEL_HUDDLE_WARNING_SIZE, guestDisplayName, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
+import { useGuestsWaiting } from "../../hooks/useLiveRooms";
 import { AvatarImg } from "../../lib/avatarCache";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogTitle, DialogTrigger } from "../ui/dialog";
 
@@ -203,10 +204,16 @@ export function HuddleButton({
   );
 }
 
+const NO_NAMES: string[] = [];
+
 // A guest link into this room, from the header, before anybody is in it: a
 // guest is usually sent the link ahead of the meeting, and the stage (which
 // has its own invite) only exists once a huddle runs. Shown only to somebody
 // who may make one (GuestInvite asks), in the header's own chip idiom.
+// When a guest is already at this room's door on the viewer's link and
+// nobody is in the room (useGuestsWaiting), the chip says so: it is the one
+// thing in this header that knows about guests, and the huddle button beside
+// it is how they get let in.
 export function GuestInviteChip({ roomKey, compact = false, className = "" }: { roomKey: string; compact?: boolean; className?: string }) {
   const enabled = useCallsAvailable();
   if (!enabled) return null;
@@ -214,25 +221,51 @@ export function GuestInviteChip({ roomKey, compact = false, className = "" }: { 
     <GuestInvite
       roomKey={roomKey}
       align="end"
-      trigger={({ open, toggle }) => (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            toggle();
-          }}
-          aria-expanded={open}
-          className={`flex items-center gap-1 rounded-full border transition-colors hover:border-sol-yellow/40 hover:text-sol-yellow ${
-            open ? "border-sol-yellow/40 text-sol-yellow" : "text-sol-text-dim"
-          } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
-          title="Invite someone outside the team: a link they join from in a browser"
-          aria-label="Invite someone outside the team"
-        >
-          <Link2 className="h-3 w-3" />
-          {!compact && <span>Guest</span>}
-        </button>
-      )}
+      trigger={(p) => <GuestChipButton {...p} roomKey={roomKey} compact={compact} className={className} />}
     />
+  );
+}
+
+/** The chip itself, mounted only for somebody who may invite here (the
+ *  trigger is drawn only then), so only they subscribe to who is waiting. */
+function GuestChipButton({
+  roomKey,
+  open,
+  toggle,
+  compact,
+  className,
+}: {
+  roomKey: string;
+  open: boolean;
+  toggle: () => void;
+  compact: boolean;
+  className: string;
+}) {
+  const waiting = useGuestsWaiting().find((r) => r.roomKey === roomKey)?.names ?? NO_NAMES;
+  const waitingLine =
+    waiting.length > 0
+      ? `${guestDisplayName(waiting[0])}${waiting.length > 1 ? ` and ${waiting.length - 1} more` : ""} ${waiting.length > 1 ? "are" : "is"} waiting to join. Start the huddle to let them in`
+      : null;
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        toggle();
+      }}
+      aria-expanded={open}
+      className={`relative flex items-center gap-1 rounded-full border transition-colors hover:border-sol-yellow/40 hover:text-sol-yellow ${
+        open || waitingLine ? "!border-sol-yellow/40 text-sol-yellow" : "text-sol-text-dim"
+      } ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      title={waitingLine ?? "Invite someone outside the team: a link they join from in a browser"}
+      aria-label={waitingLine ? `${waitingLine}. Guest link` : "Invite someone outside the team"}
+    >
+      <Link2 className="h-3 w-3" />
+      {!compact && <span>{waitingLine ? `${waiting.length} waiting` : "Guest"}</span>}
+      {waitingLine && compact && (
+        <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 animate-pulse rounded-full bg-sol-yellow motion-reduce:animate-none" aria-hidden />
+      )}
+    </button>
   );
 }
 

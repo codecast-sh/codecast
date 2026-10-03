@@ -540,10 +540,10 @@ describe("pill chrome", () => {
 
 describe("pull request references", () => {
   // A conversation bound to a repository: the pill completes `#3263` from it.
-  function renderIn(repository: string | null, markdown: string): string {
+  function renderIn(repository: string | null, markdown: string, pullRequestIds: string[] = []): string {
     return renderToStaticMarkup(
       <MemoryRouter>
-        <FilePathContext.Provider value={{ repository }}>
+        <FilePathContext.Provider value={{ repository, pullRequestIds: new Set(pullRequestIds) }}>
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
             {markdown}
           </ReactMarkdown>
@@ -588,7 +588,7 @@ describe("pull request references", () => {
   });
 
   test("#N and PR N inside a repository bound conversation pill and open that repository's PR", () => {
-    const html = renderIn("union-ai/union-mobile", "PRs 3247 (rescue dial card), 3230 (objection playbook) and #3263 landed");
+    const html = renderIn("union-ai/union-mobile", "PRs 3247 (rescue dial card), 3230 (objection playbook) and #3263 landed", ["union-ai/union-mobile#3263"]);
     expect(pillTexts(html)).toEqual(["3247", "3230", "#3263"]);
     expect(html).toContain('href="/pr/union-ai/union-mobile/3230"');
     expect(html).toContain('href="/pr/union-ai/union-mobile/3247"');
@@ -601,6 +601,18 @@ describe("pull request references", () => {
     const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
     expect(pillText(html)).toBe("#482 Fix the auth race");
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
+  });
+
+  test("a lone #N the conversation does not know as a pull request is a rank, not a reference", () => {
+    const html = renderIn("union-ai/union", "one candidate moved from #10 to #2 at a dial of 3, and down to #144 at 0", ["union-ai/union#3263"]);
+    expect(html).not.toContain('class="not-prose');
+    expect(html).toContain("moved from #10 to #2 at a dial of 3, and down to #144 at 0");
+  });
+
+  test("PR N needs no evidence; a lone #N it names is vouched for", () => {
+    const html = renderIn("union-ai/union", "PR 10 ranks #2 today", []);
+    expect(pillTexts(html)).toEqual(["10"]);
+    expect(html).toContain("ranks #2 today");
   });
 
   test("#N outside any repository is the text it was written as", () => {

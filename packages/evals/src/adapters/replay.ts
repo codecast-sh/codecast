@@ -1,17 +1,20 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CheckResult, ConvoMessage, Freeze, GateResult, Replayer, ReplayOptions, RunSummary, Score } from '@platform/evals';
 import { summarizeRunFolder } from '@platform/evals/fs';
 
 import { runFolderName, writeRunFolder, type RunJson } from '../layout';
-import { homePaths } from '../paths';
+import { GUARD_CAST, homePaths } from '../paths';
+import { diskSources, freezeSha, pinHead, type DiskSources } from '../provenance';
 import { loadSurface, surfaceMeta } from '../registry';
-import { dirtySurfaces, gitHead, sourceHashes } from '../state';
+import { addSpend, dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
 import { assertAnswered, runAgent, runCall } from './dryRun';
-import { judgeReply, PASS_AT } from './judge';
-import { loadLabel, loadSnapshot, SnapshotMismatch, type LoadedSnapshot } from './resolver';
+import { criteriaCheck, judgeMomentOf, judgeReply, PASS_AT } from './judge';
+import { loadLabel, loadSnapshot, SnapshotMismatch, snapshotPath, type LoadedSnapshot } from './resolver';
 
 // Replays a freeze N times. Each rep loads the snapshot (checking its hash),
 // runs the surface through the harness, grades it with the route's gates, the
@@ -78,7 +81,7 @@ export function routeGates(meta: SurfaceMeta, result: Pick<ReplayResult, 'calls'
     const lines = result.agents.flatMap((a) => a.calls);
     const unserved = lines.filter((l) => l.startsWith('UNSERVED '));
     const allowed = [...(meta.allowedRefusals ?? []), ...allowedHere].map((p) => new RegExp(p));
-    const refused = lines.filter((l) => l.startsWith('REFUSED ') && !allowed.some((re) => re.test(l.slice('REFUSED '.length))));
+    const refused = lines.filter((l) => l.startsWith('REFUSED ') && !allowed.some((re) => re.test(l.slice('REFUSED '.length))) && !guardCallsRead(l.slice('REFUSED '.length)));
     gates.push(
       gate('frozen-reads', unserved.length === 0, unserved.length ? `${unserved.map((l) => `cast ${l.slice('UNSERVED '.length)}`).join('; ')} was not captured, so it was refused: add it to meta.frozenReads and re-run \`./evals snapshot\` (for a fixture, add it to the world it reads)` : 'every frozen read was served'),
       gate('no-unexpected-writes', refused.length === 0, refused.length ? `refused: ${refused.map((l) => `cast ${l.slice('REFUSED '.length)}`).join('; ')}` : 'no write was attempted outside the harness note'),
@@ -86,6 +89,16 @@ export function routeGates(meta: SurfaceMeta, result: Pick<ReplayResult, 'calls'
   }
   return gates;
 }
+
+/**
+ * Whether today's guard takes a logged argv for a read. A REFUSED line records
+ * the guard's verdict when the run happened, so a read it refused by mistake
+ * (one its read list lacked then) regrades here on rescore instead of failing
+ * no-unexpected-writes forever. The log keeps the argv space joined, which
+ * keeps the command words and flags the read list looks at.
+ */
+const guardCallsRead = (argv: string): boolean =>
+  spawnSync('bash', [GUARD_CAST, ...argv.split(' ').filter(Boolean)], { env: { PATH: process.env.PATH ?? '/usr/bin:/bin', DRY_RUN_CLASSIFY: '1' }, encoding: 'utf8' }).stdout?.trim() === 'read';
 
 /** The pass rule: every gate held, no check under its floor, and the score at PASS_AT or over. */
 export const passesAt = (score: number, gatesFailed: number, missedFloors: number): boolean => gatesFailed === 0 && missedFloors === 0 && score >= PASS_AT;
@@ -95,7 +108,7 @@ export const passesAt = (score: number, gatesFailed: number, missedFloors: numbe
  * its score keeps the verdict its gates gave, so `line --dry` can prove the
  * station rule's wiring end to end.
  */
-export const repPassed = (r: RunSummary): boolean => r.status === 'pass' || (r.status === 'dry' && r.score !== null && passesAt(r.score, r.gatesFailed.length, r.missedFloors.length));
+export const repPassed = (r: Pick<RunSummary, 'status' | 'score' | 'gatesFailed' | 'missedFloors'>): boolean => r.status === 'pass' || (r.status === 'dry' && r.score !== null && passesAt(r.score, r.gatesFailed.length, r.missedFloors.length));
 
 /** The platform's Score: 0 on any failed gate, else the weighted mean of the checks (1 when only gates grade). */
 export function scoreOf(gates: GateResult[], checks: CheckResult[], judge?: { costUsd: number; model: string } | null): Score {
@@ -107,7 +120,7 @@ export function scoreOf(gates: GateResult[], checks: CheckResult[], judge?: { co
   return { pass: passesAt(score, gatesPass ? 0 : 1, missedFloors.length), score, passMark: PASS_AT, gates, checks, missedFloors, judgeCostUsd: judge?.costUsd ?? null, judgeModel: judge?.model ?? null, scoredAt: new Date().toISOString() };
 }
 
-/** One hash over every prompt under test the rep sent (system and user per call, then each agent briefing); a grader's prompt is not one. */
+/** One hash over every prompt under test the rep sent (system and user per call, then each agent briefing and its follow-up turns); a grader's prompt is not one. */
 const promptShaOf = (calls: CallResult[], prompts: string[]): string | null => {
   const parts = [...calls.filter((c) => !c.grader).map((c) => `${c.request.system ?? ''}\x1e${c.request.prompt}`), ...prompts];
   return parts.length ? createHash('sha256').update(parts.join('\x1d')).digest('hex') : null;
@@ -134,8 +147,11 @@ export const sentFields = (calls: CallResult[], agents: AgentResult[]): Pick<Run
 export interface RepLedger {
   usd: number;
   lanes?: Record<string, LaneLedger>;
-  stoppedBy?: 'budget' | 'time';
+  stoppedBy?: StopCause;
 }
+
+/** Why a check stopped starting reps: the budget, the time limit, or its stop file. Each ends like a budget stop (endedBecause: budget). */
+export type StopCause = 'budget' | 'time' | 'stop-file';
 
 export interface LaneLedger {
   /** The estimate the check started with (state.ts perRepUsd). */
@@ -160,6 +176,8 @@ export const reservedUsd = (ledger: RepLedger): number => Object.values(ledger.l
 export interface ReplayRunOptions extends ReplayOptions {
   /** The `check` invocation this belongs to; a fresh one when unset. */
   batch?: string;
+  /** The standing run it belongs to (check --cadence), stamped on every rep. */
+  cadence?: string | null;
   /** Stop before a rep that would take the spend past this. */
   budgetUsd?: number | null;
   /** Shared across every freeze and rep of one check. */
@@ -168,14 +186,16 @@ export interface ReplayRunOptions extends ReplayOptions {
   estPerRep?: number;
   /** Epoch ms after which no rep starts: a check bounds its own wall time, so a session that started it in the background cannot leave it running. */
   deadline?: number | null;
+  /** No rep starts once this file exists: how a bisect, or anyone, cancels a running check between reps. */
+  stopFile?: string | null;
 }
 
 export interface ReplayOutcome {
   runs: RunSummary[];
   crashes: number;
-  /** Stopped before a rep: the spend budget or the time limit (`stoppedBy`). */
+  /** Stopped before a rep: the spend budget, the time limit or the stop file (`stoppedBy`). */
   budgetHit: boolean;
-  stoppedBy?: 'budget' | 'time';
+  stoppedBy?: StopCause;
   costUsd: number;
 }
 
@@ -192,14 +212,20 @@ export interface PreparedFreeze {
   mismatch: string | null;
 }
 
-/** What a rep records about the tree: HEAD, and each surface's source hash and dirtiness. One read per check, not per freeze. */
+/** What a rep records about the tree: HEAD, each surface's source hash and dirtiness, and what the disk held (provenance.ts). One read per check, not per freeze. */
 export interface TreeFacts {
   head: string;
   hashes: Map<string, string>;
   dirty: Set<string>;
+  disk?: DiskSources | null;
 }
 
-export const treeFacts = (metas: SurfaceMeta[]): TreeFacts => ({ head: gitHead(), hashes: sourceHashes(metas), dirty: dirtySurfaces(metas) });
+/** Read once per check. HEAD is pinned under refs/evals/heads/ first, so a rebase or `git gc` never takes the commit the reps name. */
+export function treeFacts(metas: SurfaceMeta[]): TreeFacts {
+  const head = gitHead();
+  if (head !== 'unknown') pinHead(head);
+  return { head, hashes: sourceHashes(metas), dirty: dirtySurfaces(metas), disk: diskSources(metas) };
+}
 
 /** The reps `replayFreeze` runs for a requested count. */
 export const repCount = (reps: number): number => Math.max(1, Math.min(reps, MAX_REPS));
@@ -223,12 +249,16 @@ export async function prepareFreeze(f: Freeze, o: ReplayRunOptions, facts?: Tree
     model,
     route: meta.route,
     sourceHash: tree.hashes.get(meta.id)!,
+    sourceHashDisk: tree.disk?.hashes.get(meta.id) ?? null,
+    treePatch: tree.disk?.patches.get(meta.id) ?? null,
+    freezeSha: freezeSha(f, snapshotPath(f)),
     budgetUsd: o.budgetUsd ?? null,
     gitHead: tree.head,
     dirty: tree.dirty.has(meta.id),
     dry: Boolean(o.dry),
     temperatureReplay: 'cli-default',
     batch: o.batch ?? new Date().toISOString(),
+    cadence: o.cadence ?? null,
     title: f.name,
   };
   let loaded: LoadedSnapshot | null = null;
@@ -259,10 +289,12 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const lane = ((spent.lanes ??= {})[`${meta.id} ${model}`] ??= { est: o.estPerRep ?? 0, running: 0, done: 0, doneUsd: 0 });
   const overBudget = o.budgetUsd != null && spent.usd + reservedUsd(spent) + laneRepUsd(lane) > o.budgetUsd;
   const overTime = o.deadline != null && startedAt >= o.deadline;
-  if (overBudget || overTime) {
-    spent.stoppedBy = overTime ? 'time' : 'budget';
-    const why = overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget is spent`;
-    writeRunFolder({ ...base, endedBecause: 'budget', error: overTime ? `time limit reached after $${spent.usd.toFixed(4)}` : `budget $${o.budgetUsd} reached after $${spent.usd.toFixed(4)}`, run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
+  const stopFile = Boolean(o.stopFile && existsSync(o.stopFile));
+  if (overBudget || overTime || stopFile) {
+    spent.stoppedBy = stopFile ? 'stop-file' : overTime ? 'time' : 'budget';
+    const why = stopFile ? `the stop file ${o.stopFile} exists` : overTime ? `the time limit (${new Date(o.deadline!).toISOString()}) has passed` : `the $${o.budgetUsd} budget is spent`;
+    const error = stopFile ? `stopped by ${o.stopFile} after $${spent.usd.toFixed(4)}` : overTime ? `time limit reached after $${spent.usd.toFixed(4)}` : `budget $${o.budgetUsd} reached after $${spent.usd.toFixed(4)}`;
+    writeRunFolder({ ...base, endedBecause: 'budget', error, run: { ...run, ...sentFields([], []), promptSha: null, judgeModel: null } });
     o.onLine?.(`stopped before ${scenario} rep ${rep}: ${why}`);
     return { summary: summarizeRunFolder(root, dir.slice(root.length + 1)), crashed: false, stopped: true };
   }
@@ -291,7 +323,7 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
           return r;
         },
         async agent(opts) {
-          prompts.push(opts.prompt);
+          prompts.push(opts.prompt, ...(opts.then ?? []));
           const a = await runAgent({ ...opts, serveDir: opts.serveDir ?? loaded.dir }, join(dir, `agent${agents.length + 1}`), { dry: Boolean(o.dry) });
           agents.push(a);
           assertAnswered(a, `agent${agents.length}`);
@@ -306,17 +338,12 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
         const checks = [...(impl.checks?.(loaded.snap, result, label) ?? [])];
         let judged: { costUsd: number; model: string } | null = null;
         if (f.judge) {
-          let transcript: ConvoMessage[] = [];
-          try {
-            transcript = impl.describe(loaded.snap).filter((m) => Date.parse(m.at) <= Date.parse(f.asOf));
-          } catch {
-            transcript = [];
-          }
+          const transcript = judgeMomentOf(impl, loaded.snap, f.asOf);
           const texts = agents.length ? agents.flatMap((a) => a.said) : [result.reply];
           const reply = texts.map((text, i): ConvoMessage => ({ n: i + 1, id: `reply-${i + 1}`, at: f.asOf, channel: 'session', isGroup: false, direction: 'out', from: 'assistant', text }));
           const v = await judgeReply(f, transcript, reply, { dir: join(dir, 'judge'), dry: Boolean(o.dry) });
           judged = { costUsd: v.costUsd, model: v.model };
-          checks.push({ id: 'criteria', ask: f.judge, weight: 1, score: v.score, reasoning: v.reasoning ?? null, must: f.tags.includes('must') ? PASS_AT : null });
+          checks.push(criteriaCheck(f, v));
         }
         const score = scoreOf(gates, checks, judged);
         writeRunFolder({ ...base, endedBecause: 'done', result, score, run: { ...run, ...sentFields(calls, agents), promptSha: out.promptSha ?? promptShaOf(calls, prompts), judgeModel: judged?.model ?? null } });
@@ -333,6 +360,8 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
   if (summary) {
     spent.usd += summary.costUsd;
+    // The day's ledger hears of each rep as it finishes, so a long or killed check never hides what it spent.
+    if (!o.dry) addSpend(summary.costUsd);
     lane.done++;
     lane.doneUsd += summary.costUsd;
   }

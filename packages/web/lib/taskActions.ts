@@ -4,6 +4,7 @@
 // refusals the server enforces — never a draft the echo will undo.
 import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { MAX_TASK_DEPTH, isCountableSubtask, taskDepth, wouldCreateTaskCycle } from "@codecast/shared/tasks";
+import { undoGroup } from "@platform/engine";
 
 // This module is shared by web AND mobile (which has no sonner), so it can't
 // import a toast lib. Surfaces that want a toast on a create refusal pass a
@@ -49,6 +50,34 @@ export function closeTaskWithGuard(
   }
   s.updateTask(shortId, { status, ...(statusId !== undefined ? { status_id: statusId } : {}), subtask_resolution: resolution });
   return { needsConfirm: false };
+}
+
+/**
+ * Apply a board drop's edits: the grouped-by field(s) of the bucket it landed
+ * in, a manual rank (`sort_order`), or both, as one undo named by the field
+ * change. The rank is written on its own: a task with no rank yet cannot have
+ * that cleared on the server (NO_CLEAR in the tasks writer), so an updateTask
+ * carrying it records no undo, and the field edit riding with it would lose
+ * its undo too. Terminal statuses go through the close gateway.
+ */
+export function applyTaskDrop(shortId: string, updates: Record<string, any>): { needsConfirm: boolean } {
+  // status_id travels WITH the status through the close gateway: sent on its
+  // own it would move the category server-side and bypass the guard.
+  const { status, status_id, sort_order, ...fields } = updates;
+  const closing = status === "done" || status === "dropped";
+  if (!closing && status !== undefined) fields.status = status;
+  if (!closing && status_id !== undefined) fields.status_id = status_id;
+  const hasFields = Object.keys(fields).length > 0;
+  return undoGroup(
+    // Named by the close when there is one, else by the field edit.
+    (entries) => entries[closing ? entries.length - 1 : 0]!.label,
+    () => {
+      const s = useInboxStore.getState();
+      if (hasFields) s.updateTask(shortId, fields);
+      if (sort_order !== undefined) s.updateTask(shortId, { sort_order });
+      return closing ? closeTaskWithGuard(shortId, status, undefined, status_id) : { needsConfirm: false };
+    },
+  );
 }
 
 /** Resolve the pending close-guard dialog with the user's choice. */

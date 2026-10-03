@@ -39,7 +39,12 @@ function simRoots(dir: string): string[] {
   });
 }
 
-// The graph walk reads several hundred files: slow on a loaded machine.
+// What a product author reads when the guard fails on a binding they added.
+const HOW_TO_CLASSIFY =
+  'CONSTANT if never written after load; "window" if each browser window keeps its own value (export a { get, set, fresh } seam and add it to SEAMS); "memo" for a cache derived from state (add its reset to MEMO_RESETS); "transient" if it is always idle between turns; else { shared: "<why one copy for every sim window is correct>" }:';
+
+// The graph walk reads several hundred files, and the staleness check re-reads
+// every classified file once per entry: both are slow on a loaded machine.
 const WALK_TIMEOUT = 120_000;
 
 describe("sim window slots", () => {
@@ -61,26 +66,30 @@ describe("sim window slots", () => {
       for (const file of files) {
         for (const binding of topLevelBindings(readFileSync(join(WEB, file), "utf8"))) {
           if (!(`${file}:${binding}` in WINDOW_SLOTS)) {
-            missing.push(`  "${file}:${binding}": "window" | "memo" | "transient" | { shared: "<why one copy is right>" },`);
+            missing.push(`  "${file}:${binding}": CONSTANT | "window" | "memo" | "transient" | { shared: "<why one copy is right>" },`);
           }
         }
       }
       expect(
         missing.join("\n"),
-        `unclassified module bindings reachable from the sim; add each to WINDOW_SLOTS in sim/windowSlots.ts (a window binding also needs a seam):\n${missing.join("\n")}\n`,
+        `unclassified module bindings reachable from the sim. Add each to WINDOW_SLOTS in sim/windowSlots.ts as ${HOW_TO_CLASSIFY}\n${missing.join("\n")}\n`,
       ).toBe("");
     },
     WALK_TIMEOUT,
   );
 
-  test("every classified binding still exists", () => {
-    const stale = Object.keys(WINDOW_SLOTS).filter((key) => {
-      const file = key.slice(0, key.lastIndexOf(":"));
-      const path = join(WEB, file);
-      return !existsSync(path) || !topLevelBindings(readFileSync(path, "utf8")).includes(key.slice(file.length + 1));
-    });
-    expect(stale, "WINDOW_SLOTS entries naming a binding that is gone; remove them").toEqual([]);
-  });
+  test(
+    "every classified binding still exists",
+    () => {
+      const stale = Object.keys(WINDOW_SLOTS).filter((key) => {
+        const file = key.slice(0, key.lastIndexOf(":"));
+        const path = join(WEB, file);
+        return !existsSync(path) || !topLevelBindings(readFileSync(path, "utf8")).includes(key.slice(file.length + 1));
+      });
+      expect(stale, "WINDOW_SLOTS entries naming a binding that is gone; remove them").toEqual([]);
+    },
+    WALK_TIMEOUT,
+  );
 
   test("the extractor sees the shapes it is meant to", () => {
     const src = [

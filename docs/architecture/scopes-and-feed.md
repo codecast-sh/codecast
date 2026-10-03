@@ -89,9 +89,13 @@ So the scope page opens as the role's conversation, with the board beside it.
   proposal thread already use, so this is a mount, not a new view). It is the
   real conversation, so it survives a reload and a person reads and writes
   there exactly as in a session.
-- The eleven tabs become one panel on the right, open by default, closed and
-  reopened by a control in the header. The panel keeps its tabs; it stops
-  being the page. On a narrow window the panel is a sheet the conversation
+- The eleven tabs become one panel on the right, opened and closed by a
+  control in the header. The panel keeps its tabs; it stops being the page.
+  The page opens with the panel collapsed to a glance under the header
+  (`ScopeGlance`): the goal the area serves on its top line when one is
+  written down, else what the role is for, then what it is doing and what is
+  open in its area. A click opens the panel, a fact opens it on its tab, and a
+  link to a tab opens it on that tab. On a narrow window the panel is a sheet the conversation
   hands to and takes back, the way the proposal pane does on the phone.
 - The header keeps the face, the name, who the role reports to and the state
   stripe. Talk and Wake leave the header: the composer is Talk, and Wake is

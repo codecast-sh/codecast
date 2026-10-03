@@ -23,7 +23,7 @@
 // derived/enriched field for an entity that also lives in the store, route it
 // through these helpers.
 
-import { parseRepoObjectId } from "@codecast/shared/entities";
+import { parseRepoObjectId, type EntityType } from "@codecast/shared/entities";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 
@@ -479,6 +479,32 @@ function byShortId(collection: Record<string, any> | undefined | null): Map<stri
 function lookup(collection: Record<string, any> | undefined | null, rawId: string): any {
   if (!collection) return undefined;
   return collection[rawId] ?? byShortId(collection)?.get(rawId.toLowerCase());
+}
+
+// Which collection holds a bare Convex id, when the client already has the
+// row: a reference to it can name its type (and its title) on the first frame
+// instead of waiting on entities.resolveIdType.
+const TYPE_BY_COLLECTION: Array<[string, EntityType]> = [
+  ["conversations", "session"],
+  ["sessions", "session"],
+  ["tasks", "task"],
+  ["plans", "plan"],
+  ["docs", "doc"],
+  ["agentTasks", "trigger"],
+  ["projects", "project"],
+  ["initiatives", "initiative"],
+  ["orgProposals", "proposal"],
+  ["sessionDecisions", "decision"],
+  ["pullRequests", "pr"],
+  ["commits", "commit"],
+];
+
+export function entityTypeInStore(state: any, convexId: string): EntityType | undefined {
+  if (!state || !convexId) return undefined;
+  for (const [key, type] of TYPE_BY_COLLECTION) {
+    if (state[key]?.[convexId]) return type;
+  }
+  return undefined;
 }
 
 /**

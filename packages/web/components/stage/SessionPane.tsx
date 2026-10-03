@@ -9,7 +9,7 @@
 import { lazy, memo, Suspense } from "react";
 import { useTrackedStore, useInboxStore, getSessionRenderKey } from "../../store/inboxStore";
 import { animatedHideSession } from "../../store/undoActions";
-import { useMissingSessionRow } from "../../hooks/useMissingSessionRow";
+import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ConversationPlaceholder } from "../ConversationPlaceholder";
 import { ConversationUnavailable } from "../ConversationUnavailable";
@@ -48,7 +48,7 @@ export const SessionPane = memo(function SessionPane({
   const killed = s.pending[`sessions:${sessionId}`]?.type === "exclude";
   // A row the store does not hold (a teammate's session, one outside the inbox
   // window) loads here and lands in the store; the pane then paints from it.
-  const missing = useMissingSessionRow(session || killed ? null : sessionId);
+  const { row: missing, failed } = useMissingSessionLookup(session || killed ? null : sessionId);
   useWatchEffect(() => {
     if (missing) useInboxStore.getState().seedSession(missing);
   }, [missing]);
@@ -56,7 +56,7 @@ export const SessionPane = memo(function SessionPane({
     if (!killed && missing !== null) return <ConversationPlaceholder id={sessionId} />;
     // Killed here, or the server will not hand it over (deleted, private):
     // say so honestly instead of painting an empty column.
-    return <ConversationUnavailable actionLabel={onClose ? "Close pane" : undefined} onAction={onClose} />;
+    return <ConversationUnavailable failed={!killed && failed} actionLabel={onClose ? "Close pane" : undefined} onAction={onClose} />;
   }
   return (
     <ErrorBoundary name="StageSessionPane" level="panel">

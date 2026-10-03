@@ -33,6 +33,11 @@ export type SessionSearchRow = {
   projectPath?: string | null;
   agentType?: string | null;
   titleMatch?: boolean;
+  /** What the session began as and was called before, when that answers the
+   *  query and its current title may not (server: searchCore.originMatch). */
+  origin?: { started_as?: string; earlier_titles?: string[] } | null;
+  /** Worker sessions that matched and are folded into this row. */
+  workerCount?: number;
   /** This row came from the local cache, not from the server search. */
   instant?: boolean;
   /** The text the local match landed in (summary, project path), for a preview line. */

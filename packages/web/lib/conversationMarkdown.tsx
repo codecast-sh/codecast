@@ -1,4 +1,4 @@
-import { CollapsibleImage, ImageRowParagraph } from "../components/tools/MarkdownImages";
+import { MarkdownImg, ImageRowParagraph } from "../components/tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "../components/EntityIdPill";
 import { MESSAGE_MD_COMPONENTS, renderMarkdownPre } from "../components/messageMarkdown";
 
@@ -34,7 +34,7 @@ export function hasRichMarkdown(text: string): boolean {
 export const CMD_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,
-  img: ({ src, alt }: { src?: string; alt?: string }) => <CollapsibleImage src={src} alt={alt} />,
+  img: MarkdownImg,
   p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };

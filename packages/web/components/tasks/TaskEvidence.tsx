@@ -1,5 +1,6 @@
 "use client";
 
+import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { useMemo } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Columns2, FileCode, FileText, GitPullRequest, Image as ImageIcon, Paperclip } from "lucide-react";
@@ -177,13 +178,13 @@ function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
           {verification && (
             <div>
               <div className="text-xs font-medium text-sol-text-dim mb-1.5">Verification</div>
-              <div className="text-sm text-sol-text-muted whitespace-pre-wrap">{verification}</div>
+              <MarkdownRenderer content={verification} className="text-sm text-sol-text-muted prose-sm prose-invert max-w-none" />
             </div>
           )}
           {verdict?.note && (
             <div>
               <div className="text-xs font-medium text-sol-text-dim mb-1.5">Review note</div>
-              <div className="text-sm text-sol-text-muted whitespace-pre-wrap">{verdict.note}</div>
+              <MarkdownRenderer content={verdict.note} className="text-sm text-sol-text-muted prose-sm prose-invert max-w-none" />
             </div>
           )}
         </div>

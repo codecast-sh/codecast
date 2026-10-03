@@ -41,7 +41,7 @@ import { getFunctionName } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Principal, SimBackend, SimClient } from "@codecast/convex/convex/simBackend.testing";
 import type { OutboxEntry } from "@platform/engine";
-import { __createInboxStoreForTests, placeInboxRows, useInboxStore } from "../../inboxStore";
+import { placeInboxRows, useInboxStore } from "../../inboxStore";
 import { subscribeGestures } from "../../gestureBridge";
 import { applyBridgedGesture } from "../../syncReplication";
 import type { InboxCompareOutcome, InboxDigestComparer } from "../../inboxDigestCompare";
@@ -56,7 +56,7 @@ import { bootstrapFloorFor, bootstrapFloorKey, startBootstrapFloor } from "../..
 import { startInboxDigestCompare } from "../../../hooks/useInboxDigestCompare";
 import { reconcileStorePendingCoverage } from "../../../hooks/usePendingMessageCoverage";
 import type { Net } from "./net";
-import { now, runInWindow, type RealmWindow, type SimStore } from "./realm";
+import { createWindowStore, now, runInWindow, type RealmWindow, type SimStore } from "./realm";
 import type { SimDevice } from "./device";
 
 /** What a window needs of the world: the server, the net, and the window registry `net.online` routes through. */
@@ -105,7 +105,7 @@ function clientError(name: string, error: any): Error {
 const RECOVERY_POLL_FEEDS = ["inbox", "liveness", "team", "teamLiveness"] as const;
 
 export class SimWindow implements RealmWindow {
-  readonly store: SimStore = __createInboxStoreForTests();
+  readonly store: SimStore;
   /** This window's server access through the net: every call is a req and a res on `conn:<name>`. */
   readonly client: SimClient;
   /** The engine outbox, in memory (production keeps it in IndexedDB). */
@@ -138,6 +138,7 @@ export class SimWindow implements RealmWindow {
   ) {
     if (name.includes(":") || /\s/.test(name)) throw new Error(`sim window: name "${name}" may not hold ':' or whitespace (it names net channels)`);
     if (world.windows.has(name)) throw new Error(`sim window: a window named "${name}" already exists`);
+    this.store = createWindowStore(name);
     world.windows.set(name, this);
     this.role = role;
     this.principal = { kind: "user", userId: user.userId };

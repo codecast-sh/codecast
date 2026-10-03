@@ -1,17 +1,19 @@
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { batchSet, previousRunSet } from '../commands/check';
+import { batchSet, pooledRuns, previousRuns, previousRunSet } from '../commands/verdict';
 import { rescoreRun } from '../commands/grade';
 import { runSnapshot } from '../commands/snapshot';
 import type { SurfaceRun } from './runs';
 import { surfaceMeta } from '../registry';
 import { servedReadKey } from '../served';
-import type { AgentResult, CallResult } from '../surface';
-import { assertAnswered, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
-import { dominantModel, routeGates, scoreOf } from './replay';
+import type { AgentResult, CallResult, SurfaceImpl } from '../surface';
+import { echoImpl, echoMeta } from '../testSurface';
+import type { Freeze } from '@platform/evals';
+import { assertAnswered, filesWrittenOf, harnessFailure, loopTurnsOf, outsideWorldCommands, readAgentRun } from './dryRun';
+import { dominantModel, replayRep, routeGates, scoreOf, type PreparedFreeze, type RepLedger } from './replay';
 
 const call = (over: Partial<CallResult> = {}): CallResult => ({
   request: { model: 'pin', prompt: 'p', max_tokens: 100 },
@@ -77,6 +79,14 @@ describe('route gates', () => {
     expect(byId(routeGates(agentMeta, { calls: [], agents: [agent(['REFUSED task create x'])] }))['no-unexpected-writes']!.pass).toBe(false);
   });
 
+  test("a read an older guard refused is judged by today's guard and is no write", () => {
+    const writes = (line: string) => byId(routeGates(agentMeta, { calls: [], agents: [agent([line])] }))['no-unexpected-writes']!;
+    expect(writes('REFUSED goals --brief').pass).toBe(true);
+    expect(writes('REFUSED publish ls --json').pass).toBe(true);
+    expect(writes('REFUSED plan replay pl-461').pass).toBe(true);
+    expect(writes('REFUSED publish comments pg --resolve c1').evidence.summary).toBe('refused: cast publish comments pg --resolve c1');
+  });
+
   test('score: any failed gate zeroes it; a missed floor fails it', () => {
     const ok = { id: 'g', pass: true, evidence: { summary: '' } };
     expect(scoreOf([ok], [{ id: 'c', weight: 1, score: 0.8 }]).pass).toBe(true);
@@ -119,6 +129,13 @@ describe('a run that left its world', () => {
     use('t4', 'cast org health --json'),
     result('t4', 'SERVED'),
   ].map((e) => JSON.stringify(e)).join('\n');
+
+  test('the files a turn wrote: write tools and shell redirects, never a read', () => {
+    const tool = (name: string, input: Record<string, string>) => JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', id: name, name, input }] } });
+    const turn = [tool('Write', { file_path: '/r/.claude/projects/p/memory/fern-role.md', content: 'x' }), tool('Read', { file_path: '/r/memory/MEMORY.md' }), tool('Edit', { file_path: '/r/CLAUDE.md' }), tool('Bash', { command: 'echo hi >> notes/today.md && cat a | tee -a log.txt' })].join('\n');
+    expect(filesWrittenOf(turn)).toEqual(['/r/.claude/projects/p/memory/fern-role.md', '/r/CLAUDE.md', 'notes/today.md', 'log.txt']);
+    expect(filesWrittenOf(stream)).toEqual(['/tmp/i.json']);
+  });
 
   test("names each command the real CLI answered signed out, and not a file that quotes the words", () => {
     expect(outsideWorldCommands(stream)).toEqual(['cast org inputs --team "Union" --json > /tmp/i.json; echo $?', '~/.codecast/bin/cast read jx7 2>&1 | head']);
@@ -181,9 +198,15 @@ describe('rescore', () => {
     expect(r.after!.pass).toBe(true);
     expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8'))).toMatchObject({ score: r.after!.score, seed: 1, scenario: 'org-review-0bc4cd18' });
     expect(JSON.parse(readFileSync(join(dir, 'score.before-rescore.json'), 'utf8')).score).toBe(0);
+    // Each rescore also keeps its score as a version of its own, so a later one never loses it.
+    const versions = () => readdirSync(dir).filter((n) => /^score\.\d{4}-.*\.json$/.test(n));
+    expect(versions()).toEqual([`score.${r.after!.scoredAt!.replace(/[:.]/g, '-')}.json`]);
+    expect(readFileSync(join(dir, versions()[0]!), 'utf8')).toBe(readFileSync(join(dir, 'score.json'), 'utf8'));
     // Another role's brief stays a refused write on a rescore too.
     writeFileSync(join(sub, 'calls.log'), 'REFUSED brief edit --for @docs -\n');
+    await Bun.sleep(5);
     expect((await rescoreRun(dir))!.after!.gates.find((g) => g.id === 'no-unexpected-writes')!.pass).toBe(false);
+    expect(versions()).toHaveLength(2);
     // A rep whose cast reached the real CLI becomes the crash a fresh run records, its score kept aside.
     writeFileSync(join(dir, 'result.json'), JSON.stringify({ endedBecause: 'done', stopReason: null }));
     writeFileSync(join(sub, 'stream.jsonl'), [{ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'u', input: { command: 'cast brief' } }] } }, { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'u', content: 'Not authenticated. Run: cast auth' }] } }].map((e) => JSON.stringify(e)).join('\n'));
@@ -198,7 +221,7 @@ describe('rescore', () => {
 });
 
 describe('the previous run set', () => {
-  const run = (freezeId: string, batch: string, status = 'pass'): SurfaceRun => ({ id: `${freezeId}-${batch}`, scenario: 's', title: 't', seed: 1, startedAt: batch, createdAt: batch, status: status as SurfaceRun['status'], score: 1, gatesFailed: [], missedFloors: [], sends: 0, costUsd: 0, realMs: 0, virtualMs: 0, freezeId, batch, liveReads: 0 });
+  const run = (freezeId: string, batch: string, status = 'pass'): SurfaceRun => ({ id: `${freezeId}-${batch}`, scenario: 's', title: 't', seed: 1, startedAt: batch, createdAt: batch, status: status as SurfaceRun['status'], score: 1, gatesFailed: [], missedFloors: [], sends: 0, costUsd: 0, realMs: 0, virtualMs: 0, freezeId, batch, cadence: null, liveReads: 0 });
 
   test("is each freeze's newest other batch, so a later run of one freeze hides no other freeze's set", () => {
     const history = [run('a', 'b1'), run('b', 'b1'), run('a', 'b2'), run('a', 'b3', 'dry'), run('b', 'b2', 'unscored'), run('a', 'now')];
@@ -210,5 +233,96 @@ describe('the previous run set', () => {
     const history = [{ ...run('a', 'b1'), id: 'rerun' }, { ...run('a', 'b1', 'crash'), id: 'crash' }, { ...run('a', 'b1', 'unscored'), id: 'stop', seed: 2 }];
     expect(batchSet(history, 'b1').map((r) => r.id)).toEqual(['rerun']);
     expect(previousRunSet(history, 'now').map((r) => r.id)).toEqual(['rerun']);
+  });
+
+  test('a batch whose reps on a freeze all crashed graded nothing there, so the comparison falls back to the newest batch that did', () => {
+    // The 2026-10-02 opus union-base8 shape: every rep of the newest batch a crash after rescore, an older batch scored.
+    const history = [{ ...run('a', 'b2', 'crash'), id: 'c1' }, { ...run('a', 'b2', 'crash'), id: 'c2', seed: 2 }, run('a', 'b1'), run('b', 'b2')];
+    expect(previousRunSet(history, 'now').map((r) => r.id).sort()).toEqual(['a-b1', 'b-b2']);
+  });
+
+  test('a batch on another model is passed over and named, so a fallback never weighs the model as the prompt', () => {
+    // The union-base8 shape of 2026-10-03: the opus baseline's newest other batch on that freeze ran on sonnet.
+    const history = [{ ...run('a', 'now'), model: 'opus' }, { ...run('a', 'b2'), model: 'sonnet' }, { ...run('a', 'b1'), model: 'opus' }];
+    const prev = previousRuns(history, 'now', () => null);
+    expect(prev.set.map((r) => r.id)).toEqual(['a-b1']);
+    expect(prev.skipped).toEqual([{ batch: 'b2', freezeId: 'a', why: 'model' }]);
+  });
+
+  test('a batch judged on another ruler is passed over until it is rejudged onto the current one', () => {
+    const history = [run('a', 'now'), run('a', 'b2'), run('a', 'b1'), run('b', 'now'), run('b', 'b2')];
+    const ruler = (r: SurfaceRun) => (r.batch === 'b2' && r.freezeId === 'a' ? 'old' : 'new');
+    const prev = previousRuns(history, 'now', ruler);
+    expect(prev.set.map((r) => r.id).sort()).toEqual(['a-b1', 'b-b2']);
+    expect(prev.skipped).toEqual([{ batch: 'b2', freezeId: 'a', why: 'judge' }]);
+    // Once b2 is rejudged its ruler matches, and it is the baseline again.
+    expect(previousRunSet(history, 'now', () => 'new').map((r) => r.id).sort()).toEqual(['a-b2', 'b-b2']);
+  });
+
+  test("a cadence batch pools its own cadence's newest n batches per freeze, and no other run joins", () => {
+    const nightly = (freezeId: string, batch: string, status = 'pass') => ({ ...run(freezeId, batch, status), cadence: 'nightly' });
+    // Newest first. 'ablation' carries no cadence (its notes may say anything), n4 crashed on a, b skipped n2.
+    const history = [nightly('a', 'now'), nightly('b', 'now'), run('a', 'ablation'), { ...nightly('a', 'n4', 'crash') }, nightly('a', 'n3'), nightly('b', 'n3'), nightly('a', 'n2'), nightly('a', 'n1'), nightly('b', 'n1'), nightly('a', 'n0')];
+    const pooled = pooledRuns(history, 'now', 'nightly', 3, () => null);
+    expect(pooled.set.map((r) => r.id).sort()).toEqual(['a-n1', 'a-n2', 'a-n3', 'b-n1', 'b-n3']);
+    expect(pooled.batches).toEqual(['n1', 'n2', 'n3']);
+    expect(pooledRuns(history, 'now', 'weekly', 3, () => null).set).toEqual([]);
+  });
+});
+
+describe('what a rep records', () => {
+  const f = { id: 'eeeeeeee-0000-0000-0000-000000000000', name: 'provenance', asOf: '2026-01-01T00:00:00.000Z', tags: [], meta: { surface: 'echo' } } as unknown as Freeze;
+  const prepared = (root: string, impl: SurfaceImpl, route: 'call' | 'agent' = 'call'): PreparedFreeze => ({
+    f,
+    meta: { ...echoMeta, route },
+    impl,
+    root,
+    model: echoMeta.model,
+    scenario: 'echo-eeeeeeee',
+    loaded: { snap: { text: 'say this back' } },
+    mismatch: null,
+    run: { freezeId: f.id, notes: null, model: echoMeta.model, route, sourceHash: 'h', budgetUsd: null, gitHead: 'x', dirty: false, dry: true, temperatureReplay: 'cli-default', batch: 'b', title: 'provenance' },
+  });
+  const runJsonOf = (root: string) => JSON.parse(readFileSync(join(root, readdirSync(root)[0]!, 'run.json'), 'utf8'));
+
+  test("a dry agent rep writes every follow-up turn, and its promptSha covers them", async () => {
+    const briefing = (then: string[]): SurfaceImpl => ({
+      ...echoImpl,
+      async replay(_snap, ctx) {
+        await ctx.agent({ prompt: 'the briefing', model: ctx.model, then });
+        return { reply: '' };
+      },
+      gates: () => [],
+    });
+    const shaFor = async (then: string[]) => {
+      const root = mkdtempSync(join(tmpdir(), 'evals-then-'));
+      const r = await replayRep(prepared(root, briefing(then), 'agent'), 1, 1, { reps: 1, model: null, dry: true });
+      expect(r.crashed).toBe(false);
+      return { root, sha: runJsonOf(root).promptSha as string };
+    };
+    const two = await shaFor(['second turn', 'third turn']);
+    const agentDir = join(two.root, readdirSync(two.root)[0]!, 'agent1');
+    expect(readFileSync(join(agentDir, 'then2.md'), 'utf8')).toBe('second turn');
+    expect(readFileSync(join(agentDir, 'then3.md'), 'utf8')).toBe('third turn');
+    expect(two.sha).toMatch(/^[0-9a-f]{64}$/);
+    // A follow-up turn's text moves the hash; the same turns hash the same.
+    expect((await shaFor(['second turn', 'a changed third turn'])).sha).not.toBe(two.sha);
+    expect((await shaFor(['second turn', 'third turn'])).sha).toBe(two.sha);
+    expect((await shaFor([])).sha).not.toBe(two.sha);
+  });
+
+  test('a stop file stops the check between reps, like a budget stop', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'evals-stopfile-'));
+    const stopFile = join(root, '..', `${root.split('/').pop()}.stop`);
+    const ledger: RepLedger = { usd: 0 };
+    const o = { reps: 2, model: null, dry: true, spent: ledger, stopFile };
+    const first = await replayRep(prepared(root, echoImpl), 1, 2, o);
+    expect(first.stopped).toBe(false);
+    writeFileSync(stopFile, '');
+    const second = await replayRep(prepared(root, echoImpl), 2, 2, o);
+    expect(second.stopped).toBe(true);
+    expect(ledger.stoppedBy).toBe('stop-file');
+    const stop = readdirSync(root).find((d) => d.includes('-seed2-'))!;
+    expect(JSON.parse(readFileSync(join(root, stop, 'result.json'), 'utf8'))).toMatchObject({ endedBecause: 'budget', stopReason: `stopped by ${stopFile} after $0.0000` });
   });
 });

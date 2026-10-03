@@ -10,11 +10,14 @@ const root = join(import.meta.dir, "..");
 const read = (f: string) => readFileSync(join(root, f), "utf8");
 
 describe("answer keys have one owner", () => {
-  test("the queue passes keys to the first stack group only", () => {
+  test("the queue passes keys to one group, and inside it to the first row only", () => {
     const src = read("DecisionQueueList.tsx");
-    expect(src).toMatch(/const firstStackKey = groups\.find\(\(g\) => g\.kind === "stack"\)\?\.key;/);
-    expect(src).toMatch(/keys=\{g\.key === firstStackKey\}/);
-    expect(src).not.toMatch(/<DecisionCompactCard[^>]*\skeys\s/);
+    expect(src).toMatch(/const keysGroup = \(groups\.find\(\(g\) => g\.kind !== "role"\) \?\? groups\[0\]\)\?\.key;/);
+    expect(src).toMatch(/keys=\{g\.key === keysGroup\}/);
+    // Every compact card in the queue takes keys only as the group's first row.
+    const cards = src.match(/<DecisionCompactCard[^>]*>/g) ?? [];
+    expect(cards.length).toBeGreaterThan(0);
+    for (const c of cards) expect(c).toMatch(/keys=\{keys && i === 0\}/);
   });
   test("the checklist forwards its keys prop instead of claiming them", () => {
     const src = read("StackChecklist.tsx");
@@ -25,5 +28,19 @@ describe("answer keys have one owner", () => {
     const src = read("DecisionAnswerControls.tsx");
     expect(src).toContain("e.stopImmediatePropagation()");
     expect(src).not.toMatch(/e\.stopPropagation\(\)/);
+  });
+});
+
+// The line jumps stations with Shift and a digit while a card holds the
+// cursor. On some layouts that chord still reports a bare digit as e.key, so
+// the card's gate refuses it by code, never by key.
+describe("Shift and a digit belongs to the page", () => {
+  test("answerKeyAllowed refuses a shifted digit and passes a bare one", async () => {
+    const { answerKeyAllowed } = await import("../ChangeCardView");
+    const ev = (o: Partial<KeyboardEvent>) => ({ metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, key: "1", code: "Digit1", ...o }) as KeyboardEvent;
+    expect(answerKeyAllowed(ev({}))).toBe(true);
+    expect(answerKeyAllowed(ev({ shiftKey: true, key: "1" }))).toBe(false);
+    expect(answerKeyAllowed(ev({ shiftKey: true, key: "!" }))).toBe(false);
+    expect(answerKeyAllowed(ev({ shiftKey: true, key: "Enter", code: "Enter" }))).toBe(true);
   });
 });

@@ -322,8 +322,10 @@ export const CLIENT_SYNC_REGISTRY = {
     // Liberal delta cache like the others; a snapshot here was the one
     // remaining collection that pruned by absence. The member counts are joined
     // from tasks/plans/docs and move without any scalar on the row changing,
-    // so they must be content-compared or a refetch lands as a no-op.
-    sync: { isDelta: true, deepFields: ["task_counts"] },
+    // so they must be content-compared or a refetch lands as a no-op. The line
+    // profile (signals.publishProfile) is replaced whole without touching any
+    // scalar, so it is content-compared for the same reason.
+    sync: { isDelta: true, deepFields: ["task_counts", "line_profile"] },
   },
   // Initiatives (initiatives-projects-role-page.md I1). SNAPSHOT, not delta:
   // initiatives.webList returns the complete visible set of the workspace, so
@@ -605,9 +607,12 @@ export const CLIENT_SYNC_REGISTRY = {
   // feed attaches each node's `session` under a shared read budget, so a
   // list push over the detail row keeps the session rows; a run past the
   // budget carries none and its rows fall back to the daemon handle.
+  // localFirst: answering a gate flips the run to running in the draft
+  // (store respondToGate) and holds until the settle echoes it.
   workflowRuns: {
     persistence: { kind: "collection", key: "workflowRuns" },
     hydration: { phase: "deferred" },
+    localFirst: true,
     indexes: "_id, workflow_id",
     sync: { isDelta: true },
     feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.listRuns"],
@@ -662,11 +667,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // The org tree (people, roles, anchors, top sessions per parent): one
   // server-derived snapshot for the active workspace. Singleton; the store's
   // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
+  // Two feeds, one home: org.tree for the surfaces that draw sessions, and
+  // org.roles (roles and seats, no session read) for the ones that only name
+  // a role; ORG_SYNC_REGISTRY fills a roles-only push from the held tree.
   orgTree: {
     persistence: { kind: "meta", key: "orgTree" },
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
-    feeds: ["org.tree"],
+    feeds: ["org.tree", "org.roles"],
   },
   // The company's flow signals and flags (org-staffing.md S3): one snapshot
   // for the active workspace, painted by the staffing pane and the node
@@ -802,6 +810,19 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, team_id, kind",
     feeds: ["changesQueries.inTheWorks"],
   },
+  // The sessions behind one story, for its evidence drawer: each session's
+  // headline and, when its owner shares it in full, its turns. Keyed
+  // `<story>|<conversation>`. Delta and never pruned: a session the gate drops
+  // leaves the story's own conversation_ids on the next rebuild, and the
+  // drawer reads only the ids the story still names. `turns` compares deep, so
+  // an owner who now shares less clears them from the cache on the next answer.
+  changeStorySessions: {
+    persistence: { kind: "collection", key: "changeStorySessions" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["turns"] },
+    indexes: "_id, team_id, story_id",
+    feeds: ["changesQueries.storySessions"],
+  },
   // The daemon-side fleet (managed_sessions). listActiveSessions is the
   // COMPLETE live set (24h heartbeat window) — snapshot, so a session that
   // stops heartbeating leaves. Readers additionally hide rows whose
@@ -823,6 +844,26 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["managedSessions.listActiveSessions"],
   },
+  machineResources: {
+    persistence: { kind: "collection", key: "machineResources" },
+    hydration: { phase: "deferred" },
+    sync: {},
+    feeds: ["machineResources.listMine"],
+  },
+  migrationCandidates: {
+    persistence: { kind: "meta", key: "migrationCandidates" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "list" },
+    feeds: ["sessionMigrations.candidates"],
+  },
+  migrationBatches: {
+    persistence: { kind: "meta", key: "migrationBatches" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "list", rowKey: "batch_id" },
+    localFirst: true,
+    unprotectedFields: ["rows", "queued", "cancelled", "state"],
+    feeds: ["sessionMigrations.listBatches"],
+  },
   // Aggregate CPU/memory over the last 2h — a recomputed list, not rows.
   sessionMetricsAggregate: {
     persistence: { kind: "meta", key: "sessionMetricsAggregate" },
@@ -835,9 +876,12 @@ export const CLIENT_SYNC_REGISTRY = {
   // syncs with pruneAbsentScope for it (a resolved permission leaves the
   // pending query and must leave the store). Persisted so the decision queue
   // paints permission cards at boot; readers hide rows past the 2h window.
+  // localFirst: approve/deny (store resolvePermission) removes the row, and
+  // the exclude it plants keeps a racing push from bringing the card back.
   pendingPermissions: {
     persistence: { kind: "collection", key: "pendingPermissions" },
     hydration: { phase: "deferred" },
+    localFirst: true,
     indexes: "_id, conversation_id",
     sync: { isDelta: true },
     feeds: ["permissions.getPendingPermissions"],
@@ -873,8 +917,14 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "machineRoster" },
     feeds: ["devices.listDevices"],
   },
+  // The viewer's notification list (notifications.list, the complete recent
+  // set, so a snapshot). Persisted so the phone's Notifications tab and its
+  // badge paint the cached list on open instead of a skeleton.
   notifications: {
+    persistence: { kind: "collection", key: "notifications" },
+    hydration: { phase: "deferred" },
     localFirst: true,
+    sync: {},
   },
   // The flags a person flips from inside a huddle (calls.setRoomLocked,
   // calls.setRoomTranscribeOff, Record and Stop through
@@ -892,11 +942,47 @@ export const CLIENT_SYNC_REGISTRY = {
   // end between two pushes, so a lock waiting for the pressed value could wait
   // for ever. The press paints it and every push corrects it, and the press in
   // flight (hooks/useRoomRecording) carries the mark across the round trip.
+  // The run behind the flag rides the same row, flat (recording_status, who
+  // pressed, the clock's time 0, whether a press could work): the room's
+  // recording has this one home, and every mark, the Record button and the
+  // notice read it. All the server's, none locked.
   callRooms: {
     sync: {},
     localFirst: true,
-    unprotectedFields: ["transcribe_off_at", "recording"],
+    unprotectedFields: [
+      "transcribe_off_at",
+      "recording",
+      "recording_status",
+      "recording_run_id",
+      "recording_by_id",
+      "recording_by_name",
+      "recording_requested_at",
+      "recording_started_at",
+      "recording_configured",
+    ],
     feeds: ["calls.getLiveRooms"],
+  },
+  // Who is waiting at the door of the room I'm seated in (calls.getRoomKnocks,
+  // teammates and guests in one list), fed by useCallSync in every window.
+  // A localFirst list keyed by from_user: answering a guest (store
+  // admitGuestKnock / denyGuestKnock / removeCallGuest) takes the knock off
+  // on the draft, and the lock holds it off through pushes computed before
+  // the answer landed, and puts it back if the server refuses. Never
+  // persisted: a knock is a moment.
+  roomKnocks: {
+    sync: { kind: "list", rowKey: "from_user" },
+    localFirst: true,
+    feeds: ["calls.getRoomKnocks"],
+  },
+  // Guests waiting on the viewer's own links at a room nobody is in
+  // (callGuests.listGuestsWaiting), fed by useCallSync in every window like
+  // the door: what the "is waiting to join" toast and the Live now row read.
+  // The feed is the complete set, replaced whole on every push; nothing here
+  // is the client's to change (joining the room is what answers it). Never
+  // persisted: somebody at a door is a moment.
+  guestsWaiting: {
+    sync: { kind: "list", rowKey: "guest_id" },
+    feeds: ["callGuests.listGuestsWaiting"],
   },
   // A room's open guest links (callGuests.listGuestLinks), keyed by link id:
   // the invite panel draws them, and whether the feed answers at all (null
@@ -908,6 +994,36 @@ export const CLIENT_SYNC_REGISTRY = {
   guestLinks: {
     sync: { isDelta: true },
     feeds: ["callGuests.listGuestLinks"],
+  },
+  // A call's video, as callRecordings.webCallRecordings answers it: one row
+  // per recorded file in `callRecordings` (keyed by the recording's id, each
+  // carrying its transcript_id), and the facts about the call itself (its
+  // clock, whether its share link hands out the video) in `callRecordingCalls`,
+  // keyed by transcript id. One feeder fills both (hooks/useRoomRecording
+  // useCallRecordings), mounted by whatever shows the call's video: the call
+  // page, its share popover and every `cl-42@12:34` frame. Each push is the
+  // call's complete set of files, so it syncs as a delta pruned to the call,
+  // and the feeder lets go of the exclude tombstones the push has answered.
+  // localFirst: a deleted run leaves the page in the same frame (its rows go
+  // on the draft and the exclude tombstones hold them out of a push computed
+  // before the delete committed), and the share switch moves on the press
+  // (a field lock on video_shared). Never persisted: every row carries a URL
+  // signed for one window, so a cached row would be a dead link by the next
+  // load; the call page asks again when it opens.
+  callRecordings: {
+    sync: { isDelta: true },
+    localFirst: true,
+    feeds: ["callRecordings.webCallRecordings"],
+  },
+  // `deleted_here_at` is this window's own mark that it deleted a run of the
+  // call (store deleteCallRecording): the server never sends it, so a push
+  // keeps it (preserveFields) and it holds no lock waiting for an echo
+  // (unprotectedFields). A refused delete clears it.
+  callRecordingCalls: {
+    sync: { isDelta: true, preserveFields: ["deleted_here_at"] },
+    localFirst: true,
+    unprotectedFields: ["deleted_here_at"],
+    feeds: ["callRecordings.webCallRecordings"],
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -1311,7 +1427,11 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   changeEditions: "shared",
   changeLive: "shared",
   changeWorks: "shared",
+  changeStorySessions: "shared",
   managedSessions: "shared",
+  machineResources: "shared",
+  migrationCandidates: "shared",
+  migrationBatches: "shared",
   sessionCommands: "local",
   sessionMetricsAggregate: "shared",
   pendingPermissions: "shared",
@@ -1322,7 +1442,12 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Fed in every window by useCallSync (calls are window effects, not host
   // feeders), like the liveRooms roster it is split from.
   callRooms: "local",
+  roomKnocks: "local",
+  guestsWaiting: "local",
   guestLinks: "local",
+  // Per-view, like guestLinks: fed by the window showing the call.
+  callRecordings: "local",
+  callRecordingCalls: "local",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

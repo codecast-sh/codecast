@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery, useConvex } from "convex/react";
+import { useConvex } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { collectionRowValidator } from "../store/clientSyncRegistry";
@@ -100,9 +101,9 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
     { select: (r: any) => r?.items ?? r, liveLoadingScope: "tasks", onRows: fetchOriginBadges },
   );
 
-  const activeMap = useQuery(api.tasks.webActiveSessions,
+  const activeMap = useQueryNoThrow(api.tasks.webActiveSessions,
     wsArgs === "skip" ? "skip" : {}
-  );
+  ).data;
 
   // Active sessions stored separately — lightweight update, no task resync.
   useConvexSync(activeMap, useCallback((data: any) => {
@@ -203,7 +204,7 @@ export function useSyncTasks() {
  */
 export function useSyncMentionTasks() {
   const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
-  const result = useQuery(api.tasks.webMentionList, { workspace: "all" } as any);
+  const result = useQueryNoThrow(api.tasks.webMentionList, { workspace: "all" } as any).data;
 
   useConvexSync(result, useCallback((data: any) => {
     syncMentionIndex("tasks", data?.items ?? []);
@@ -241,10 +242,10 @@ export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): 
 }
 
 export function useSyncTaskDetail(id?: string) {
-  const data = useQuery(
+  const data = useQueryNoThrow(
     api.taskMining.webGetTaskDetail,
     id ? { id: id as any } : "skip"
-  );
+  ).data;
 
   useConvexSync(data, ingestTaskDetail);
 

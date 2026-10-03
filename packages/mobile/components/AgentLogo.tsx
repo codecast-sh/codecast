@@ -2,7 +2,7 @@ import { View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import Svg, { Path } from 'react-native-svg';
 import { Theme } from '@/constants/Theme';
-import { MOBILE_AGENT_LOGO_BG } from '@codecast/shared/render/mobileSessionStyle';
+import { MOBILE_AGENT_LOGO_BG, MUSE_MARK_PATH } from '@codecast/shared/render/mobileSessionStyle';
 
 export function agentLogoBg(agentType?: string): string {
   const bg = agentType ? MOBILE_AGENT_LOGO_BG[agentType] : undefined;
@@ -56,6 +56,15 @@ export function AgentLogoSvg({ agentType, size = 16 }: { agentType?: string; siz
       <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
         <Svg width={iconSize} height={iconSize} viewBox="0 0 24 24" fill="none">
           <Path d="M4 4l16 6-8 2-2 8z" stroke="white" strokeWidth={2} />
+        </Svg>
+      </RNView>
+    );
+  }
+  if (agentType === 'muse') {
+    return (
+      <RNView style={{ width: size, height: size, borderRadius: 3, backgroundColor: bg, alignItems: 'center', justifyContent: 'center' }}>
+        <Svg width={size * 0.7} height={size * 0.7} viewBox="0 0 24 24">
+          <Path d={MUSE_MARK_PATH} fill="white" fillRule="evenodd" />
         </Svg>
       </RNView>
     );

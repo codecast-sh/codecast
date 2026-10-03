@@ -10,7 +10,8 @@ import type { AgentResult, CallResult, ReplayResult } from './surface';
 // `runs` and `freeze` view reads it with no codecast code: result.json,
 // events.jsonl, sends.json, captures.json, score.json, run.json, run.log.
 
-const stampOf = (ms: number): string => new Date(ms).toISOString().replace(/[:.]/g, '-');
+/** An instant as a file name part: ISO with `:` and `.` as `-`. */
+export const stampOf = (ms: number): string => new Date(ms).toISOString().replace(/[:.]/g, '-');
 
 /** `<surface>-<freeze8>-seed<rep>-<stamp>`: the name fs/runs.ts parses. */
 export function runFolderName(surfaceId: string, freezeId: string, rep: number, at: number): string {
@@ -22,7 +23,14 @@ export interface RunJson {
   notes: string | null;
   model: string;
   route: 'call' | 'agent';
+  /** The surface's declared sources at HEAD (state.ts sourceHashes): what staleness reads, and not what a dirty checkout ran. */
   sourceHash: string;
+  /** The declared sources plus the fixtures and freezes, hashed as the disk held them (provenance.ts diskSources): what the rep ran. Null when git could not say; absent on runs before it was recorded. */
+  sourceHashDisk?: string | null;
+  /** sha256 of the patch that rebuilds that disk on gitHead, kept at EVALS_HOME/trees/<sha>.patch; null when the disk matched HEAD. */
+  treePatch?: string | null;
+  /** The freeze JSON and its snapshot content (provenance.ts freezeSha): a changed moment reads as its own cause. */
+  freezeSha?: string | null;
   promptSha: string | null;
   judgeModel: string | null;
   budgetUsd: number | null;
@@ -36,8 +44,13 @@ export interface RunJson {
   /** Agent reads that went to the live workspace: more than 0 and the rep is not reproducible. */
   liveReads: number;
   batch: string;
+  /** The standing run this rep belongs to (check --cadence, e.g. the nightly): its batches are weighed against their own pooled history, which no other run joins. Null for any other run. */
+  cadence?: string | null;
   title: string;
 }
+
+/** A kept score version beside score.json: `score.<stamp of its scoredAt>.json` (rescore and rejudge write one each). */
+export const scoreVersionName = (scoredAt: string | null | undefined): string => `score.${stampOf(scoredAt ? Date.parse(scoredAt) : Date.now())}.json`;
 
 export interface RunRecord {
   dir: string;

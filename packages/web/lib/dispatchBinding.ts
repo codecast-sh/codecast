@@ -11,6 +11,7 @@ import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
+import { deadRecordingPress } from "./calls/recordingPress";
 
 /** The args of one `dispatch:dispatch` mutation call. */
 export type DispatchCallArgs = {
@@ -41,6 +42,11 @@ export function makeDispatchBinding(
   state: DispatchAckState = newDispatchAckState(),
 ): DispatchFn {
   return (action, args, patches, result) => {
+    // A Record or Stop press that is no longer a moment never leaves the
+    // browser: refused here as final, so the outbox drops it instead of
+    // delivering it into a room nobody is still asking to film.
+    const dead = deadRecordingPress(action, args);
+    if (dead) return Promise.reject(dead);
     // Sync-log write acks (docs/architecture/sync-log-migration.md D8).
     // The flag is a binding concern added at call time, so outbox rows
     // persisted by older bundles get it on redrive too. The envelope is
@@ -88,6 +94,18 @@ export function makeDispatchBinding(
   };
 }
 
+// Actions whose caller reverts the painted change and says why in its own
+// words (hooks/useRoomRecording, lib/calls/guestDoorActions): the generic
+// "didn't go through" line would tell the person the same refusal twice.
+const CALLER_REPORTED_ACTIONS = new Set([
+  "setRoomRecording",
+  "deleteCallRecording",
+  "setCallShareVideo",
+  "admitGuestKnock",
+  "denyGuestKnock",
+  "removeCallGuest",
+]);
+
 /** The handler `_setDispatchError` takes: a dispatch gave up after its retries. */
 export function applyDispatchFailure(action: string, error: unknown, args?: unknown): void {
   console.error(`[sync] dispatch failed after retries: ${action}`, error);
@@ -112,7 +130,7 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
   // A permanent rejection is dropped from the outbox (no re-drive will
   // land it), so it's the user's only chance to hear their action didn't
   // take: record it for the platform's feedback surface to render.
-  if (isPermanentDispatchError(error)) {
+  if (isPermanentDispatchError(error) && !CALLER_REPORTED_ACTIONS.has(action)) {
     // An org edit the rail rejected for good has no echo coming: stop
     // replaying its intent, put the draft back, and say so. Only here: a
     // transient exhaustion (a backend timeout) leaves the parked outbox

@@ -38,12 +38,11 @@ export default function ProfilePage() {
  *  the old form showed placeholders, cleared itself on save, and echoed the
  *  real value only as hint text below each input. */
 function ProfileSection({ user }: { user: any }) {
-  const updateProfile = useMutation(api.users.updateProfile);
+  const updateMyProfile = useInboxStore((s) => s.updateMyProfile);
   const [form, setForm] = useState({
     name: user.name ?? "", bio: user.bio ?? "", title: user.title ?? "",
     status: user.status ?? "available", timezone: user.timezone ?? "",
   });
-  const [isSaving, setIsSaving] = useState(false);
 
   const set = (key: keyof typeof form) => (value: string) => setForm((f) => ({ ...f, [key]: value }));
   const dirty =
@@ -53,24 +52,18 @@ function ProfileSection({ user }: { user: any }) {
     form.status !== (user.status ?? "available") ||
     form.timezone !== (user.timezone ?? "");
 
-  const handleSave = async () => {
-    setIsSaving(true);
-    try {
-      // Send empty strings too — clearing a field is a real edit, and
-      // updateProfile only skips fields that are undefined.
-      await updateProfile({
-        name: form.name,
-        bio: form.bio,
-        title: form.title,
-        status: form.status as "available" | "busy" | "away",
-        timezone: form.timezone,
-      });
-      toast.success("Profile saved");
-    } catch {
-      toast.error("Could not save profile");
-    } finally {
-      setIsSaving(false);
-    }
+  // Local-first: the store patches the user and roster rows now (a refusal
+  // rolls back with the standard dispatch toast). Empty strings are sent too:
+  // clearing a field is a real edit, and updateProfile skips only undefined.
+  const handleSave = () => {
+    updateMyProfile({
+      name: form.name,
+      bio: form.bio,
+      title: form.title,
+      status: form.status as "available" | "busy" | "away",
+      timezone: form.timezone,
+    });
+    toast.success("Profile saved");
   };
 
   const inputClass = "bg-sol-bg border-sol-border text-sol-text";
@@ -106,10 +99,10 @@ function ProfileSection({ user }: { user: any }) {
         <Button
           size="sm"
           onClick={handleSave}
-          disabled={!dirty || isSaving}
+          disabled={!dirty}
           variant="cyan"
         >
-          {isSaving ? "Saving…" : "Save changes"}
+          Save changes
         </Button>
       </SettingsRow>
     </SettingsSection>

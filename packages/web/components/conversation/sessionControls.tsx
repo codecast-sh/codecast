@@ -3,13 +3,11 @@ import { useRef, useState, useMemo, useCallback, Fragment } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../../shortcuts";
-import { useConvexSync } from "../../hooks/useConvexSync";
 import { usePinnedLaunchOptions } from "../../hooks/usePinnedAgents";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
+import { useScopedRecentProjects } from "../../hooks/useScopedRecentProjects";
 import { useShallow } from "zustand/react/shallow";
 import { createPortal } from "react-dom";
-import { fromConvexAgentType, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, cloudAgentLaunch, cloudAgentLaunchKey, cloudAgentProviderForLaunch, cloudAgentProvidersFor, compareMachineChips, modelOptionKey, type CloudAgentLaunch, type CloudAgentProviderSpec, type ConvexAgentType } from "@codecast/shared/contracts";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
 import { commitModelChange } from "../../lib/modelSwitchWeb";
 import { useCloudAgentStatus } from "../cloudAgents/machine";
@@ -28,15 +26,15 @@ import { createProjectFolder, useDirListing } from "../../lib/fsBrowse";
 import { CollabComposer } from "../CollabComposer";
 import { useInboxStore, isConvexId, convBucketMap, type BucketItem, resolveCloudStartFrom } from "../../store/inboxStore";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
+import { withoutUndo } from "../../store/undoStack";
 import { getLabelColor } from "../../lib/labelColors";
-import { useCurrentUser } from "../../hooks/useCurrentUser";
-import { browseProjectOrder, frequentProjectChips, mergeRecentProjectPaths, recentProjectPathsFromSessionKeys, recentProjectSessionKey } from "../../lib/recentProjectPaths";
+import { browseProjectOrder, frequentProjectChips } from "../../lib/recentProjectPaths";
 import { ChevronDown, Search } from "lucide-react";
 import { deviceDisplayName } from "../DeviceBadge";
 import { MachineChips } from "../MachineChips";
 import { SharedWithMark } from "../ProjectPathPicker";
 import { SessionModeToggles } from "../SessionModeToggles";
-import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection, resolveScopedProjects } from "../../lib/machinePicker";
+import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
 import { useLocalDeviceId } from "../../hooks/useLocalDeviceId";
@@ -103,23 +101,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // element hasn't mounted yet, during which nothing renders.
   machineSlot?: HTMLElement | null;
 }) {
-  // No-throw: the ladder below falls back to the store's cached list, so a
-  // backend timeout (the 15 s db-wait cap under saturation) degrades to the
-  // last answer instead of dropping the whole new-session header into its
-  // ErrorBoundary.
-  const freshProjects = useRecentProjectsFeed();
-  const cachedProjects = useInboxStore((s) => s.recentProjects);
-  const { user: currentUser } = useCurrentUser();
-  // Select stable primitive keys—not session objects, which are replaced on
-  // heartbeats. This avoids both the useSyncExternalStore allocation loop and
-  // restoring the old ~1×/s ProjectSwitcher re-render regression.
-  const loadedSessionProjectKeys = useInboxStore(useShallow((s) =>
-    Object.values(s.sessions).map(recentProjectSessionKey),
-  ));
-  const ownSessionProjects = useMemo(
-    () => recentProjectPathsFromSessionKeys(loadedSessionProjectKeys, currentUser?._id ? String(currentUser._id) : null),
-    [loadedSessionProjectKeys, currentUser?._id],
-  );
   // Narrowed: only _id/project_path/git_root/owner_device_id/target_device_id are
   // read here, none of which change on a heartbeat — so the always-rendered
   // ProjectSwitcher no longer re-renders ~1×/s. Anything the machine row needs
@@ -181,13 +162,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // couple of times a minute — cheap next to the per-second churn the narrowed
   // store selector above avoids, and the row can't be drawn without it.
   const devices = useSessionMachines();
-  // listDevices comes back sorted by last_seen, so the row would reshuffle every
-  // time a machine heartbeats. Chips hold still instead: locals first, then name.
-  const machineChips = useMemo(
-    () => [...devices].sort((a, b) =>
-      Number(a.is_remote) - Number(b.is_remote) || deviceDisplayName(a).localeCompare(deviceDisplayName(b))),
-    [devices],
-  );
+  // listDevices comes back sorted by last_seen; chips hold still instead.
+  const machineChips = useMemo(() => [...devices].sort(compareMachineChips), [devices]);
   const [pickedDeviceId, setPickedDeviceId] = useState<string | null>(null);
   // Machine picker rests as a single pill showing where the session will run;
   // clicking it unfolds the full chip row for an explicit pick.
@@ -272,27 +248,6 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
   // scoping falls back to the union across your own machines, which is the
   // honest set of repos a host can be told to fetch.
   const scopedDeviceId = cloudMode ? null : scopeProjectsToDeviceId;
-  // The unscoped query stays mounted regardless — it's the shared subscription
-  // that keeps the store's recentProjects cache (which the other pickers read)
-  // warm. The scoped one deliberately never feeds that cache.
-  const { data: scopedProjects } = useQueryNoThrow(
-    api.users.getRecentProjectPaths,
-    scopedDeviceId ? { limit: 50, device_id: scopedDeviceId } : "skip",
-  );
-  // Per-device cache so the picker paints instantly on every open instead of
-  // waiting out the scoped round-trip. The cached list is that same machine's
-  // prior answer, so — unlike the union — it can never offer a path the target
-  // machine lacks; only cache-vs-cache staleness, which the live echo corrects.
-  const cachedScopedProjects = useInboxStore((s) => s.recentProjectsByDevice);
-  const setRecentProjectsForDevice = useInboxStore((s) => s.setRecentProjectsForDevice);
-  const syncScopedProjects = useCallback(
-    (projects: RecentProject[]) => {
-      if (scopedDeviceId) setRecentProjectsForDevice(scopedDeviceId, projects);
-    },
-    [scopedDeviceId, setRecentProjectsForDevice],
-  );
-  useConvexSync(scopedProjects, syncScopedProjects);
-
   // One chip per repo name: the same project checked out on several machines
   // collapses to the routed machine's variant, and "other" means a different
   // PROJECT — the current one's foreign checkout is the machine row's job.
@@ -301,31 +256,9 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
     [devices, selectedDeviceId],
   );
 
-  // Memoized because five downstream useMemos take it as a dep — an identity
-  // that churned every render would defeat all of them.
-  //
-  // While the scoped query is in flight we must NOT fall back to the raw union
-  // (it offers folders the target machine lacks), but we must also not paint an
-  // empty row: the chips popped in a beat late on every open — a visible
-  // flicker. The union filtered by the routed machine's OWN local_project_roots
-  // is the same predicate the server applies (deviceSeesPath mirrors
-  // pathUnderRoot), computed from the device roster already in memory. So the
-  // ladder is: live scoped answer → that machine's cached answer → the union
-  // narrowed to that machine → nothing (roster not loaded yet).
-  const unionProjects = useMemo<RecentProject[]>(
-    () => mergeRecentProjectPaths(freshProjects ?? cachedProjects, ownSessionProjects),
-    [freshProjects, cachedProjects, ownSessionProjects],
-  );
-  const recentProjects = useMemo<RecentProject[]>(
-    () => resolveScopedProjects({
-      scopedDeviceId,
-      scoped: scopedProjects,
-      cached: scopedDeviceId ? cachedScopedProjects[scopedDeviceId] : undefined,
-      union: unionProjects,
-      routedDevice,
-    }),
-    [scopedDeviceId, scopedProjects, cachedScopedProjects, unionProjects, routedDevice],
-  );
+  // Live scoped answer → that machine's cached answer → the union narrowed to
+  // that machine → nothing; shared with the mobile sheet.
+  const recentProjects = useScopedRecentProjects({ scopedDeviceId, routedDevice });
   const suggestedPaths = useMemo(
     () => new Set(recentProjects.filter((p) => p.suggested).map((p) => p.path)),
     [recentProjects],
@@ -526,7 +459,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       cloudStartFrom: resolveCloudStartFrom(useInboxStore.getState().clientState.ui),
     })).catch((err) => {
       if (isParkedDispatchError(err)) return;
-      if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
+      // The switch failed: putting the path back is not an undoable change.
+      if (prevPath) withoutUndo(() => useInboxStore.getState().updateSessionProject(convexId!, prevPath));
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
   }, [storeSession, conversation._id, convCommand, currentPath, isolatedToggle, cloudMode, cloudHost, routedMachine, machineChips, scopedDeviceId]);
@@ -1121,7 +1055,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     const real = store.getConvexId(convId) ?? convId;
     if (!isConvexId(real)) return;
     if (Object.values(store.bucketAssignments).some((row) => row.conversation_id === real)) return;
-    store.assignSessionToBucket(real, activeBucketFilter);
+    withoutUndo(() => store.assignSessionToBucket(real, activeBucketFilter));
   }, [convId, activeBucketFilter, assigned]);
 
   if (visibleBuckets.length === 0) return null;

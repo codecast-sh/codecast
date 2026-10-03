@@ -4,8 +4,7 @@ import { View as RNView,
   StyleSheet,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
-import { useQuery } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { deviceDisplayName } from '@codecast/shared/contracts';
@@ -53,7 +52,8 @@ export function relativeSeen(lastSeen: number): string {
 }
 
 export function useDevices() {
-  const devices = (useQuery(api.devices.listDevices, {}) ?? []) as Device[];
+  // The persisted machine roster, fed app-wide (StoreSyncBridge useSyncDevices).
+  const devices = useInboxStore((s) => s.machineRoster) as unknown as Device[];
   return useMemo(() => {
     const byId = new Map(devices.map((d) => [d.device_id, d]));
     return { devices, byId, loaded: devices.length > 0 };
