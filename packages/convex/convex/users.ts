@@ -4299,6 +4299,19 @@ export const getAgentPermissionModes = query({
   },
 });
 
+/** The agents the viewer's pickers show. Every supported client stays
+ *  launchable; this only decides which ones sit in the pickers. */
+export const setPinnedAgents = mutation({
+  args: { agents: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const unknown = args.agents.filter((id) => !(id in AGENT_CLIENTS));
+    if (unknown.length) throw new Error(`Unknown agent client: ${unknown.join(", ")}`);
+    await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)] });
+  },
+});
+
 export const updateAgentPermissionModes = mutation({
   args: {
     claude: v.optional(v.union(v.literal("default"), v.literal("bypass"))),
