@@ -3,6 +3,8 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { showUndoToast } from "../store/undoStack";
+import { undoAsOne } from "../store/undoActions";
 import { Plus, X, Tag, Filter, FilterX, EyeOff, Trash2, ChevronRight } from "lucide-react";
 import {
   useInboxStore,
@@ -185,9 +187,8 @@ export function LabelChipsRow({
       else store.toggleBucketFilterTerm(bucket._id, term.exclude);
     }
     store.updateBucket(bucket._id, { archived_at: Date.now() });
-    toast.success(`Deleted label "${bucket.name}"`, {
-      action: { label: "Undo", onClick: () => useInboxStore.getState().updateBucket(bucket._id, { archived_at: null }) },
-    });
+    // The archive is the newest undo entry; its toast undoes exactly that.
+    showUndoToast(`Deleted label "${bucket.name}"`);
   }, []);
   const deleteLabel = useCallback((bucket: BucketItem) => (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -222,7 +223,10 @@ export function LabelChipsRow({
     const finalIndex = fromIndex < insertion ? insertion - 1 : insertion;
     const updates = computeReorderUpdates(ordered, fromIndex, finalIndex);
     const store = useInboxStore.getState();
-    for (const u of updates) store.updateBucket(u.id, { sort_order: u.sort_order });
+    const name = ordered[fromIndex]!.name;
+    undoAsOne(`Moved label "${name}"`, () => {
+      for (const u of updates) store.updateBucket(u.id, { sort_order: u.sort_order });
+    });
   }, []);
 
   // ── Chip element registry (stable per-key ref callbacks!) ────────────────

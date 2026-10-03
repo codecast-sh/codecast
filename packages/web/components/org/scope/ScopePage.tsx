@@ -42,6 +42,7 @@ import { parentName } from "../orgMeta";
 import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
+import { ScopeGlance } from "./ScopeGlance";
 import { scopeDefaultTab, scopeTabFromParam, scopeWorkViewFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { RetireRoleConfirm } from "../RetireRoleConfirm";
@@ -107,10 +108,12 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
     const qs = params.toString();
     router.replace(qs ? `${base}?${qs}` : base);
   }, [searchParams, router, base, role, inPane]);
-  // The panel: open by default beside the conversation; on the phone the
-  // conversation leads and the panel is a sheet one tap away. A link straight
-  // to a tab opens the panel on it, whatever the width.
-  const [panelOpen, setPanelOpen] = useState<boolean>(() => !phone || !!tabParam);
+  // The panel: the page opens on the conversation, with the panel collapsed to
+  // its glance under the header; it opens beside the conversation, over it on a
+  // narrow page, or as a sheet on the phone. A link straight to a tab opens the
+  // panel on it, whatever the width.
+  const [panelOpen, setPanelOpen] = useState<boolean>(() => !!tabParam);
+  const openPanelOn = useCallback((next: ScopeTabKey) => { setTab(next); setPanelOpen(true); }, [setTab]);
   useWatchEffect(() => { if (tabParam) setPanelOpen(true); }, [tabParam]);
   // A page too narrow for the panel's column (a split pane) opens on the
   // conversation; the board would otherwise cover it as an overlay.
@@ -353,6 +356,8 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           <PanelToggle open={panelOpen} root={!role} onClick={() => setPanelOpen((v) => !v)} />
         </div>
       </header>
+
+      {role && !panelOpen && <ScopeGlance role={role} summary={summary} onOpen={openPanelOn} />}
 
       {role && (
         <Dialog open={retireOpen} onOpenChange={setRetireOpen}>

@@ -33,7 +33,6 @@ import {
 import { taskPriority } from "../../../lib/taskPriority";
 import Link from "next/link";
 import { toast } from "sonner";
-import { undoableArchiveDoc } from "../../../store/undoActions";
 import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -151,7 +150,7 @@ function DocDetailContent() {
 
   const handleArchive = useCallback(() => {
     if (!data) return;
-    undoableArchiveDoc(data._id);
+    useInboxStore.getState().archiveDoc(data._id);
     router.push("/docs");
   }, [data, router]);
 

@@ -1,7 +1,7 @@
 import { internalMutation, mutation, query } from "./functions";
 import { v } from "convex/values";
 import { Id } from "./_generated/dataModel";
-import { buildShareUpdate, resolveCreationPrivacy } from "./privacy";
+import { buildShareUpdate, isConversationTeamVisible, resolveCreationPrivacy } from "./privacy";
 import { patchConversationVisibility } from "./lib/access";
 import { enqueueStartSession } from "./devices";
 import { fromConvexAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
@@ -179,12 +179,17 @@ export function bootstrapMessage(opts: {
   teamName?: string;
   persona?: string;
   role?: RoleBootstrap;
+  /** The team that can read a personal agent's own conversation, when its
+   *  directory shares it (sharedTeamOf); absent when only the owner can. */
+  sharedWithTeam?: string;
 }): string {
   const { name, scopeType, scopeLabel, persona, role } = opts;
   if (role) return roleOpeningMessage(name, scopeType === "team" ? opts.teamName ?? "the team" : `${opts.ownerName ?? "one person"}'s personal workspace`, role);
   const who = scopeType === "team"
-    ? `the **team** workspace's standing agent for ${opts.teamName ?? "this team"} — every member of that team can reach you, and you speak for the team's shared context`
-    : `the **personal** workspace's standing agent for ${opts.ownerName ?? "one person"} — private to them, and you speak only in their voice and interest`;
+    ? `the **team** workspace's standing agent for ${opts.teamName ?? "this team"}: every member of that team can reach you and read this conversation, and you speak for the team's shared context`
+    : opts.sharedWithTeam
+      ? `the **personal** workspace's standing agent for ${opts.ownerName ?? "one person"}: you speak only in their voice and interest, but this conversation is shared with ${opts.sharedWithTeam}, and every member of that team can read it`
+      : `the **personal** workspace's standing agent for ${opts.ownerName ?? "one person"}: private to them, and you speak only in their voice and interest`;
   return [
     `You are **${name}**, ${who}. You are codecast's standing agent for ${scopeLabel}: a`,
     `general agent and a persistent member, not a one-shot task. People will ask you`,
@@ -240,12 +245,28 @@ export function bootstrapMessage(opts: {
     `  to the people who own it as a \`cast decide\` card (\`--to\` each of them) naming every`,
     `  option and what it costs, and tell them where you were asked that you are waiting on`,
     `  their answer.`,
+    `- Know who reads each place you write: this conversation, a channel, a direct message.`,
+    `  What someone asks you to keep from others reaches only the people they named, carrying`,
+    `  only what those people need, and you don't restate it, or what kind of matter it is,`,
+    `  anywhere others can read it, your replies here included.`,
     `- Be concise and additive. Don't repeat yourself across channels.`,
     persona ? `\n## Your persona\nAdopt the **${persona}** persona/skill if it is available in this project.` : ``,
     ``,
     `Save your role to memory now, post a one-line hello confirming you are online and which`,
     `workspace you serve, then stand by.`,
   ].filter((line) => line !== ``).join("\n");
+}
+
+// The team that can read a personal agent's standing conversation. A personal
+// anchor's session resolves its privacy from its project path like any session
+// (insertStandingConversation), so a directory with an auto-share mapping makes
+// it readable by that team, and the opening must say so rather than promise
+// privacy. A team anchor's conversation is always the team's, and its opening
+// already says that.
+async function sharedTeamOf(ctx: { db: any }, scopeType: "team" | "user", conversation: any): Promise<string | undefined> {
+  if (scopeType !== "user" || !conversation || !(await isConversationTeamVisible(ctx, conversation))) return undefined;
+  const team = await ctx.db.get(conversation.team_id);
+  return team?.name ?? "a team";
 }
 
 export async function findExistingAnchor(
@@ -559,6 +580,7 @@ export async function provisionStandingAgent(
         teamName,
         persona: args.persona,
         role: args.role?.bootstrap,
+        sharedWithTeam: await sharedTeamOf(ctx, args.scope_type, conversation),
       }),
     });
   }
@@ -634,6 +656,7 @@ export async function briefingFor(ctx: { db: any }, anchor: any): Promise<string
   const owner = anchor.scope_user_id ? await ctx.db.get(anchor.scope_user_id) : null;
   const role = anchor.org_role_id ? await ctx.db.get(anchor.org_role_id) : null;
   const live = role && role.status !== "retired" ? role : null;
+  const conversation = anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
   return bootstrapMessage({
     role: live ? { ...(await roleBootstrapOf(ctx, live)), rebrief: true } : undefined,
     name: live?.name ?? anchor.name,
@@ -644,6 +667,7 @@ export async function briefingFor(ctx: { db: any }, anchor: any): Promise<string
     ownerName: owner?.name || owner?.github_username || owner?.email?.split("@")[0] || undefined,
     teamName: team?.name ?? undefined,
     persona: anchor.persona,
+    sharedWithTeam: await sharedTeamOf(ctx, anchor.scope_type, conversation),
   });
 }
 
@@ -665,22 +689,32 @@ export const rebriefAnchor = mutation({
   },
 });
 
+type RebriefArgs = { dry_run?: boolean; key?: string; only?: string[] };
+
+// Send one live anchor its current opening, once per `rail` and `key`: a repeat
+// with the same key sends nothing new while the first is still waiting, so a
+// later wording change needs a new key. The anchor's session, or null when it
+// has none to send to.
+async function rebriefLiveAnchor(ctx: any, anchor: any, rail: string, args: RebriefArgs): Promise<any | null> {
+  const conversation = anchor && anchor.status !== "decommissioned" && anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+  if (!conversation) return null;
+  if (!args.dry_run) await deliverToAnchor(ctx, anchor._id, await briefingFor(ctx, anchor), `${rail}:${args.key ?? "1"}:${anchor._id}`);
+  return conversation;
+}
+
 // One sweep: send every live role its current opening, so a role started
-// under earlier instructions works from the ones that ship now. Once per role
-// and per `key`: a repeat with the same key sends nothing new while the first
-// is still waiting. `npx convex run anchors:rebriefRoles '{"dry_run":true}'`.
-export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; key?: string; only?: string[] }): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
+// under earlier instructions works from the ones that ship now.
+// `npx convex run anchors:rebriefRoles '{"dry_run":true}'`.
+export async function performRebriefRoles(ctx: any, args: RebriefArgs): Promise<{ dry_run: boolean; sent: Array<{ role: string; handle: string; conversation: string | null }>; skipped: number }> {
   const sent: Array<{ role: string; handle: string; conversation: string | null }> = [];
   let skipped = 0;
-  // A re-brief is idempotent per key, so a later wording change needs a new key;
   // `only` (short ids) keeps it to the roles whose instructions changed.
   const only = args.only?.length ? new Set(args.only) : null;
   for (const role of await ctx.db.query("org_roles").collect()) {
     if (only && !only.has(role.short_id) && !only.has(String(role._id))) continue;
     const anchor = role.status !== "retired" && role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-    const conversation = anchor && anchor.status !== "decommissioned" && anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+    const conversation = await rebriefLiveAnchor(ctx, anchor, "role-rebrief", args);
     if (!conversation) { skipped++; continue; }
-    if (!args.dry_run) await deliverToAnchor(ctx, anchor._id, await briefingFor(ctx, anchor), `role-rebrief:${args.key ?? "1"}:${anchor._id}`);
     sent.push({ role: role.short_id, handle: role.handle, conversation: conversation.short_id ?? null });
   }
   return { dry_run: !!args.dry_run, sent, skipped };
@@ -689,6 +723,28 @@ export async function performRebriefRoles(ctx: any, args: { dry_run?: boolean; k
 export const rebriefRoles = internalMutation({
   args: { dry_run: v.optional(v.boolean()), key: v.optional(v.string()), only: v.optional(v.array(v.string())) },
   handler: async (ctx, args) => performRebriefRoles(ctx, args),
+});
+
+// The same sweep for the workspace agents that hold no role seat: a change to
+// bootstrapMessage reaches a running workspace agent only through a rebrief.
+// `only` takes anchor ids.
+// `npx convex run anchors:rebriefWorkspaceAgents '{"dry_run":true}'`.
+export async function performRebriefWorkspaceAgents(ctx: any, args: RebriefArgs): Promise<{ dry_run: boolean; sent: Array<{ anchor: string; name: string; conversation: string | null }>; skipped: number }> {
+  const sent: Array<{ anchor: string; name: string; conversation: string | null }> = [];
+  let skipped = 0;
+  const only = args.only?.length ? new Set(args.only) : null;
+  for (const anchor of await ctx.db.query("anchors").collect()) {
+    if (anchor.org_role_id || (only && !only.has(String(anchor._id)))) continue;
+    const conversation = await rebriefLiveAnchor(ctx, anchor, "anchor-rebrief", args);
+    if (!conversation) { skipped++; continue; }
+    sent.push({ anchor: String(anchor._id), name: anchor.name, conversation: conversation.short_id ?? null });
+  }
+  return { dry_run: !!args.dry_run, sent, skipped };
+}
+
+export const rebriefWorkspaceAgents = internalMutation({
+  args: { dry_run: v.optional(v.boolean()), key: v.optional(v.string()), only: v.optional(v.array(v.string())) },
+  handler: async (ctx, args) => performRebriefWorkspaceAgents(ctx, args),
 });
 
 // resolveAnchorForScope — the lookup wake routing uses to find which anchor

@@ -5,7 +5,6 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { MessagePromptPreview } from "./MessagePromptPreview";
 import { AvatarImg } from "../lib/avatarCache";
-import { useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
@@ -36,7 +35,7 @@ const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 // short id here — resolve it server-side the same way EntityIdPill does.
 function MachineSourceLabel({ kind, source }: { kind: HiddenKind; source: string }) {
   const needsLookup = kind === "session" && SHORT_ID_RE.test(source);
-  const resolved = useQuery(api.conversations.webGet, needsLookup ? { short_id: source } : "skip");
+  const resolved = useQueryNoThrow(api.conversations.webGet, needsLookup ? { short_id: source } : "skip").data;
   return <>{(needsLookup && resolved?.title) || source}</>;
 }
 
@@ -594,12 +593,12 @@ export function MessageNavButton({
   // Fallback query only while the shared cache hasn't landed yet (Convex dedups
   // it against useConversationMessages' identical subscription). Never falls
   // back to the truncated paginated set.
-  const queryUserMessages = useQuery(
+  const queryUserMessages = useQueryNoThrow(
     api.conversations.getUserMessages,
     canQuery && !cachedUserMessages
       ? { conversation_id: conversationId as Id<"conversations">, ...shareTokenArg(conversationId) }
       : "skip"
-  );
+  ).data;
   const rawUserMessages = cachedUserMessages ?? queryUserMessages;
   const messages = useMemo(
     () => mergeNavigatorSources(rawUserMessages, loadedMessages),
@@ -620,12 +619,12 @@ export function MessageNavButton({
     return (meta as { message_count?: number } | undefined)?.message_count ?? 0;
   });
 
-  const commentSummary = useQuery(
+  const commentSummary = useQueryNoThrow(
     api.comments.getConversationCommentSummary,
     isConvexId(conversationId)
       ? { conversation_id: conversationId as Id<"conversations"> }
       : "skip"
-  );
+  ).data;
 
   const commentsByMessage = countCommentsByMessage(commentSummary);
   const topLevelComments: CommentEntry[] = [];
@@ -742,9 +741,9 @@ export function MessageNavButton({
           return (
             <span
               key={i}
-              className={`block rounded-full transition-all duration-150 ${
+              className={`block rounded-full transition-all duration-200 ease-out ${
                 isActive
-                  ? "bg-sol-text w-4 h-[2.5px]"
+                  ? "cc-rail-here"
                   : hasComment
                   ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
                   : isMachine

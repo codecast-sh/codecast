@@ -11,8 +11,8 @@ import { readLocalCredential } from '../../../cli/src/ccKeychain';
 import { apiConfig } from '../adapters/convo';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
-import { CHEAP_MODEL } from '../../../convex/convex/lib/anthropic';
-import { CALL_MODEL } from '../models';
+import { CHEAP_MODEL, STRONG_MODEL } from '../../../convex/convex/lib/anthropic';
+import { CALL_MODEL, PROSE_MODEL } from '../models';
 import { DRY_RUN_SCRIPT, homePaths, LABELS_REMOTE, REPO_ROOT } from '../paths';
 import { surfaces } from '../registry';
 import { labelsRemoteProblem, labelsRepoVisibility } from '../labels';
@@ -95,8 +95,12 @@ export const CHECKS: DoctorCheck[] = [
   {
     name: 'model pins',
     run: () => {
-      const off = surfaces().filter((s) => s.route === 'call' && s.model !== CHEAP_MODEL);
-      return CALL_MODEL === CHEAP_MODEL && !off.length ? { ok: true, detail: `call surfaces pin ${CHEAP_MODEL}, the model prod calls` } : { ok: false, detail: `off the prod model: ${off.map((s) => `${s.id}=${s.model}`).join(', ')}` };
+      // Every call surface pins a model prod calls with (the cheap one, or the strong one the Changes prose asks; changes.test.ts holds each to its builder).
+      const prod = new Set([CHEAP_MODEL, STRONG_MODEL]);
+      const calls = surfaces().filter((s) => s.route === 'call');
+      const off = calls.filter((s) => !prod.has(s.model));
+      const by = [...prod].map((m) => `${m} (${calls.filter((s) => s.model === m).length})`).join(', ');
+      return CALL_MODEL === CHEAP_MODEL && PROSE_MODEL === STRONG_MODEL && !off.length ? { ok: true, detail: `call surfaces pin the models prod calls: ${by}` } : { ok: false, detail: `off the prod models: ${off.map((s) => `${s.id}=${s.model}`).join(', ') || 'models.ts pins'}` };
     },
   },
   { name: 'agent snippet', run: () => (snippetInstalled() === 'current' ? { ok: true, detail: 'AGENTS.md carries the current reference' } : { ok: false, warn: true, detail: `AGENTS.md section ${snippetInstalled()}`, fix: './evals snippet install' }) },

@@ -7,7 +7,7 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 /** A YYYY-MM-DD as a calendar date at UTC midnight, or null when it is not a real day. */
-function parseDay(ymd: string): Date | null {
+export function parseDay(ymd: string): Date | null {
   const m = YMD.exec(ymd);
   if (!m) return null;
   const date = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));

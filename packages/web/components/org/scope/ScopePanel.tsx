@@ -245,19 +245,9 @@ const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase trackin
  *  mount test holds it to that. */
 export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean }) {
   const { model } = useRoleScope(role.short_id);
-  const openLinked = useOpenLinkedSession();
-  const openId = (id: string) => {
-    const s = role.sessions.find((x) => x._id === id);
-    openLinked(s ? { _id: s._id, short_id: s.short_id, title: s.title, agent_type: s.agent_type } : { _id: id });
-  };
   const standing = useMemo(() => parseStandingSection(narrative), [narrative]);
   const projects = model?.projects ?? role.scope_names.projects.map((p) => ({ id: p.id, ref: p.short_id ?? p.id, title: p.title }));
   const written = projectsWithLines(standing, projects.map((p) => ({ ...p, short_id: p.ref })));
-  // What it is doing: the sessions at work under it, and the one it moved
-  // most recently, from the tree's own rows.
-  const active = role.counts.working ?? 0;
-  const current = [...role.sessions].filter((s) => s.state === "working").sort((a, b) => b.updated_at - a.updated_at)[0]
-    ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
   return (
     <div className="space-y-6" data-scope-briefing>
       {written.length > 0 && (
@@ -283,16 +273,32 @@ export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: 
 
       <section data-scope-section="doing">
         <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>What it is doing</h3>
-        <p className="px-2.5 text-[13px] flex items-center gap-2 flex-wrap" style={{ color: "var(--sol-text-secondary)" }} data-scope-doing={active}>
-          {role.total === 0 ? "No sessions under it yet." : active === 0 ? "No session at work right now." : `${active} ${active === 1 ? "session" : "sessions"} at work`}
-          {current && (
-            <span className="inline-flex items-center gap-1.5 min-w-0" onClick={() => openId(current._id)}>
-              <span style={{ color: "var(--sol-text-dim)" }}>{active > 0 ? "· on" : "· last"}</span>
-              <EntityIdPill id={current._id} shortId={current.short_id} type="session" compact />
-            </span>
-          )}
-        </p>
+        <RoleDoing role={role} className="px-2.5 text-[13px]" />
       </section>
     </div>
+  );
+}
+
+/** What a role is doing (F5.1): the sessions at work under it, and the one it
+ *  moved most recently, from the tree's own rows. The Overview says it in
+ *  full; `short` is the collapsed glance's wording. */
+export function RoleDoing({ role, short, className }: { role: OrgRole; short?: boolean; className?: string }) {
+  const openLinked = useOpenLinkedSession();
+  const active = role.counts.working ?? 0;
+  const current = [...role.sessions].filter((s) => s.state === "working").sort((a, b) => b.updated_at - a.updated_at)[0]
+    ?? [...role.sessions].sort((a, b) => b.updated_at - a.updated_at)[0];
+  const line = short
+    ? (role.total === 0 ? "no sessions yet" : active === 0 ? "nothing at work" : `${active} at work`)
+    : (role.total === 0 ? "No sessions under it yet." : active === 0 ? "No session at work right now." : `${active} ${active === 1 ? "session" : "sessions"} at work`);
+  return (
+    <p className={cn("flex items-center gap-2 flex-wrap", className)} style={{ color: "var(--sol-text-secondary)" }} data-scope-doing={active}>
+      {line}
+      {current && (
+        <span className="inline-flex items-center gap-1.5 min-w-0" onClick={(e) => { e.stopPropagation(); openLinked({ _id: current._id, short_id: current.short_id, title: current.title, agent_type: current.agent_type }); }}>
+          <span style={{ color: "var(--sol-text-dim)" }}>{active > 0 ? "· on" : "· last"}</span>
+          <EntityIdPill id={current._id} shortId={current.short_id} type="session" compact />
+        </span>
+      )}
+    </p>
   );
 }

@@ -229,6 +229,15 @@ describe("sampleTicks", () => {
     expect(idx[1]).toBe(Math.round((1 / 23) * 199));
   });
 
+  test("a current row between sampled rows still lights the nearest tick", () => {
+    for (const active of [1, 50, 101, 150, 198]) {
+      const ticks = sampleTicks(rowsOf(200), 24, active);
+      expect(ticks.filter((t) => t.active).length).toBe(1);
+      const lit = ticks.find((t) => t.active)!.row.i;
+      expect(Math.abs(lit - active)).toBeLessThanOrEqual(Math.ceil(199 / 23 / 2));
+    }
+  });
+
   test("activeTickIndex prefers the current message, then scroll progress", () => {
     const rows = rowsOf(10);
     expect(activeTickIndex(rows, "7", 0)).toBe(7);

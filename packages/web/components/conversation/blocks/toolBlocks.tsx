@@ -1,4 +1,5 @@
 import { sessionRepository } from "../../../lib/repoNavigation";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { commitPageHref } from "../../../lib/repoView";
 import { commandLeavesCheckout, gitToolOutcome, type GitToolOutcome } from "../../../lib/gitToolOutcome";
 import Link from "next/link";
@@ -16,7 +17,6 @@ import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { editStringsFromInput } from "../../../lib/fileChangeExtractor";
 import { parseWorkflowScriptMeta, parseWorkflowLaunch } from "../../../lib/workflowLaunch";
 import { DiffView } from "../../DiffView";
-import { useQuery } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { WorkflowRunNodes } from "../../WorkflowRunNodes";
 import { wfStatusMeta, wfFmtTokens } from "../../../lib/workflowRun";
@@ -278,10 +278,10 @@ export function WorkflowToolBlock({ tool, result }: { tool: ToolCall; result?: T
   const summary = meta.description || launch.summary || "";
   const externalRunId = launch.runId || stillRunningId || resumeFromRunId;
 
-  const run = useQuery(
+  const run = useQueryNoThrow(
     api.workflow_runs.getByExternalRunForUser,
     externalRunId ? { external_run_id: externalRunId } : "skip"
-  );
+  ).data;
   // A stop (TaskStop, Esc, the host exiting) lands as failed + "Stopped";
   // it reads as a stop, not a crash.
   const stopped = run?.status === "failed" && run?.fail_reason === "Stopped";

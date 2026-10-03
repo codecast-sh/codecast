@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { commit, MIN, T0 } from "./__fixtures__/commit";
 import { dedupeCommits, resolveDefaultBranch } from "./dedupe";
 import { computeRisks } from "./risks";
-import { assignRelease, detectSurfaces, latestShips, releaseBursts, surfaceCoversArea, waitingStories } from "./surfaces";
+import { RELEASE_SURFACE, assignRelease, detectSurfaces, latestShips, releaseBursts, surfaceCoversArea, waitingStories, withoutShadowedReleases } from "./surfaces";
 import type { ShipEvent } from "./types";
 
 describe("dedupe", () => {
@@ -98,20 +98,22 @@ describe("risks", () => {
 
   test("schema reads only the slice's own area", () => {
     const c = commit({ sha: "a", paths: { "packages/convex/convex/schema.ts": 3, "packages/web/x.ts": 1, "docs/a.md": 1 } });
-    expect(computeRisks({ ...base, units: [{ commit: c, area: null }] }, { ships: [] })).toEqual([{ code: "schema", evidence: ["packages/convex/convex/schema.ts"] }]);
-    expect(computeRisks({ ...base, units: [{ commit: c, area: "web" }] }, { ships: [] })).toEqual([]);
+    expect(computeRisks({ ...base, units: [{ commit: c, area: null }] }, { ships: [], linked: true })).toEqual([{ code: "schema", evidence: ["packages/convex/convex/schema.ts"] }]);
+    expect(computeRisks({ ...base, units: [{ commit: c, area: "web" }] }, { ships: [], linked: true })).toEqual([]);
   });
 
   test("revert, bulk and blocked", () => {
     const r = commit({ sha: "r", subject: 'Revert "feat: x"' });
     const risks = computeRisks(
       { ...base, units: [{ commit: r, area: null }], insertions: 1400, deletions: 200 },
-      { ships: [] },
+      { ships: [], linked: true },
     ).map((x) => x.code);
     expect(risks).toEqual(["revert", "bulk"]);
+    // A team that links none of its work: big unlinked changes are the norm, not news.
+    expect(computeRisks({ ...base, units: [{ commit: r, area: null }], insertions: 1400, deletions: 200 }, { ships: [], linked: false }).map((x) => x.code)).toEqual(["revert"]);
     const blocked = computeRisks(
       { ...base, units: [{ commit: r, area: null }], insertions: 2000, conversations: [{ conversation_id: "jx7b", outcome_type: "blocked" }] },
-      { ships: [] },
+      { ships: [], linked: true },
     );
     expect(blocked.map((x) => x.code)).toEqual(["revert", "blocked"]);
   });
@@ -121,11 +123,27 @@ describe("risks", () => {
     const story = { ...base, units: [{ commit: c, area: null }] };
     const deploy: ShipEvent = { surface: "backend", sha: "d", at: T0, kind: "deploy" };
     const web: ShipEvent = { surface: "desktop", version: "1.1.123", sha: "w", at: T0 + 20 * MIN, kind: "release" };
-    expect(computeRisks(story, { ships: [web] })).toEqual([]);
-    expect(computeRisks(story, { ships: [deploy] })).toEqual([]);
-    const [sk] = computeRisks(story, { ships: [deploy, web] });
+    expect(computeRisks(story, { ships: [web], linked: true })).toEqual([]);
+    expect(computeRisks(story, { ships: [deploy], linked: true })).toEqual([]);
+    const [sk] = computeRisks(story, { ships: [deploy, web], linked: true });
     expect(sk.code).toBe("skew");
     expect(sk.evidence[0]).toBe("b");
-    expect(computeRisks(story, { ships: [{ ...deploy, at: T0 + 15 * MIN }, web] })).toEqual([]);
+    expect(computeRisks(story, { ships: [{ ...deploy, at: T0 + 15 * MIN }, web], linked: true })).toEqual([]);
   });
 });
+
+describe("withoutShadowedReleases", () => {
+  const ship = (surface: string, sha: string, version?: string, at = 1): ShipEvent => ({ surface, sha, at, kind: "release", ...(version ? { version } : {}) });
+  test("a catch-all tag on a named surface's release commit or version is the same ship", () => {
+    const cli = ship("cli", "abc", "1.1.165");
+    expect(withoutShadowedReleases([cli, ship(RELEASE_SURFACE, "abc", "v1.1.165")])).toEqual([cli]);
+    expect(withoutShadowedReleases([cli, ship(RELEASE_SURFACE, "def", "v1.1.165")])).toEqual([cli]);
+  });
+  test("a catch-all release of its own stays, and so does every named ship", () => {
+    const own = ship(RELEASE_SURFACE, "zzz", "v2.0.0");
+    const desktop = ship("desktop", "abc", "1.1.165");
+    expect(withoutShadowedReleases([own, desktop])).toEqual([own, desktop]);
+    expect(withoutShadowedReleases([ship(RELEASE_SURFACE, "abc")])).toHaveLength(1);
+  });
+});
+

@@ -3,6 +3,7 @@ import { agentSupportsFork } from "@codecast/shared/contracts";
 import { toast } from "sonner";
 import { useInboxStore, convBucketMap, type BucketItem, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
+import { withoutUndo } from "../store/undoStack";
 import { canAnchorForkChips } from "../components/conversation/classify";
 import type { ConversationData } from "../components/conversation/types";
 
@@ -136,8 +137,9 @@ export function useForkActions({ injectSession, conversation, addOptimisticFork,
     const forkStore = useInboxStore.getState();
     const parentBucketId = convBucketMap(forkStore.bucketAssignments)[parentId];
     const parentBucket = parentBucketId ? (forkStore.buckets as Record<string, BucketItem>)[parentBucketId] : undefined;
+    // The fork inherits its parent's label; nobody filed it, so no undo.
     if (parentBucket && !parentBucket.archived_at) {
-      forkStore.assignSessionToBucket(forkSessionId, parentBucket._id);
+      withoutUndo(() => forkStore.assignSessionToBucket(forkSessionId, parentBucket._id));
     }
     const ready = convCommand(parentId, "forkFromMessage", {
       message_uuid: messageUuid,

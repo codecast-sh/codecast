@@ -14,4 +14,5 @@ export const HELP_SECTIONS: { when: string | undefined; label: string; accent: s
   { when: "docs", label: "Documents", accent: "bg-sol-yellow" },
   { when: "review", label: "Review", accent: "bg-sol-violet" },
   { when: "desktop", label: "Desktop", accent: "bg-sol-cyan" },
+  { when: "undoWalk", label: "Undo history peek", accent: "bg-sol-orange" },
 ];

@@ -64,7 +64,10 @@ const ADDRESS_SPACE_INIT: Record<string, unknown> = pickAddressSpaceInit(
   (init) => new Request("http://127.0.0.1/", init),
 );
 
-async function vaultFetch(ep: VaultEndpoint, path: string, init?: RequestInit): Promise<Response> {
+/** A request to the daemon's loopback bridge with its bearer and the browser's
+ *  local-network hints. Every page that talks to the bridge goes through this
+ *  (vault routes here, memory routes in lib/memory/client.ts). */
+export async function loopbackFetch(ep: VaultEndpoint, path: string, init?: RequestInit): Promise<Response> {
   const request = {
     ...init,
     headers: { ...authHeaders(ep), ...(init?.headers as Record<string, string>) },
@@ -91,7 +94,7 @@ export class VaultRequestError extends Error {
 }
 
 export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
-  const res = await vaultFetch(ep, "/vault/roots");
+  const res = await loopbackFetch(ep, "/vault/roots");
   if (!res.ok) throw new VaultRequestError(`vault roots: ${res.status}`, res.status);
   const body = (await res.json()) as { vaults: VaultInfo[] };
   return body.vaults ?? [];
@@ -101,7 +104,7 @@ export async function listVaults(ep: VaultEndpoint): Promise<VaultInfo[]> {
  *  (GET /vault/locate). Null when the path does not exist on that machine;
  *  throws VaultRequestError(404) for a daemon that predates the route. */
 export async function locateVault(ep: VaultEndpoint, localPath: string): Promise<VaultLocateResponse | null> {
-  const res = await vaultFetch(ep, `/vault/locate?path=${encodeURIComponent(localPath)}`);
+  const res = await loopbackFetch(ep, `/vault/locate?path=${encodeURIComponent(localPath)}`);
   if (res.ok) return (await res.json()) as VaultLocateResponse;
   const body = (await res.json().catch(() => ({}))) as { error?: string };
   if (res.status === 404 && body.error === "no such path") return null;
@@ -118,7 +121,7 @@ export async function scanVault(
   // image: a scan always precedes rendering a note, so by the time an <img> is
   // built the capability is cached and vaultAssetUrl answers synchronously.
   const [res] = await Promise.all([
-    vaultFetch(ep, `/vault/scan?${query}`, {
+    loopbackFetch(ep, `/vault/scan?${query}`, {
       // A big vault walk can exceed the default budget.
       signal: AbortSignal.timeout(60_000),
     }),
@@ -169,7 +172,7 @@ export async function ensureVaultCapability(ep: VaultEndpoint, vaultId: string):
 
   const mint = (async () => {
     try {
-      const res = await vaultFetch(ep, `/vault/cap?vault=${encodeURIComponent(vaultId)}`);
+      const res = await loopbackFetch(ep, `/vault/cap?vault=${encodeURIComponent(vaultId)}`);
       if (res.status === 404) {
         legacyCapabilityDaemons.add(key);
         return;
@@ -197,7 +200,7 @@ export async function readVaultFile(
   vaultId: string,
   path: string,
 ): Promise<VaultFileContent | null> {
-  const res = await vaultFetch(
+  const res = await loopbackFetch(
     ep,
     `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`,
   );
@@ -242,7 +245,7 @@ export async function writeVaultFile(
   content: string,
   baseEtag?: string,
 ): Promise<VaultWriteResponse> {
-  const res = await vaultFetch(
+  const res = await loopbackFetch(
     ep,
     `/vault/file?vault=${encodeURIComponent(vaultId)}&path=${encodeURIComponent(path)}`,
     {
@@ -267,7 +270,7 @@ export async function writeVaultFile(
 }
 
 export async function vaultOp(ep: VaultEndpoint, vaultId: string, op: VaultOpRequest): Promise<VaultOpResponse> {
-  const res = await vaultFetch(ep, `/vault/op?vault=${encodeURIComponent(vaultId)}`, {
+  const res = await loopbackFetch(ep, `/vault/op?vault=${encodeURIComponent(vaultId)}`, {
     method: "POST",
     body: JSON.stringify(op),
     headers: { "Content-Type": "application/json" },

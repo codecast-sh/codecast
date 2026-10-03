@@ -111,6 +111,14 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/clientSyncRegistry.ts:REPLICATED_COLLECTION_SET": CONSTANT,
   "store/mutativeMiddleware.ts:MUST_DELIVER_ACTIONS": CONSTANT,
   "store/mutativeMiddleware.ts:LEGACY_RECEIPT_ACTIONS": CONSTANT,
+  "store/mutativeMiddleware.ts:UNDO_IGNORE_KEYS": CONSTANT,
+  "store/mutativeMiddleware.ts:BRIDGED_FIELD_SET": CONSTANT,
+  "store/mutativeMiddleware.ts:undoStoreBinding": {
+    shared: "set once as inboxStore loads; its functions read the store through the useInboxStore facade, so they reach the active window",
+  },
+  "store/undo/onRevert.ts:hooks": {
+    shared: "undo revert hooks registered once at module load (undoActions.ts); the one there animates a DOM row, and the sim has no DOM",
+  },
   "store/syncProtocol.ts:OPTIONAL_INBOX_TIMESTAMPS": CONSTANT,
   "store/workbench.ts:RESTORABLE_KINDS": CONSTANT,
   "store/workbench.ts:MAY_FAIL_TO_MATERIALIZE": CONSTANT,
@@ -162,6 +170,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/desktop.ts:paneWatchers": DESKTOP,
   "lib/desktopApps.ts:placedByShell": DESKTOP,
   "lib/desktopHandoff.ts:IN_SHELL_ROOT_SEGMENTS": CONSTANT,
+  "lib/dispatchBinding.ts:CALLER_REPORTED_ACTIONS": CONSTANT,
   "lib/imageByteCache.ts:opaqueOrigins": IMAGE_URLS,
   "lib/inboxViewHistory.ts:applying": { shared: "true only inside a synchronous popstate re-apply, which the sim never drives" },
   "lib/notificationDelivery.ts:current": { shared: "browser notifications; the sim installs no delivery" },
@@ -173,6 +182,9 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/openIntent.ts:prewarmTabIds": { shared: "background tabs TabContent mounts hidden; read only by components, and the sim mounts no React" },
   "lib/pendingDraftWrites.ts:exitHooked": DRAFTS,
   "lib/pendingDraftWrites.ts:pending": DRAFTS,
+  "lib/pendingUploads.ts:pendingImageUploads": {
+    shared: "in-flight image uploads keyed by blob preview URL; only the composer (a component) adds one, and the sim mounts no React",
+  },
   "lib/shareTokenScope.ts:tokensByConversation": { shared: "share tokens a guest presented on a page; sim windows are signed in and present none" },
   "lib/sounds.ts:ctx": { shared: "audio output; bun has no AudioContext, so it stays null" },
   "lib/sounds.ts:soundedAt": { shared: "arrival sound de-dupe; affects only whether a sound plays" },

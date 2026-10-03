@@ -15,6 +15,7 @@ import {
 } from "./middleware";
 import { deriveRegistryMaps } from "./registry";
 import type { OutboxEntry, PlatformConfig } from "./types";
+import { OUTBOX_OWNER_LOCK_PREFIX, type LockManagerLike } from "./outboxOwner";
 
 const SERVER_ID = "a".repeat(32);
 const OTHER_ID = "b".repeat(32);
@@ -75,8 +76,14 @@ async function waitFor(cond: () => boolean, timeoutMs = 2000) {
   }
 }
 
-function makeHarness(opts?: { config?: PlatformConfig; retryDelays?: number[] }) {
-  const outbox = new Map<string, OutboxEntry>();
+function makeHarness(opts?: {
+  config?: PlatformConfig;
+  retryDelays?: number[];
+  // Two windows on one origin share one outbox table.
+  outbox?: Map<string, OutboxEntry>;
+  lockManager?: LockManagerLike | null;
+}) {
+  const outbox = opts?.outbox ?? new Map<string, OutboxEntry>();
   const dispatched: Array<{
     action: string;
     args: any;
@@ -158,7 +165,11 @@ function makeHarness(opts?: { config?: PlatformConfig; retryDelays?: number[] })
       }),
     }),
     opts?.config ?? CONFIG,
-    { retryDelays: opts?.retryDelays ?? [], storageWatchdogMs: 50_000 },
+    {
+      retryDelays: opts?.retryDelays ?? [],
+      storageWatchdogMs: 50_000,
+      ...(opts && "lockManager" in opts ? { lockManager: opts.lockManager } : {}),
+    },
   )(set, get, api);
   state = wrapped;
 
@@ -739,5 +750,73 @@ describe("view guard", () => {
     declared = false;
     h.api.setState({ currentId: OTHER_ID, items: {} });
     expect(h.state.currentId).toBeNull();
+  });
+});
+
+
+// A Web Locks stand-in: request() holds a lock until release(name).
+function fakeLocks() {
+  const held = new Set<string>();
+  const manager: LockManagerLike = {
+    request: (name) => { held.add(name); return new Promise(() => {}); },
+    query: async () => ({ held: [...held].map((name) => ({ name })) }),
+  };
+  return { manager, held, release: (name: string) => held.delete(name) };
+}
+
+describe("outbox rows across windows", () => {
+  it("a drain leaves a live sibling window's rows to that window", async () => {
+    // Window A delivered its write and its undo; the rows still sit in the
+    // shared table because storage is slow to delete them. Window B drains.
+    const outbox = new Map<string, OutboxEntry>();
+    const locks = fakeLocks();
+    const a = makeHarness({ outbox, lockManager: locks.manager });
+    a.wireDispatch(async () => ({}));
+    a.wrapped.seedRow(SERVER_ID, { title: "before" });
+    a.wrapped.rename(SERVER_ID, "after");
+    await waitFor(() => a.dispatched.length === 2);
+    const owner = [...outbox.values()][0]?.owner;
+    expect(owner).toBeTruthy();
+    expect(locks.held.has(`${OUTBOX_OWNER_LOCK_PREFIX}${owner}`)).toBe(true);
+    // The deletes have not landed: put the delivered rows back as a stale read would see them.
+    const stale = [...outbox.values()];
+    await sleep(5);
+    for (const row of stale) outbox.set(row.id, row);
+
+    const b = makeHarness({ outbox, lockManager: locks.manager });
+    b.wireDispatch(async () => ({}));
+    await sleep(20);
+    b.wrapped._drainOutbox();
+    await sleep(20);
+    // B re-sent nothing: replaying "after" here would land after A's later writes.
+    expect(b.dispatched).toEqual([]);
+    expect(outbox.size).toBe(stale.length);
+  });
+
+  it("a closed window's rows are replayed by the next drain", async () => {
+    const outbox = new Map<string, OutboxEntry>();
+    const locks = fakeLocks();
+    const a = makeHarness({ outbox, lockManager: locks.manager });
+    // A never reaches the server, then goes away with its row parked.
+    a.wireDispatch(() => new Promise(() => {}));
+    a.wrapped.poke(SERVER_ID);
+    await waitFor(() => outbox.size === 1);
+    const owner = [...outbox.values()][0]!.owner!;
+    locks.release(`${OUTBOX_OWNER_LOCK_PREFIX}${owner}`);
+
+    const b = makeHarness({ outbox, lockManager: locks.manager });
+    b.wireDispatch(async () => ({}));
+    await waitFor(() => b.dispatched.some((d) => d.action === "poke"));
+    await waitFor(() => outbox.size === 0);
+  });
+
+  it("without a lock manager every row stays drainable, as before", async () => {
+    const outbox = new Map<string, OutboxEntry>();
+    outbox.set("e1", {
+      id: "e1", action: "poke", args: [SERVER_ID], patches: {}, result: null, ts: Date.now(), owner: "someone-else",
+    });
+    const b = makeHarness({ outbox, lockManager: null });
+    b.wireDispatch(async () => ({}));
+    await waitFor(() => b.dispatched.some((d) => d.action === "poke"));
   });
 });

@@ -1,6 +1,6 @@
 "use client";
 import { useMemo, useState, useRef } from "react";
-import { Activity, Clock, LayoutGrid, MessageSquare, Send } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Clock, LayoutGrid, MessageSquare, Send, X } from "lucide-react";
 import { useTheme } from "./ThemeProvider";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
@@ -73,10 +73,135 @@ export function metricHours(r: PunchRow, metric: TimelineMetric): number[] {
   return r.sends ?? zeros24();
 }
 
-const RANGE_DAYS: Record<string, number | null> = { "1m": 30, "3m": 90, all: null };
-
-function dateKey(d: Date): string {
+export function dateKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addDays(key: string, n: number): string {
+  const [y, m, d] = key.split("-").map(Number);
+  return dateKey(new Date(y, m - 1, d + n));
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function shortDay(key: string): string {
+  const [y, m, d] = key.split("-").map(Number);
+  const sameYear = y === new Date().getFullYear();
+  return `${MONTHS[m - 1]} ${d}${sameYear ? "" : ` '${String(y).slice(2)}`}`;
+}
+
+// The day window every activity chart reads: a trailing preset, or an exact
+// span picked by stepping a window back or dragging across a chart.
+export type RangePreset = "7d" | "1m" | "3m" | "1y" | "all";
+export type DayRange = { preset: RangePreset } | { from: string; to: string };
+
+const RANGE_PRESETS: { key: RangePreset; label: string; title: string; days: number | null }[] = [
+  { key: "7d", label: "7D", title: "Last 7 days", days: 7 },
+  { key: "1m", label: "1M", title: "Last 30 days", days: 30 },
+  { key: "3m", label: "3M", title: "Last 90 days", days: 90 },
+  { key: "1y", label: "1Y", title: "Last 365 days", days: 365 },
+  { key: "all", label: "All", title: "Everything", days: null },
+];
+
+/** Continuous day axis from the first row through today, empty days filled. */
+export function fillDays(punchcard: PunchRow[] | undefined): PunchRow[] {
+  if (!punchcard || punchcard.length === 0) return [];
+  const map = new Map(punchcard.map((r) => [r.date, r]));
+  const todayKey = dateKey(new Date());
+  const out: PunchRow[] = [];
+  for (let key = punchcard[0].date; out.length < 400; key = addDays(key, 1)) {
+    out.push(map.get(key) ?? { date: key, hours: zeros24(), msgs: zeros24(), sends: zeros24(), sessions: zeros24(), day_sessions: 0 });
+    if (key >= todayKey) break;
+  }
+  return out;
+}
+
+export function sliceRange<T extends { date: string }>(days: T[], range: DayRange): T[] {
+  if ("from" in range) return days.filter((d) => d.date >= range.from && d.date <= range.to);
+  const n = RANGE_PRESETS.find((p) => p.key === range.preset)?.days;
+  return n ? days.slice(-n) : days;
+}
+
+/** "last 30 days" for a preset, "Sep 12 – Sep 18" for an exact span. */
+export function rangeLabel(range: DayRange): string {
+  if ("from" in range) return range.from === range.to ? shortDay(range.from) : `${shortDay(range.from)} – ${shortDay(range.to)}`;
+  return RANGE_PRESETS.find((p) => p.key === range.preset)!.title.toLowerCase();
+}
+
+/** Presets, a step back/forward by the window's own length, and the exact
+ *  span as a chip that clears back to the last preset. `days` is the filled
+ *  axis the range slices, so stepping knows the window and where data ends. */
+export function RangeControl({ value, onChange, days }: { value: DayRange; onChange: (r: DayRange) => void; days: { date: string }[] }) {
+  const [lastPreset, setLastPreset] = useState<RangePreset>("preset" in value ? value.preset : "1m");
+  const span = sliceRange(days, value);
+  const first = days[0]?.date;
+  const today = dateKey(new Date());
+  const from = span[0]?.date;
+  const to = span[span.length - 1]?.date;
+  const len = span.length;
+  const step = (dir: -1 | 1) => {
+    if (!from || !to) return;
+    let a = addDays(from, dir * len);
+    let b = addDays(to, dir * len);
+    if (b > today) { b = today; a = addDays(today, -(len - 1)); }
+    if (first && a < first) { a = first; b = addDays(first, len - 1); }
+    onChange({ from: a, to: b });
+  };
+  const btn = "h-7 w-6 flex items-center justify-center rounded-md text-sol-text-muted/50 hover:text-sol-text hover:bg-sol-bg-alt/60 disabled:opacity-25 disabled:pointer-events-none transition-colors";
+  return (
+    <div className="flex items-center gap-1">
+      <button className={btn} onClick={() => step(-1)} disabled={!from || from <= (first ?? from)} title="Previous period">
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </button>
+      <button className={btn} onClick={() => step(1)} disabled={!to || to >= today} title="Next period">
+        <ChevronRight className="w-3.5 h-3.5" />
+      </button>
+      {"from" in value && (
+        <span className="h-7 flex items-center gap-1 pl-2 pr-1 rounded-md border border-sol-cyan/40 bg-sol-cyan/10 text-xs text-sol-cyan tabular-nums whitespace-nowrap">
+          {rangeLabel(value)}
+          <button
+            onClick={() => onChange({ preset: lastPreset })}
+            className="w-4 h-4 flex items-center justify-center rounded hover:bg-sol-cyan/20"
+            title="Back to a preset range"
+          >
+            <X className="w-3 h-3" />
+          </button>
+        </span>
+      )}
+      <SegmentedToggle
+        value={"preset" in value ? value.preset : ""}
+        onChange={(k) => { setLastPreset(k as RangePreset); onChange({ preset: k as RangePreset }); }}
+        items={RANGE_PRESETS.map(({ key, label, title }) => ({ key, label, title }))}
+      />
+    </div>
+  );
+}
+
+/** Drag across a day chart to zoom into that span. Indices are plot slots;
+ *  `pick` gets them ordered and only for a span of two or more slots. */
+export function useDayBrush(pick: (a: number, b: number) => void) {
+  // The ref is the truth (mouse events can outrun renders); state only paints.
+  const ref = useRef<{ a: number; b: number } | null>(null);
+  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
+  const set = (d: { a: number; b: number } | null) => { ref.current = d; setDrag(d); };
+  return {
+    drag,
+    start: (i: number) => set({ a: i, b: i }),
+    move: (i: number) => { if (ref.current && ref.current.b !== i) set({ ...ref.current, b: i }); },
+    end: () => {
+      const d = ref.current;
+      if (d && d.a !== d.b) pick(Math.min(d.a, d.b), Math.max(d.a, d.b));
+      set(null);
+    },
+    cancel: () => set(null),
+  };
+}
+
+export function BrushRect({ drag, toX, top, height }: { drag: { a: number; b: number } | null; toX: (i: number) => number; top: number; height: number }) {
+  if (!drag || drag.a === drag.b) return null;
+  const x1 = toX(Math.min(drag.a, drag.b));
+  const x2 = toX(Math.max(drag.a, drag.b));
+  return <rect x={x1} y={top} width={x2 - x1} height={height} className="fill-sol-cyan/10 stroke-sol-cyan/50" strokeWidth={0.5} pointerEvents="none" />;
 }
 
 const zeros24 = () => new Array(24).fill(0);
@@ -91,9 +216,9 @@ function hourLabel(h: number): string {
 
 // X-axis ticks for a continuous day series: weekly on short ranges, month
 // starts otherwise, suppressing labels that would crowd the previous one.
-function timeAxisLabels(dates: string[], toX: (i: number) => number): { label: string; x: number }[] {
+export function timeAxisLabels(dates: string[], toX: (i: number) => number): { label: string; x: number }[] {
   const labels: { label: string; x: number }[] = [];
-  const mn = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const mn = MONTHS;
   const weekly = dates.length <= 45;
   let lastM = -1;
   let lastX = -Infinity;
@@ -110,32 +235,26 @@ function timeAxisLabels(dates: string[], toX: (i: number) => number): { label: s
   return labels;
 }
 
-export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefined }) {
+/** `range`/`onRangeChange` make the window controlled by a page that shares
+ *  it across sections (and then owns the control); otherwise it's local. */
+export function TimelineCharts({
+  punchcard,
+  range: controlledRange,
+  onRangeChange,
+}: {
+  punchcard: PunchRow[] | undefined;
+  range?: DayRange;
+  onRangeChange?: (r: DayRange) => void;
+}) {
   const [metric, setMetric] = useState<TimelineMetric>("hours");
-  const [range, setRange] = useState<"1m" | "3m" | "all">("3m");
+  const [localRange, setLocalRange] = useState<DayRange>({ preset: "3m" });
+  const range = controlledRange ?? localRange;
+  const setRange = onRangeChange ?? setLocalRange;
   const [view, setView] = useState<"grid" | "chart">("grid");
 
   // Continuous day axis from first activity through today — both charts share it.
-  const filled = useMemo(() => {
-    if (!punchcard || punchcard.length === 0) return [];
-    const map = new Map(punchcard.map((r) => [r.date, r]));
-    const [y, m, d] = punchcard[0].date.split("-").map(Number);
-    const cur = new Date(y, m - 1, d);
-    const todayKey = dateKey(new Date());
-    const out: PunchRow[] = [];
-    while (out.length < 400) {
-      const key = dateKey(cur);
-      out.push(map.get(key) ?? { date: key, hours: zeros24(), msgs: zeros24(), sends: zeros24(), sessions: zeros24(), day_sessions: 0 });
-      if (key === todayKey) break;
-      cur.setDate(cur.getDate() + 1);
-    }
-    return out;
-  }, [punchcard]);
-
-  const sliced = useMemo(() => {
-    const n = RANGE_DAYS[range];
-    return n ? filled.slice(-n) : filled;
-  }, [filled, range]);
+  const filled = useMemo(() => fillDays(punchcard), [punchcard]);
+  const sliced = useMemo(() => sliceRange(filled, range), [filled, range]);
 
   const daySeries = useMemo(
     () =>
@@ -204,26 +323,18 @@ export function TimelineCharts({ punchcard }: { punchcard: PunchRow[] | undefine
               { key: "sends", icon: Send, label: "Typed", title: "Messages the person typed" },
             ]}
           />
-          <SegmentedToggle
-            value={range}
-            onChange={(k) => setRange(k as "1m" | "3m" | "all")}
-            items={[
-              { key: "1m", label: "1M", title: "Last 30 days" },
-              { key: "3m", label: "3M", title: "Last 90 days" },
-              { key: "all", label: "All", title: "Everything" },
-            ]}
-          />
+          {!controlledRange && <RangeControl value={range} onChange={setRange} days={filled} />}
         </div>
       </div>
       {view === "grid" ? (
         <>
           <PunchcardChart rows={sliced} metric={metric} />
           <div className="mt-4">
-            <TimelineChart points={daySeries} cfg={cfg} />
+            <TimelineChart points={daySeries} cfg={cfg} onPickRange={(from, to) => setRange({ from, to })} />
           </div>
         </>
       ) : (
-        <TimelineChart points={hourSeries} cfg={cfg} hourly />
+        <TimelineChart points={hourSeries} cfg={cfg} hourly onPickRange={(from, to) => setRange({ from, to })} />
       )}
     </div>
   );
@@ -338,10 +449,23 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
  * legible). `hour` on a point flags hourly so the tooltip can break it down. */
 type ChartPoint = { date: string; value: number; sessions: number; hour?: number; hours?: number; msgs?: number };
 
-function TimelineChart({ points, cfg, hourly }: { points: ChartPoint[]; cfg: (typeof METRIC_CFG)[TimelineMetric]; hourly?: boolean }) {
+function TimelineChart({
+  points,
+  cfg,
+  hourly,
+  onPickRange,
+}: {
+  points: ChartPoint[];
+  cfg: (typeof METRIC_CFG)[TimelineMetric];
+  hourly?: boolean;
+  onPickRange?: (from: string, to: string) => void;
+}) {
   const { ref: containerRef, width: containerW } = useContainerWidth();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hovered, setHovered] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const brush = useDayBrush((a, b) => {
+    if (onPickRange && points[a].date !== points[b].date) onPickRange(points[a].date, points[b].date);
+  });
 
   const maxV = useMemo(() => Math.max(...points.map((d) => d.value), 1), [points]);
 
@@ -379,15 +503,19 @@ function TimelineChart({ points, cfg, hourly }: { points: ChartPoint[]; cfg: (ty
         width={containerW}
         height={chartH}
         className="block cursor-crosshair"
-        onMouseLeave={() => setHovered(null)}
+        onMouseLeave={() => { setHovered(null); brush.cancel(); }}
+        onMouseDown={(e) => { if (onPickRange && hovered) { e.preventDefault(); brush.start(hovered.idx); } }}
+        onMouseUp={brush.end}
         onMouseMove={(e) => {
           const r = svgRef.current?.getBoundingClientRect();
           if (!r) return;
           let idx = Math.round((e.clientX - r.left - padLeft) / stepX);
           idx = Math.max(0, Math.min(points.length - 1, idx));
           setHovered({ idx, x: r.left + toX(idx), y: r.top + toY(points[idx].value) });
+          brush.move(idx);
         }}
       >
+        <BrushRect drag={brush.drag} toX={toX} top={padTop} height={plotH} />
         {/* Y grid lines */}
         {yTicks.map((v, i) => {
           const y = toY(v);

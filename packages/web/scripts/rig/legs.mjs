@@ -6,9 +6,9 @@
 // then presence, then engaged again), and the identity verdict (no face node
 // remounted). Screenshots of both bars land in the run directory at every
 // named state.
-import { killChrome, launchChrome } from "./chrome.mjs";
+import { killChrome, launchSignedIn } from "./chrome.mjs";
 import { connect, sleep } from "./cdp.mjs";
-import { IDENTITIES, signIn } from "./auth.mjs";
+import { faceRigDeployment, IDENTITIES } from "./auth.mjs";
 import { ENGAGED, offThenOn, PAGE_LIB } from "./page.mjs";
 
 const RILEY = IDENTITIES.riley.id;
@@ -35,10 +35,7 @@ export async function bringUp(who, { fresh = true, dir, attach = false }) {
     await side.page.evaluate(PAGE_LIB);
     return side;
   }
-  side.child = await launchChrome({ port: id.port, profile: side.profile, fresh });
-  side.page = await connect(id.port, /about:blank|localhost/);
-  await side.page.send("Emulation.setFocusEmulationEnabled", { enabled: true });
-  await signIn(side.page, who);
+  Object.assign(side, await launchSignedIn({ port: id.port, profile: side.profile, fresh, dep: faceRigDeployment(), userId: id.id }));
   await side.page.evaluate(PAGE_LIB);
   return side;
 }

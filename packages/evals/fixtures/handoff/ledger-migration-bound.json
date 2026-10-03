@@ -1,7 +1,6 @@
 {
  "asOf": "2026-01-15T14:49:30.000Z",
  "notes": "synthetic session bound to a task and a plan, with a pinned state: billing reads moved to a ledger, writes half done",
- "judge": "a cold reader can continue: the brief names the goal (billing on the ledger tables), the double-write decision and its reason (rollback by a flag), what is verified (reads match on 200 accounts, tests pass) and what is not, that refunds in billing/refunds.ts remain, and a first step that names that file",
  "snapshot": {
   "rows": [
    {

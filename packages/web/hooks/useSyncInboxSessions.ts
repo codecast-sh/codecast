@@ -2,7 +2,7 @@ import { useRef, useCallback, useState } from "react";
 import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, classifySession, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
+import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { warmVisibleSessions } from "./inboxWarm";
 import { toast } from "sonner";
@@ -11,7 +11,7 @@ import { useConvexSync } from "./useConvexSync";
 import { INBOX_RECOVERY_STALE_MS, useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { useEnsureDispatch } from "./useEnsureDispatch";
-import { useLiveInboxSessions, applyInboxListPayload, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
+import { useLiveInboxSessions, applyInboxListPayload, settleDisownClaims, LIST_INBOX_SESSIONS_ARGS } from "./useLiveInboxSessions";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useFeederError } from "./useSyncCollection";
 import { onSyncWake } from "./syncWake";
@@ -111,8 +111,9 @@ export function inboxCrawlWsKey(principalId: string | null | undefined): string 
 // return. A recut floor cannot carry what left the inbox scan while this
 // client was away (a killed row is out of it, a deleted row is gone), so
 // these are re-read by id through the authorized byIds path: returned rows
-// land with their hidden stamps, omitted ids are gone or no longer this
-// principal's and prune. Only ids byIds could return are probed (byIdsCouldReturn).
+// land with their hidden stamps, omitted ids are gone and prune. Only rows
+// byIds must return are probed that way (byIdsMustReturn); a foreign row that
+// claims this principal is settled without a prune (settleDisownClaims).
 export function floorProbeIds(cached: Iterable<string>, returned: Iterable<string>): string[] {
   const seen = new Set(returned);
   const out: string[] = [];
@@ -120,18 +121,21 @@ export function floorProbeIds(cached: Iterable<string>, returned: Iterable<strin
   return out;
 }
 
-// Which cached rows the probe may stand behind: those byIds could return for
-// this principal. It mirrors collectInboxSessionsByIds' admission (the runner,
-// or a member of the session's owner set), so the probe never sends an id the
-// server is bound to omit. A teammate's row the team feeder merged into this
-// cache is outside both the floor and byIds; probing it would read its absence
-// as gone and prune it with a durable exclude. Those rows belong to the team
-// list and the team scope's log. A row with no user_id is unknown and probed.
-export function byIdsCouldReturn(
-  row: { user_id?: string | null; owned_by_me?: boolean },
+// Which cached rows the pruning probe may stand behind: those byIds must
+// return while they exist, which is the rows this principal runs
+// (collectInboxSessionsByIds admits the runner unconditionally). Its omission
+// of such a row proves the row gone. Everything else byIds may omit while the
+// row lives on: a teammate's row the team feeder merged into this cache is
+// outside both the floor and byIds, and a foreign row whose owned_by_me claim
+// went stale (a disown emits nothing to the departed owner) is omitted once
+// the owner set drops this principal. Probing either would read the omission
+// as gone and prune a row that may still be team-visible, with a durable
+// exclude. A row with no user_id is unknown and probed.
+export function byIdsMustReturn(
+  row: { user_id?: string | null },
   principalId: string | null | undefined,
 ): boolean {
-  return !row.user_id || row.user_id === principalId || !!row.owned_by_me;
+  return !row.user_id || row.user_id === principalId;
 }
 
 // The personal liveness overlay into the store: FACT fields merge onto the
@@ -192,9 +196,13 @@ export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flag
   // index bound, and a wall-clock value recomputed per page would make each
   // page a different query (InvalidCursor).
   const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
-  const cached = Object.entries(useInboxStore.getState().sessions)
-    .filter(([, row]) => byIdsCouldReturn(row, principalId))
-    .map(([id]) => id);
+  const cachedRows = Object.entries(useInboxStore.getState().sessions);
+  const cached = cachedRows.filter(([, row]) => byIdsMustReturn(row, principalId)).map(([id]) => id);
+  // Foreign rows that claim this principal: the floor may not return them, and
+  // byIds settles the claim without pruning.
+  const claimed = principalId
+    ? cachedRows.filter(([, row]) => claimsViewer(row, principalId)).map(([id]) => id)
+    : [];
   runReconcileCrawl({
     namespace: "sessions",
     wsKey,
@@ -218,8 +226,11 @@ export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flag
       // before this floor can hold one the floor did not return. Safe on a
       // resumed (partial) floor too: byIds answers with the truth for every
       // id, so the only cost of a wider probe is reads.
-      const stale = floorProbeIds(cached, all.map((r: any) => String(r._id)));
+      const returned = all.map((r: any) => String(r._id));
+      const stale = floorProbeIds(cached, returned);
       if (stale.length) await applyEntityIds(convex, { ...emptyIdsByCollection(), sessions: stale });
+      const unsettled = floorProbeIds(claimed, returned);
+      if (unsettled.length) await settleDisownClaims(convex, unsettled);
     },
   });
 }

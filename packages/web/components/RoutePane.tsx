@@ -54,6 +54,7 @@ const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/te
 const Search = lazyPage("@/app/search/page", () => import("@/app/search/page"));
 const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"));
 const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
+const Memory = lazyPage("@/app/memory/page", () => import("@/app/memory/page"));
 const Vault = lazyPage("@/app/vault/page", () => import("@/app/vault/page"));
 const Artifacts = lazyPage("@/app/artifacts/page", () => import("@/app/artifacts/page"));
 const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/notifications/page"));
@@ -169,6 +170,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
+  { pattern: /^\/memory$/, paramNames: [], component: Memory },
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },

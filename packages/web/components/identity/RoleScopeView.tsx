@@ -20,7 +20,7 @@ import { ArrowRight, FolderInput } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { groupsLine, planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
 import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
-import type { RoleInitiative } from "../../lib/roleInitiatives";
+import { initiativeRelation, type RoleInitiative } from "../../lib/roleInitiatives";
 import { HEALTH_COLOR } from "../../lib/initiativeColors";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RoleFace } from "../org/RoleFace";
@@ -179,7 +179,7 @@ function More({ onClick, children }: { onClick: () => void; children: ReactNode 
 /** A goal the role's work serves: whether the role drives it or its projects
  *  contribute, and what its owner last said about how it is going. */
 function InitiativeRowView({ i, density }: { i: RoleInitiative; density: RoleScopeDensity }) {
-  const part = i.owned ? "drives it" : `through ${i.projects} ${i.projects === 1 ? "project" : "projects"}`;
+  const part = initiativeRelation(i);
   const health = i.health !== "none" ? <span style={{ color: HEALTH_COLOR[i.health] }}>{INITIATIVE_HEALTH_LABEL[i.health].toLowerCase()}</span> : null;
   if (density === "card") {
     return (

@@ -3,7 +3,7 @@
 // RoomThread owns the reads and the writes and lays these out in time order.
 
 import { useState } from "react";
-import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, ListChecks, Sparkles, Square, Trash2 } from "lucide-react";
+import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, ListChecks, Sparkles, Square, Trash2, UserMinus } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { recordingFailureWords } from "@codecast/shared/contracts";
 import { ChatAttachments } from "../chat/ChatMessage";
@@ -303,6 +303,9 @@ export function EventLine({
   if (row.event === "record_on" || row.event === "record_off" || row.event === "record_deleted") {
     return <RecordEventLine row={row} actor={actor} fresh={fresh} dayOf={dayOf} moment={row.event === "record_deleted" ? null : (momentAt?.(row.at) ?? null)} />;
   }
+  if (row.event === "guest_admitted" || row.event === "guest_removed") {
+    return <GuestEventLine row={row} actor={actor} fresh={fresh} dayOf={dayOf} />;
+  }
   const Glyph = row.event === "transcribe_off" ? CaptionsOff : row.event === "transcribe_on" ? Captions : Sparkles;
   // On and joined keep their accents; off and left go dim, as an ended thing should.
   const tone =
@@ -362,13 +365,7 @@ function RecordEventLine({
   // Recording keeps the red the mark wears; a failure is a warning; the
   // ends are dim, as an ended thing should be.
   const tone = row.event === "record_on" ? "fill-current text-sol-red" : failed ? "text-sol-orange" : "text-sol-text-dim";
-  const who = row.event_guest_name ? (
-    <>
-      {firstName(row.event_guest_name)} <GuestTag className="align-[1px]" />
-    </>
-  ) : (
-    actor
-  );
+  const who = row.event_guest_name ? <GuestWho name={row.event_guest_name} /> : actor;
   let words: React.ReactNode;
   if (row.event === "record_on") words = <>{who} started recording</>;
   else if (row.event === "record_deleted") words = <>{who} deleted a recording</>;
@@ -392,6 +389,43 @@ function RecordEventLine({
           {moment.label}
         </button>
       )}
+      <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
+    </div>
+  );
+}
+
+/** A guest named in a line, marked as the outsider they are. */
+function GuestWho({ name }: { name: string }) {
+  return (
+    <>
+      {firstName(name)} <GuestTag className="align-[1px]" />
+    </>
+  );
+}
+
+/** Somebody let a stranger in, or put one out. The door is a moment only the
+ *  people looking at it see; this line is how everyone else learns who opened
+ *  the room to an outsider, and it stays with the call. */
+function GuestEventLine({ row, actor, fresh, dayOf }: { row: EventRow; actor: string; fresh: boolean; dayOf: number | undefined }) {
+  const admitted = row.event === "guest_admitted";
+  const Glyph = admitted ? DoorOpen : UserMinus;
+  const guest = <GuestWho name={row.event_guest_name ?? "a guest"} />;
+  return (
+    <div className={`rt-event${fresh ? " rt-in" : ""}`} role="note">
+      <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
+        <Glyph className={`h-3 w-3 ${admitted ? "text-sol-yellow" : "text-sol-text-dim"}`} />
+      </span>
+      <span className="min-w-0 flex-1">
+        {admitted ? (
+          <>
+            {actor} let {guest} in
+          </>
+        ) : (
+          <>
+            {actor} removed {guest}
+          </>
+        )}
+      </span>
       <span className="rt-when rt-event-when">{fmtWallClock(row.at, dayOf)}</span>
     </div>
   );

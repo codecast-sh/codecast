@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildEdition, dayVolumes, stepOrder } from "../editionModel";
+import { awaitsStories, buildEdition, dayVolumes, filterAreas, stepOrder } from "../editionModel";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, at, edition, liveRow, story } from "./fixtures";
 
@@ -144,9 +144,30 @@ describe("buildEdition", () => {
       story("b", { area_counts: { web: 2 }, commit_shas: ["s1", "s2"] }),
     ]);
     expect(m.areas).toEqual([
-      { area: "web", touches: 5, commits: 2 },
-      { area: "shared", touches: 1, commits: 1 },
+      { area: "web", touches: 5, commits: 2, stories: 2 },
+      { area: "shared", touches: 1, commits: 1, stories: 0 },
     ]);
+  });
+
+  test("a commit is credited to an area only as far as its touches prove it", () => {
+    const shas = Array.from({ length: 30 }, (_, i) => `c${i}`);
+    const m = build([story("a", { area_counts: { web: 120, github: 1 }, commit_shas: shas })]);
+    expect(m.areas).toEqual([
+      { area: "web", touches: 120, commits: 30, stories: 1 },
+      { area: "github", touches: 1, commits: 1, stories: 0 },
+    ]);
+  });
+
+  test("the area filter offers the stories' own areas, never an area touched only inside them", () => {
+    const stories = [
+      story("a", { area: "web", area_counts: { web: 9, github: 2 } }),
+      story("b", { area: "cli", area_counts: { cli: 3, github: 1 } }),
+      story("c", { area: "cli", area_counts: { cli: 1 } }),
+      story("d", { area: "release", area_counts: {} }),
+    ];
+    const m = build(stories);
+    expect(m.areas.map((a) => a.area)).toEqual(["web", "cli", "github"]);
+    expect(filterAreas(m.day, m.areas)).toEqual(["web", "cli", "release"]);
   });
 });
 
@@ -170,5 +191,26 @@ describe("stepOrder", () => {
     expect(stepOrder(["a", "b", "c"], "a", -1)).toBe("a");
     expect(stepOrder(["a"], "gone", 1)).toBe("a");
     expect(stepOrder([], "a", 1)).toBeNull();
+  });
+});
+
+describe("awaitsStories", () => {
+  const stats = (stories: number) => ({ commits: stories, stories, releases: 0, people: 1, sessions: 0, private_sessions: 0 });
+
+  test("a cached edition that counts stories waits for them instead of saying nothing landed", () => {
+    expect(awaitsStories(0, false, [edition({ stats: stats(4) })])).toBe(true);
+    expect(awaitsStories(0, false, [undefined])).toBe(true);
+  });
+
+  test("cached stories, an answered feed, or editions that say nothing landed paint at once", () => {
+    expect(awaitsStories(3, false, [undefined])).toBe(false);
+    expect(awaitsStories(0, true, [edition({ stats: stats(4) })])).toBe(false);
+    expect(awaitsStories(0, false, [edition({ stats: stats(0) })])).toBe(false);
+  });
+
+  test("a week is quiet from cache only when every day so far says so", () => {
+    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), edition({ stats: stats(2) })])).toBe(true);
+    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), undefined])).toBe(true);
+    expect(awaitsStories(0, false, [edition({ stats: stats(0) }), edition({ stats: stats(0) })])).toBe(false);
   });
 });

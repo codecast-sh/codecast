@@ -100,6 +100,5 @@
  },
  "label": {
   "why": "pr"
- },
- "judge": "says daily digests now arrive at 8am in each workspace's own timezone, takes the reason from pull request #212, words the schema risk as one line a teammate can act on, and names no person or session"
+ }
 }

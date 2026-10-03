@@ -33,6 +33,29 @@ const CACHED_ENRICHMENT_QUERIES = [
   // avatar bar open at the time latched its ErrorBoundary ("Failed to load
   // TeamAvatarBar") until a manual retry, hours after prod had recovered.
   "teams.getTeamMembers",
+  // The page degrade tests (components/__tests__/*.degrade.test.tsx) mount
+  // every page over a backend missing every function; each of these re-threw
+  // there and took a shell panel (the global feeders, the sidebar, the bell)
+  // or the conversation view down with it. They feed or enrich a store the
+  // surface already paints from.
+  "teams.getUserTeams",
+  "notifications.list",
+  "conversations.listFavorites",
+  "conversations.listTeamInboxSessions",
+  "conversations.teamSessionsLiveness",
+  "tasks.webActiveSessions",
+  "tasks.webMentionList",
+  "docs.webMentionList",
+  "plans.webMentionList",
+  "buckets.webList",
+  "capabilityState.webList",
+  "capabilityBindings.webListBindings",
+  "conversations.listMessagesTail",
+  "conversations.getTranscriptWatermark",
+  "conversations.getUserMessages",
+  "conversations.resolveConversation",
+  "comments.getConversationCommentSummary",
+  "collab.collabRequests",
   // users.getCurrentUser is fed the same way but still has plain subscribers
   // on auth/team pages (pinned by the raw useQuery ratchet), so it is not
   // listed here yet.

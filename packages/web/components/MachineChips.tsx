@@ -43,9 +43,9 @@ export function MachineChips({ machines, selectedDeviceId, open, onOpen, onPick,
           title={machineChipTitle(d)}
           className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
             selected
-              ? `${deviceAccentClasses(d)} font-medium`
-              : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70"
-          } ${d.online ? "" : "opacity-50"}`}
+              ? `${deviceAccentClasses(d)} font-medium !border-current`
+              : `border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 ${d.online ? "" : "opacity-50"}`
+          }`}
         >
           <DeviceIcon d={d} className="w-3 h-3 shrink-0" />
           <span className="truncate max-w-[14rem]">{chipLabel(d)}</span>

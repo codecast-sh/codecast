@@ -550,6 +550,46 @@ test("partial results and false hashes never make a local stamp current; source 
   expect(stamps[hostKey(host)]!.last_failure?.reason).toBe("unreadable input");
 });
 
+// ct-56327: what a receiver can do is what the receiver installed now says.
+test("the bundle narrows only on the --verify read before the push, and keeps_tracked follows the receiver's last answer", async () => {
+  let stamps: LocalMirrorStamps = {};
+  let capabilities: string[] | undefined = ["keeps-tracked"];
+  let reply: "answer" | "throw" = "answer";
+  const builds: boolean[] = [];
+  const deps: Partial<MirrorDeps> = {
+    readConfig: () => ({ user_id: "u" }), readProjects: () => [],
+    readLocalStamps: () => structuredClone(stamps), writeLocalStamps: (next) => { stamps = next; },
+    build: async (opts) => { builds.push(!!opts.narrowProjects); return fakeBuild(opts.narrowProjects ? "narrow" : "wide"); },
+    readStamp: async () => ({ version: 1, complete: true, hash: "old", source_device_id: "d", source_user_id: "u", applied_at: "", files: {}, managed_roots: [], ...(capabilities ? { capabilities } : {}) }),
+    push: async (_h, bytes) => {
+      if (reply === "throw") throw new Error("ssh dropped");
+      const hash = (await parseMirrorBundle(bytes)).files[0]!.bytes.toString();
+      return { pushed: true, hash, result: { hash, applied: [], unchanged: 0, host_edited: [], pruned: [], errors: [], ...(capabilities ? { capabilities } : {}) } };
+    },
+  };
+  const keeps = () => stamps[hostKey(host)]?.keeps_tracked;
+  // Nothing remembered: the read says keeps-tracked, so the first push is already narrow.
+  expect((await mirrorHomeToHost(host, { deps })).hash).toBe("narrow");
+  expect(builds).toEqual([false, true]);
+  expect(keeps()).toBe(true);
+  // The host is back on an older receiver: the remembered answer is overruled by the read.
+  capabilities = undefined;
+  resetBuildCache(); builds.length = 0;
+  expect((await mirrorHomeToHost(host, { deps })).hash).toBe("wide");
+  expect(builds).toEqual([true, false]);
+  expect(keeps()).toBeUndefined();
+  // A push that gets no answer keeps the last one.
+  capabilities = ["keeps-tracked"];
+  resetBuildCache();
+  await mirrorHomeToHost(host, { deps });
+  expect(keeps()).toBe(true);
+  reply = "throw";
+  resetBuildCache();
+  stamps[hostKey(host)]!.hash = "";
+  await expect(mirrorHomeToHost(host, { deps })).rejects.toThrow("ssh dropped");
+  expect(keeps()).toBe(true);
+});
+
 test("disabled mirror skips all work and unchanged bundles recover from an older host after bounded backoff", async () => {
   let attempts = 0;
   let now = new Date("2026-09-06T00:00:00Z");

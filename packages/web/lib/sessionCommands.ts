@@ -6,7 +6,7 @@
 // daemon never answers expires here, at read time, from when it was asked.
 
 import { useInboxStore, type AccountSwitchArgs } from "../store/inboxStore";
-import { DispatchNotWiredError, isParkedDispatchError, isPermanentDispatchError } from "../store/mutativeMiddleware";
+import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { MACHINE_SWITCH_TIMEOUT_MS } from "./machineAccountSwitch";
 
 export type SessionCommandKind = "restart" | "repair" | "move" | "switch";
@@ -114,7 +114,7 @@ export function restartPending(row: SessionCommandRow | undefined, now: number):
  * re-drives it and the echo settles it.
  */
 export function recordSessionCommandDispatchError(requestId: string, error: unknown) {
-  if (isParkedDispatchError(error) || (!isPermanentDispatchError(error) && !(error instanceof DispatchNotWiredError))) return;
+  if (!isRefusedDispatchError(error)) return;
   settleSessionCommand(requestId, { error: String(error), result: DISPATCH_REFUSED });
 }
 

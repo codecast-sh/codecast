@@ -106,4 +106,20 @@ describe("replicated facts and locks", () => {
     expect((useInboxStore.getState().pending as any)[`sessions:${id}:inbox_dismissed_at`]).toBeUndefined();
     expect((useInboxStore.getState().sessions as any)[id].inbox_dismissed_at).toBe(9);
   });
+
+  // A follower pins; its mut waits in the channel while the host unpins. The
+  // late mut must not put the pin back under a lock the server, which took
+  // the unpin, never echoes (legacy multi-window sim seeds 83 and 86).
+  it("a replicated field write older than this window's own lock on the field is dropped", () => {
+    const id = "p".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, inbox_pinned_at: null }], { isDelta: true });
+    useInboxStore.setState((s: any) => ({ pending: { ...s.pending, [`sessions:${id}:inbox_pinned_at`]: { type: "field", value: null, ts: 20 } } }));
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_pinned_at: 15 } }, 15);
+    expect((useInboxStore.getState().sessions as any)[id].inbox_pinned_at).toBeNull();
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:inbox_pinned_at`]).toEqual({ type: "field", value: null, ts: 20 });
+
+    // A newer one lands.
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_pinned_at: 25 } }, 25);
+    expect((useInboxStore.getState().sessions as any)[id].inbox_pinned_at).toBe(25);
+  });
 });

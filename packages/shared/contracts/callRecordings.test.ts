@@ -249,5 +249,7 @@ describe("recording words", () => {
     expect(recordingFailureWords("Stopped before the room's video began.")).toBe("Stopped before the room's video began.");
     expect(recordingFailureWords("The recording hit its limit.")).toBe("The recording hit its limit.");
     expect(recordingFailureWords("egress timed out")).toBe("The recording failed. egress timed out");
+    expect(recordingFailureWords("LiveKit lost track of this recording before it finished.")).toBe("LiveKit lost track of this recording before it finished.");
+    expect(recordingFailureWords("Recording is not set up on this server.")).toBe("Recording is not set up on this server.");
   });
 });

@@ -71,7 +71,7 @@ import { CallMomentPicture } from "./calls/CallMomentFrame";
 import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
-import { FilePathContext, filePathMention, parseFilePathHref } from "../lib/filePathLinks";
+import { FilePathContext, filePathMention, parseFilePathHref, type FilePathContextValue } from "../lib/filePathLinks";
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
@@ -648,16 +648,20 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
  * A pull request named by number alone (`pr:#N|<as written>`, minted by
  * remarkEntityIds) completes to `owner/repo#N` from the conversation's
  * repository and wears a pill that reads as the text written. With no
- * repository in context it is not a reference at all and prints back verbatim.
+ * repository in context it is not a reference at all and prints back verbatim,
+ * and neither is a lone `#N` the conversation does not know as a pull request.
  */
-function contextualPrReference(payload: string, repository: string | null | undefined, mention?: MentionInfo): React.ReactNode | null {
+function contextualPrReference(payload: string, ctx: FilePathContextValue | null, mention?: MentionInfo): React.ReactNode | null {
   const ref = parseContextualPrRef(payload);
   if (!ref) return null;
+  const repository = ctx?.repository;
   if (!repository) return <>{ref.label}</>;
+  const id = repoObjectId({ type: "pr", repository, number: ref.number });
+  if (ref.bare && !ctx?.pullRequestIds?.has(id)) return <>{ref.label}</>;
   return (
     <EntityIdPill
       type="pr"
-      id={repoObjectId({ type: "pr", repository, number: ref.number })}
+      id={id}
       certain
       label={ref.label}
       mention={mention}
@@ -769,7 +773,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     const date = parseDateRef(ref);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
     if (ref.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
-      const pr = contextualPrReference(ref, pathCtx?.repository, mention);
+      const pr = contextualPrReference(ref, pathCtx, mention);
       if (pr !== null) return pr;
     }
     return <EntityIdPill shortId={ref} mention={mention} />;
@@ -806,7 +810,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // A pull request named by number alone (`pr:#N|<as written>`), same
   // convention: completed from the conversation's repository, or the text back.
   if (text.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
-    const pr = contextualPrReference(text, pathCtx?.repository, mention);
+    const pr = contextualPrReference(text, pathCtx, mention);
     if (pr !== null) return pr;
   }
   if (isEntityId(text)) {

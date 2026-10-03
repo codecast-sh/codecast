@@ -98,6 +98,5 @@
  },
  "label": {
   "why": "none"
- },
- "judge": "says invoices are now sorted by due date by default (and the table was split out with no behavior change) without offering any reason or motive, because no input states one"
+ }
 }

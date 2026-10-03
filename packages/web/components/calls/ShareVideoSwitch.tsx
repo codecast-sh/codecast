@@ -1,8 +1,4 @@
-import { useState } from "react";
-import { useMutation } from "convex/react";
-import { toast } from "sonner";
-import { api } from "@codecast/convex/convex/_generated/api";
-import { humanizeConvexError } from "@codecast/shared/contracts";
+import { setCallVideoShared } from "../../hooks/useRoomRecording";
 import { Switch } from "../ui/switch";
 
 // Whether a call's public link shows its video too. Off unless somebody turns
@@ -12,26 +8,16 @@ import { Switch } from "../ui/switch";
 // without. Only the room's recording is shared, never a single person's
 // screen file.
 export function ShareVideoSwitch({ call, shared, linkOn }: { call: string; shared: boolean; linkOn: boolean }) {
-  const setShareVideo = useMutation(api.callRecordings.setCallShareVideo);
-  // The switch moves on the press; the query's echo settles it, and a refusal
-  // puts it back and says why. Local, not the store's, until the recordings
-  // become a synced collection with a dispatched setCallShareVideo (ct-56308).
-  const [pending, setPending] = useState<boolean | null>(null);
-  const on = linkOn && (pending ?? shared);
-  if (pending !== null && pending === shared) setPending(null);
+  // `shared` is the store's (callRecordingCalls.video_shared): the switch
+  // moves on the press, and a refusal puts it back and says why.
+  const on = linkOn && shared;
   return (
     <label className="flex items-start gap-2.5 pt-1">
       <Switch
         checked={on}
         disabled={!linkOn}
         aria-label="Include the video recording"
-        onCheckedChange={(next) => {
-          setPending(next);
-          void setShareVideo({ call, include: next }).catch((err) => {
-            setPending(null);
-            toast.error(humanizeConvexError(err));
-          });
-        }}
+        onCheckedChange={(next) => setCallVideoShared(call, next)}
         className="mt-px"
       />
       <span className="min-w-0 text-xs leading-snug">

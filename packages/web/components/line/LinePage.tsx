@@ -53,17 +53,20 @@ const STATIONS: Station[] = [
 ];
 
 /** The first command a new line needs: file one signal by hand. */
-const FIRST_SIGNAL = `cast signal add --source person --kind bug --fingerprint first-signal --title "What you saw"`;
+const FIRST_SIGNAL = `cast signal add --source person --kind bug --title "What you saw"`;
 
 const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id ?? t._id}`;
 
-// Columns size from the container so the whole line fits a laptop; an empty
+// Columns size from the flow's own width (a container query), so the inbox
+// panel opening narrows the line the way a smaller window does. An empty
 // station is a slimmer tile so the live ones get the width, and its command
-// wraps at spaces. Below sm the stations snap one per screen and scroll
-// sideways. The tight set takes over under 1360px (a laptop, or a wide screen
-// with the inbox panel open): all six live stations fit in 1160px of flow.
+// wraps at flag boundaries. The tight set takes over under 1360px; under
+// 1000px an empty station folds to a 40px labelled slot (lamp, count, name)
+// and the stations holding work take the rest. Below sm the stations snap
+// one per screen and scroll sideways.
 const ROOMY = { rail: "24px", empty: "minmax(148px, 0.6fr)", wide: "minmax(256px, 1.4fr)", live: "minmax(180px, 1fr)" };
 const TIGHT = { rail: "12px", empty: "minmax(124px, 0.55fr)", wide: "minmax(216px, 1.4fr)", live: "minmax(156px, 1fr)" };
+const SLIM = { rail: "10px", empty: "40px", wide: "minmax(232px, 1.4fr)", live: "minmax(168px, 1fr)" };
 const NARROW = { rail: "18px", empty: "68vw", wide: "86vw", live: "86vw" };
 const template = (set: typeof ROOMY, emptyOf: (s: Station) => boolean) =>
   STATIONS.flatMap((s, i) => [...(i ? [set.rail] : []), emptyOf(s) ? set.empty : s.wide ? set.wide : set.live]).join(" ");
@@ -147,7 +150,9 @@ export function LinePage() {
       if (e.key === "ArrowLeft" || e.key === "h") return side(-1);
       if (e.key === "ArrowDown" || e.key === "j") return down(1);
       if (e.key === "ArrowUp" || e.key === "k") return down(-1);
-      const jump = Number(e.key);
+      // Shift and a digit jumps to a station. A bare digit belongs to the card
+      // under the cursor, which answers with it (DecisionAnswerControls).
+      const jump = e.shiftKey && /^Digit\d$/.test(e.code) ? Number(e.code.slice(5)) : 0;
       if (jump >= 1 && jump <= STATIONS.length) { e.preventDefault(); return setFocus({ col: jump - 1, row: 0 }); }
       if ((e.key === "c" || e.key === "C") && rows === 0) { e.preventDefault(); void copyText(allEmpty ? FIRST_SIGNAL : STATIONS[col].cmd, "Command copied"); return; }
       if (e.key === "Enter" && !cardTakesReturn) {
@@ -172,6 +177,7 @@ export function LinePage() {
   const grid = {
     "--line-cols": template(ROOMY, (s) => empty(s.key)),
     "--line-cols-tight": template(TIGHT, (s) => empty(s.key)),
+    "--line-cols-slim": template(SLIM, (s) => empty(s.key)),
     "--line-cols-narrow": template(NARROW, (s) => empty(s.key)),
   } as CSSProperties;
 
@@ -181,36 +187,36 @@ export function LinePage() {
   const onFlowScroll = () => {
     const root = scroller.current;
     if (!root) return;
-    const mid = root.scrollLeft + root.clientWidth / 2;
+    // Rects, not offsetLeft: offsetLeft counts from the nearest positioned
+    // ancestor, which is outside the scroller and shifts with the layout.
+    const box = root.getBoundingClientRect();
+    const mid = box.left + box.width / 2;
     let best = 0;
     let bestGap = Infinity;
     root.querySelectorAll<HTMLElement>("[data-line-col]").forEach((el) => {
-      const gap = Math.abs(el.offsetLeft + el.offsetWidth / 2 - mid);
+      const r = el.getBoundingClientRect();
+      const gap = Math.abs(r.left + r.width / 2 - mid);
       if (gap < bestGap) { bestGap = gap; best = Number(el.dataset.lineCol); }
     });
     if (best !== shown) setShown(best);
   };
   const showStation = (i: number) => {
     setFocus({ col: i, row: 0 });
+    setShown(i);
     scroller.current?.querySelector<HTMLElement>(`[data-line-col="${i}"]`)?.scrollIntoView({ block: "nearest", inline: "center", behavior: "smooth" });
   };
 
   return (
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
       <header className="shrink-0 px-4 sm:px-6 pt-5 pb-4 flex flex-col gap-3">
-        <div className="flex items-center gap-3 flex-wrap">
+        <div className="flex items-baseline gap-3 min-w-0">
           <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
-          <span className="hidden md:inline text-[11px] text-sol-text-dim leading-none">a signal in the world to a shipped, watched change</span>
-          <div className="ml-auto flex items-center gap-3 text-[11px] text-sol-text-dim">
-            <Link href="/questions" className="hover:text-sol-text">all questions</Link>
-            <Link href="/routines" className="hover:text-sol-text">workflows</Link>
-          </div>
+          <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
         </div>
-        <Headline parts={lineHeadline(flow, now)} />
-        {!allEmpty && <Throughput t={flow.throughput} />}
+        {!allEmpty && <><Headline parts={lineHeadline(flow, now)} /><Throughput t={flow.throughput} /></>}
       </header>
 
-      {allEmpty ? <Onboarding focusedCol={col} now={now} states={STATIONS.map((s) => columns[s.key].state)} onFocus={(i) => setFocus({ col: i, row: 0 })} /> : (<>
+      {allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} /> : (<>
       <nav className="line-tabs sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations">
         {STATIONS.map((s, i) => (
           <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
@@ -230,6 +236,7 @@ export function LinePage() {
                 column={columns[s.key]}
                 empty={empty(s.key)}
                 moved={flow.moved[s.key as keyof typeof flow.moved] ?? 0}
+                week={s.key === "sense" ? flow.throughput.signalsIn : undefined}
                 focused={col === i}
                 now={now}
                 onFocus={() => setFocus({ col: i, row: 0 })}
@@ -261,7 +268,7 @@ export function LinePage() {
 
                 {s.key === "awaiting" && !empty("awaiting") && (<div className="space-y-2">
                       {flow.awaiting.items.map((d, r) => (
-                        <div key={d._id} data-line-row={r} className={cn("rounded-lg transition-shadow", at("awaiting", r) && "ring-2 ring-sol-yellow/40")}>
+                        <div key={d._id} data-line-row={r} data-focused={at("awaiting", r) ? "true" : undefined} className="line-card rounded-lg">
                           <DecisionCompactCard decision={d as SessionDecisionItem} keys={at("awaiting", r)} />
                         </div>
                       ))}
@@ -277,15 +284,19 @@ export function LinePage() {
       </div>
       </>)}
 
-      <footer className="shrink-0 hidden sm:flex items-center gap-4 px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
-        <span className="flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> stations</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> items</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">1</KeyCap>-<KeyCap size="xs">{String(STATIONS.length)}</KeyCap> jump</span>
-        <span className="ml-auto flex items-center gap-4" data-line-hint>
+      <footer className="shrink-0 flex items-center gap-4 px-4 sm:px-6 py-2 border-t border-sol-border/30 text-[11px] text-sol-text-dim">
+        <span className="hidden sm:flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> stations</span>
+        <span className="hidden sm:flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> items</span>
+        <span className="line-hint-jump hidden sm:flex items-center gap-1"><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">1</KeyCap>-<KeyCap size="xs">{String(STATIONS.length)}</KeyCap> jump</span>
+        <span className="ml-auto hidden sm:flex items-center gap-4" data-line-hint>
           {focusedCard && options > 0 && <span className="text-sol-yellow/90 flex items-center gap-1"><KeyCap size="xs">1</KeyCap>{options > 1 && <>-<KeyCap size="xs">{String(options)}</KeyCap></>} answer the card</span>}
           {rows > 0
             ? <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> {cardTakesReturn ? "submit" : "open"}</span>
             : <span className="flex items-center gap-1"><KeyCap size="xs">c</KeyCap> {allEmpty ? "copy the first command" : "copy the command"}</span>}
+        </span>
+        <span className="ml-auto sm:ml-0 flex items-center gap-3 pl-3 sm:border-l border-sol-border/40">
+          <Link href="/questions" className="hover:text-sol-text">all questions</Link>
+          <Link href="/routines" className="hover:text-sol-text">workflows</Link>
         </span>
       </footer>
     </div>
@@ -304,7 +315,7 @@ const TONE: Record<HeadlinePart["tone"], string> = {
 
 function Headline({ parts }: { parts: HeadlinePart[] }) {
   return (
-    <p className="line-headline text-[19px] leading-snug" data-line-headline>
+    <p className="line-headline" data-line-headline>
       {parts.map((p, i) => (
         <Fragment key={i}>
           {i > 0 && <span className="text-sol-text-dim">, </span>}
@@ -321,28 +332,51 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
   if (!moved) {
     return <p className="text-[11px] text-sol-text-dim" data-line-throughput="quiet">No signals this week. Throughput appears once the line moves.</p>;
   }
-  const cells: Array<{ label: string; value: number | string | null; tone?: string; tip?: string; spark?: number[] }> = [
+  // The two numbers a founder reads first lead; the flow counts sit quieter.
+  const lead: Array<{ label: string; value: string | number | null; tip: string; spark?: number[] }> = [
+    { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, tip: "Causes shipped in the last 7 days, per day" },
+    { label: "median signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
+  ];
+  const flowCells: Array<{ label: string; value: number; tone?: string; spark: number[] }> = [
     { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn },
     { label: "causes opened", value: t.opened, spark: t.daily.opened },
     { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved },
-    { label: "shipped", value: t.shipped, spark: t.daily.shipped },
-    { label: "reopened in watch", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
-    { label: "signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip) },
-    { label: "tokens per ship", value: t.tokensPerShip === null ? null : formatTokens(Math.round(t.tokensPerShip)), tip: "Cost per shipped change, in run tokens: runs record tokens, not dollars, so tokens stand in for cost" },
+    { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
   ];
   return (
-    <div className="line-meter rounded-xl grid grid-cols-4 lg:grid-cols-7 overflow-hidden" data-line-throughput>
-      {cells.map((c) => (
-        <div key={c.label} className="line-meter-cell px-3 sm:px-4 py-2.5 min-w-0" title={c.tip ?? (c.spark ? `${c.label}, per day over the last 7 days` : c.label)}>
-          <div className="h-[19px] flex items-end gap-2">
-            {c.value === null
-              ? <span className="text-[11px] text-sol-text-dim whitespace-nowrap">none yet</span>
-              : <span className={cn("line-num text-[19px] text-sol-text", c.tone)} data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
-            {c.spark && c.value !== 0 && <Spark values={c.spark} bar={3} height={14} className="ml-auto self-end" label={`${c.label} per day, last 7 days`} />}
+    <div className="line-meter rounded-xl" data-line-throughput>
+      <div className="line-meter-lead">
+        {lead.map((c) => (
+          <div key={c.label} className="line-meter-big min-w-0" title={c.tip}>
+            <div className="flex items-end gap-2.5 h-[30px]">
+              {c.value === null
+                ? <span className="text-[13px] text-sol-text-dim whitespace-nowrap pb-0.5">none yet</span>
+                : <span className="line-num line-display-num text-[32px] text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
+              {c.spark && c.value !== 0 && <Spark values={c.spark} bar={4} height={20} className="mb-0.5" label={`${c.label}, per day`} />}
+            </div>
+            <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}</div>
           </div>
-          <div className="mt-1 text-[11px] text-sol-text-dim truncate">{c.label}</div>
+        ))}
+      </div>
+      <div className="line-meter-flow">
+        {flowCells.map((c) => (
+          <div key={c.label} className="min-w-0" title={`${c.label} this week, per day`}>
+            <div className="flex items-center gap-1.5">
+              <span className={cn("line-num text-[15px] text-sol-text-muted", c.tone)} data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>
+              {c.value !== 0 && <Spark values={c.spark} bar={2} height={10} label={`${c.label} per day`} />}
+            </div>
+            <div className="mt-1 text-[11px] text-sol-text-dim truncate">{c.label}</div>
+          </div>
+        ))}
+        <div className="min-w-0" title="Cost per shipped change, in run tokens. Runs record tokens, not dollars.">
+          <div className="flex items-baseline gap-1">
+            {t.tokensPerShip === null
+              ? <span className="text-[11px] text-sol-text-dim">none yet</span>
+              : <><span className="line-num text-[15px] text-sol-text-muted">{formatTokens(Math.round(t.tokensPerShip))}</span><span className="text-[11px] text-sol-text-dim">tokens</span></>}
+          </div>
+          <div className="mt-1 text-[11px] text-sol-text-dim truncate">cost per ship</div>
         </div>
-      ))}
+      </div>
     </div>
   );
 }
@@ -353,12 +387,22 @@ function stateWords(state: StageState, now: number): string {
   const since = state.since ? formatElapsed(state.since, now) : null;
   if (state.kind === "idle") return state.why;
   if (state.kind === "ask") return `${state.why}${since ? `, oldest ${since}` : ""}`;
-  if (state.kind === "paused") return `paused${since ? ` ${since}` : ""} · ${state.why}`;
-  if (state.kind === "failing") return `failing${since ? ` ${since}` : ""} · ${state.why}`;
-  if (state.kind === "starved") return `starved · ${state.why}${since ? `, last ${since} ago` : ""}`;
-  if (state.kind === "clear") return `clear · ${state.why}`;
-  return `running · ${state.why}`;
+  if (state.kind === "paused") return `paused${since ? ` ${since}` : ""}: ${state.why}`;
+  if (state.kind === "failing") return `failing${since ? ` ${since}` : ""}: ${state.why}`;
+  if (state.kind === "starved") return `starved: ${state.why}${since ? `, last ${since} ago` : ""}`;
+  if (state.kind === "clear") return `clear: ${state.why}`;
+  return `running: ${state.why}`;
 }
+
+/** The short tag beside the lamp; the why lives in its tooltip, and for a
+ *  stage in trouble in one line at the foot of the column. */
+function stateTag(state: StageState, now: number): string {
+  const since = state.since ? ` ${formatElapsed(state.since, now)}` : "";
+  if (state.kind === "ask") return `waiting${since}`;
+  if (state.kind === "paused" || state.kind === "starved" || state.kind === "failing") return `${state.kind}${since}`;
+  return state.kind;
+}
+const TROUBLE = new Set<StageState["kind"]>(["paused", "starved", "failing"]);
 
 const STATE_TONE: Record<StageState["kind"], string> = {
   failing: "text-sol-red",
@@ -370,13 +414,18 @@ const STATE_TONE: Record<StageState["kind"], string> = {
   running: "text-sol-text-muted",
 };
 
-function StationColumn({ station, index, column, empty, moved, focused, now, onFocus, children }: {
+/** What a station's count measures, said beside it. */
+const COUNT_UNIT: Partial<Record<StationKey, string>> = { sense: "in 24h", closed: "this week" };
+
+function StationColumn({ station, index, column, empty, moved, week, focused, now, onFocus, children }: {
   station: Station;
   index: number;
   column: Column<unknown>;
   empty: boolean;
   /** What entered this week; the rail chip says it too where there is room. */
   moved: number;
+  /** Sense only: the week's signals, said dimly beside the 24h count. */
+  week?: number;
   focused: boolean;
   now: number;
   onFocus: () => void;
@@ -384,6 +433,10 @@ function StationColumn({ station, index, column, empty, moved, focused, now, onF
 }) {
   const state = column.state;
   const words = stateWords(state, now);
+  const countTip = [
+    moved > 0 ? `${moved} entered this week` : null,
+    column.oldestAt ? `oldest ${formatElapsed(column.oldestAt, now)}` : null,
+  ].filter(Boolean).join(", ");
   return (
     <section
       data-line-col={index}
@@ -395,30 +448,39 @@ function StationColumn({ station, index, column, empty, moved, focused, now, onF
       className="line-col group relative rounded-[10px] flex flex-col min-h-0 min-w-0 snap-center"
       style={{ "--i": index } as CSSProperties}
     >
-      <div className="line-col-head shrink-0 px-3 pt-3 pb-2.5 border-b border-sol-border/25">
-        <div className="flex items-start gap-2 h-[40px]">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-1.5 h-[24px]">
-              <KeyCap size="xs">{String(index + 1)}</KeyCap>
-              <h2 className="text-[13px] font-medium text-sol-text whitespace-nowrap truncate">{station.name}</h2>
-            </div>
-            <div className="text-[11px] text-sol-text-dim whitespace-nowrap truncate">
-              {station.sub ?? (moved > 0 ? `+${moved} in 7d` : "")}
-            </div>
-          </div>
-          <div className="shrink-0 text-right">
-            <div className={cn("line-num line-col-count", state.kind === "ask" ? "text-[28px] text-sol-yellow" : "text-[19px] pt-[3px] text-sol-text")} data-zero={empty ? "true" : undefined}>{column.count}</div>
-            {column.oldestAt && <div className="mt-0.5 text-[11px] text-sol-text-dim whitespace-nowrap" title="the oldest item here">oldest {formatElapsed(column.oldestAt, now)}</div>}
-          </div>
+      {/* Folded: an empty station in a tight flow is a slot that still says
+          what it is, how it stands, and how much it holds. */}
+      <div className="line-col-slim" title={`${station.name}, ${words}. ${station.what}`} aria-label={`${station.name}, ${column.count}`}>
+        <span className="line-num line-display-num text-[17px]" data-zero="true">{column.count}</span>
+        <span className="line-lamp" data-kind={state.kind} />
+        <span className="line-col-slim-name text-[11px] text-sol-text-muted">{station.name}</span>
+      </div>
+      <div className="line-col-head shrink-0 px-3 pt-3 pb-3 border-b border-sol-border/25">
+        <div className="flex items-center h-[24px] min-w-0">
+          <h2 className="text-[13px] font-medium text-sol-text whitespace-nowrap">
+            <span className="line-name-full">{station.name}</span>
+            <span className="line-name-short">{station.short}</span>
+          </h2>
         </div>
-        <div className="mt-1 flex items-start gap-2 text-[11px] h-[30px]" data-line-state title={words}>
-          <span className="line-lamp mt-[4px]" data-kind={state.kind} />
-          <span className={cn("leading-[15px] min-w-0 line-clamp-2", STATE_TONE[state.kind])}>{words}</span>
+        <div className="mt-2 flex items-end gap-2 min-w-0">
+          <span className={cn("line-num line-display-num line-col-count text-[34px]", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
+          {COUNT_UNIT[station.key] && (
+            <span className="pb-[3px] text-[11px] text-sol-text-dim whitespace-nowrap min-w-0 truncate">
+              {COUNT_UNIT[station.key]}{week !== undefined && week !== column.count && <span className="line-count-of" title={`${week} signals this week`}> of {week} wk</span>}
+            </span>
+          )}
+          <span className={cn("ml-auto pb-[3px] flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-line-state title={words}>
+            <span className="line-lamp" data-kind={state.kind} />
+            <span className="truncate">{stateTag(state, now)}</span>
+          </span>
         </div>
       </div>
-      <div className={cn("min-h-0 flex-1 p-2", !empty && "overflow-y-auto")} data-line-body>
+      <div className={cn("line-col-body min-h-0 flex-1 p-2", !empty && "overflow-y-auto")} data-line-body>
         {children}
       </div>
+      {TROUBLE.has(state.kind) && (
+        <div className={cn("line-col-why shrink-0 px-3 py-2 text-[11px] truncate", STATE_TONE[state.kind])} title={words} data-line-why>{state.why}</div>
+      )}
     </section>
   );
 }
@@ -443,60 +505,86 @@ function Empty({ station, focused, after }: { station: Station; focused: boolean
   );
 }
 
-/** A command chip that wraps at spaces, never clips, with a copy button
- *  inside it: shown on hover, or always when the station holds the cursor. */
+/** A command split where it may wrap: the words before the first flag, then
+ *  each `--flag value` pair whole. Quoted values stay one token. */
+function cmdChunks(cmd: string): string[] {
+  const tokens = cmd.match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+  const chunks: string[] = [];
+  for (const t of tokens) {
+    const last = chunks.length - 1;
+    const pairs = last >= 0 && chunks[last].startsWith("--") && !chunks[last].includes(" ") && !t.startsWith("--");
+    if (pairs) chunks[last] += ` ${t}`;
+    else chunks.push(t);
+  }
+  return chunks;
+}
+
+/** A command chip that wraps between words and flag pairs, and splits a pair
+ *  at its space only when the pair alone is wider than the chip; a token never
+ *  splits, not even at its hyphens. The copy button floats in the first line,
+ *  so the lines below it get the chip's full width: shown on hover, or always
+ *  when the station holds the cursor. */
 function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: boolean }) {
   return (
     <div className={cn("line-cmd group/cmd relative rounded-md min-w-0", primary && "line-cmd-primary")} data-line-cmd>
-      <code className={cn("block whitespace-pre-wrap break-normal [overflow-wrap:anywhere] pl-2 pr-7 py-1.5 leading-[16px]", primary ? "text-[13px] text-sol-text" : "text-[11px] text-sol-text-muted")}>{cmd}</code>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); void copyText(cmd, "Command copied"); }}
-        title="Copy the command"
-        aria-label="Copy the command"
-        className={cn(
-          "absolute top-1 right-1 w-5 h-5 rounded flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-opacity",
-          shown || primary ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-hover/cmd:opacity-100 focus-visible:opacity-100",
-        )}
-      >
-        <Copy className="w-3 h-3" />
-      </button>
+      <code className={cn("block whitespace-normal break-normal px-2 py-1.5 leading-[16px]", primary ? "text-[13px] text-sol-text" : "text-[11px] text-sol-text-muted")}>
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); void copyText(cmd, "Command copied"); }}
+          title="Copy the command"
+          aria-label="Copy the command"
+          className={cn(
+            "line-cmd-copy float-right ml-1 -mr-1 w-5 h-4 rounded flex items-center justify-center text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-opacity",
+            shown || primary ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-hover/cmd:opacity-100 focus-visible:opacity-100",
+          )}
+        >
+          <Copy className="w-3 h-3" />
+        </button>
+        {cmdChunks(cmd).map((c, i) => (
+          <Fragment key={i}>
+            {i > 0 && " "}
+            <span className="line-cmd-chunk">{c.split(" ").map((t, j) => <Fragment key={j}>{j > 0 && " "}<span className="whitespace-nowrap">{t}</span></Fragment>)}</span>
+          </Fragment>
+        ))}
+      </code>
     </div>
   );
 }
 
-/** The line before anything has reached it: the six stations as one short
- *  strip and the first command. The columns grow once something flows. */
-function Onboarding({ focusedCol, states, now, onFocus }: { focusedCol: number; states: StageState[]; now: number; onFocus: (i: number) => void }) {
+/** The line before anything has reached it: the first command, then the six
+ *  stations as a faint skeleton of the flow they will become. The columns
+ *  fill with work once something flows. */
+function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: number) => void }) {
   return (
-    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-6" data-line-onboarding>
-      <ol className="line-band rounded-xl grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-6 overflow-hidden">
+    <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col gap-5" data-line-onboarding>
+      <div className="line-start shrink-0 max-w-[760px] rounded-xl p-5 sm:p-6">
+        <div className="line-start-title text-sol-text">File the first signal.</div>
+        <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
+          A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
+          Sentry, PostHog and evals file their own once connected.
+        </p>
+        <div className="mt-5"><Cmd cmd={FIRST_SIGNAL} primary /></div>
+      </div>
+      <ol className="line-ghost flex-1" aria-label="Stations">
         {STATIONS.map((s, i) => (
           <li
             key={s.key}
             data-line-col={i}
             data-focused={focusedCol === i ? "true" : undefined}
             onMouseDown={() => onFocus(i)}
-            className="line-band-cell relative p-3 min-w-0"
+            className="line-ghost-col relative rounded-[10px] min-w-0"
             style={{ "--i": i } as CSSProperties}
           >
-            <div className="flex items-center gap-1.5">
-              <KeyCap size="xs">{String(i + 1)}</KeyCap>
-              <span className="text-[13px] font-medium text-sol-text">{s.name}</span>
-              <span className="line-lamp ml-auto" data-kind={states[i].kind} title={stateWords(states[i], now)} />
+            <div className="flex items-center h-[24px]">
+              <span className="text-[13px] font-medium text-sol-text whitespace-nowrap">{s.name}</span>
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-sol-text-muted">{s.what}</p>
+            <p className="line-ghost-what mt-2 text-[11px] leading-relaxed text-sol-text-muted">{s.what}</p>
+            <div className="line-ghost-rows" aria-hidden>
+              <span /><span /><span />
+            </div>
           </li>
         ))}
       </ol>
-      <div className="line-start mt-5 max-w-[720px] rounded-xl p-4 sm:p-5">
-        <div className="text-[19px] text-sol-text leading-snug">File the first signal.</div>
-        <p className="mt-1.5 text-[13px] text-sol-text-muted leading-relaxed">
-          A signal is one thing someone saw. It opens a cause, the line builds a fix, and you answer one card.
-          Finders like Sentry, PostHog and evals file signals on their own once connected.
-        </p>
-        <div className="mt-4"><Cmd cmd={FIRST_SIGNAL} primary /></div>
-      </div>
     </div>
   );
 }
@@ -537,11 +625,13 @@ function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 2
 
 function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: number; focused: boolean; index: number; href: string }) {
   return (
-    <RowLink href={href} focused={focused} index={index}>
-      <div className="flex items-center gap-2">
+    <RowLink href={href} focused={focused} index={index} className={src.day === 0 ? "line-row-quiet" : undefined}>
+      <div className="flex items-center gap-2 min-w-0">
         <span className="text-[13px] text-sol-text">{src.source}</span>
         <span className="text-[11px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>
-        <span className="ml-auto shrink-0 text-[13px] text-sol-text tabular-nums">{src.day}<span className="text-sol-text-dim"> / {src.week}</span></span>
+        <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap" title={`${src.day} in the last 24 hours, ${src.week} this week`}>
+          <span className={cn("text-[13px]", src.day > 0 ? "text-sol-text" : "text-sol-text-dim")}>{src.day}</span> today · {src.week} wk
+        </span>
       </div>
       <div className="mt-1.5"><Spark values={src.spark} /></div>
       <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>
@@ -561,21 +651,22 @@ const GOAL_TONE: Record<string, string> = {
 
 function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow; rank?: number; max: number; focused: boolean; index: number; muted?: boolean }) {
   const t = row.task;
+  // The row is a scan line: rank, title, signal count and goal. The rest of
+  // the triage sits on hover and on the task page.
+  const tip = [t.short_id, t.category, t.risk && t.risk !== "low" ? `${t.risk} risk` : null, `priority ${row.score.toFixed(1)}`].filter(Boolean).join(" · ");
+  const unready = t.readiness && t.readiness !== "ready";
   return (
     <RowLink href={taskHref(t)} focused={focused} index={index} className={muted ? "opacity-70" : undefined}>
-      <div className="flex items-start gap-2">
+      <div className="flex items-start gap-2" title={tip}>
         {rank !== undefined && <span className="line-num text-[13px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
       </div>
-      <div className={cn("mt-1.5 flex items-center gap-1.5 flex-wrap text-[11px]", rank !== undefined && "pl-6")}>
-        <span className="text-sol-text tabular-nums" title="signals attached">×{row.signals}</span>
-        <span className={cn("px-1.5 py-px rounded border max-w-[10rem] truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref || "the ground node has not run"}>{row.goal.label}</span>
-        {t.category && <span className="text-sol-text-dim">{t.category}</span>}
-        {t.risk && t.risk !== "low" && <span className="text-sol-text-dim">· {t.risk}</span>}
-        {t.readiness && t.readiness !== "ready" && <span className="text-sol-yellow" title={t.readiness_note ?? undefined}>· {t.readiness.replace("_", " ")}</span>}
-        <span className="ml-auto text-sol-text-dim font-mono">{t.short_id}</span>
+      <div className={cn("mt-1.5 flex items-center gap-1.5 text-[11px] min-w-0", rank !== undefined && "pl-6")}>
+        <span className="text-sol-text tabular-nums shrink-0" title="signals attached">×{row.signals}</span>
+        <span className={cn("px-1.5 py-px rounded border min-w-0 truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref || "the ground node has not run"}>{row.goal.label}</span>
+        {unready && <span className="ml-auto shrink-0 text-sol-yellow" title={t.readiness_note ?? undefined}>{t.readiness!.replace("_", " ")}</span>}
       </div>
-      <div className={cn("line-bar mt-1.5 h-[3px] rounded-full overflow-hidden", rank !== undefined && "ml-6")} title={`priority ${row.score.toFixed(1)}`}>
+      <div className={cn("line-bar mt-2 h-[3px] rounded-full overflow-hidden", rank !== undefined && "ml-6")}>
         <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.score / (max || 1)) * 100))}%` }} />
       </div>
     </RowLink>

@@ -13,6 +13,7 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "Element", 
 let fetched: unknown = undefined;
 mock.module("../../../hooks/useMissingSessionRow", () => ({
   useMissingSessionRow: (id: string | null) => (id ? fetched : undefined),
+  useMissingSessionLookup: (id: string | null) => ({ row: id ? fetched : undefined, failed: false }),
 }));
 mock.module("../../../app/inbox/QueuePageClient", () => ({
   SessionPage: ({ sessionId }: { sessionId: string }) => <div data-conversation={sessionId} />,

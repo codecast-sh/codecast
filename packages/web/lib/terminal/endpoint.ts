@@ -77,6 +77,16 @@ const inflight = new Map<string, Promise<TerminalEndpoint | null>>();
  *    local-network permission. Restarting the daemon fixes neither.
  *  - "other-device": a targeted lookup missed; the pane lives elsewhere. */
 export type DiscoveryFailure = "none" | "no-devices" | "daemon-slow" | "probe-failed" | "other-device";
+/** Why a page on the loopback bridge has nothing to show: discovery failed, or
+ *  the daemon it found is too old, refused, or the request itself failed. */
+export type LoopbackUnreachableReason = DiscoveryFailure | "old-daemon" | "refused" | "error";
+
+/** A route call failed after discovery found the daemon. Only a 404 means the
+ *  daemon predates the route; reporting anything else as "too old" sends people
+ *  to update a daemon that is already current. */
+export function loopbackFailureReason(status: number): LoopbackUnreachableReason {
+  return status === 404 ? "old-daemon" : status ? "refused" : "error";
+}
 let lastFailure: DiscoveryFailure = "none";
 export function lastDiscoveryFailure(): DiscoveryFailure {
   return lastFailure;

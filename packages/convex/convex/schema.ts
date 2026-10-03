@@ -3859,6 +3859,12 @@ export default defineSchema({
     // When the team's daily prose cap first left a story or the edition of
     // this day unwritten. Independent of status: a written edition can be capped.
     capped_at: v.optional(v.number()),
+    // Week editions (scope "week", date an ISO week `2026-W40`, changesWeek.ts):
+    // the week's biggest stories by key, lead first, and its area totals.
+    top_story_keys: v.optional(v.array(v.string())),
+    area_totals: v.optional(v.array(v.object({ area: v.string(), stories: v.number(), files: v.number() }))),
+    // The week build scheduled by a day edition finalizing, while it waits.
+    scheduled_id: v.optional(v.id("_scheduled_functions")),
   })
     .index("by_user_scope_date", ["user_id", "scope", "date"])
     .index("by_team_scope_date", ["team_id", "scope", "date"])
@@ -3909,6 +3915,9 @@ export default defineSchema({
       v.literal("failed"),
       v.literal("skipped"),
     ),
+    // Prose calls that failed since the inputs last moved; a failed story is
+    // retried until this reaches PROSE_ATTEMPTS (changes.ts).
+    prose_attempts: v.optional(v.number()),
     inputs_hash: v.string(),
     generated_at: v.optional(v.number()),
     model: v.optional(v.string()),
@@ -6094,6 +6103,13 @@ export default defineSchema({
     // shows for a beat after somebody switched transcription back on by hand
     // predates their run and must not end it (autoScribe).
     transcribe_off_at: v.optional(v.number()),
+    // When the last seat left this huddle's room (calls.leaveRoom). The
+    // huddle's grace dates from it when no live record carries an idle stamp
+    // of its own (transcription off, or nobody scribing yet), so a teammate
+    // who reloads the tab comes back to the same huddle, with its grants and
+    // its guests, whether or not anything was transcribing it
+    // (transcripts.withinHuddleGrace). Dies with the row like the rest.
+    emptied_at: v.optional(v.number()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -6136,6 +6152,14 @@ export default defineSchema({
     expires_at: v.number(),
     revoked_at: v.optional(v.number()),
     revoked_by: v.optional(v.id("users")),
+    // How many people from this link the room has turned away or put out,
+    // counted as it happens rather than by reading every row the link ever
+    // made: past one, the door offers to turn the link off.
+    turned_away: v.optional(v.number()),
+    // When the creator was last pushed about somebody waiting at an empty
+    // room on this link. Per link, not per guest: a leaked link mints new
+    // guests at will, and must not page its creator once for each.
+    creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
     .index("by_room", ["room_key"]),
@@ -6177,12 +6201,32 @@ export default defineSchema({
     // Why a `left` row left: they walked out, or the huddle they were let
     // into ended (an admission is for one huddle). CallGuestLeftReason.
     left_reason: v.optional(callGuestLeftReasonValidator),
-    // When the link's creator was last told this guest was waiting at an
-    // empty room (one push per arrival, not one per beat).
+    // When the link's creator was last told somebody was waiting on this
+    // link at an empty room, stamped on each guest that push covered, so
+    // their page says "we let them know" only when somebody was.
     creator_told_at: v.optional(v.number()),
+    // When this row stopped letting the guest in (left, removed, denied).
+    // The minute sweep keeps checking the media room of a running huddle for
+    // a while after (by_settled), since LiveKit refreshes a connected
+    // client's token by itself and only a roster check puts it out.
+    settled_at: v.optional(v.number()),
+    // What the guest's last beat computed for their page ("closed:quiet",
+    // "admitted"), written only when it moves. getGuestState answers from the
+    // clock too (a link's expiry, a huddle's grace), and a query re-runs only
+    // when a row it read changes: this is that change.
+    beat_view: v.optional(v.string()),
+    // When this admission was last seen in the media room: a beat from a page
+    // connected to it, or the roster check finding the identity in LiveKit.
+    // Cleared on each admission, so a place let go with none is "not_joined"
+    // rather than "lapsed" (the guest never came in, nothing dropped).
+    media_seen_at: v.optional(v.number()),
   })
-    .index("by_room_status", ["room_key", "status"])
-    .index("by_status", ["status"])
+    // Every read of a room's door or roster is bounded by the lease
+    // (last_seen), so rows from closed pages cost nothing to the reads that
+    // run on every beat, however many a leaked link has made.
+    .index("by_room_status_seen", ["room_key", "status", "last_seen"])
+    .index("by_status_seen", ["status", "last_seen"])
+    .index("by_settled", ["settled_at"])
     .index("by_link", ["link_id"]),
 
   // Which calls a guest was in: one row per guest per call record, written
@@ -6456,9 +6500,11 @@ export default defineSchema({
     source_message_id: v.optional(v.id("messages")),
     // Set when this row is something the room SAW rather than something
     // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
-    // "transcribe_off" | "record_on" | "record_off" | "record_deleted".
-    // `user_id` is who did it (the person who added or removed the agent, or
-    // pressed the transcription or recording switch); an agent event
+    // "transcribe_off" | "record_on" | "record_off" | "record_deleted" |
+    // "guest_admitted" | "guest_removed".
+    // `user_id` is who did it (the person who added or removed the agent,
+    // pressed the transcription or recording switch, or let a guest in or
+    // put one out, the guest named by event_guest_name); an agent event
     // also carries `agent_conversation_id`. `text` is empty, except a
     // recording that failed, which carries the failure in plain words.
     // Written only by callChat.postEvent; never relayed to the fed sessions.
@@ -6470,7 +6516,8 @@ export default defineSchema({
     event_reason: v.optional(v.string()),
     // A guest did it (pressed Stop): the name the room knew them by. The row
     // is owned by the run's presser, since a line needs a user, and is shown
-    // as the guest's.
+    // as the guest's. On guest_admitted / guest_removed it is the guest the
+    // doorkeeper (user_id) let in or put out.
     event_guest_name: v.optional(v.string()),
     // The huddle this line was said in: the room's live transcript when it
     // was written (callChat.insertRoomRow), or the one a line typed before
@@ -7229,7 +7276,8 @@ export default defineSchema({
   // how many lines a role or session posted in a channel today, how many thread
   // roots it started, how many mention wakes a sender caused or a target took
   // this hour. `key` names what is counted ("post:<channel>:<poster>",
-  // "root:<channel>:<poster>", "mention_from:<user>", "mention_to:<target>")
+  // "root:<channel>:<poster>", "mention_from:<user>", "mention_from:<user>:<session>"
+  // for a mention reply charged to the replying session, "mention_to:<target>")
   // and `bucket` is the window it counts in (a UTC day "2026-09-12" or hour
   // "2026-09-12T14"). One row per (key, bucket); old buckets are simply never
   // read again. Separate from `rate_limits`, whose window is one minute.

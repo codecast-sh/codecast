@@ -6,8 +6,8 @@ import * as Accordion from "@radix-ui/react-accordion";
 import type { StoryRow } from "../../hooks/useSyncChanges";
 import { DiffStat, MetaDot } from "../entityDisplay";
 import { EvidenceDrawer } from "./EvidenceDrawer";
-import { AreaTag, FadeText, People, Provenance, ReleaseTag, SessionPills, StoryEdge, riskLine } from "./StoryParts";
-import { useStoryCtx } from "./storyContext";
+import { AreaTag, FadeText, People, Provenance, ReleaseTag, SessionPills, StoryEdge, hasProvenance, riskLine } from "./StoryParts";
+import { useStoryAttrs, useStoryCtx } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 
 export function LeadStory({ story, open }: { story: StoryRow; open: boolean }) {
@@ -16,13 +16,12 @@ export function LeadStory({ story, open }: { story: StoryRow; open: boolean }) {
   const risk = riskLine(story);
   const pending = !story.dek && story.prose_status === "pending";
   const commits = story.commit_shas.length;
+  const attrs = useStoryAttrs(key);
   return (
     <Accordion.Item
       value={key}
-      data-story-key={key}
-      data-flip-key={key}
-      data-focused={ctx.focused === key}
-      className="chg-story relative scroll-mt-6 overflow-hidden rounded-lg border border-sol-border/25 bg-sol-card px-5 py-4 shadow-sm"
+      {...attrs}
+      className="chg-story relative overflow-hidden rounded-lg border border-sol-border/25 bg-sol-card px-5 py-4 shadow-sm"
       onClick={() => ctx.pick(key)}
       style={{ opacity: ctx.dimmed.has(key) ? 0.35 : 1 }}
     >
@@ -37,32 +36,36 @@ export function LeadStory({ story, open }: { story: StoryRow; open: boolean }) {
         <FadeText text={story.headline} />
       </h2>
       <p className="chg-ui mt-1.5 min-h-[1.6em] text-[15px] leading-[1.6] text-sol-text/80">
-        {pending ? <span className="chg-pending-bar" aria-label="Notes pending" /> : <FadeText text={story.dek} />}
+        {pending ? <span className="chg-pending-bar" role="img" aria-label="Notes pending" /> : <FadeText text={story.dek} />}
       </p>
-      {risk && (
-        <p className="chg-ui mt-1 flex items-center gap-2 text-[13px] leading-[1.55] text-sol-text/70">
-          <span aria-hidden className="chg-hatch h-2.5 w-3.5 shrink-0 rounded-[2px]" />
-          {risk}
-        </p>
-      )}
       {story.body && (
         <p className="chg-ui mt-2 text-[15px] leading-[1.6] text-sol-text/80">
           <FadeText text={story.body} />
         </p>
       )}
+      {risk && (
+        <p className="chg-ui mt-2 flex items-start gap-2 text-[13px] leading-[1.55] text-sol-text/70">
+          <span aria-hidden className="chg-hatch mt-[0.45em] h-2.5 w-3.5 shrink-0 rounded-[2px]" />
+          {risk}
+        </p>
+      )}
       <div className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1">
-        <Provenance story={story} />
-        <MetaDot />
+        {hasProvenance(story) && (
+          <>
+            <Provenance story={story} />
+            <MetaDot />
+          </>
+        )}
         <span className="font-mono text-[11px] tabular-nums text-sol-text/55">
           {commits} {commits === 1 ? "commit" : "commits"}
         </span>
-        <DiffStat additions={story.insertions} deletions={story.deletions} className="text-[11px]" />
+        <DiffStat additions={story.insertions} deletions={story.deletions} className="text-[11px]" themed />
       </div>
       <Accordion.Header asChild>
         <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
           <People story={story} />
           <SessionPills story={story} />
-          <Accordion.Trigger className="ml-auto inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-sol-text/60 outline-none transition-colors hover:bg-sol-bg-alt hover:text-sol-text focus-visible:ring-1 focus-visible:ring-sol-border">
+          <Accordion.Trigger data-story-trigger className="ml-auto inline-flex items-center gap-1.5 rounded-md px-1.5 py-0.5 font-mono text-[11px] text-sol-text/60 outline-none transition-colors hover:bg-sol-bg-alt hover:text-sol-text focus-visible:ring-1 focus-visible:ring-sol-border">
             <KeyHint action="changes.evidence" />
             {open ? "hide evidence" : "evidence"}
           </Accordion.Trigger>
