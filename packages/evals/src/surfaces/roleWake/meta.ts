@@ -1,5 +1,5 @@
 import { AGENT_MODEL } from '../../models';
-import { surfaceSources, type SurfaceMeta } from '../../surface';
+import { OWN_BRIEF_EDIT, surfaceSources, type SurfaceMeta } from '../../surface';
 
 // What a role reads from its standing session, captured by `./evals snapshot`
 // and served back to the replay. The role's own `cast brief` is captured as
@@ -48,6 +48,6 @@ export const meta: SurfaceMeta = {
   maxUsdPerRep: 1.5,
   criteria: 'asks a person only what needs them; each line names evidence',
   ...STANDING_READS,
-  // A stashed session's frame tells the role to declare its state; that write is the frame's, not the role's choice.
-  allowedRefusals: ['^state '],
+  // A stashed session's frame tells the role to declare its state, and every check ends by saving its brief; those writes are the frame's, not the role's choice.
+  allowedRefusals: ['^state ', OWN_BRIEF_EDIT],
 };

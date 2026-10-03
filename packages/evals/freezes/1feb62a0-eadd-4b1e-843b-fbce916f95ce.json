@@ -1,0 +1,26 @@
+{
+  "name": "role-wake docs-session-message",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:docs-session-message"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:docs-session-message",
+    "title": "role-wake docs-session-message"
+  },
+  "asOf": "2026-09-28T11:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/docs-session-message.json"
+  },
+  "judge": "answers jx7bil3 with `cast send`, in its own words, choosing one of the two options and saying why in a sentence; it does not raise the question to Mara and does not end the turn without the reply",
+  "notes": null,
+  "tags": [],
+  "id": "1feb62a0-eadd-4b1e-843b-fbce916f95ce",
+  "createdAt": "2026-10-03T01:01:47.352Z"
+}

@@ -1,0 +1,39 @@
+{
+  "asOf": "2026-09-28T11:00:00.000Z",
+  "notes": "A lead woken by another session's message (org-staffing.md S25: a role wakes through triggers and messages, nothing else). jx7bil3, the session rewriting the billing page under the docs role, asks a question that is the lead's to answer, and says it cannot open its pull request until it hears back. The turn under test is the reply: the lead answers that session with `cast send jx7bil3`, not Mara, not its own thread, not silence. Catches the regression where a lead reads a session's message, writes its brief, and never answers.",
+  "judge": "answers jx7bil3 with `cast send`, in its own words, choosing one of the two options and saying why in a sentence; it does not raise the question to Mara and does not end the turn without the reply",
+  "label": {
+    "replies": [
+      "jx7bil3"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T11:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-903",
+      "routine": "message",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      },
+      "message": {
+        "from": "jx7bil3",
+        "body": "The billing page rewrite (ct-418) is ready to open as a pull request except for one call that is yours, not mine. The Starter and Team plans were retired on 2026-09-15, but customers already on them keep their price until renewal. Do I keep a short \"legacy plans\" section on the page (the two names and a line saying existing customers keep their terms, no prices), or drop the old plans from the page entirely? I cannot open the pull request until I know. Reply here with `cast send`."
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    }
+  }
+}

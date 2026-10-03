@@ -46,7 +46,7 @@ async function verifyPicker() {
   ));
   const q = <T extends Element = HTMLElement>(sel: string) => document.querySelector<T>(sel);
   const qa = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel));
-  const handleOf = (el: Element) => el.querySelector(".font-mono")!.textContent;
+  const handleOf = (el: Element) => `@${el.getAttribute("data-handle")}`;
   const key = (target: EventTarget, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
   const typeInto = (input: HTMLInputElement, value: string) => act(async () => {
     Object.getOwnPropertyDescriptor((dom.window as any).HTMLInputElement.prototype, "value")!.set!.call(input, value);
@@ -69,7 +69,7 @@ async function verifyPicker() {
   // with no standing session is listed but cannot be picked.
   const rows = qa("[role=option] button");
   assert.deepEqual(rows.map(handleOf), ["@growth", "@head-of-people", "@docs", "@platform"]);
-  assert.match(rows[0].textContent!, /EmberHead of Growth· Growth, SEO@growth/);
+  assert.match(rows[0].textContent!, /EmberHead of Growth· Growth, SEO$/);
   assert.ok(!rows[0].className.includes("opacity-70"), "my own role reads in full");
   assert.ok(rows[2].className.includes("opacity-70"), "another person's role is quieter");
   assert.ok((rows[2] as HTMLButtonElement).disabled, "no standing session: not pickable");
@@ -79,10 +79,10 @@ async function verifyPicker() {
 
   // The first reachable row is highlighted; ↓ steps over the dead seat.
   assert.equal(qa("[role=option][aria-selected=true]").length, 1);
-  assert.match(qa("[role=option][aria-selected=true]")[0].textContent!, /@growth/);
+  assert.equal(qa("[role=option][aria-selected=true] button")[0].getAttribute("data-handle"), "growth");
   await key(input, { key: "ArrowDown" });
   await key(input, { key: "ArrowDown" });
-  assert.match(qa("[role=option][aria-selected=true]")[0].textContent!, /@platform/);
+  assert.equal(qa("[role=option][aria-selected=true] button")[0].getAttribute("data-handle"), "platform");
 
   // Typing filters by any word in the line; ↵ picks and hands the caret back.
   await typeInto(input, "gro");
@@ -93,12 +93,18 @@ async function verifyPicker() {
   await render();
   assert.equal(q("input"), null);
   assert.match(q("[aria-label^='Sending to Ember']")!.textContent!, /EmberHead of Growth· Growth, SEO@growth/);
+  // Asking by handle shows the handles on the rows.
+  await key(dom.window, { altKey: true, code: "KeyR" });
+  await typeInto(q("input")!, "@head");
+  assert.match(qa("[role=option] button")[0].textContent!, /@head-of-people$/);
+  await key(q("input")!, { key: "Escape" });
+  await render();
 
   // ⌥R again reopens; Esc backs out, the pick stands.
   await key(dom.window, { altKey: true, code: "KeyR" });
   assert.ok(q("input"));
   await key(q("input")!, { key: "Escape" });
-  assert.equal(done, 2);
+  assert.equal(done, 3);
   await render();
   assert.equal(q("input"), null);
   assert.ok(q("[aria-label^='Sending to Ember']"));

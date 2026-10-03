@@ -17,8 +17,7 @@ import { composeDraftContent, findKeptComposeDraft, type ComposeInstance } from 
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { awaitUpload } from "../lib/pendingUploads";
 import { ComposeRolePicker } from "./ComposeRolePicker";
-import type { RoleRecipient } from "../lib/roleRecipients";
-import type { OptimisticImage } from "../store/inboxStore";
+import { sendRequestToRole, type GateImage, type RoleRecipient } from "../lib/roleRecipients";
 import { Minus, Maximize2, ChevronUp, X } from "lucide-react";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -269,27 +268,15 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")?.focus();
   }, []);
 
-  // The role path of a send. MessageInput's gate hands over the text and the
-  // images once it has emptied the composer; the message goes into the role's
-  // standing conversation exactly as the role page's Talk composer sends one
-  // (the same pending message `orgRoles.wake` enqueues), so the role learns
-  // who wrote and answers there with the session it started. The bubble
-  // paints at once with the previews; the send waits only for uploads still
-  // in flight. The standing id is re-read from the live tree, so a seat
-  // provisioned while the composer was open counts.
-  const wakeRole = useCallback(async (text: string, images?: Array<{ storageId?: string; previewUrl: string; mime: string; uploading: boolean }>) => {
+  // The role path of a send (lib/roleRecipients.sendRequestToRole):
+  // MessageInput's gate hands over the text and the images once it has
+  // emptied the composer, and the request goes into the role's standing
+  // conversation. Only a seat with none refuses, and the picker never offers one.
+  const wakeRole = useCallback(async (text: string, images?: GateImage[]) => {
     const r = recipientRef.current;
     if (!r) return;
-    const store = useInboxStore.getState();
-    const standingId = store.orgTree?.roles.find((x) => x._id === r.role._id)?.standing?.conversation_id ?? r.standingId;
-    if (!standingId) { toast.error(`${r.name} has no standing session yet`); return; }
-    const attached = images ?? [];
-    const optimistic: OptimisticImage[] = attached.map((img) => img.storageId
-      ? { media_type: img.mime, storage_id: img.storageId }
-      : { media_type: img.mime, preview_url: img.previewUrl, uploading: true });
-    const clientId = store.addOptimisticMessage(standingId, text, optimistic);
-    const ids = (await Promise.all(attached.map((img) => img.storageId ?? awaitUpload(img.previewUrl)))).filter((id): id is string => !!id);
-    useInboxStore.getState().sendMessage(standingId, text, ids.length ? ids : undefined, clientId);
+    const into = await sendRequestToRole(() => useInboxStore.getState(), r, text, images ?? [], awaitUpload);
+    if (!into) toast.error(`${r.name} has no standing session yet`);
   }, []);
 
   // Expanding a dock, restoring a collapsed one, or minimizing the modal all

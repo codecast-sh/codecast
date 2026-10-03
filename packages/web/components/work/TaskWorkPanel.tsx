@@ -5,7 +5,8 @@
 // work can be read and steered without leaving the task. The full transcript
 // is the session face, one click away in the WorkUnitBar above.
 
-import { useMemo } from "react";
+import { useContext, useMemo } from "react";
+import { InsideWorkUnit } from "../../lib/workUnit";
 import { Pin } from "lucide-react";
 import { MessageInput } from "../MessageInput";
 import { cleanUserMessage } from "../sessionMessage";
@@ -45,7 +46,13 @@ function tailSig(msgs: Turn[] | undefined): string {
   return last ? `${msgs!.length}:${last._id ?? ""}:${(last.content ?? "").length}` : "";
 }
 
-export function TaskWorkPanel({ session }: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
+export function TaskWorkPanel(props: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
+  // Stacked under the session's own transcript, the panel would repeat it.
+  if (useContext(InsideWorkUnit)) return null;
+  return <TaskWorkPanelInner {...props} />;
+}
+
+function TaskWorkPanelInner({ session }: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
   const now = useCoarseNow(30_000);
   const personifyAll = usePersonifyAll();
   const sig = useInboxStore((s) => {
@@ -108,6 +115,24 @@ export function TaskWorkPanel({ session }: { session: WorkUnitSession & { recent
           composerPlaceholder={`Message ${name}…`}
         />
       </div>
+    </section>
+  );
+}
+
+/** The same slot on a task nobody is working: the one move is to hand it to
+ *  an agent, which makes that session the task's owner. */
+export function TaskWorkEmpty({ onStart }: { onStart: () => void }) {
+  if (useContext(InsideWorkUnit)) return null;
+  return (
+    <section data-task-work className="mb-6 rounded-lg border border-dashed border-sol-border/50 px-3 py-2.5 flex items-center gap-3">
+      <span className="text-xs text-sol-text-dim flex-1">No session is working on this task.</span>
+      <button
+        type="button"
+        onClick={onStart}
+        className="h-6 px-2.5 rounded-md border border-sol-cyan/40 bg-sol-cyan/10 text-[11px] text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+      >
+        Hand to an agent
+      </button>
     </section>
   );
 }

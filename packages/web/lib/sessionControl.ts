@@ -1,5 +1,5 @@
 import { ArrowRightLeft, Split, Send } from "lucide-react";
-import { AGENT_LAUNCH_OPTIONS, canSessionBecomeAgent, cloudAgentProviderOfConversation, type ConvexAgentType } from "@codecast/shared/contracts";
+import { canSessionBecomeAgent, fromConvexAgentType, pinnedLaunchOptions, cloudAgentProviderOfConversation, type ConvexAgentType } from "@codecast/shared/contracts";
 
 // ── Moving a session ──────────────────────────────────────────────────────────
 //
@@ -38,13 +38,14 @@ export function sessionMoveVerbs(agentType: string | undefined, sessionId: strin
   return (Object.keys(MOVE_VERBS) as MoveVerb[]).filter((verb) => verb !== "switch" || canSwitchSessionAgent(agentType, sessionId, model));
 }
 
-/** The agent list for each verb from one session state. Exported for tests. */
-export function moveAgentOptions(agentType: string | undefined, messageCount: number | undefined): Record<MoveVerb, AgentOption[]> {
+/** The agent list for each verb from one session state: the viewer's pinned
+ *  agents (users.pinned_agents) plus the current one. Exported for tests. */
+export function moveAgentOptions(agentType: string | undefined, messageCount: number | undefined, pins?: readonly string[] | null): Record<MoveVerb, AgentOption[]> {
   const current = (agentType || "claude_code") as ConvexAgentType;
   const count = messageCount ?? 0;
   // Short, because it sits at the end of a row: the count is on the badge already.
   const cannotRebuild = "can't rebuild history";
-  const all = AGENT_LAUNCH_OPTIONS.map((a) => ({ type: a.convexType, label: a.label }));
+  const all = pinnedLaunchOptions(pins, fromConvexAgentType(current)).map((a) => ({ type: a.convexType, label: a.label }));
   return {
     switch: all.map<AgentOption>((a) =>
       a.type === current

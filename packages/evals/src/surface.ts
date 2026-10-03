@@ -37,6 +37,15 @@ export interface SurfaceMeta {
   allowedRefusals?: string[];
 }
 
+/**
+ * A REFUSED pattern for an agent writing its own brief (`cast brief edit -`):
+ * a role's turn ends by saving what it learned, and the harness note sends
+ * that save to `brief.md`, so a turn that also types the command did what its
+ * frame asked. Only its own: `--for` names another role's brief, and
+ * `brief @x edit` is not this command, so both stay refused.
+ */
+export const OWN_BRIEF_EDIT = '^(?!.*(?:^| )--for(?:[ =]|$))brief(?: --team[ =]\\S+)? edit(?: |$)';
+
 /** The directory a surface's code lives in: its id in camelCase. */
 export const surfaceDir = (id: string): string => id.replace(/-([a-z])/g, (_, c: string) => c.toUpperCase());
 

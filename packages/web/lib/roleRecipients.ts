@@ -5,6 +5,7 @@
 // come from the one reader every surface uses (shared/contracts/orgIdentity).
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import type { OrgRole } from "../components/org/orgTypes";
+import type { OptimisticImage } from "../store/inboxStore";
 
 export type RoleRecipient = {
   role: OrgRole;
@@ -83,4 +84,37 @@ export function filterRoleRecipients(list: readonly RoleRecipient[], query: stri
   return scored
     .sort((a, b) => (a.r.mine !== b.r.mine ? (a.r.mine ? -1 : 1) : b.score - a.score || a.r.name.localeCompare(b.r.name)))
     .map((x) => x.r);
+}
+
+export type GateImage = { storageId?: string; previewUrl: string; mime: string; uploading: boolean };
+export type RoleSendStore = {
+  orgTree: { roles: ReadonlyArray<Pick<OrgRole, "_id" | "standing">> } | null | undefined;
+  addOptimisticMessage: (convId: string, content: string, images?: OptimisticImage[]) => string;
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+};
+
+/** The role path of a send: the request goes into the role's standing
+ *  conversation exactly as the role page's Talk composer sends one (the same
+ *  pending message `orgRoles.wake` enqueues), so the role learns who wrote and
+ *  answers there with the session it started. The bubble paints at once with
+ *  the previews; the send waits only for uploads still in flight. The standing
+ *  id is re-read from the live tree, so a seat provisioned while the composer
+ *  was open counts. Returns the conversation it went into, or null when the
+ *  seat has no standing session. */
+export async function sendRequestToRole(
+  store: () => RoleSendStore,
+  r: RoleRecipient,
+  text: string,
+  images: GateImage[],
+  awaitUpload: (previewUrl: string) => Promise<string | null>,
+): Promise<string | null> {
+  const standingId = store().orgTree?.roles.find((x) => x._id === r.role._id)?.standing?.conversation_id ?? r.standingId;
+  if (!standingId) return null;
+  const optimistic: OptimisticImage[] = images.map((img) => img.storageId
+    ? { media_type: img.mime, storage_id: img.storageId }
+    : { media_type: img.mime, preview_url: img.previewUrl, uploading: true });
+  const clientId = store().addOptimisticMessage(standingId, text, optimistic);
+  const ids = (await Promise.all(images.map((img) => img.storageId ?? awaitUpload(img.previewUrl)))).filter((id): id is string => !!id);
+  store().sendMessage(standingId, text, ids.length ? ids : undefined, clientId);
+  return standingId;
 }

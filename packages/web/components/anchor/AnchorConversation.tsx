@@ -126,7 +126,10 @@ export function AnchorOnboarding({ compact }: { compact?: boolean }) {
   return <HireHeadOfPeopleCard compact />;
 }
 
-function HireHeadOfPeopleCard({ compact }: { compact?: boolean }) {
+/** Hire the Head of People through the staff path (org-staffing.md S6): the
+ *  onboarding card, and the built-in entry at the top of the hire gallery.
+ *  `onHired` lets a dialog close once the seat is online. */
+export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; onHired?: () => void }) {
   const { tree } = useSyncOrgTree();
   const meId = useTrackedStore([(st) => st.currentUser?._id]).currentUser?._id;
   const [project, setProject] = useState("");
@@ -150,6 +153,7 @@ function HireHeadOfPeopleCard({ compact }: { compact?: boolean }) {
       // to wait for, so say so rather than sit on "Bringing it online".
       if (r?.already_existed) toast.success(`${r.role?.name ?? HEAD_OF_PEOPLE_NAME} is already online`);
       else if (r?.role) toast.success(`${r.role.name} is coming online`);
+      if (r) onHired?.();
     } catch (e: any) {
       setErr(e?.message ?? "Could not bring the agent online");
     } finally {

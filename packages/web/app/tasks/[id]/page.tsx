@@ -43,7 +43,7 @@ import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
 import { WorkUnitBar } from "../../../components/work/WorkUnitBar";
-import { TaskWorkPanel } from "../../../components/work/TaskWorkPanel";
+import { TaskWorkEmpty, TaskWorkPanel } from "../../../components/work/TaskWorkPanel";
 import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import { getLabelColor } from "../../../lib/labelColors";
@@ -1046,7 +1046,11 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           </div>
 
           {/* The session doing this task: its state, last turns and composer */}
-          {ownerSession && <TaskWorkPanel session={ownerSession} />}
+          {ownerSession ? (
+            <TaskWorkPanel session={ownerSession} />
+          ) : data.status !== "done" && data.status !== "dropped" && (
+            <TaskWorkEmpty onStart={() => openCmd("agent_run")} />
+          )}
 
           {!blockedOnDecision && <TaskDecisions taskId={data._id} />}
 

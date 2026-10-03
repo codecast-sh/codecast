@@ -1,6 +1,6 @@
 // Run: bun test packages/web/lib/roleRecipients.test.ts
 import { describe, expect, test } from "bun:test";
-import { filterRoleRecipients, roleArea, roleRecipients } from "./roleRecipients";
+import { filterRoleRecipients, roleArea, roleRecipients, sendRequestToRole } from "./roleRecipients";
 import type { OrgRole } from "../components/org/orgTypes";
 
 const ME = "user-me";
@@ -83,5 +83,40 @@ describe("filterRoleRecipients", () => {
     const sync = role({ _id: "s", handle: "sync", name: "Sync lead", given_name: "Sol", reports_to: { kind: "user", user_id: SAM } });
     const out = filterRoleRecipients(roleRecipients([platform, sync], ME), "sync");
     expect(out.map((r) => r.handle)).toEqual(["sync", "platform"]);
+  });
+});
+
+describe("sendRequestToRole", () => {
+  const fakeStore = (tree: any) => {
+    const calls: any[] = [];
+    const store = { orgTree: tree, addOptimisticMessage: (...a: any[]) => { calls.push(["optimistic", ...a]); return "client-1"; }, sendMessage: (...a: any[]) => { calls.push(["send", ...a]); } };
+    return { store, calls };
+  };
+  const [ember] = roleRecipients([growth], ME);
+
+  test("paints the bubble at once with previews, sends once uploads settle, into the live tree's standing session", async () => {
+    const { store, calls } = fakeStore({ roles: [{ _id: "g", standing: { conversation_id: "conv-g-live" } }] });
+    let release!: (id: string | null) => void;
+    const pending = new Promise<string | null>((r) => { release = r; });
+    const images = [{ storageId: "st-1", previewUrl: "blob:a", mime: "image/png", uploading: false }, { previewUrl: "blob:b", mime: "image/jpeg", uploading: true }];
+    const done = sendRequestToRole(() => store, ember, "Draft the review", images, (url) => (url === "blob:b" ? pending : Promise.resolve(null)));
+    await Promise.resolve();
+    expect(calls).toEqual([["optimistic", "conv-g-live", "Draft the review", [{ media_type: "image/png", storage_id: "st-1" }, { media_type: "image/jpeg", preview_url: "blob:b", uploading: true }]]]);
+    release("st-2");
+    expect(await done).toBe("conv-g-live");
+    expect(calls[1]).toEqual(["send", "conv-g-live", "Draft the review", ["st-1", "st-2"], "client-1"]);
+  });
+
+  test("falls back to the recipient's standing id, sends no image list when there are none", async () => {
+    const { store, calls } = fakeStore(null);
+    expect(await sendRequestToRole(() => store, ember, "hi", [], async () => null)).toBe("conv-g");
+    expect(calls).toEqual([["optimistic", "conv-g", "hi", []], ["send", "conv-g", "hi", undefined, "client-1"]]);
+  });
+
+  test("a seat with no standing session refuses without writing", async () => {
+    const { store, calls } = fakeStore({ roles: [] });
+    const [ada] = roleRecipients([docs], ME);
+    expect(await sendRequestToRole(() => store, ada, "hi", [], async () => null)).toBeNull();
+    expect(calls).toEqual([]);
   });
 });
