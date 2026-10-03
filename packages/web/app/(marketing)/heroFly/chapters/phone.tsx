@@ -15,7 +15,6 @@ import { AssistantBlock, UserPrompt } from "@/components/conversation/blocks/tur
 import { PhoneComposer, PhoneMessage, PhoneMessageText, PhoneSessionHeader, PhoneSessionMeta, PhoneStatusDot, PhoneToolCalls } from "@/components/PhoneSession";
 import { MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_PULSE, MOBILE_SESSION_STYLE, mobileRelativeTime } from "@codecast/shared/render/mobileSessionStyle";
 import { ASK, EARLIER, ME, PHONE_SESSION, REPLY, STEER, TEST_CALL, TEST_RESULT } from "../fixtures/phone";
-import { MIN } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
 import { FilmGrow, Veil } from "../film";
 import { typed } from "../timeline";
@@ -144,14 +143,15 @@ function StreamedReply() {
 
 /** The worker's session in the app: what it did before the question, then the exchange as film time reaches it, each entry opening its own room (FilmGrow) so the feed above rises. */
 function Feed({ now }: { now: number }) {
+  // The same stamps the worker's pane on the desk gives these messages (fanout.tsx), so the two copies of the session agree.
   const tested = useFilmTime((t) => t >= PHONE_AT.testDone);
   const agentType = PHONE_SESSION.agent;
   return (
     <div {...fly("phone/phone.feed", MOBILE_SESSION_STYLE.messageList)} className="flex flex-col">
-      <PhoneMessage role="user" name={EARLIER.from} agentType={agentType} time={mobileRelativeTime(now - 4 * MIN, now)}>
+      <PhoneMessage role="user" name={EARLIER.from} agentType={agentType} time={mobileRelativeTime(now - 4_000, now)}>
         <PhoneMessageText>{EARLIER.task}</PhoneMessageText>
       </PhoneMessage>
-      <PhoneMessage role="assistant" agentType={agentType} model={PHONE_SESSION.model} time={mobileRelativeTime(now - 3 * MIN, now)}>
+      <PhoneMessage role="assistant" agentType={agentType} model={PHONE_SESSION.model} time={mobileRelativeTime(now - 3_000, now)}>
         <PhoneMessageText>{EARLIER.plan}</PhoneMessageText>
       </PhoneMessage>
       <PhoneToolCalls only calls={EARLIER.calls.map(({ call, result }) => ({ call, result }))} />
@@ -229,7 +229,6 @@ export function PhoneScreen({ now }: PartProps) {
             live
             dot={<PulseDot color="#10b981" pulse={MOBILE_PULSE.live} />}
             model={PHONE_SESSION.model}
-            branch={PHONE_SESSION.branch}
           />
         </div>
         <div className="relative min-h-0 flex-1">

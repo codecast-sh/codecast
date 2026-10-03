@@ -24,6 +24,8 @@ export type SeoEntry = {
   path: string;
   title: string;
   description: string;
+  /** The page's own name for its social card, when the title carries a site suffix. */
+  heading?: string;
 };
 
 export const SITE_URL = "https://codecast.sh";
@@ -48,7 +50,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/features",
     title: "Features — Codecast",
     description:
-      "The cast CLI and everything codecast records: a searchable memory of every agent conversation, cast blame from a line to the conversation that wrote it, a live inbox you can steer from anywhere, and the agents you already run.",
+      "The cast CLI: every Codecast surface as a command. Agents use it to pick up tasks, answer chat threads, own pull requests, queue decisions, publish pages and search the team's history, on any machine.",
   },
   {
     path: "/documentation",
@@ -114,16 +116,19 @@ export const SEO_ROUTES: SeoEntry[] = [
   ...COMPARISONS.map((c) => ({
     path: compareHref(c.slug),
     title: `${c.title} — which coding agent tool fits?`,
+    heading: c.title,
     description: c.dek,
   })),
   ...GUIDES.map((g) => ({
     path: guideHref(g.slug),
     title: `${g.title} — Codecast docs`,
+    heading: g.title,
     description: g.dek,
   })),
   ...POSTS.map((p) => ({
     path: `/blog/${p.slug}`,
     title: `${p.title} — Codecast`,
+    heading: p.title,
     description: p.dek,
   })),
 ];
@@ -132,4 +137,17 @@ const BY_PATH = new Map(SEO_ROUTES.map((e) => [e.path, e]));
 
 export function seoFor(path: string): SeoEntry | undefined {
   return BY_PATH.get(path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path);
+}
+
+/** Big headline on a route's social card: its own name, without the site suffix. */
+export function cardHeading(entry: SeoEntry): string {
+  return entry.heading ?? entry.title.replace(/ — Codecast$/, "");
+}
+
+/**
+ * Site path of a route's 1200x630 social card. scripts/prerender.mjs renders
+ * one per SEO route into dist/og/ and points og:image here.
+ */
+export function cardImagePath(path: string): string {
+  return path === "/" ? "/og/index.png" : `/og${path}.png`;
 }

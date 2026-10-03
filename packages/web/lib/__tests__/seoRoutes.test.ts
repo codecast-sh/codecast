@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SEO_ROUTES, seoFor, SITE_URL } from "../seoRoutes";
+import { SEO_ROUTES, seoFor, SITE_URL, cardHeading, cardImagePath } from "../seoRoutes";
 import { ROUTES } from "../../src/routes.manifest";
 
 /**
@@ -52,6 +52,17 @@ describe("seoRoutes", () => {
   test("seoFor normalizes trailing slashes", () => {
     expect(seoFor("/about/")).toBe(seoFor("/about"));
     expect(seoFor("/")).toBeDefined();
+  });
+
+  test("every route gets its own social card with a suffix-free heading", () => {
+    const images = new Set<string>();
+    for (const entry of SEO_ROUTES) {
+      const image = cardImagePath(entry.path);
+      expect(image).toMatch(/^\/og\/.+\.png$/);
+      expect(images.has(image), `two routes share card ${image}`).toBe(false);
+      images.add(image);
+      expect(cardHeading(entry)).not.toMatch(/—\s*Codecast|which coding agent tool fits/);
+    }
   });
 
   test("site url has no trailing slash", () => {

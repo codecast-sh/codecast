@@ -77,13 +77,22 @@ export type Surface = {
 
 const whole = (w: number, h: number): Record<string, Region> => ({ main: { x: 0, y: 0, w, h } });
 
-/** The API worker's centre, and how far it sits below the band (the dashboard worker as far above it). */
+/**
+ * The API worker's centre, and how far it sits below the band (the dashboard
+ * worker as far above it). Two side-by-side windows are framed by their width,
+ * so this stagger is what fills the box's height: at 105 the pair takes about
+ * 70% of it.
+ */
 const PAIR_A_X = 1630;
-const PAIR_DY = 70;
+const PAIR_DY = 105;
 /** The phone's centre: its own half width (at its zoom) and half the frame's width east of the API worker's edge, so a hold on it leaves the worker just off the page. */
 const PHONE_X = PAIR_A_X + 270 + 640;
-/** A little above the API worker's centre: a full-height phone level with the lowered worker would hang past the box's foot while the pair is framed, and arrive late. */
-const PHONE_Y = 20;
+/**
+ * Near the API worker's centre, so the pull-back that shows the two together
+ * centres both on one line; a little above it, because a full-height phone
+ * level with the lowered worker hangs past a phone's box foot as it slides in.
+ */
+const PHONE_Y = 55;
 
 /** The film box's inner margin each hold's subject keeps from its edges (stage px). */
 export const FRAME_MARGIN = { desktop: { x: 80, y: 36 }, mobile: { x: 24, y: 56 } } as const;
