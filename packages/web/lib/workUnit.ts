@@ -3,9 +3,11 @@
 // here, apart from the components, so those files stay Fast Refresh
 // boundaries.
 
-import { createContext } from "react";
+import { createContext, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { stageNavigateLeaf } from "./stage";
+import { sessionPanePath, stageNavigateLeaf } from "./stage";
+import { leavesOf } from "../store/stageSplit";
+import { useInboxStore } from "../store/inboxStore";
 import { useTabContext } from "./tabParams";
 
 export type WorkFace = "task" | "session";
@@ -27,4 +29,32 @@ export function useSwitchFace(): (path: string) => void {
     if (ctx?.leafId) stageNavigateLeaf(ctx.leafId, path, "replace");
     else router.push(path);
   };
+}
+
+// Which sessions are stacked under a bar right now ("Both" in a narrow pane).
+// One home for the fact: the bar toggles it, and the task's work panel reads
+// it to step aside while the session's own transcript and composer are on
+// screen (two composers on one conversation would race for its draft).
+const stackedSessions = new Set<string>();
+const stackListeners = new Set<() => void>();
+export function setSessionStacked(sessionId: string, on: boolean): void {
+  if (on === stackedSessions.has(sessionId)) return;
+  if (on) stackedSessions.add(sessionId); else stackedSessions.delete(sessionId);
+  for (const l of stackListeners) l();
+}
+const subscribeStack = (l: () => void) => { stackListeners.add(l); return () => { stackListeners.delete(l); }; };
+export function useSessionStacked(sessionId: string): boolean {
+  return useSyncExternalStore(subscribeStack, () => stackedSessions.has(sessionId), () => false);
+}
+
+/** Is the session's own page on screen in this tab: stacked under a bar, or
+ *  a pane of the stage. */
+export function useSessionOnScreen(sessionId: string): boolean {
+  const stacked = useSessionStacked(sessionId);
+  const path = sessionPanePath(sessionId);
+  const inPane = useInboxStore((s) => {
+    const tab = s.tabs.find((t) => t.id === s.activeTabId);
+    return !!tab?.layout && leavesOf(tab.layout).some((l) => l.path === path);
+  });
+  return stacked || inPane;
 }

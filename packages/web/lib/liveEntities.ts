@@ -334,8 +334,10 @@ export function sessionOwnsTask(
   live: { active_task?: { _id: string } | null } | null | undefined,
   taskId: string | null | undefined,
 ): boolean {
-  if (!taskId) return !!snapshot.is_owner;
-  return live ? live.active_task?._id === taskId : !!snapshot.is_owner;
+  // A row fed without refs carries no active_task at all; only a row that
+  // carries the field can overrule the snapshot.
+  if (!taskId || !live || !("active_task" in live)) return !!snapshot.is_owner;
+  return live.active_task?._id === taskId;
 }
 
 /** The task's one owning session among its linked sessions, or null. */

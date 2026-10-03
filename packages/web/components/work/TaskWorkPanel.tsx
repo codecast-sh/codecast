@@ -6,13 +6,13 @@
 // is the session face, one click away in the WorkUnitBar above.
 
 import { useContext, useMemo } from "react";
-import { InsideWorkUnit } from "../../lib/workUnit";
-import { Pin } from "lucide-react";
+import { InsideWorkUnit, useSessionOnScreen, useSwitchFace } from "../../lib/workUnit";
 import { MessageInput } from "../MessageInput";
 import { cleanUserMessage } from "../sessionMessage";
 import { identityLine, identityRowOf } from "../../lib/sessionIdentity";
 import { sessionLiveAt } from "../../lib/liveness";
-import { compactAge, threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../../lib/threadState";
+import { compactAge } from "../../lib/threadState";
+import { sessionPanePath } from "../../lib/stage";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
@@ -47,17 +47,22 @@ function tailSig(msgs: Turn[] | undefined): string {
 }
 
 export function TaskWorkPanel(props: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
-  // Stacked under the session's own transcript, the panel would repeat it.
-  if (useContext(InsideWorkUnit)) return null;
+  // Stacked under the session's own transcript, or with that transcript on
+  // screen beside or above it, the panel would repeat it and race its
+  // composer for the one draft.
+  const inside = useContext(InsideWorkUnit);
+  const onScreen = useSessionOnScreen(props.session._id);
+  if (inside || onScreen) return null;
   return <TaskWorkPanelInner {...props} />;
 }
 
 function TaskWorkPanelInner({ session }: { session: WorkUnitSession & { recent_messages?: Turn[] } }) {
   const now = useCoarseNow(30_000);
+  const switchFace = useSwitchFace();
   const personifyAll = usePersonifyAll();
   const sig = useInboxStore((s) => {
     const r: any = s.sessions[session._id];
-    return [r?.thread_state, r?.thread_state_status, r?.thread_state_at, r?.is_idle, r?.updated_at, r?.message_count, tailSig(s.messages[session._id] as any)].join("\u0001");
+    return [r?.title, r?.character_name, r?.character_avatar, r?.is_idle, r?.updated_at, r?.message_count, tailSig(s.messages[session._id] as any)].join("\u0001");
   });
   const { row, turns } = useMemo(() => {
     const st = useInboxStore.getState();
@@ -70,29 +75,21 @@ function TaskWorkPanelInner({ session }: { session: WorkUnitSession & { recent_m
   const name = identityLine(identityRowOf(row), cleanTitle(String(row.title || "")), personifyAll).name ?? "the session";
   // The agent's turns are labelled by its name when it has one.
   const speaker = name === "the session" ? "agent" : name.split(" ")[0];
-  const stateView = threadStateView(row, row.message_count ?? 0, now);
   const live = sessionLiveAt(row, now);
 
   return (
     <section data-task-work className="mb-6 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.03] overflow-hidden">
-      <div className="px-3 pt-2.5 pb-1 flex items-center gap-2 text-[11px] text-sol-text-dim">
-        <span className="font-medium text-sol-text-secondary">{live ? `${name} is on it` : `${name} owns this`}</span>
-        {!live && row.updated_at && <span className="tabular-nums">last active {compactAge(now - row.updated_at)} ago</span>}
+      <div className="px-3 pt-2 pb-1.5 flex items-center gap-2 text-[11px] text-sol-text-dim">
+        <span className="font-medium text-sol-text-secondary">Latest from {name}</span>
+        {!live && row.updated_at && <span className="tabular-nums">· {compactAge(now - row.updated_at)} ago</span>}
+        <button
+          type="button"
+          onClick={() => switchFace(sessionPanePath(session._id))}
+          className="ml-auto text-sol-text-dim hover:text-sol-cyan transition-colors"
+        >
+          Full transcript →
+        </button>
       </div>
-      {stateView?.text && (
-        <div className="px-3 pb-1.5 flex items-start gap-1.5 min-w-0" title={stateView.text}>
-          <Pin
-            className={`w-2.5 h-2.5 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
-            strokeWidth={2.4}
-          />
-          {stateView.status && stateView.status !== "working" && (
-            <span className={`shrink-0 mt-px px-1 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}>
-              {THREAD_STATE_STATUS_META[stateView.status].label}
-            </span>
-          )}
-          <span className="text-xs text-sol-text-secondary leading-snug line-clamp-2">{stateView.text}</span>
-        </div>
-      )}
       {turns.length > 0 && (
         <ol className="px-3 pb-2 space-y-1.5">
           {turns.map((t, i) => (

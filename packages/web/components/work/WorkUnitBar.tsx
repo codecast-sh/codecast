@@ -7,7 +7,7 @@
 // Switching faces re-points the pane you are in; Split puts the other face
 // beside it.
 
-import { useContext, useRef, useState } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { Columns2, Rows2 } from "lucide-react";
 import { IdentityFace } from "../identity/IdentityFace";
 import { LivenessDot } from "../LivenessDot";
@@ -21,7 +21,7 @@ import { compactAge, threadStateView } from "../../lib/threadState";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { canOpenBeside, openBeside, sessionPanePath } from "../../lib/stage";
 import { useTabContext } from "../../lib/tabParams";
-import { InsideWorkUnit, taskFacePath, useSwitchFace, type WorkFace } from "../../lib/workUnit";
+import { InsideWorkUnit, setSessionStacked, taskFacePath, useSessionStacked, useSwitchFace, type WorkFace } from "../../lib/workUnit";
 import { HeightGrip, savedGripHeight } from "../HeightGrip";
 import { SessionPane } from "../stage/SessionPane";
 import { RoutePane } from "../RoutePane";
@@ -45,9 +45,16 @@ export interface WorkUnitSession {
   [k: string]: unknown;
 }
 
+// "closed/total" of a task's direct subtasks, or "" with none: a plain
+// string, so the selector's result compares by value.
+function subtaskTally(taskId: string, tasks: Record<string, any>): string {
+  const c = subtaskCounts(taskId, Object.values(tasks));
+  return c ? `${c.closed}/${c.open + c.closed}` : "";
+}
+
 function liveSig(row: any): string {
   if (!row) return "";
-  return [row.title, row.is_idle, row.updated_at, row.message_count, row.character_name, row.character_avatar, row.last_heartbeat, row.producing_until].join("\u0001");
+  return [row.title, row.is_idle, row.character_name, row.character_avatar, row.thread_state, row.thread_state_status, row.thread_state_at].join("\u0001");
 }
 
 export type { WorkFace } from "../../lib/workUnit";
@@ -66,21 +73,26 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   const tab = useTabContext();
   // Both faces at once: beside this pane when the stage has room, else
   // stacked under the bar at a height the reader drags.
-  const [stacked, setStacked] = useState(false);
+  const stacked = useSessionStacked(session._id);
+  const setStacked = (on: boolean) => setSessionStacked(session._id, on);
+  // A stacked face folds away when the bar goes (the page closes or moves).
+  // eslint-disable-next-line no-restricted-syntax -- clears the shared stacked flag on unmount
+  useEffect(() => () => setSessionStacked(session._id, false), [session._id]);
   const frameRef = useRef<HTMLDivElement>(null);
   const switchFace = useSwitchFace();
   const personifyAll = usePersonifyAll();
   // The store row is the live truth for the session (and the task's status);
   // the props are what the page already had in hand.
-  useInboxStore((s) => {
-    const counts = subtaskCounts(task._id, Object.values(s.tasks as any));
-    return `${liveSig(s.sessions[session._id])}|${(s.tasks as any)[task._id]?.status ?? ""}|${counts ? `${counts.closed}/${counts.open}` : ""}`;
-  });
+  // The re-render signature: identity, declared state, the task's status
+  // and its subtask tally. Heartbeats are left out on purpose (they tick about
+  // once a second); liveness is re-read on the coarse clock instead.
+  const sig = useInboxStore((s) => `${liveSig(s.sessions[session._id])}|${(s.tasks as any)[task._id]?.status ?? ""}|${subtaskTally(task._id, s.tasks)}`);
   const st = useInboxStore.getState();
   const liveRow: any = { ...session, ...(st.sessions[session._id] ?? {}) };
   const status = (st.tasks as any)[task._id]?.status ?? task.status;
   const visual = taskVisual(status);
-  const counts = subtaskCounts(task._id, Object.values(st.tasks as any));
+  const [closed, total] = sig.slice(sig.lastIndexOf("|") + 1).split("/").map(Number);
+  const counts = total > 0 ? { closed, open: total - closed } : null;
   const StatusIcon = visual.icon;
 
   const row = identityRowOf(liveRow);
