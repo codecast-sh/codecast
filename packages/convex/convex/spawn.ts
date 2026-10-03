@@ -488,6 +488,12 @@ export async function recordHandStart(ctx: { db: any }, role: any, conversationI
 // the unattended mandate, who the hand works for, the goal of the project the
 // task serves (org-staffing.md S7), and the structured ending. Written where
 // the hand pointer is written, so no hand can start without it.
+/** The first line of a hand's briefing; a session whose first message opens
+ *  with it was started by a role's line (migrations:releaseFolderHeldSessions
+ *  reads it for hands from before the `org_role_hold` stamp). */
+export const HAND_BRIEFING_HEADER = "## You are a hand of ";
+export const isHandBriefing = (text: string | null | undefined) => (text ?? "").trimStart().startsWith(HAND_BRIEFING_HEADER);
+
 export function handBriefing(
   role: { name: string; handle: string; short_id?: string },
   prompt: string | undefined,
@@ -497,7 +503,7 @@ export function handBriefing(
   const ct = taskShortId ?? "<ct-id>";
   const direction = charterLine(`Project ${project?.title ?? ""}`, project);
   const header = [
-    `## You are a hand of ${role.name} (@${role.handle})`,
+    `${HAND_BRIEFING_HEADER}${role.name} (@${role.handle})`,
     `You work for that role, not for a person. It reads your handoff, not your transcript.`,
     ...(direction ? [`${direction}. Your work serves that goal; say in the handoff how it moved.`] : []),
     `- Bind your work: \`cast task start ${ct}\` if this session was not started on it.`,
