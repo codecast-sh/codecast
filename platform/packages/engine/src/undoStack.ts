@@ -27,6 +27,12 @@ export type UndoNotifier = {
    * the default "Undid: <label>" notice; conflicts still go through notify.
    */
   onHistoryStep?: (kind: "undo" | "redo", steps: number, entry: UndoEntry) => void;
+  /**
+   * A keyboard undo stopped at a `confirm` entry and took nothing back. When
+   * present it replaces notify(message), so an app can point at the entry
+   * (an open history can mark its row) instead of only printing the notice.
+   */
+  onConfirmStop?: (entry: UndoEntry, message: string) => void;
 };
 
 export type UndoHistoryItem = Omit<UndoEntry, "undo" | "redo" | "children"> & {
@@ -536,7 +542,9 @@ export function performUndo(): boolean {
   const top = undoStack[undoStack.length - 1];
   if (!top || expired(top, now)) return false;
   if (top.confirm) {
-    notifier.notify(`Undo ${top.label} from its toast or the history`);
+    const message = `Undo ${top.label} from its toast or the history`;
+    if (notifier.onConfirmStop) notifier.onConfirmStop(top, message);
+    else notifier.notify(message);
     return true;
   }
   const step = stepUndo(top);

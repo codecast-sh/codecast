@@ -26,7 +26,7 @@ import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
-  buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY,
+  ageShort, buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY,
   type LineProject, type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type LineCauseTask, type LineFlowRun, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
 import { KeyCap } from "../KeyboardShortcutsHelp";
@@ -50,7 +50,7 @@ const STATIONS: Station[] = [
   { key: "sense", name: "Sense", short: "Sense", sub: "last 24h", what: "Finders write signals here: Sentry, PostHog, evals, lessons, or a person.", cmd: "cast signal add" },
   { key: "causes", name: "Causes", short: "Causes", what: "A signal opens a cause, or joins the open one that shares its fingerprint.", cmd: "cast signal ls" },
   { key: "build", name: "In build", short: "Build", what: "The sweep starts the top cause while you hold fewer than five open cards.", cmd: "cast workflow run line --task ct-N" },
-  { key: "awaiting", name: "Awaiting you", short: "You", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
+  { key: "awaiting", name: "Awaiting you", short: "Yours", wide: true, what: "Each run ends in one change card with its proof. Cards wait here for your answer.", cmd: "cast workflow runs" },
   { key: "watching", name: "Watching", short: "Watch", what: "A shipped cause is watched. A repeat of its signal reopens it; a quiet watch resolves it.", cmd: "cast task update ct-N --watch-days 7" },
   { key: "closed", name: "Closed", short: "Closed", sub: "last 7d", what: "Causes shipped, dissolved or resolved in the last seven days.", cmd: "cast task ls -s done" },
 ];
@@ -254,7 +254,7 @@ export function LinePage() {
         <div className="line-track h-full px-4 sm:px-5 pb-4" style={grid}>
           {STATIONS.map((s, i) => (
             <Fragment key={s.key}>
-              {i > 0 && <Rail live={!empty(s.key)} moved={flow.moved[s.key as keyof typeof flow.moved] ?? 0} into={s.name} />}
+              {i > 0 && <Rail live={!empty(s.key)} />}
               <StationColumn
                 station={s}
                 index={i}
@@ -344,14 +344,19 @@ function Hint({ label, className, children }: { label: string; className?: strin
 
 // ── Headline and throughput ──
 
+// Color only what needs the founder: cards waiting, a stall, a failure.
+// An all-clear part is plain text.
 const TONE: Record<HeadlinePart["tone"], string> = {
   ask: "text-sol-yellow",
   warn: "text-sol-orange",
   fail: "text-sol-red",
-  live: "text-sol-text",
-  calm: "text-sol-text",
-  clear: "line-tone-clear",
+  live: "",
+  calm: "",
+  clear: "",
 };
+
+/** The sentence's counts in bold, so the numbers are what the eye lands on. */
+const boldNumbers = (text: string) => text.split(/(\d+)/).map((t, i) => (i % 2 ? <b key={i} className="font-semibold">{t}</b> : t));
 
 /** The five-second read. A part that names a station links to it: the
  *  cursor moves there and the flow scrolls it into view. */
@@ -366,8 +371,8 @@ function Headline({ parts, onStation }: { parts: HeadlinePart[]; onStation: (key
         return (
           <Fragment key={i}>
             {station
-              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{text}</a>
-              : <span className={TONE[p.tone]}>{text}</span>}
+              ? <a href={`#line-${station}`} onClick={(e) => { e.preventDefault(); onStation(station); }} className={cn("line-headline-link", TONE[p.tone])} data-line-headline-link={station}>{boldNumbers(text)}</a>
+              : <span className={TONE[p.tone] || undefined}>{boldNumbers(text)}</span>}
             {sep}
           </Fragment>
         );
@@ -386,7 +391,12 @@ function NoValue({ className }: { className?: string }) {
   return <span className={cn("line-num text-sol-text-dim opacity-50", className)} aria-label="no data yet">–</span>;
 }
 
+/** "2d", "2d 5h", "40m": the elapsed time without its zero units. */
+const compactElapsed = (ms: number) => (formatElapsed(0, ms) ?? "").replace(/ 0[hm]$/, "");
+
 function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }) {
+  // On a phone the strip is one line that opens on tap.
+  const [open, setOpen] = useState(false);
   const moved = t.signalsIn + t.opened + t.dissolved + t.shipped + t.reopened > 0;
   if (!moved) {
     return <p className="text-[11px] text-sol-text-dim" data-line-throughput="quiet">No signals this week. Throughput appears once the line moves.</p>;
@@ -394,7 +404,7 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
   // The two numbers a founder reads first lead; the flow counts sit quieter.
   const lead: Array<{ label: string; value: string | number | null; tip: string; spark?: number[] }> = [
     { label: "shipped this week", value: t.shipped, spark: t.daily.shipped, tip: "Causes shipped in the last 7 days, per day" },
-    { label: "median signal to ship", value: t.medianToShip === null ? null : formatElapsed(0, t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
+    { label: "median signal to ship", value: t.medianToShip === null ? null : compactElapsed(t.medianToShip), tip: "From a cause's first signal to its ship, median over this week's ships" },
   ];
   const flowCells: Array<{ label: string; value: number; tone?: string; spark: number[] }> = [
     { label: "signals in", value: t.signalsIn, spark: t.daily.signalsIn },
@@ -402,15 +412,21 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
     { label: "dissolved", value: t.dissolved, spark: t.daily.dissolved },
     { label: "reopened", value: t.reopened, tone: t.reopened ? "text-sol-red" : undefined, spark: t.daily.reopened },
   ];
+  const summary = [`${t.shipped} shipped`, t.medianToShip !== null && `${compactElapsed(t.medianToShip)} median`, `${t.signalsIn} in`].filter(Boolean).join(" · ");
   return (
-    <div className="line-meter rounded-xl" data-line-throughput>
+    <>
+    <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className="line-meter-summary rounded-lg px-3 py-2 text-[12px] text-sol-text-muted items-center gap-1.5 text-left" data-line-throughput-summary>
+      <span className="line-num font-normal truncate min-w-0">{summary}</span>
+      <ChevronDown className={cn("ml-auto w-3.5 h-3.5 shrink-0 transition-transform", open && "rotate-180")} />
+    </button>
+    <div className="line-meter rounded-xl" data-open={open ? "true" : undefined} data-line-throughput>
       <div className="line-meter-lead">
         {lead.map((c) => (
           <div key={c.label} className="line-meter-big min-w-0" title={c.tip}>
             <div className="flex items-end gap-2.5 h-[30px]">
               {c.value === null
-                ? <NoValue className="text-[32px]" />
-                : <span className="line-num line-display-num text-[32px] text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
+                ? <NoValue className="text-[28px]" />
+                : <span className="line-num line-display-num text-[28px] text-sol-text" data-zero={c.value === 0 ? "true" : undefined}>{c.value}</span>}
               {c.spark && sparkable(c.spark) && <Spark values={c.spark} bar={4} height={20} className="mb-0.5" label={`${c.label}, per day`} />}
             </div>
             <div className="mt-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">{c.label}</div>
@@ -437,6 +453,7 @@ function Throughput({ t }: { t: ReturnType<typeof buildLineFlow>["throughput"] }
         </div>
       </div>
     </div>
+    </>
   );
 }
 
@@ -455,10 +472,12 @@ function stateWords(state: StageState, now: number): string {
 
 /** The short tag beside the lamp; the why lives in its tooltip, and for a
  *  stage in trouble in one line at the foot of the column. */
-function stateTag(state: StageState, now: number): string {
-  const since = state.since ? ` ${formatElapsed(state.since, now)}` : "";
+function stateTag(state: StageState, oldestAt: number | null, now: number): string {
+  const since = state.since ? ` ${ageShort(now - state.since)}` : "";
   if (state.kind === "ask") return `waiting${since}`;
   if (state.kind === "paused" || state.kind === "starved" || state.kind === "failing") return `${state.kind}${since}`;
+  // Running is the ordinary case: the header spends its words on the oldest age.
+  if (state.kind === "running" && oldestAt) return `oldest ${ageShort(now - oldestAt)}`;
   return state.kind;
 }
 const TROUBLE = new Set<StageState["kind"]>(["paused", "starved", "failing"]);
@@ -473,8 +492,13 @@ const STATE_TONE: Record<StageState["kind"], string> = {
   running: "text-sol-text-muted",
 };
 
-/** What a station's count measures, said beside it. */
-const COUNT_UNIT: Partial<Record<StationKey, string>> = { sense: "in 24h", closed: "this week" };
+/** What a station's count measures and what entered it this week, said
+ *  beside the count: "today · 5 this week", "+3 this wk". */
+function countWords(key: StationKey, count: number, moved: number, week?: number): ReactNode {
+  if (key === "sense") return <>today{week !== undefined && week !== count && <span className="line-count-of"> · {week} this week</span>}</>;
+  if (key === "closed") return "this week";
+  return moved > 0 ? <span title={`${moved} entered this week`}>+{moved} this wk</span> : null;
+}
 
 function StationColumn({ station, index, column, empty, moved, week, focused, now, onFocus, note, children }: {
   station: Station;
@@ -483,7 +507,7 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   index: number;
   column: Column<unknown>;
   empty: boolean;
-  /** What entered this week; the rail chip says it too where there is room. */
+  /** What entered this week, said beside the count. */
   moved: number;
   /** Sense only: the week's signals, said dimly beside the 24h count. */
   week?: number;
@@ -494,10 +518,8 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
 }) {
   const state = column.state;
   const words = stateWords(state, now);
-  const countTip = [
-    moved > 0 ? `${moved} entered this week` : null,
-    column.oldestAt ? `oldest ${formatElapsed(column.oldestAt, now)}` : null,
-  ].filter(Boolean).join(", ");
+  const countTip = column.oldestAt ? `oldest ${formatElapsed(column.oldestAt, now)}` : "";
+  const unit = empty ? null : countWords(station.key, column.count, moved, week);
   return (
     <section
       data-line-col={index}
@@ -525,14 +547,10 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
         </div>
         <div className="mt-2 flex items-end gap-2 min-w-0">
           <span className={cn("line-num line-display-num line-col-count text-[34px]", state.kind === "ask" ? "text-sol-yellow" : "text-sol-text")} data-zero={column.count === 0 ? "true" : undefined} title={countTip || undefined}>{column.count}</span>
-          {COUNT_UNIT[station.key] && !empty && (
-            <span className="pb-[3px] text-[11px] text-sol-text-dim whitespace-nowrap min-w-0 truncate">
-              {COUNT_UNIT[station.key]}{week !== undefined && week !== column.count && <span className="line-count-of" title={`${week} signals this week`}> of {week} wk</span>}
-            </span>
-          )}
+          {unit && <span className="pb-[3px] text-[11px] text-sol-text-dim whitespace-nowrap min-w-0 truncate" data-line-unit>{unit}</span>}
           <span className={cn("ml-auto pb-[3px] flex items-center gap-1.5 text-[11px] whitespace-nowrap min-w-0", STATE_TONE[state.kind])} data-line-state title={words}>
             <span className="line-lamp" data-kind={state.kind} />
-            <span className="line-state-text truncate">{stateTag(state, now)}</span>
+            <span className="line-state-text truncate">{stateTag(state, column.oldestAt, now)}</span>
           </span>
         </div>
         {note && <div className="mt-2 text-[11px] text-sol-text-dim leading-snug" data-line-note>{note}</div>}
@@ -547,11 +565,10 @@ function StationColumn({ station, index, column, empty, moved, week, focused, no
   );
 }
 
-function Rail({ live, moved, into }: { live: boolean; moved: number; into: string }) {
+function Rail({ live }: { live: boolean }) {
   return (
     <div className="line-rail-slot relative" aria-hidden>
       <div className="line-rail" data-live={live ? "true" : undefined} />
-      {moved > 0 && <span className="line-rail-chip" title={`${moved} entered ${into} this week`}>{moved}</span>}
     </div>
   );
 }
@@ -669,7 +686,7 @@ function RowLink({ href, focused, index, children, className }: { href: string; 
 // ── Rows ──
 
 /** Bars oldest first; the last few, when non-zero, read bright. */
-function Spark({ values, bar = 4, height = 20, label = "signals per hour, last 24 hours", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
+function Spark({ values, bar = 4, height = 20, label = "signals per day, last 7 days", className }: { values: number[]; bar?: number; height?: number; label?: string; className?: string }) {
   const max = Math.max(1, ...values);
   const gap = 1;
   const hot = Math.max(1, Math.round(values.length / 8));
@@ -698,10 +715,10 @@ function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: n
           ? <span className="text-[11px] text-sol-text-dim italic truncate min-w-0">undeclared</span>
           : <span className="text-[11px] text-sol-text-dim truncate min-w-0">{src.kinds.join(" · ")}</span>}
         <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap" title={`${src.day} in the last 24 hours, ${src.week} this week`}>
-          <span className={cn("text-[13px]", src.day > 0 ? "text-sol-text" : "text-sol-text-dim")}>{src.day}</span> today<span className="line-count-of"> · {src.week} wk</span>
+          <span className={cn("text-[13px]", src.day > 0 ? "text-sol-text" : "text-sol-text-dim")}>{src.day}</span> today{src.week !== src.day && <span className="line-count-of">, {src.week} this week</span>}
         </span>
       </div>
-      <div className="mt-1.5"><Spark values={src.spark} /></div>
+      {sparkable(src.spark) && <div className="mt-1.5"><Spark values={src.spark} bar={6} height={14} label="signals per day, last 7 days" /></div>}
       {src.newest
         ? (
           <div className="mt-1 text-[11px] text-sol-text-dim truncate" title={src.newest.title}>
@@ -729,7 +746,10 @@ function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow
   const tip = [t.short_id, t.category, t.risk && t.risk !== "low" ? `${t.risk} risk` : null, `priority ${row.score.toFixed(1)}`].filter(Boolean).join(" · ");
   const unready = t.readiness && t.readiness !== "ready";
   return (
-    <RowLink href={taskHref(t)} focused={focused} index={index} className={muted ? "opacity-70" : undefined}>
+    <RowLink href={taskHref(t)} focused={focused} index={index} className={cn("relative", muted && "opacity-70")}>
+      {/* Priority is a meter on the row's left edge that fills upward, never a
+          bar across it: a bar under a title reads as progress. */}
+      <span className="line-prio" style={{ "--p": `${Math.max(8, Math.min(100, (row.score / (max || 1)) * 100))}%` } as CSSProperties} title={`priority ${row.score.toFixed(1)}`} aria-label={`priority ${row.score.toFixed(1)}`} />
       <div className="flex items-start gap-2" title={tip}>
         {rank !== undefined && <span className="line-num text-[13px] text-sol-text-dim w-4 shrink-0 pt-px">{rank}</span>}
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{t.title}</span>
@@ -738,9 +758,6 @@ function CauseRowView({ row, rank, max, focused, index, muted }: { row: CauseRow
         <span className="text-sol-text tabular-nums shrink-0" title="signals attached">×{row.signals}</span>
         {GOAL_TONE[row.goal.kind] && <span className={cn("px-1.5 py-px rounded border min-w-0 truncate", GOAL_TONE[row.goal.kind])} title={row.goal.ref}>{row.goal.label}</span>}
         {unready && <span className="ml-auto shrink-0 text-sol-yellow" title={t.readiness_note ?? undefined}>{t.readiness!.replace("_", " ")}</span>}
-      </div>
-      <div className={cn("line-bar mt-2 h-[3px] rounded-full overflow-hidden", rank !== undefined && "ml-6")}>
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.score / (max || 1)) * 100))}%` }} />
       </div>
     </RowLink>
   );
@@ -790,8 +807,8 @@ function WatchRowView({ row, focused, index }: { row: WatchRow; focused: boolean
         <span className="text-[13px] text-sol-text leading-snug line-clamp-2 flex-1 min-w-0">{row.task.title}</span>
         <span className="text-[11px] text-sol-text tabular-nums shrink-0">{row.daysLeft}d left</span>
       </div>
-      <div className="line-bar mt-1.5 h-[3px] rounded-full overflow-hidden">
-        <span className="block h-full rounded-full" style={{ width: `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` }} />
+      <div className="line-countdown mt-1.5" title={`${row.daysLeft} of ${span} watch days left`}>
+        <span style={{ "--left": `${Math.max(4, Math.min(100, (row.daysLeft / span) * 100))}%` } as CSSProperties} />
       </div>
       <div className="mt-1 flex gap-2 text-[11px] text-sol-text-dim">
         <span>×{row.task.cause?.signal_count ?? 0} before ship</span>

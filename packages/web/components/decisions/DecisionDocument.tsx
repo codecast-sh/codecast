@@ -106,8 +106,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
         : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
 
-  // A settled change card says what happened: the verdict alone in the header
-  // pill, and who gave it and when as the card's last line.
+  // A settled change card says what happened once: the verdict, who gave it
+  // and when, as the card's last line.
   const answererName = !answeredBy
     ? "a person"
     : answeredBy.kind === "policy"
@@ -145,8 +145,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <>
           <dt>task</dt>
           <dd>
-            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-              {detail.task?.short_id ?? "task"}<span className="text-sol-text truncate max-w-[20rem]">{detail.task?.title}</span>
+            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal]">
+              <span className="whitespace-nowrap shrink-0">{detail.task?.short_id ?? "task"}</span><span className="text-sol-text truncate min-w-0 max-w-[20rem]">{detail.task?.title}</span>
             </Link>
             {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
           </dd>
@@ -199,9 +199,9 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <header className="mt-4">
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
             <span className="font-mono px-1.5 py-0.5 rounded border border-sol-border/60">{decision.short_id ?? "decision"}</span>
-            {outcome ? (
-              <span className={`px-1.5 py-0.5 rounded cc-outcome-pill cc-tone-${outcome.tone}`} data-outcome-pill>{outcome.verdict}</span>
-            ) : (
+            {/* A settled card says its verdict once, as the card's last line with
+                who and when, so the header keeps only the id and the age. */}
+            {!outcome && (
               <span className={`px-1.5 py-0.5 rounded border ${pending ? (decision.blocking ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-blue/30 text-sol-blue") : "border-sol-border text-sol-text-dim"}`}>
                 {pending ? (decision.blocking ? "blocking · the session is parked" : "advisory · the agent proceeded") : decision.status}
               </span>

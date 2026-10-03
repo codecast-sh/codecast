@@ -6468,11 +6468,6 @@ mark.search-hit[data-search-active] {
   letter-spacing: -0.02em;
   font-variant-ligatures: none;
   text-wrap: balance;
-  /* A height guard: a headline is one sentence, and never more than three lines of the page. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
   overflow-wrap: anywhere;
 }
 .chg-rule {
@@ -6488,6 +6483,9 @@ mark.search-hit[data-search-active] {
 .chg-works-inner { position: sticky; top: 16px; }
 @container changes (max-width: 760px) {
   .chg-headline { font-size: 24px; line-height: 1.2; }
+}
+@container changes (max-width: 480px) {
+  .chg-headline { font-size: 21px; }
 }
 @container changes (min-width: 1100px) {
   /* Head, main column, In brief. The last row takes whatever height the
@@ -6538,11 +6536,13 @@ mark.search-hit[data-search-active] {
 .chg-root .entity-ref:hover, .chg-root .entity-ref:focus-visible { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .chg-story { scroll-margin: 24px 0 96px; }
 .chg-story:has(:focus-visible), .chg-story:focus-visible { outline: 1px solid color-mix(in srgb, var(--sol-text) 40%, transparent); outline-offset: 2px; }
-/* The open drawer's height animation, opening only: a drawer that closes goes
-   at once, so the story that opens keeps its place on screen. */
-@keyframes chgOpen { from { height: 0; } to { height: var(--radix-accordion-content-height); } }
+/* An opening drawer is at its full height at once, and its contents rise in.
+   Its height never animates: the story that opens keeps its place only if
+   the page measures the drawers at their real size, and a background tab
+   parks an animation on its first frame, which for a height is a drawer
+   shut. A drawer that closes goes at once. */
 .chg-drawer { overflow: hidden; }
-.chg-drawer[data-state="open"] { animation: chgOpen 200ms ease-out; }
+.chg-drawer[data-state="open"] > * { animation: chgRise 180ms ease-out both; }
 /* Transform with a partial fade: a background tab parks an animation on its
    first frame, and a region parked invisible is a page nobody can read. */
 @keyframes chgRise { from { opacity: 0.35; transform: translateY(4px); } to { opacity: 1; transform: none; } }
@@ -6558,6 +6558,6 @@ mark.search-hit[data-search-active] {
 @keyframes chgPulse { 0% { opacity: 1; } 35% { opacity: 0.3; } 100% { opacity: 1; } }
 .chg-pulse { animation: chgPulse 700ms ease-out 1; }
 @media (prefers-reduced-motion: reduce) {
-  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] { animation: none; }
+  .chg-rise, .chg-slide-next, .chg-slide-prev, .chg-prose-in, .chg-roll, .chg-pulse, .chg-pending-bar, .chg-drawer[data-state="open"] > * { animation: none; }
   .chg-row:not([data-focused="true"]):hover { transition: none; }
 }

@@ -2606,6 +2606,30 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     );
   }
 
+  // The palette's commands, split: the ones whose label starts with the
+  // query lead the list (see the leading group), the rest sit with Commands.
+  const commandQuery = query.trim().toLowerCase();
+  const commandLabel = (cmd: (typeof GLOBAL_COMMANDS)[number]) => (typeof cmd.label === "function" ? cmd.label() : cmd.label);
+  const shownCommands = GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.() && !(cmd.searchOnly && !commandQuery));
+  const namedCommands = commandQuery ? shownCommands.filter((cmd) => commandLabel(cmd).toLowerCase().startsWith(commandQuery)) : [];
+  const otherCommands = namedCommands.length ? shownCommands.filter((cmd) => !namedCommands.includes(cmd)) : shownCommands;
+  const renderCommand = (cmd: (typeof GLOBAL_COMMANDS)[number]) => {
+    const Icon = cmd.icon;
+    const label = commandLabel(cmd);
+    return (
+      <CommandPrimitive.Item
+        key={`cmd-${cmd.action}`}
+        value={`${label} ${cmd.keywords}`}
+        onSelect={() => { closePalette(); dispatchAction(cmd.action); }}
+        className={itemClass}
+      >
+        <Icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+        <span className="truncate flex-1">{label}</span>
+        <MenuKeyCaps action={cmd.action} />
+      </CommandPrimitive.Item>
+    );
+  };
+
   // Root mode: navigation + context actions
   const paletteContent = (
     <CommandPrimitive
@@ -2668,6 +2692,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {filterCompletion?.kind === "value" && filterGroup}
+
+        {/* A command the query names (its label starts with what was typed)
+            leads the list, so Enter runs it. Scores alone cannot do this:
+            cmdk 1.1.1 never reorders groups (its sort looks a group up by
+            data-value, which holds the heading, while it tracks the group by
+            its useId), so groups paint in this order whatever their items score. */}
+        {!standalone && !picking && namedCommands.length > 0 && (
+          <CommandPrimitive.Group heading="Commands" className={groupClass}>
+            {namedCommands.map(renderCommand)}
+          </CommandPrimitive.Group>
+        )}
 
         {(["person", "role"] as const).map((kind) => {
           const rows = whoRows.filter((r) => r.kind === kind);
@@ -3342,23 +3377,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         )}
 
         {!standalone && !picking && (
-          <CommandPrimitive.Group heading="Commands" className={groupClass}>
-            {GLOBAL_COMMANDS.filter((cmd) => !cmd.hidden?.() && !(cmd.searchOnly && !query.trim())).map((cmd) => {
-              const Icon = cmd.icon;
-              const label = typeof cmd.label === "function" ? cmd.label() : cmd.label;
-              return (
-                <CommandPrimitive.Item
-                  key={`cmd-${cmd.action}`}
-                  value={`${label} ${cmd.keywords}`}
-                  onSelect={() => { closePalette(); dispatchAction(cmd.action); }}
-                  className={itemClass}
-                >
-                  <Icon className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-                  <span className="truncate flex-1">{label}</span>
-                  <MenuKeyCaps action={cmd.action} />
-                </CommandPrimitive.Item>
-              );
-            })}
+          <CommandPrimitive.Group heading={namedCommands.length > 0 ? "More commands" : "Commands"} className={groupClass}>
+            {otherCommands.map(renderCommand)}
             {!isPeopleWindow() && (
               <CommandPrimitive.Item
                 key="cmd-people"

@@ -16,6 +16,12 @@
 // not depend on which day is on screen.
 // In week mode a last feed reads the week edition, keyed by its ISO week.
 //
+// The live strip and In the works are per repository too, and each answer is
+// the whole of its repository: what it lacks there has stopped, and what
+// another repository holds stays cached, so a return paints at once. Their
+// row ids are composed, never Convex ids, so the drop reaches disk and plants
+// no tombstone: a surface or a session that comes back shows again.
+//
 // Readers subscribe to signatures of the fields the page renders. Story rows
 // change only when a rebuild writes them, so the lists stay still between
 // rebuilds whatever else moves in the store.
@@ -87,6 +93,26 @@ export function storySyncOpts(scope: TeamScope, window: DateWindow, except?: str
   };
 }
 
+/**
+ * The live strip's answer is every surface of one repository in the team: a
+ * cached surface of that repository it lacks has gone, and every other
+ * repository's surfaces stay cached for a return to them.
+ */
+export const liveScope = (scope: TeamScope) => (row: LiveRow) => String(row.team_id) === scope.teamId && row.repository === scope.repository;
+
+/**
+ * In the works answers for one repository, or the whole team: its session
+ * rows name the repository they were read for, and its reviews and branches
+ * name their own. A cached row the answer covers and lacks has stopped
+ * moving; another repository's rows stay cached for a return to it.
+ */
+export const worksScope = (scope: TeamScope) => (row: WorksRow) => {
+  if (String(row.team_id) !== scope.teamId) return false;
+  const repo = row.repository ? normalizeRepository(row.repository) : undefined;
+  if (row.kind === "stuck" || row.kind === "building") return repo === scope.repository;
+  return !scope.repository || repo === scope.repository;
+};
+
 /** listStories answers `{ stories, covered_from, complete }`, or null when it refused the caller (nothing synced). */
 export const selectStories = (data: any): StoryRow[] | undefined => (data && Array.isArray(data.stories) ? data.stories : undefined);
 
@@ -148,8 +174,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
       editions: { team_id: teamId, ...repoArg, scope: "day", ...around },
       recent: today ? { team_id: teamId, scope: "day", ...recentWindow(today) } : "skip",
       week: week ? { team_id: teamId, ...repoArg, scope: "week", ...weekWindow(week) } : "skip",
-      live: repository ? { team_id: teamId, repository } : "skip",
-      works: { team_id: teamId, ...repoArg },
+      live: repository ? { args: { team_id: teamId, repository }, opts: { dropAbsent: liveScope(scope) } } : null,
+      works: { args: { team_id: teamId, ...repoArg }, opts: { dropAbsent: worksScope(scope) } },
     } as const;
   }, [teamId, repository, date, today, week]);
 
@@ -158,8 +184,8 @@ export function useSyncChanges(view: ChangesView): ChangesFeedState {
   const editions = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.editions ?? "skip");
   const recent = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.recent ?? "skip");
   const weekEdition = useSyncCollection("changeEditions", api.changesQueries.listEditions, feeds?.week ?? "skip");
-  const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live ?? "skip");
-  const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works ?? "skip");
+  const live = useSyncCollection("changeLive", api.changesQueries.liveStatus, feeds?.live?.args ?? "skip", feeds?.live?.opts);
+  const works = useSyncCollection("changeWorks", api.changesQueries.inTheWorks, feeds?.works.args ?? "skip", feeds?.works.opts);
 
   return {
     ready: day.ready && editions.ready,

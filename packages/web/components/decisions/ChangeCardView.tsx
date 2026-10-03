@@ -57,31 +57,44 @@ export function ChangeCardView({ card, density = "full", recommend = true, chang
   return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} />;
 }
 
-/** Why the change exists: its task and cause, the signals behind it, and the goal it serves. */
+/** "evals, judges and users" */
+const listLabel = (xs: string[]) => (xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
+
+/**
+ * Why the change exists, in two quiet lines: its task and cause, then the
+ * signals behind it (and where they came from), how old it is, and the goal
+ * it serves, so the page goes from its title to the evidence in one glance.
+ */
 export function ChangeCardCause({ card, className = "" }: { card: ChangeCard; className?: string }) {
   const now = useCoarseNow(60_000);
   const hasGoal = card.goal.ref && card.goal.ref !== "none";
-  const meta = [
-    card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "",
-    card.cause.first_seen ? `first seen ${formatTimeAgo(card.cause.first_seen, now)}` : "",
-  ].filter(Boolean);
+  const sources = card.cause.sources.length ? `from ${listLabel(card.cause.sources)}` : "";
+  const signals = card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "";
+  const meta: { key: string; node: ReactNode; className?: string; title?: string }[] = [];
+  if (signals || sources) meta.push({ key: "signals", node: [signals, sources].filter(Boolean).join(" ") });
+  if (card.cause.first_seen) meta.push({ key: "seen", node: `first seen ${formatTimeAgo(card.cause.first_seen, now)}` });
+  // The goal it serves; its ref shows on hover.
+  if (hasGoal) meta.push({
+    key: "goal",
+    className: "cc-goal",
+    title: card.goal.why || undefined,
+    node: <>serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span>{card.goal.name && <span className="cc-goal-ref">{card.goal.ref}</span>}</>,
+  });
   return (
     <div className={`cc-cause ${className}`}>
       <div className="cc-cause-row">
         <Link href={`/tasks/${card.cause.task}`} className="cc-chip text-sol-violet border-sol-violet/30 hover:bg-sol-violet/10">{card.cause.task}</Link>
         <span className="cc-cause-title">{card.cause.title}</span>
       </div>
-      {(meta.length > 0 || card.cause.sources.length > 0) && (
-        <div className="cc-cause-row">
-          {meta.map((m, i) => <span key={m} className="cc-cause-meta">{i > 0 && <span className="cc-sep" aria-hidden>·</span>}{m}</span>)}
-          {card.cause.sources.map((src) => <span key={src} className="cc-source">{src}</span>)}
-        </div>
-      )}
-      {/* The goal it serves, one muted line; its ref shows on hover. */}
-      {hasGoal && (
-        <div className="cc-cause-row cc-goal" title={card.goal.why || undefined}>
-          serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span>
-          {card.goal.name && <span className="cc-goal-ref">{card.goal.ref}</span>}
+      {/* Every fact carries its separator and the row clips the one that
+          opens a line, so a wrapped line never starts with a dot. */}
+      {meta.length > 0 && (
+        <div className="cc-cause-facts">
+          <div className="cc-cause-row">
+            {meta.map((m) => (
+              <span key={m.key} className={`cc-cause-meta ${m.className ?? ""}`} title={m.title}><span className="cc-sep" aria-hidden>·</span>{m.node}</span>
+            ))}
+          </div>
         </div>
       )}
     </div>
@@ -197,22 +210,20 @@ function ProofStrip({ card }: { card: ChangeCard }) {
       <div className="cc-label-row">
         <h3 className="cc-label">Proof</h3>
         <span className={`cc-proof-label ${summary.stillRed.length || summary.broke.length ? "cc-text-red" : summary.red ? "cc-text-green" : "text-sol-text-dim"}`}>{summary.label}</span>
+        {/* The detail most rows share reads once, beside the headline, keyed
+            to the strip by its own red and green dots. */}
+        {(commonBefore || commonAfter) && (
+          <span className="cc-proof-caption">
+            {commonBefore && <span className="cc-legend"><span className="cc-legend-dot cc-dot-red" aria-hidden />{commonBefore}</span>}
+            {commonBefore && commonAfter && <span className="cc-arrow" aria-hidden>→</span>}
+            {commonAfter && <span className="cc-legend"><span className="cc-legend-dot cc-dot-green" aria-hidden />{commonAfter}</span>}
+          </span>
+        )}
       </div>
       {red.length === 0 && !broke.length ? (
         <div className="text-[12px] text-sol-text-dim">Nothing was shown failing before the change.</div>
       ) : (
         <ol className="cc-proof">
-          {/* The detail most rows share reads once, over the names; the red
-              and green dots under it say which side is before and after. */}
-          {(commonBefore || commonAfter) && (
-            <li className="cc-proof-head">
-              <span className="cc-proof-caption">
-                {commonBefore && <span className="cc-text-red">{commonBefore}</span>}
-                {commonBefore && commonAfter && <span className="cc-arrow" aria-hidden>→</span>}
-                {commonAfter && <span className="cc-text-green">{commonAfter}</span>}
-              </span>
-            </li>
-          )}
           {red.map((b, i) => {
             const a = after.get(b.name);
             const fixed = a?.ok === true;
@@ -312,6 +323,15 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
   const showChecks = checksOpen || checksPassed < card.checks.length;
   return (
     <article className={`change-card ${inline ? "cc-inline" : "cc-full"} ${animate ? "cc-animate" : ""}`} data-change-card={card.cause.task}>
+      {/* The box is the proposal, so it opens on that. The verdict it
+          recommends reads here when the card is the one to say it; beside
+          answer controls the controls say it, and a settled card ends on
+          what happened instead. */}
+      <div className={`cc-card-head cc-tone-${outcome ? "dim" : tone}`} data-cc-head>
+        <span className="cc-card-head-dot" aria-hidden />
+        <span>{outcome ? "Change proposed" : "Change ready"}</span>
+        {!outcome && recommend && <span className="cc-sep-before">Recommends {verdictLabel(card.recommend.verdict)}</span>}
+      </div>
       {/* Cause: why this run exists, one quiet line above the decision. */}
       {head && <header><ChangeCardCause card={card} /></header>}
 
@@ -382,7 +402,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate }: { c
 
       {outcome ?? (recommend && (
         <div className={`cc-recommend cc-tone-${tone}`}>
-          <span className="cc-recommend-verdict">Recommends {verdictLabel(card.recommend.verdict)}</span>
+          <span className="cc-recommend-verdict">Why {verdictLabel(card.recommend.verdict)}</span>
           <span className="text-sol-text-muted">{card.recommend.why}</span>
         </div>
       ))}

@@ -46,7 +46,8 @@ Each run is recorded as a session under ${sessionsDir().replace(process.env.HOME
   --red                run only the red (expected-failing) scenarios                   SIM_RED=1
   --keep               write a pass's artifacts into the session too                   SIM_KEEP=1
   --out dir            write run artifacts under dir instead, on a pass too            SIM_OUT
-  --order "<channels>" replay one delivery order, as a report's --order line prints it SIM_ORDER
+  --order="<channels>" replay one delivery order, as a report's --order line prints it SIM_ORDER
+                       (one word: bun run drops an empty "", so an empty order is --order=)
   --shrink <dir>       shrink a failure's recorded order (dir: its artifact folder) to the
                        fewest deliveries that fail the same way; writes minimal.json there
   --list               print the scenario catalog (name, red markers, known, modes) and exit
@@ -79,7 +80,7 @@ function parseArgs(argv: string[]): Parsed {
     const next = () => {
       if (inline !== undefined) return inline;
       const v = argv[i + 1];
-      if (v === undefined || v.startsWith("--")) fail(`${flag} needs a value`);
+      if (v === undefined || v.startsWith("--")) fail(`${flag} needs a value${flag === "--order" ? ' (bun run drops an empty "", so write an empty order as --order=)' : ""}`);
       i++;
       return v;
     };

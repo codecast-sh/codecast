@@ -81,3 +81,17 @@ describe("buildWeek", () => {
     expect(none).toMatchObject({ matching: 0, top: [], order: [], filterLine: "Showing 0 of 3 stories (risks)" });
   });
 });
+
+describe("the week's live count on main", () => {
+  test("sums the day editions' counts, else the days' main stories, whatever the branch toggle shows", () => {
+    const { stories, editions } = fixture();
+    // Monday 5 and Tuesday 3 from their editions; Wednesday has one main story and no edition.
+    const all = [...stories, story("w", { date: WED, commit_shas: ["w1", "w2"] })];
+    const main = buildWeek({ days: [MON, TUE, WED], stories: all, editions, week: undefined, url: url() });
+    const every = buildWeek({ days: [MON, TUE, WED], stories: all, editions, week: undefined, url: url({ branches: "all" }) });
+    expect(main.mainCommits).toBe(10);
+    expect(every.mainCommits).toBe(10);
+    // With every branch the header counts Tuesday's branch story too.
+    expect(every.stats.stories).toBe(main.stats.stories + 1);
+  });
+});

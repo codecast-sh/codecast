@@ -99,8 +99,11 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
   const findersTotal = sum("finders");
   const silentTotal = sum("silent");
   return (
-    <div className="flex-1 min-h-0 overflow-auto px-4 sm:px-6 pb-5" data-line-rollup>
-      <table className="w-full max-w-[1100px] border-separate border-spacing-0 text-[13px]">
+    <div className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5" data-line-rollup>
+      {/* A narrow screen scrolls the table sideways; the scroller's edge shadow
+          says more columns sit past the edge (line.css). */}
+      <div className="line-rollup-scroll overflow-x-auto max-w-[1100px]">
+      <table className="w-full min-w-[640px] border-separate border-spacing-0 text-[13px]">
         <thead>
           <tr className="text-[11px] text-sol-text-dim">
             <th className="text-left font-normal py-2 pr-4 border-b border-sol-border/40">Project</th>
@@ -112,8 +115,8 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
           {rollup.map((r) => (
             <tr key={r.key} onClick={() => onSelect(r.key)} className="line-row cursor-pointer" data-line-rollup-row={r.key}>
               <td className="py-2.5 pr-4 border-b border-sol-border/20">
-                <span className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</span>
-                {r.short_id && <span className="ml-2 font-mono text-[11px] text-sol-text-dim">{r.short_id}</span>}
+                <div className={cn("text-sol-text", r.key === NO_PROJECT && "italic text-sol-text-muted")}>{r.title}</div>
+                {r.short_id && <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim whitespace-nowrap">{r.short_id}</div>}
               </td>
               {COLS.map((c) => <Cell key={c.key} value={r[c.key] as number} ask={c.key === "awaiting"} />)}
               <td className="py-2.5 pl-3 border-b border-sol-border/20 text-right tabular-nums whitespace-nowrap text-[11px]">
@@ -132,6 +135,7 @@ export function LineRollup({ rollup, onSelect }: { rollup: RollupRow[]; onSelect
           </tr>
         </tfoot>
       </table>
+      </div>
     </div>
   );
 }

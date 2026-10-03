@@ -5283,6 +5283,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   respondToGate: (runId: string, response: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   updateMyProfile: (patch: MyProfilePatch) => void;
+  setActiveTeamPointer: (teamId: string | null) => void;
   setWalkiePref: (pref: "team" | "off") => void;
   adoptTimezone: (timezone: string) => void;
   setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
@@ -9705,6 +9706,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // round trip would leave the door in its old state for a beat after somebody
   // deliberately shut it. currentUser is localFirst, so the pref holds over
   // presence pushes until the server echoes it.
+  // The canonical workspace pointer (users.active_team_id), written in the
+  // draft so whatever reads it off currentUser agrees in this tick;
+  // currentUser is localFirst, so it holds until the server echoes.
+  // useSwitchWorkspace pairs it with the mirror the UI scopes by.
+  setActiveTeamPointer: action(function (this: Draft, teamId: string | null) {
+    if (this.currentUser) (this.currentUser as any).active_team_id = teamId ?? undefined;
+  }),
+
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
   }),

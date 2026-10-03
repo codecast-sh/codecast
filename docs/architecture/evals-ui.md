@@ -104,17 +104,22 @@ Other recording fixes:
 
 ### 3.3 Analysis library (one code path for the CLI and the UI)
 
-- **`verdict.ts`.** Split `verdictLines` (private today, `:155`) into `batchVerdict(meta, batch, history, opts): BatchVerdict` and a formatter that prints today's lines from it.
-  - `BatchVerdict` holds: footing `{model, ruler}`; set stats (reps, passed, median, mean, cost, crashes, liveReads); baseline `{kind: previous|pooled|against, batches, skipped}`; separation `{kind, p}`; `flips: VerdictFlip[]`; `gatesFailed`; plus what today's lines print (the compared scores, footing notes for `--against`, the models).
-  - A `VerdictFlip` names the freeze, the direction and the run ids on each side. The existing `EvalFlip` (`contracts/evalResult.ts`) carries reply text, which the verdict cannot fill without reading every flipped rep's folder, so the text travels separately as `examples: EvalFlip[]` on `/batches` and on the attribution, ready for ExamplePair.
-  - CLI output stays byte-identical, and `check.test.ts` must still pass.
-  - Export the footing comparison (model plus `rulerOf`).
+- **`verdict.ts`.** `batchVerdict(meta, batch, history, {against, baselineBatches, ruler, earlierOnly}): BatchVerdict` chooses the baseline (named, pooled cadence, or each freeze's newest other batch) and weighs the batch against it. `verdictLinesOf(v)` prints today's lines from that value alone. `setVerdict` is the two plus the surface's own summary lines.
+  - The functions take a `VerdictRun`: a CLI `SurfaceRun` or an index `RunRow` both fit. A rep's ruler is the row's `ruler` when it has one, else `rulerOf` reads its folder.
+  - `BatchVerdict` holds: footing `{model, ruler}`; `set: BatchStats` (reps, passed, median, mean, min, max, cost, crashes, liveReads, dirty reps, gitHeads); baseline `{kind: previous|pooled|against, batches, reps, cadence, skipped}`, null only for a dry set; the compared scores; separation `{kind, p}`; footing notes for `--against`; `flips: VerdictFlip[]`; `gatesFailed`; the models.
+  - A `VerdictFlip` names the freeze, the direction and the run ids on each side. The existing `EvalFlip` (`contracts/evalResult.ts`) carries reply text, which the verdict cannot fill without reading every flipped rep's folder, so the text travels separately as `examples: EvalFlip[]` on `/batches` and on the attribution, ready for ExamplePair (`flipExamples` in `history/flips.ts`).
+  - CLI output is byte-identical: `analysis.test.ts` holds a snapshot of every line branch captured from the code before the split, and a replay of 515 recorded batches across all 13 surfaces (every batch, plus `--against` pairs) matched byte for byte with colour on.
+  - `previousRuns` and `pooledRuns` take the newest *other* batches, later ones included. `check` always weighs its newest batch, so that never shows there, but a history view weighing an older batch passes `earlierOnly` to weigh it only against batches that began before it.
+  - The exact Mann-Whitney count can take about a second on 100 reps against 20, so `batchVerdict` keeps the last 512 separations (separate() is deterministic).
+  - Exported for the history modules: `footingOf`, `footingChange`, `verdictFlips`, `batchStats`, `batchStarts`, `upTo`.
 - **`history/epochs.ts`.** These are prompt epochs for the legacy history, which needs no backfill.
-  - Per surface, sort batches by `batchAt`. A new epoch starts at the first batch where any freeze's promptSha differs from that freeze's previous appearance. Dry reps count as evidence here.
-  - Each epoch carries its first batch, its gitHead and its changed freeze ids.
+  - Per surface, sort batches by when each began (its earliest rep). A new epoch starts at the first batch where any freeze renders differently from that freeze's previous appearance. Dry reps count as evidence here; bisect-cadence probes do not, because they render old commits on purpose.
+  - What a freeze rendered in a batch is its promptSha, except where its reps disagree within a batch. `ask`'s second call quotes excerpts the first call's reply chose, so its promptSha differs on almost every rep (24 of 105 freeze-batches), and the naive rule would start an epoch at 13 of its 15 batches. For such a freeze the key is the prompt files that held still: every file seen to vary within a batch of that freeze is left out everywhere. Files are compared by size first and hashed only when sizes agree, and one rep stands for each distinct promptSha. Where no file holds still, and always for org-review, the key is the batch's most common promptSha.
+  - On the real home (2026-10-03) the epochs match a hand check of promptSha changes on 11 surfaces exactly (settle 1, anchor-brief 21, role-wake 8, ...). ask (1 epoch) and org-review (6) were checked by hand at the file level.
+  - Each epoch carries its first and last batch, its gitHead and its changed freeze ids. `footingMarkers` walks the same timeline for model and ruler changes.
   - The diff between two epochs is the per-freeze diff of `callN/system.md` (written only when the request has a system prompt) and `prompt.md` (or `agentN/prompt.md` and `thenN.md`) between the last rep before the boundary and the first rep after it. That is exactly what the model saw, dirty or not.
   - org-review is labelled "analyzer prompt only", because its promptSha covers only that prompt.
-- **`history/flips.ts`.** Holds `flipsBetween(surface, batchA, batchB)`, built from per-freeze `majority()` and `onePerSeed` on the same footing. It refuses with a reason when the footing differs.
+- **`history/flips.ts`.** Holds `flipsBetween(rows, batchA, batchB)` over one surface's rows, built from per-freeze `majority()` and `onePerSeed` on the freezes both batches graded (crashes and dry reps left out). It refuses with a reason when the footing differs on any such freeze, or when either batch graded nothing. `flipExamples(surface, freezeIds, a, b)` builds the reply text the way `line` does (`repsSurface`, `flipOf`).
 - **`history/attribution.ts`.** Free and computed only from records. The algorithm is in section 5, Tier 0.
 - **Platform.** `diffRuns(a, b): RunDiffEntry[]` is extracted from what was the inline flip block in `renderRunDiff` (gate flips, then check moves of `CHECK_MOVE` = 0.2 or more, in b's order) and exported from `@platform/evals/render` with `CHECK_MOVE`, `RunDiffEntry` (the same shape as the contract's) and `DiffableRun`. It reads only `verdict.gates` and `verdict.checks`, so a `RunDetail` fits and so does a bare `{ verdict: <score.json> }`. `renderRunDiff` formats from it, byte-identical to before. The api child's two-run compare uses it.
 
@@ -176,15 +181,19 @@ All paths are relative to `/evals`.
 
 ### 3.6 Web side
 
-- **`lib/evals/client.ts`.** A thin wrapper over `loopbackFetch` (`lib/vault/client.ts:70`), like `lib/memory/client.ts`.
-- **`lib/evals/fixtureTransport.ts`.** Active only when `import.meta.env.DEV && localStorage.EVALS_FIXTURE === "1"`. It answers from the fixtures, so every view can be checked in a real browser before the backend lands.
+- **`lib/evals/client.ts`.** A thin wrapper over `loopbackFetch` (`lib/vault/client.ts:70`), like `lib/memory/client.ts`. Every call is built as an `EvalsBridgeRequest` (`evalsRequest(key, args)`, typed by `EvalsRoutes`) and sent through a transport, so the loopback transport and the fixture transport take the same value the daemon hands the child.
+- **`lib/evals/fixtureTransport.ts`.** Dev builds only (`import.meta.env.DEV`), read from `localStorage.EVALS_FIXTURE`: `"1"` answers every route from `components/evals/__fixtures__/world.ts` (a seeded fake EVALS_HOME, all 13 surfaces, with the settle regression, model and ruler changes, live reads, a re-captured freeze, bisects and a shrunk Multiplayer sim failure built in); `"no-daemon"`, `"no-checkout"` and `"child-crashed"` act out each failure screen. The world is a dynamic import inside the dev branch, so it never ships.
+- **`lib/evals/hooks.ts`.** `useEvalsConnection` (connect on first mount), `useEvalsResource(key, args)` (a cached answer by request, painted at once when cached) and `useEvalsChanges(live, onChanges)` (the `/changes` poller below). Pages read data only through these.
 - **`store/evalsStore.ts`.** A zustand store that lives in memory only, beside `memoryStore`, with states `idle | discovering | connected | no-daemon | no-checkout | child-crashed`.
   - It is not in inboxStore, the client sync registry or IndexedDB. This is local disk data, not Convex data.
   - A guard test fails if any `evalsApi` type is imported from `store/inboxStore.ts`, `store/clientSyncRegistry.ts` or `store/idbCache.ts`.
+  - Failures are classified once (`classifyEvalsFailure`): a 502 or `child-crashed` moves the area to `child-crashed` with stderr; a checkout reason or `no-bun` to `no-checkout` with the reason in words; a 404 with no reason (a daemon without `/evals`) or a 401/403 to `no-daemon`; a 404 the child wrote (`reason: not-found`) stays that page's problem.
 - **Live updates.** While a view shows live work (a running batch, a bisect, a shrink or a sweep), it polls `GET /changes?since=` every 3 s. Polling pauses when the tab is hidden. A job with no new step for 5 minutes shows "stalled?".
 - **Routing.** Register one area, `/evals` and `/evals/*`, rather than eight route families. This keeps edits to shared files to one pass.
-  - Files to edit: `App.tsx`, `RoutePane.tsx` (pattern `^/evals(/.*)?$`), `lib/pageLayout.tsx` (full width), `lib/desktopHandoff.ts` ("evals" in the in-shell set), `routes.manifest.ts` (as `routes.manifest.test.ts` requires), `pathLabel.ts`, `CommandPalette.tsx` ("Evals", "Multiplayer sim"), and `appSurfaces.ts` (`/evals` and `/evals/sim`).
-  - `app/evals/page.tsx` dispatches sub-paths through a pure `parseEvalsPath()` in `components/evals/evalsPaths.ts`. That file also builds every href.
+  - Files to edit: `App.tsx` (routes `evals` and `evals/*`), `RoutePane.tsx` (patterns `/^\/evals$/` and `/^\/evals\/(.+)$/`, one component, so moving between views reconciles), `lib/pageLayout.tsx` (full width), `lib/desktopHandoff.ts` ("evals" in the in-shell set), `routes.manifest.ts` (entries `evals` and `evals/*`), `pathLabel.ts` (`evalsTabLabel`, so a tab reads "settle" or "Multiplayer sim", not a path), `CommandPalette.tsx` ("Evals", "Multiplayer sim"), and `appSurfaces.ts` (`evals` and `evals/sim`).
+  - `routes.manifest.test.ts` reads a trailing `(.+)` in a RoutePane pattern as the splat `*`, and counts a surface as served when a splat route sits above it (`evals/*` serves `evals/sim`). A single `^/evals(/.*)?$` pattern is not readable by that parser.
+  - `app/evals/page.tsx` dispatches sub-paths through a pure `parseEvalsPath()` in `components/evals/evalsPaths.ts`, and lazy-loads each view's page. That file also builds every href (`evalsHref`), resolves the nav's search box (`evalsSearchTargets`) and names tabs (`evalsTabLabel`).
+  - Links inside the area go through `EvalsLink` (`parts.tsx`): a plain click is a router push, which moves the pane the page sits in, so a split sibling stays put; `next/link` would move the active tab instead.
 
   Sub-paths:
 
@@ -202,9 +211,9 @@ All paths are relative to `/evals`.
   | `/evals/sim/:session/:run` | one sim run |
 
 - **Page structure.** Every page is a connected `pages/XPage.tsx` plus a props-only `XView.tsx`, with a fixture and a mount test, following OrgHistory and OrgHistoryView.
-- **Failure screen.** `LocalDaemonUnreachable` gains two reasons:
-  - "no codecast checkout has run ./evals on this machine";
-  - "the evals process crashed", which shows its stderr.
+- **Failure screen.** `LocalDaemonUnreachable` gains two reasons (`LocalUnreachableReason`):
+  - `no-checkout`, "No codecast checkout has run ./evals on this machine", with the specific checkout reason (or `no-bun`) as its detail line;
+  - `child-crashed`, "The evals process crashed", which shows its stderr (the `stderr` prop).
 
 ### 3.7 Multiplayer sim changes
 
@@ -225,7 +234,7 @@ All paths are relative to `/evals`.
   - The empty order is tried right after the full one: when it fails the same way, no pinned order is needed. A candidate runs as the scenario's one test at that seed (`-t`), so sibling scenarios in its file cost nothing.
   - It writes `minimal.json` as `{order, removed, attempts, ms, oneMinimal}`, and `minimal.json.tmp` with progress while it runs. `order` is the kept channels and `removed` indexes the recorded channels; a scripted run's leading `scripted` mark is in neither and is never removed. `result.json` gains `minimalOrder`, the `--order` value with the mark.
   - It adds a third replay line (`replayLines(ctx, minimal)`, or `replayCommands` from result.json's facts).
-  - An empty `SIM_ORDER` is an order replay too (the DSL tests for a set value, not a non-empty one), so an empty minimal order replays.
+  - An empty `SIM_ORDER` is an order replay too (the DSL tests for a set value, not a non-empty one), so an empty minimal order replays. Replay lines print the order as one word, `--order="<order>"` (`--order=""` when empty), because `bun run` drops an empty argument and `--order ""` would reach sim.ts as a bare flag.
   - A filter that is exactly a scenario's name runs that scenario alone, so replay lines work for a scenario that shares a file (`agentPingPongOwnSessions`).
 - **`--list --json` and `--invariants --json`.**
 - The UI always calls this "Multiplayer sim", to keep it apart from `@platform/evals`' persona `sim` command.
@@ -465,28 +474,30 @@ The UI always says which tier produced an answer. The CLI is the engine, and the
 ### Tier 0: attribution from records (free, instant; `history/attribution.ts`)
 
 1. **Endpoints.**
-   - B is the red batch: it separated worse against its baseline, or it holds flipped freezes.
-   - G is the newest earlier batch on the same footing in which each flipped freeze passed by majority. A user-picked G is accepted.
+   - B is the red batch: it separated worse against its baseline (weighed with `earlierOnly`), or a freeze broke. Left out, it is the newest such batch.
+   - G is the newest earlier batch on the same footing in which each flipped freeze passed by majority; in score mode, the newest batch of B's baseline. A user-picked G is accepted. Either end may be a sha: it stands for the newest clean batch that ran on it, or for the bare commit (an orphan through `heads.json`).
    - The flipped freezes come from `flipsBetween`. For a score-only regression with no flips, take the 3 freezes with the largest median drop.
 2. **Classes, in a fixed order.** The first one that differs between G and B is the answer:
 
    | # | Class | Test | Outcome |
    |---|---|---|---|
    | 1 | Footing | model or `rulerOf` differs | stop |
-   | 2 | Freeze | `freezeSha` differs; for legacy runs, the snapshot address in the freeze file | stop |
+   | 2 | Freeze | `freezeSha` differs; for legacy runs, a public freeze's pointer or committed snapshot changed in git between the two heads (one `git diff --name-only`). A private legacy freeze cannot be told and reads as unchanged, which the line says. | stop |
    | 3 | Live reads | `liveReads > 0` on B | not reproducible |
-   | 4 | Source | `sourceHashDisk` differs; for legacy runs, gitHead or promptSha differs | continue to step 3 |
+   | 4 | Source | `sourceHashDisk` differs, or the rendered promptSha differs on a flipped freeze; for legacy runs (no `sourceHashDisk`), the commit differs | continue to step 3 |
    | 5 | Noise | nothing differs | stop |
+
+   The classes are tested on the flipped freezes (in score mode, the largest drops). Each checklist line says truthfully whether its class differs; the first that does is the answer.
 
 3. **Candidates.** `git rev-list --ancestry-path G.mainSha..B.mainSha -- <declared sources ∪ fixtures ∪ freezes ∪ judge prompt ∪ models.ts>`, using the union of both sides' registries.
    - Orphan heads resolve through `refs/evals/heads/*` and `heads.json`.
    - B's `treePatch`, when B was dirty and has one, is appended as a virtual candidate: "uncommitted edits on top of <sha8>".
    - When no declared source moved, the answer says so ("no declared source moved"), and `--all-commits` widens the search to every commit in the range.
-4. **Narrow for free.** Every recorded batch whose head lies inside the range, on the same footing, that ran a flipped freeze, and that is clean or carries a `treePatch`, is classified with the probe rule. The range then shrinks to the adjacent good/bad pair of these recorded batches.
+4. **Narrow for free.** Every recorded batch whose head lies inside the range, on the same footing, that ran a flipped freeze, and that is clean or carries a `treePatch`, is classified with the probe rule. The range then shrinks to the adjacent good/bad pair of these recorded batches. A batch on edits that reads bad may owe it to those edits, which land as later commits, so only a clean bad batch moves the bad bound; a good reading moves the good bound either way. B's patch candidate stays only while no clean recorded batch reads bad.
 5. **Confidence.**
    - pinned: one candidate left. The answer is that commit, with no spend.
    - narrowed: k candidates left.
-   - unattributable: an endpoint was dirty, has no patch, and is not mapped by Tier 1.
+   - unattributable: an endpoint was dirty, has no patch, and is not mapped by Tier 1; or an endpoint's head is on no branch with no main-line twin (the reason and `near` from `heads.json` are quoted); or G is not an ancestor of B. The candidates are still listed, and the reason says why none can be trusted.
 6. **The prompt diff is always shown,** whatever the confidence. Both reps share the moment, so the diff of their rendered prompt files is exactly the prompt change.
 
 ### Tier 1: dry render probes (free, takes minutes; `bisect/probe.ts`)
@@ -551,7 +562,7 @@ usd  ≤ reps × perRep[model].usd (state.json, else meta.maxUsdPerRep) + reps �
 
 ### Sim bisect (free, wave 3)
 
-It uses the same runner with a different probe: `bun run sim <s> --seed N --order "<minimal>"`, run in `prepareTreeAt(sha)` with today's `store/__tests__/sim/` copied in. Each probe is deterministic, so no controls or reps are needed beyond the two endpoints, and the cost shows as $0.
+It uses the same runner with a different probe: `bun run sim <s> --seed N --order="<minimal>"`, run in `prepareTreeAt(sha)` with today's `store/__tests__/sim/` copied in. Each probe is deterministic, so no controls or reps are needed beyond the two endpoints, and the cost shows as $0.
 
 ## 6. Visual direction
 
@@ -669,7 +680,7 @@ Every unit owns its files exclusively within its wave. Before editing, each unit
 
 1. Dev server on `http://localhost:3200`.
 2. `cast browser open http://localhost:3200/evals…`.
-3. `cast browser eval "localStorage.EVALS_FIXTURE='1'"` (waves 1 and 2) or `'0'` (wave 3), then reload.
+3. `cast browser eval "localStorage.EVALS_FIXTURE='1'"` (waves 1 and 2) or `'0'` (wave 3), then reload. `'no-daemon'`, `'no-checkout'` and `'child-crashed'` show each failure screen. Remove the flag when done (`localStorage.removeItem('EVALS_FIXTURE')`): it lives in the founder's Chrome and would keep their own `/evals` on fixture data. `cast app goto` may move the tab to the `local.codecast.sh` dev origin, whose localStorage is separate.
 4. `cast browser shot` in light, then `.dark`, then minimal style. Post the screenshots in the thread.
 5. Close the tab when done.
 
@@ -745,7 +756,7 @@ Background-tab timers stall, so check end states, not mid-animation frames. If t
 - `cast check cli` is green.
 
 **U6 Web foundation.**
-- Owns: `lib/evals/*`, `store/evalsStore.ts` and its guard test, `app/evals/page.tsx`, `components/evals/{EvalsShell, EvalsNav, evalsPaths(+test), parts, evals.css, charts/*, __fixtures__/world.ts}`, the stub `pages/*.tsx` (each renders a "not built yet" EmptyState), all route registration files, `LocalDaemonUnreachable.tsx`, `ChangeCardView.tsx`.
+- Owns: `lib/evals/*` (client, fixtureTransport, hooks), `store/evalsStore.ts` and its guard test, `app/evals/page.tsx`, `components/evals/{EvalsShell, EvalsNav, evalsPaths(+test), parts, evals.css, charts/*, __fixtures__/world.ts, __tests__/EvalsFoundation.mount.test.tsx}`, the stub `pages/*.tsx` (each renders a "not built yet" EmptyState), all route registration files plus `routes.manifest.test.ts`, `LocalDaemonUnreachable.tsx`, `ChangeCardView.tsx`.
 - Accept:
   - `routes.manifest.test.ts` passes;
   - `cast app goto evals` and `cast app goto evals/sim` open;

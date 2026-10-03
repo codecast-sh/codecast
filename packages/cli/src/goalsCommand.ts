@@ -4,35 +4,34 @@
 // (convex/goals.ts); the rendering is shared/contracts/goalsBrief. With a
 // project (--project, else the repo profile's `[line] project`) the brief is
 // that project's charter and the initiatives that carry it (line-profile.md
-// LP1). Principles are docs/principles.md plus the profile's own files (LP5).
+// LP1). Principles are the shared set plus the profile's own files (LP5).
 //
 //   cast goals [--brief] [--json] [--project <ref>] [--team <name|id|personal>]
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
 import { renderGoalsBrief, type GoalsBrief } from "@codecast/shared/contracts/goalsBrief";
+// The shared set ships inside the CLI, so every project reads the same one.
+import SHARED_PRINCIPLES from "../../../docs/principles.md" with { type: "text" };
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { lineDefaults, scopeFor } from "./signalCommand.js";
-import { loadLineProfile } from "./lineProfile.js";
-
-export const PRINCIPLES_PATH = "docs/principles.md";
+import { CODECAST_PRINCIPLES, loadLineProfile } from "./lineProfile.js";
 
 /**
- * docs/principles.md at the repository root and each of the profile's
- * principles files (paths relative to the root), the ones that exist, in that
- * order; null when none does.
+ * The principles a project's line reads: the shared set, then each of the
+ * profile's principles files (paths relative to the repository root) that
+ * exists and is not a copy of the shared set. `from` names each part read.
  */
-export function readPrinciples(root: string | null, paths: string[] = []): string | null {
-  if (!root) return null;
-  const texts = [...new Set([PRINCIPLES_PATH, ...paths])].flatMap((rel) => {
+export function readPrinciples(root: string | null, paths: string[] = [], shared: string = SHARED_PRINCIPLES): { text: string; from: string[] } | null {
+  const parts = shared.trim() ? [{ from: CODECAST_PRINCIPLES, text: shared }] : [];
+  for (const rel of root ? [...new Set(paths)] : []) {
     try {
-      return [fs.readFileSync(path.join(root, rel), "utf8")];
-    } catch {
-      return [];
-    }
-  });
-  return texts.length ? texts.join("\n") : null;
+      const text = fs.readFileSync(path.join(root!, rel), "utf8");
+      if (text !== shared) parts.push({ from: rel, text });
+    } catch {}
+  }
+  return parts.length ? { text: parts.map((p) => p.text).join("\n"), from: parts.map((p) => p.from) } : null;
 }
 
 export function registerGoalsCommand(program: Command, deps: PublishDeps): void {
@@ -51,9 +50,9 @@ export function registerGoalsCommand(program: Command, deps: PublishDeps): void 
       const root = repoRootOf(cwd);
       const principles = readPrinciples(root, root ? loadLineProfile(cwd).profile.principles : []);
       if (options.json) {
-        console.log(JSON.stringify({ ...data, principles }, null, 2));
+        console.log(JSON.stringify({ ...data, principles: principles?.text ?? null }, null, 2));
         return;
       }
-      process.stdout.write(renderGoalsBrief(data, { brief: options.brief, principles }));
+      process.stdout.write(renderGoalsBrief(data, { brief: options.brief, principles: principles?.text, principlesFrom: principles?.from }));
     });
 }

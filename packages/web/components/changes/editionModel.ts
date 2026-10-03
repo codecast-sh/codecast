@@ -36,8 +36,6 @@ export type EditionModel = {
   day: StoryRow[];
   /** Everyone behind `day`, by name. */
   people: Person[];
-  /** Commits on main as the stories count them now, to tell notes written from fewer. */
-  mainCommits: number;
   lead: StoryRow | null;
   sections: Section[];
   brief: StoryRow[];
@@ -368,7 +366,6 @@ export function buildEdition(input: {
   return {
     day,
     people,
-    mainCommits: dayStats(storiesOfDay(input.stories, date, "main"), undefined, releases).commits,
     lead: leadShown,
     sections,
     brief,

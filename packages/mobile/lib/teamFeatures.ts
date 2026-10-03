@@ -16,13 +16,13 @@ import { createFeatureHooks, defineFeatures, type FeatureSource } from "@platfor
 
 const TEAM_FEATURE_CATALOG = defineFeatures(TEAM_FEATURES);
 
-/** The active team (canonical pointer, users.active_team_id; unset = personal)
+/** The active team (the store's workspace mirror; unset = personal)
  *  and every team the viewer belongs to. undefined while the user is unknown,
  *  or while the active team is missing from the list (never fed, or a team
  *  created this tick), which keeps the hooks from reporting a premature false. */
 function useTeamSource(): FeatureSource<TeamFeatureKey> | undefined {
   const userKnown = useInboxStore((s) => !!s.currentUser?._id);
-  const activeTeamId = useInboxStore((s) => (s.currentUser as any)?.active_team_id as string | undefined);
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? undefined) as string | undefined;
   const teams = useInboxStore((s) => s.teams) as any[];
   return useMemo(() => {
     if (!userKnown) return undefined;

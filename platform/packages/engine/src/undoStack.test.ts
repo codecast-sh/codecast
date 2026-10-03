@@ -283,6 +283,17 @@ describe("confirm", () => {
     expect(getUndoHistory().head).toBe(e.id);
   });
 
+  it("an onConfirmStop notifier hears the stop instead of notify", () => {
+    const stops: Array<[string, string]> = [];
+    setUndoNotifier({ notify: (m) => notices.push(m), onConfirmStop: (entry, message) => stops.push([entry.id, message]) });
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(stops).toEqual([[e.id, "Undo Made public from its toast or the history"]]);
+    expect(notices).toEqual([]);
+    expect(value).toEqual(["Made public"]);
+  });
+
   it("once the confirm entry is undone from its toast, blind undo reaches the next one", () => {
     generic("Old");
     const e = generic("Made public");

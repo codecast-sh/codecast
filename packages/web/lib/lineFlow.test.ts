@@ -114,7 +114,7 @@ describe("buildLineFlow", () => {
     expect(f.build.state).toMatchObject({ kind: "running", why: "1 building, 1 stalled" });
   });
 
-  it("sense groups by source with a 24 hour sparkline", () => {
+  it("sense groups by source with a seven day sparkline", () => {
     const f = flow({
       signals: [
         signal("s1", { created_at: NOW - 30 * 60_000 }),
@@ -123,8 +123,8 @@ describe("buildLineFlow", () => {
       ],
     });
     expect(f.sense.items.map((s) => [s.source, s.day, s.week])).toEqual([["sentry", 2, 2], ["evals", 0, 1]]);
-    expect(f.sense.items[0].spark[23]).toBe(1);
-    expect(f.sense.items[0].spark[19]).toBe(1);
+    expect(f.sense.items[0].spark).toEqual([0, 0, 0, 0, 0, 0, 2]);
+    expect(f.sense.items[1].spark).toEqual([0, 0, 0, 0, 1, 0, 0]);
     expect(f.sense.count).toBe(2);
     expect(f.sense.state.kind).toBe("running");
   });

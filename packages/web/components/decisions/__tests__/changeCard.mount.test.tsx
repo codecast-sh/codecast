@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
-import { CARD_DECISION_OPTIONS, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_DECISION_OPTIONS, suiteGateCheck, SUITE_GATE_CHECK, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 // A decision about a change card (LE11) draws the card natively and answers
 // Ship, Revise or Drop with the keys; Revise carries a note.
@@ -47,10 +47,16 @@ test("the full card draws every section from the contract", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} />);
   const text = container.textContent!;
   expect(text).toContain("ct-56301");
-  // The cause's meta reads "14 signals · first seen …": separators sit between items, never leading a row.
-  const metas = container.querySelectorAll(".cc-cause-meta");
-  expect(metas[0].querySelector(".cc-sep")).toBeNull();
-  expect(metas[1].querySelector(".cc-sep")).toBeTruthy();
+  // The cause's facts read "14 signals · first seen …": each carries its
+  // separator inside a clipped row, so the one opening a line never shows.
+  const metas = container.querySelectorAll(".cc-cause-facts .cc-cause-meta");
+  expect(Array.from(metas).every((m) => m.firstElementChild?.classList.contains("cc-sep"))).toBe(true);
+  // Two rows: the cause, then signals with their sources, age and goal on one line.
+  expect(container.querySelectorAll(".cc-cause > .cc-cause-row, .cc-cause-facts > .cc-cause-row")).toHaveLength(2);
+  expect(metas[0].textContent).toContain(`${card.cause.signals} signals from ${card.cause.sources[0]}`);
+  // The box opens on the proposal and its recommendation, said once.
+  expect(container.querySelector("[data-cc-head]")!.textContent).toBe("Change readyRecommends Ship");
+  expect(container.querySelector(".cc-recommend")!.textContent).toContain("Why Ship");
   expect(text).toContain(card.goal.name);
   expect(text).toContain(card.wrong);
   expect(text).toContain(card.change);
@@ -84,13 +90,23 @@ test("the full card draws every section from the contract", async () => {
   expect(text).toContain("PR #912");
   expect(text).toContain("Low risk");
   expect(text).toContain("$1.96");
-  expect(text).toContain("Recommends Ship");
   await unmount();
 }, 30_000); // the first mount pays for loading the store under a loaded machine
+
+test("a failed suite gate shows unfolded in the checks, naming its scenarios", async () => {
+  const gated: ChangeCard = { ...card, checks: [...card.checks, suiteGateCheck(["handoff-keeps-owner", "dup-merge-keeps-newest"])], recommend: { verdict: "revise", why: "Two suite scenarios fail." } };
+  const { container, unmount } = await mount(<ChangeCardView card={gated} />);
+  expect(container.querySelector("[data-cc-checks]")!.textContent).toContain("1 of 4 fail");
+  const row = Array.from(container.querySelectorAll(".cc-check")).find((r) => r.textContent!.includes(SUITE_GATE_CHECK))!;
+  expect(row.querySelector(".cc-tone-red")).toBeTruthy();
+  expect(row.textContent).toContain("handoff-keeps-owner, dup-merge-keeps-newest");
+  await unmount();
+});
 
 test("an answerable surface says the recommendation once, on the control", async () => {
   const { container, unmount } = await mount(<><ChangeCardView card={card} recommend={false} /><DecisionAnswerControls decision={decision} onAnswer={() => {}} /></>);
   expect(container.querySelector(".cc-recommend")).toBeNull();
+  expect(container.querySelector("[data-cc-head]")!.textContent).toBe("Change ready");
   expect(container.querySelector("[data-verdict=ship]")!.textContent).toContain("recommended");
   expect(container.querySelector(".cc-why")!.textContent).toContain(card.recommend.why);
   await unmount();
@@ -112,6 +128,7 @@ test("a settled card says what happened in place of the recommendation", async (
   const { container, unmount } = await mount(<ChangeCardView card={card} outcome={outcome.line} />);
   expect(container.querySelector(".cc-recommend")).toBeNull();
   expect(container.querySelector("[data-cc-outcome]")!.textContent).toContain("Shipped");
+  expect(container.querySelector("[data-cc-head]")!.textContent).toBe("Change proposed");
   await unmount();
   const revised = cardOutcome({ ...answered, answer_index: 1, answer_text: "Revise: keep the greeting" }, "Ashot", Date.now())!;
   expect(revised.pill.startsWith("Sent back to revise by Ashot")).toBe(true);

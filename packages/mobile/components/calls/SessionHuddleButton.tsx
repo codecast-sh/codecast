@@ -2,8 +2,7 @@ import { Alert, TouchableOpacity, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { useQuery } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { CHANNEL_HUDDLE_WARNING_SIZE, parseRoomKey, sessionRoomKey } from "@codecast/shared/contracts";
 import { Text } from "@/components/Themed";
 import { Theme, themedStyles, useTheme } from "@/constants/Theme";
@@ -15,7 +14,7 @@ import { joinCall, startHuddle } from "@/lib/calls/callManager";
 // teammates are already in it, the button shows their count so it reads as
 // "join them", not "start something". Renders nothing when calling is not
 // configured, or when calls are off for the room's team (a per-team opt-in;
-// getCallConfig lists the caller's teams that have it on) — no dead
+// callConfig lists the caller's teams that have it on) — no dead
 // affordance.
 export function HuddleButton({
   roomKey,
@@ -32,11 +31,15 @@ export function HuddleButton({
 }) {
   const Theme = useTheme();
   const router = useRouter();
-  const config = useQuery(api.calls.getCallConfig);
-  const enabled = config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
-  const occupancy = useQuery(api.calls.getRoomOccupancy, enabled ? { room_keys: [roomKey] } : "skip");
+  // Both off the store the sync bridge feeds: whether calling is on for the
+  // team, and who is in this room (every live room in my teams carries its
+  // members), so the button paints its final state on the first frame.
+  const enabled = useInboxStore((s) => {
+    const config = s.callConfig as { enabled: boolean; teams?: string[] } | null;
+    return config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
+  });
+  const inRoom = useInboxStore((s) => s.liveRooms.find((r: any) => r.room_key === roomKey)?.members.length ?? 0);
   if (!enabled) return null;
-  const inRoom = (occupancy as any)?.[roomKey]?.length ?? 0;
   const isChannel = parseRoomKey(roomKey)?.kind === "channel";
   const start = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

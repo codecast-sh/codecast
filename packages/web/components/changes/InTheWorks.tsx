@@ -8,7 +8,7 @@ import { foldShepherdState } from "@codecast/shared/contracts";
 import { useState, type ReactNode } from "react";
 import type { WorksRow } from "../../hooks/useSyncChanges";
 import { PrStatusChip } from "../PrStatusChip";
-import { areaColor, areaLabel, ink, STUCK_RULE } from "./areaColor";
+import { areaFill, areaLabel, ink, STUCK_RULE } from "./areaColor";
 import type { AreaTouch } from "./editionModel";
 import { AreaTag, SessionPills, Tip } from "./StoryParts";
 import { useAreaColors } from "./storyContext";
@@ -17,10 +17,13 @@ type Review = Extract<WorksRow, { kind: "review" }>;
 type Insight = Extract<WorksRow, { kind: "stuck" | "building" }>;
 type Branch = Extract<WorksRow, { kind: "branch" }>;
 
-function Group({ label, children }: { label: string; children: ReactNode }) {
+function Group({ label, unit, children }: { label: string; unit?: string; children: ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <h4 className="chg-ui text-[12px] font-medium text-sol-text/75">{label}</h4>
+      <div>
+        <h4 className="chg-ui text-[12px] font-medium text-sol-text/75">{label}</h4>
+        {unit && <p className="font-mono text-[10px]" style={{ color: ink(45) }}>{unit}</p>}
+      </div>
       {children}
     </section>
   );
@@ -90,8 +93,8 @@ function AreaBars({ areas }: { areas: readonly AreaTouch[] }) {
         <Tip key={a.area} text={barTip(a)} side="left">
           <div className="grid grid-cols-[5.5rem_minmax(0,1fr)_2.5rem] items-center gap-2">
             <span className="truncate font-mono text-[11px] text-sol-text/60">{areaLabel(a.area)}</span>
-            <span className="h-1.5 rounded-[1px]" style={{ background: ink(8) }}>
-              <span className="block h-full rounded-[1px]" style={{ width: `${Math.max(3, (a.touches / max) * 100)}%`, background: a.stories ? areaColor(a.area, colors) : ink(45) }} />
+            <span className="h-1 rounded-[1px]" style={{ background: ink(8) }}>
+              <span className="block h-full rounded-[1px]" style={{ width: `${Math.max(3, (a.touches / max) * 100)}%`, background: a.stories ? areaFill(a.area, 55, colors) : ink(30) }} />
             </span>
             <span className="text-right font-mono text-[10px] tabular-nums text-sol-text/45">{a.touches}</span>
           </div>
@@ -116,7 +119,7 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed }: {
   const branches = works.filter((w): w is Branch => w.kind === "branch");
   const moving = stuck.length + building.length + reviews.length + branches.length > 0;
   const bars = areas.length > 0 && (
-    <Group label={areasLabel}>
+    <Group label={areasLabel} unit="file touches">
       <AreaBars areas={areas} />
     </Group>
   );

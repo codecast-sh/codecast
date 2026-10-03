@@ -3,7 +3,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { renderGoalsBrief } from "@codecast/shared/contracts/goalsBrief";
+import SHARED from "../../../docs/principles.md" with { type: "text" };
 import { readPrinciples } from "./goalsCommand.js";
+import { CODECAST_PRINCIPLES, loadLineProfile } from "./lineProfile.js";
 
 describe("cast goals", () => {
   const SITE = "https://x.test";
@@ -58,35 +61,53 @@ describe("cast goals", () => {
     await run("--brief");
     expect(calls).toEqual([{ path: "/cli/goals/brief", body: { project_path: path.join(repo, "docs", "sub"), conversation_id: "s1" } }]);
     expect(out).toContain("### in-1 Grow (p0)\n- `in-1:teams` Teams: not reported yet, target 100\n");
-    expect(out).not.toContain("## Principles");
+    expect(out).toContain("## Principles\n\n- Product: PR-product-1");
   });
 
-  test("principles come from docs/principles.md at the repository root", async () => {
+  test("the shared set ships with the CLI; a repo's own docs/principles.md is read only when its profile names it", async () => {
     fs.writeFileSync(path.join(repo, "docs", "principles.md"), "# Principles\n\nOne fact, one home.\n");
-    await run();
-    expect(out.endsWith("## Principles\n\nOne fact, one home.\n")).toBe(true);
-    out = "";
     await run("--json");
-    expect(JSON.parse(out).principles).toBe("# Principles\n\nOne fact, one home.\n");
+    expect(JSON.parse(out).principles).toBe(SHARED);
   });
 
-  test("--project asks for one project's brief; without it the profile's [line] project, and its principles join docs/principles.md", async () => {
+  test("--project asks for one project's brief; without it the profile's [line] project, and its principles join the shared set", async () => {
     await run("--project", "pj-3");
     expect(calls[0].body.project).toBe("pj-3");
     calls.length = 0;
     fs.mkdirSync(path.join(repo, ".codecast"));
     fs.mkdirSync(path.join(repo, "outreach"));
     fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nproject = "Agent Quality"\nprinciples = ["outreach/principles.md"]\n`);
-    fs.writeFileSync(path.join(repo, "docs", "principles.md"), "# Principles\n\nShared one.\n");
     fs.writeFileSync(path.join(repo, "outreach", "principles.md"), "UN-1 Project one.\n");
     out = "";
     await run("--json");
     expect(calls[0].body.project).toBe("Agent Quality");
-    expect(JSON.parse(out).principles).toBe("# Principles\n\nShared one.\n\nUN-1 Project one.\n");
+    expect(JSON.parse(out).principles).toBe(`${SHARED}\nUN-1 Project one.\n`);
   });
 
-  test("no repository, no principles", () => {
-    expect(readPrinciples(null)).toBeNull();
-    expect(readPrinciples(repo)).toBeNull();
+  test("readPrinciples: the shared set first, the profile's files that exist after it, never the shared set twice", () => {
+    fs.writeFileSync(path.join(repo, "own.md"), "CC-1 Own.\n");
+    fs.writeFileSync(path.join(repo, "copy.md"), "PR-1 Shared.\n");
+    expect(readPrinciples(repo, ["own.md", "missing.md", "copy.md"], "PR-1 Shared.\n")).toEqual({
+      text: "PR-1 Shared.\n\nCC-1 Own.\n",
+      from: [CODECAST_PRINCIPLES, "own.md"],
+    });
+    expect(readPrinciples(null, ["own.md"], "PR-1 Shared.\n")?.from).toEqual([CODECAST_PRINCIPLES]);
+    expect(readPrinciples(null, [], "")).toBeNull();
+    expect(readPrinciples(repo, [], "")).toBeNull();
+  });
+
+  test("codecast's profile: the shared set holds PR- ids only, its own file CC- ids only, and both fit the brief whole", () => {
+    const root = path.resolve(import.meta.dir, "../../..");
+    const paths = loadLineProfile(root).profile.principles;
+    expect(paths).toEqual(["docs/line/principles.md"]);
+    const own = fs.readFileSync(path.join(root, paths[0]), "utf8");
+    const ids = (text: string) => [...text.matchAll(/^### (\S+)/gm)].map((m) => m[1]);
+    expect(ids(SHARED).every((id) => id.startsWith("PR-"))).toBe(true);
+    expect(ids(own).every((id) => id.startsWith("CC-"))).toBe(true);
+    expect(new Set(ids(own)).size).toBe(ids(own).length);
+    const p = readPrinciples(root, paths)!;
+    const brief = renderGoalsBrief({ initiatives: [], projects: [] } as any, { brief: true, principles: p.text, principlesFrom: p.from });
+    for (const id of [...ids(SHARED), ...ids(own)]) expect(brief).toContain(`${id} `);
+    expect(brief).toContain(`Full text: ${CODECAST_PRINCIPLES}, docs/line/principles.md.`);
   });
 });

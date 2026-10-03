@@ -19,7 +19,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { createDataContext, createWorkContext } from "./data";
-import { canAccessSignal, canAccessTask } from "./lib/access";
+import { canAccessSignal, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { nextShortId } from "./counters";
 import { patchTask } from "./lib/taskWrite";
@@ -30,6 +30,7 @@ import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { insightSignalFingerprint, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
 import { teamVisibleConvTeam } from "./privacy";
 import { resolveWorkspaceProject } from "./lib/projectRef";
+import { projectContainingPath } from "./projectPaths";
 
 export { SIGNAL_KINDS, type SignalKind };
 export type SignalAttach = "fingerprint" | "judge" | "new" | "person";
@@ -540,7 +541,27 @@ export function insightBlockerSignals(
   return out;
 }
 
-/** Who files an insight's signals and where: the session's owner, in the insight's workspace. */
+/**
+ * The project an insight's blockers file into (line-profile.md LP1): the
+ * project of the session's active task, else the project whose project_path
+ * contains the session's directory, else none. Only a project of the workspace
+ * the signal lands in can be named, so a task or path in another workspace
+ * never routes a blocker there.
+ */
+async function insightProject(ctx: any, conv: Doc<"conversations">, workspaceKey: string, dir: string | undefined): Promise<string | undefined> {
+  const task: Doc<"tasks"> | null = conv.active_task_id ? await ctx.db.get(conv.active_task_id) : null;
+  const taskProject: Doc<"projects"> | null = task?.project_id ? await ctx.db.get(task.project_id) : null;
+  if (taskProject && taskProject.workspace === workspaceKey) return String(taskProject._id);
+  if (!dir) return undefined;
+  const rows: Doc<"projects">[] = await ctx.db
+    .query("projects")
+    .withIndex("by_workspace", (q: any) => q.eq("workspace", workspaceKey))
+    .take(2000);
+  const byPath = projectContainingPath(rows, dir);
+  return byPath ? String(byPath._id) : undefined;
+}
+
+/** Who files an insight's signals and where: the session's owner, in the insight's workspace and project. */
 export const insightFiler = internalQuery({
   args: { conversation_id: v.id("conversations") },
   handler: async (ctx, args) => {
@@ -550,7 +571,12 @@ export const insightFiler = internalQuery({
     // session hands its team over; anything else is the owner's own.
     const team = teamVisibleConvTeam(conv);
     const project_path = conv.project_path || conv.git_root || undefined;
-    const scope: Scope = team ? { workspace: "team", team_id: team, project_path } : { workspace: "personal", project_path };
+    const project = await insightProject(ctx, conv, computeWorkspaceKey({ user_id: conv.user_id }, conv), project_path);
+    const scope: Scope = {
+      ...(team ? { workspace: "team" as const, team_id: team } : { workspace: "personal" as const }),
+      project_path,
+      ...(project ? { project } : {}),
+    };
     return { short_id: conv.short_id, user_id: conv.user_id, title: conv.title, scope };
   },
 });

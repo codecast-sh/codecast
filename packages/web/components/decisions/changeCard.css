@@ -9,6 +9,10 @@
    (yellow and olive on cream sit near 3:1), hence --cc-ink per theme. */
 :root { --cc-ink: 58%; }
 .dark { --cc-ink: 84%; }
+/* The After tile has to out-weigh Before's red edge. On cream a faint tint
+   sits level with it, so light themes fill deeper and draw a solid edge. */
+:root { --cc-after-fill: 17%; --cc-after-edge: var(--cc-green-fill); }
+.dark { --cc-after-fill: 10%; --cc-after-edge: color-mix(in srgb, var(--cc-green-fill) 45%, transparent); }
 :root {
   --cc-green-fill: color-mix(in srgb, var(--sol-green) 68%, var(--sol-cyan));
   --cc-green: color-mix(in oklab, var(--cc-green-fill) 82%, var(--sol-text));
@@ -59,8 +63,15 @@
 .cc-cause { display: flex; flex-direction: column; gap: 0.35rem; font-size: 12px; line-height: 1.4; color: var(--sol-text-dim); }
 .cc-cause-row { display: flex; align-items: baseline; flex-wrap: wrap; gap: 0.3rem 0.5rem; }
 .cc-cause-title { color: var(--sol-text-muted); min-width: 0; }
-.cc-cause-meta { display: inline-flex; align-items: center; gap: 0.5rem; white-space: nowrap; }
-.cc-source { padding: 0 0.4rem; border-radius: 999px; font-size: 11px; border: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); }
+.cc-cause-meta { display: inline-flex; align-items: baseline; gap: 0.5rem; white-space: nowrap; }
+.cc-cause-meta.cc-goal { white-space: normal; min-width: 0; }
+.cc-cause-facts { overflow: hidden; }
+.cc-cause-facts > .cc-cause-row { margin-left: calc(-1ch - 0.5rem); }
+.cc-cause-facts .cc-sep { display: inline-block; width: 1ch; text-align: center; }
+
+/* The card's first line: it is a proposal, and what it recommends. */
+.cc-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 0 0.45rem; margin-bottom: calc(0.55rem - var(--cc-gap)); font-size: 12px; font-weight: 500; color: var(--cc-tone-ink); }
+.cc-card-head-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--cc-tone); box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-tone) 18%, transparent); }
 
 /* the decision: what changes leads, what was wrong supports it */
 .cc-sentences { display: flex; flex-direction: column; gap: 0.6rem; }
@@ -79,16 +90,17 @@
 .cc-proof { display: flex; flex-direction: column; gap: 0.15rem; }
 /* A two column table: the track (before dot, wire, after dot) and the name; a
    row's own detail stacks under its name. */
-.cc-proof-head, .cc-proof-row {
+.cc-proof-row {
   display: grid;
   grid-template-columns: 4.75rem minmax(0, 1fr);
   align-items: center;
   column-gap: 0.75rem;
 }
-.cc-proof-head { padding: 0 0.5rem; margin: 0 -0.5rem 0.15rem; align-items: baseline; }
-/* The detail most rows share, said once over the names. */
-.cc-proof-caption { grid-column: 2; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 0.4rem; font-size: 12px; line-height: 1.4; min-width: 0; }
-@media (max-width: 480px) { .cc-proof-caption { grid-column: 1 / -1; } }
+/* The detail most rows share, said once beside the headline. Its two dots
+   are the strip's own, so it plainly describes every row. */
+.cc-proof-caption { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.1rem 0.4rem; font-size: 12px; line-height: 1.4; min-width: 0; color: var(--sol-text-muted); }
+.cc-legend { display: inline-flex; align-items: center; gap: 0.35rem; }
+.cc-legend-dot { width: 6px; height: 6px; border-radius: 999px; flex-shrink: 0; box-shadow: none; }
 .cc-proof-row {
   row-gap: 0.1rem;
   padding: 0.35rem 0.5rem;
@@ -102,9 +114,14 @@
 .cc-dot-red { background: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 16%, transparent); }
 .cc-dot-green { background: var(--cc-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-green) 22%, transparent); }
 .cc-wire { position: relative; flex: 1; height: 2px; margin: 0 5px; border-radius: 2px; background: color-mix(in srgb, var(--sol-red) 35%, transparent); overflow: hidden; }
+/* The before dot is the smaller and the after the larger, as on .cc-pip, so
+   a fixed row reads as went green, not as a red line. */
+.cc-track > .cc-dot:first-child { width: 7px; height: 7px; }
+.cc-track > .cc-dot:last-child { width: 11px; height: 11px; }
+/* Filled, the wire is red only where it leaves the before dot. */
 .cc-wire-fill {
   position: absolute; inset: 0;
-  background: linear-gradient(90deg, var(--sol-red), var(--cc-green));
+  background: linear-gradient(90deg, var(--sol-red), var(--cc-green) 32%, var(--cc-green));
   transform-origin: left center;
 }
 /* The one motion moment, the first time a card is seen (useFirstSight). */
@@ -113,7 +130,7 @@
   animation-delay: calc(120ms + var(--i, 0) * 70ms);
 }
 .is-red .cc-wire-fill { background: var(--sol-red); opacity: 0.5; }
-.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--cc-green), var(--sol-red)); }
+.is-broke .cc-wire-fill { background: linear-gradient(90deg, var(--cc-green), var(--sol-red) 32%, var(--sol-red)); }
 .cc-proof-name { color: var(--sol-text); font-size: 12.5px; line-height: 1.4; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
 /* before → after on one line: the before gives way first, both clip with a tooltip. */
 .cc-proof-detail { grid-column: 2; display: flex; gap: 0.4rem; align-items: baseline; font-size: 12px; line-height: 1.4; min-width: 0; }
@@ -143,7 +160,7 @@
 /* Before is a neutral tile with a red label and edge; only After is tinted,
    so After reads as the one that wins. */
 .cc-before { border-color: color-mix(in srgb, var(--sol-red) 28%, var(--sol-border)); background: color-mix(in srgb, var(--sol-bg-alt) 55%, transparent); color: var(--sol-text-muted); }
-.cc-after { border-color: color-mix(in srgb, var(--cc-green) 45%, transparent); background: color-mix(in srgb, var(--cc-green) 10%, transparent); }
+.cc-after { border-color: var(--cc-after-edge); background: color-mix(in srgb, var(--cc-green-fill) var(--cc-after-fill), transparent); }
 .cc-side-label { font-size: 11px; font-weight: 600; }
 .cc-before .cc-side-label { color: var(--cc-red-ink); }
 .cc-after .cc-side-label { color: var(--cc-green-ink); }
@@ -201,7 +218,6 @@
 /* A settled card's last word: what was decided, by whom, when. */
 .cc-outcome { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.35rem 0.6rem; font-size: 13px; line-height: 1.5; padding-top: 0.9rem; border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); }
 .cc-outcome-verdict { color: var(--cc-tone-ink); font-weight: 600; }
-.cc-outcome-pill { color: var(--cc-tone-ink); border: 1px solid color-mix(in srgb, var(--cc-tone) 45%, transparent); background: color-mix(in srgb, var(--cc-tone) 8%, transparent); }
 
 /* the queue's line */
 .cc-line { display: flex; flex-direction: column; gap: 0.35rem; }
@@ -285,8 +301,17 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .cc-animate .cc-wire-fill, .cc-note { animation: none; }
+  .cc-animate .cc-wire-fill, .cc-note, .cc-checks { animation: none; }
+  .change-card *, .change-card-answer * { transition: none; }
 }
+
+/* Every control on the card can be reached by tab, and shows it. */
+.change-card :is(a, button):focus-visible,
+.change-card-answer button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sol-blue) 70%, transparent);
+  outline-offset: 2px;
+}
+.cc-example-input:focus-visible { border-radius: 0 4px 4px 0; color: var(--sol-text-muted); }
 
 @media (max-width: 640px) {
   /* A phone has no room to pin the bar; it leads the page and scrolls with it. */

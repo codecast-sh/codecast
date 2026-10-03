@@ -24,25 +24,25 @@
 }
 .line-num[data-zero="true"] { opacity: 0.45; font-weight: 400; }
 
-/* The display face, for the few things read from across the room: the
-   headline, the start title and the big counts. Mono stays for ids, commands
-   and the numbers inside rows. */
+/* The display level is the app's mono, only larger: the headline, the start
+   title and the big counts read as the same page as the rows under them. */
 .line-display, .line-headline, .line-start-title, .line-display-num {
-  font-family: var(--font-serif), serif;
-  font-optical-sizing: auto;
-  letter-spacing: 0;
+  font-family: var(--font-mono), monospace;
+  letter-spacing: -0.01em;
 }
-.line-display-num { font-weight: 500; font-variant-numeric: lining-nums tabular-nums; }
+.line-display-num { font-weight: 600; font-variant-numeric: tabular-nums; letter-spacing: -0.03em; }
 .line-display-num[data-zero="true"] { font-weight: 400; opacity: 0.4; }
 
-/* The display level: the one sentence that says how the line is doing. */
+/* The one sentence that says how the line is doing. Its counts are bold;
+   color marks only what needs action. */
 .line-headline {
-  font-size: clamp(24px, 3.2cqi, 34px);
-  line-height: 1.12;
-  font-weight: 450;
-  text-wrap: balance;
-  max-width: 30ch;
+  font-size: 20px;
+  line-height: 1.35;
+  font-weight: 400;
+  text-wrap: pretty;
+  max-width: 72ch;
 }
+@container line-floor (max-width: 640px) { .line-headline { font-size: 16px; } }
 .line-subtitle { display: none; }
 @container line-floor (min-width: 700px) { .line-subtitle { display: inline; } }
 
@@ -57,8 +57,6 @@
 .line-flow { container-type: inline-size; }
 @container (max-width: 1360px) {
   .line-track { grid-template-columns: var(--line-cols-tight); }
-  /* No room on a 16px rail: the station's header line carries the count. */
-  .line-rail-chip { display: none; }
 }
 @container (max-width: 1000px) {
   .line-track { grid-template-columns: var(--line-cols-compact); }
@@ -77,22 +75,26 @@
 }
 .line-track > .line-col { align-self: stretch; }
 
-/* Throughput: two lead numbers, then the flow counts as a quieter set. */
+/* Throughput: two lead numbers, then the flow counts as a quieter set, all
+   at fixed widths in one cluster that ends where its content does. */
 .line-meter {
   display: flex;
   flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
   align-items: stretch;
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background: color-mix(in srgb, var(--sol-card) 82%, transparent);
   backdrop-filter: blur(2px);
   overflow: hidden;
 }
-.line-meter-lead { display: flex; gap: 32px; padding: 14px 20px; flex: 0 0 auto; }
+.line-meter-lead { display: flex; gap: 28px; padding: 12px 20px; flex: 0 0 auto; }
+.line-meter-lead > * { min-width: 104px; }
 .line-meter-flow {
-  flex: 1 1 420px;
+  flex: 0 0 auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 6px 16px;
+  grid-template-columns: repeat(5, 96px);
+  gap: 6px 12px;
   align-content: center;
   padding: 12px 20px;
   box-shadow: -1px 0 0 color-mix(in srgb, var(--sol-border) 35%, transparent);
@@ -101,6 +103,7 @@
 /* Too narrow for five across: the flow counts take their own band as a
    fixed three by two grid, so no count is ever left alone on a row. */
 @container line-floor (max-width: 900px) {
+  .line-meter { width: auto; }
   .line-meter-lead { flex: 1 1 100%; gap: 24px; padding: 12px 16px; }
   .line-meter-flow {
     flex: 1 1 100%;
@@ -111,8 +114,16 @@
   }
 }
 
-/* All clear, said quietly: green held back toward the text color. */
-.line-tone-clear { color: color-mix(in srgb, var(--sol-green) 72%, var(--sol-text)); }
+/* On a phone the strip folds to one summary line; a tap opens it. */
+.line-meter-summary {
+  display: none;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  background: color-mix(in srgb, var(--sol-card) 82%, transparent);
+}
+@media (max-width: 639px) {
+  .line-meter-summary { display: flex; }
+  .line-meter:not([data-open="true"]) { display: none; }
+}
 
 /* The headline's links: a station named in the sentence. */
 .line-headline-link {
@@ -220,8 +231,8 @@
 }
 
 /* The rail between stations, at the height of the station names: the one
-   colored thing on the floor, moving while the next station holds work, with
-   a chip for what entered it this week. */
+   colored thing on the floor, moving while the next station holds work. What
+   entered a station this week is said in its header, beside the count. */
 .line-rail-slot { --rail-y: 25px; }
 .line-rail {
   position: absolute;
@@ -244,42 +255,18 @@
   from { background-position: 0 0; }
   to { background-position: 18px 0; }
 }
-.line-rail-chip {
-  position: absolute;
-  left: 50%;
-  top: var(--rail-y);
-  transform: translate(-50%, -50%);
-  min-width: 20px;
-  padding: 1px 5px;
-  border-radius: 9999px;
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 14px;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
-  color: var(--line-belt);
-  background: var(--sol-card);
-  border: 1px solid color-mix(in srgb, var(--line-belt) 70%, transparent);
-  z-index: 1;
-}
+
 
 /* Stage lamps. */
 .line-lamp { position: relative; width: 8px; height: 8px; border-radius: 9999px; flex-shrink: 0; }
-.line-lamp[data-kind="running"] { background: var(--line-belt); }
-.line-lamp[data-kind="running"]::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: 9999px;
-  border: 1px solid var(--line-belt);
-  animation: line-ping 2.4s cubic-bezier(0, 0, 0.2, 1) infinite;
-}
+/* Running is the ordinary case: a still dot. Only exceptions move (ask,
+   failing, starved). */
+.line-lamp[data-kind="running"] { background: color-mix(in srgb, var(--line-belt) 75%, transparent); }
 .line-lamp[data-kind="paused"] {
   background: linear-gradient(90deg, var(--sol-yellow) 0 35%, transparent 35% 65%, var(--sol-yellow) 65%);
   border-radius: 1px;
 }
-.line-lamp[data-kind="starved"] { background: var(--sol-orange); }
+.line-lamp[data-kind="starved"] { background: var(--sol-orange); animation: line-pulse 2.4s ease-in-out infinite; }
 .line-lamp[data-kind="ask"] { background: var(--sol-yellow); }
 .line-lamp[data-kind="ask"]::after {
   content: "";
@@ -318,8 +305,32 @@
 .line-spark rect { fill: color-mix(in srgb, var(--sol-text-muted) 45%, transparent); }
 .line-spark rect[data-hot="true"] { fill: var(--sol-text); }
 
-.line-bar { background: color-mix(in srgb, var(--sol-border) 30%, transparent); }
-.line-bar > span { background: linear-gradient(90deg, color-mix(in srgb, var(--stage) 55%, transparent), var(--stage)); }
+/* Priority: a thin meter on a cause row's left edge, filling upward. */
+.line-prio {
+  position: absolute;
+  left: 3px;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 1px;
+  background: linear-gradient(to top, var(--sol-text-muted) var(--p, 0%), color-mix(in srgb, var(--sol-border) 40%, transparent) var(--p, 0%));
+}
+.line-row[data-focused="true"] .line-prio { opacity: 0; }
+
+/* Watch: a countdown track that empties as the watch runs, with ticks so it
+   never reads as a progress bar. */
+.line-countdown {
+  position: relative;
+  height: 4px;
+  border-radius: 1px;
+  background: repeating-linear-gradient(90deg, color-mix(in srgb, var(--sol-border) 45%, transparent) 0 calc(100% / 7 - 2px), transparent calc(100% / 7 - 2px) calc(100% / 7));
+}
+.line-countdown > span {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(90deg, var(--sol-text-muted) 0 calc(100% / 7 - 2px), transparent calc(100% / 7 - 2px) calc(100% / 7));
+  clip-path: inset(0 calc(100% - var(--left, 100%)) 0 0);
+}
 
 /* A command chip: wraps at spaces, never clips; the copy button sits inside. */
 .line-cmd {
@@ -381,7 +392,7 @@
   background: color-mix(in srgb, var(--sol-card) 90%, transparent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent);
 }
-.line-start-title { font-size: clamp(26px, 4.4cqi, 36px); line-height: 1.08; font-weight: 450; }
+.line-start-title { font-size: 20px; line-height: 1.3; font-weight: 600; }
 .line-start {
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   background:
@@ -402,6 +413,17 @@
   color: var(--sol-text);
   border-color: color-mix(in srgb, var(--sol-text) 35%, transparent);
   background: var(--sol-card);
+}
+
+/* The roll-up's sideways scroller: a shadow on whichever edge hides
+   columns, covered by a background that scrolls with the content once the
+   edge is reached. */
+.line-rollup-scroll {
+  background:
+    linear-gradient(to left, var(--sol-bg) 40%, transparent) right center / 32px 100% no-repeat local,
+    linear-gradient(to right, var(--sol-bg) 40%, transparent) left center / 32px 100% no-repeat local,
+    radial-gradient(farthest-side at 100% 50%, color-mix(in srgb, var(--sol-text) 22%, transparent), transparent) right center / 14px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 0% 50%, color-mix(in srgb, var(--sol-text) 22%, transparent), transparent) left center / 14px 100% no-repeat scroll;
 }
 
 /* The awaiting column hosts the decision cards; tighten their padding. */

@@ -347,6 +347,12 @@ function surfaceLine(s: EvalSurfaceResult): string {
   return `${s.title || s.surface}: ${sep}${p}${gates}`;
 }
 
+/** The check a card carries when the project's suite gates failed (reps.json gates_failed): red, naming each failing scenario, so Ship is refused like any failing check. */
+export const SUITE_GATE_CHECK = "Suite gates";
+export function suiteGateCheck(failed: readonly string[]): CardCheck {
+  return { name: SUITE_GATE_CHECK, ok: false, detail: `${failed.length} ${failed.length === 1 ? "scenario" : "scenarios"} failed: ${failed.join(", ")}` };
+}
+
 /** The eval station's proof: each proven freeze was red on the base, and is green on the branch when it passes. */
 export function evalProof(result: EvalResult): ChangeCard["proof"] {
   const before: CardCheck[] = [];
@@ -401,11 +407,15 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     });
   }
   if (evalResult) {
+    // A failed suite gate is its own check, so the Eval check answers for the
+    // replays alone and one red is never counted twice.
+    const gates = evalResult.gatesFailed ?? [];
     checks.push({
       name: "Eval",
-      ok: evalResult.ok,
+      ok: gates.length ? evalResult.surfaces.every((s) => s.ok) : evalResult.ok,
       detail: evalResult.surfaces.length ? evalResult.surfaces.map(surfaceLine).join("; ") : "no surface touched",
     });
+    if (gates.length) checks.push(suiteGateCheck(gates));
   }
   if (evidence?.review_verdict) {
     checks.push({

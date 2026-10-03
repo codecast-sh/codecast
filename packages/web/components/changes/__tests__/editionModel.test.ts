@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { awaitsStories, buildEdition, dayVolumes, echoesHeadline, filterAreas, stepOrder } from "../editionModel";
+import { awaitsStories, buildEdition, dayVolumes, echoesHeadline, filterAreas, peopleOf, stepOrder } from "../editionModel";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, at, edition, liveRow, story } from "./fixtures";
 
@@ -241,5 +241,50 @@ describe("echoesHeadline", () => {
     expect(written.leadEchoesHeadline).toBe(true);
     const other = build(stories, { edition: edition({ status: "written", headline: EDITION, lead_story_key: "b" }) });
     expect(other.leadEchoesHeadline).toBe(false);
+  });
+});
+
+describe("counts under the branch toggle", () => {
+  const stats = { commits: 2, stories: 2, releases: 0, people: 1, sessions: 0, private_sessions: 0 };
+  const stories = [story("a"), story("b"), story("c", { on_default_branch: false, branch: "feat/x", author_names: ["Bo"] })];
+
+  test("on main the edition's stored counts stand", () => {
+    expect(build(stories, { edition: edition({ stats }) }).stats.stories).toBe(2);
+  });
+
+  test("with every branch the counts come from the stories, so the header agrees with Showing N of M", () => {
+    const m = build(stories, { edition: edition({ stats }), url: url({ branches: "all", q: "Headline" }) });
+    expect(m.stats).toMatchObject({ stories: 3, commits: 3, people: 2 });
+    expect(m.filterLine).toBe('Showing 3 of 3 stories ("Headline")');
+  });
+});
+
+describe("people", () => {
+  const roster = [{ _id: "u_ana", name: "Ana Lopez" }, { _id: "u_ben", name: "" }] as any[];
+  // Ana ran one session that committed under her name, and committed twice with no session.
+  const stories = [
+    story("session", { actor_user_ids: ["u_ana" as any], author_names: ["Ana Lopez"] }),
+    story("commit1", { author_names: ["ana lopez "] }),
+    story("commit2", { author_names: ["Ana Lopez"], area: "cli" }),
+    story("other", { author_names: ["Cid"], area: "cli" }),
+    story("blank", { actor_user_ids: ["u_ben" as any], author_names: [" "] }),
+  ];
+
+  test("one person per human: the roster name, every id and spelling that is them, blank names skipped", () => {
+    expect(peopleOf(stories, roster)).toEqual([
+      { key: "ana lopez", name: "Ana Lopez", userIds: ["u_ana"], authorNames: ["Ana Lopez", "ana lopez "] },
+      { key: "cid", name: "Cid", userIds: [], authorNames: ["Cid"] },
+    ]);
+  });
+
+  test("choosing the person keeps their session story and both commit-only stories", () => {
+    const m = build(stories, { roster, url: url({ person: "ana lopez" }) });
+    expect(m.matching).toBe(3);
+    expect(m.filterLine).toBe("Showing 3 of 5 stories (Ana Lopez)");
+    expect(m.stats.people).toBe(2);
+  });
+
+  test("an older link naming the roster id finds the same three stories", () => {
+    expect(build(stories, { roster, url: url({ person: "u_ana" }) }).matching).toBe(3);
   });
 });
