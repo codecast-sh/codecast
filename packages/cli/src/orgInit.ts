@@ -15,7 +15,7 @@ import type { Command } from "commander";
 export type OrgInitMode = "init" | "review";
 
 export interface OrgInitDeps {
-  cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number }) => Promise<any>;
+  cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
   readWorkspace: (explicitTeam?: string) => Promise<{ kind: "team" | "personal"; [k: string]: any }>;
   workspaceArgs: (ws: any) => { team_id?: string };
   workspaceLabel: (ws: any) => string;

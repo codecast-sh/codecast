@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  undoLabelNamesTitle,
   describeUndoObject,
   undoActLabel,
   undoFixtureWalk,
@@ -145,15 +146,40 @@ describe("undo timeline row model", () => {
     expect(undoActLabel(row("fx-org").act)).toBe("Open in org record");
   });
 
+  test("a done row that ⌘Z stops at (its undo widens access) says to take it back from the row", () => {
+    const items = fx.snapshot.items.map((i) => (i.id === "fx-status" ? { ...i, confirm: true } : i));
+    const m = undoTimelineRows({ ...fx.snapshot, items }, fx.state, NOW, WINDOW);
+    expect(row("fx-status", m).detail).toMatch(/its undo widens access: take it back from here$/);
+    expect(row("fx-status", m).act).toEqual({ kind: "back", steps: 1 });
+  });
+
   test("objects resolve live through the recent-visit shape", () => {
     expect(row("fx-pin").visits[0]?.title).toBe("Fix the auth race on sign-in");
     expect(row("fx-status").visits[0]?.objectType).toBe("task");
-    expect(row("fx-status").detail).toContain("ct-4102");
+    // The label names the short id already, so the detail does not repeat it.
+    expect(row("fx-status").label).toContain("ct-4102");
+    expect(row("fx-status").detail).toBe("In Review · High");
     const renamed = { ...fx.state, tasks: { "fx-task": { ...fx.state.tasks["fx-task"], title: "Renamed live" } } };
     expect(row("fx-status", undoTimelineRows(fx.snapshot, renamed, NOW, WINDOW)).visits[0]?.title).toBe("Renamed live");
     expect(describeUndoObject({}, "tasks", "t1")).toEqual({ kind: "page", key: "page:/tasks/t1", ts: 0, path: "/tasks/t1", label: undefined });
     expect(describeUndoObject({ buckets: { b1: { name: "Review" } } }, "buckets", "b1")).toEqual({ kind: "view", key: "label:b1", ts: 0, label: "Review" });
     expect(describeUndoObject({ bucketAssignments: { a1: { conversation_id: "c1" } } }, "bucketAssignments", "a1")).toEqual({ kind: "session", key: "c1", ts: 0 });
     expect(describeUndoObject({}, "pending", "x")).toBeNull();
+  });
+
+  test("a label that quotes a title cut short still counts as naming it", () => {
+    const long = "Append codecast p3val4 marker to README.md and commit it";
+    expect(undoLabelNamesTitle(`Stashed “${long.slice(0, 39)}…”`, long)).toBe(true);
+    expect(undoLabelNamesTitle("Pinned “Broker lead”", "Broker lead")).toBe(true);
+    expect(undoLabelNamesTitle("Moved ct-4102 to In Review", "Undo history timeline")).toBe(false);
+    // A rename since: the live title is news, so the link shows.
+    expect(undoLabelNamesTitle("Pinned “Auth race”", "Fix the auth race on sign-in")).toBe(false);
+  });
+
+  test("a done group leaves line 2 to its fold, never one child's place", () => {
+    const items = fx.snapshot.items.map((i) => (i.id === "fx-file" ? { ...i, status: "done" as const, skipped: [] } : i));
+    const m = undoTimelineRows({ ...fx.snapshot, items }, fx.state, NOW, WINDOW);
+    expect(row("fx-file", m).fold?.label).toBe("3 sessions");
+    expect(row("fx-file", m).detail).toBe("");
   });
 });

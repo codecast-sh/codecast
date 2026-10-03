@@ -40,7 +40,7 @@ test("the calls page and the face row render through every missing query", async
     expect(text).toContain("Your calls could not be loaded.");
     expect(text).not.toContain("Loading…");
     expect([...page.container.querySelectorAll("button")].some((b) => b.textContent?.trim() === "Try again")).toBe(true);
-    expect(text).toContain("Record a meeting");
+    expect(text).toContain("Record audio");
     for (const fn of ["transcripts:webListCalls", "teams:getTeamMembers", "calls:getCallConfig"]) {
       expect(backend.refused).toContain(fn);
     }

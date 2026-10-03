@@ -29,8 +29,10 @@
 //                                       the guest's own beat, the minute sweep)
 //   the page goes quiet   -> left      (left_reason "lapsed", by the sweep,
 //                                       once the media server no longer
-//                                       lists them; "not_joined" for a place
-//                                       nobody ever came into)
+//                                       lists them, or sooner by the roster
+//                                       check for a guest it listed before
+//                                       (noteGuestsInMedia); "not_joined"
+//                                       for a place nobody ever came into)
 //   requestJoin, soon     -> admitted  (a place let go that way, within
 //                                       GUEST_RESUME_MS of the same huddle,
 //                                       comes back without a knock)
@@ -97,8 +99,9 @@ import { enqueuePush, readPresence } from "./pushRouter";
 import { signLivekitJwt } from "./lib/livekitJwt";
 import { listParticipants, livekitConfigFromEnv, putOutOfRoom } from "./lib/livekitServer";
 import { sha256Hex } from "./lib/hash";
+import { requireUser } from "./lib/requireUser";
 import { newSlug } from "./lib/slug";
-import { isRoomRecording } from "./lib/callRecordingRuns";
+import { roomRecordingState } from "./lib/callRecordingRuns";
 import { personImage, publicPersonLabel, teammateLabel } from "./lib/personLabel";
 import {
   GUEST_ROSTER_TAIL_MS,
@@ -132,6 +135,7 @@ import {
   guestDisplayName,
   guestIdentity,
   guestJoinPath,
+  guestLinkRefusal,
   isGuestIdentity,
   isGuestPresent,
   normalizeGuestName,
@@ -147,15 +151,13 @@ const GUEST_SECRET_LENGTH = 32;
 
 // ── Pure rules (exported for tests) ───────────────────────────────────────
 
-/** Why a link refuses, by its own fields alone, or null. */
+/** Why a link refuses, by its own fields alone, or null (guestLinkRefusal,
+ *  the rule the guest's lobby shares). */
 export function linkRefusal(
   link: Pick<Doc<"call_guest_links">, "revoked_at" | "expires_at"> | null,
   now: number,
 ): "not_found" | "revoked" | "expired" | null {
-  if (!link) return "not_found";
-  if (link.revoked_at) return "revoked";
-  if (now >= link.expires_at) return "expired";
-  return null;
+  return guestLinkRefusal(link, now);
 }
 
 /** Has this link neither expired nor been turned off? */
@@ -373,13 +375,19 @@ export function projectGuest(g: Doc<"call_guests">) {
 }
 
 /** What a guest is told before joining and while inside: is this call being
- *  transcribed, and is it being recorded. Every huddle transcribes unless the
- *  room switched it off (calls.setRoomTranscribeOff); recording is a composite
- *  run in progress (call_recordings), which is what puts their face on file. */
-async function roomNotice(ctx: any, roomKey: string): Promise<{ transcribed: boolean; recording: boolean }> {
+ *  transcribed, is it being recorded, and will that video be on the call's
+ *  public link. Every huddle transcribes unless the room switched it off
+ *  (calls.setRoomTranscribeOff); recording is a composite run in progress
+ *  (call_recordings), which is what puts their face on file; and a run whose
+ *  call shares its video by link (roomRecordingState.video_shared) puts it
+ *  in front of anyone with that link. */
+async function roomNotice(ctx: any, roomKey: string): Promise<{ transcribed: boolean; recording: boolean; video_public: boolean }> {
+  const run = await roomRecordingState(ctx, roomKey);
+  const recording = !!run && run.status !== "stopping";
   return {
     transcribed: !(await readRoomState(ctx, roomKey))?.transcribe_off,
-    recording: await isRoomRecording(ctx, roomKey),
+    recording,
+    video_public: recording && !!run?.video_shared,
   };
 }
 
@@ -391,6 +399,13 @@ async function roomNotice(ctx: any, roomKey: string): Promise<{ transcribed: boo
  *  prod"), both written for the team and never for a stranger, so those
  *  rooms are named the way a people room is: after whoever invited them
  *  (the page's meetingTitle). */
+/*  linkTitle hides a room's NAME from strangers, not its ids. An admitted
+ *  guest's LiveKit client holds the room name, which is the room_key itself
+ *  ("session:<conversationId>", "channel:<channelId>", "dm:<a>:<b>"), and
+ *  every participant identity: a member's Convex user id, an agent face's
+ *  "agent:<conversationId>". None of them grants anything (every read checks
+ *  standing, and a guest has none), but they are visible to anyone the room
+ *  admits, so nothing may treat a room key or a member's id as private. */
 export async function linkTitle(ctx: any, link: Pick<Doc<"call_guest_links">, "room_key">): Promise<string | null> {
   const parsed = parseRoomKey(link.room_key);
   if (parsed?.kind === "channel") {
@@ -426,12 +441,6 @@ const LINK_REFUSAL_FOR_ROOM: Record<GuestLinkRefusal, string> = {
 };
 
 // ── The room's side (signed in) ────────────────────────────────────────────
-
-async function requireUser(ctx: any): Promise<Id<"users">> {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) throw new Error("Not authenticated");
-  return userId;
-}
 
 const NOT_A_DOORKEEPER = "Only someone in the huddle can do that";
 
@@ -799,11 +808,16 @@ export const listGuestsWaiting = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
     const now = Date.now();
-    // Newest first and bounded: a person's old links are mostly expired ones.
+    // Only links the clock still holds open: the range leaves expired ones
+    // out of the read set (so their writes re-run nothing in any window),
+    // and a guest can only be waiting on a live link anyway. linkOpen then
+    // drops the revoked. The cap is a safety bound, never a window: nobody
+    // keeps hundreds of live links, and were it ever reached, latest expiry
+    // first keeps the links made most recently.
     const links = (
       await ctx.db
         .query("call_guest_links")
-        .withIndex("by_creator_told", (q) => q.eq("created_by", userId))
+        .withIndex("by_creator_expires", (q) => q.eq("created_by", userId).gt("expires_at", now))
         .order("desc")
         .take(200)
     ).filter((l) => linkOpen(l, now));
@@ -1216,9 +1230,9 @@ export const enforceGuestRoster = internalAction({
     let removed = 0;
     try {
       const guests = (await listParticipants(cfg, args.room_key)).filter((p) => isGuestIdentity(p.identity));
+      const inMedia: string[] = [];
       if (guests.length > 0) {
         const allowed = new Set(await ctx.runQuery(internal.callGuests.allowedGuestIdentities, { room_key: args.room_key }));
-        const inMedia: string[] = [];
         for (const p of guests) {
           if (allowed.has(p.identity)) {
             inMedia.push(p.identity);
@@ -1227,10 +1241,10 @@ export const enforceGuestRoster = internalAction({
           await putOutOfRoom(cfg, args.room_key, p.identity);
           removed++;
         }
-        if (inMedia.length > 0) {
-          await ctx.runMutation(internal.callGuests.noteGuestsInMedia, { room_key: args.room_key, identities: inMedia });
-        }
       }
+      // Told even when the listing holds no guest at all: that is exactly the
+      // listing that says a guest who closed their tab has left the media.
+      await ctx.runMutation(internal.callGuests.noteGuestsInMedia, { room_key: args.room_key, identities: inMedia });
     } catch (err) {
       console.warn(`[callGuests] roster check failed for ${args.room_key}:`, err);
     }
@@ -1242,25 +1256,42 @@ export const enforceGuestRoster = internalAction({
   },
 });
 
-/** Admitted guests the media server still has in the room are seen, page
- *  beat or not. A phone suspends a background tab's timers within seconds,
- *  so a guest who glanced at a message for two minutes would otherwise be
- *  let go by the sweep while their connection never dropped. The roster
- *  check that lists them runs every minute for a room with guests in it,
- *  inside the lapse window, so a guest LiveKit holds never lapses, and one
- *  it lost lapses on the page's own lease as before. */
+/** What a roster listing says about the room's admitted guests, both ways.
+ *
+ *  Listed: seen, page beat or not. A phone suspends a background tab's
+ *  timers within seconds, so a guest who glanced at a message for two
+ *  minutes would otherwise be let go by the sweep while their connection
+ *  never dropped. The roster check that lists them runs every minute for a
+ *  room with guests in it, inside the lapse window, so a guest LiveKit holds
+ *  never lapses.
+ *
+ *  Not listed, after having been (media_seen_at), with a page quiet past a
+ *  seat's lease: gone. That is a closed tab, not a pocketed phone (LiveKit
+ *  keeps a sleeping client listed) and not a reconnect (LiveKit keeps a
+ *  reconnecting participant listed, and the page beats through it). Waiting
+ *  out the whole lapse window for them left a guest nobody could see on
+ *  every member's face row and room count for minutes after LiveKit let
+ *  them go. Let go as "lapsed", which stays resumable (GUEST_RESUME_MS), so
+ *  a page that does come back walks in without knocking. A guest admitted
+ *  but not yet in the media has no media_seen_at (admitting clears it), so
+ *  somebody still connecting is never mistaken for somebody who left. */
 export const noteGuestsInMedia = internalMutation({
   args: { room_key: v.string(), identities: v.array(v.string()) },
   handler: async (ctx, args) => {
     const now = Date.now();
     const listed = new Set(args.identities);
     let touched = 0;
+    const gone: Doc<"call_guests">[] = [];
     for (const g of await roomGuestRows(ctx, args.room_key, "admitted", now, { all: true })) {
-      if (!listed.has(guestIdentity(String(g._id)))) continue;
+      if (!listed.has(guestIdentity(String(g._id)))) {
+        if (g.media_seen_at && now - g.last_seen >= CALL_MEMBER_STALE_MS) gone.push(g);
+        continue;
+      }
       await ctx.db.patch(g._id, { last_seen: Math.max(g.last_seen, now), media_seen_at: now });
       touched++;
     }
-    return { touched };
+    await settleGuests(ctx, args.room_key, gone, { status: "left", left_reason: "lapsed" });
+    return { touched, lapsed: gone.length };
   },
 });
 

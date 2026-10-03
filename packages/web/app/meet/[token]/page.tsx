@@ -17,15 +17,16 @@ import {
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useWsConnected } from "../../../hooks/useWsConnected";
+import { useNowWhen } from "../../../hooks/useCoarseNow";
 import { AppLoader } from "../../../components/AppLoader";
 import { steadyInterval } from "../../../lib/steadyInterval";
 import { hasStoredAuthToken } from "../../../lib/localAuth";
-import { GuestCall, GuestPreview, canJoinCalls } from "../../../lib/calls/guestRoom";
+import { GuestCall, GuestPreview, canJoinCalls, guestMediaEnding } from "../../../lib/calls/guestRoom";
 import { playCueStandalone } from "../../../lib/cuePlay";
 import { CALL_JOIN } from "../../../lib/cueSpec";
 import { GuestLobby, type LobbyMode } from "./GuestLobby";
 import { GuestInCall } from "./GuestInCall";
-import { GuestOutcome, type Outcome } from "./GuestOutcome";
+import { GuestOutcome, linkAsOf, type Outcome } from "./GuestOutcome";
 import { MeetShell } from "./MeetChrome";
 import { meetingTitle } from "../../../lib/calls/roomGuests";
 import {
@@ -102,6 +103,8 @@ type Describe =
       live: boolean;
       transcribed: boolean;
       recording: boolean;
+      /** The recording's video will be on the call's public link. */
+      video_public?: boolean;
     }
   | { ok: false; reason: GuestLinkRefusal };
 
@@ -121,6 +124,7 @@ type GuestState = {
     live: boolean;
     transcribed: boolean;
     recording: boolean;
+    video_public?: boolean;
   };
 };
 
@@ -168,6 +172,11 @@ function pageWasTouched(): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** How often the lobby asks whether its link has expired. A knock in the
+ *  gap is refused by the server and said in words; the page's Expired
+ *  screen follows within this. */
+const LINK_EXPIRY_CHECK_MS = 10_000;
+
 export default function GuestMeetPage() {
   const token = useParams().token as string;
   const [creds, setCreds] = useState<GuestCreds | null>(() => readCreds(token));
@@ -176,7 +185,12 @@ export default function GuestMeetPage() {
   // Another tab of this link knocked (or was forgotten): this tab is the same
   // person, and takes the same row.
   useWatchEffect(() => watchCreds(token, () => setCreds(readCreds(token))), [token]);
-  const link = describe.data as Describe | undefined;
+  const described = describe.data as Describe | undefined;
+  // A link's expiry writes nothing, so describeGuestLink never re-runs when
+  // it passes: a guest who opened the link and waited on the lobby would
+  // still be offered a knock the server then refuses. The clock decides it
+  // here instead, waking only when the expiry is crossed.
+  const now = useNowWhen((t) => String(linkAsOf(described, t)?.ok), LINK_EXPIRY_CHECK_MS);
   const state = guest.data as GuestState | null | undefined;
 
   const requestJoin = useMutation(api.callGuests.requestJoin);
@@ -246,7 +260,7 @@ export default function GuestMeetPage() {
   // The two things the page needs from the media, read as strings so the
   // page does not re-render for every speaking ring (GuestInCall reads the rest).
   const phase = useSyncExternalStore(call ? call.subscribe : noSubscribe, () => call?.getSnapshot().phase ?? null, noSnapshot);
-  const ended = useSyncExternalStore(call ? call.subscribe : noSubscribe, () => call?.getSnapshot().ended ?? null, noSnapshot);
+  const mediaEnded = useSyncExternalStore(call ? call.subscribe : noSubscribe, () => call?.getSnapshot().ended ?? null, noSnapshot);
 
   // A secret the server no longer knows (a cleared database, a hand-edited
   // store): forget it and start at the lobby.
@@ -260,6 +274,12 @@ export default function GuestMeetPage() {
   const serverView: CallGuestView | null = state?.view ?? (creds && state === undefined && !guest.error ? knockedView : null);
   const view = stoppedAsking && serverView === "waiting" ? null : serverView;
   const atDoorOrIn = view === "waiting" || view === "admitted";
+  // Before a knock the lobby's link is judged by the clock (see `now`); a
+  // guest at the door or inside is kept current by their own row instead.
+  const link: Describe | undefined = !atDoorOrIn ? linkAsOf(described, now) : described;
+  // The media's reason for letting go, overruled by the server's view where
+  // they disagree (guestMediaEnding): still admitted means not over.
+  const ended = guestMediaEnding(mediaEnded, view);
   if (atDoorOrIn) seenLive.current = true;
   // Last visit's ending, on a link that still lets them ask: the lobby. A
   // place still held for them, a removal, a link that closed and a denial
@@ -279,9 +299,12 @@ export default function GuestMeetPage() {
   const title = meetingTitle(info?.title ?? null, info?.inviter ?? null);
   const transcribed = !!info?.transcribed;
   const recording = !!info?.recording;
-  const notice: GuestNotice = { recording, transcribed };
-  // The room keeps more than the guest agreed to when they asked.
-  const widened = !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed));
+  const videoPublic = recording && !!info?.video_public;
+  const notice: GuestNotice = { recording, transcribed, video_public: videoPublic };
+  // The room keeps more than the guest agreed to when they asked: a
+  // recording, a transcript, or a recording whose video goes to a public link.
+  const widened =
+    !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed) || (videoPublic && !accepted.video_public));
 
   // The lease. See the header: worker-timed, at once when the tab comes back
   // to the front, and for an admitted guest out of the media only while
@@ -643,10 +666,13 @@ export default function GuestMeetPage() {
   }, [ended, reopening, reopenTries, pageVisible]);
 
   // The tab says where the guest is: a tab among twenty others is how most of
-  // them will come back to it.
+  // them will come back to it. "You're in" only while they are (a guest let
+  // in while the tab was behind others, then removed before they looked, was
+  // still told they were in), and no "Join" on a door that is shut to them.
   const tabInfo = state?.room ?? (link?.ok ? link : null);
+  const inCall = !!call && view === "admitted";
   const tabTitle = tabInfo
-    ? `${enteredUnseen ? "You're in · " : call && view === "admitted" ? "" : "Join "}${meetingTitle(tabInfo.title, tabInfo.inviter)} · codecast`
+    ? `${inCall ? (enteredUnseen ? "You're in · " : "") : view === "removed" || view === "closed" ? "" : "Join "}${meetingTitle(tabInfo.title, tabInfo.inviter)} · codecast`
     : "codecast";
   useWatchEffect(() => {
     document.title = tabTitle;
@@ -685,8 +711,10 @@ export default function GuestMeetPage() {
         myName={state?.name ?? name}
         transcribed={transcribed}
         recording={recording}
+        videoPublic={videoPublic}
         accepted={accepted}
         reconnecting={reopening}
+        ended={ended}
         serverTrouble={!!serverError || socketDown}
         awayNotice={letInAway}
         onDismissAway={() => setLetInAway(false)}

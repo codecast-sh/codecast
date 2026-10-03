@@ -2,7 +2,9 @@
 // (components/evals/__fixtures__/world.ts) so a view can be built and checked
 // in a real browser before the daemon bridge and the api child exist.
 //
-// Dev builds only, and only when asked: `localStorage.EVALS_FIXTURE`
+// Dev builds only, and only when asked: `localStorage.EVALS_FIXTURE`, or
+// `sessionStorage.EVALS_FIXTURE` for one tab alone (it wins when set, so a
+// tab checking fixtures never flips another tab on the origin off real data)
 //   "1"              answer from the world
 //   "no-daemon"      act as if no daemon answered discovery
 //   "no-checkout"    answer every route 503 no-checkout
@@ -27,7 +29,7 @@ export function readEvalsFixtureMode(raw: string | null | undefined): EvalsFixtu
 export function evalsFixtureMode(): EvalsFixtureMode {
   if (!import.meta.env?.DEV) return "off";
   try {
-    return readEvalsFixtureMode(globalThis.localStorage?.getItem(EVALS_FIXTURE_KEY));
+    return readEvalsFixtureMode(globalThis.sessionStorage?.getItem(EVALS_FIXTURE_KEY) ?? globalThis.localStorage?.getItem(EVALS_FIXTURE_KEY));
   } catch {
     return "off";
   }

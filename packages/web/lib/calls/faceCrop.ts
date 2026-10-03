@@ -7,6 +7,8 @@
 // custom properties. Pure functions are what makes that arrangement testable:
 // the jitter, the drift and the swap timing are all decided in here.
 
+import { isGuestParticipant } from "@codecast/shared/contracts";
+
 /**
  * A square crop of a video frame, in the frame's own normalized coordinates.
  *
@@ -190,10 +192,13 @@ export type FacePerson = {
   isLocal: boolean;
   muted: boolean;
   hasVideo: boolean;
+  /** Let in on a guest link: not one of the team, and marked as such. */
+  guest?: boolean;
 };
 
-/** An occupancy row (convex `call_members`), loosely typed as the store holds it. */
-export type RosterRow = { user_id?: unknown; user_name?: string; user_image?: string; muted?: boolean };
+/** An occupancy row (convex `call_members`, or a guest folded in by
+ *  roomGuests.rosterWithGuests), loosely typed as the store holds it. */
+export type RosterRow = { user_id?: unknown; user_name?: string; user_image?: string; muted?: boolean; guest?: boolean };
 /** A camera tile, as callManager publishes them. */
 export type TileRow = { identity: string; name: string; image?: string; isLocal: boolean };
 
@@ -224,6 +229,7 @@ export function facePeople(roster: RosterRow[], tiles: TileRow[], selfId: string
       isLocal: id === selfId,
       muted: m.muted === true,
       hasVideo: withVideo.has(id),
+      guest: m.guest === true || isGuestParticipant(id, m.user_name),
     });
   }
   for (const t of tiles) {
@@ -236,6 +242,7 @@ export function facePeople(roster: RosterRow[], tiles: TileRow[], selfId: string
       isLocal: t.isLocal || t.identity === selfId,
       muted: false,
       hasVideo: true,
+      guest: isGuestParticipant(t.identity, t.name),
     });
   }
   return out;

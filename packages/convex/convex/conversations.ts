@@ -10723,6 +10723,11 @@ export function tallyInboxRows(
     is_live: boolean;
     is_unresponsive: boolean;
     awaiting_input: boolean;
+    // The park kind when the newest turn is an unresolved login / limit /
+    // connection banner ("limit", "auth", ...), else null: needs_input that
+    // is plumbing, not a question. The workflow runner waits out the kinds
+    // that recover on their own instead of reading the park as settled.
+    blocked_on: string | null;
     idle_summary: string | null;
     thread_state: string | null;
     thread_state_status: string | null;
@@ -10822,6 +10827,7 @@ export function tallyInboxRows(
       is_live,
       is_unresponsive: !!s.is_unresponsive,
       awaiting_input: !!s.awaiting_input,
+      blocked_on: s.pending_api_error ? (s.pending_api_error_kind ?? "error") : null,
       idle_summary: s.idle_summary || null,
       // The agent's own pinned state beats the generated blurb when both exist:
       // one is what the agent says is true now, the other is a description.

@@ -1,8 +1,10 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { recordingFailureWords, recordingKeptWords } from "@codecast/shared/contracts";
+import { useRouter } from "next/navigation";
+import { RECORDING_RESTART_COOLDOWN_MS, recordingKeptWords } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useNowWhen } from "../../hooks/useCoarseNow";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWindowPresent } from "../../hooks/usePagePresence";
 import { useFaceRowSelect, type FaceRow } from "../../hooks/useFaceRow";
@@ -10,10 +12,10 @@ import {
   noteRecordConfirmed,
   noteRecordingNoticed,
   owesRecordingNotice,
+  pressedRunOf,
   recordConfirmed,
   recordingNoticed,
   setRoomRecording,
-  stoppedHere,
   useRoomRecordingEnded,
   useRoomRecordingMark,
   useRoomRecordingPress,
@@ -21,12 +23,23 @@ import {
   type RoomRecordingEnd,
   type RoomRecordingLive,
 } from "../../hooks/useRoomRecording";
-import { hasBrowserNotificationPermission, isCallPanelWindow, isElectron, notifyNative } from "../../lib/desktop";
+import {
+  owedStopNotice,
+  recordingEndHref,
+  roomRunWatch,
+  savedWords,
+  stoppedByItself,
+  stoppedWords,
+  watchRoomRun,
+  type RoomRunWatch,
+} from "../../lib/calls/roomRecordingEnd";
+import { hasBrowserNotificationPermission, isCallPanelWindow, isElectron, navigateMainWindow, notifyNative } from "../../lib/desktop";
 import { soundRecordingOff, soundRecordingOn } from "../../lib/sounds";
+import { persistentToast } from "../../lib/persistentToast";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { RecordingMark, RecordingStopControl, STOP_RECORDING_ASK, StopRecordingQuestion } from "./RecordingMark";
+import { RECORDING_SHARED_WORDS, RecordingMark, RecordingStopControl, STOP_RECORDING_ASK, StopRecordingQuestion } from "./RecordingMark";
 import { STAGE_CTL, STAGE_CTL_IDLE } from "./stageHost";
-import { firstName, speakerShortName } from "./speakers";
+import { firstName } from "./speakers";
 
 // Recording a huddle, from inside it: the Record button on the stage's
 // control bar, the red mark on the stage's header and on the face row's card,
@@ -67,7 +80,9 @@ export function StageRecordingBadge({ roomKey }: { roomKey: string | null }) {
   const { status, live } = useRoomRecordingMark(roomKey);
   const me = useMe();
   if (!status || !roomKey) return null;
-  const mark = <RecordingMark status={status} startedAt={status === "recording" ? live?.started_at : null} by={byWords(live, me)} />;
+  const mark = (
+    <RecordingMark status={status} startedAt={status === "recording" ? live?.started_at : null} by={byWords(live, me)} shared={!!live?.video_shared} />
+  );
   if (!filming(status)) return <span className="ml-1 flex shrink-0">{mark}</span>;
   return (
     <RecordingStopControl onStop={stopForEveryone(roomKey)} place="below-start" className="ml-1">
@@ -146,7 +161,7 @@ export function CallCardRecordingMark({ tell = false, inert = false }: { tell?: 
           aria-label="This call is being recorded. Stop recording"
           data-card-action="recording"
         >
-          <RecordingMark size="dot" status={status} by={by} />
+          <RecordingMark size="dot" status={status} by={by} shared={!!live?.video_shared} />
           {telling === runId && live && (
             <span className="whitespace-nowrap font-mono text-[10px] text-sol-text-secondary" role="status">
               {firstName(live.started_by.name)} is recording
@@ -162,20 +177,28 @@ export function CallCardRecordingMark({ tell = false, inert = false }: { tell?: 
 
 /** The control bar's round button. Absent on a server where recording is
  *  not set up (a button that can only fail is worse than none), except while
- *  the room records: Stop is always offered to anyone in it. Until the
- *  room's row has said which, the button's place is held, so the bar does not
- *  shift under the person's pointer when the answer lands. Stop asks once
- *  more, as it does everywhere: it sits between Transcribe and Hang up, where
- *  a stray click is likeliest, and it ends the recording for everyone. */
+ *  the room records: Stop is always offered to anyone in it. A server that is
+ *  set up but cannot record right now (the LiveKit plan spent its minutes)
+ *  shows the button disabled with the reason, so nobody presses it in front
+ *  of the room to find out. Until the room's row has said which, the
+ *  button's place is held, so the bar does not shift under the person's
+ *  pointer when the answer lands. Stop asks once more, as it does
+ *  everywhere: it sits between Transcribe and Hang up, where a stray click is
+ *  likeliest, and it ends the recording for everyone. */
 export function RecordButton({ roomKey }: { roomKey: string }) {
-  const { status, configured } = useRoomRecordingMark(roomKey);
+  const { status, live, configured, unavailable } = useRoomRecordingMark(roomKey);
   const press = useRoomRecordingPress(roomKey);
   const [asking, setAsking] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
   const on = filming(status);
-  // The last run is still being written: a new one would be refused until it
-  // is down (the server's cooldown), so the button says so instead.
-  const saving = status === "stopping";
+  // The last run is still being written. A new press waits only the
+  // server's short cooldown after the stop (the shared rule, counted from
+  // the stop rather than from LiveKit's upload, which can take minutes), then
+  // records while the last file is still saving.
+  const stoppedAt = status === "stopping" ? (live?.stop_requested_at ?? null) : null;
+  const now = useNowWhen((t) => (stoppedAt !== null && t - stoppedAt < RECORDING_RESTART_COOLDOWN_MS ? "wait" : "go"), 1_000);
+  const cooling = status === "stopping" && (stoppedAt === null || now - stoppedAt < RECORDING_RESTART_COOLDOWN_MS);
+  const stillSaving = status === "stopping" && !cooling;
 
   if (on) {
     return (
@@ -191,35 +214,49 @@ export function RecordButton({ roomKey }: { roomKey: string }) {
       </RecordingStopControl>
     );
   }
-  if (!saving && configured === undefined) {
+  if (!cooling && configured === undefined) {
     return (
       <span className={`${STAGE_CTL} invisible`} aria-hidden="true">
         <RecordGlyph look="idle" />
       </span>
     );
   }
-  if (!saving && !configured) return null;
+  if (!cooling && !configured) return null;
+  // Set up, but LiveKit is refusing every recording: say why, offer nothing.
+  const blocked = !cooling && !!unavailable;
+  const idle = !cooling && !blocked;
 
   const pressButton = () => {
     if (asking) return setAsking(false);
-    if (press !== null || saving) return;
+    if (press !== null || !idle) return;
     if (!recordConfirmed()) return setAsking(true);
     void setRoomRecording(roomKey, true);
   };
+
+  const title = cooling
+    ? "Saving the last recording. Record again in a moment"
+    : blocked
+      ? unavailable!
+      : stillSaving
+        ? "Record this huddle again. The last recording is still saving to the call"
+        : "Record this huddle: video of everyone and any shared screen";
 
   return (
     <span ref={wrapRef} className="relative">
       <button
         type="button"
         onClick={pressButton}
-        disabled={saving}
-        className={`${STAGE_CTL} ${saving ? "cursor-default text-sol-text-dim" : STAGE_CTL_IDLE}`}
-        title={saving ? "Saving the last recording. Record again in a moment" : "Record this huddle: video of everyone and any shared screen"}
-        aria-label={saving ? "Saving the last recording" : "Record this huddle"}
+        // aria-disabled, not disabled, when blocked: a disabled button shows
+        // no tooltip, and the reason is the point.
+        disabled={cooling}
+        aria-disabled={blocked || undefined}
+        className={`${STAGE_CTL} ${idle ? STAGE_CTL_IDLE : "cursor-default text-sol-text-dim"}`}
+        title={title}
+        aria-label={cooling ? "Saving the last recording" : blocked ? `Recording unavailable: ${unavailable}` : "Record this huddle"}
         aria-pressed={false}
         aria-expanded={asking || undefined}
       >
-        <RecordGlyph look={saving ? "saving" : "idle"} />
+        <RecordGlyph look={cooling ? "saving" : blocked ? "unavailable" : "idle"} />
       </button>
       {asking && (
         <RecordConfirm
@@ -238,10 +275,11 @@ export function RecordButton({ roomKey }: { roomKey: string }) {
 }
 
 /** Record is the universal red dot in a ring; recording is the stop square
- *  (breathing while LiveKit has not begun); saving is the ring alone, dim.
- *  Drawn rather than an icon font glyph so the dot is red while the ring
- *  keeps the bar's quiet tone. */
-function RecordGlyph({ look }: { look: "idle" | "starting" | "on" | "saving" }) {
+ *  (breathing while LiveKit has not begun); saving is the ring with a dim,
+ *  breathing dot; unavailable is the ring with a dim, still dot. Drawn rather
+ *  than an icon font glyph so the dot is red while the ring keeps the bar's
+ *  quiet tone. */
+function RecordGlyph({ look }: { look: "idle" | "starting" | "on" | "saving" | "unavailable" }) {
   if (look === "on" || look === "starting") {
     return (
       <span className="flex h-[18px] w-[18px] items-center justify-center" aria-hidden="true">
@@ -251,14 +289,20 @@ function RecordGlyph({ look }: { look: "idle" | "starting" | "on" | "saving" }) 
   }
   return (
     <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full border-[1.75px] border-current" aria-hidden="true">
-      <span className={`h-[7px] w-[7px] rounded-full ${look === "saving" ? "animate-pulse bg-sol-red/40 motion-reduce:animate-none" : "bg-sol-red"}`} />
+      <span
+        className={`h-[7px] w-[7px] rounded-full ${
+          look === "saving" ? "animate-pulse bg-sol-red/40 motion-reduce:animate-none" : look === "unavailable" ? "bg-sol-text-dim/50" : "bg-sol-red"
+        }`}
+      />
     </span>
   );
 }
 
 /** The first press, ever: what recording does, who is told and who can watch,
- *  once. Focus lands on the question, not on Record: filming a room is a
- *  deliberate press, never a stray Enter or Space. */
+ *  once. Focus lands on the question, not on Record, so a stray Space cannot
+ *  film the room. Enter on the question records and Esc cancels, each shown
+ *  on its button: the question is itself the deliberate second step. A held
+ *  Enter (the press that opened it, repeating) is not an answer. */
 function RecordConfirm({
   roomKey,
   insideRef,
@@ -289,6 +333,12 @@ function RecordConfirm({
       aria-label="Record this huddle?"
       tabIndex={-1}
       onKeyDown={(e) => {
+        if (e.key === "Enter" && !e.repeat && e.target === e.currentTarget) {
+          e.preventDefault();
+          e.stopPropagation();
+          onRecord();
+          return;
+        }
         if (e.key !== "Escape") return;
         // The stage collapses on Esc; this Esc only closes the question.
         e.stopPropagation();
@@ -321,9 +371,9 @@ function RecordConfirm({
           <button
             type="button"
             onClick={onRecord}
-            className="rounded-md bg-sol-red px-3.5 py-1.5 font-mono text-[11.5px] font-medium text-white transition-colors hover:bg-sol-red/85"
+            className="flex items-center gap-1.5 rounded-md bg-sol-red px-3 py-1.5 font-mono text-[11.5px] font-medium text-white transition-colors hover:bg-sol-red/85"
           >
-            Record
+            Record <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
           </button>
         </div>
       </div>
@@ -336,29 +386,14 @@ function RecordConfirm({
 const STARTED_TITLE = "This call is being recorded";
 
 function startedWords(live: RoomRecordingLive): string {
-  return `${firstName(live.started_by.name)} started recording. Anyone in the call can stop it.`;
-}
-
-/** What the room is told when a run stops, from how it ended (convex
- *  roomRecordingEnd): who stopped it, or why it stopped on its own, and
- *  whether there is a video at all. "Saving" is said only of a run that was
- *  filming; a run LiveKit refused or lost left nothing to save. Unknown (a
- *  server older than the end facts), it says only that it stopped. */
-export function stoppedWords(end: RoomRecordingEnd | null, me: string | null): { title: string; body: string; failed: boolean } {
-  const by = end?.stopped_by ? (me && end.stopped_by.id === me ? "You" : speakerShortName(end.stopped_by.name)) : null;
-  const pressed = by && end?.stop_reason === "pressed" ? `${by} stopped recording` : null;
-  if (end?.status === "failed") {
-    return { title: pressed ?? "Recording failed", body: recordingFailureWords(end.error), failed: !pressed };
-  }
-  const title = pressed ?? (end?.stop_reason === "limit" ? "Recording stopped at its time limit" : "Recording stopped");
-  return { title, body: end ? "The video is saving to the call." : "", failed: false };
+  const shared = live.video_shared ? ` ${RECORDING_SHARED_WORDS}` : "";
+  return `${firstName(live.started_by.name)} started recording.${shared} Anyone in the call can stop it.`;
 }
 
 // A notice nobody was there to read: how long a window waits for a person
-// to look at it before the run is said by a system banner instead, and how
-// long a stop stays worth saying to someone who comes back.
+// to look at it before the run is said by a system banner instead (how long
+// a stop stays worth saying is STOP_NEWS_MS, shared with the phone).
 const AWAY_MS = 4_000;
-const STOP_NEWS_MS = 10 * 60_000;
 
 // Runs this tab has sounded, so a second mount of the hook (the banner beside
 // the toast) or a remount does not sound one twice. Across windows the sound
@@ -368,12 +403,15 @@ const cued = new Set<string>();
 type RecordingSay = {
   started: (live: RoomRecordingLive) => void;
   stopped: (live: RoomRecordingLive, end: RoomRecordingEnd | null) => void;
+  /** The presser's line once their run landed (stopNoticeVerdict `saved`). */
+  saved: (live: RoomRecordingLive, end: RoomRecordingEnd) => void;
   /** The same two, for a person who is not looking at any codecast window:
    *  said where an unfocused person is reached. Absent: this surface only
    *  speaks to someone looking at it. */
   away?: {
     started: (live: RoomRecordingLive) => Promise<boolean>;
     stopped: (live: RoomRecordingLive, end: RoomRecordingEnd | null) => Promise<boolean>;
+    saved: (live: RoomRecordingLive, end: RoomRecordingEnd) => Promise<boolean>;
   };
 };
 
@@ -400,33 +438,18 @@ function useRecordingNotices(roomKey: string | null, present: boolean, say: Reco
   const sayRef = useRef(say);
   sayRef.current = say;
   const me = useMe();
-  // The run last seen filming in this room, to tell a stop from a room never
-  // recorded, and the stop this window still owes its person.
-  const seen = useRef<{ room: string | null; live: RoomRecordingLive | null; stop: { was: RoomRecordingLive; at: number } | null }>({
-    room: null,
-    live: null,
-    stop: null,
-  });
+  // What this window has seen of the room's runs (shared with the phone:
+  // lib/calls/roomRecordingEnd watchRoomRun).
+  const seen = useRef<RoomRunWatch>(roomRunWatch(null));
   useWatchEffect(() => {
-    if (seen.current.room !== roomKey) seen.current = { room: roomKey, live: null, stop: null };
+    if (seen.current.room !== roomKey) seen.current = roomRunWatch(roomKey);
     if (!roomKey) return;
-    const was = seen.current.live;
-    const running = live && live.status !== "stopping" ? live : null;
-    if (running) {
-      seen.current.live = running;
-      // A newer run is the news now; the last one's stop is not.
-      if (seen.current.stop && seen.current.stop.was.run_id !== running.run_id) seen.current.stop = null;
-      if (!cued.has(running.run_id)) {
-        cued.add(running.run_id);
-        soundRecordingOn(running.run_id);
-      }
+    const { running, stopped } = watchRoomRun(seen.current, live, endedRef.current, pressedRunOf(roomKey), recordingNoticed, Date.now());
+    if (running && !cued.has(running.run_id)) {
+      cued.add(running.run_id);
+      soundRecordingOn(running.run_id);
     }
-    if (was && (!live || live.run_id !== was.run_id || live.status === "stopping")) {
-      seen.current.live = running;
-      soundRecordingOff(was.run_id);
-      if (!stoppedHere(roomKey) && !recordingNoticed(`stop:${was.run_id}`)) seen.current.stop = { was, at: Date.now() };
-    }
-    const endOf = (run: RoomRecordingLive) => (endedRef.current?.run_id === run.run_id ? endedRef.current : null);
+    if (stopped) soundRecordingOff(stopped.run_id);
     // A notice is claimed once it was said: at once where a person is
     // looking, and for a banner only if it went up (the shell holds one back
     // when a codecast window is in front, and that window says it itself).
@@ -436,13 +459,15 @@ function useRecordingNotices(roomKey: string | null, present: boolean, say: Reco
       void said.then((shown) => shown && done()).catch(() => {});
     };
     /** Say what is still owed, through `how`; each claimed as it is said. */
-    const settle = (how: Pick<RecordingSay, "started" | "stopped"> | NonNullable<RecordingSay["away"]>) => {
-      const stop = seen.current.stop;
-      if (stop) {
-        const key = `stop:${stop.was.run_id}`;
-        const drop = () => void (seen.current.stop === stop && (seen.current.stop = null));
-        if (Date.now() - stop.at >= STOP_NEWS_MS || recordingNoticed(key)) drop();
-        else claim(key, how.stopped(stop.was, endOf(stop.was)), drop);
+    const settle = (how: Pick<RecordingSay, "started" | "stopped" | "saved"> | NonNullable<RecordingSay["away"]>) => {
+      const owed = owedStopNotice(seen.current, endedRef.current, me, recordingNoticed, Date.now());
+      if (owed) {
+        const drop = () => void (seen.current.stop === owed.stop && (seen.current.stop = null));
+        if (owed.how === "drop") drop();
+        // Their own Stop: not that it stopped, only where it went once it
+        // landed, in one window.
+        else if (owed.how === "saved" && owed.end) claim(owed.key, how.saved(owed.stop.was, owed.end), drop);
+        else if (owed.how === "say") claim(owed.key, how.stopped(owed.stop.was, owed.end), drop);
       }
       if (owesRecordingNotice(running, me)) claim(running.run_id, how.started(running));
     };
@@ -450,38 +475,65 @@ function useRecordingNotices(roomKey: string | null, present: boolean, say: Reco
     if (!sayRef.current.away || (!seen.current.stop && !owesRecordingNotice(running, me))) return;
     const timer = setTimeout(() => sayRef.current.away && settle(sayRef.current.away), AWAY_MS);
     return () => clearTimeout(timer);
-  }, [roomKey, live?.run_id, live?.status, me, present]);
+  }, [roomKey, live?.run_id, live?.status, ended?.run_id, ended?.status, me, present]);
+}
+
+/** Open the call page a notice names: in the main window from the call's
+ *  own window (the desktop's voice window, a popped out stage), here
+ *  anywhere else. */
+function useOpenCallPage(): (href: string) => void {
+  const router = useRouter();
+  return (href) => {
+    if (isCallPanelWindow() && navigateMainWindow(href)) return;
+    router.push(href);
+  };
 }
 
 /** The stage's own notice, for the call window: the toast that tells the
  *  rest of the app lives in the main window, and a stage in a window of its
  *  own is where the person is looking. Said once per run (shared with the
  *  toast), never to whoever pressed, with Stop a deliberate two presses
- *  away; somebody else's Stop gets a quiet line that goes by itself. */
+ *  away; somebody else's Stop gets a quiet line that goes by itself, naming
+ *  the call the video went to with a way to open it, and the presser gets
+ *  one such line once their run has landed. */
 export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
   const present = useWindowPresent();
   const me = useMe();
+  const openCall = useOpenCallPage();
   const [shown, setShown] = useState<{
     live: RoomRecordingLive;
-    mode: "started" | "confirm" | "stopped";
+    mode: "started" | "confirm" | "stopped" | "saved";
     end?: RoomRecordingEnd | null;
   } | null>(null);
   useRecordingNotices(roomKey, present, {
     started: (live) => setShown({ live, mode: "started" }),
     stopped: (live, end) => setShown({ live, mode: "stopped", end }),
+    saved: (live, end) => setShown({ live, mode: "saved", end }),
   });
+  const ending = shown?.mode === "stopped" || shown?.mode === "saved";
+  // A run that stopped by itself while the huddle goes on stays said until
+  // somebody dismisses it: the mark going away is easy to miss.
+  const sticky = shown?.mode === "stopped" && stoppedByItself(shown.end);
   useWatchEffect(() => {
-    if (shown?.mode !== "stopped") return;
-    const timer = setTimeout(() => setShown((cur) => (cur?.mode === "stopped" ? null : cur)), 5_000);
+    if (!ending || sticky) return;
+    const timer = setTimeout(() => setShown((cur) => (cur?.mode === "stopped" || cur?.mode === "saved" ? null : cur)), 8_000);
     return () => clearTimeout(timer);
-  }, [shown?.mode, shown?.live.run_id]);
-  const { status } = useRoomRecordingMark(roomKey);
+  }, [shown?.mode, shown?.live.run_id, sticky]);
+  const { status, unavailable } = useRoomRecordingMark(roomKey);
   if (!shown || !roomKey) return null;
+  // Somebody already pressed again: the old run's line has nothing to offer.
+  const again = sticky && !unavailable && !filming(status);
   // A run that ended without a word from here (this window's own Stop) takes
   // its notice with it.
-  if (shown.mode !== "stopped" && (status === null || status === "stopping")) return null;
-  const stopped = shown.mode === "stopped" ? stoppedWords(shown.end ?? null, me) : null;
+  if (!ending && (status === null || status === "stopping")) return null;
+  const stopped =
+    shown.mode === "stopped"
+      ? stoppedWords(shown.end ?? null, me)
+      : shown.mode === "saved"
+        ? { title: savedWords(shown.end ?? null), body: "", failed: false }
+        : null;
   const words = stopped ?? { title: STARTED_TITLE, body: startedWords(shown.live) };
+  const href = ending ? recordingEndHref(shown.end) : null;
   return (
     <div
       role="status"
@@ -514,6 +566,45 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[12px] text-sol-text">{words.title}</div>
             {words.body && <div className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">{words.body}</div>}
+            {(href || sticky) && (
+              <div className="mt-2 flex items-center gap-1.5">
+                {again && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShown(null);
+                      void setRoomRecording(roomKey, true);
+                    }}
+                    className="rounded-md bg-sol-red/15 px-2 py-0.5 font-mono text-[11px] text-sol-red transition-colors hover:bg-sol-red/25"
+                    title="Start recording this huddle again. Everyone in it is told"
+                  >
+                    Record again
+                  </button>
+                )}
+                {href && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShown(null);
+                      openCall(href);
+                    }}
+                    className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/10"
+                    title="Open the call page at the recording"
+                  >
+                    Open
+                  </button>
+                )}
+                {sticky && (
+                  <button
+                    type="button"
+                    onClick={() => setShown(null)}
+                    className="rounded-md px-2 py-0.5 font-mono text-[11px] text-sol-text-muted transition-colors hover:bg-white/10 hover:text-sol-text"
+                  >
+                    Dismiss
+                  </button>
+                )}
+              </div>
+            )}
             {shown.mode === "started" && (
               <div className="mt-2 flex items-center gap-1.5">
                 <button
@@ -549,10 +640,18 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
  *  the app's call effects. */
 export function useRecordingNoticeToast(): void {
   const me = useMe();
+  const openCall = useOpenCallPage();
+  // The toast's way to the video: the call page at the run, when the end
+  // says which call it went to.
+  const openAction = (end: RoomRecordingEnd | null) => {
+    const href = recordingEndHref(end);
+    return href ? { action: { label: "Open", onClick: () => openCall(href) } } : {};
+  };
   const panel = isCallPanelWindow();
   const seated = useSeatedRoomKey();
   const present = useWindowPresent();
   const roomKey = seated;
+  const recordingUnavailable = useRoomRecordingMark(roomKey).unavailable;
   // A banner counts as said only where one can go up: the desktop shell, or
   // a browser the person let notify. Anywhere else the notice stays owed and
   // the toast says it when they come back.
@@ -585,10 +684,28 @@ export function useRecordingNoticeToast(): void {
     stopped: (live, end) => {
       toast.dismiss(`call-recording-${live.run_id}`);
       const words = stoppedWords(end, me);
+      // Stopped by itself while this person sits in the call: it stays until
+      // closed, and offers to record again (the video, if any, a second
+      // button). The server refuses a press it cannot honour and says why.
+      const href = recordingEndHref(end);
+      const sticky = stoppedByItself(end) && !!roomKey;
       (words.failed ? toast.warning : toast)(words.title, {
         ...(words.body ? { description: words.body } : {}),
-        duration: words.failed ? 8_000 : 5_000,
+        ...(sticky
+          ? {
+              ...persistentToast,
+              ...(recordingUnavailable
+                ? openAction(end)
+                : {
+                    action: { label: "Record again", onClick: () => roomKey && void setRoomRecording(roomKey, true) },
+                    ...(href ? { cancel: { label: "Open", onClick: () => openCall(href) } } : {}),
+                  }),
+            }
+          : { ...openAction(end), duration: 8_000 }),
       });
+    },
+    saved: (live, end) => {
+      toast(savedWords(end), { id: `call-recording-${live.run_id}`, ...openAction(end), duration: 8_000 });
     },
     ...(panel
       ? {}
@@ -599,6 +716,7 @@ export function useRecordingNoticeToast(): void {
               const words = stoppedWords(end, me);
               return banner(`stop:${live.run_id}`, words.title, words.body);
             },
+            saved: (live, end) => banner(`stop:${live.run_id}`, savedWords(end), ""),
           },
         }),
   });

@@ -40,4 +40,17 @@ describe("typedPollAnswer", () => {
     expect(answer(confirm, "esc")?.keys).toEqual(["Escape"]);
     expect(answer(confirm, "maybe later")).toBeNull();
   });
+
+  test("a word inside a label names nothing; the label's opening words do", () => {
+    const menu = { options: ["Keep going", "Wait here, then continue later"].map(label => ({ label })) };
+    expect(answer(menu, "continue")).toBeNull();
+    expect(answer(menu, "wait here")?.display).toBe("Wait here, then continue later");
+    expect(answer(modelMenu, "sonnet")?.display).toBe("Sonnet 5");
+  });
+
+  test("a limit dialog is never answered by text (2026-10-04: continue armed a day-long wait)", () => {
+    const limit = { options: ["Stop and wait for limit to reset", "Wait here, then continue automatically at Oct 5 at 3pm", "Switch to usage credits"].map(label => ({ label })) };
+    expect(answer(limit, "continue")).toBeNull();
+    expect(answer(limit, "2")).toBeNull();
+  });
 });

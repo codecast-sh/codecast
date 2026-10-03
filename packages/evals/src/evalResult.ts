@@ -61,12 +61,25 @@ function runSet(sides: Array<EvalRepsFreeze['base']>): EvalRunSet | null {
 export function provenVerdicts(freezes: EvalRepsFreeze[]): { proven: EvalSurfaceResult['proven']; reasons: string[] } {
   const proven = freezes
     .filter((f) => f.proven)
-    .map((f) => ({ freeze: f.freeze, basePasses: majorityOf(f.base?.reps) ?? null, passes: majorityOf(f.branch?.reps) === true }));
+    .map((f) => ({ freeze: f.freeze, basePasses: majorityOf(f.base?.reps) ?? null, branch: majorityOf(f.branch?.reps) }));
   const reasons = proven.flatMap((p) => [
     ...(p.basePasses === true ? [`proven freeze ${p.freeze.slice(0, 8)} already passes on the base, so it shows no miss; find where the bug is before changing this surface`] : []),
-    ...(p.passes ? [] : [`proven freeze ${p.freeze.slice(0, 8)} still fails`]),
+    ...(p.branch === true ? [] : [`proven freeze ${p.freeze.slice(0, 8)} ${p.branch === undefined ? 'was not scored on the branch' : 'still fails'}`]),
   ]);
-  return { proven, reasons };
+  return { proven: proven.map((p) => ({ freeze: p.freeze, basePasses: p.basePasses, passes: p.branch === true })), reasons };
+}
+
+/**
+ * The surfaces the eval could not judge: a side with no scored rep (every rep
+ * crashed, a usage limit, a harness that never ran). Such a station failed
+ * for want of evidence, not because the change is wrong, so it is not the
+ * builder's to fix.
+ */
+export function unscoredSurfaces(reps: EvalRepsFile): string[] {
+  return reps.surfaces
+    .filter((s) => !s.skipped)
+    .filter((s) => [s.freezes.flatMap((f) => f.base?.reps ?? []), s.freezes.flatMap((f) => f.branch?.reps ?? [])].some((side) => !scored(side).length))
+    .map((s) => s.surface);
 }
 
 /** A freeze whose verdict differs between the sides, with one rep from each side that matches its side's verdict. */

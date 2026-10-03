@@ -28,6 +28,7 @@ export function SegmentedToggle({
   fullWidth,
   collapse,
   variant = "box",
+  size = "md",
 }: {
   value: string;
   onChange: (key: string) => void;
@@ -37,11 +38,14 @@ export function SegmentedToggle({
   /** `bare`: no container, no fill: the options as text, the active one bright
    *  and cyan. For hairline surfaces where a bordered tray would float. */
   variant?: "box" | "bare";
+  /** `sm`: 24px tall with 11px labels, for a dense masthead. */
+  size?: "md" | "sm";
 }) {
   const bare = variant === "bare";
+  const sm = size === "sm";
   const segments = (
     <div
-      className={`flex items-center h-7 ${
+      className={`flex items-center ${sm ? "h-6" : "h-7"} ${
         bare ? "gap-3" : "rounded-md border border-sol-border/40 overflow-hidden"
       } ${collapse ? "cq-seg-full" : ""} ${fullWidth ? "w-full" : ""}`}
     >
@@ -53,14 +57,14 @@ export function SegmentedToggle({
             key={it.key}
             onClick={() => onChange(it.key)}
             aria-pressed={selected}
-            className={`h-full flex items-center justify-center gap-1.5 text-xs transition-colors ${
+            className={`h-full flex items-center justify-center gap-1.5 ${sm ? "text-[11px]" : "text-xs"} transition-colors ${
               fullWidth ? "flex-1" : ""
             } ${
               bare
                 ? selected
                   ? "text-sol-cyan font-medium"
                   : "text-sol-text-dim hover:text-sol-text"
-                : `px-2.5 ${i > 0 ? "border-l border-sol-border/40" : ""} ${
+                : `${sm ? "px-2" : "px-2.5"} ${i > 0 ? "border-l border-sol-border/40" : ""} ${
                     selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"
                   }`
             }`}

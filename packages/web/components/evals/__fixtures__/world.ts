@@ -46,6 +46,7 @@ import type {
   MomentMessage,
   MovedEvent,
   OverviewResponse,
+  PatchResponse,
   PromptFilePair,
   RecordedProbe,
   RunDiffEntry,
@@ -56,17 +57,22 @@ import type {
   RunRowStatus,
   SeparationResult,
   SimCatalogResponse,
-  SimEvent,
-  SimGridCell,
   SimInvariant,
   SimRunResponse,
   SimRunRow,
+  SimScenario,
   SimSessionSummary,
   StalenessWord,
   SurfaceOverview,
   SurfaceResponse,
   VerdictFlip,
 } from "@codecast/shared/contracts/evalsApi";
+import { narrowByRecords, sourceConfidence } from "@codecast/shared/contracts/evalsApi";
+import { makeRng } from "@codecast/shared/random";
+import { sessionTrailerValue } from "@codecast/shared/blame";
+import { simGridOf } from "../../../store/__tests__/sim/grid";
+import { simFixtureRun } from "./sim";
+import { fixtureBisect, type FixtureBisectKind } from "./bisect";
 
 /** A route the world has no answer for (an unknown id): the transport turns it into a 404. */
 export class EvalsFixtureMiss extends Error {}
@@ -79,17 +85,6 @@ const OPUS_MODEL = "claude-opus-5-5";
 const JUDGE_MODEL = "claude-sonnet-5-5";
 
 // ── Deterministic helpers ───────────────────────────────────────────────────
-
-function prng(seed: number) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** A stable hex string of `len` characters from any text. */
 export function fixtureHex(text: string, len = 40): string {
@@ -200,6 +195,21 @@ const SUBJECTS = [
   "web: palette search ranking",
   "suggest: voice from recent sends",
 ];
+/** The last six days, denser, as a real tree is: a range between two recent batches holds several commits, some touching each surface. */
+const RECENT_SUBJECTS = [
+  "evals: judge prompt cites the label",
+  "settle: read the asked question verbatim",
+  "web: sidebar wake signature",
+  "evals: models table pins sonnet 4.6",
+  "settle: done needs verified tests",
+  "anchor brief: lead with the blocker",
+  "call summary: merge duplicate owners",
+  "cli: daemon restamp build id",
+  "settle: drop the error-state rule",
+  "evals: fixture for unresolvable errors",
+  "handoff: name the open question",
+  "anchor brief: shorter who-to-ask list",
+];
 const SESSIONS = ["jx70x2y", "jx7c6zk", "jx7dhfh", "jx76e8h", "jx7appr", "jx768ah", "jx7k3m2", "jx7p9q1"];
 
 interface Batch {
@@ -227,22 +237,29 @@ interface FixtureState {
   byId: Map<string, RunRow>;
   commits: CommitRef[];
   bisects: BisectState[];
+  /** The bisects playing a run in progress: they read as writing now, whatever the world's clock (see liveBisect). */
+  running: Set<string>;
   stepsByBisect: Map<string, BisectStep[]>;
+  tailByBisect: Map<string, string[]>;
   sim: { catalog: SimCatalogResponse; sessions: SimSessionSummary[]; runs: Map<string, SimRunResponse> };
 }
 
 function build(now: number, seed: number): FixtureState {
-  const rand = prng(seed);
-  const commits: CommitRef[] = SUBJECTS.map((subject, i) => {
-    const at = now - (29 - i * 1.5) * DAY - 3 * 3_600_000;
-    const sha = fixtureHex(`commit:${i}:${subject}`);
+  const rand = makeRng(seed);
+  const placed = [
+    ...SUBJECTS.map((subject, i) => ({ subject, i, at: now - (29 - i * 1.5) * DAY - 3 * 3_600_000, key: `commit:${i}:${subject}` })),
+    ...RECENT_SUBJECTS.map((subject, j) => ({ subject, i: SUBJECTS.length + j, at: now - (6 - j * 0.5) * DAY - 5 * 3_600_000, key: `commit:r${j}:${subject}` })),
+  ].sort((a, b) => a.at - b.at);
+  const commits: CommitRef[] = placed.map(({ subject, i, at, key }) => {
+    const sha = fixtureHex(key);
     const offMain = i === 13;
     return {
       sha,
       subject,
       author: i % 4 === 3 ? "Samvit Rao" : "Ashot Petrosian",
       at: iso(at),
-      session: SESSIONS[i % SESSIONS.length],
+      // A real trailer: the session link with its full id (blame refuses short ids).
+      session: sessionTrailerValue(`jx7${fixtureHex(`session:${SESSIONS[i % SESSIONS.length]}`, 29)}`),
       mainSha: offMain ? fixtureHex(`commit:${i}:main-twin`) : sha,
       onMain: !offMain,
     };
@@ -265,7 +282,8 @@ function build(now: number, seed: number): FixtureState {
       if ((day + si) % def.every !== 0) continue;
       const at = now - day * DAY - (2 + (si % 5)) * 3_600_000 - Math.floor(rand() * 40) * 60_000;
       if (at > now) continue;
-      list.push({ surface: def.id, index: list.length, name: iso(at), at, cadence: "nightly", epoch: 1, model: def.model, ruler: `${JUDGE_MODEL}#r2`, gitHead: headAt(at).sha, dry: false, landing: false });
+      // The real mix: agent surfaces carry no cadence, and most call batches are run by hand; a call surface's nightly lands every third day.
+      list.push({ surface: def.id, index: list.length, name: iso(at), at, cadence: def.route === "agent" || day % 3 !== 0 ? null : "nightly", epoch: 1, model: def.model, ruler: `${JUDGE_MODEL}#r2`, gitHead: headAt(at).sha, dry: false, landing: false });
     }
     // A named batch by hand mid-window, and a dry render on the busy surfaces.
     const mid = list[Math.floor(list.length / 2)];
@@ -303,7 +321,11 @@ function build(now: number, seed: number): FixtureState {
           const status: RunRowStatus = b.dry ? "dry" : crash ? "crash" : gateFail ? "fail" : score >= PASS_MARK ? "pass" : "fail";
           const scored = status === "pass" || status === "fail";
           const finalScore = scored ? (gateFail ? 0 : round(score)) : null;
-          const dirty = rand() < 0.55;
+          // A batch runs on one tree, so its reps share the disk: dirty is the batch's (about half of them). The draw is
+          // still taken, so every later number in the world stays where it was.
+          rand();
+          // The newest batch is the one checked against edits in progress.
+          const dirty = b.index === list.length - 1 || parseInt(fixtureHex(`dirty:${def.id}:${b.name}`, 4), 16) % 100 < 50;
           const recent = now - b.at < 8 * DAY;
           const live = def.story === "live-reads" && rand() < 0.4 ? 1 + Math.floor(rand() * 3) : 0;
           const agent = def.route === "agent";
@@ -344,7 +366,7 @@ function build(now: number, seed: number): FixtureState {
             costUsd: b.dry ? 0 : round(agent ? 0.15 + rand() * 0.45 : 0.002 + rand() * 0.004, 4),
             judgeCostUsd: scored ? round(agent ? 0.02 + rand() * 0.02 : 0.003 + rand() * 0.002, 4) : 0,
             realMs: Math.round(agent ? 60_000 + rand() * 120_000 : 1_500 + rand() * 2_500),
-            guard: agent ? { served: 8 + Math.floor(rand() * 12), unserved: Math.floor(rand() * 3), live, refused: rand() < 0.2 ? 1 : 0, unknown: rand() < 0.15 ? 1 : 0, help: rand() < 0.3 ? 1 : 0 } : { served: 0, unserved: 0, live: 0, refused: 0, unknown: 0, help: 0 },
+            guard: agent ? { served: 8 + Math.floor(rand() * 12), unserved: 1 + Math.floor(rand() * 2), live, refused: rand() < 0.2 ? 1 : 0, unknown: rand() < 0.15 ? 1 : 0, help: rand() < 0.3 ? 1 : 0 } : { served: 0, unserved: 0, live: 0, refused: 0, unknown: 0, help: 0 },
             scoreVersions: scored && rand() < 0.15 ? 2 : scored ? 1 : 0,
           };
           rows.push(row);
@@ -363,7 +385,9 @@ function build(now: number, seed: number): FixtureState {
     byId: new Map(rows.map((r) => [r.id, r])),
     commits,
     bisects: [],
+    running: new Set(),
     stepsByBisect: new Map(),
+    tailByBisect: new Map(),
     sim: buildSim(now),
   };
   buildBisects(state);
@@ -547,16 +571,33 @@ function ledger(st: FixtureState, surface: string, list: Batch[]): LedgerRow[] {
 
 // ── Text the run pages read ─────────────────────────────────────────────────
 
+/** How each freeze's moment ends: the human's question, the agent's answer ending on a question back, and what a "done" reading would claim. */
+const CLOSERS: Array<{ ask: string; answer: string; done: string }> = [
+  { ask: "Does this need a deploy, or is it client only?", answer: "Client only. Want me to open the PR or leave it in the tree?", done: "The fix is in the tree and tests pass." },
+  { ask: "Did the migration run on staging too?", answer: "It ran on staging. Should I run it on prod now, or wait for the window?", done: "The migration ran on staging." },
+  { ask: "Can you check the flaky test while you're there?", answer: "The flake is a timer race; I pinned the clock. Same fix in the other two suites?", done: "The flaky test is fixed and the clock is pinned." },
+  { ask: "What's left on the export bug?", answer: "The CSV path is fixed. The PDF path still drops its header; should I take that next?", done: "The CSV export is fixed." },
+  { ask: "Is the webhook retry safe to ship?", answer: "It is idempotent now. Behind the flag, or straight to everyone?", done: "The retry is idempotent and ready." },
+];
+
+/** One closer per freeze, seeded by its id, so two flips never show the same moment. */
+const closerOf = (freezeId: string) => {
+  let h = 0;
+  for (let i = 0; i < freezeId.length; i++) h = (h * 31 + freezeId.charCodeAt(i)) >>> 0;
+  return CLOSERS[h % CLOSERS.length];
+};
+
 function momentOf(st: FixtureState, freezeId: string): MomentMessage[] {
   const f = st.freezes.get(freezeId);
   if (!f) return [];
   const t0 = st.now - 31 * DAY;
+  const c = closerOf(freezeId);
   const lines: Array<[MomentMessage["direction"], string, string]> = [
     ["in", "Ashot", `Can you look at ${f.name.replace(/-/g, " ")}? It came up again this morning.`],
     ["out", "agent", "Reading the logs first. The failure starts after the cache warms, not at boot."],
     ["out", "agent", "Found it: the retry wraps the wrong call. Patch is in the tree, tests pass locally."],
-    ["in", "Ashot", "Does this need a deploy, or is it client only?"],
-    ["out", "agent", "Client only. Want me to open the PR or leave it in the tree?"],
+    ["in", "Ashot", c.ask],
+    ["out", "agent", c.answer],
   ];
   return lines.map(([direction, from, text], n) => ({ n: n + 1, id: `m${n + 1}`, at: iso(t0 + n * 240_000), channel: "session", isGroup: false, direction, from, text }));
 }
@@ -564,8 +605,10 @@ function momentOf(st: FixtureState, freezeId: string): MomentMessage[] {
 function replyOf(row: RunRow): string {
   const pass = row.status === "pass";
   switch (row.surface) {
-    case "settle":
-      return pass ? '{"state":"waiting","why":"The agent asked whether to open the PR and has no answer."}' : '{"state":"done","why":"The fix is in the tree and tests pass."}';
+    case "settle": {
+      const c = closerOf(row.freezeId);
+      return JSON.stringify(pass ? { state: "waiting", why: `The agent asked "${c.answer.slice(c.answer.lastIndexOf(". ") + 2)}" and has no answer.` } : { state: "done", why: c.done });
+    }
     case "title":
       return pass ? `Fix ${row.freezeName.replace(/-/g, " ")} retry` : `Claude Code: ${row.freezeName}`;
     default:
@@ -585,28 +628,41 @@ function promptOf(st: FixtureState, row: RunRow, file: string): string {
   return momentOf(st, row.freezeId).map((m) => `${m.from}: ${m.text}`).join("\n");
 }
 
+/** What an agent typed, per mark: real-shaped commands, cycled when a count outruns the list. */
+const GUARD_ARGV: Record<GuardStatus, string[]> = {
+  SERVED: ["cast feed --since 1d", "cast task ls -q sync", "cast plan show pl-810", "cast read jx7c6zk 40:60", "cast sessions --label growth", "cast task show ct-4102", "cast search \"weekly digest\" -s 7d", "cast decisions list", "cast pr ls --mine", "cast calls -n 3", "cast doc search \"growth plan\"", "cast trigger ls", "cast task ready -q growth", "cast chat read --channel growth --since 1d", "cast summary jx7dhfh", "cast plan ls -q growth", "cast diff jx7c6zk", "cast feed --label growth", "cast task ls --assignee me", "cast usage"],
+  UNSERVED: ["cast plan context pl-810", "cast call cl-212 --transcript"],
+  LIVE: ["cast sessions --state needs-input", "cast feed --since 2h", "cast task ls -s in_progress"],
+  REFUSED: ['cast task comment ct-4102 "done"'],
+  UNKNOWN: ["cast roster"],
+  HELP: ["cast trigger --help"],
+};
+
 function guardOf(row: RunRow): GuardEntry[] {
   const out: GuardEntry[] = [];
-  const push = (status: GuardStatus, argv: string, n: number, turn = 1) => {
-    for (let i = 0; i < n; i++) out.push({ seq: out.length + 1, turn, argv: `${argv}${n > 1 ? ` ${i + 1}` : ""}`, status });
+  const push = (status: GuardStatus, n: number, turn: number, from = 0) => {
+    const list = GUARD_ARGV[status];
+    for (let i = 0; i < n; i++) out.push({ seq: out.length + 1, turn, argv: list[(from + i) % list.length], status });
   };
-  push("SERVED", "cast feed --since 1d", Math.min(row.guard.served, 4));
-  push("SERVED", "cast task ls -q sync", Math.max(0, row.guard.served - 4), 2);
-  push("UNSERVED", "cast plan show pl-810", row.guard.unserved, 2);
-  push("LIVE", "cast sessions --state needs-input", row.guard.live, 2);
-  push("REFUSED", 'cast task comment ct-1 "done"', row.guard.refused, 2);
-  push("UNKNOWN", "cast roster", row.guard.unknown, 2);
-  push("HELP", "cast trigger --help", row.guard.help, 1);
+  push("SERVED", Math.min(row.guard.served, 4), 1);
+  push("HELP", row.guard.help, 1);
+  push("SERVED", Math.max(0, row.guard.served - 4), 2, 4);
+  push("UNSERVED", row.guard.unserved, 2);
+  push("LIVE", row.guard.live, 2);
+  push("UNKNOWN", row.guard.unknown, 2);
+  push("REFUSED", row.guard.refused, 2);
   return out;
 }
 
 function runResponse(st: FixtureState, row: RunRow): RunResponse {
   const def = surfaceDef(st, row.surface);
   const scored = row.status === "pass" || row.status === "fail";
-  const reply = replyOf(row);
+  // A dry rep calls no model: a call's reply is its prompt echoed back (adapters/dryRun.ts), an agent's a fixed line.
+  const dry = row.status === "dry";
+  const reply = dry ? (def.route === "call" ? promptOf(st, row, "call1/prompt.md") : "(dry run: no agent ran)") : replyOf(row);
   const calls: CallDetail[] =
     def.route === "call" && row.status !== "crash"
-      ? [{ n: 1, dir: "call1", request: { model: row.model ?? def.model, max_tokens: 1024, temperature: 0 }, system: promptOf(st, row, "call1/system.md"), prompt: promptOf(st, row, "call1/prompt.md"), reply, stopReason: "end_turn", tokens: { input: 2140, output: 96, cacheRead: 1800, cacheWrite: 0 }, costUsd: row.costUsd, realMs: row.realMs, isError: false, harnessFailure: null }]
+      ? [{ n: 1, dir: "call1", request: { model: row.model ?? def.model, max_tokens: 1024, temperature: 0 }, system: promptOf(st, row, "call1/system.md"), prompt: promptOf(st, row, "call1/prompt.md"), reply, stopReason: "end_turn", tokens: dry ? { input: null, output: Math.ceil(reply.length / 4), cacheRead: null, cacheWrite: null } : { input: 2140, output: 96, cacheRead: 1800, cacheWrite: 0 }, costUsd: row.costUsd, realMs: row.realMs, isError: false, harnessFailure: null }]
       : [];
   const agents =
     def.route === "agent" && row.status !== "crash"
@@ -616,7 +672,7 @@ function runResponse(st: FixtureState, row: RunRow): RunResponse {
           model: row.model ?? def.model,
           prompt: promptOf(st, row, "agent1/prompt.md"),
           then: [promptOf(st, row, "agent1/then2.md")],
-          turns: [
+          turns: dry ? [[{ kind: "text" as const, text: reply }]] : [
             [{ kind: "thinking" as const, text: "Start from what changed since the last check." }, { kind: "tool" as const, name: "Bash", input: { command: "cast feed --since 1d" }, output: "12 events since yesterday", isError: false }, { kind: "text" as const, text: reply }],
             [{ kind: "text" as const, text: "Nothing else: the open items belong to other roles." }],
           ],
@@ -631,6 +687,10 @@ function runResponse(st: FixtureState, row: RunRow): RunResponse {
     { id: "no-leak", title: "No private text leaks into the reply", pass: !row.gatesFailed.includes("no-leak"), decidedBy: "mechanical" as const, evidence: row.gatesFailed.includes("no-leak") ? { summary: "The reply quotes a private channel name.", scanned: 1, excerpts: [{ where: "reply", text: "#founders-only" }] } : { summary: "Scanned 1 reply, nothing private.", scanned: 1 } },
     { id: "shape", title: "The reply parses", pass: true, decidedBy: "mechanical" as const, evidence: { summary: "Held, nothing to check.", vacuous: true } },
   ];
+  // The tool grades a dry rep too, scoring the echoed prompt as if it were a reply: real dry folders mostly fail `parse` at 0.
+  const dryScore = dry
+    ? { pass: false, score: 0, passMark: PASS_MARK, gates: [{ id: "shape", title: "The reply parses", pass: false, decidedBy: "mechanical" as const, evidence: { summary: `not JSON: the reply starts "${reply.slice(0, 32)}"` } }], checks: [], missedFloors: [], judgeCostUsd: 0, judgeModel: null, scoredAt: iso(Date.parse(row.stamp) + 2_000) }
+    : null;
   const score = scored
     ? {
         pass: row.status === "pass",
@@ -643,20 +703,21 @@ function runResponse(st: FixtureState, row: RunRow): RunResponse {
         judgeModel: row.judgeModel,
         scoredAt: iso(Date.parse(row.stamp) + 90_000),
       }
-    : null;
+    : dryScore;
+  // Sizes come from the texts the file route serves (runFileTexts), so the tree and the open file agree.
   const files: RunFileEntry[] = [
-    { path: "run.json", kind: "file", size: 812 },
-    { path: "result.json", kind: "file", size: 344 },
-    ...(score ? [{ path: "score.json", kind: "file" as const, size: 2210 }] : []),
-    { path: "sends.json", kind: "file", size: 410 },
-    ...(calls.length ? [{ path: "call1", kind: "dir" as const, size: 0 }, { path: "call1/system.md", kind: "file" as const, size: 420 }, { path: "call1/prompt.md", kind: "file" as const, size: 960 }, { path: "call1/reply.md", kind: "file" as const, size: 120 }] : []),
-    ...(agents.length ? [{ path: "agent1", kind: "dir" as const, size: 0 }, { path: "agent1/prompt.md", kind: "file" as const, size: 960 }, { path: "agent1/then2.md", kind: "file" as const, size: 60 }, { path: "agent1/stream.jsonl", kind: "file" as const, size: 18_400 }, { path: "calls.log", kind: "file" as const, size: 640 }] : []),
-    ...(row.status === "crash" ? [{ path: "run.log", kind: "file" as const, size: 2_048 }] : []),
+    { path: "run.json", kind: "file", size: 0 },
+    { path: "result.json", kind: "file", size: 0 },
+    ...(score ? [{ path: "score.json", kind: "file" as const, size: 0 }] : []),
+    { path: "sends.json", kind: "file", size: 0 },
+    ...(calls.length ? [{ path: "call1", kind: "dir" as const, size: 0 }, { path: "call1/system.md", kind: "file" as const, size: 0 }, { path: "call1/prompt.md", kind: "file" as const, size: 0 }, { path: "call1/reply.md", kind: "file" as const, size: 0 }] : []),
+    ...(agents.length ? [{ path: "agent1", kind: "dir" as const, size: 0 }, { path: "agent1/prompt.md", kind: "file" as const, size: 0 }, { path: "agent1/then2.md", kind: "file" as const, size: 0 }, { path: "agent1/stream.jsonl", kind: "file" as const, size: 0 }, { path: "calls.log", kind: "file" as const, size: 0 }] : []),
+    ...(row.status === "crash" ? [{ path: "run.log", kind: "file" as const, size: 0 }] : []),
   ];
   const b = batchOf(st, row.surface, row.batch ?? "");
   const list = st.batches.get(row.surface) ?? [];
   const sameFreeze = (x: Batch | undefined) => (x ? rowsIn(st, x).find((r) => r.freezeId === row.freezeId && r.seed === row.seed)?.id ?? null : null);
-  return {
+  const res: RunResponse = {
     row,
     run: { freezeId: row.freezeId, notes: null, model: row.model ?? def.model, route: def.route, sourceHash: row.sourceHash ?? "", sourceHashDisk: row.sourceHashDisk, treePatch: row.treePatch, freezeSha: row.freezeSha, promptSha: row.promptSha, judgeModel: row.judgeModel, budgetUsd: 8, gitHead: row.gitHead ?? "", dirty: row.dirty, dry: row.status === "dry", temperatureProd: [0], temperatureReplay: "cli-default", liveReads: row.liveReads, batch: row.batch ?? "", cadence: row.cadence, title: `${row.surface} ${row.freezeName}` },
     result: { scenario: row.freezeName, seed: row.seed, title: `${row.surface} ${row.freezeName}`, startedAt: row.stamp, endedBecause: row.status === "crash" ? "failed" : "done", stopReason: row.status === "crash" ? "the replay exited 1 before replying" : null, steps: calls.length + agents.length, virtualElapsedMs: 0, realElapsedMs: row.realMs, costUsd: row.costUsd, captures: 1 },
@@ -664,10 +725,10 @@ function runResponse(st: FixtureState, row: RunRow): RunResponse {
     scoreVersions: score
       ? [
           ...(row.scoreVersions > 1 ? [{ file: "score.before-rejudge.json", scoredAt: null, judgeModel: JUDGE_MODEL, score: round(clamp01((row.score as number) + 0.06)), pass: true, legacy: true }] : []),
-          { file: "score.json", scoredAt: score.scoredAt ?? null, judgeModel: row.judgeModel, score: row.score as number, pass: row.status === "pass", legacy: false },
+          { file: "score.json", scoredAt: score.scoredAt ?? null, judgeModel: score.judgeModel, score: score.score, pass: score.pass, legacy: false },
         ]
       : [],
-    rubric: scored ? null : { criteria: def.criteria, passMark: PASS_MARK },
+    rubric: score ? null : { criteria: def.criteria, passMark: PASS_MARK },
     sends: row.status === "crash" ? [] : [{ seq: 1, at: row.stamp, label: def.id, rail: def.route === "agent" ? "chat" : "result", to: null, audience: "founder", text: reply, chars: reply.length }],
     calls,
     agents,
@@ -679,6 +740,8 @@ function runResponse(st: FixtureState, row: RunRow): RunResponse {
     adjacent: { previous: sameFreeze(list[b.index - 1]), next: sameFreeze(list[b.index + 1]) },
     extra: row.surface === "org-review" ? { gradeAuto: { named: 7, exist: 7, owners: 6 }, hashes: { analyzer: row.promptSha } } : null,
   };
+  const texts = runFileTexts(res);
+  return { ...res, files: files.map((f) => (f.kind === "dir" ? f : { ...f, size: byteLength(texts.get(f.path) ?? "") })) };
 }
 
 function promptPair(st: FixtureState, a: RunRow, b: RunRow): PromptFilePair[] {
@@ -688,8 +751,10 @@ function promptPair(st: FixtureState, a: RunRow, b: RunRow): PromptFilePair[] {
 
 function examplesOf(st: FixtureState, flips: VerdictFlip[]): EvalFlip[] {
   return flips.map((f) => {
-    const before = st.byId.get(f.before[0]);
-    const after = st.byId.get(f.after[0]);
+    // The reps that show the flip: one on each side with the side's majority outcome, as flipOf picks them.
+    const pick = (ids: string[], pass: boolean) => ids.map((id) => st.byId.get(id)).find((r) => r && (r.status === "pass") === pass) ?? st.byId.get(ids[0]);
+    const before = pick(f.before, f.direction === "broke");
+    const after = pick(f.after, f.direction !== "broke");
     return {
       freeze: f.freezeId,
       name: f.name,
@@ -716,7 +781,7 @@ function endpointOf(st: FixtureState, surface: string, ref: string): { endpoint:
   return { batch: null, endpoint: { batch: null, sha: c.sha, mainSha: c.mainSha, dirty: false, treePatch: null, footing: { model: surfaceDef(st, surface).model, ruler: `${JUDGE_MODEL}#r2` }, at: c.at } };
 }
 
-function attribution(st: FixtureState, surface: string, goodRef: string, badRef: string): Attribution {
+function attribution(st: FixtureState, surface: string, goodRef: string, badRef: string, allCommits = false): Attribution {
   const good = endpointOf(st, surface, goodRef);
   const bad = endpointOf(st, surface, badRef);
   const gb = good.batch;
@@ -747,18 +812,47 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
   else if (changedFreezes.length) answer = { kind: "freeze", freezeIds: changedFreezes };
   else if (live.length) answer = { kind: "live-reads", reps: live.length, reads: sum(live.map((r) => r.liveReads)) };
   else if (sourceDiffers) {
-    candidates = (touching.length ? touching : inRange).map((commit) => ({ kind: "commit" as const, commit, renderClass: null }));
-    if (bad.endpoint.treePatch) candidates.push({ kind: "patch", base: bad.endpoint.sha, treePatch: bad.endpoint.treePatch, renderClass: null });
-    const recorded: RecordedProbe[] = gb && bb ? gradedBatches(st, surface).filter((b) => b.at > gb.at && b.at < bb.at && sameFooting(b, gb)).slice(-2).map((b) => ({ batch: b.name, sha: b.gitHead, verdict: b.epoch === bb.epoch ? "bad" : "good", reps: rowsIn(st, b).length })) : [];
-    const unattributable = bad.endpoint.dirty && !bad.endpoint.treePatch;
+    // The search set, as attribution.ts walks it: the commits touching declared sources, or every commit with --all-commits.
+    const searched = allCommits ? inRange : touching;
+    const patch: Candidate | null = bad.endpoint.dirty && bad.endpoint.treePatch ? { kind: "patch", base: bad.endpoint.sha, treePatch: bad.endpoint.treePatch, renderClass: null } : null;
+    // Either end on edits nothing kept cannot stand for one commit (attribution.ts unreplayable).
+    const unkept = (["good", "bad"] as const).filter((k) => { const e = (k === "good" ? good : bad).endpoint; return e.dirty && !e.treePatch; });
+    const unattributable = unkept.length > 0;
+    // Every recorded batch inside the range, on the same footing, that ran a flipped freeze and can be replayed (clean, or
+    // carrying a patch), placed at its commit's index and read by the probe rule: majority per flipped freeze.
+    const focus = new Set(flipped.map((f) => f.freezeId));
+    const probeVerdict = (rows: RunRow[]): RecordedProbe["verdict"] => {
+      const byFreeze = new Map<string, boolean[]>();
+      for (const r of rows) byFreeze.set(r.freezeId, [...(byFreeze.get(r.freezeId) ?? []), r.status === "pass"]);
+      const failing = [...byFreeze.values()].filter((v) => v.filter(Boolean).length * 2 <= v.length).length;
+      return failing * 2 > byFreeze.size ? "bad" : (byFreeze.size - failing) * 2 > byFreeze.size ? "good" : "unsure";
+    };
+    const recorded = gb && bb && !unattributable
+      ? gradedBatches(st, surface)
+          .filter((b) => b.at > gb.at && b.at < bb.at && sameFooting(b, gb))
+          .flatMap((b) => {
+            const all = rowsIn(st, b);
+            const ran = all.filter((r) => focus.has(r.freezeId) && (r.status === "pass" || r.status === "fail"));
+            const dirty = all.some((r) => r.dirty);
+            const at = inRange.findIndex((c) => c.sha === b.gitHead);
+            if (!ran.length || at < 0 || (dirty && !all.some((r) => r.treePatch))) return [];
+            return [{ batch: b.name, sha: b.gitHead, verdict: probeVerdict(ran), reps: ran.length, at, clean: !dirty }];
+          })
+      : [];
+    const { goodAt, badAt, keepPatch } = narrowByRecords(inRange.length, recorded);
+    candidates = [
+      ...searched.filter((c) => { const i = inRange.indexOf(c); return unattributable || (i > goodAt && i <= badAt); }).map((commit) => ({ kind: "commit" as const, commit, renderClass: null })),
+      ...(patch && (unattributable || keepPatch) ? [patch] : []),
+    ];
     answer = {
       kind: "source",
-      confidence: unattributable ? "unattributable" : candidates.length === 1 ? "pinned" : "narrowed",
+      confidence: unattributable ? "unattributable" : sourceConfidence(candidates.length),
       candidates,
-      narrowedBy: recorded,
+      narrowedBy: recorded.map(({ at: _, clean: __, ...r }) => r),
       epochs: epochsOf(st, surface).filter((e) => Date.parse(e.firstBatchAt) > lo && Date.parse(e.firstBatchAt) <= hi),
-      noDeclaredSourceMoved: touching.length === 0,
-      reason: unattributable ? "The bad batch ran uncommitted edits and kept no patch; nothing recorded can replay them." : null,
+      noDeclaredSourceMoved: !allCommits && !touching.length && !patch,
+      rangeCommits: inRange.length,
+      reason: unattributable ? unkept.map((k) => `the ${k} batch ran uncommitted edits and kept no patch; nothing recorded can replay them`).join("; ") : null,
     };
   } else answer = { kind: "noise", separation: gb && bb ? fixtureSeparate(scoredOf(rowsIn(st, gb)).map((r) => r.score as number), scoredOf(badRows).map((r) => r.score as number)) : { kind: "too-few" } };
   const firstFlip = flipped[0];
@@ -779,13 +873,14 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
 
 function bisectPlan(st: FixtureState, req: BisectPlanRequest): BisectPlan {
   const def = surfaceDef(st, req.surface);
-  const attr = attribution(st, req.surface, req.good, req.bad);
+  const attr = attribution(st, req.surface, req.good, req.bad, req.allCommits);
   const candidates = attr.answer.kind === "source" ? attr.answer.candidates : [];
   const flipped = attr.flipped.map((f) => ({ id: f.freezeId, name: f.name, role: "flipped" as const }));
   const controls = [...st.freezes.values()].filter((f) => f.surface === req.surface && !flipped.some((x) => x.id === f.id)).slice(0, 2).map((f) => ({ id: f.id, name: f.name, role: "control" as const }));
   const freezes = req.freezes?.length ? [...flipped, ...controls].filter((f) => req.freezes!.includes(f.id)) : [...flipped, ...controls];
   const reps = req.reps ?? 3;
-  const classes = candidates.length ? Math.max(1, candidates.length - 1) : 0;
+  // The api child plans with --no-render, so every candidate (the patch included) counts as its own class until start renders them.
+  const classes = candidates.length;
   const probes = Math.ceil(Math.log2(classes + 1));
   const F = freezes.length;
   const maxReps = (2 + probes) * F * (reps + 2) + 2 * (F + 2) * 5;
@@ -802,73 +897,76 @@ function bisectPlan(st: FixtureState, req: BisectPlanRequest): BisectPlan {
     freezes,
     reps,
     candidates,
-    classes: candidates.length
-      ? candidates.slice(0, classes).map((c, i) => ({ n: i + 1, shas: c.kind === "commit" ? [c.commit.sha] : [c.base], representative: c.kind === "commit" ? c.commit.sha : c.base, promptShas: Object.fromEntries(freezes.map((f) => [f.id, fixtureHex(`render:${i}:${f.id}`, 64)])), skip: null }))
-      : null,
+    classes: null,
     bound,
     budgetUsd,
     maxMinutes: req.maxMinutes ?? 45,
     allCommits: req.allCommits ?? false,
     needsConfirm: def.route === "agent",
-    summary: `2 controls + up to ${probes} probes + confirmation, ${F} freezes, ${reps} to ${reps + 2} reps: at most ${maxReps} reps, about $${maxUsd.toFixed(2)}, budget $${budgetUsd.toFixed(2)}`,
+    // plan.ts costLine, word for word.
+    summary: `2 controls + up to ${probes} probe${probes === 1 ? "" : "s"} + confirmation, ${F} freeze${F === 1 ? "" : "s"}, ${reps} to ${reps + 2} reps: at most ${maxReps} reps, about $${maxUsd.toFixed(2)}, budget $${budgetUsd.toFixed(2)}`,
   };
 }
 
-function buildBisects(st: FixtureState) {
-  const settle = gradedBatches(st, "settle");
-  const lastEpoch = Math.max(...settle.map((b) => b.epoch));
-  const lastEpochStart = settle.findIndex((b) => b.epoch === lastEpoch);
-  const good = settle[lastEpochStart - 1];
-  const bad = settle[settle.length - 1];
-  if (!good || !bad) return;
-  const plan = bisectPlan(st, { surface: "settle", good: good.name, bad: bad.name });
-  const mk = (id: string, status: BisectState["status"], ageMin: number, probesDone: number): BisectState => {
-    const startedAt = st.now - ageMin * 60_000;
-    const probes: BisectProbe[] = [];
-    const reps = (sha: string, passing: boolean, n: number) =>
-      plan.freezes.flatMap((f) => Array.from({ length: n }, (_, i) => ({ freezeId: f.id, runId: null, passed: f.role === "control" ? true : passing, score: f.role === "control" ? 0.84 : passing ? 0.81 - i * 0.02 : 0.42 + i * 0.03 })));
-    probes.push({ sha: good.gitHead, kind: "control-good", renderClass: null, batch: `${id}~${good.gitHead.slice(0, 8)}`, recorded: false, reps: reps(good.gitHead, true, 3), verdict: "good", skipReason: null, costUsd: 0.09 });
-    probes.push({ sha: bad.gitHead, kind: "control-bad", renderClass: null, batch: `${id}~${bad.gitHead.slice(0, 8)}`, recorded: false, reps: reps(bad.gitHead, false, 3), verdict: "bad", skipReason: null, costUsd: 0.09 });
-    plan.candidates.slice(0, probesDone).forEach((c, i) => {
-      const sha = c.kind === "commit" ? c.commit.sha : c.base;
-      const bad = i === 0;
-      probes.push({ sha, kind: "probe", renderClass: i + 1, batch: `${id}~${sha.slice(0, 8)}`, recorded: false, reps: reps(sha, !bad, status === "probing" && i === probesDone - 1 ? 1 : 3), verdict: status === "probing" && i === probesDone - 1 ? "pending" : bad ? "bad" : "good", skipReason: null, costUsd: 0.08 });
-    });
-    const culprit = plan.candidates.find((c) => c.kind === "commit");
-    const done = status === "done";
-    return {
-      id,
-      surface: "settle",
-      seq: probes.length * 4,
-      status,
-      tier: 2,
-      range: { good: good.gitHead, bad: bad.gitHead },
-      candidates: plan.candidates,
-      classes: plan.classes,
-      probes,
-      spentUsd: round(sum(probes.map((p) => p.costUsd)), 2),
-      budgetUsd: plan.budgetUsd,
-      startedAt: iso(startedAt),
-      updatedAt: iso(st.now - (done ? ageMin - 40 : 1) * 60_000),
-      finishedAt: done ? iso(startedAt + 40 * 60_000) : null,
-      tmux: done ? null : `evals-bisect-${id}`,
-      answer: done && culprit?.kind === "commit" ? { kind: "culprit", commit: culprit.commit, separation: { kind: "worse", p: 0.004 }, tier: 2 } : null,
-      plan,
-    };
+/** The newest pair of batches on one surface whose attribution narrows to `minCommits` or more candidates, the patch included (flipped freezes preferred). */
+function narrowedPair(st: FixtureState, surface: string, minCommits: number): { good: Batch; bad: Batch } | null {
+  const graded = gradedBatches(st, surface);
+  let fallback: { good: Batch; bad: Batch } | null = null;
+  for (let bi = graded.length - 1; bi >= Math.max(1, graded.length - 3); bi--) {
+    for (let gap = 2; gap <= 6 && bi - gap >= 0; gap++) {
+      const good = graded[bi - gap];
+      const bad = graded[bi];
+      if (!sameFooting(good, bad)) continue;
+      const a = attribution(st, surface, good.name, bad.name);
+      if (a.answer.kind !== "source" || a.answer.confidence !== "narrowed" || a.answer.candidates.length < minCommits) continue;
+      if (a.flipped.length) return { good, bad };
+      fallback ??= { good, bad };
+    }
+  }
+  return fallback;
+}
+
+/**
+ * The bisects the pages show: settle running and finished, a stalled agent
+ * run, an unsure range and drift (__fixtures__/bisect.ts plays each out).
+ * Their clock is the real one, not the world's start of day: a page weighs a
+ * bisect's elapsed time and its last write against Date.now, so a run that
+ * began at the world's clock would read as hours old and never stalled. Their
+ * ids are fixed, so nothing that names one moves.
+ */
+function buildBisects(st: FixtureState, clock = Math.max(st.now, Date.now())) {
+  // A landed rep links to one of the world's own runs on its freeze with the same outcome.
+  const runIdOf = (freezeId: string, passed: boolean, n: number) => {
+    const runs = st.rows.filter((r) => r.freezeId === freezeId && (r.status === "pass") === passed && (r.status === "pass" || r.status === "fail"));
+    return runs.length ? runs[runs.length - 1 - (n % runs.length)].id : null;
   };
-  const finished = mk("b-settle-0927", "done", 60 * 26, 2);
-  const running = mk("b-settle-1003", "probing", 18, 2);
-  st.bisects = [running, finished];
-  for (const b of st.bisects) {
-    const steps: BisectStep[] = [
-      { seq: 1, at: b.startedAt, kind: "plan", sha: null, text: b.plan.summary },
-      { seq: 2, at: b.startedAt, kind: "render", sha: null, text: `Tier 1 dry render: ${b.candidates.length} candidates in ${b.classes?.length ?? 0} render classes.` },
-      ...b.probes.map((p, i) => ({ seq: 3 + i, at: iso(Date.parse(b.startedAt) + (i + 1) * 4 * 60_000), kind: (p.kind.startsWith("control") ? "control" : "probe") as BisectStep["kind"], sha: p.sha, text: `${p.kind} at ${p.sha.slice(0, 8)}: ${p.verdict}` })),
-    ];
-    if (b.answer) steps.push({ seq: steps.length + 1, at: b.finishedAt ?? b.updatedAt, kind: "answer", sha: b.answer.kind === "culprit" ? b.answer.commit.sha : null, text: "Culprit confirmed: separated worse at p 0.004." });
-    st.stepsByBisect.set(b.id, steps);
+  const cases: Array<{ id: string; surface: string; kind: FixtureBisectKind; ageMin: number }> = [
+    { id: "b-settle-1003", surface: "settle", kind: "running", ageMin: 18 },
+    { id: "b-anchor-brief-1003", surface: "anchor-brief", kind: "stalled", ageMin: 50 },
+    { id: "b-settle-0927", surface: "settle", kind: "culprit", ageMin: 60 * 26 },
+    { id: "b-call-summary-0929", surface: "call-summary", kind: "range", ageMin: 60 * 24 * 4 },
+    { id: "b-handoff-0930", surface: "handoff", kind: "drift", ageMin: 60 * 24 * 3 },
+  ];
+  for (const c of cases) {
+    // An unsure range needs two commits that render alike, which the fixture's Tier 1 folds only among four or more.
+    const pair = narrowedPair(st, c.surface, c.kind === "range" ? 5 : 3);
+    if (!pair) continue;
+    const plan = bisectPlan(st, { surface: c.surface, good: pair.good.name, bad: pair.bad.name });
+    const b = fixtureBisect(c.kind, plan, { id: c.id, now: clock, ageMin: c.ageMin, runIdOf });
+    st.bisects.push(b.state);
+    if (c.kind === "running") st.running.add(c.id);
+    st.stepsByBisect.set(c.id, b.steps);
+    st.tailByBisect.set(c.id, b.logTail);
   }
 }
+
+/**
+ * A bisect as a page sees it. The world's clock is the start of the day, but
+ * a page weighs a bisect's last write against the real clock, so the running
+ * one is shown as having written within the last half minute: otherwise every
+ * page would flag it "stalled?" a few minutes into the day.
+ */
+const liveBisect = (st: FixtureState, b: BisectState): BisectState => (st.running.has(b.id) ? { ...b, updatedAt: iso(Math.max(Date.parse(b.updatedAt), Date.now() - 30_000)) } : b);
 
 const bisectSummary = (b: BisectState): BisectSummary => ({
   id: b.id,
@@ -881,6 +979,7 @@ const bisectSummary = (b: BisectState): BisectSummary => ({
   spentUsd: b.spentUsd,
   budgetUsd: b.budgetUsd,
   startedAt: b.startedAt,
+  updatedAt: b.updatedAt,
   finishedAt: b.finishedAt,
 });
 
@@ -906,8 +1005,10 @@ const SIM_INVARIANTS: Array<[string, string]> = [
   ["INV-fixpoint", "re-running every mounted feeder, one catch-up and a byIds pass over every held id changes nothing"],
 ];
 
+const failureInvariant = (r: SimRunResponse) => (r.result.passed === true ? "" : r.result.invariant.id);
+
 function buildSim(now: number): FixtureState["sim"] {
-  const rand = prng(7);
+  const rand = makeRng(7);
   const invariants: SimInvariant[] = SIM_INVARIANTS.map(([id, meaning]) => ({ id, meaning, keys: [] }));
   const head = fixtureHex("commit:19:suggest: voice from recent sends");
   const sessions: SimSessionSummary[] = [];
@@ -929,98 +1030,26 @@ function buildSim(now: number): FixtureState["sim"] {
       }
     }
     const failed = rows.filter((r) => !r.passed).length;
-    sessions.push({ id, argv: i === 8 ? ["memberRemovedMidTurn", "--sweep", "4"] : [], gitHead: head, dirty: i >= 7, treePatch: null, startedAt: iso(at), finishedAt: iso(at + 95_000), exit: failed ? 1 : 0, runs: rows.length, failed, scenarios: SIM_SCENARIOS.length });
+    const failing = rows.filter((r) => !r.passed).map(({ scenario, mode, seed, dir }) => ({ scenario, mode, seed, ...(dir ? { dir } : {}) }));
+    sessions.push({ id, argv: i === 8 ? ["memberRemovedMidTurn", "--sweep", "4"] : [], gitHead: head, dirty: i >= 7, treePatch: i >= 7 ? fixtureHex(`simpatch:${id}`, 64) : null, startedAt: iso(at), finishedAt: iso(at + 95_000), exit: failed ? 1 : 0, runs: rows.length, failed, scenarios: SIM_SCENARIOS.length, failing });
   }
-  sessions.push({ id: "codecast-sim-legacy-1", argv: [], gitHead: null, dirty: false, treePatch: null, startedAt: iso(now - 12 * DAY), finishedAt: null, exit: null, unsessioned: true, runs: 1, failed: 1, scenarios: 1 });
+  sessions.push({ id: "codecast-sim-legacy-1", argv: [], gitHead: null, dirty: false, treePatch: null, startedAt: iso(now - 12 * DAY), finishedAt: null, exit: null, unsessioned: true, runs: 1, failed: 1, scenarios: 1, failing: [{ scenario: "memberRemovedMidTurn", mode: "interleave", seed: 1 }] });
 
+  // Every failing run is the same story (__fixtures__/sim.ts); the newest one has been shrunk.
   const failing = allRows.filter((r) => !r.row.passed);
   failing.forEach(({ session, row }, k) => {
-    const events: SimEvent[] = [];
-    const lanes = ["conn:laptop.host", "live:laptop.host:inbox", "repl:laptop.host>laptop.follower", "conn:phone.host", "live:phone.host:inbox", "bridge:laptop:daemon", "timer:settle", "sched", "actor:ashot"];
-    const steps = [
-      { verb: "send", actor: "ashot", label: "Ashot sends a turn" },
-      { verb: "removeMember", actor: "samvit", label: "Samvit removes Ashot from the team" },
-      { verb: "settle", actor: "world", label: "the world settles" },
-    ];
-    let seq = 0;
-    steps.forEach((step, si) => {
-      events.push({ kind: "step", seq: seq++, verb: step.verb, actor: step.actor, label: step.label });
-      for (let i = 0; i < 8; i++) {
-        const channel = lanes[(si * 3 + i * 2) % lanes.length];
-        events.push({ kind: "delivery", seq: seq++, channel, due: 0, label: channel.startsWith("repl") ? "slice" : channel.startsWith("live") ? "listInboxSessions" : "tick", producer: channel.split(":")[0] });
-      }
-    });
-    const order = events.filter((e) => e.kind !== "step").map((e) => (e as { channel: string }).channel);
-    const failAt = events.length - 3;
-    const minimal = k === failing.length - 1 ? { order: [order[1], order[5], order[9], order[14]], removed: order.map((_, i) => i).filter((i) => ![1, 5, 9, 14].includes(i)), attempts: 61, ms: 48_000, oneMinimal: true } : null;
-    const runId = row.dir as string;
-    runs.set(`${session}/${runId}`, {
-      session: sessions.find((s) => s.id === session)!,
-      run: row,
-      result: {
-        scenario: row.scenario,
-        mode: row.mode,
-        seed: row.seed,
-        gitHead: head,
-        dirty: true,
-        startedAt: iso(now - DAY),
-        realMs: row.ms,
-        step: "the world settles",
-        delivery: failAt,
-        invariant: { id: "INV-team-inbox", meaning: SIM_INVARIANTS[2][1] },
-        message: "laptop.follower still lists the session after the removal",
-        window: { name: "laptop.follower", principal: "ashot", scope: "team:t1" },
-        row: { table: "sessions", id: "s-41", label: "Ashot's session", diff: [{ field: "team_id", server: "null", replica: "t1" }, { field: "workspace", server: "user:ashot", replica: "team:t1" }] },
-        order: order.join(","),
-        labels: { "s-41": "Ashot's session", t1: "the team" },
-        replay: [`bun run sim memberRemovedMidTurn --mode interleave --seed ${row.seed} --trace s-41`],
-        text: "INV-team-inbox failed at delivery " + failAt,
-        ...(minimal ? { minimalOrder: minimal.order.join(",") } : {}),
-      },
-      events,
-      world: { scenario: row.scenario, mode: row.mode, seed: row.seed, labels: { "s-41": "Ashot's session" }, devices: [{ name: "laptop", windows: [{ name: "laptop.host", role: "host", closed: false }, { name: "laptop.follower", role: "follower", closed: false }] }, { name: "phone", windows: [{ name: "phone.host", role: "host", closed: true }] }] },
-      final: { deliveries: order.length, writesSpent: 14, producers: { conn: 8, live: 6, repl: 5, bridge: 2, timer: 2, sched: 1 }, calls: [{ seq: 3, name: "teams:removeMember", kind: "mutation", ok: true }, { seq: 9, name: "messages:send", kind: "mutation", ok: false, error: "Forbidden: not a member" }], actors: [{ actor: "ashot", verb: "send", ok: false, error: "Forbidden: not a member" }], windowErrors: {} },
-      minimal,
-      shrinking: null,
-      invariant: invariants[2],
-      replay: {
-        trace: `bun run sim memberRemovedMidTurn --mode interleave --seed ${row.seed} --trace s-41`,
-        order: `bun run sim memberRemovedMidTurn --mode order --order "${order.join(",")}"`,
-        minimal: minimal ? `bun run sim memberRemovedMidTurn --mode order --order "${minimal.order.join(",")}"` : null,
-      },
-    });
+    const run = simFixtureRun({ session: sessions.find((s) => s.id === session)!, run: row, gitHead: head, shrunk: k === failing.length - 1 });
+    row.deliveries = run.run.deliveries;
+    runs.set(`${session}/${row.dir}`, run);
   });
 
-  const grid: SimGridCell[] = [];
-  for (const scenario of [...SIM_SCENARIOS, "selftest"]) {
-    for (const mode of ["scripted", "interleave"] as const) {
-      const mine = allRows.filter((r) => r.row.scenario === scenario && r.row.mode === mode);
-      const last = mine[mine.length - 1];
-      const bySession = new Map<string, { seeds: number; failed: number }>();
-      for (const r of mine) {
-        const s = bySession.get(r.session) ?? { seeds: 0, failed: 0 };
-        s.seeds++;
-        if (!r.row.passed) s.failed++;
-        bySession.set(r.session, s);
-      }
-      const failLast = [...mine].reverse().find((r) => !r.row.passed && r.session === last?.session);
-      grid.push({
-        scenario,
-        mode,
-        latest: last ? { session: last.session, run: failLast?.row.dir ?? null, seed: (failLast ?? last).row.seed, passed: !failLast, at: iso(last.at) } : null,
-        history: [...bySession].map(([session, s]) => ({ session, ...s })),
-        gitHead: last ? head : null,
-        lastRunAt: last ? iso(last.at) : null,
-      });
-    }
-  }
-
+  const scenarios: SimScenario[] = [
+    ...SIM_SCENARIOS.map((name) => ({ name, file: `scenarios/${name}.scenario.ts`, selftest: false, modes: ["scripted", "interleave"], red: name === "roleTriggerScope" ? [{ task: "ct-55120", invariant: "INV-triggers", modes: ["interleave"], seeds: null }] : [], known: name === "visibilityFlip" ? [{ invariant: "INV-sweep", tasks: ["ct-54902"] }] : [] })),
+    ...SIM_SELFTESTS.map((name) => ({ name, file: `selftests/${name}.selftest.ts`, selftest: true, modes: ["scripted"], red: [], known: [] })),
+  ];
   const catalog: SimCatalogResponse = {
     gitHead: head,
-    scenarios: [
-      ...SIM_SCENARIOS.map((name) => ({ name, file: `scenarios/${name}.scenario.ts`, selftest: false, modes: ["scripted", "interleave"], red: name === "roleTriggerScope" ? [{ task: "ct-55120", invariant: "INV-triggers", modes: ["interleave"], seeds: null }] : [], known: name === "visibilityFlip" ? [{ invariant: "INV-sweep", tasks: ["ct-54902"] }] : [] })),
-      ...SIM_SELFTESTS.map((name) => ({ name, file: `selftests/${name}.selftest.ts`, selftest: true, modes: ["scripted"], red: [], known: [] })),
-    ],
+    scenarios,
     invariants,
     notCompared: [
       { key: "conversations", reason: "the message page's meta twin, fed only by a conversation page the sim does not open" },
@@ -1029,8 +1058,15 @@ function buildSim(now: number): FixtureState["sim"] {
       { key: "chatReads", reason: "per-viewer read marks fed by useChatSync, which the sim does not mount" },
       { key: "chatRail", reason: "a client fold over chat rows, derived at read time" },
     ],
-    grid,
-    caught: Object.fromEntries(SIM_INVARIANTS.map(([id]) => [id, id === "INV-team-inbox" ? failing.length : id === "INV-sweep" ? 2 : 0])),
+    // The child's own fold over the same history (store/__tests__/sim/grid.ts).
+    ...simGridOf(
+      scenarios,
+      [...sessions].reverse().filter((s) => !s.unsessioned).map((session) => ({ session, runs: allRows.filter((r) => r.session === session.id).map((r) => r.row) })),
+      (session, dir) => {
+        const run = runs.get(`${session}/${dir}`);
+        return run ? failureInvariant(run) || null : null;
+      },
+    ),
   };
   return { catalog, sessions: sessions.reverse(), runs };
 }
@@ -1090,8 +1126,9 @@ function overview(st: FixtureState, cadence: string): OverviewResponse {
     surfaces,
     moved: moved.sort((a, b) => b.at.localeCompare(a.at)).slice(0, 12),
     spendByDay: [...spend].sort(([a], [b]) => a.localeCompare(b)).map(([day, s]) => ({ day, usd: round(s.usd, 2), judgeUsd: round(s.judgeUsd, 2) })),
-    bisects: st.bisects.map(bisectSummary),
-    sim: st.sim.sessions[0] ?? null,
+    bisects: st.bisects.map((b) => bisectSummary(liveBisect(st, b))),
+    // The newest session by when it began: the list puts the read-only legacy folder first.
+    sim: [...st.sim.sessions].sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0] ?? null,
   };
 }
 
@@ -1115,6 +1152,10 @@ function surfaceResponse(st: FixtureState, id: string, q: Record<string, string>
     footing: footingMarkers(st, id),
     ledger: ledger(st, id, list.filter((b) => !b.dry)),
     commits: st.commits.filter((c) => Date.parse(c.at) >= lo - DAY && Date.parse(c.at) <= hi && (c.subject.startsWith(word) || c.subject.startsWith("evals"))),
+    latest: (() => {
+      const last = list.filter((b) => !b.dry).at(-1);
+      return last ? verdict(st, last) : null;
+    })(),
   };
 }
 
@@ -1135,8 +1176,10 @@ function freezeResponse(st: FixtureState, id: string): FreezeResponse {
   };
 }
 
-function runFile(st: FixtureState, row: RunRow, path: string): RunFileResponse {
-  const r = runResponse(st, row);
+const byteLength = (text: string) => new TextEncoder().encode(text).length;
+
+/** Each file of a run folder as the file route serves it. */
+function runFileTexts(r: RunResponse): Map<string, string> {
   const map: Record<string, unknown> = {
     "run.json": r.run,
     "result.json": r.result,
@@ -1151,10 +1194,15 @@ function runFile(st: FixtureState, row: RunRow, path: string): RunFileResponse {
     "calls.log": r.guard.map((g) => `${g.argv}\n# ${g.status}`).join("\n"),
     "run.log": r.logTail,
   };
-  const v = map[path];
-  if (v === undefined || v === null) throw new EvalsFixtureMiss(`no file ${path} in ${row.id}`);
-  const text = typeof v === "string" ? v : JSON.stringify(v, null, 2);
-  return { path, size: text.length, text, truncated: false };
+  const out = new Map<string, string>();
+  for (const [path, v] of Object.entries(map)) if (v !== undefined && v !== null) out.set(path, typeof v === "string" ? v : JSON.stringify(v, null, 2));
+  return out;
+}
+
+function runFile(st: FixtureState, row: RunRow, path: string): RunFileResponse {
+  const text = runFileTexts(runResponse(st, row)).get(path);
+  if (text === undefined) throw new EvalsFixtureMiss(`no file ${path} in ${row.id}`);
+  return { path, size: byteLength(text), text, truncated: false };
 }
 
 function compare(st: FixtureState, a: RunRow, b: RunRow): CompareResponse {
@@ -1221,6 +1269,21 @@ function commit(st: FixtureState, sha: string, whole: boolean): CommitResponse {
   };
 }
 
+/** A kept tree patch: the edits a dirty rep ran on top of its head (any treePatch a row names). */
+function patch(st: FixtureState, sha: string): PatchResponse {
+  // A Multiplayer sim session's kept edits: the store code its runs read.
+  if (st.sim.sessions.some((x) => x.treePatch === sha)) {
+    const file = "packages/web/store/inboxStore.ts";
+    const diff = `diff --git a/${file} b/${file}\nindex 51a0c3e..e77d902 100644\n--- a/${file}\n+++ b/${file}\n@@ -812,6 +812,7 @@ export const hideConversation = action((draft, id: string) => {\n   const row = draft.sessions[id];\n   if (!row) return;\n+  if (row.team_id && !draft.teamMembers[row.team_id]) return;\n   draft.inboxHides[id] = { at: Date.now() };\n });\n`;
+    return { sha, files: [{ path: file, additions: 1, deletions: 0 }], diff, truncated: false };
+  }
+  const row = st.rows.find((r) => r.treePatch === sha);
+  if (!row) throw new EvalsFixtureMiss(`no patch ${sha.slice(0, 12)}`);
+  const file = `packages/convex/convex/lib/${row.surface.replace(/-(\w)/g, (_, c: string) => c.toUpperCase())}Prompt.ts`;
+  const diff = `diff --git a/${file} b/${file}\nindex 3f1c2aa..9be04d1 100644\n--- a/${file}\n+++ b/${file}\n@@ -20,7 +20,8 @@ export const RULES = [\n   "Read the last assistant turn first.",\n-  "Answer in JSON only.",\n+  "Answer in JSON only, with no prose around it.",\n+  "When unsure between two states, pick the one the human must act on.",\n   "Never guess a state the transcript does not show.",\n ];\n`;
+  return { sha, files: [{ path: file, additions: 2, deletions: 1 }], diff, truncated: false };
+}
+
 function runRowOf(st: FixtureState, id: string): RunRow {
   const row = st.byId.get(id);
   if (!row) throw new EvalsFixtureMiss(`no run ${id}`);
@@ -1235,9 +1298,17 @@ export interface EvalsFixtureWorld {
   answer(key: EvalsRouteKey, params: Record<string, string>, query: Record<string, string>, body?: unknown): unknown;
 }
 
-/** A world with its clock at `now` (default: this hour, so the 30-day windows stay current). */
+/** The default world clock: the start of this UTC day. A test that rebuilds the transport's world uses it to name the same runs. */
+export const fixtureWorldNow = (at = Date.now()) => Math.floor(at / DAY) * DAY;
+
+/**
+ * A world with its clock at `now`. The default is the start of this UTC day:
+ * recent enough that the 30-day windows stay current, and still for a whole
+ * day, so batch names, run ids and sim session ids (all built from the clock)
+ * keep naming the same things while a page or a pinned link is open.
+ */
 export function evalsFixtureWorld(opts: { now?: number; seed?: number } = {}): EvalsFixtureWorld {
-  const now = opts.now ?? Math.floor(Date.now() / 3_600_000) * 3_600_000;
+  const now = opts.now ?? fixtureWorldNow();
   const st = build(now, opts.seed ?? 42);
   let cursor = 100;
   const answer = (key: EvalsRouteKey, p: Record<string, string>, q: Record<string, string>, body?: unknown): unknown => {
@@ -1245,7 +1316,7 @@ export function evalsFixtureWorld(opts: { now?: number; seed?: number } = {}): E
       case "GET /health":
         return { root: "/Users/you/src/codecast", evalsHome: "~/.local/share/codecast/evals", gitHead: st.commits[st.commits.length - 1].sha, runsIndexed: st.rows.length, index: { state: "warm", done: st.rows.length, total: st.rows.length }, pid: 48213, startedAt: iso(now - 600_000) };
       case "GET /overview":
-        return overview(st, q.cadence || "nightly");
+        return overview(st, q.cadence || "all");
       case "GET /surface/:id":
         return surfaceResponse(st, p.id, q);
       case "GET /freeze/:id":
@@ -1261,24 +1332,28 @@ export function evalsFixtureWorld(opts: { now?: number; seed?: number } = {}): E
       case "GET /epoch":
         return epoch(st, q.surface, Number(q.n));
       case "GET /attribution":
-        return attribution(st, q.surface, q.good, q.bad);
+        return attribution(st, q.surface, q.good, q.bad, q.allCommits === "1");
       case "GET /commit/:sha":
         return commit(st, p.sha, q.whole === "1");
+      case "GET /patch/:sha":
+        return patch(st, p.sha);
       case "GET /changes":
         cursor = Math.max(cursor, Number(q.since) || 0) + 1;
-        return { cursor, runs: [], bisects: st.bisects.filter((b) => !b.finishedAt).map(bisectSummary), jobs: [] };
+        return { cursor, runs: [], bisects: st.bisects.filter((b) => !b.finishedAt).map((b) => bisectSummary(liveBisect(st, b))), jobs: [] };
       case "POST /bisect/plan":
         return bisectPlan(st, body as BisectPlanRequest);
       case "POST /bisect":
         return { id: st.bisects[0].id, tmux: st.bisects[0].tmux };
       case "GET /bisects":
-        return { bisects: st.bisects.map(bisectSummary) };
+        return { bisects: st.bisects.map((b) => bisectSummary(liveBisect(st, b))), running: [...st.running][0] ?? null };
       case "GET /bisect/:id": {
-        const state = st.bisects.find((b) => b.id === p.id);
-        if (!state) throw new EvalsFixtureMiss(`no bisect ${p.id}`);
+        const found = st.bisects.find((b) => b.id === p.id);
+        if (!found) throw new EvalsFixtureMiss(`no bisect ${p.id}`);
+        const state = liveBisect(st, found);
         const since = Number(q.since) || 0;
         const steps = (st.stepsByBisect.get(p.id) ?? []).filter((s) => s.seq > since);
-        const resp: BisectResponse = { state, steps, cursor: Math.max(since, ...steps.map((s) => s.seq)), logTail: ["probe 2/2: rep 1 of 3 landed", "waiting on claude -p (41s)"], stalled: false };
+        const stalled = !state.finishedAt && Math.max(now, Date.now()) - Date.parse(state.updatedAt) > 5 * 60_000;
+        const resp: BisectResponse = { state, steps, cursor: Math.max(since, ...steps.map((s) => s.seq)), logTail: st.tailByBisect.get(p.id) ?? [], stalled };
         return resp;
       }
       case "POST /bisect/:id/stop":

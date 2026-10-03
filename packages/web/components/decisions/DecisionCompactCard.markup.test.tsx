@@ -89,3 +89,73 @@ describe("DecisionCompactCardView", () => {
     });
   }
 });
+
+// A change card (LE11) is one row in the queue: the change, its proof and
+// Ship / Revise / Drop as chips, with no question link, proof block or
+// answer row of its own.
+test("a change card draws as one row with its answer chips", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "hero-card", blocking: false, default_option: 2, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} keys />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  const row = doc.querySelector("[data-card-row]")!;
+  expect(row).toBeTruthy();
+  expect(doc.querySelector(".decision-question")).toBeNull();
+  expect(doc.querySelector(".cc-head > .cc-line-change")!.textContent).toBe(card.change);
+  expect(row.textContent).toContain("4 of 4 cases fixed");
+  expect(Array.from(row.querySelectorAll("[data-verdict]")).map((b) => b.getAttribute("data-verdict"))).toEqual(["ship", "revise", "drop"]);
+  expect(row.querySelector("[data-verdict=drop]")!.className).toContain("is-taken");
+  expect(doc.querySelector("[data-cc-course]")).toBeNull();
+  expect(doc.querySelector("[data-card-question]")!.textContent).toBe("[test] change card render");
+  // The row's head: the change, then one dim line, the cause's title and
+  // when it was asked. The task, the goal and the line gate wait on the
+  // decision page, and an advisory card says its course beside the chips.
+  expect(doc.querySelector("[data-card-cause]")!.textContent).toMatch(new RegExp(`^${card.cause.title} · asked `));
+  expect(doc.querySelector("[data-card-goal]")).toBeNull();
+  expect(doc.querySelector(".cc-head")!.textContent).not.toContain("advisory");
+  // Risk always reads at the end of the proof line.
+  expect(row.querySelector("[data-cc-line-risk]")!.textContent).toBe("Low risk");
+  // The advisory course is said beside the chips, not left to a check mark.
+  expect(row.querySelector("[data-cc-course-short]")!.textContent).toBe("Agent goes with Drop unless you pick");
+  // One id on the row: the task chip; the open link is the arrow alone.
+  const open = doc.querySelector(`a[aria-label="Open the decision"]`)!;
+  expect(open.textContent).toBe("");
+});
+
+// On the line (LE13) a card is the queue's card: the same head (change,
+// then one cause line), then one before and after, then the proof row.
+test("a line card draws the queue's head, then its example and proof", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "line-card", blocking: true, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} line />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  const head = doc.querySelector(".cc-head")!;
+  expect(head.firstElementChild!.textContent).toBe(card.change);
+  // One cause line under the change; the goal waits on the decision page.
+  expect(head.querySelector("[data-card-cause]")!.textContent).toMatch(new RegExp(`^${card.cause.title} · asked `));
+  expect(head.querySelector("[data-card-goal]")).toBeNull();
+  expect(doc.querySelector("[data-cc-line-example]")).not.toBeNull();
+  expect(doc.querySelector("[data-goal-chip]")).toBeNull();
+  expect(doc.querySelector(`a[aria-label="Open the decision"]`)).toBeNull();
+});
+
+test("a folded line card is its change and its proof, with no cause and no answers", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const { CARD_DECISION_OPTIONS } = await import("@codecast/shared/contracts/changeCard");
+  const card = JSON.parse(readFileSync(join(import.meta.dir, "../../../shared/contracts/__fixtures__/changeCard/card.json"), "utf-8"));
+  const html = wrap(<DecisionCompactCard decision={{ ...base, _id: "line-card", blocking: true, question: "[test] change card render", options: CARD_DECISION_OPTIONS.map((o) => ({ ...o })), card } as any} line folded />);
+  const { JSDOM } = await import("jsdom");
+  const doc = new JSDOM(html).window.document;
+  expect(doc.querySelector(".cc-head.is-folded .cc-line-change")!.textContent).toBe(card.change);
+  expect(doc.querySelector(".cc-cause")).toBeNull();
+  expect(doc.querySelector("[data-cc-line-example]")).toBeNull();
+  expect(doc.querySelector(".cc-verdicts")).toBeNull();
+  expect(doc.querySelector("[data-cc-proof-dots]")).not.toBeNull();
+});

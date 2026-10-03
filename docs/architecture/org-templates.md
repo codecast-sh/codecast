@@ -52,6 +52,10 @@ A user-selected root is canonicalized once so normal macOS `/tmp` and `/var` ali
 
 The digest is SHA-256 over sorted relative file paths. Each file contributes `JSON.stringify([path, byteLength, executable]) + "\n"`, then its raw bytes. Executable means any executable mode bit is set. Snapshots preserve executability and remove write permissions. Directory permissions are sealed after atomic rename, since macOS refuses renaming some read-only directories. Runtime recomputes the same digest. Same-version changed content is refused, including previously cached versions. This org-template digest is distinct from any pack-specific runtime digest.
 
+## A role that owns a line
+
+A v2 manifest may give its role the line it runs: `role.line`, a workflow slug (`line`, `feature`, or one pushed to the workspace), and `role.caps.cards`, a positive integer, the open change cards the line admits work against (line-profile.md LP6). Both are optional; v1 refuses them like any other unknown key. Install copies them into the role proposal beside the other caps. Applying the person's answer sets `org_roles.line_workflow_slug` and `caps.cards` under that decision, the only path by which a hire sets them, since both are otherwise human only. Reconcile verifies the created role carries the approved line and cap before provisioning, and upgrade refuses a release that changes either. The shipped line template (`packages/cli/org-templates/line/`, line-profile.md LP7) is the reference use.
+
 ## Receipt and recovery
 
 The receipt lives at `<project>/.codecast/org-templates/<instance>.json`. It stores schema version, instance UUID, template ID/version/digest/root, project ID/ref/name/directory, workspace, proposer session, phase, original proposal, stack and decision IDs, role and standing session IDs, and routine trigger IDs. Extra project-owned fields, such as grants or document IDs, survive upgrades. Releases live under `.codecast/org-templates/releases/<template>/<version>-<digest>`.

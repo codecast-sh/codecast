@@ -8,7 +8,7 @@ import { workspaceStamp } from "@codecast/web/hooks/useWorkspaceArgs";
 import { useSyncTasks } from "./useSyncTasks";
 import { useSyncPlans } from "./useSyncPlans";
 import { useSyncDocs } from "./useSyncDocs";
-import { useWorkspaceArgs } from "./useWorkspaceArgs";
+import { useWorkspaceArgs, useActiveTeamId } from "./useWorkspaceArgs";
 
 // The workspace's work data, fed ahead of any screen: teams (feature gates),
 // the roster, notifications, tasks, plans, docs, projects and the org's roles.
@@ -17,8 +17,7 @@ import { useWorkspaceArgs } from "./useWorkspaceArgs";
 // the persisted store. Screens read the store; none of them waits on these.
 export function useSyncWorkspaceData(): void {
   const wsArgs = useWorkspaceArgs();
-  const teamId = useInboxStore((s) => (s.currentUser as any)?.active_team_id) as string | undefined;
-  const userKnown = useInboxStore((s) => !!s.currentUser?._id);
+  const teamId = useActiveTeamId();
 
   useSyncTeams();
   useSyncCollection(
@@ -36,7 +35,7 @@ export function useSyncWorkspaceData(): void {
     wsArgs === "skip" ? "skip" : workspaceStamp(wsArgs as any),
     { liveLoadingScope: "projects" },
   );
-  useSyncOrgTreeFeeder(userKnown ? (teamId ?? null) : undefined);
+  useSyncOrgTreeFeeder();
 }
 
 /** Is a workspace list still on its cold first load? True while its bootstrap

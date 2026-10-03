@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { evalsHref, evalsHrefFor, evalsSearchTargets, evalsSection, evalsTabLabel, parseEvalsPath, type EvalsView } from "./evalsPaths";
+import { evalsHref, evalsHrefFor, evalsSearchTargets, evalsSenseHref, evalsSection, evalsTabLabel, parseEvalsPath, type EvalsView } from "./evalsPaths";
 
 const at = (href: string) => {
   const [path, query = ""] = href.split("?");
@@ -15,12 +15,17 @@ describe("parseEvalsPath", () => {
     { view: "home", cadence: "nightly" },
     { view: "surface", surface: "settle", batch: null, compare: null },
     { view: "surface", surface: "settle", batch: BATCH, compare: "2026-10-01T00:00:00.000Z" },
-    { view: "freeze", freezeId: "ef03830f-4363-41c1-9fe9-1e0a4532e14d", batch: BATCH },
+    { view: "freeze", freezeId: "ef03830f-4363-41c1-9fe9-1e0a4532e14d", batch: BATCH, a: null, b: null },
+    { view: "freeze", freezeId: "ef03830f-4363-41c1-9fe9-1e0a4532e14d", batch: null, a: RUN, b: "title-7ab2a29e-seed5-2026-10-03T01-13-08-164Z" },
+    { view: "commit", sha: "0ae504f0123", surface: "settle" },
+    { view: "commit", sha: "0ae504f0123", surface: null },
+    { view: "patch", sha: "87d03b".padEnd(64, "0") },
     { view: "run", runId: RUN },
     { view: "compare", a: RUN, b: "title-7ab2a29e-seed5-2026-10-03T01-13-08-164Z" },
     { view: "bisect-list" },
     { view: "bisect-new", surface: "settle", good: BATCH, bad: "6cd0083b3", freeze: null },
     { view: "bisect-new", surface: null, good: null, bad: null, freeze: null },
+    { view: "bisect-new", surface: "settle", good: BATCH, bad: "6cd0083b3", freeze: null, all: true },
     { view: "bisect", id: "b-settle-1003" },
     { view: "sim" },
     { view: "sim-run", session: "2026-10-02T11-06-14-581Z", run: "memberRemovedMidTurn-interleave-3" },
@@ -57,6 +62,14 @@ describe("parseEvalsPath", () => {
 
   it("carries a gate fragment on a run link", () => {
     expect(evalsHref.run(RUN, "gate-no-leak")).toBe(`/evals/r/${RUN}#gate-no-leak`);
+  });
+});
+
+describe("evalsSenseHref", () => {
+  it("the Line page's evals row opens the surface its newest signal names, else the wall", () => {
+    expect(evalsSenseHref("settle")).toBe("/evals/s/settle");
+    expect(evalsSenseHref(undefined)).toBe("/evals");
+    expect(evalsSenseHref("not a surface/../x")).toBe("/evals");
   });
 });
 

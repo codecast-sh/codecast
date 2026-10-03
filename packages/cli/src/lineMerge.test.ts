@@ -70,7 +70,9 @@ describe("runMergeStep", () => {
     const post = async (path: string, body: any) => { posts.push({ path, body }); return { ...allowed, allowed: false, reason: "merge is off for this line" }; };
     const out = await runMergeStep({ cwd: "/repo", run_id: "run_1", branch: "b", into: "main", post, exec });
     expect(out.outcome).toEqual({ kind: "left", reason: "merge is off for this line" });
-    expect(posts).toEqual([{ path: "/cli/line/merge/check", body: { run_id: "run_1" } }]);
+    expect(posts.map((p) => p.path)).toEqual(["/cli/line/merge/check", "/cli/work/comment"]);
+    expect(posts[0].body).toEqual({ run_id: "run_1" });
+    expect(posts[1].body).toMatchObject({ short_id: "ct-7", comment_type: "blocker" });
     expect(calls).toHaveLength(0);
   });
 
@@ -89,5 +91,29 @@ describe("runMergeStep", () => {
     const { exec } = scripted({});
     const out = await runMergeStep({ cwd: "/repo", run_id: "run_1", branch: "b", into: "main", post: async () => { throw new Error("offline"); }, exec });
     expect(out.outcome).toEqual({ kind: "left", reason: "could not read the merge allowance: offline" });
+  });
+
+  test("a merge left to a person says so on the task as a blocker naming the branch", async () => {
+    const posts: Array<{ path: string; body: any }> = [];
+    const { exec } = scripted({});
+    const post = async (path: string, body: any) => {
+      posts.push({ path, body });
+      if (path.endsWith("/check")) throw new Error("This run was not started by a role's line, so it has no merge authority to merge under");
+      return { ok: true };
+    };
+    const out = await runMergeStep({ cwd: "/repo", run_id: "run_1", branch: "codecast/line-ct-7", into: "main", task: "ct-7", post, exec });
+    expect(out.outcome.kind).toBe("left");
+    expect(posts[1].path).toBe("/cli/work/comment");
+    expect(posts[1].body).toMatchObject({ short_id: "ct-7", comment_type: "blocker" });
+    expect(posts[1].body.text).toContain("codecast/line-ct-7 is not on main");
+    expect(posts[1].body.text).toContain("no merge authority");
+  });
+
+  test("a landed merge posts no blocker", async () => {
+    const posts: string[] = [];
+    const { exec } = scripted({ "git rev-parse": { stdout: "abc123\n" } });
+    const post = async (path: string) => { posts.push(path); return path.endsWith("/check") ? allowed : { used: 2, limit: 3 }; };
+    await runMergeStep({ cwd: "/repo", run_id: "run_1", branch: "b", into: "main", task: "ct-7", post, exec });
+    expect(posts).toEqual(["/cli/line/merge/check", "/cli/line/merge/record"]);
   });
 });

@@ -735,24 +735,31 @@ export function MessageNavButton({
         }`}
         title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} ${hiddenRowsNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
-        {sampleTicks(processed, MAX_BARS, activeIndex).map(({ row: msg, active: isActive }, i) => {
-          const hasComment = msg.commentCount > 0;
-          const isMachine = msg.kind !== "user";
-          return (
-            <span
-              key={i}
-              className={`block rounded-full transition-all duration-200 ease-out ${
-                isActive
-                  ? "cc-rail-here"
-                  : hasComment
-                  ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
-                  : isMachine
-                  ? "bg-current w-2 h-px opacity-20"
-                  : "bg-current w-3 h-px opacity-35"
-              }`}
-            />
-          );
-        })}
+        {(() => {
+          const ticks = sampleTicks(processed, MAX_BARS, activeIndex);
+          const here = ticks.findIndex((t) => t.active);
+          return ticks.map(({ row: msg, active: isActive }, i) => {
+            const hasComment = msg.commentCount > 0;
+            const isMachine = msg.kind !== "user";
+            const isNear = here >= 0 && Math.abs(i - here) === 1;
+            return (
+              <span
+                key={i}
+                className={`cc-rail-tick block rounded-full ${
+                  isActive
+                    ? "cc-rail-here"
+                    : isNear
+                    ? `${hasComment ? "bg-sol-cyan h-[2px]" : "bg-current h-px"} cc-rail-near`
+                    : hasComment
+                    ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
+                    : isMachine
+                    ? "bg-current w-2 h-px opacity-20"
+                    : "bg-current w-3 h-px opacity-35"
+                }`}
+              />
+            );
+          });
+        })()}
       </button>
       {open && triggerRect && (
         <NavDropdown

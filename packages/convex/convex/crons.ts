@@ -305,6 +305,16 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // Objects in the recordings bucket that no recording row accounts for (a
+  // manifest LiveKit wrote, a delete that gave up, an upload that landed
+  // after its run was deleted) go, so deleting a recording really deletes it.
+  "sweep orphaned call recording objects",
+  { hours: 24 },
+  internal.callRecordings.sweepRecordingObjects,
+  {}
+);
+
 crons.cron(
   // Sync-log retention: delete actions past the 30d window and advance
   // per-scope floors (syncLogPrune.ts; the mutation self-continues in bounded
@@ -356,11 +366,85 @@ crons.interval(
 // "start the line for scoped tasks".
 
 crons.interval(
+  // A new cause names its goal, category, risk and readiness before the line
+  // can rank and admit it (the-line-end-to-end.md LE5).
+  "ground new causes",
+  { minutes: 2 },
+  (internal as any).lineGround.sweep,
+  {}
+);
+
+crons.interval(
   // A person who reports to a role hears once a day at most that a high
   // priority goal of theirs has stalled (org-roles-run-work.md R6).
   "tell people about stalled goals",
   { hours: 1 },
   (internal as any).orgGoals.sweep,
+  {}
+);
+
+crons.cron(
+  // External data upkeep (external-data.md X3): a source's *_today counters
+  // start the day at zero, and groups drop bucket hours past the 72 hour
+  // window. A batch already resets its own source's counters on a new UTC
+  // day, so this only zeros quiet sources, and runs clear of the nightly
+  // backup window (see "prune sync log actions").
+  "reset ingest counters and buckets",
+  "15 2 * * *",
+  internal.ingest.dailyUpkeep,
+  {}
+);
+
+crons.interval(
+  // Event samples older than 30 days (external-data.md X3, X11).
+  "prune old event samples",
+  { hours: 6 },
+  internal.ingest.pruneSamples,
+  {}
+);
+
+crons.interval(
+  // Watched metrics (external-data.md X7): claims the watches whose interval
+  // is up and polls each in its own action. The minute is the finest a watch
+  // may ask for (METRIC_WATCH_LIMITS.interval_min_ms).
+  "poll metric watches",
+  { minutes: 1 },
+  internal.metrics.pollDue,
+  {}
+);
+
+crons.interval(
+  // App connector watches (external-data.md X8): each source whose watch
+  // interval is up polls the watched reader in its own action. Five minutes
+  // is the finest a manifest's `every` may ask for (APP_LIMITS.min_watch_ms).
+  "poll app connector watches",
+  { minutes: 5 },
+  internal.sources.app.pollWatches,
+  {}
+);
+
+crons.interval(
+  // App connector manifests a day old refetch even when nobody calls (X8).
+  "refresh app connector manifests",
+  { hours: 24 },
+  internal.sources.app.refreshManifests,
+  {}
+);
+
+crons.interval(
+  // Sentry sources mirror their unresolved issues (external-data.md X7). One
+  // action per active source; the webhook, when set up, only removes the lag.
+  "poll sentry sources",
+  { minutes: 2 },
+  internal.sources.sentry.schedulePolls,
+  {}
+);
+
+crons.interval(
+  // Vendor webhook delivery ids past any retry window (X2).
+  "prune webhook deliveries",
+  { hours: 24 },
+  internal.ingest.pruneWebhookDeliveries,
   {}
 );
 

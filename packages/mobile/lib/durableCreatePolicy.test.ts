@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DispatchNotWiredError } from "@codecast/web/store/mutativeMiddleware";
+import { DispatchNotWiredError, StaleDispatchBindingError } from "@codecast/web/store/mutativeMiddleware";
 import { mobileCreateFailureDisposition } from "./durableCreatePolicy";
 
 describe("mobile create failure policy", () => {
@@ -19,7 +19,15 @@ describe("mobile create failure policy", () => {
     ).toBe("retry");
   });
 
-  test("ordinary dispatch/storage failures stay visible", () => {
-    expect(mobileCreateFailureDisposition(new Error("offline"))).toBe("retry");
+  // A cold start rewires the dispatch binding while the first writes are in
+  // flight; their outbox rows redeliver under the new binding.
+  test("a stale dispatch binding is still on its way", () => {
+    expect(
+      mobileCreateFailureDisposition(new StaleDispatchBindingError()),
+    ).toBe("accepted-pending");
+  });
+
+  test("a transient failure stays queued, not refused", () => {
+    expect(mobileCreateFailureDisposition(new Error("offline"))).toBe("accepted-pending");
   });
 });

@@ -18,7 +18,7 @@
     "visibility": "public",
     "snapshot": "fixtures/changes-edition/release-day.json"
   },
-  "judge": "the headline is one plain sentence leading with the day's most important change (the webhook retry or digest timezone story) rather than an inventory of areas or releases, the standfirst names the cli 1.4.2 release and the backend deploy and makes no claim the stories do not support, the lead is the webhook retry or the digest timezone story, and housekeeping (s7, s8, s9) is in brief rather than the lead",
+  "judge": "the headline is one short plain sentence (under about 80 characters) leading with the day's most important change (the webhook retry or digest timezone story) rather than an inventory of areas or releases, it makes no claim the stories do not support, the lead is the webhook retry or the digest timezone story, and housekeeping (s7, s8, s9) is in brief rather than the lead",
   "notes": null,
   "tags": [],
   "id": "97c52830-afef-42ba-86d3-36f6a8431761",

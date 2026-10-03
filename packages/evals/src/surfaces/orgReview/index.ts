@@ -65,9 +65,9 @@ const impl: SurfaceImpl = {
     const b = buildBriefing({ inputsText: readFileSync(join(servedDir, 'org-inputs.json'), 'utf8'), workspace, served: basename(servedDir), proposalsDir: join(ctx.runDir, 'proposals'), frozen: readFrozenVerbs(servedDir), mode });
     mkdirSync(ctx.runDir, { recursive: true });
     writeFileSync(join(ctx.runDir, 'hashes.json'), JSON.stringify(b.hashes, null, 1));
-    const a = await ctx.agent({ prompt: b.briefing, model: ctx.model, maxTurns: 200 });
+    const a = await ctx.agent({ prompt: b.briefing, model: ctx.model, maxTurns: 200, promptSha: b.hashes.promptSha });
     const extra: OrgExtra = { runDir: ctx.runDir, workspace, servedDir, hashes: b.hashes };
-    return { reply: a.said.at(-1) ?? '', promptSha: b.hashes.promptSha, extra: extra as unknown as Record<string, unknown> };
+    return { reply: a.said.at(-1) ?? '', extra: extra as unknown as Record<string, unknown> };
   },
 
   // frozen-reads and no-unexpected-writes are route gates; these are the surface's own.

@@ -8,6 +8,7 @@ import {
   removeMember,
   restoreTeam,
 } from "./teams";
+import { TEAM_RECORDINGS_PURGE_GRACE_MS } from "./lib/r2";
 
 const ALICE = "user-alice" as any;
 const BOB = "user-bob" as any;
@@ -118,6 +119,14 @@ describe("teams.deleteTeam", () => {
     expect(await db.get("ac-1")).toBeNull();
 
     expect(result).toMatchObject({ deleted: true, name: "Doomed Team", active_team_id: OLDER, members: 3, anchors: 1 });
+  });
+
+  test("the team's call recordings are queued to leave the bucket once the restore window passes", async () => {
+    const db = seed();
+    const scheduled: Array<{ delay: number; args: any }> = [];
+    const ctx = { ...ctxFor(db, "user-alice"), scheduler: { async runAfter(delay: number, _fn: unknown, args: any) { scheduled.push({ delay, args }); } } };
+    await (deleteTeam as any)._handler(ctx, { team_id: DOOMED, confirm_name: "Doomed Team" });
+    expect(scheduled).toContainEqual({ delay: TEAM_RECORDINGS_PURGE_GRACE_MS, args: { team_id: DOOMED } });
   });
 
   test("a deleted team cannot be deleted twice or joined by invite", async () => {

@@ -15,6 +15,7 @@ import {
   TRIGGER_EVENT_NAMES,
   TRIGGER_EVENT_LABELS,
   triggerEventShorthand,
+  eventFilterForSave,
 } from "@codecast/shared/contracts";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
@@ -211,7 +212,9 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       };
       if (kind === "on") {
         args.schedule_type = "event";
-        args.event_filter = TRIGGER_EVENT_SHORTHANDS[eventKey];
+        // Keeps a --source or --repo the trigger was armed with; the form
+        // offers only the event, and saving must not widen it.
+        args.event_filter = eventFilterForSave(eventKey, (editTask ?? seedTask)?.event_filter);
       } else if (kind === "every") {
         args.schedule_type = "recurring";
         args.interval_ms = parsed;

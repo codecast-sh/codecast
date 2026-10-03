@@ -1,4 +1,4 @@
-import { FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
+import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { definitionLaunchFlags } from "../agentLaunch.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
@@ -6,6 +6,7 @@ import { evalCondition, extractJsonOutput, lookupContextVar } from "./condition"
 import { planReadiness } from "../planReadiness.js";
 import { readCardFile } from "../cardFile.js";
 import { spawnSync } from "../proc.js";
+import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { applyUnattended } from "../unattended.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineCommandEnv, lineProfileVars, loadLineProfile } from "../lineProfile.js";
@@ -189,7 +190,10 @@ async function executeAgent(
     }
 
     const beforeMs = Date.now();
-    const result = spawnSync(args[0], args.slice(1), {
+    // On the fleet store like every codecast launch, never the bare keychain
+    // login (ct-56748).
+    const argv = argvOnLaunchAccount(args, (msg) => console.log(`${c.dim}${msg}${c.reset}`));
+    const result = spawnSync(argv[0], argv.slice(1), {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       encoding: "utf-8",
@@ -262,7 +266,7 @@ async function executeCliAgent(
     });
   }
 
-  const timeout = options.agentTimeout || 1800_000;
+  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = 10_000;
 
@@ -347,8 +351,8 @@ async function cliCall(options: RunOptions, route: string, body: Record<string, 
 
 // A session node (backend=session) is a hand: a real codecast session started
 // through /cli/spawn exactly as `cast spawn --unattended` starts one, so it is
-// inbox visible, reachable with cast send/read, and bound by the unattended
-// mandate (the-line.md L4). The runner then waits for it to settle: done or
+// reachable with cast send/read and bound by the unattended mandate
+// (the-line.md L4). It nests under the run's own session (L10). The runner then waits for it to settle: done or
 // needs_input, killed, or its process gone. A hand that outlives the node
 // timeout is killed and the node fails; runWorkflow's failure path returns the
 // task to open with a comment.
@@ -387,6 +391,11 @@ async function executeSessionNode(
     prompt,
     project_path: cwd,
     git_root: gitRoot,
+    title: stationTitle(node, context),
+    // A station is the run's worker: nested under the run's own session, so
+    // it reads, answers cast send and shows on the run, and stays out of the
+    // inbox's top level. The task's blocker comment is what reaches a person.
+    ...(options.runSession ? { parent_session: options.runSession } : {}),
     // With a definition the server folds its client in unless the node names one.
     ...(node.definition && !node.agent ? {} : { agent_type: agent }),
     ...(node.definition ? { definition: node.definition } : {}),
@@ -417,7 +426,7 @@ async function executeSessionNode(
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
-  const timeout = options.agentTimeout || 1800_000;
+  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = options.pollIntervalMs ?? 10_000;
   let wasLive = false;
@@ -433,18 +442,36 @@ async function executeSessionNode(
       console.log(`${c.dim}  ${shortId}: ${state}${c.reset}`);
       lastState = state;
     }
+    // A hand parked on a usage limit (or a throttle, a dropped connection)
+    // files as needs_input, but it resumes on its own at the reset or the
+    // fleet's next account: wait for it within the node's timeout rather than
+    // read the park as its answer.
+    if (row.blocked_on && CONTINUE_BANNER_KINDS.includes(row.blocked_on)) {
+      if (lastState !== `parked:${row.blocked_on}`) console.log(`${c.dim}  ${shortId}: parked on ${row.blocked_on}, waiting for it to resume${c.reset}`);
+      lastState = `parked:${row.blocked_on}`;
+      continue;
+    }
     const settled = state === "done" || state === "needs_input" || row.is_killed || (wasLive && !row.is_live);
     if (!settled) continue;
     const pinned = await cliCall(options, "/cli/sessions/state/get", { session: conversationId });
-    const pinnedText: string = typeof pinned?.text === "string" ? pinned.text : (typeof pinned?.state?.text === "string" ? pinned.state.text : "");
+    // conversations.getThreadState: the pinned text is `state`, its status `status`.
+    const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
     recordNodeOutput(context, node.id, `work_state: ${state}${pinnedText ? `\n${pinnedText}` : ""}`);
-    const pinnedStatus: string = pinned?.status || pinned?.state?.status || "";
+    const pinnedStatus: string = pinned?.status || "";
     if (pinnedStatus === "blocked") {
       console.log(`  ${c.yellow}blocked${c.reset}: ${pinnedText.split("\n")[0] || "(no detail)"}`);
       context["last_error"] = pinnedText.slice(0, 2000);
       return "failure";
     }
     console.log(`  ${c.green}✓ settled${c.reset} ${c.dim}(${state})${c.reset}`);
+    // A station that declared done has handed the run its answer and holds
+    // nothing for a person: retire it, or a later settle with no verdict
+    // files it under needs input for good. Its transcript stays and it
+    // restarts on a send. One that ended on a question stays as it is; the
+    // run's failure path puts that on the task as a blocker.
+    if (!row.is_killed && (state === "done" || pinnedStatus === "done")) {
+      await cliCall(options, "/cli/sessions/kill", { session: conversationId });
+    }
     return "success";
   }
 
@@ -816,6 +843,8 @@ export interface RunOptions {
   planId?: string;
   /** The session running the workflow; stamped as spawned_by on session nodes. */
   spawnerSession?: string;
+  /** The run's own session (workflow_runs.primary_conversation_id): stations nest under it. */
+  runSession?: string;
   /** Settle poll for session nodes (tests shorten it). */
   pollIntervalMs?: number;
 }
@@ -939,18 +968,39 @@ async function queueTaskDecision(options: RunOptions, context: Record<string, st
   return !!result;
 }
 
+// A station's name, fixed at spawn: the node and what it works on, so the row
+// reads on its own ("Prove · ct-42") instead of a title drawn from the
+// unattended preamble every station's prompt opens with.
+export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: Record<string, string>): string {
+  const subject = context["task_id"] || context["plan_id"] || context["goal"];
+  const label = node.label || node.id;
+  return subject ? `${label} · ${subject.slice(0, 80)}` : label;
+}
+
+// How long a hand may run before the runner kills it: the node's own
+// `timeout` (seconds) when the graph sets one, since a station that replays
+// evals under load needs more than one that writes criteria, else the run's
+// --agent-timeout, else 30 minutes.
+export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick<RunOptions, "agentTimeout">): number {
+  return node.timeout ? node.timeout * 1000 : options.agentTimeout || 1800_000;
+}
+
 // The failure path for a bound task (the-line.md L4). A hand that handed off
 // blocked or needs_context already parked the task in review: keep it there.
 // Retries exhausted parks it in review as blocked. Anything else (a killed
 // hand, a hand that ended without a handoff) returns it to open. Either way
 // a blocker comment says what happened, and a parked task gets a decision.
 async function returnTaskOnFailure(options: RunOptions, state: WorkflowRunState): Promise<void> {
-  if (!options.taskId) return;
+  // A dry run validates the graph; it never moves or comments on the real task.
+  if (!options.taskId || options.dryRun) return;
   const reason = state.failReason || "workflow failed";
   const exhausted = /max_visits/.test(reason);
   const handoff = state.context["handoff"];
   const parkedByHand = handoff === "blocked" || handoff === "needs_context";
-  const detail = state.context["last_error"] ? `\n\n${state.context["last_error"].slice(0, 1500)}` : "";
+  // The station's session, which a nested worker no longer puts in the inbox
+  // on its own: the comment names it so the blocker leads straight there.
+  const hand = state.currentNodeId ? state.context[`${state.currentNodeId}.session_id`] : undefined;
+  const detail = (state.context["last_error"] ? `\n\n${state.context["last_error"].slice(0, 1500)}` : "") + (hand ? `\n\nStation session: ${hand}` : "");
   let text: string;
   if (parkedByHand) {
     text = `Workflow stopped: the hand handed off ${handoff} (${reason}); task left in review.${detail}`;
@@ -1194,7 +1244,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     }
 
     // Log completion to bound plan
-    if (options.planId && options.apiToken && options.convexSiteUrl) {
+    if (options.planId && options.apiToken && options.convexSiteUrl && !options.dryRun) {
       try {
         await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
           method: "POST",
@@ -1299,7 +1349,9 @@ async function runNodeLoop(
       await reportProgress(options, {
         current_node_id: current.id,
         node_id: current.id,
-        node_status: outcome === "success" ? "completed" : "failed",
+        // A gate's outcome is the key it was answered with ("s" for Ship):
+        // only "failure" is a failed node.
+        node_status: outcome === "failure" ? "failed" : "completed",
         outcome,
         session_id: state.context[`${current.id}.session_id`],
       });
@@ -1334,7 +1386,7 @@ async function runNodeLoop(
     }
 
     // Log node completion to bound plan
-    if (options.planId && options.apiToken && options.convexSiteUrl && current.type !== "start") {
+    if (options.planId && options.apiToken && options.convexSiteUrl && current.type !== "start" && !options.dryRun) {
       try {
         await fetch(`${options.convexSiteUrl}/cli/plans/log`, {
           method: "POST",
@@ -1342,7 +1394,7 @@ async function runNodeLoop(
           body: JSON.stringify({
             api_token: options.apiToken,
             short_id: options.planId,
-            entry: `Workflow node "${current.label}" ${outcome === "success" ? "completed" : "failed"}`,
+            entry: `Workflow node "${current.label}" ${outcome === "failure" ? "failed" : "completed"}`,
           }),
         });
       } catch {}

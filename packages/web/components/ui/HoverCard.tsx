@@ -9,7 +9,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "./popover";
 import { useHoverCard } from "../../hooks/useHoverCard";
 
 export function HoverCard({
-  card, children, side = "top", align = "start", className = "w-80", disabled, triggerClassName,
+  card, children, side = "top", align = "start", className = "w-80", disabled, triggerClassName, focusable,
 }: {
   card: ReactNode;
   children: ReactNode;
@@ -19,13 +19,21 @@ export function HoverCard({
   className?: string;
   disabled?: boolean;
   triggerClassName?: string;
+  /** Also open while keyboard focus is inside the trigger, and close when it leaves: the trigger holds a focusable control. */
+  focusable?: boolean;
 }) {
   const h = useHoverCard();
   if (disabled) return <>{children}</>;
   return (
     <Popover open={h.open} onOpenChange={h.setOpen}>
       <PopoverAnchor asChild>
-        <span className={triggerClassName ?? "inline-flex min-w-0 items-center"} onMouseEnter={h.openSoon} onMouseLeave={h.closeSoon}>
+        <span
+          className={triggerClassName ?? "inline-flex min-w-0 items-center"}
+          onMouseEnter={h.openSoon}
+          onMouseLeave={h.closeSoon}
+          onFocus={focusable ? h.openSoon : undefined}
+          onBlur={focusable ? h.closeSoon : undefined}
+        >
           {children}
         </span>
       </PopoverAnchor>

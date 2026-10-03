@@ -279,10 +279,31 @@ describe("the undo chords", () => {
     expect(resolve(false, keyEvent({ ctrlKey: true, altKey: true }))).toBe("ui.undoHistory");
   });
 
-  test("none of them bypasses the input guard", () => {
-    for (const def of SHORTCUTS.filter((d) => UNDO_ACTIONS.includes(d.action))) {
-      expect(def.skipInputCheck).toBeUndefined();
-      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(false);
+  // The triage chords fire from an empty composer and leave focus there, so
+  // undo and redo reach app undo from an empty field; a field with text keeps
+  // its own.
+  test("undo and redo bypass the input guard only from an empty field", () => {
+    for (const def of SHORTCUTS.filter((d) => d.action === "ui.undo" || d.action === "ui.redo")) {
+      expect(def.skipInputCheck).toBe("whenEmpty");
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(true);
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "draft" })).toBe(false);
+    }
+  });
+
+  // ⌘⌥Z is no text on mac, so the history chord opens from the autofocused
+  // composer. Off mac Ctrl+Alt is AltGr, which types letters (Polish ż), so
+  // the chord stays out of fields there.
+  test("the history chord fires from a text field on mac only", () => {
+    const fromField = (isMac: boolean, e: KeyboardEvent, value: string) => {
+      const catalog = createShortcutCatalog(SHORTCUTS, { isMac });
+      return catalog.shortcuts.find(
+        (d) => catalog.matchShortcut(e, d) && inputGuardBypass(d, { tagName: "TEXTAREA", value }),
+      )?.action;
+    };
+    for (const value of ["", "draft"]) {
+      expect(fromField(true, keyEvent({ metaKey: true, altKey: true }), value)).toBe("ui.undoHistory");
+      expect(fromField(false, keyEvent({ ctrlKey: true, altKey: true }), value)).toBeUndefined();
+      expect(fromField(false, keyEvent({ key: "ż", ctrlKey: true, altKey: true }), value)).toBeUndefined();
     }
   });
 
@@ -300,5 +321,22 @@ describe("the undo chords", () => {
         .filter((c) => new Set(c.defs.map((d) => d.action)).size > 1);
       expect(collides).toEqual([]);
     }
+  });
+});
+
+// A held toggle would reopen what it just closed; a held step key walks on,
+// as it should.
+describe("Changes keys", () => {
+  test("toggles fire once per press, steps repeat", () => {
+    const changes = SHORTCUTS.filter((d) => d.when === "changes");
+    const once = [...new Set(changes.filter((d) => d.noRepeat).map((d) => d.action))].sort();
+    expect(once).toEqual([
+      "changes.copyLink", "changes.evidence", "changes.filter", "changes.open", "changes.risks", "changes.today",
+    ]);
+    for (const action of ["changes.next", "changes.prev"]) {
+      expect(changes.filter((d) => d.action === action).every((d) => !d.noRepeat)).toBe(true);
+    }
+    // Both evidence bindings, e and enter.
+    expect(changes.filter((d) => d.action === "changes.evidence").every((d) => d.noRepeat)).toBe(true);
   });
 });

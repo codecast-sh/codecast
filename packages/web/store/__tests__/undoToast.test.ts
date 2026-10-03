@@ -2,8 +2,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import { toast } from "sonner";
 import { _resetUndoStacks, getUndoHistory, setUndoNotifier } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
-import { CODECAST_UNDO_NOTIFIER, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
+import { CODECAST_UNDO_NOTIFIER, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
 import * as undoTimeline from "../../lib/undoTimelineOpen";
+import { undoAsOne } from "../undoActions";
 
 // B4: a toast's Undo takes back the change it announced, even after newer
 // changes were recorded on top of it. The toasts are read from sonner's own
@@ -139,10 +140,13 @@ describe("undo announcements", () => {
     useInboxStore.getState().renameSession(B, "Renamed");
     performUndo();
     expect(status()?.action?.label).toBe("History");
+    // A side door, worn quietly, not a second primary button.
+    expect((status() as any)?.className).toBe(UNDO_QUIET_ACTION_CLASS);
 
     // A redo never offers it, and its update clears the earlier one.
     performRedo();
     expect(status()).toHaveProperty("action", undefined);
+    expect(status()).toHaveProperty("className", undefined);
   });
 
   test("the notifier is silent while the timeline is open", () => {
@@ -152,6 +156,22 @@ describe("undo announcements", () => {
     performUndo();
     useInboxStore.getState().renameSession(B, "Renamed");
     expect(since()).toHaveLength(0);
+    undoTimeline.close();
+  });
+
+  test("a ⌘Z that stops at a confirm entry toasts when the card is closed and marks the row when it is open", () => {
+    let undone = 0;
+    const id = pushUndo({ label: "Made “First” private", confirm: true, undo: () => { undone += 1; }, redo: () => {} });
+    performUndo();
+    expect(status()?.title).toBe("Undo Made “First” private from its toast or the history");
+
+    undoTimeline.open("interactive");
+    mark = toast.getHistory().length;
+    const before = undoTimeline.getFlash()?.n ?? 0;
+    performUndo();
+    expect(since()).toHaveLength(0);
+    expect(undoTimeline.getFlash()).toEqual({ id, n: before + 1 });
+    expect(undone).toBe(0);
     undoTimeline.close();
   });
 
@@ -192,5 +212,25 @@ describe("undo announcements", () => {
     expect(undoStepMessage("redo", 1, entry)).toBe("Redid: Filed 3 sessions as Done (2 of 3; 1 changed since)");
     expect(undoStepMessage("undo", 1, { ...entry, skipped: [] })).toBe("Undid: Filed 3 sessions as Done");
     expect(undoStepMessage("undo", 3, entry)).toBe("Undid 3 changes");
+  });
+
+  test("a partial step counts an opened session once, not once per store copy", () => {
+    // An opened session lives in sessions AND conversations; the engine lists
+    // both copies in objects but skips the server row once.
+    const C = "c".repeat(32);
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [C]: { _id: C, title: "Third", updated_at: 1 } },
+      conversations: { ...s.conversations, [C]: { _id: C, title: "Third" } },
+    }));
+    undoAsOne("Stashed 3 sessions", () => {
+      for (const id of [A, B, C]) useInboxStore.getState().stashSession(id);
+    });
+    // A teammate changed one of them after.
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [B]: { ...s.sessions[B], inbox_stashed_at: 99 } },
+      conversations: { ...s.conversations, [B]: { ...s.conversations[B], inbox_stashed_at: 99 } },
+    }));
+    performUndo();
+    expect(status()?.title).toBe("Undid: Stashed 3 sessions (2 of 3; 1 changed since)");
   });
 });

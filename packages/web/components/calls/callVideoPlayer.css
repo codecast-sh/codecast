@@ -1,0 +1,13 @@
+/* The call video's one clock (CallVideoPlayer, THE CLOCK).
+ *
+ * The browser's controls count from the file's own start (Record was pressed
+ * minutes into the call), while the toolbar under the picture says where in
+ * the CALL it is, in the clock every transcript line and `cl-42@12:34`
+ * reference uses. Two readouts that disagree for the same picture is one too
+ * many, so the browser's time readouts are hidden and the toolbar's is the
+ * clock. Its play, scrub, volume and fullscreen stay. (Chromium and WebKit
+ * name these parts; Firefox draws its own controls and keeps its readout.) */
+.call-video::-webkit-media-controls-current-time-display,
+.call-video::-webkit-media-controls-time-remaining-display {
+  display: none;
+}

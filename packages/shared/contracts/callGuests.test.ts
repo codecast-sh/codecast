@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import {
+  guestLinkRefusal,
   GUEST_JOIN_REFUSAL_TEXT,
   GUEST_LINK_REFUSAL_TEXT,
   guestJoinRefusalOf,
   callParticipantKind,
+  isRoomMachineryKind,
   guestNoticeLines,
   guestNoticeSentence,
   callSpeakerName,
@@ -40,6 +42,13 @@ describe("guest identities", () => {
     expect(callParticipantKind("k17user")).toBe("person");
     expect(callParticipantKind(guestIdentity("g1"))).toBe("guest");
     expect(callParticipantKind(agentFaceIdentity("c1"))).toBe("agent");
+  });
+
+  test("a recording's egress and the agent-face worker are machinery; people, guests and faces are not", () => {
+    // LiveKit ParticipantInfo.Kind: STANDARD 0, INGRESS 1, EGRESS 2, SIP 3, AGENT 4.
+    expect(isRoomMachineryKind(2)).toBe(true);
+    expect(isRoomMachineryKind(4)).toBe(true);
+    for (const k of [0, 1, 3, undefined]) expect(isRoomMachineryKind(k)).toBe(false);
   });
 });
 
@@ -83,6 +92,15 @@ describe("guest names", () => {
   });
 });
 
+describe("a link's own life", () => {
+  test("gone, turned off, expired at its stamp, else open", () => {
+    expect(guestLinkRefusal(null, 1_000)).toBe("not_found");
+    expect(guestLinkRefusal({ expires_at: 2_000, revoked_at: 500 }, 1_000)).toBe("revoked");
+    expect(guestLinkRefusal({ expires_at: 1_000 }, 1_000)).toBe("expired");
+    expect(guestLinkRefusal({ expires_at: 1_001, revoked_at: null }, 1_000)).toBeNull();
+  });
+});
+
 describe("guest lifecycle", () => {
   test("only an admitted guest may hold a media token", () => {
     expect(guestMayJoin("admitted")).toBe(true);
@@ -114,6 +132,15 @@ describe("the notice a guest's consent rests on", () => {
     expect(guestNoticeLines(both, "short")[1].text).toContain("written down");
     expect(guestNoticeLines(both, "label").map((l) => l.text)).toEqual(["recording", "transcribed"]);
     expect(guestNoticeLines({ recording: false, transcribed: false }, "long")).toEqual([]);
+  });
+
+  test("a recording whose video goes to the call's public link says so in every form", () => {
+    const shared = { recording: true, transcribed: false, video_public: true };
+    expect(guestNoticeLines(shared, "long")[0].text).toContain("anyone with that link can watch it");
+    expect(guestNoticeLines(shared, "short")[0].text).toContain("shared by public link");
+    expect(guestNoticeLines(shared, "label")[0].text).toBe("recording, public");
+    // Never said of a call that is not being recorded.
+    expect(guestNoticeLines({ recording: false, transcribed: false, video_public: true }, "long")).toEqual([]);
   });
 
   test("a link's card says it in one sentence, or not at all", () => {

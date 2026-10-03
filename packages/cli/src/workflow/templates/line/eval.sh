@@ -14,5 +14,6 @@ mkdir -p "$dir"
 rm -f "$dir/reps.json"
 bash -c "$cmd"
 code=$?
-[ -s "$dir/reps.json" ] || { echo "the eval command exited $code and wrote no $dir/reps.json"; exit 1; }
+# No reps is no verdict on the change (exit 2), not a failed one (exit 1).
+[ -s "$dir/reps.json" ] || { echo "the eval command exited $code and wrote no $dir/reps.json"; exit 2; }
 cast line eval-result --reps "$dir/reps.json" --out "$dir/eval-result.json"

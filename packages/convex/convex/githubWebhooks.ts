@@ -23,6 +23,7 @@ import { internal, api } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
+import { recordCiRun, type CiRun } from "./ingest";
 import { markCommitDirty } from "./lib/changesDirty";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
 import { parseReleaseTag } from "@codecast/shared/changes";
@@ -84,6 +85,44 @@ const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"]);
 
 function isFailingCheck(entry: { status: string; conclusion?: string }): boolean {
   return entry.status === "completed" && !!entry.conclusion && !PASSING_CONCLUSIONS.has(entry.conclusion);
+}
+
+// A run on a default branch that was cancelled (a newer push superseded it),
+// skipped or left waiting says nothing about whether the branch is green.
+const CI_SILENT_CONCLUSIONS = new Set(["cancelled", "skipped", "neutral", "stale", "action_required"]);
+
+/**
+ * A finished workflow run on its repository's own default branch, as the
+ * github-ci source takes it (external-data.md X7), or null for anything else:
+ * a run still going, a silent conclusion, another branch, and every pull
+ * request run. A pull request opened from a fork's `main` reports head_branch
+ * `main` too, so the triggering event and the head repository both have to
+ * say this is the branch itself.
+ */
+export function defaultBranchCiRun(payload: any): Omit<CiRun, "team_id"> | null {
+  const run = payload?.workflow_run;
+  const repository: string | undefined = normalizeRepository(payload?.repository?.full_name);
+  const defaultBranch: string | undefined = payload?.repository?.default_branch;
+  if (!run || !repository || !defaultBranch || run.status !== "completed") return null;
+  if (run.head_branch !== defaultBranch || String(run.event ?? "").startsWith("pull_request")) return null;
+  const headRepository = normalizeRepository(run.head_repository?.full_name);
+  if (headRepository && headRepository !== repository) return null;
+  const conclusion: string | undefined = run.conclusion ?? undefined;
+  if (!conclusion || CI_SILENT_CONCLUSIONS.has(conclusion)) return null;
+  const workflow: string | undefined = run.name ?? run.workflow?.name ?? run.path;
+  if (!workflow) return null;
+  const started = Date.parse(run.run_started_at ?? run.created_at ?? "");
+  return {
+    repository,
+    workflow,
+    ok: !isFailingCheck({ status: "completed", conclusion }),
+    conclusion,
+    at: Number.isFinite(started) ? started : Date.now(),
+    url: run.html_url ?? undefined,
+    sha: run.head_sha ?? undefined,
+    branch: defaultBranch,
+    run_id: run.id != null ? String(run.id) : undefined,
+  };
 }
 
 function actorFrom(payload: any): { actor_login?: string; actor_avatar_url?: string } {
@@ -1172,7 +1211,9 @@ export const processCheckRunEvent = internalMutation({
  * Remember what triggered a workflow run's check suite. Every action of the
  * run (requested, in_progress, completed) carries the same suite id and event,
  * so each delivery is an upsert; the check_run handler reads it to tell a
- * push run from a pull_request run of the same job.
+ * push run from a pull_request run of the same job. A completed run on the
+ * repository's default branch also files on the github-ci source
+ * (defaultBranchCiRun).
  */
 export const processWorkflowRunEvent = internalMutation({
   args: {
@@ -1203,7 +1244,13 @@ export const processWorkflowRunEvent = internalMutation({
       .first();
     if (existing) await ctx.db.patch(existing._id, row);
     else await ctx.db.insert("github_check_suites", row);
-    return { success: true, suite_id: suiteId, event: row.event };
+
+    // CI on the default branch has no pull request to fold into: it files as
+    // a check on the team's github-ci source instead (external-data.md X7).
+    const ci = defaultBranchCiRun(payload);
+    const team = ci ? await resolveTeamForRepository(ctx, repository) : null;
+    const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
+    return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
   },
 });
 

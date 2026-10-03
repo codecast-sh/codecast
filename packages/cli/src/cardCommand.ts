@@ -16,12 +16,14 @@ import {
   CHANGE_VERDICTS,
   proofSummary,
   checksLabel,
+  cardChecks,
   validateChangeCard,
   type CardEvidenceInput,
   type ChangeCard,
   type ChangeVerdict,
 } from "@codecast/shared/contracts/changeCard";
 import type { EvalResult } from "@codecast/shared/contracts/evalResult";
+import { goalRefLabel, type GoalsBrief } from "@codecast/shared/contracts/goalsBrief";
 import { renderChangeCardHtml } from "@codecast/shared/render/changeCardHtml";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
@@ -88,14 +90,38 @@ export function runCost(runs: Array<{ created_at?: number; updated_at: number; t
   return { tokens, minutes: ms / 60_000 };
 }
 
+// A card names the goal from the task's own workspace, never the shell's
+// active one: a codecast cause built from a shell pointed at Union still
+// finds its codecast project.
+export function taskWorkspaceScope(task: { workspace?: string; project_id?: string }) {
+  const project = task.project_id ? { project: String(task.project_id) } : {};
+  const key = task.workspace ?? "";
+  if (key.startsWith("team:")) return { workspace: "team" as const, team_id: key.slice(5), ...project };
+  if (key.startsWith("user:")) return { workspace: "personal" as const, ...project };
+  return { project_path: process.cwd(), ...project };
+}
+
 async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void> {
   const task = await apiPost(deps, "/cli/work/get", { short_id: options.task }, { read: true });
   if (!task?.short_id) fail(`Task not found: ${options.task}`);
   const optional = (p: Promise<any>) => p.catch(() => null);
-  const [evidence, runs] = await Promise.all([
+  const goalRef: string | undefined = task.goal_ref && task.goal_ref !== "none" ? task.goal_ref : undefined;
+  const [evidence, runs, signals, brief] = await Promise.all([
     optional(apiPost(deps, "/cli/work/evidence", { task_id: task.short_id }, { read: true, exitOnError: false })),
     optional(apiPost(deps, "/cli/workflow-runs/list", { task_id: task.short_id }, { read: true, exitOnError: false })),
+    // The finders behind the cause, and the goal its ref names: the task
+    // carries the ref and the signal count, the card says them in words.
+    optional(apiPost(deps, "/cli/signal/ls", { task: task.short_id, limit: 200 }, { read: true, exitOnError: false })),
+    goalRef ? optional(apiPost(deps, "/cli/goals/brief", taskWorkspaceScope(task), { read: true, exitOnError: false })) : null,
   ]);
+  const goal = goalRef && brief?.projects ? goalRefLabel(brief as GoalsBrief, goalRef) : null;
+  const sources = [...new Set<string>((signals?.signals ?? []).map((sg: { source: string }) => sg.source))];
+  const named = {
+    ...task,
+    goal_name: task.goal_name || goal?.name,
+    goal_why: task.goal_why || goal?.why,
+    cause: task.cause ? { ...task.cause, sources: task.cause.sources?.length ? task.cause.sources : sources } : task.cause,
+  };
 
   // A run's directory (the line's run files) supplies whichever inputs it holds.
   const inDir = (name: string) => (options.dir && fs.existsSync(path.join(options.dir, name)) ? path.join(options.dir, name) : undefined);
@@ -109,7 +135,7 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   const base = options.base ?? evalResult?.base.sha ?? "origin/main";
 
   const card = assembleChangeCard({
-    task,
+    task: named,
     evidence: evidence && Array.isArray(evidence.files_changed) ? (evidence as CardEvidenceInput) : null,
     evalResult,
     proof,
@@ -148,7 +174,7 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
   } else {
     console.log(`${fmt.label("card:")} ${outJson}`);
     console.log(`${fmt.label("page:")} ${outHtml}`);
-    console.log(fmt.muted(`  ${proofSummary(card.proof).label} · ${checksLabel(card.checks)} · ${card.examples.length} examples`));
+    console.log(fmt.muted(`  ${proofSummary(card.proof).evidence} · ${checksLabel(cardChecks(card))} · ${card.examples.length} examples`));
     if (errors.length) {
       console.error(fmt.error(`\nThe card is not ready (${errors.length}):`));
       for (const e of errors) console.error(`  ${e}`);

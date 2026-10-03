@@ -8,6 +8,7 @@ import { hasTmux, isTmuxSessionMissingError, tmuxRunAsync } from "./tmux.js";
 import { deviceId, isRemoteDevice } from "./remote/device.js";
 import { spawnAgentTmux } from "./delivery/spawnAgentTmux.js";
 import { launchTokenLedger } from "./launchToken.js";
+import { launchAccountPrefix } from "./ccAccounts.js";
 import { type Config, getAgentArgs } from "./config/types.js";
 import { appendModelEffortFlags, resolvePrintModelAlias } from "./launchCommand.js";
 import { SAFE_MODE_DENY_RULES, SAFE_MODE_MANDATE, definitionLaunchFlags } from "./agentLaunch.js";
@@ -165,6 +166,44 @@ export function buildRunLaunch(
     requestedEffort: launch.effort,
   });
   return { agentBin, extraAgentArgs, runSessionUuid };
+}
+
+/** The run's launch script. A shell script so the shell inside tmux does all
+ *  quoting and expansion, rather than the daemon's exec shell expanding
+ *  $(cat ...) after the prompt's quotes and newlines were already read.
+ *
+ *  A Claude run starts on the account every other codecast launch uses
+ *  (`accountPrefix`, from launchAccountPrefix): the fleet store, which the
+ *  daemon keeps on a live credential and moves on every account switch. A bare
+ *  `claude` reads the machine's keychain login instead, which the daemon leaves
+ *  alone and which can sit signed out for hours: every tr-1245 run from
+ *  2026-10-03 19:39Z died on its first turn that way (ct-56748). */
+export function buildRunScript(input: {
+  agentType: "claude" | "codex";
+  agentBin: string;
+  extraAgentArgs: string[];
+  promptFile: string;
+  scriptFile: string;
+  runSessionUuid?: string;
+  accountPrefix?: string;
+}): string {
+  const { agentType, agentBin, extraAgentArgs, promptFile, scriptFile, runSessionUuid } = input;
+  const quotedArgs = extraAgentArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
+  const agentInvocation = agentType === "codex"
+    ? `${agentBin} "$(cat ${promptFile})" ${quotedArgs}`
+    : `${input.accountPrefix ?? ""}${agentBin} -p "$(cat ${promptFile})" ${quotedArgs}`;
+  return [
+    "#!/bin/bash",
+    "unset CLAUDECODE",
+    "unset ANTHROPIC_API_KEY",
+    // Hand the run's session UUID to the agent so a self-report via
+    // `cast trigger complete` can link the run's conversation back to the task
+    // (the agent's own session_id IS this UUID, assigned via --session-id above).
+    ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
+    agentInvocation,
+    `rm -f ${promptFile} ${scriptFile}`,
+    "",
+  ].join("\n");
 }
 
 // A run is over when its pane's shell has no child process: the launch
@@ -360,7 +399,9 @@ export class TaskScheduler {
       return;
     }
 
-    const prompt = this.buildPrompt(task);
+    // The claimed row is current: an event that fired between the poll and
+    // the claim is on it, not on the polled copy.
+    const prompt = this.buildPrompt({ ...task, pending_events: claimed.pending_events ?? task.pending_events });
     const agentType = task.agent_type || "claude";
     // canServeTask gated the claim; this catches the checkout vanishing between
     // poll and spawn. Fail loudly — never fall back to $HOME, which runs the
@@ -385,26 +426,17 @@ export class TaskScheduler {
     }
     const { agentBin, extraAgentArgs, runSessionUuid } = buildRunLaunch(task, this.config, definition);
 
-    // Write a shell script so the target shell (inside tmux) handles all quoting/expansion,
-    // rather than relying on the outer exec shell to expand $(cat ...). This avoids issues
-    // when the prompt contains characters that would be misinterpreted by the shell
-    // (quotes, newlines, etc.) after being expanded by the outer shell.
     const scriptFile = `/tmp/codecast-task-${shortId}.sh`;
-    const agentInvocation = agentType === "codex"
-      ? `${agentBin} "$(cat ${promptFile})" ${extraAgentArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`
-      : `${agentBin} -p "$(cat ${promptFile})" ${extraAgentArgs.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(" ")}`;
-    const scriptBody = [
-      "#!/bin/bash",
-      "unset CLAUDECODE",
-      "unset ANTHROPIC_API_KEY",
-      // Hand the run's session UUID to the agent so a self-report via
-      // `cast trigger complete` can link the run's conversation back to the task
-      // (the agent's own session_id IS this UUID, assigned via --session-id above).
-      ...(runSessionUuid ? [`export CODECAST_RUN_SESSION_UUID='${runSessionUuid}'`] : []),
-      agentInvocation,
-      `rm -f ${promptFile} ${scriptFile}`,
-      "",
-    ].join("\n");
+    const runAgent = agentType === "codex" ? "codex" : "claude";
+    const scriptBody = buildRunScript({
+      agentType: runAgent,
+      agentBin,
+      extraAgentArgs,
+      promptFile,
+      scriptFile,
+      runSessionUuid,
+      accountPrefix: runAgent === "claude" ? launchAccountPrefix(undefined, (msg) => this.log(msg, "warn")).prefix : undefined,
+    });
     fs.writeFileSync(scriptFile, scriptBody, { mode: 0o755 });
 
     if (!hasTmux()) {

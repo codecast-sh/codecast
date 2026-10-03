@@ -461,10 +461,14 @@ export function VoiceRows({
   if (voices.length === 0) return null;
   return (
     <div className={small ? "space-y-1 max-sm:flex max-sm:shrink-0 max-sm:gap-1 max-sm:space-y-0" : "flex flex-wrap gap-2"}>
+      {/* A row wraps rather than squeeze: in the 200px side column a guest's
+          remove, once pressed, asks "remove Pat?" and offers the link too,
+          and on one line that crushed the face and the name it is asking
+          about. Its actions take their own line instead. */}
       {voices.map((m) => (
         <div
           key={m.user_id}
-          className={`group flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors ${
+          className={`group flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2 py-1.5 transition-colors ${
             speaking.has(String(m.user_id)) ? "bg-sol-cyan/10" : ""
           }`}
         >

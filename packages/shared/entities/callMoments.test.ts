@@ -11,7 +11,7 @@ import {
   parseCallTime,
   parseEntityUrl,
 } from "./index";
-import { callMomentHref, parseCallMomentParam } from "../contracts/callLinks";
+import { callFrameHref, callMomentHref, parseCallMomentParam, parseCallViewParam } from "../contracts/callLinks";
 
 const FULL = "k57abcdefghijklmnopqrstuvwxyz012";
 
@@ -67,15 +67,16 @@ describe("call moments", () => {
     }
   });
 
-  test("a moment is a call, and routes to the call page at that second", () => {
+  test("a moment is a call, and routes to the call page at that second, on the picture its citation shows", () => {
     expect(entityTypeFromId("cl-42@12:34")).toBe("call");
-    expect(entityRoute("call", "cl-42@12:34")).toBe("/calls/cl-42?t=754");
+    expect(entityRoute("call", "cl-42@12:34")).toBe("/calls/cl-42?t=754&view=screen");
     expect(entityRoute("call", "cl-42:3-4")).toBe("/calls/cl-42?turns=3-4");
-    expect(buildEntityUrl("call", "cl-42@754s")).toBe("https://codecast.sh/calls/cl-42?t=754");
+    expect(buildEntityUrl("call", "cl-42@754s")).toBe("https://codecast.sh/calls/cl-42?t=754&view=screen");
   });
 
   test("a pasted link at a time becomes the moment", () => {
     expect(parseEntityUrl("https://codecast.sh/calls/cl-42?t=754")).toEqual({ type: "call", id: "cl-42@12:34" });
+    expect(parseEntityUrl("https://codecast.sh/calls/cl-42?t=754&view=screen")).toEqual({ type: "call", id: "cl-42@12:34" });
     expect(parseEntityUrl(`https://codecast.sh/calls/${FULL}?t=30`)).toEqual({ type: "call", id: `${FULL}@0:30` });
     // Turns are the more specific place when a link names both.
     expect(parseEntityUrl("https://codecast.sh/calls/cl-42?turns=3-4&t=754")).toEqual({ type: "call", id: "cl-42:3-4" });
@@ -98,6 +99,27 @@ describe("the call page at a moment", () => {
     expect(callMomentHref("abc", 754_900)).toBe("/calls/abc?t=754");
     expect(callMomentHref("abc", 5_000, { kind: "turns", from_seq: 3, to_seq: 4 })).toBe("/calls/abc?turns=3-4&t=5");
     expect(t(callMomentHref("abc", 754_000))).toBe(754_000);
+  });
+
+  test("a screen view rides beside the moment, by identity or as the screen covering it; the room needs no word", () => {
+    const view = (href: string) => parseCallViewParam(new URL(href, "https://x.test").searchParams);
+    expect(callMomentHref("abc", 5_000, null, null)).toBe("/calls/abc?t=5");
+    expect(callMomentHref("abc", 5_000, null, { screen: true })).toBe("/calls/abc?t=5&view=screen");
+    const guest = callMomentHref("abc", 5_000, null, { screen: true, identity: "guest:k9 x" });
+    expect(guest).toBe("/calls/abc?t=5&view=screen:guest%3Ak9%20x");
+    expect(view(guest)).toEqual({ screen: true, identity: "guest:k9 x" });
+    expect(view("/calls/abc?t=5&view=screen")).toEqual({ screen: true, identity: null });
+    expect(view("/calls/abc?t=5")).toBeNull();
+    expect(view("/calls/abc?t=5&view=room")).toBeNull();
+  });
+
+  test("a frame's link opens on the picture it shows: the sharer's screen, the room, or the citation's view", () => {
+    expect(callFrameHref("abc", 5_000, { kind: "screen", participant_identity: "guest:x" })).toBe("/calls/abc?t=5&view=screen:guest%3Ax");
+    expect(callFrameHref("abc", 5_000, { kind: "screen" })).toBe("/calls/abc?t=5&view=screen");
+    expect(callFrameHref("abc", 5_000, { kind: "composite", participant_identity: null })).toBe("/calls/abc?t=5");
+    // No file chosen yet (a citation): the view a citation renders.
+    expect(callFrameHref("abc", 5_000)).toBe(entityRoute("call", "cl-0@0:05")!.replace("cl-0", "abc"));
+    expect(callFrameHref("abc", 5_000)).toBe("/calls/abc?t=5&view=screen");
   });
 
   test("the page reads plain, suffixed and fractional seconds, and nothing else", () => {

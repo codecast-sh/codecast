@@ -65,6 +65,21 @@ describe("undo card focus return", () => {
     expect(doc.activeElement).toBe(button);
   });
 
+  // The toast's History action is a doorway that leaves the DOM as the card
+  // opens (opening retires the toast), so focus returns past it.
+  it("opened from the toast's History button, focus returns past the toast", () => {
+    const composer = el("textarea");
+    composer.focus();
+    const toaster = el("ol", { "data-sonner-toaster": "" }, el("section", { "aria-label": "Notifications alt+T" }));
+    const history = el("button", {}, toaster);
+    history.focus();
+    undoTimeline.open();
+    toaster.remove();
+    mountCard();
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(composer);
+  });
+
   it("a close after focus moved elsewhere leaves it there", () => {
     const button = el("button");
     const other = el("input");

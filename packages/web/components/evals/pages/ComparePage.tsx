@@ -1,13 +1,27 @@
-// Stub until its wave-2 unit builds it (docs/architecture/evals-ui.md section 8).
-// It keeps the route, the props and the shell working end to end meanwhile.
+// Two runs side by side: GET /compare?a=&b=, the platform's diffRuns over
+// both scores, both replies and both prompts.
 
 import { EmptyState } from "../../EmptyState";
-import type { EvalsView } from "../evalsPaths";
+import { useEvalsResource } from "../../../lib/evals/hooks";
+import { evalsHref, type EvalsView } from "../evalsPaths";
+import { CompareView } from "../CompareView";
 
-export function ComparePage(_props: { view: Extract<EvalsView, { view: "compare" }> }) {
+export function ComparePage({ view }: { view: Extract<EvalsView, { view: "compare" }> }) {
+  const res = useEvalsResource("GET /compare", { query: { a: view.a, b: view.b } });
+  const data = res.data && res.data.a.id === view.a && res.data.b.id === view.b ? res.data : null;
+  if (!data) {
+    if (res.status === 404) {
+      return <EmptyState title="One of these runs is not in the index" description={`${view.a} or ${view.b} names no run folder. Open a run and use "compare with" to pick a second rep.`} action={{ label: "Open the wall", href: evalsHref.home() }} />;
+    }
+    return (
+      <div className="ev-page text-[12px] ev-quiet" data-evals-page="compare" data-evals-loading>
+        {res.error ?? "Reading both runs..."}
+      </div>
+    );
+  }
   return (
-    <div data-evals-page="compare" data-evals-stub>
-      <EmptyState title="Two runs side by side is not built yet" description="Gate flips, check moves of 0.2 or more, both replies and both prompts diffed. Built next from GET /compare." />
+    <div data-evals-page="compare">
+      <CompareView data={data} />
     </div>
   );
 }

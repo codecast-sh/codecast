@@ -5,7 +5,12 @@
 
 import { ShortcutCatalog, type ShortcutDef, hasOpenModal, isEditableTarget, inputGuardBypass } from './catalog';
 
-export type ShortcutHandler = () => boolean | void;
+/** How an action arrived: a key press the keydown handler matched, or a
+ *  named dispatch (a palette row, a button, a menu). A handler that defers to
+ *  the focused field's own key handling applies that only to a key press. */
+export type DispatchSource = "key" | "named";
+
+export type ShortcutHandler = (source: DispatchSource) => boolean | void;
 
 // Several components may register for one action (e.g. each mounted list view
 // registers list.down). Dispatch walks them: a handler returning false
@@ -36,12 +41,12 @@ export class ShortcutDispatcher<A extends string> {
     return this.contexts.has(ctx);
   }
 
-  dispatch(action: A): boolean {
+  dispatch(action: A, source: DispatchSource = "named"): boolean {
     const actionHandlers = this.handlers.get(action);
     if (!actionHandlers || actionHandlers.size === 0) return false;
     let handled = false;
     for (const handler of actionHandlers) {
-      const result = handler();
+      const result = handler(source);
       if (result === false) continue;
       handled = true;
       if (result === true) break;
@@ -116,7 +121,7 @@ export function createKeydownHandler<A extends string>(
         return;
       }
 
-      if (dispatcher.dispatch(def.action)) {
+      if (dispatcher.dispatch(def.action, "key")) {
         e.preventDefault();
         e.stopImmediatePropagation();
         opts.onShortcutUsed?.(def.action);

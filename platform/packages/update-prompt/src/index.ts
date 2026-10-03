@@ -1,5 +1,5 @@
 export { RECHECK_MS, STALE_PROMPT_AFTER_MS, updatePromptKind, type UpdatePromptFacts, type UpdatePromptKind } from "./kind";
-export { createReloadWhenHidden } from "./reloadWhenHidden";
+export { createReloadWhenAway, IDLE_RELOAD_MS, type ReloadWhenAwayOptions } from "./reloadWhenAway";
 export { serviceWorkerHooks, UPDATE_POLL_MS } from "./serviceWorker";
 export {
   createUpdatePrompt,
