@@ -34,6 +34,7 @@ import { usageTone } from "../lib/usageTone";
 import { AccountUsageBars, LoginExpiredBadge, ProfileSignInButton, UsageRefreshButton } from "./AccountUsageMeter";
 import { MintTokenButton, SetupTokenBadge } from "./MintTokenDialog";
 import { StatusDot } from "./StatusDot";
+import { TopbarChip } from "./TopbarButton";
 
 type ProfileRow = {
   name: string;
@@ -120,9 +121,12 @@ function ProviderSegment({
 }) {
   return (
     <span className="flex items-center gap-1.5" aria-label={title}>
-      <StatusDot color={tone} ping={percent != null && percent >= 100} />
+      {/* Healthy usage needs no light: the chip's tint says when it is not. */}
+      {percent != null && percent >= 80 && <StatusDot color={tone} ping={percent >= 100} />}
       {icon}
-      <span className="max-w-[88px] truncate font-mono text-[11px] font-bold" style={{ color: tone }}>
+      {/* The account's name folds away on a narrow bar; the icon and the
+          chip's tint still say which provider and whether it is near a limit. */}
+      <span className="hidden xl:block max-w-[88px] truncate">
         {label}
       </span>
     </span>
@@ -132,18 +136,10 @@ function ProviderSegment({
 function AccountChipEmpty({ onManage }: { onManage: () => void }) {
   return (
     <div className="relative hidden md:block">
-      <button
-        type="button"
-        onClick={onManage}
-        title="Manage accounts by machine in Settings"
-        className="flex items-center gap-2 rounded-full border border-sol-border/60 px-2 py-0.5 select-none transition-all duration-300"
-      >
-        <StatusDot color="var(--sol-text-dim)" />
-        <KeyRound className="h-3 w-3 shrink-0 text-sol-text-dim" />
-        <span className="max-w-[88px] truncate font-mono text-[11px] font-bold text-sol-text-dim">
-          accounts
-        </span>
-      </button>
+      <TopbarChip onClick={onManage} title="Manage accounts by machine in Settings">
+        <KeyRound className="h-3 w-3 shrink-0" />
+        <span className="max-w-[88px] truncate">accounts</span>
+      </TopbarChip>
     </div>
   );
 }
@@ -390,13 +386,7 @@ export function AccountUsageChip() {
   // pointer on the way in and the panel closes on hover (globals.css).
   return (
     <div className="relative hidden md:block" onMouseEnter={openNow} onMouseLeave={closeSoon}>
-      <button
-        className="flex items-center gap-2 rounded-full px-2 py-0.5 select-none transition-all duration-300 cursor-default"
-        style={{
-          background: `color-mix(in srgb, ${tone} 10%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${tone} 25%, transparent)`,
-        }}
-      >
+      <TopbarChip tone={tone} alert={tone !== "var(--sol-green)" && tone !== "var(--sol-text-dim)"} className="cursor-default">
         {shown === "claude" ? (
           <ProviderSegment
             icon={<ClaudeIcon className="h-3 w-3 shrink-0 text-sol-orange" />}
@@ -441,32 +431,30 @@ export function AccountUsageChip() {
             aria-label={machineSwitchPendingCopy(sw.phase, sw.switching, device.label)}
           />
         ) : autoOn ? (
-          <Zap
-            className="h-3 w-3"
-            style={{
-              color: exhausted
-                ? "var(--sol-red)"
-                : awaitingApproval
-                  ? "var(--sol-yellow)"
-                  : "var(--sol-cyan)",
-            }}
-            aria-label={
-              awaitingApproval
-                ? "An account switch is waiting for your approval"
-                : mode === "auto"
-                  ? "Switches accounts automatically on a usage limit"
-                  : "Asks before switching accounts on a usage limit"
-            }
-          />
+          // Auto-switch on is the default and needs no mark at rest; the bolt
+          // shows only when it carries news (a limit hit, a switch to approve).
+          (exhausted || awaitingApproval) && (
+            <Zap
+              className="h-3 w-3"
+              style={{ color: exhausted ? "var(--sol-red)" : "var(--sol-yellow)" }}
+              aria-label={
+                awaitingApproval
+                  ? "An account switch is waiting for your approval"
+                  : mode === "auto"
+                    ? "Switches accounts automatically on a usage limit"
+                    : "Asks before switching accounts on a usage limit"
+              }
+            />
+          )
         ) : (
           active && (
             <ZapOff
-              className="h-3 w-3 text-sol-text-dim opacity-60"
+              className="h-3 w-3 opacity-40"
               aria-label="Auto-switch off — open to re-enable"
             />
           )
         )}
-      </button>
+      </TopbarChip>
       {panelOpen && (
         <div data-flyout className="absolute right-0 top-full z-50 pt-1.5">
           <div className="w-[320px] rounded-md border bg-popover text-popover-foreground shadow-md">

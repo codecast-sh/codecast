@@ -11,12 +11,12 @@
 //   (c) a default-branch commit touching 3 or more areas splits into one
 //       slice per area; each slice joins the story of its area, and the
 //       slices nothing claims stay together as the commit's own story.
-import { commitArea, parseConventional, rankAreas, scopeNamesArea, subjectKind, type AreaTouch, type ChangeKind } from "./classify";
+import { commitArea, narrowAreas, parseConventional, rankAreas, scopeNamesArea, subjectKind, type AreaTouch, type ChangeKind } from "./classify";
 import { dedupeCommits, onDefaultBranch, resolveDefaultBranch } from "./dedupe";
 import { sliceDek, storyDek, storyHeadline, type HeadlineUnit } from "./headline";
 import { clusterAnchor, storyKey } from "./keys";
-import { computeRisks } from "./risks";
-import { assignRelease, releaseBursts } from "./surfaces";
+import { computeRisks, type RiskContext } from "./risks";
+import { assignRelease, releaseBursts, withoutShadowedReleases } from "./surfaces";
 import type { ChangeCommit, ChangePr, LayerZeroStory, ReleaseBurst, ShipEvent, VisibleConversation } from "./types";
 
 /** A commit touching this many areas is a batch and splits by area. */
@@ -142,9 +142,11 @@ class Unions {
 
 export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
   const defaultBranch = resolveDefaultBranch(input.default_branch, input.commits.map((c) => c.branch));
-  const { commits, twins } = dedupeCommits(input.commits, defaultBranch);
+  const deduped = dedupeCommits(input.commits, defaultBranch);
+  const commits = narrowAreas(deduped.commits);
+  const twins = deduped.twins;
   const { bursts, absorbed } = releaseBursts(commits, defaultBranch);
-  const ships = [...(input.ships ?? []), ...bursts.flatMap((b) => b.releases)].sort((a, b) => a.at - b.at || a.surface.localeCompare(b.surface));
+  const ships = withoutShadowedReleases([...(input.ships ?? []), ...bursts.flatMap((b) => b.releases)]).sort((a, b) => a.at - b.at || a.surface.localeCompare(b.surface));
 
   const visible = new Map(input.visible.map((v) => [v.conversation_id, v]));
   const units = commits.filter((c) => !absorbed.has(c.sha)).flatMap((c) => toUnits(c, defaultBranch)).sort(byTime);
@@ -260,7 +262,9 @@ export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
     clusters.push({ anchor: clusterAnchor(defaultBranch, area, null, sha), area, scope: null, units: list, remainder: true });
   }
 
-  const stories = clusters.map((c) => toStory(c, input, defaultBranch, visible, ships));
+  // Unlinked bulk work stands out only on a day whose other work carries a session, pull request or task.
+  const linked = commits.some((c) => !!c.conversation_id || !!c.pr_id || !!c.task_ids?.length);
+  const stories = clusters.map((c) => toStory(c, input, defaultBranch, visible, { ships, linked }));
   stories.sort((a, b) => a.first_at - b.first_at || a.story_key.localeCompare(b.story_key));
   return {
     default_branch: defaultBranch,
@@ -280,7 +284,7 @@ function commitLinks(c: ChangeCommit, visible: ReadonlyMap<string, VisibleConver
   return c.conversation_id && !visible.has(c.conversation_id) ? { task_ids: [], pr_id: null } : { task_ids: c.task_ids ?? [], pr_id: c.pr_id ?? null };
 }
 
-function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visible: Map<string, VisibleConversation>, ships: readonly ShipEvent[]): LayerZeroStory {
+function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visible: Map<string, VisibleConversation>, risk: RiskContext): LayerZeroStory {
   const units = c.units;
   const commits = uniq(units.map((u) => u.commit));
   const whole = units.filter((u) => !u.slice);
@@ -334,10 +338,10 @@ function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visib
     area_counts,
     first_at,
     last_at,
-    release: onDefault ? assignRelease(c.area, last_at, ships) : null,
+    release: onDefault ? assignRelease(c.area, last_at, risk.ships) : null,
     risks: computeRisks(
       { units: units.map((u) => ({ commit: u.commit, area: u.slice })), insertions, deletions, conversations, pr_ids, task_ids },
-      { ships },
+      risk,
     ),
     kind,
     importance: brief ? 1 : 2,

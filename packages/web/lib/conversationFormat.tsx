@@ -137,6 +137,11 @@ export function useRelativeTime(): (ts: number) => string {
   return useCallback((ts: number) => formatRelativeTime(ts, now ?? Date.now()), [now]);
 }
 
+/** The instant a surface's times are measured from: the sandbox's (RelativeTimeNow) under a film, the wall clock elsewhere. Pass it as the `now` of any age or day formatter a view calls. */
+export function useStampNow(): number {
+  return useContext(RelativeTimeNow) ?? Date.now();
+}
+
 export function formatRelativeTime(ts: number, now = Date.now()): string {
   const diff = now - ts;
   const seconds = Math.floor(diff / 1000);

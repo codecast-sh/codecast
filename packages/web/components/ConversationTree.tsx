@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 
 type TreeNode = {
@@ -51,9 +51,9 @@ function TreeNodeRow({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
 }
 
 export function ConversationTree({ conversationId }: { conversationId: string }) {
-  const result = useQuery(api.conversations.getConversationTree, {
+  const result = useQueryNoThrow(api.conversations.getConversationTree, {
     conversation_id: conversationId,
-  });
+  }).data;
 
   if (!result || "error" in result) {
     return null;

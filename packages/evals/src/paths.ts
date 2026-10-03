@@ -39,7 +39,7 @@ export function homePaths(root = evalsHome()) {
     site: join(root, 'html', 'site'),
     scratch: join(root, 'scratch'),
     state: join(root, 'state.json'),
-    spend: join(root, 'spend.json'),
+    spend: join(root, 'spend.jsonl'),
   };
 }
 

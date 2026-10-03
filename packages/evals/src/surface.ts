@@ -108,6 +108,8 @@ export interface AgentResult {
   said: string[];
   /** The same messages per turn: turns[0] answers the prompt, turns[n] the nth `then`. */
   turns: string[][];
+  /** The files each turn wrote (dryRun.ts filesWrittenOf), per turn as `turns`. */
+  wrote?: string[][];
   calls: string[];
   costUsd: number;
   /** Every model the run spent on, its `Agent` subagents included. */
@@ -159,8 +161,14 @@ export interface SurfaceImpl {
   replay(snap: any, ctx: ReplayCtx): Promise<ReplayOutput>;
   gates(snap: any, out: ReplayResult, label?: any): GateResult[];
   checks?(snap: any, out: ReplayResult, label?: any): CheckResult[];
-  /** What the judge and the convo views show. */
+  /** What the convo views show, and the judge unless judgeMoment says otherwise. */
   describe(snap: any): ConvoMessage[];
+  /**
+   * The moment the judge reads, when describe would show it text the prompt
+   * under test renders: that text is left out, so both arms of an ablation
+   * are graded against one moment and a prompt never becomes its own ruler.
+   */
+  judgeMoment?(snap: any): ConvoMessage[];
   /** Agent route: REFUSED patterns this snapshot's own turns ask for, on top of meta.allowedRefusals (a wake's `cast chat reply <its placeholder>`). */
   allowedRefusals?(snap: any): string[];
   productionReply?(snap: any): ProductionReply | null;

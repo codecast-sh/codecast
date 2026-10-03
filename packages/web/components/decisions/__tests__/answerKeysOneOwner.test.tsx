@@ -10,11 +10,14 @@ const root = join(import.meta.dir, "..");
 const read = (f: string) => readFileSync(join(root, f), "utf8");
 
 describe("answer keys have one owner", () => {
-  test("the queue passes keys to the first stack group only", () => {
+  test("the queue passes keys to one group, and inside it to the first row only", () => {
     const src = read("DecisionQueueList.tsx");
-    expect(src).toMatch(/const firstStackKey = groups\.find\(\(g\) => g\.kind === "stack"\)\?\.key;/);
-    expect(src).toMatch(/keys=\{g\.key === firstStackKey\}/);
-    expect(src).not.toMatch(/<DecisionCompactCard[^>]*\skeys\s/);
+    expect(src).toMatch(/const keysGroup = \(groups\.find\(\(g\) => g\.kind !== "role"\) \?\? groups\[0\]\)\?\.key;/);
+    expect(src).toMatch(/keys=\{g\.key === keysGroup\}/);
+    // Every compact card in the queue takes keys only as the group's first row.
+    const cards = src.match(/<DecisionCompactCard[^>]*>/g) ?? [];
+    expect(cards.length).toBeGreaterThan(0);
+    for (const c of cards) expect(c).toMatch(/keys=\{keys && i === 0\}/);
   });
   test("the checklist forwards its keys prop instead of claiming them", () => {
     const src = read("StackChecklist.tsx");

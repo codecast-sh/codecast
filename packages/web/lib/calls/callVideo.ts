@@ -74,6 +74,21 @@ function runState(rows: CallVideoFile[]): CallVideoRun["state"] {
   return "failed";
 }
 
+/** Every file of the run a file belongs to, the file itself included: what
+ *  deleting it takes, the way the server deletes (callRecordings
+ *  deleteRecording works on the whole run). Keyed rows as the store holds
+ *  them (registry callRecordings). */
+export function runFilesOf<T extends { run_id?: string | null; transcript_id?: string }>(
+  rows: Record<string, T>,
+  recordingId: string,
+): Array<[string, T]> {
+  const target = rows[recordingId];
+  if (!target) return [];
+  return Object.entries(rows).filter(
+    ([id, r]) => id === recordingId || (!!target.run_id && r.run_id === target.run_id && r.transcript_id === target.transcript_id),
+  );
+}
+
 /** The call's runs, oldest first. */
 export function callVideoRuns(files: readonly CallVideoFile[]): CallVideoRun[] {
   const byRun = new Map<string, CallVideoFile[]>();

@@ -1,7 +1,9 @@
 {
   "asOf": "2026-09-28T09:00:00.000Z",
   "notes": "The team workspace's own agent coming online for the first time.",
-  "judge": "orients the agent to the workspace it serves and how it works there, saves its role to memory as the opening asks, says a one-line hello, and changes nothing through cast",
+  "label": {
+    "savesMemory": true
+  },
   "snapshot": {
     "captured_at": "2026-09-28T09:00:00.000Z",
     "facts": {

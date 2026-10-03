@@ -1,6 +1,7 @@
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import { carryRingStubs } from "../lib/calls/ringStubs";
+import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -18,6 +19,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { rekeyUndoIds, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
@@ -62,7 +64,7 @@ import { makeCollectionSig } from "./wakeSig";
 import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessage } from "./gestureBridge";
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, clearedThreadStateFields, isInboxRowField } from "@codecast/shared/contracts";
 import { liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -254,7 +256,7 @@ import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFie
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
-import { createComposeSlice, type ComposeSliceState } from "./composeSlice";
+import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
 export {
@@ -600,6 +602,9 @@ export type InboxSession = {
   // (shared deriveLiveAt), so the idle grace, a heartbeat lapse and the status
   // decay flip locally without a server re-execution.
   agent_status_updated_at?: number | null;
+  // The daemon's raw status beside the overlay's verdict (agent_status): the
+  // re-derivation trusts this one, since a verdict does not replay (ct-56054).
+  agent_status_raw?: string | null;
   // The settle's own facts (ct-49533): agent_status_boundary says the status
   // settled the row on a resume / clear / manual compact rather than on a turn
   // ending — a placement input, and the signal any completion-reactive surface
@@ -4886,6 +4891,12 @@ export type LiveRoomGuest = { guest_id: string; identity: string; name: string; 
  *  teammate's knock is answered with a ring; a guest's (`kind: "guest"`,
  *  `from_user` is their `guest:<id>` identity, never a users id) with
  *  callGuests.admitGuest. */
+/** Take a guest's knock off the door on a draft (the store's guest answers). */
+function dropGuestKnock(draft: any, guestId: string): void {
+  const knocks: RoomKnock[] = draft.roomKnocks ?? [];
+  if (knocks.some((k) => k.guest_id === guestId)) draft.roomKnocks = knocks.filter((k) => k.guest_id !== guestId);
+}
+
 export type RoomKnock = {
   from_user: string;
   from_name: string;
@@ -4899,6 +4910,10 @@ export type RoomKnock = {
   /** People already turned away or put out from the same link: past one,
    *  the door offers to turn the link off. */
   link_turned_away?: number;
+  /** Whose link brought a guest (a teammate's name), and whether it is the
+   *  viewer's own: the door says "via Sam's link". */
+  link_by?: string;
+  link_mine?: boolean;
 };
 
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
@@ -5247,6 +5262,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   toggleBookmark: (conversationId: string, messageId: string) => void;
   setMyStatus: (status: "available" | "busy" | "away") => void;
   setWalkiePref: (pref: "team" | "off") => void;
+  adoptTimezone: (timezone: string) => void;
   setCloudSessionSync: (source: CloudSessionSource, enabled: boolean) => void;
   snoozeWalkie: (until: number) => number;
   markNotificationRead: (id: string) => void;
@@ -5988,6 +6004,28 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  stopRecording). Rejects with the server's reason when refused. */
   setRoomRecording: (roomKey: string, on: boolean) => Promise<unknown>;
   undoRoomRecordingPress: (roomKey: string, on: boolean) => void;
+  /** The room's answers to a guest at the door (callGuests.admitGuest /
+   *  denyGuest): the knock leaves roomKnocks at once. `name` is the name the
+   *  door showed (a guest who renamed since is asked about again). Rejects
+   *  with the server's reason, and the knock comes back. */
+  admitGuestKnock: (guestId: string, name: string) => Promise<unknown>;
+  denyGuestKnock: (guestId: string, revokeLink?: boolean) => Promise<unknown>;
+  /** Put a guest out (callGuests.removeGuest), optionally closing the link
+   *  they came in on: they leave the live room's guests at once. */
+  removeCallGuest: (roomKey: string, guestId: string, revokeLink?: boolean) => Promise<unknown>;
+  /** Put back a guest a refused removal took off the live room. */
+  restoreCallGuest: (roomKey: string, guest: { identity: string; name: string; joined_at?: number }) => void;
+  /** Delete a whole recording run (the room's file and its screen files),
+   *  named by any one of its files (callRecordings.deleteRecording). The rows
+   *  leave `callRecordings` at once; a refusal puts them back and rejects
+   *  with the server's reason. */
+  deleteCallRecording: (recordingId: string) => Promise<unknown>;
+  /** Drop the exclude tombstones of recording rows a push no longer sends. */
+  settleCallRecordingTombstones: (released: string[]) => void;
+  /** Whether the call's share link hands out the room's video
+   *  (callRecordings.setCallShareVideo). Rejects with the server's reason,
+   *  and the switch falls back with it. */
+  setCallShareVideo: (transcriptId: string, include: boolean) => Promise<unknown>;
   // Ephemeral media-plane state, written only by lib/calls/callManager. The
   // dock renders from THIS synchronously (local-first: joining paints
   // "connecting" before any server or SFU round-trip).
@@ -6604,12 +6642,16 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   tasks: {
     isDelta: true,
     altKey: "client_key",
-    // The detail joins (activity, linked sessions, related docs, source
+    // The detail joins (history, linked sessions, related docs, source
     // insight) ride only webGetTaskDetail, live while a task is open; the list
     // channels (webList, webListPaginated, webGetByIds) never carry them.
     // Preserve them across list deltas so a fetched task's detail renders
-    // instantly from cache on the next open instead of reloading async. Fields
-    // the list DOES carry (creator, assignee_info, plan) stay list-authoritative.
+    // instantly from cache on the next open instead of reloading async.
+    // Comments are the exception: every list channel carries them (one row
+    // builder, tasks.ts enrichTasks), so they stay list-authoritative like
+    // creator, assignee_info and plan. They stay preserved so a row without
+    // them (an older server's list, the create stub's rekey) keeps the cached
+    // thread.
     preserveFields: ["comments", "history", "linked_conversations", "related_docs", "source_insight"],
   },
   // The decision queue. NOT delta: listForUser returns the complete visible
@@ -6725,7 +6767,6 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // bails on the JSON compare). Nothing local to protect: the flags a person
   // flips live in `callRooms`, which useCallSync splits off this feed.
   liveRooms: { kind: "list" },
-  roomKnocks: { kind: "list" },
   // teams, teamMembers and bookmarks are localFirst lists (clientSyncRegistry
   // carries their kind, row identity and altKey): an action's change to a row
   // or to membership holds over pushes until the server agrees. teamMembers
@@ -6945,8 +6986,9 @@ function resumePostCreateBucketIntentFor(
   }
   // The assignment action is durable and the server upsert is idempotent. Keep
   // the marker until an authoritative (Convex-id-keyed) assignment echo lands,
-  // so a crash between this call and its outbox commit merely retries.
-  store.assignSessionToBucket(convexId, bucketId);
+  // so a crash between this call and its outbox commit merely retries. The
+  // filing replays the create's intent, not a gesture: nothing to undo.
+  withoutUndo(() => store.assignSessionToBucket(convexId, bucketId));
 }
 
 function scheduleResolvedSessionContinuations(
@@ -7044,6 +7086,9 @@ function scheduleResolvedChatChannelSends(channelId: string): void {
 
 function rekeyId(draft: any, oldId: string, newId: string) {
   if (oldId === newId) return;
+  // Undo entries recorded on the stub follow it to the server id, as the
+  // engine's own syncTable rekey does (spec undo-history 3.7).
+  rekeyUndoIds(oldId, newId);
   if (draft.newSessionHolds?.[oldId]) {
     draft.newSessionHolds[newId] = draft.newSessionHolds[oldId];
     delete draft.newSessionHolds[oldId];
@@ -7564,9 +7609,9 @@ function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: s
 }
 
 // The signed-in user, as the gesture bridge stamps it on outbound messages and
-// matches it on inbound ones. Exported for undoActions, whose undo closures
-// broadcast the reverted value (an un-announced undo leaves a sibling holding
-// the pre-undo row — see gestureBridge.ts).
+// matches it on inbound ones. The undo binding (mutativeMiddleware afterReplay)
+// stamps it on the reverted values it broadcasts (an un-announced undo leaves a
+// sibling holding the pre-undo row — see gestureBridge.ts).
 export function bridgeUserId(state: any): string | null {
   return state.currentUser?._id?.toString?.() ?? null;
 }
@@ -7712,10 +7757,8 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   // bridge receiver (src/providers.tsx); it never touches a row.
   if (msg.kind === "follow") return;
   const notNewer = (coll: "sessions" | "conversations", id: string, field: string, current: unknown, ts: number) => {
-    const pending = draft.pending[`${coll}:${id}:${field}`];
     const currentTs = typeof current === "number" ? current : 0;
-    const pendingTs = pending?.type === "field" && typeof pending.ts === "number" ? pending.ts : 0;
-    return Math.max(currentTs, pendingTs) <= ts;
+    return Math.max(currentTs, fieldLockTs(draft, `${coll}:${id}:${field}`)) <= ts;
   };
   // A bridged gesture changes the session row and its conversation twin as one
   // transition. Accept only when every extant twin agrees it is not older; a
@@ -7906,7 +7949,13 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
         ? ["inbox_pinned_at"]
         : []),
     ];
-    acceptTransition(msg.id, guardFields, { shared: Object.fromEntries(fields) });
+    // is_pinned lives on the sessions twin only (as in the pin branch below):
+    // no conversation feed carries it, so a conversations copy would plant a
+    // lock no echo ever retires.
+    acceptTransition(msg.id, guardFields, {
+      shared: Object.fromEntries(fields.filter(([key]) => key !== "is_pinned")),
+      sessions: Object.fromEntries(fields.filter(([key]) => key === "is_pinned")),
+    });
     return;
   }
 
@@ -7926,6 +7975,13 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
 // by JSON: both sides may have crossed a structured-clone boundary.
 function sameLockValue(a: unknown, b: unknown): boolean {
   return a === b || (a !== null && b !== null && typeof a === "object" && typeof b === "object" && JSON.stringify(a) === JSON.stringify(b));
+}
+
+// When this window last wrote a field it still holds a lock on (0 for none):
+// the ordering clock every cross-window write of the field is judged by.
+function fieldLockTs(draft: any, key: string): number {
+  const pending = draft.pending[key];
+  return pending?.type === "field" && typeof pending.ts === "number" ? pending.ts : 0;
 }
 
 // A field lock, carrying the acknowledgement it already holds when it is
@@ -8090,9 +8146,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
         // has had it acknowledged and echoed: a fresh lock there would wait
         // for an echo that already came. A lock already holding the value
         // keeps the acknowledgement the bridge stamped on it.
+        //
+        // A write older than this window's own lock on the field is stale: a
+        // mut that waited in the channel while this window wrote the field
+        // again would put back the value the newer write replaced, under a
+        // lock the server, holding the newer write, never echoes.
         const k = `${key}:${id}:${field}`;
         const prev = this.pending[k] as any;
         const locked = prev?.type === "field";
+        if (locked && fieldLockTs(this, k) > ts) continue;
         if (!locked && value !== undefined && sameLockValue(row[field], value)) continue;
         if (value === undefined) delete row[field];
         else row[field] = value;
@@ -8516,7 +8578,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
   answerDecision: action(function (this: Draft, decisionId: string, answer: DecisionAnswerInput) {
     const row = this.sessionDecisions[decisionId];
-    if (!row || row.status !== "pending") return;
+    // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
+    // the agent went ahead on its default, so a new pick is one more message.
+    if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
     const now = Date.now();
     if ("dismiss" in answer) {
       row.status = "dismissed";
@@ -9430,10 +9494,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     clear(this.conversations[conversationId]);
   }),
 
-  // Undo restores its full local snapshot in undoActions.ts. This no-op action
-  // carries only the exact authoritative field tombstones/values through the
-  // durable outbox; dispatch.ts applies them with the ordinary validated patch
-  // gate, so a reload cannot lose the undo's server half.
+  // The engine's undo replay (store/undo) writes the prior values through this
+  // action's pipeline, so the draft here stays a no-op: the grouped patches
+  // carry the exact field tombstones/values through the durable outbox, and
+  // dispatch.ts applies them with the ordinary validated patch gate, so a
+  // reload cannot lose the undo's server half.
   applyUndoPatches: action(function (
     _patches: Record<string, Record<string, Record<string, any>>>,
   ) {}),
@@ -9552,6 +9617,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // presence pushes until the server echoes it.
   setWalkiePref: action(function (this: Draft, pref: "team" | "off") {
     if (this.currentUser) (this.currentUser as any).walkie_pref = pref;
+  }),
+
+  // The person's timezone, from the device they use when their profile has
+  // none. A team's Changes day is cut in its admins' zone, and teammates' local
+  // clocks read it too, so an unset zone silently means UTC for everyone. The
+  // adoptTimezone dispatch side effect writes it through users.updateProfile.
+  adoptTimezone: action(function (this: Draft, timezone: string) {
+    if (this.currentUser && !(this.currentUser as any).timezone) (this.currentUser as any).timezone = timezone;
   }),
 
   // Cloud session sync (Claude Code, Cursor Cloud). Local-first like the walkie door: the sync
@@ -9727,8 +9800,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // (2026-09-14), so the line never waits on the sessions row.
       const session = this.sessions[convId];
       const agentType = session?.agent_type ?? this.conversations[convId]?.agent_type;
+      // The press claims the daemon's own status as well as the verdict: the
+      // live derivation trusts agent_status_raw over agent_status (ct-56054),
+      // so a lock on the verdict alone would let an overlay push put a
+      // working raw status under it and keep the stopped row working.
       if (session) {
         session.agent_status = "idle";
+        session.agent_status_raw = "idle";
         session.is_idle = true;
       }
       // One line per interruption, not per press. A second Escape on a turn
@@ -12191,6 +12269,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return ["buckets", "bucketAssignments", "sessions", "conversations", "pending"];
     }
 
+    if (actionName === "deleteCallRecording") {
+      const rows = localResult.rows;
+      if (!Array.isArray(rows)) return false;
+      const coll = (this as any).callRecordings as Record<string, unknown>;
+      for (const row of rows) {
+        if (typeof row?._id !== "string") continue;
+        // A push since may have brought the row back already, fresher.
+        if (!coll[row._id]) coll[row._id] = row;
+        delete this.pending[`callRecordings:${row._id}`];
+      }
+      const facts = typeof localResult.transcriptId === "string"
+        ? ((this as any).callRecordingCalls as Record<string, { deleted_here_at?: number }>)[localResult.transcriptId]
+        : undefined;
+      if (facts && facts.deleted_here_at === localResult.at) delete facts.deleted_here_at;
+      return ["callRecordings", "callRecordingCalls", "pending"];
+    }
+
     if (actionName === "updateBucket") {
       const bucketId = localResult.bucketId;
       const fields = localResult.fields;
@@ -12421,8 +12516,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   toggleAnchorPanel: () => set({ anchorPanel: { ...get().anchorPanel, open: !get().anchorPanel.open } }),
 
   settingsModalSection: null,
-  openSettingsModal: (section?: SettingsSectionId) =>
-    set({ settingsModalSection: section ?? DEFAULT_SETTINGS_SECTION }),
+  openSettingsModal: (section?: SettingsSectionId) => {
+    // Settings sits below the compose layer, so a modal compose (the place
+    // "share yours" opens it from) folds to its dock title bar first.
+    const modal = (get().composes as ComposeInstance[]).find((c) => c.mode === "modal");
+    if (modal) {
+      get().dockCompose(modal.id);
+      get().setComposeCollapsed(modal.id, true);
+    }
+    set({ settingsModalSection: section ?? DEFAULT_SETTINGS_SECTION });
+  },
   closeSettingsModal: () => set({ settingsModalSection: null }),
 
   peopleWallOpen: false,
@@ -12959,11 +13062,83 @@ const inboxStoreConfig = (set: any, get: any) => ({
     row.recording = on;
     return { roomKey, on };
   }),
+  // The room's answers to a guest, from the door, the knock's toast or the
+  // stage: the knock leaves the door (and a removed guest the room's faces)
+  // in the frame it was pressed, and the same-named dispatch side effect
+  // (convex/dispatch.ts) runs callGuests' mutation. roomKnocks is a
+  // localFirst list keyed by from_user (clientSyncRegistry): a getRoomKnocks
+  // push computed before the answer landed cannot put the knock back, every
+  // surface of this window agrees the moment one answers, and a refusal (the
+  // guest renamed, the link closed) restores the row with the reason.
+  admitGuestKnock: asyncAction(function (this: Draft, guestId: string, name: string) {
+    dropGuestKnock(this, guestId);
+    return { guestId, name };
+  }),
+  denyGuestKnock: asyncAction(function (this: Draft, guestId: string, revokeLink?: boolean) {
+    dropGuestKnock(this, guestId);
+    return { guestId, revokeLink: !!revokeLink };
+  }),
+  // liveRooms is server truth replaced whole on every push (not localFirst:
+  // a field lock on a room's `guests` array could never match the server's
+  // fresh array and would freeze it), so the guest leaves the faces here and
+  // the server's push, which drops them too, follows; a refusal puts them
+  // back through restoreCallGuest (lib/calls/guestDoorActions).
+  removeCallGuest: asyncAction(function (this: Draft, roomKey: string, guestId: string, revokeLink?: boolean) {
+    dropGuestKnock(this, guestId);
+    const identity = `guest:${guestId}`;
+    const room = ((this.liveRooms ?? []) as any[]).find((r) => r?.room_key === roomKey);
+    if (room?.guests?.some((g: any) => g.identity === identity)) room.guests = room.guests.filter((g: any) => g.identity !== identity);
+    return { roomKey, guestId, revokeLink: !!revokeLink };
+  }),
+  restoreCallGuest: sync(function (this: Draft, roomKey: string, guest: { identity: string; name: string; joined_at?: number }) {
+    const room = ((this.liveRooms ?? []) as any[]).find((r) => r?.room_key === roomKey);
+    if (room && !(room.guests ?? []).some((g: any) => g.identity === guest.identity)) room.guests = [...(room.guests ?? []), guest];
+  }),
   // A refused press puts the flag back (an unprotected field has no lock for
   // the engine to lift), unless a push has spoken for the room since.
   undoRoomRecordingPress: sync(function (this: Draft, roomKey: string, on: boolean) {
     const row = this.callRooms[roomKey];
     if (row && row.recording === on) row.recording = !on;
+  }),
+  // A call's video (registry callRecordings / callRecordingCalls). Deleting
+  // takes the whole run, as the server does: the room's file and the screen
+  // files filmed alongside it share a run_id. Removing the rows on the draft
+  // plants their exclude tombstones, so a push computed before the delete
+  // committed cannot bring them back, and stamps the call's facts with
+  // `deleted_here_at`, so the page says the recording was deleted in the same
+  // frame rather than once the thread's line arrives. Receipt-backed: the
+  // rows ride the command as its local result, and a refusal, live or on a
+  // replay after a reload, puts them back (_handleReceiptRejection).
+  deleteCallRecording: receiptAsyncAction(function (this: Draft, recordingId: string) {
+    const rows = (this as any).callRecordings as Record<string, { run_id?: string; transcript_id?: string }>;
+    const taken = runFilesOf(rows, recordingId);
+    // Plain copies: draft values are revocable proxies, and the result is
+    // persisted with the command after the recipe closes.
+    const snapshot = JSON.parse(JSON.stringify(taken.map(([, r]) => r))) as Array<{ _id: string; transcript_id?: string }>;
+    for (const [id] of taken) delete rows[id];
+    const transcriptId = snapshot[0]?.transcript_id ?? null;
+    const at = Date.now();
+    const facts = transcriptId ? ((this as any).callRecordingCalls as Record<string, { deleted_here_at?: number }>)[transcriptId] : undefined;
+    if (facts) facts.deleted_here_at = at;
+    return { recordingId, transcriptId, at, rows: snapshot };
+  }),
+  // Tombstones a push has answered (the feeder decides which: a row of that
+  // call the server no longer sends is gone for good, ids never come back),
+  // so their excludes have nothing left to hold out. Without this they would
+  // pile up in the persisted pending map.
+  settleCallRecordingTombstones: sync(function (this: Draft, released: string[]) {
+    for (const id of released) {
+      const key = `callRecordings:${id}`;
+      if (this.pending[key]?.type === "exclude") delete this.pending[key];
+    }
+  }),
+  // The switch moves on the press and holds through a push computed before
+  // the write committed (a field lock on video_shared); a refusal lifts the
+  // lock and the switch falls back to what the server holds.
+  setCallShareVideo: asyncAction(function (this: Draft, transcriptId: string, include: boolean) {
+    const row = ((this as any).callRecordingCalls as Record<string, { video_shared?: boolean }>)[transcriptId];
+    if (row) row.video_shared = include;
+    return { transcriptId, include };
   }),
 
   // =====================

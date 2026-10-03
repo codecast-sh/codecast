@@ -176,6 +176,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // app starts. The ANSWER lives here in the web layer — main never starts a
   // recording, it only says a meeting looks like it began.
   onMeetingDetected,
+  // Edit > Undo/Redo (or its ⌘Z) pressed while focus was not in a text field:
+  // the menu takes the key before the page, so the shell hands the press to
+  // the web app's undo (editUndo.js). Returns an unsubscribe.
+  onAppEditCommand: (cb) => {
+    const handler = (_event, command) => { if (command === "undo" || command === "redo") cb(command); };
+    ipcRenderer.on("app-edit-command", handler);
+    return () => ipcRenderer.removeListener("app-edit-command", handler);
+  },
   getMeetingDetect: () => ipcRenderer.invoke("get-meeting-detect"),
   setMeetingDetect: (patch) => ipcRenderer.invoke("set-meeting-detect", patch ?? {}),
   // The meeting-offer window: the record-this-meeting card as a small

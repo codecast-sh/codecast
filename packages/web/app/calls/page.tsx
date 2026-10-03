@@ -41,7 +41,7 @@ import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
 import { copyCallLink } from "../../lib/calls/callLinks";
 import { copyText } from "../../lib/copyText";
 import { callVideoNotice, callVideoRuns, noVideoWords, playableFiles, shownMomentNear, turnIndexAt, type CallVideoRun } from "../../lib/calls/callVideo";
-import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
+import { deleteRecordingRun, toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import {
   CallVideoNoticeLine,
   CallVideoPlayer,
@@ -275,39 +275,20 @@ function CallDetail({ id }: { id: string }) {
 
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  // The huddle's video (convex callRecordings). A recording ("rec:") has its
-  // own audio and never a video, so it is not asked. A run deleted here
-  // leaves the page at once (goneRuns) and comes back if the server refuses.
-  //
-  // goneRuns, and ShareVideoSwitch's pending switch, are the two writes on
-  // this page that keep their own optimistic state rather than riding the
-  // store. The recordings are not a synced collection yet (they are read per
-  // call, with URLs signed per window, by the page, the share popover and
-  // every frame embed); moving them into the store with dispatched delete
-  // and share-video actions is ct-56308, and these two go with it.
+  // The huddle's video (convex callRecordings, read through the store). A
+  // recording ("rec:") has its own audio and never a video, so it is not
+  // asked. A run deleted here leaves the page in the same frame (store
+  // deleteCallRecording) and comes back, with the reason, if the server
+  // refuses.
   const callRecs = useCallRecordings(recording || !call ? null : id);
-  const [goneRuns, setGoneRuns] = useState<ReadonlySet<string>>(() => new Set());
-  const videoFiles = useMemo(
-    () => (callRecs?.recordings ?? []).filter((r) => !goneRuns.has(r.run_id)).map(toVideoFile),
-    [callRecs, goneRuns],
-  );
+  const videoFiles = useMemo(() => (callRecs?.recordings ?? []).map(toVideoFile), [callRecs]);
   const hasVideo = useMemo(() => playableFiles(videoFiles).length > 0, [videoFiles]);
   const videoRuns = useMemo(() => callVideoRuns(videoFiles), [videoFiles]);
   const videoNotice = callVideoNotice(videoRuns);
   const playerRef = useRef<CallVideoHandle | null>(null);
-  const deleteRecording = useMutation(api.callRecordings.deleteRecording);
   const removeRun = (run: CallVideoRun) => {
     const anyId = run.composite?.id ?? run.screens[0]?.id;
-    if (!anyId) return;
-    setGoneRuns((g) => new Set(g).add(run.id));
-    void deleteRecording({ recording_id: anyId }).catch((err) => {
-      setGoneRuns((g) => {
-        const next = new Set(g);
-        next.delete(run.id);
-        return next;
-      });
-      toast.error(humanizeConvexError(err));
-    });
+    if (anyId) deleteRecordingRun(anyId);
   };
   // Media the transcript follows: the audio of a recording, the video of a
   // recorded huddle. Either makes a click on a line a seek.
@@ -449,6 +430,16 @@ function CallDetail({ id }: { id: string }) {
   }
 
   const inThisRoom = myCall.roomKey === call.room_key && myCall.phase === "connected";
+  // The people row lists who was heard (participants, the voices the
+  // scribe transcribed). Outsiders are the one group the room let in on
+  // purpose, so the ones not heard are listed too, apart, as guests: the
+  // record's attendance, matched to the speakers by identity on the server
+  // (callGuestsOnRecord's `spoke`), so two guests who typed one name stay
+  // two and a guest who renamed is listed once. "Did not speak" is only said
+  // when the whole call was transcribed and is over: otherwise silence on
+  // the record is not silence in the room.
+  const silentGuests: Array<{ name: string; joined_at: number }> = (call.guests ?? []).filter((g: { spoke?: boolean }) => !g.spoke);
+  const heardAll = !live && (segments?.length ?? 0) > 0 && !(rows ?? []).some((r) => r.event === "transcribe_off" && (!r.transcript_id || r.transcript_id === String(call._id)));
 
   const buildExcerpt = (which: "selection" | "all"): TranscriptExcerpt => {
     const chosen =
@@ -523,7 +514,10 @@ function CallDetail({ id }: { id: string }) {
   const activeIndex = seekable && mediaAt ? turnIndexAt(turns, mediaAt.ms, !mediaAt.playing) : null;
   const callRef = callRecs?.short_id ?? call.short_id ?? String(call._id);
   const ofThisCall = (r: ThreadRow) => !r.transcript_id || r.transcript_id === String(call._id);
-  const recordingDeleted = !hasVideo && !videoNotice && (rows ?? []).some((r) => r.event === "record_deleted" && ofThisCall(r));
+  // Deleted: this window's own delete says so in the same frame (the store's
+  // mark), and the thread's line says so for everyone else.
+  const recordingDeleted =
+    !hasVideo && !videoNotice && (!!callRecs?.deleted_here_at || (rows ?? []).some((r) => r.event === "record_deleted" && ofThisCall(r)));
   // The thread says this call was filmed before the recordings have answered:
   // hold the player's place, so the words do not jump down when it lands.
   const videoExpected = !recording && callRecs === undefined && (rows ?? []).some((r) => r.event === "record_on" && ofThisCall(r));
@@ -567,6 +561,21 @@ function CallDetail({ id }: { id: string }) {
                 >
                   {firstName(p.name)}
                   {isGuestParticipant(p.id, p.name) && <GuestTag />}
+                </span>
+              ))}
+            </span>
+          )}
+          {silentGuests.length > 0 && (
+            <span className="flex flex-wrap items-center gap-1.5">
+              {(call.participants || []).length > 0 && <span className="text-sol-text-dim" aria-hidden>·</span>}
+              {silentGuests.map((g) => (
+                <span
+                  key={`${g.name}:${g.joined_at}`}
+                  title={`${firstName(g.name)} joined from a guest link${heardAll ? " and did not speak" : ""}`}
+                  className="flex items-center gap-1 rounded-md bg-sol-bg-alt/40 px-1.5 py-0.5 font-mono text-[11px] text-sol-text-dim"
+                >
+                  {firstName(g.name)}
+                  <GuestTag />
                 </span>
               ))}
             </span>

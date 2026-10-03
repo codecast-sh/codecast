@@ -9,7 +9,7 @@ export type FaceDensity = "bar" | "float";
  *  faceRow.css (`--face`, `--face-gap`, `--link-w`, the float padding); the
  *  layout test holds the two together. */
 export const FACE_ROW_METRICS: Record<FaceDensity, { face: number; gap: number; link: number; pad: number }> = {
-  bar: { face: 32, gap: 6, link: 14, pad: 0 },
+  bar: { face: 28, gap: 6, link: 14, pad: 0 },
   float: { face: 64, gap: 10, link: 26, pad: FACES_PADDING },
 };
 
@@ -17,7 +17,7 @@ export const FACE_ROW_METRICS: Record<FaceDensity, { face: number; gap: number; 
  *  call circles' two tiers (TIER_DIAMETER: row 128, between them 96). The
  *  person picks one from the float's chrome; it is remembered per device
  *  (`float_face_size`), because a face that suits a laptop is a stamp on an
- *  ultrawide. The header is always 32px. */
+ *  ultrawide. The header is always 28px. */
 export const FLOAT_FACE_SIZES = [64, 96, 128] as const;
 export type FloatFaceSize = (typeof FLOAT_FACE_SIZES)[number];
 
@@ -30,6 +30,19 @@ export function floatFaceSizeOf(stored: unknown): FloatFaceSize {
 export function stepFloatFaceSize(size: FloatFaceSize, dir: 1 | -1): FloatFaceSize {
   const i = FLOAT_FACE_SIZES.indexOf(size) + dir;
   return FLOAT_FACE_SIZES[Math.max(0, Math.min(FLOAT_FACE_SIZES.length - 1, i))];
+}
+
+/** The float's faces off the call: half the call's, so the people you are
+ *  talking to stay the row's subject and the rest of the team reads as a
+ *  roster beside them, never a second wall of portraits. */
+export function floatOffCallFace(face: number): number {
+  return Math.max(28, Math.round(face / 2));
+}
+
+/** How much a face's marks (presence, mute, agent tag) scale at `face` px:
+ *  by the square root, so a big circle's badge grows less than the circle. */
+export function faceMarkScale(face: number): string {
+  return Math.sqrt(face / FACE_ROW_METRICS.float.face).toFixed(3);
 }
 
 /** The linked pair pulls together: a bridge eats this share of the gap on

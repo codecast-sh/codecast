@@ -18,6 +18,9 @@ import {
   makeOutboxFailureDisposition,
   defaultIsServerId,
   deriveRegistryMaps,
+  isPermanentDispatchError as isPermanentDispatchErrorImpl,
+  isParkedDispatchError as isParkedDispatchErrorImpl,
+  DispatchNotWiredError as DispatchNotWiredErrorImpl,
   type GroupPatchesContext,
   type MiddlewareOptions,
   type OutboxEntry,
@@ -40,6 +43,7 @@ import { UNDO_SPECS } from "./undo/policy";
 import { UNDO_WRITERS } from "./undo/writers";
 import { runUndoRevert } from "./undo/onRevert";
 
+
 export {
   action,
   asyncAction,
@@ -58,6 +62,17 @@ export {
   STORAGE_WATCHDOG_RECHECK_MS,
   CURRENT_OUTBOX_OPERATION_SCHEMA_VERSION,
 } from "@platform/engine";
+
+/** The write will never land: the server refused it for good, or it was
+ *  dropped before reaching the outbox. A caller holding a painted change
+ *  reverts it and says why. Every other failure (a write parked for the next
+ *  dispatch binding, a transient one left queued) is still on its way, and
+ *  the outbox and the server's echo settle it; reverting then would put back
+ *  what is about to land. */
+export function isRefusedDispatchError(error: unknown): boolean {
+  if (isParkedDispatchErrorImpl(error)) return false;
+  return isPermanentDispatchErrorImpl(error) || error instanceof DispatchNotWiredErrorImpl;
+}
 
 export type DurableCreateContinuation =
   | { version: 1; kind: "navigate" }

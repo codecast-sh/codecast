@@ -329,3 +329,16 @@ describe.skipIf(!haveArchive)('org-review regrade against grade.py (founder arch
     expect(archiveStamp()).toEqual(stampBefore);
   });
 });
+
+describe('the set summary', () => {
+  test('counts the must-stay-open records each rep closed, read from the gate evidence', async () => {
+    const impl = (await import('./index')).default;
+    const score = (summary: string, pass: boolean) => scoreOf([gate('no-wrong-close', pass, summary)], []);
+    const lines = impl.summarize!([
+      score('closes ct-49328, pl-460, which the labels say must stay open', false),
+      score('closes ct-49328, which the labels say must stay open', false),
+      score('closes 4, none the labels say must stay open', true),
+    ]);
+    expect(lines).toEqual(['no-wrong-close held in 1/3 graded reps; closed ct-49328 in 2, pl-460 in 1']);
+  });
+});

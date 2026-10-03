@@ -8,7 +8,7 @@ import {
   performUpdateRole,
   resolveScopeRef,
 } from "./orgRoles";
-import { computeOrgTree, stateOf } from "./org";
+import { computeOrgRoles, computeOrgTree, stateOf } from "./org";
 
 // Org roles (docs/architecture/org-roles.md S2 to S5): the boundary rules, the
 // cycle guard, the session pointer, and the tree filing sessions under roles.
@@ -567,5 +567,68 @@ describe("org.tree standing state", () => {
   test("an unknown status word and an empty pinned state read as absent", () => {
     expect(stateOf({ thread_state: "\n\n", thread_state_status: "purple" })).toEqual({ state_line: null, state_status: null, state_at: null });
     expect(stateOf(null)).toEqual({ state_line: null, state_status: null, state_at: null });
+  });
+});
+
+// org.roles: the tree without anything a session touches (ct-53363). The
+// inbox, the owners badge and the task board name roles; they must get the
+// same role and seat rows as org.tree, and must not read a single session,
+// because every session read makes the subscription re-run on that
+// session's every write.
+describe("org.roles", () => {
+  const SESSION_FIELDS = ["counts", "sessions", "total"];
+  const ANCHOR_LIVE_FIELDS = ["short_id", "state", "state_line", "state_status", "state_at"];
+  const without = (row: any, keys: string[]) => Object.fromEntries(Object.entries(row).filter(([k]) => !keys.includes(k)));
+  const world = () => fixtures({
+    org_roles: [
+      { _id: "role_growth", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Growth", handle: "growth", scope: { project_ids: ["projects_a"], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", created_by: ME, created_at: 1, updated_at: 1 },
+      { _id: "role_infra", short_id: "or-2", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Infra", handle: "infra", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "role", role_id: "role_growth" }, status: "active", anchor_id: "anchors_infra", created_by: ME, created_at: 1, updated_at: 1 },
+      { _id: "role_old", short_id: "or-3", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Old", handle: "old", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "retired", created_by: ME, created_at: 1, updated_at: 1 },
+    ],
+    projects: [{ _id: "projects_a", title: "Alpha", short_id: "pj-1" }],
+    anchors: [
+      { _id: "anchors_growth", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: "b".repeat(32), conversation_id: "a".repeat(32), org_role_id: "role_growth", name: "Growth lead", status: "active", created_at: 1 },
+      { _id: "anchors_infra", scope_type: "team", team_id: TEAM, host_user_id: ME, bot_user_id: "c".repeat(32), conversation_id: "q".repeat(32), name: "Infra lead", status: "active", created_at: 1 },
+    ],
+    conversations: [
+      { _id: "a".repeat(32), session_id: "s1", user_id: ME, team_id: TEAM, status: "active", title: "Growth lead", agent_type: "claude_code", message_count: 3, last_message_role: "assistant", updated_at: NOW - 500, anchor_id: "anchors_growth", thread_state: "Busy", thread_state_status: "working", thread_state_at: NOW - 400 },
+      { _id: "w".repeat(32), session_id: "s2", user_id: ME, team_id: TEAM, status: "active", title: "Work", agent_type: "claude_code", message_count: 2, last_message_role: "assistant", updated_at: NOW - 300, org_role_id: "role_growth" },
+    ],
+  });
+
+  test("the same role and seat rows as org.tree, without the session fields", async () => {
+    const db = world();
+    const tree = await computeOrgTree(ctxOf(db), ME as any, TEAM, NOW);
+    const roles = await computeOrgRoles(ctxOf(db), ME as any, TEAM, NOW);
+    expect(roles.roles_only).toBe(true);
+    expect(roles.workspace).toEqual(tree.workspace);
+    expect(roles.roles.map((r: any) => r._id)).toEqual(tree.roles.map((r: any) => r._id));
+    for (const r of roles.roles) {
+      const twin = tree.roles.find((t: any) => t._id === r._id)!;
+      expect(without(r, ["standing"])).toEqual(without(twin, [...SESSION_FIELDS, "standing"]));
+      for (const k of SESSION_FIELDS) expect(k in r).toBe(false);
+      // The standing session is named, never read: its live state comes
+      // from the last full tree on the client.
+      expect(r.standing).toEqual(twin.standing ? { conversation_id: twin.standing.conversation_id } : null);
+    }
+    expect(roles.anchors.map((a: any) => without(a, ANCHOR_LIVE_FIELDS))).toEqual(tree.anchors.map((a: any) => without(a, ANCHOR_LIVE_FIELDS)));
+    // Members as identity: the same people, without presence or sessions.
+    expect(roles.people).toEqual(tree.people.map((p: any) => without(p, ["presence", ...SESSION_FIELDS])));
+    expect(roles.roles.find((r: any) => r.handle === "growth")!.scope_names.projects).toEqual([{ id: "projects_a", title: "Alpha", short_id: "pj-1" }]);
+  });
+
+  test("reads no session at all", async () => {
+    const db = world();
+    const tables: string[] = [];
+    const watched = new Proxy(db, {
+      get(target: any, prop: string) {
+        if (prop === "query") return (table: string) => { tables.push(table); return target.query(table); };
+        if (prop === "get") return (id: any) => { tables.push(`get:${String(id)}`); return target.get(id); };
+        return target[prop];
+      },
+    });
+    await computeOrgRoles(ctxOf(watched), ME as any, TEAM, NOW);
+    expect(tables.filter((t) => t === "conversations" || t === "managed_sessions" || t === "messages")).toEqual([]);
+    expect(tables.filter((t) => t.startsWith("get:") && (t.includes("a".repeat(32)) || t.includes("w".repeat(32))))).toEqual([]);
   });
 });

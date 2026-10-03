@@ -4,7 +4,7 @@ import { useCloudAgentActions } from "./cloudAgents/sessionAgent";
 import { familyHeading } from "../hooks/useForkTree";
 import { sessionRepository } from "../lib/repoNavigation";
 import { repoTreeHref, repoCommitsHref } from "../lib/repoView";
-import { madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
+import { knownPullRequestIds, madeInTranscript, transcriptGitOutcomes } from "../lib/gitToolOutcome";
 import { useConversationCommits, useConversationPullRequests, useSyncConversationCommits, useSyncConversationPullRequests } from "../hooks/useSyncTimeline";
 import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
@@ -65,7 +65,7 @@ import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { AgentStatusPill, ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
-import { useMutation, useQuery, useConvex } from "convex/react";
+import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
@@ -423,12 +423,12 @@ const ConversationViewInner = (
   // Defer non-critical Convex queries one macrotask past a conversation switch so the
   // message list paints before the cascade fires.
   const deferredQueriesEnabled = useDeferUntilSettled(conversation?._id);
-  const gitDiffData = useQuery(
+  const gitDiffData = useQueryNoThrow(
     api.conversations.getConversationGitDiff,
     deferredQueriesEnabled && diffExpanded && convexConvId
       ? { conversation_id: convexConvId, ...shareTokenArg(convexConvId) }
       : "skip"
-  );
+  ).data;
   const renamingSessionId = useInboxStore((s) => s.renamingSessionId);
   const isRenaming = renamingSessionId === conversation?._id;
   const [renameDraft, setRenameDraft] = useState("");
@@ -3149,7 +3149,17 @@ const ConversationViewInner = (
     { key: "view_branches", label: "Branch map", icon: PaletteBranch, shortcutAction: "conv.toggleTree", available: !!isOwner, run: toggleMap },
     { key: "view_density", label: "Cycle message density", icon: PaletteRows, shortcutAction: "conv.cycleDensity", run: () => setDensity(DENSITY_OPTIONS[(DENSITY_OPTIONS.findIndex(o => o.value === density) + 1) % DENSITY_OPTIONS.length].value) },
   ]);
-  const { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx } = useToolResultMaps({ conversation, codeRepository });
+  const knownPrIdsRaw = useMemo(
+    () => knownPullRequestIds(codeRepository, messages as any, [...pullRequests, ...linkedPullRequests], transcriptOutcomes.prRefs),
+    [codeRepository, messages, pullRequests, linkedPullRequests, transcriptOutcomes],
+  );
+  // Same members, same set: a streamed message that named no new pull request
+  // keeps the context value, so every markdown block below does not re-render.
+  const knownPrIdsRef = useRef(knownPrIdsRaw);
+  if (knownPrIdsRef.current !== knownPrIdsRaw && (knownPrIdsRef.current.size !== knownPrIdsRaw.size || [...knownPrIdsRaw].some((id) => !knownPrIdsRef.current.has(id)))) {
+    knownPrIdsRef.current = knownPrIdsRaw;
+  }
+  const { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx } = useToolResultMaps({ conversation, codeRepository, pullRequestIds: knownPrIdsRef.current });
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");

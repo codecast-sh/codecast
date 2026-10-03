@@ -60,6 +60,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/admin\//,
   // Agent config: file list + editor, owns its canvas the way /sessions does.
   /^\/config(\/|$)/,
+  // Memory: project rail + map/index + editor, owns its canvas.
+  /^\/memory(\/|$)/,
 ];
 
 function routePath(pathname: string): string {

@@ -1,0 +1,301 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { _resetUndoStacks, getUndoHistory, performUndo, undoEntry } from "@platform/engine";
+import { useInboxStore } from "../inboxStore";
+
+// Each work spec with an inverse names its server half explicitly. These
+// check that the undo of each gesture dispatches the right action with the
+// prior value, and that the gestures no verb can take back record nothing.
+const CONV = "c".repeat(32);
+const ME = "u".repeat(32);
+const SAM = "s".repeat(32);
+const KIM = "k".repeat(32);
+
+const s = () => useInboxStore.getState() as any;
+let calls: Array<[string, unknown[]]> = [];
+const owner = {};
+
+beforeAll(() => {
+  // Receipt actions (editComment) expect their command acknowledged.
+  s()._setDispatch(async (action: string, args: unknown[], _patches: unknown, result: any) => {
+    calls.push([action, args]);
+    return result?.receiptActionVersion ? { commandId: result.commandId, status: "acknowledged", result: null } : null;
+  }, { owner });
+});
+afterAll(() => s()._clearDispatch(owner));
+beforeEach(() => {
+  _resetUndoStacks();
+  calls = [];
+  useInboxStore.setState({ pending: {}, currentUser: { _id: ME, name: "Me" } } as any);
+});
+
+/** Run the gesture, then its undo (by the toast's id, so confirm specs undo too); return what the undo dispatched. */
+function undoOf(gesture: () => void): Array<[string, unknown[]]> {
+  gesture();
+  const entry = getUndoHistory().items[0];
+  expect(entry?.status).toBe("done");
+  calls = [];
+  expect(undoEntry(entry!.id)).toBe(true);
+  return calls;
+}
+
+const label = () => getUndoHistory().items[0]?.label;
+
+describe("conversation inverses", () => {
+  const seed = (fields: Record<string, unknown>) =>
+    useInboxStore.setState({
+      sessions: { [CONV]: { _id: CONV, title: "Auth fix", ...fields } },
+      conversations: { [CONV]: { _id: CONV, title: "Auth fix", ...fields } },
+    } as any);
+
+  it("switchProject goes back to the prior path", () => {
+    seed({ project_path: "/src/a", git_root: "/src/a" });
+    expect(undoOf(() => s().switchProject(CONV, "/src/b"))).toEqual([["switchProject", [CONV, "/src/a"]]]);
+    expect(s().conversations[CONV].project_path).toBe("/src/a");
+  });
+
+  it("switchProject undo writes git_root as the server will, so the echo of a subdirectory session retires every lock", () => {
+    seed({ project_path: "/src/repo/sub", git_root: "/src/repo" });
+    expect(undoOf(() => s().switchProject(CONV, "/src/b"))).toEqual([["switchProject", [CONV, "/src/repo/sub"]]]);
+    // The server's switchProject stores git_root = path.
+    expect(s().conversations[CONV]).toMatchObject({ project_path: "/src/repo/sub", git_root: "/src/repo/sub" });
+    for (const store of ["conversations", "sessions"]) {
+      s().syncTable(store, [{ ...s()[store][CONV], project_path: "/src/repo/sub", git_root: "/src/repo/sub" }], { isDelta: true });
+      expect(s()[store][CONV].git_root).toBe("/src/repo/sub");
+    }
+    expect(Object.keys(s().pending).filter((k) => k.includes(CONV))).toEqual([]);
+  });
+
+  it("switchProject undo of a session with no git_root also stores the server's spelling", () => {
+    seed({ project_path: "/tmp/scratch" });
+    undoOf(() => s().switchProject(CONV, "/src/b"));
+    expect(s().conversations[CONV].git_root).toBe("/tmp/scratch");
+  });
+
+  it("making a shared session private is undone by sharing it at its prior level, and blind undo stops at it", () => {
+    seed({ is_private: false, team_visibility: "summary" });
+    s().setPrivacy(CONV, true);
+    expect(label()).toBe("Made “Auth fix” private");
+    // confirm: a blind keypress names the entry and does not widen access.
+    calls = [];
+    performUndo();
+    expect(s().conversations[CONV].is_private).toBe(true);
+    expect(calls).toEqual([]);
+    calls = [];
+    undoEntry(getUndoHistory().items[0]!.id);
+    expect(calls).toEqual([["setTeamVisibility", [CONV, "summary"]]]);
+    expect(s().conversations[CONV]).toMatchObject({ is_private: false, team_visibility: "summary" });
+  });
+
+  it("an accidental share is taken back by blind undo, which makes the session private again", () => {
+    seed({ is_private: true, team_visibility: "private" });
+    s().setPrivacy(CONV, false);
+    expect(getUndoHistory().items[0]?.confirm).toBeUndefined();
+    calls = [];
+    performUndo();
+    expect(calls).toEqual([["setPrivacy", [CONV, true]]]);
+    expect(s().conversations[CONV].is_private).toBe(true);
+  });
+
+  it("setTeamVisibility goes back to the prior level, or to private", () => {
+    seed({ is_private: false, team_visibility: "summary" });
+    expect(undoOf(() => s().setTeamVisibility(CONV, "full"))).toEqual([["setTeamVisibility", [CONV, "summary"]]]);
+    _resetUndoStacks();
+    seed({ is_private: true, team_visibility: "private" });
+    expect(undoOf(() => s().setTeamVisibility(CONV, "full"))).toEqual([["setPrivacy", [CONV, true]]]);
+  });
+
+  it("unsharing a session born private leaves no lock its echo cannot retire", () => {
+    // The server creates private sessions with no team_visibility; its
+    // setPrivacy(true) then stores "private".
+    for (const share of [() => s().setTeamVisibility(CONV, "full"), () => s().setPrivacy(CONV, false)]) {
+      _resetUndoStacks();
+      useInboxStore.setState({ pending: {} } as any);
+      seed({ is_private: true });
+      expect(undoOf(share)).toEqual([["setPrivacy", [CONV, true]]]);
+      for (const store of ["conversations", "sessions"]) {
+        s().syncTable(store, [{ ...s()[store][CONV], is_private: true, team_visibility: "private" }], { isDelta: true });
+        expect(s()[store][CONV]).toMatchObject({ is_private: true, team_visibility: "private" });
+      }
+      expect(Object.keys(s().pending).filter((k) => k.includes(CONV))).toEqual([]);
+    }
+  });
+
+  it("setTeamVisibility confirms only an undo that would widen the audience", () => {
+    const confirmOf = (from: Record<string, unknown>, to: "summary" | "full" | null) => {
+      _resetUndoStacks();
+      seed(from);
+      s().setTeamVisibility(CONV, to);
+      return getUndoHistory().items[0]?.confirm === true;
+    };
+    expect(confirmOf({ is_private: false, team_visibility: "full" }, "summary")).toBe(true);
+    expect(confirmOf({ is_private: false, team_visibility: "summary" }, "full")).toBe(false);
+    expect(confirmOf({ is_private: true, team_visibility: "private" }, "summary")).toBe(false);
+    // The member default cannot be ordered against a level, so either way confirms.
+    expect(confirmOf({ is_private: false }, "summary")).toBe(true);
+    expect(confirmOf({ is_private: false, team_visibility: "summary" }, null)).toBe(true);
+  });
+});
+
+describe("bookmarks, saved views, comments", () => {
+  it("toggleBookmark is undone by the same toggle", () => {
+    useInboxStore.setState({ bookmarks: [] } as any);
+    expect(undoOf(() => s().toggleBookmark(CONV, "msg_1"))).toEqual([["toggleBookmark", [CONV, "msg_1"]]]);
+    expect(s().bookmarks).toEqual([]);
+  });
+
+  it("updateSavedView sends the prior fields", () => {
+    const V = "v".repeat(32);
+    useInboxStore.setState({ savedViews: { [V]: { _id: V, name: "Mine", icon: "star", updated_at: 1 } } } as any);
+    expect(undoOf(() => s().updateSavedView(V, { name: "Ours", icon: "bolt" }))).toEqual([["updateSavedView", [V, { name: "Mine", icon: "star" }]]]);
+    expect(s().savedViews[V]).toMatchObject({ name: "Mine", icon: "star" });
+  });
+
+  it("resolving a thread is undone by reopening it; reopening records nothing", () => {
+    const C1 = "1".repeat(32);
+    const C2 = "2".repeat(32);
+    useInboxStore.setState({
+      comments: {
+        [C1]: { _id: C1, conversation_id: CONV, message_id: "m1", content: "a", user_id: ME, created_at: 1 },
+        [C2]: { _id: C2, conversation_id: CONV, message_id: "m1", content: "b", user_id: ME, created_at: 2 },
+      },
+    } as any);
+    expect(undoOf(() => s().resolveCommentThread(CONV, { messageId: "m1" }, true))).toEqual([
+      ["resolveCommentThread", [CONV, { messageId: "m1" }, false]],
+    ]);
+    expect(s().comments[C1].resolved_at).toBeUndefined();
+    _resetUndoStacks();
+    useInboxStore.setState({ comments: { [C1]: { ...s().comments[C1], resolved_at: 5, resolved_by: ME } } } as any);
+    s().resolveCommentThread(CONV, { messageId: "m1" }, false);
+    expect(getUndoHistory().items).toHaveLength(0);
+  });
+
+  it("resolving a thread that holds an older resolved comment records nothing", () => {
+    // The server's reopen would clear the older stamp too, so an undo could
+    // never put it back and its lock would never retire.
+    const C1 = "1".repeat(32);
+    const C2 = "2".repeat(32);
+    useInboxStore.setState({
+      comments: {
+        [C1]: { _id: C1, conversation_id: CONV, message_id: "m1", content: "a", user_id: ME, created_at: 1, resolved_at: 5, resolved_by: ME },
+        [C2]: { _id: C2, conversation_id: CONV, message_id: "m1", content: "b", user_id: ME, created_at: 2 },
+      },
+    } as any);
+    s().resolveCommentThread(CONV, { messageId: "m1" }, true);
+    expect(getUndoHistory().items).toHaveLength(0);
+  });
+
+  it("editComment sends the prior content", () => {
+    const C1 = "1".repeat(32);
+    useInboxStore.setState({ comments: { [C1]: { _id: C1, conversation_id: CONV, content: "first", user_id: ME, created_at: 1 } } } as any);
+    const sent = undoOf(() => void s().editComment(C1, "second"));
+    expect(sent.map(([a, args]) => [a, args.slice(0, 2)])).toEqual([["editComment", [C1, "first"]]]);
+    expect(s().comments[C1].content).toBe("first");
+  });
+});
+
+describe("decision stacks", () => {
+  const STACK = "q".repeat(32);
+  beforeEach(() => {
+    useInboxStore.setState({
+      decisionStacks: { [STACK]: { _id: STACK, title: "Launch", decision_ids: ["d1", "d2", "d3"], policy: { due_at: 50 }, total: 3, pending: 3 } },
+    } as any);
+  });
+
+  it("reorderStack goes back to the prior order", () => {
+    expect(undoOf(() => s().reorderStack(STACK, ["d3", "d1", "d2"]))).toEqual([["reorderStack", [STACK, ["d1", "d2", "d3"]]]]);
+    expect(s().decisionStacks[STACK].decision_ids).toEqual(["d1", "d2", "d3"]);
+  });
+
+  it("setStackPolicy sends back each moved key, clearing the ones that were unset", () => {
+    const sent = undoOf(() => void s().setStackPolicy(STACK, { auto_default_after_ms: 60_000, clear_due: true }));
+    expect(sent).toEqual([["setStackPolicy", [STACK, { clear_auto_default: true, due_at: 50 }]]]);
+    expect(s().decisionStacks[STACK].policy).toEqual({ due_at: 50 });
+  });
+});
+
+describe("triggers", () => {
+  const TR = "r".repeat(32);
+  const seed = (status: string) =>
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Nightly digest", status, schedule_type: "recurring", interval_ms: 3_600_000, run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+
+  it("pause and resume go back through the opposite verb", () => {
+    seed("scheduled");
+    expect(undoOf(() => s().triggerAction(TR, "pause"))).toEqual([["triggerAction", [TR, "resume"]]]);
+    expect(s().agentTasks[TR].status).toBe("scheduled");
+    _resetUndoStacks();
+    seed("paused");
+    expect(undoOf(() => s().triggerAction(TR, "resume"))).toEqual([["triggerAction", [TR, "pause"]]]);
+  });
+
+  it("run now, cancel and reactivate record nothing", () => {
+    seed("scheduled");
+    s().triggerAction(TR, "runNow");
+    seed("scheduled");
+    s().triggerAction(TR, "cancel");
+    seed("paused");
+    s().triggerAction(TR, "cancel");
+    seed("completed");
+    s().triggerAction(TR, "reactivate");
+    expect(getUndoHistory().items).toHaveLength(0);
+  });
+
+  it("setTriggerInterval goes back to the prior interval", () => {
+    seed("scheduled");
+    expect(undoOf(() => s().setTriggerInterval(TR, 7_200_000))).toEqual([["setTriggerInterval", [TR, 3_600_000]]]);
+    expect(label()).toBe("Set “Nightly digest” to every 2h");
+    expect(s().agentTasks[TR].interval_ms).toBe(3_600_000);
+  });
+});
+
+describe("chat", () => {
+  const CH = "h".repeat(32);
+  const MSG = "m".repeat(32);
+  beforeEach(() => {
+    useInboxStore.setState({
+      chatChannels: { [CH]: { _id: CH, name: "general", topic: "hi", updated_at: 1 } },
+      chatRail: [{ channel_id: CH, member_ids: [ME, SAM] }],
+      chatMessages: { [MSG]: { _id: MSG, channel_id: CH, content: "helo" } },
+    } as any);
+  });
+
+  it("updateChatChannel sends the prior name", () => {
+    expect(undoOf(() => s().updateChatChannel(CH, { name: "random" }))).toEqual([["updateChatChannel", [CH, { name: "general" }]]]);
+    expect(s().chatChannels[CH].name).toBe("general");
+  });
+
+  it("archiveChatChannel is undone by unarchiving", () => {
+    expect(undoOf(() => s().archiveChatChannel(CH, true))).toEqual([["archiveChatChannel", [CH, false]]]);
+    expect(label()).toBe("Archived #general");
+    expect(s().chatChannels[CH].archived_at ?? null).toBeNull();
+  });
+
+  it("adding members is undone by removing each one added", () => {
+    expect(undoOf(() => s().addChatChannelMembers(CH, [SAM, KIM]))).toEqual([["removeChatChannelMember", [CH, KIM]]]);
+  });
+
+  it("removing someone is undone by adding them back; leaving yourself records nothing", () => {
+    expect(undoOf(() => s().removeChatChannelMember(CH, SAM))).toEqual([["addChatChannelMembers", [CH, [SAM]]]]);
+    _resetUndoStacks();
+    s().removeChatChannelMember(CH, ME);
+    expect(getUndoHistory().items).toHaveLength(0);
+  });
+
+  it("dispatchChatEdit sends the prior content", () => {
+    expect(undoOf(() => s().dispatchChatEdit(MSG, "hello"))).toEqual([["dispatchChatEdit", [MSG, "helo"]]]);
+    expect(s().chatMessages[MSG].content).toBe("helo");
+  });
+});
+
+describe("org verbs", () => {
+  it("record a display-only history item that undo steps past", () => {
+    s().withdrawOrgProposal("prop_1");
+    const [item] = getUndoHistory().items;
+    expect(item).toMatchObject({ status: "external", external: "org", label: "Withdrew an org proposal" });
+    calls = [];
+    expect(performUndo()).toBe(false);
+    expect(calls).toEqual([]);
+  });
+});

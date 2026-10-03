@@ -98,6 +98,11 @@ describe("teamVisibleInputs: conversation visibility", () => {
     expect(out.size).toBe(0);
   });
 
+  test("a former member's shared session contributes nothing", async () => {
+    const out = await gate({ conversations: [conv("c1"), conv("c2", { team_visibility: "full" })], members: [{ user_id: "u2" }] });
+    expect(out.size).toBe(0);
+  });
+
   test("unknown and repeated ids are ignored", async () => {
     const out = await gate({ conversations: [conv("c1")], members: [{ user_id: "u1" }] }, ["c1", "c1", "nope"]);
     expect([...out.keys()]).toEqual(["c1"]);

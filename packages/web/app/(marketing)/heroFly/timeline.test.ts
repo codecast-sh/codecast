@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { ARCS, FLYERS } from "./motion";
-import { coverage, findJumps, summarise } from "./filmQa";
+import { cardOffset, coverage, findJumps, shownRects, summarise } from "./filmQa";
 import { project, rotateXYZ, STAGE_SIZE } from "./project";
-import { DROP, SETTLE, SNAP, cameraAt, frame, ghostOpacity, isLive, presence, SEAM_GHOST, typed } from "./timeline";
-import { CAMERA, CAMERA_MOBILE, DURATION, FRAME_MARGIN, SCENES, SURFACES, SURFACE_BY_ID, localToWorld, subjectBox, surfacePt, type Pose, type SurfaceId, type V3 } from "./world";
+import { DROP, PAGE_SIDE, PASSAGE_TABLE, SETTLE, SLIDE_ANCHORS, SNAP, cameraAt, frame, ghostOpacity, isLive, passageRow, presence, SEAM_GHOST, solvePassages, typed, warm } from "./timeline";
+import { CAMERA, CAMERA_MOBILE, DURATION, FRAME_MARGIN, SCENES, SURFACES, SURFACE_BY_ID, localToWorld, seesOf, subjectBox, surfacePt, type Pose, type SurfaceId, type V3 } from "./world";
 
 const nums = (s: string | undefined) => (s ?? "").match(/-?\d+(\.\d+)?(e-?\d+)?/g)?.map(Number) ?? [];
 
@@ -32,6 +32,17 @@ function expectSameFrame(a: ReturnType<typeof frame>, b: ReturnType<typeof frame
 const underGhost = (id: string) => /^ghost:/.test(id) || SEAM_GHOST.surfaces.some((s) => id.startsWith(`${s}/`));
 
 describe("hero fly-through timeline", () => {
+  /**
+   * The pages the film is checked on: how far each reaches beyond the box (stage px) and how much larger a stage px is on
+   * screen there than at 1440x900, the reference. The film is (100svh - 402px) * 1280 / 760 wide (page.tsx), so 1440x900
+   * shows an 839px film with 458 stage px of page either side, and 1280x800 a 670px film with 583.
+   */
+  const PAGES = [
+    { name: "1440x900", mobile: false, side: 458, rectScale: 1, fill: 0.5 },
+    { name: "1280x800", mobile: false, side: 583, rectScale: 839 / 670, fill: 0.45 },
+    { name: "phone", mobile: true, side: PAGE_SIDE.mobile, rectScale: 1, fill: 0.45 },
+  ] as const;
+
   // The last frame shows the first: everything but the opening windows' content is the same, and that content is wholly covered
   // by the seam's copy, which the driver writes frame(0) (HeroFlythrough), so the loop hands over with nothing changing on screen.
   test("the loop seam is exact: frame(0) is what frame(DURATION - 1e-6) shows", () => {
@@ -82,7 +93,7 @@ describe("hero fly-through timeline", () => {
   });
 
   // Every hold frames its hero surface near scale 1 and near face-on, so text reads crisply.
-  const HERO: (SurfaceId | null)[] = ["desk", "desk", "desk", "pairA", "phone", null, "pairB", "desk", "board", "auto", "team", "pr", "page", "palette", "blame", "desk", null];
+  const HERO: (SurfaceId | null)[] = ["desk", "desk", "desk", "pairA", "phone", "pairB", "desk", "board", "auto", "team", "pr", "page", "palette", "blame", "desk", null];
 
   test("every camera hold has a hero entry and a mobile override", () => {
     expect(HERO.length).toBe(CAMERA.length);
@@ -155,25 +166,25 @@ describe("hero fly-through timeline", () => {
 
   // The film clips at exactly its own height and that clip is never seen: at every moment of the film, holds and transits alike,
   // each window that is shown is wholly inside the box's height, or it is not shown. The sides are open (the page runs to the
-  // browser's edges, 700 stage px either side of the box on a 2560px screen; a phone shows a 60px gutter). Each card's corners
-  // are taken from the transform the frame writes (its lift, turn and scale) and projected through the camera's perspective.
+  // browser's edges, PAGES). Each card's corners are taken from the transform the frame writes (its slide, lift, turn and
+  // scale) and projected through the camera's perspective.
   const FLYER_HALF = 40;
-  const PAGE = { desktop: { x0: -700, x1: 1980, h: STAGE_SIZE.desktop.h }, mobile: { x0: -60, x1: 700, h: STAGE_SIZE.mobile.h } };
   function cardCorners(id: SurfaceId, tf: string | undefined, pose: Pose, mobile: boolean) {
     const sf = SURFACE_BY_ID[id];
-    // A card is only ever lowered (a surface's rise) and scaled about its centre (a lift-out).
-    const down = Number(/translate3d\(0px, (-?[\d.e-]+)px, 0px\)/.exec(tf ?? "")?.[1] ?? 0);
-    const k = Number(/scale\((-?[\d.e-]+)\)/.exec(tf ?? "")?.[1] ?? 1);
-    return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(id, (lx * sf.w * k) / 2, (ly * sf.h * k) / 2 + down), mobile));
+    // A card is only ever slid along its width (a move carrying it), lowered (a surface's rise) and scaled about its centre (a lift-out).
+    const { x: slid, y: down, z: near, k } = cardOffset(tf);
+    return [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(id, (lx * sf.w * k) / 2 + slid, (ly * sf.h * k) / 2 + down, near), mobile));
   }
 
-  for (const mobile of [false, true]) {
-    test(`no shown window crosses the top or bottom of the box${mobile ? " (mobile)" : ""}`, () => {
-      const page = PAGE[mobile ? "mobile" : "desktop"];
+  for (const pg of PAGES) {
+    const mobile = pg.mobile;
+    test(`no shown window crosses the top or bottom of the box (${pg.name})`, () => {
+      const { w, h } = mobile ? STAGE_SIZE.mobile : STAGE_SIZE.desktop;
+      const page = { x0: -pg.side, x1: w + pg.side, h };
       const bad: string[] = [];
       for (let k = 0; k * (1 / 60) < DURATION; k++) {
         const t = k / 60;
-        const f = frame(t, mobile);
+        const f = frame(t, mobile, pg.side);
         const { pose } = cameraAt(t, mobile);
         for (const sf of SURFACES) {
           if (!f.els[`mount:${sf.id}`].visible) continue;
@@ -213,9 +224,9 @@ describe("hero fly-through timeline", () => {
 
     // The edge rule is kept by composing the holds, not by hiding what they are about: every hold's own window is shown,
     // whole and at full opacity, from the moment the camera lands until it sets off.
-    test(`every hold shows its windows whole${mobile ? " (mobile)" : ""}`, () => {
+    test(`every hold shows its windows whole (${pg.name})`, () => {
       CAMERA.forEach((h, i) => {
-        const ids = h.sees;
+        const ids = seesOf(h, mobile);
         for (let t = h.t0; t <= h.t1; t += 0.05) {
           for (const id of ids) expect(presence(id, t, mobile).o, `${id} at ${t.toFixed(2)} (hold ${i})`).toBe(1);
         }
@@ -224,21 +235,25 @@ describe("hero fly-through timeline", () => {
   }
 
   // A surface is rendered whenever it is shown and any of it lands within the page (a 1440px window: 350 stage px either side of the box).
-  test("no surface is culled while the camera can see it", () => {
-    const view = { x0: -350, x1: 1630, y0: 0, y1: STAGE_SIZE.desktop.h };
-    for (let t = 0; t < DURATION; t += 0.05) {
-      const { pose } = cameraAt(t);
-      for (const sf of SURFACES) {
-        if (presence(sf.id, t).o <= 0) continue;
-        const pts = [[0, 0], [sf.w, 0], [0, sf.h], [sf.w, sf.h]].map(([x, y]) => project(pose, surfacePt(sf.id, x, y)));
-        if (pts.some((p) => !p)) continue;
-        const xs = pts.map((p) => p!.x);
-        const ys = pts.map((p) => p!.y);
-        const seen = Math.max(...xs) > view.x0 && Math.min(...xs) < view.x1 && Math.max(...ys) > view.y0 && Math.min(...ys) < view.y1;
-        if (seen) expect(isLive(sf.id, t), `${sf.id} rendered at ${t.toFixed(2)}`).toBe(true);
+  // A window is rendered whenever any of it can be seen on the visitor's page, wherever a move has carried it.
+  for (const pg of PAGES) {
+    test(`no surface is culled while the camera can see it (${pg.name})`, () => {
+      const { w, h } = pg.mobile ? STAGE_SIZE.mobile : STAGE_SIZE.desktop;
+      for (let t = 0; t < DURATION; t += 0.05) {
+        const { pose } = cameraAt(t, pg.mobile);
+        const f = frame(t, pg.mobile, pg.side);
+        for (const sf of SURFACES) {
+          if (presence(sf.id, t, pg.mobile, pg.side).o <= 0 || (f.els[`face:${sf.id}`].opacity ?? 1) <= 0) continue;
+          const pts = cardCorners(sf.id, f.els[`card:${sf.id}`].transform, pose, pg.mobile);
+          if (pts.some((p) => !p)) continue;
+          const xs = pts.map((p) => p!.x);
+          const ys = pts.map((p) => p!.y);
+          const seen = Math.max(...xs) > -pg.side && Math.min(...xs) < w + pg.side && Math.max(...ys) > 0 && Math.min(...ys) < h;
+          if (seen) expect(isLive(sf.id, t, pg.mobile, pg.side), `${sf.id} rendered at ${t.toFixed(2)}`).toBe(true);
+        }
       }
-    }
-  }, 60_000);
+    }, 60_000);
+  }
   // Every hold is optically centred: what it is about sits in the middle of the film box, with the same margins in every shot
   // (world.ts frameHolds). On a phone a window wider than the frame fills it edge to edge and is centred vertically.
   for (const mobile of [false, true]) {
@@ -251,7 +266,7 @@ describe("hero fly-through timeline", () => {
         // A hold drifts by a push about the box's centre and a slight turn (DRIFT): it lands and leaves centred too.
         for (const [v, tol] of [[0.5, 3], [0, 8], [1, 8]] as const) {
           const t = hold.t0 + (hold.t1 - hold.t0) * v;
-          const b = subjectBox(hold.sees, cameraAt(t, mobile).pose, mobile)!;
+          const b = subjectBox(seesOf(hold, mobile), cameraAt(t, mobile).pose, mobile)!;
           const [cx, cy] = [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2];
           if (Math.abs(cy - h / 2) > tol) bad.push(`hold ${i} at ${t.toFixed(2)}: centre y ${cy.toFixed(1)}`);
           const fits = b.x1 - b.x0 <= w - 2 * m.x + 1;
@@ -266,28 +281,30 @@ describe("hero fly-through timeline", () => {
     });
   }
 
+
   // The jump detector: step the film at 60fps and fail on any change faster than an eye can follow between two frames: the
   // camera and every shown window's projected corners (speed and change of speed), and every element's opacity, translate,
   // scale and rotation (filmQa.ts LIMITS). There are no intentional cuts. Layout compensations (FLIP pairs) are checked in the
   // browser instead, where the layout they answer happens.
-  for (const mobile of [false, true]) {
-    test(`nothing jumps between two frames${mobile ? " (mobile)" : ""}`, () => {
-      expect(summarise(findJumps(mobile))).toEqual([]);
+  for (const pg of PAGES) {
+    test(`nothing jumps between two frames (${pg.name})`, () => {
+      expect(summarise(findJumps(pg.mobile, 0, DURATION, pg.side, pg.rectScale))).toEqual([]);
     }, 240_000);
   }
 
   // No near-empty frames: while the camera crosses between two holds, the windows it leaves and the ones it reaches together
-  // cover at least 45% of what the sparser of the two holds covers (40% in a phone's narrow frame, where the gap between two
-  // windows is a larger share of the width), so the page is never left blank mid-move. The move home at the loop's seam
-  // included: the opening window stays while its content dissolves home (timeline.ts SEAM_GHOST).
-  for (const mobile of [false, true]) {
-    test(`every move keeps the frame filled${mobile ? " (mobile)" : ""}`, () => {
+  // cover at least half of what the sparser of the two holds covers (a little less where the page is wider beside a smaller
+  // film, so windows travel further to leave it), so the page is never left blank mid-move. The move home
+  // at the loop's seam included: the opening window stays while its content dissolves home (timeline.ts SEAM_GHOST).
+  for (const pg of PAGES) {
+    test(`every move keeps the frame filled (${pg.name})`, () => {
       const bad: string[] = [];
+      const cover = (t: number) => coverage(Math.min(t, DURATION - 1e-6), pg.mobile, frame(Math.min(t, DURATION - 1e-6), pg.mobile, pg.side));
       for (let i = 0; i + 1 < CAMERA.length; i++) {
         const [a, b] = [CAMERA[i], CAMERA[i + 1]];
-        const floor = (mobile ? 0.4 : 0.45) * Math.min(coverage(a.t1, mobile), coverage(Math.min(b.t0, DURATION - 1e-6), mobile));
+        const floor = pg.fill * Math.min(cover(a.t1), cover(b.t0));
         for (let t = a.t1; t <= b.t0; t += 1 / 30) {
-          const c = coverage(Math.min(t, DURATION - 1e-6), mobile);
+          const c = cover(t);
           if (c < floor) {
             bad.push(`${a.sees.join("+")} -> ${b.sees.join("+")} at ${t.toFixed(2)}: ${c.toFixed(2)} < ${floor.toFixed(2)}`);
             break;
@@ -310,28 +327,61 @@ describe("hero fly-through timeline", () => {
     expect(SEAM_GHOST.from - SEAM_GHOST.mount).toBeGreaterThanOrEqual(1.5);
   });
 
-  // A move carries windows: one leaving is taken off the side of the page by the pan, and fades only once it is nearly off the
-  // box; one arriving comes in from the side, whole. Nothing dissolves in place while much of it is on screen: while a window
-  // fades, appearing or leaving, at most 30% of its width is inside the box.
-  for (const mobile of [false, true]) {
-    test(`moves carry windows rather than dissolve them on screen${mobile ? " (mobile)" : ""}`, () => {
-      const { w } = mobile ? STAGE_SIZE.mobile : STAGE_SIZE.desktop;
+  // A move carries windows: one leaving is taken off the side of the page, one arriving comes in from beyond it, and either
+  // is wholly opaque whenever any of it (its shadow's spread included) is on the visitor's page. Nothing dissolves where a
+  // visitor can see it, in the box or in the page beside it.
+  for (const pg of PAGES) {
+    test(`moves carry windows rather than dissolve them on the page (${pg.name})`, () => {
+      const { w } = pg.mobile ? STAGE_SIZE.mobile : STAGE_SIZE.desktop;
+      const [x0, x1] = [-pg.side, w + pg.side];
       const bad: string[] = [];
       for (let i = 0; i + 1 < CAMERA.length; i++) {
         const [a, b] = [CAMERA[i], CAMERA[i + 1]];
-        for (let t = a.t1; t < b.t0; t += 1 / 30) {
-          const f = frame(t, mobile);
-          const { pose } = cameraAt(t, mobile);
-          for (const sf of SURFACES) {
-            const o = f.els[`mount:${sf.id}`].visible ? (f.els[`face:${sf.id}`].opacity ?? 1) : 0;
-            if (o <= 0.02 || o >= 0.98) continue;
-            const xs = [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([lx, ly]) => project(pose, localToWorld(sf.id, (lx * sf.w) / 2, (ly * sf.h) / 2), mobile)!.x);
-            const inBox = Math.max(0, Math.min(w, Math.max(...xs)) - Math.max(0, Math.min(...xs))) / (Math.max(...xs) - Math.min(...xs));
-            if (inBox > 0.3) bad.push(`${sf.id} at ${t.toFixed(2)}: opacity ${o.toFixed(2)} with ${(inBox * 100).toFixed(0)}% in the box`);
+        for (let t = a.t1; t < b.t0; t += 1 / 60) {
+          const f = frame(t, pg.mobile, pg.side);
+          for (const r of shownRects(t, pg.mobile, f)) {
+            if (r.o >= 0.995) continue;
+            const xs = r.pts.map((p) => p.x);
+            const pad = (Math.max(...xs) - Math.min(...xs)) * 0.05;
+            if (Math.max(...xs) + pad > x0 && Math.min(...xs) - pad < x1) bad.push(`${r.id} at ${t.toFixed(3)}: opacity ${r.o.toFixed(2)} on the page (x ${Math.min(...xs).toFixed(0)}..${Math.max(...xs).toFixed(0)})`);
           }
         }
       }
       expect(bad.slice(0, 20)).toEqual([]);
     }, 120_000);
   }
+
+  // Each move's passages are solved (solvePassages) and kept in a table, so neither a page load nor a resize solves anything:
+  // the table is the solver's answer. On a change to the world or the camera, paste the printed rows into PASSAGE_TABLE.
+  test("the passage table is the solver's", () => {
+    const rows: string[] = [];
+    let same = true;
+    for (const mobile of [false, true]) {
+      for (const anchor of SLIDE_ANCHORS[mobile ? "mobile" : "desktop"]) {
+        const key = `${mobile ? "m" : "d"}:${anchor}`;
+        const row = passageRow(solvePassages(mobile, anchor));
+        rows.push(`  "${key}": "${row}",`);
+        if (PASSAGE_TABLE[key] !== row) same = false;
+      }
+    }
+    if (!same) console.log(`PASSAGE_TABLE is stale; the solver's rows:\n${rows.join("\n")}`);
+    expect(same).toBe(true);
+    // Solving every anchor is the slowest check here: a few minutes of CPU, far more on a loaded machine.
+  }, 1_800_000);
+
+  // The driver's per-frame cost: a hold needs nothing built, and once a page's moves are warmed (in idle time, HeroFlythrough)
+  // any frame is a few ms of CPU at most, at any page reach, so neither the first paint nor a resize stalls the main thread.
+  test("frames cost a few ms of CPU at any page reach", () => {
+    const cpu = (fn: () => void) => {
+      const a = process.cpuUsage();
+      fn();
+      const b = process.cpuUsage(a);
+      return (b.user + b.system) / 1000;
+    };
+    for (const [mobile, side] of [[false, 333], [false, 517], [true, 12]] as const) {
+      expect(cpu(() => frame(CAMERA[1].t0 + 0.5, mobile, side)), `hold at ${side}`).toBeLessThan(15);
+      warm(mobile, side);
+      expect(cpu(() => frame(CAMERA[3].t0 - 0.7, mobile, side)), `move at ${side}`).toBeLessThan(15);
+    }
+  }, 120_000);
 });

@@ -9,6 +9,8 @@ import { hasStoredAuthToken } from "../lib/localAuth";
 import { serviceWorkerHooks } from "@platform/update-prompt";
 import { App } from "./App";
 import "../store/inboxStore";
+// Registers the session row entrance an undo of a hide plays (undo/onRevert).
+import "../store/undoActions";
 import { stashSlackReturn } from "../lib/slackReturn";
 
 // Before anything mounts: a Slack OAuth return carries ?code=, which the auth

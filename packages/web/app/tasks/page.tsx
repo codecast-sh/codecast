@@ -40,6 +40,7 @@ import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
+import { undoAsOne } from "../../store/undoActions";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import {
   Plus,
@@ -127,8 +128,11 @@ function TaskCombineDialog({ source, target, onClose }: {
     onClose();
   };
   const asDuplicate = () => {
-    updateTask(source.short_id, { duplicate_of: target.short_id });
-    closeTaskWithGuard(source.short_id, "dropped");
+    // One gesture, one undo: the link and the close come back together.
+    undoAsOne(`Marked ${source.short_id} as a duplicate of ${target.short_id}`, () => {
+      updateTask(source.short_id, { duplicate_of: target.short_id });
+      closeTaskWithGuard(source.short_id, "dropped");
+    });
     toast.success(`${source.short_id} marked as duplicate of ${target.short_id}`);
     onClose();
   };
@@ -1096,8 +1100,12 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     // own it would move the category server-side and bypass the guard.
     const { status, status_id, ...rest } = updates;
     if (status === "done" || status === "dropped") {
-      if (Object.keys(rest).length > 0) updateTask(task.short_id, rest);
-      const res = closeTaskWithGuard(task.short_id, status, undefined, status_id);
+      // The rank and the close are one drop, so one undo takes both back,
+      // named by the close ("Moved ct-1 to Done").
+      const res = undoAsOne((entries) => entries[entries.length - 1]!.label, () => {
+        if (Object.keys(rest).length > 0) updateTask(task.short_id, rest);
+        return closeTaskWithGuard(task.short_id, status, undefined, status_id);
+      });
       if (res.needsConfirm) return;
     } else {
       updateTask(task.short_id, updates);

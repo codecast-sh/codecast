@@ -309,7 +309,7 @@ describe("line.cast station scripts", () => {
       before: [{ name: "sum adds two numbers", ok: false, detail: "expected 2, got 3" }],
       after: [{ name: "sum adds two numbers", ok: true, detail: "ok" }],
     });
-    expect(proofSummary(proof).label).toBe("1 of 1 check went red to green");
+    expect(proofSummary(proof)).toMatchObject({ red: 1, fixed: 1, stillRed: [], broke: [] });
   });
 
   test("eval_scope names no surface in a repo without ./evals, and the touched ones when there is one", () => {

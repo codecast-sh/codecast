@@ -1,14 +1,13 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hasOpenModal } from "../../shortcuts";
 import { chosenOptions } from "../../lib/decisionLinks";
-import { ChangeCardAnswer, cardAnswerIndexes } from "./ChangeCardView";
+import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
 // D1 / D4): single = one option (digits 1 to 9, or a typed answer); multi =
@@ -18,14 +17,15 @@ import { ChangeCardAnswer, cardAnswerIndexes } from "./ChangeCardView";
 // Answering is the caller's: this component only builds the DecisionAnswerInput
 // (store answerDecision takes it and delivers the message). `keys` claims the
 // digit keys on window in capture phase, the same way SessionDecisionCard
-// does, so exactly one surface on screen should pass it.
+// does, so exactly one surface on screen should pass it; `keyScope` narrows
+// that to while focus is inside the given element (a card in a transcript).
 //
 // A decision about a change card (LE11) answers Ship, Revise or Drop through
 // the card's own controls (ChangeCardAnswer), whatever surface renders it.
 type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0];
 export function DecisionAnswerControls(props: AnswerControlsProps) {
   const indexes = cardAnswerIndexes(props.decision);
-  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} size={props.size} />;
+  if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} keyScope={props.keyScope} size={props.size} />;
   return <GenericAnswerControls {...props} />;
 }
 
@@ -34,6 +34,7 @@ function GenericAnswerControls({
   onAnswer,
   onDismiss,
   keys = false,
+  keyScope,
   size = "full",
   recommendation,
 }: {
@@ -41,6 +42,7 @@ function GenericAnswerControls({
   onAnswer: (input: DecisionAnswerInput) => void;
   onDismiss?: () => void;
   keys?: boolean;
+  keyScope?: RefObject<HTMLElement | null>;
   size?: "full" | "compact";
   /** The option a role on the ladder recommended (the latest hop with one). */
   recommendation?: number;
@@ -102,7 +104,7 @@ function GenericAnswerControls({
   useWatchEffect(() => {
     if (!keys) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
+      if (!answerKeyAllowed(e, keyScope)) return;
       const target = e.target as HTMLElement | null;
       const editing = !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.tagName === "SELECT");
       if (editing) {
@@ -132,7 +134,7 @@ function GenericAnswerControls({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, kind, decision.options.length, answerSingle, answerText, submit, onDismiss]);
+  }, [keys, keyScope, kind, decision.options.length, answerSingle, answerText, submit, onDismiss]);
 
   const compact = size === "compact";
   const submitBtn = (

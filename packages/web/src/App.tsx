@@ -131,6 +131,7 @@ const Roadmap = lazy(() => import("@/app/roadmap/page"));
 const Cli = lazy(() => import("@/app/cli/page"));
 const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
+const Memory = lazy(() => import("@/app/memory/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
 
@@ -282,6 +283,7 @@ export function App() {
               <Route path="team/:username" element={<E name="TeamMember"><TeamMember /></E>} />
               <Route path="admin/daemon-logs" element={<E name="AdminDaemonLogs"><AdminDaemonLogs /></E>} />
               <Route path="config" element={<E name="ConfigPage"><ConfigPage /></E>} />
+              <Route path="memory" element={<E name="Memory"><Memory /></E>} />
             </Route>
 
             {/* Standalone shell pages — kept outside the shared shell because they

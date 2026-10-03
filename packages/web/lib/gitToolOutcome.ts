@@ -6,7 +6,7 @@
 // with no extra row. The commit hash rule is the one the server's file change
 // extractor uses, so the two never disagree about which sha a call produced.
 import { extractCommitHashFromContent } from "@codecast/convex/convex/fileChanges/extractor";
-import { parseEntityUrl } from "@codecast/shared/entities";
+import { namedPullRequestIds, parseEntityUrl, repoObjectId } from "@codecast/shared/entities";
 
 export type GitToolOutcome =
   | { kind: "commit"; hash: string; subject: string; branch?: string }
@@ -49,6 +49,7 @@ export function gitToolOutcome(command: string | undefined, output: string | und
 }
 
 export type TranscriptMessage = {
+  content?: string | null;
   tool_calls?: { id: string; name: string; input?: unknown }[] | null;
   tool_results?: { tool_use_id: string; content?: string; is_error?: boolean }[] | null;
 };
@@ -87,6 +88,38 @@ export function transcriptGitOutcomes(messages: readonly TranscriptMessage[]): {
     }
   }
   return { commitShas, prRefs };
+}
+
+const namedCache = new WeakMap<object, { content: string; repository: string; ids: string[] }>();
+
+/**
+ * The pull requests of `repository` a conversation knows, as repo object ids:
+ * the ones linked to the session, the ones its shell calls made, and the ones
+ * its prose names outright. A lone `#N` in the conversation is a pull request
+ * only when it is one of these.
+ */
+export function knownPullRequestIds(
+  repository: string | null | undefined,
+  messages: readonly TranscriptMessage[],
+  linked: readonly { repository?: string; number?: number }[],
+  prRefs: ReadonlySet<string>,
+): Set<string> {
+  const ids = new Set<string>(prRefs);
+  if (!repository) return ids;
+  for (const pr of linked) {
+    if (pr.repository && typeof pr.number === "number") ids.add(repoObjectId({ type: "pr", repository: pr.repository, number: pr.number }));
+  }
+  for (const message of messages) {
+    const content = message.content;
+    if (!content) continue;
+    let named = namedCache.get(message);
+    if (!named || named.content !== content || named.repository !== repository) {
+      named = { content, repository, ids: namedPullRequestIds(content, repository) };
+      namedCache.set(message, named);
+    }
+    for (const id of named.ids) ids.add(id);
+  }
+  return ids;
 }
 
 /** A commit made in the transcript, by any prefix of its sha. */

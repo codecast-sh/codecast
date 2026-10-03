@@ -88,6 +88,9 @@ export type OutboxEntry = {
   // Failed boot replays so far; entries are given up on at
   // MAX_OUTBOX_BOOT_ATTEMPTS unless they are must-deliver.
   attempts?: number;
+  // The window that enqueued the row (outboxOwner.ts). While that window is
+  // alive, only it delivers the row; absent on rows from older builds.
+  owner?: string;
   operationSchemaVersion?: number;
   // Present on repeated-write actions (see outboxCoalesceKeys): the outbox
   // keeps at most one row per key, newest wins.
@@ -253,7 +256,11 @@ export type UndoCtx = {
 export type UndoSpec = {
   /** null = do not record this call. */
   label: (ctx: UndoCtx) => string | null;
-  /** Overrides the store-derived server half. */
+  /**
+   * Overrides the store-derived server half. Derive the invocations from
+   * `ctx.changes`: a partial undo asks again with the skipped rows taken out,
+   * and refuses whole if an invocation still names one.
+   */
   inverse?: (ctx: UndoCtx) => Invocation[] | null;
   ignoreFields?: readonly string[];
   /** Restore view fields if the view has not moved since. */
@@ -263,19 +270,42 @@ export type UndoSpec = {
   coalesce?: boolean;
   /** A display-only history item (org); never on the stack. */
   external?: string;
-  /** Blind keyboard undo skips it with a notice; the toast and the timeline may undo it. */
-  confirm?: boolean;
+  /**
+   * Blind keyboard undo stops at it with a notice; only the toast and the
+   * timeline may undo it. A function is asked once, when the entry is
+   * recorded, so a spec can confirm only the direction that needs it.
+   */
+  confirm?: boolean | ((ctx: UndoCtx) => boolean);
+  /**
+   * How the inverse's server half stores what it restores, for a value the
+   * server spells differently from the prior one (a verb that stamps a field
+   * the row never had). Given the cells an undo writes, return them with
+   * each such before value spelled the server's way; the replay then writes,
+   * locks and compares that value, so the inverse's echo retires the lock.
+   * The writer route's counterpart is `UndoWriter.clears`.
+   */
+  spell?: (cells: CellChange[]) => CellChange[];
 };
 
 export type UndoWriter = {
   fields?: (id: string, fields: Record<string, unknown>, row: any, state: any) => Invocation[];
   restoreRow?: (id: string, row: any, state: any) => Invocation[];
   removeRow?: (id: string, row: any, state: any) => Invocation[];
+  /**
+   * How the server stores a field it cannot unset once set (a cleared task
+   * assignee is stored as ""). An undo that takes such a field back to unset
+   * restores this value instead, so the row is what the server will echo and
+   * the replay's lock retires on that echo.
+   */
+  clears?: Readonly<Record<string, unknown>>;
 };
 
 export type UndoOutcome =
   | { ok: true; applied: number; skipped: number }
-  | { ok: false; reason: "conflict" | "gone" | "expired" };
+  // "already": every row is back at its before value, so there is nothing to
+  // take back. A lone entry reports it as a conflict; a group child counts as
+  // undone without a skipped row.
+  | { ok: false; reason: "conflict" | "gone" | "expired" | "already" };
 
 export type UndoEntry = {
   id: string;
@@ -300,6 +330,8 @@ export type UndoEntry = {
   confirm?: boolean;
   /** Outbox ids of this entry's own undo dispatches (a refused one puts the entry back). */
   replayOutboxIds?: string[];
+  /** Which way those dispatches went: the stack the replay put the entry on. */
+  replayDir?: "undo" | "redo";
 };
 
 export type UndoConfig = {

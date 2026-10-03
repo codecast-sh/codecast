@@ -1,7 +1,8 @@
 "use client";
 
 import { memo, useEffect, useRef, useState } from "react";
-import { useQuery, useMutation, useConvexAuth } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock } from "lucide-react";
@@ -136,10 +137,10 @@ export const CollabComposer = memo(function CollabComposer({
   // Skip until the conversation is a real server row: a freshly-created
   // optimistic stub is keyed by its session UUID, which the v.id("conversations")
   // validator rejects (crashing the page). A stub has no grants to read anyway.
-  const access = useQuery(
+  const access = useQueryNoThrow(
     api.collab.mySendAccess,
     isConvexId(conversation._id.toString()) ? { conversation_id: convId } : "skip"
-  );
+  ).data;
   const requestAccess = useMutation(api.collab.requestSendAccess);
   const sendToSession = useMutation(api.pendingMessages.sendSessionMessage);
 
@@ -323,10 +324,10 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
   const convId = conversationId as Id<"conversations">;
   // See CollabComposer: skip while the conversation is still an optimistic stub
   // (session-UUID id) — its v.id("conversations") validator would otherwise throw.
-  const requests = useQuery(
+  const requests = useQueryNoThrow(
     api.collab.collabRequests,
     isConvexId(conversationId) ? { conversation_id: convId } : "skip"
-  );
+  ).data;
   const decide = useMutation(api.collab.decideSendAccess);
   const revoke = useMutation(api.collab.revokeSendAccess);
   const [busyId, setBusyId] = useState<string | null>(null);

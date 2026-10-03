@@ -2,7 +2,7 @@ import type { ReactNode, Ref, ChangeEvent, InputHTMLAttributes } from "react";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 
 /** The magnifier the search field and its folded button both draw. */
-export function SearchGlyph({ className }: { className: string }) {
+export function SearchGlyph({ className }: { className?: string }) {
   return (
     <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
@@ -53,8 +53,8 @@ export function SearchField({
             : "max-w-[230px]"
       }`}
     >
-      <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-        <SearchGlyph className={`w-4 h-4 transition-colors duration-200 ${expanded ? "text-sol-cyan" : "text-sol-text-dim"}`} />
+      <div className="absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none">
+        <SearchGlyph className={`w-3.5 h-3.5 transition-colors duration-200 ${expanded ? "text-sol-cyan" : "text-sol-text-dim"}`} />
       </div>
       <input
         ref={inputRef}
@@ -63,10 +63,10 @@ export function SearchField({
         onChange={onChange}
         {...inputProps}
         placeholder="Search sessions"
-        className={`w-full pl-9 py-1.5 bg-sol-bg-alt border rounded-full text-sm text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
+        className={`h-7 w-full pl-8 py-0 bg-sol-bg-alt border rounded-full text-[13px] text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 ${
           expanded
             ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"
-            : `${hideCaps ? "pr-3" : "pr-12"} border-sol-border hover:border-sol-text-dim/40 hover:bg-sol-bg-highlight`
+            : `${hideCaps ? "pr-3" : "pr-12"} border-transparent hover:bg-sol-bg-highlight`
         }`}
       />
       <div

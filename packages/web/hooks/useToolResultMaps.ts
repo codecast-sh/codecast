@@ -4,9 +4,10 @@ import type { SentFileData } from "../components/tools/SentFileBlock";
 import type { ImageData, Message, ToolResult } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
 
-export function useToolResultMaps({ conversation, codeRepository }: {
+export function useToolResultMaps({ conversation, codeRepository, pullRequestIds }: {
   conversation: ConversationData | null | undefined;
   codeRepository: string | null;
+  pullRequestIds?: ReadonlySet<string>;
 }) {
   const toolCallMap = useMemo(() => {
     const map: Record<string, string> = {};
@@ -79,7 +80,10 @@ export function useToolResultMaps({ conversation, codeRepository }: {
   // the session's working directory, and the home it implies for `~/…`.
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const gitRoot = conversation?.git_root || null;
-  const filePathCtx = useMemo(() => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository, gitRoot }), [filePathBase, codeRepository, gitRoot]);
+  const filePathCtx = useMemo(
+    () => ({ base: filePathBase, home: inferHomeDir([filePathBase]), repository: codeRepository, pullRequestIds, gitRoot }),
+    [filePathBase, codeRepository, pullRequestIds, gitRoot],
+  );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };
 }

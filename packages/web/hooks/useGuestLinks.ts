@@ -22,11 +22,6 @@ export type GuestLinkRow = {
   token: string;
   path: string;
   created_by_name: string;
-  /** How a guest sees whoever made it (never an address). */
-  created_by_public?: string;
-  /** What the guest's page and the link's card call the meeting; null means
-   *  "a call with <whoever made it>". */
-  title?: string | null;
   mine: boolean;
   created_at: number;
   expires_at: number;
@@ -34,7 +29,7 @@ export type GuestLinkRow = {
   admitted: number;
 };
 
-const rowSig = (l: GuestLinkRow) => `${l.expires_at}|${l.waiting}|${l.admitted}|${l.mine ? 1 : 0}|${l.title ?? ""}`;
+const rowSig = (l: GuestLinkRow) => `${l.expires_at}|${l.waiting}|${l.admitted}|${l.mine ? 1 : 0}`;
 const newestFirst = (a: GuestLinkRow, b: GuestLinkRow) => b.created_at - a.created_at;
 
 export function useGuestLinks(roomKey: string | null): {

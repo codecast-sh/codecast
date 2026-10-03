@@ -51,6 +51,7 @@ import type * as changesDeploy from "../changesDeploy.js";
 import type * as changesProse from "../changesProse.js";
 import type * as changesQueries from "../changesQueries.js";
 import type * as changesSchedule from "../changesSchedule.js";
+import type * as changesWeek from "../changesWeek.js";
 import type * as chat from "../chat.js";
 import type * as chatAccess from "../chatAccess.js";
 import type * as chatText from "../chatText.js";
@@ -394,6 +395,7 @@ declare const fullApi: ApiFromModules<{
   changesProse: typeof changesProse;
   changesQueries: typeof changesQueries;
   changesSchedule: typeof changesSchedule;
+  changesWeek: typeof changesWeek;
   chat: typeof chat;
   chatAccess: typeof chatAccess;
   chatText: typeof chatText;

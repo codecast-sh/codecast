@@ -8870,6 +8870,7 @@ async function enrichInboxSessionRow(
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
     agent_status: agentStatus,
+    agent_status_raw: maps.agentStatusMap.get(conv._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(conv._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(conv._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(conv._id.toString()) ?? null,
@@ -9062,6 +9063,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_rest: userRestStampOf(child)?.rest ?? null,
     inbox_rest_at: userRestStampOf(child)?.at ?? null,
     agent_status: childAgentStatus,
+    agent_status_raw: maps.agentStatusMap.get(child._id.toString()) ?? null,
     tmux_session: maps.tmuxSessionMap.get(child._id.toString()) ?? null,
     permission_mode: maps.permissionModeMap.get(child._id.toString()) ?? null,
     agent_started_at: maps.agentStartedAtMap.get(child._id.toString()) ?? null,
@@ -9865,6 +9867,10 @@ export const listTeamInboxSessions = query({
 // full row (enrichInboxSessionRow) exposes and the web client merges via syncOverlay.
 type LivenessFields = {
   agent_status: any;
+  // The daemon's raw status the verdict above came from: a replica re-runs the
+  // trust rules over it at its own clock, since a verdict does not replay at a
+  // later instant (ct-56054).
+  agent_status_raw: string | null;
   is_idle: boolean;
   is_unresponsive: boolean;
   awaiting_input: boolean;
@@ -10131,12 +10137,15 @@ export async function buildAskingParents(
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
-      if ((c.message_count ?? 0) === 0) continue;
       const status = trustedAgentStatus(
         maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
       );
+      // A permission prompt is the child's own ask (ownAsk) whatever its
+      // message count, so it lifts the parent the same way on every side.
       if (status === "permission_blocked") { asking.add(pid); break; }
-      if (status !== undefined && status !== "idle") {
+      // Only a child with content can hold an AskUserQuestion poll: an empty
+      // one never spends the probe's message read.
+      if ((c.message_count ?? 0) > 0 && status !== undefined && status !== "idle") {
         const key = `${cid}:${c.message_count ?? 0}`;
         const hit = childAuqProbeCache.get(key);
         if (hit !== undefined) {
@@ -10311,6 +10320,7 @@ function deriveLivenessAt(
     // outlived the managed row and filed a declared-done session under Needs
     // Input on every replica while this stamp said done (prod, 2026-09-01).
     agent_status: live.agent_status,
+    agent_status_raw: facts.agent_status,
     is_idle: live.is_idle,
     is_unresponsive: live.is_unresponsive,
     awaiting_input: live.awaiting_input,

@@ -9,7 +9,7 @@
 // (16 of the first 20 interleave seeds, 239423 first), the floor's warm-cache
 // probe must leave ada's row alone. byIds serves only rows bo runs or owns, so
 // probing it would prune it with a durable exclude and empty bo's team board;
-// the probe asks only for ids byIds could return (byIdsCouldReturn).
+// the pruning probe asks only about rows bo runs (byIdsMustReturn).
 
 import { scenario } from "../dsl";
 

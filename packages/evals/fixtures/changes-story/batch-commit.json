@@ -113,6 +113,5 @@
  },
  "label": {
   "why": "session"
- },
- "judge": "tells receivers of webhooks that failed deliveries now retry for about an hour, gives the session's reason (one failure used to drop the event while a partner's server blipped), and does not present the web, mobile or docs parts of the batch commit as this story's change"
+ }
 }

@@ -2,16 +2,17 @@
 
 import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { Check, Copy, Link2, RefreshCw, UserMinus, X } from "lucide-react";
+import { Check, Copy, Link2, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { GUEST_LINK_TTL_MS, guestIdFromIdentity, isGuestIdentity } from "@codecast/shared/contracts";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useGuestLinks } from "../../hooks/useGuestLinks";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { copyToClipboard, copyToClipboardWhenReady } from "../../lib/utils";
-import { guestLinkUrl } from "../../lib/calls/guestDoorActions";
+import { guestLinkUrl, removeGuest } from "../../lib/calls/guestDoorActions";
 import { useGuestDoor } from "../../hooks/useGuestDoor";
-import { useInboxStore } from "../../store/inboxStore";
 import { GUEST_LINK_TTL_CHOICES, guestLinkExpiry, meetingTitle } from "../../lib/calls/roomGuests";
 import { firstName } from "./speakers";
 
@@ -24,40 +25,43 @@ import { firstName } from "./speakers";
 //   the remove   beside a guest's name on the stage, and on their face's
 //                card in the header: put them out
 //
-// None of these can paint before the server answers, and none pretends to:
-// a link's token is minted by the server, and letting a stranger in or
-// putting them out is a decision the room should see land, not assume. So a
-// gesture shows itself in flight ("removing…") and the store's own feeds
-// (liveRooms, roomKnocks) carry the result everywhere else.
+// Answering a guest (admit, deny, remove) is a store action and paints in the
+// frame it is pressed, everywhere at once (lib/calls/guestDoorActions); a
+// refusal puts the row back and says why. A link cannot paint first: its
+// token is minted by the server, so the panel shows it in flight.
 
 // ── Remove ───────────────────────────────────────────────────────────────────
 
 /** Put a guest out, beside their name. Two presses, the second within a few
  *  seconds: removing somebody from a meeting they are talking in is not a
- *  thing to do by brushing a button. Renders nothing for anyone not a guest. */
+ *  thing to do by brushing a button. The second press offers a choice: out,
+ *  or out with the link they came in on turned off, because a guest put out
+ *  can open the same link in a private window and knock again as somebody
+ *  new. Renders nothing for anyone not a guest, or a viewer who could not. */
 export function GuestRemoveButton({
+  roomKey,
   identity,
   name,
   variant,
   always = false,
 }: {
+  /** The room the guest is in, which is the room the caller is drawing. */
+  roomKey: string;
   identity: string;
   name: string;
   variant: "tile" | "row";
   /** Shown at rest, not only when the row is hovered (a card's own button). */
   always?: boolean;
 }) {
-  const door = useGuestDoor();
   // Putting a guest out takes the standing that letting one in does; a
   // button that would only answer "you can't" is not offered.
-  const roomKey = useInboxStore((st) => (st.call as any)?.roomKey ?? null);
   const { canInvite } = useGuestLinks(roomKey);
-  const [phase, setPhase] = useState<"idle" | "confirm" | "busy">("idle");
+  const [confirm, setConfirm] = useState(false);
   useWatchEffect(() => {
-    if (phase !== "confirm") return;
-    const t = setTimeout(() => setPhase("idle"), 4000);
+    if (!confirm) return;
+    const t = setTimeout(() => setConfirm(false), 5000);
     return () => clearTimeout(t);
-  }, [phase]);
+  }, [confirm]);
   const guestId = guestIdFromIdentity(identity);
   if (!guestId || !isGuestIdentity(identity) || !canInvite) return null;
   const who = firstName(name);
@@ -65,30 +69,53 @@ export function GuestRemoveButton({
   const base = tile
     ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] backdrop-blur transition-all"
     : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-[10px] transition-all";
-  const reveal = phase === "idle" && !always ? " opacity-0 group-hover:opacity-100 focus-visible:opacity-100" : "";
-  const tone =
-    phase === "idle"
-      ? tile
-        ? " bg-black/45 text-white/80 hover:bg-sol-red/70 hover:text-white"
-        : " text-sol-text-muted hover:bg-sol-red/15 hover:text-sol-red"
-      : " bg-sol-red/80 text-white hover:bg-sol-red";
+  const out = (revokeLink: boolean) => (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirm(false);
+    removeGuest(roomKey, guestId, { revokeLink });
+  };
+  if (confirm) {
+    const armed = `${base} bg-sol-red/80 text-white hover:bg-sol-red`;
+    return (
+      <span className="inline-flex items-center gap-1">
+        <button
+          type="button"
+          onClick={out(false)}
+          className={armed}
+          title={`Press to remove ${who} from the call`}
+          aria-label={`Confirm: remove ${who} from the call`}
+        >
+          <UserMinus className="h-3 w-3" />
+          remove {who}?
+        </button>
+        <button
+          type="button"
+          onClick={out(true)}
+          className={`${base} ${tile ? "bg-black/55 text-white/85" : "text-sol-text-muted"} hover:bg-sol-red/80 hover:text-white`}
+          title={`Remove ${who} and turn off the link they came in on, so nobody new can use it. Guests already in stay`}
+          aria-label={`Remove ${who} and turn off their link`}
+        >
+          <Unlink className="h-3 w-3" />
+          and link
+        </button>
+      </span>
+    );
+  }
+  const reveal = always ? "" : " opacity-0 group-hover:opacity-100 focus-visible:opacity-100";
+  const tone = tile ? " bg-black/45 text-white/80 hover:bg-sol-red/70 hover:text-white" : " text-sol-text-muted hover:bg-sol-red/15 hover:text-sol-red";
   return (
     <button
       type="button"
-      disabled={phase === "busy"}
       onClick={(e) => {
         e.stopPropagation();
-        if (phase === "idle") return setPhase("confirm");
-        if (phase !== "confirm") return;
-        setPhase("busy");
-        void door.remove(guestId).finally(() => setPhase("idle"));
+        setConfirm(true);
       }}
       className={`${base}${tone}${reveal}`}
-      title={phase === "confirm" ? `Press again to remove ${who} from the call` : `Remove ${who} from the call`}
-      aria-label={phase === "confirm" ? `Confirm: remove ${who} from the call` : `Remove ${who} from the call`}
+      title={`Remove ${who} from the call`}
+      aria-label={`Remove ${who} from the call`}
     >
       <UserMinus className="h-3 w-3" />
-      {phase === "busy" ? "removing…" : phase === "confirm" ? `remove ${who}?` : "remove"}
+      remove
     </button>
   );
 }
@@ -245,8 +272,13 @@ function GuestInvitePanel({
     setBusy(null);
   };
   const ttlLabel = GUEST_LINK_TTL_CHOICES.find((c) => c.ms === ttl)?.label ?? "7 days";
-  // What travels with the link: the guest's page and every unfurl of it.
-  const seenAs = meetingTitle(links[0]?.title ?? null, { name: (mine ?? links[0])?.created_by_public ?? null });
+  // What travels with the viewer's link: the guest's page and every unfurl
+  // of it. The server says it (callGuests.guestLinkPreview), from the same
+  // two functions the guest's page uses, before any link exists, because
+  // that is when the person decides what to send: a private channel's name
+  // stays inside, and the meeting is then named after whoever invites.
+  const preview = useQueryNoThrow(api.callGuests.guestLinkPreview, { room_key: roomKey }).data;
+  const seenAs = preview ? meetingTitle(preview.title, { name: preview.inviter }) : null;
 
   return createPortal(
     <div
@@ -379,9 +411,11 @@ function GuestInvitePanel({
           {!mine && copyFailed && (
             <p className="mt-1.5 px-0.5 font-mono text-[10.5px] text-sol-orange">The link was made but not copied. Press copy above.</p>
           )}
-          <p className="mt-2 px-0.5 text-[11px] leading-snug text-sol-text-dim">
-            Guests see this call as <span className="text-sol-text-muted">{seenAs}</span>.
-          </p>
+          {seenAs && (
+            <p className="mt-2 px-0.5 text-[11px] leading-snug text-sol-text-dim">
+              Guests see this call as <span className="text-sol-text-muted">{seenAs}</span>.
+            </p>
+          )}
         </div>
       )}
 

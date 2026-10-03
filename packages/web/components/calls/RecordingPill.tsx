@@ -10,6 +10,7 @@
 //
 // Clicking it opens the transcript, which is the calls page's own detail view
 // streaming live. There is no second transcript surface to keep in step.
+import { useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { Maximize2, Square } from "lucide-react";
@@ -29,66 +30,92 @@ export function RecordingPill() {
   const now = useCoarseNow(1000);
   const levelRef = useRecorderLevelVar<HTMLSpanElement>(running);
 
-  if (!running && !stopping) return null;
+  // When the save lands the pill sinks away instead of vanishing: it stays
+  // mounted, frozen on its last live frame (the engine has already reset the
+  // clock and tail), until the exit animation ends.
+  const live = running || stopping;
+  const [shown, setShown] = useState(live);
+  if (live && !shown) setShown(true);
+  const lastFrame = useRef<ReactNode>(null);
+
+  if (!live) {
+    if (!shown) return null;
+    return createPortal(
+      <div className="rec-pill-host">
+        <div
+          className="rec-pill rec-pill-leaving"
+          onAnimationEnd={(e) => e.target === e.currentTarget && setShown(false)}
+        >
+          {lastFrame.current}
+        </div>
+      </div>,
+      document.body,
+    );
+  }
 
   const last = status.tail[status.tail.length - 1]?.text ?? "";
 
-  return createPortal(
-    <div className="rec-pill-host">
-      <div className="rec-pill">
-        <span className="rec-pill-dot" aria-hidden="true" />
-        <span ref={levelRef} className="rec-pill-level" aria-hidden="true">
-          {[0.55, 1, 0.75, 0.4].map((b, i) => (
-            <i key={i} style={{ ["--b" as string]: b }} />
-          ))}
-        </span>
-        <div className="rec-pill-body">
-          <div className="rec-pill-head">
-            <span className="rec-pill-clock">
-              {fmtClock(status.startedAt ? now - status.startedAt : 0)}
-            </span>
-            {/* Where the sound comes from, in the words the feature actually
-                delivers: the microphone always, and on the desktop the
-                computer's own audio when the shell could open that feed. */}
-            <span className="rec-pill-what">
-              {stopping
-                ? "finishing"
-                : status.systemAudio
-                  ? "recording the room + computer audio"
-                  : "recording the room"}
-            </span>
-          </div>
-          {last ? (
-            <div className="rec-pill-tail" title={last}>
-              {last}
-            </div>
-          ) : (
-            <div className="rec-pill-quiet">
-              {status.error ?? "listening — words appear as people speak"}
-            </div>
-          )}
+  const face = (
+    <>
+      <span className="rec-pill-dot" aria-hidden="true" />
+      <span ref={levelRef} className="rec-pill-level" aria-hidden="true">
+        {[0.55, 1, 0.75, 0.4].map((b, i) => (
+          <i key={i} style={{ ["--b" as string]: b }} />
+        ))}
+      </span>
+      <div className="rec-pill-body">
+        <div className="rec-pill-head">
+          <span className="rec-pill-clock">
+            {fmtClock(status.startedAt ? now - status.startedAt : 0)}
+          </span>
+          {/* Where the sound comes from, in the words the feature actually
+              delivers: the microphone always, and on the desktop the
+              computer's own audio when the shell could open that feed. */}
+          <span className="rec-pill-what">
+            {stopping
+              ? "finishing"
+              : status.systemAudio
+                ? "recording the room + computer audio"
+                : "recording the room"}
+          </span>
         </div>
-        {status.transcriptId && (
-          <button
-            type="button"
-            className="rec-pill-open"
-            title="Open the live transcript"
-            aria-label="Open the live transcript"
-            onClick={() => router.push(`/calls/${status.transcriptId}`)}
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
+        {last ? (
+          <div className="rec-pill-tail" title={last}>
+            {last}
+          </div>
+        ) : (
+          <div className="rec-pill-quiet">
+            {status.error ?? "listening — words appear as people speak"}
+          </div>
         )}
+      </div>
+      {status.transcriptId && (
         <button
           type="button"
-          className="rec-pill-stop"
-          disabled={stopping}
-          onClick={() => void stopRecording()}
+          className="rec-pill-open"
+          title="Open the live transcript"
+          aria-label="Open the live transcript"
+          onClick={() => router.push(`/calls/${status.transcriptId}`)}
         >
-          <Square className="h-3 w-3 fill-current" />
-          {stopping ? "Saving" : "Stop"}
+          <Maximize2 className="h-3.5 w-3.5" />
         </button>
-      </div>
+      )}
+      <button
+        type="button"
+        className="rec-pill-stop"
+        disabled={stopping}
+        onClick={() => void stopRecording()}
+      >
+        <Square className="h-3 w-3 fill-current" />
+        {stopping ? "Saving" : "Stop"}
+      </button>
+    </>
+  );
+  lastFrame.current = face;
+
+  return createPortal(
+    <div className="rec-pill-host">
+      <div className="rec-pill">{face}</div>
     </div>,
     document.body,
   );

@@ -49,6 +49,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   tabs: "local tab layout, no server truth",
   activeTabId: "local tab layout, no server truth",
   sidePanelSessionId: "local panel state, no server truth",
+  callRecordings: "a call's video files, fed per view by useCallRecordings, which the sim does not mount (its feed also fills callRecordingCalls, the key REGISTERED_FEEDS maps it to)",
 };
 
 /**

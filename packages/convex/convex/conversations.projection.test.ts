@@ -158,8 +158,11 @@ describe("overlay projection — placement rules", () => {
         conv("child_auq", { is_subagent: true, parent_conversation_id: "conversations_parent_auq", updated_at: EPOCH - MIN }),
         conv("parent_quiet"),
         conv("child_quiet", { is_subagent: true, parent_conversation_id: "conversations_parent_quiet", updated_at: EPOCH - 20 * MIN }),
+        conv("parent_empty_perm", { updated_at: EPOCH - MIN }),
+        conv("child_empty_perm", { is_subagent: true, parent_conversation_id: "conversations_parent_empty_perm", message_count: 0, updated_at: EPOCH - MIN }),
       ],
       managed_sessions: [
+        { _id: "ms_child_empty_perm", user_id: ME, conversation_id: "conversations_child_empty_perm", last_heartbeat: EPOCH - 1000, agent_status: "permission_blocked", agent_status_updated_at: EPOCH - MIN },
         { _id: "ms_own", user_id: ME, conversation_id: "conversations_own", last_heartbeat: EPOCH - 1000, agent_status: "permission_blocked", agent_status_updated_at: EPOCH - MIN },
         { _id: "ms_child_perm", user_id: ME, conversation_id: "conversations_child_perm", last_heartbeat: EPOCH - 1000, agent_status: "permission_blocked", agent_status_updated_at: EPOCH - MIN },
         { _id: "ms_child_auq", user_id: ME, conversation_id: "conversations_child_auq", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
@@ -179,6 +182,10 @@ describe("overlay projection — placement rules", () => {
     expect(liveness.conversations_parent_perm).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_auq).toMatchObject({ asking: true, bucket: "questions" });
     expect(liveness.conversations_parent_quiet).toMatchObject({ asking: false });
+    // A permission prompt is the child's own ask whatever its message count,
+    // so it lifts the parent as the replica's rollup does (legacy
+    // multi-window sim seed 110).
+    expect(liveness.conversations_parent_empty_perm).toMatchObject({ asking: true, bucket: "questions", child_asking: true });
     // The child half of the rollup ships as a fact (ct-56051): a replica that
     // never holds the asking child still lifts the parent. A row asking on its
     // own (prompt or decide) carries false.

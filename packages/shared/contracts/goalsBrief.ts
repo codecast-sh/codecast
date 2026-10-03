@@ -156,7 +156,45 @@ export function renderGoalsBrief(data: GoalsBrief, opts: RenderGoalsBriefOptions
   if (principles) {
     // The file's own top heading is replaced by the section's.
     const body = principles.replace(/^#\s+[^\n]*\n+/, "").trim();
-    out.push("", "## Principles", "", clip(body, PRINCIPLES_CHARS));
+    out.push("", "## Principles", "", body.length <= PRINCIPLES_CHARS ? body : compactPrinciples(body, PRINCIPLES_CHARS));
   }
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * docs/principles.md too long for the brief, as its ids and titles only: one
+ * line per area (`## Area`), each principle as its `### <id> <title>` heading.
+ * Whole principles drop from the end when even that is over the cap, never
+ * one cut mid-line. A file without principle headings is clipped as text.
+ */
+export function compactPrinciples(body: string, max: number): string {
+  const areas: Array<{ name: string; items: string[] }> = [];
+  for (const line of body.split("\n")) {
+    const area = line.match(/^##\s+(.+)/);
+    if (area && !line.startsWith("###")) areas.push({ name: oneLine(area[1]), items: [] });
+    const item = line.match(/^###\s+(.+)/);
+    if (item) {
+      if (!areas.length) areas.push({ name: "", items: [] });
+      areas[areas.length - 1].items.push(oneLine(item[1]));
+    }
+  }
+  const total = areas.reduce((n, a) => n + a.items.length, 0);
+  if (!total) return clip(body, max);
+  const footer = (left: number) =>
+    `Full text: docs/principles.md${left ? ` (${left} more)` : ""}.`;
+  const render = (keep: number) => {
+    const lines: string[] = [];
+    let n = 0;
+    for (const a of areas) {
+      const items = a.items.slice(0, Math.max(0, keep - n));
+      n += items.length;
+      if (items.length) lines.push(`- ${a.name ? `${a.name}: ` : ""}${items.join("; ")}`);
+    }
+    return `${lines.join("\n")}\n\n${footer(total - Math.min(keep, total))}`;
+  };
+  for (let keep = total; keep > 0; keep--) {
+    const text = render(keep);
+    if (text.length <= max) return text;
+  }
+  return footer(total);
 }

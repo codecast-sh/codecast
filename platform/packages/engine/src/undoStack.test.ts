@@ -101,6 +101,31 @@ describe("history snapshot", () => {
   });
 });
 
+describe("stack order in the snapshot", () => {
+  it("follows the stacks, not history order, after an out-of-turn undo and a redo", () => {
+    const a = generic("a");
+    const b = generic("b");
+    const c = generic("c");
+    expect(getUndoHistory().undoOrder).toEqual([c.id, b.id, a.id]);
+    expect(undoEntry(a.id)).toBe(true);
+    expect(getUndoHistory().redoOrder).toEqual([a.id]);
+    expect(performRedo()).toBe(true);
+    const snap = getUndoHistory();
+    expect(snap.items.map((i) => i.label)).toEqual(["c", "b", "a"]);
+    expect(snap.undoOrder).toEqual([a.id, c.id, b.id]);
+    expect(snap.redoOrder).toEqual([]);
+    expect(snap.head).toBe(a.id);
+  });
+
+  it("omits done entries trimmed past the stack limit", () => {
+    configureUndoStack({ stackLimit: 2 });
+    for (const l of ["a", "b", "c"]) generic(l);
+    const snap = getUndoHistory();
+    expect(snap.items).toHaveLength(3);
+    expect(snap.undoOrder.map((id) => snap.items.find((i) => i.id === id)!.label)).toEqual(["c", "b"]);
+  });
+});
+
 describe("undoTo and redoTo", () => {
   it("walk several steps with one notification each way", () => {
     const a = generic("a");
@@ -241,6 +266,40 @@ describe("confirm", () => {
     expect(notices).toEqual(["Undo Made public from its toast or the history"]);
     expect(undoEntry(e.id)).toBe(true);
     expect(value).toEqual([]);
+  });
+
+  it("blind undo stops at a confirm entry and leaves the ones below it", () => {
+    generic("Older");
+    generic("Old");
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual(["Older", "Old", "Made public"]);
+    expect(notices).toEqual([
+      "Undo Made public from its toast or the history",
+      "Undo Made public from its toast or the history",
+    ]);
+    expect(getUndoHistory().head).toBe(e.id);
+  });
+
+  it("once the confirm entry is undone from its toast, blind undo reaches the next one", () => {
+    generic("Old");
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(undoEntry(e.id)).toBe(true);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual([]);
+  });
+
+  it("a manual entry below a confirm entry is left alone", () => {
+    let n = 1;
+    pushUndo({ label: "inc", undo: () => { n--; }, redo: () => { n++; } });
+    const e = generic("Made public");
+    e.confirm = true;
+    expect(performUndo()).toBe(true);
+    expect(n).toBe(1);
+    expect(notices).toEqual(["Undo Made public from its toast or the history"]);
   });
 });
 

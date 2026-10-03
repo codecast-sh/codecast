@@ -54,18 +54,18 @@ test("the full card draws every section from the contract", async () => {
   expect(text).toContain(card.goal.name);
   expect(text).toContain(card.wrong);
   expect(text).toContain(card.change);
-  expect(text).toContain("4 of 4 checks went red to green");
+  expect(text).toContain("4 proven misses, all fixed");
   expect(container.querySelectorAll(".cc-proof-row.is-fixed")).toHaveLength(4);
   // One pair by default; the rest are a click away.
   expect(container.querySelectorAll(".cc-example")).toHaveLength(1);
   const more = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Show all 3 examples")!;
   await act(() => { more.click(); });
   expect(container.querySelectorAll(".cc-example")).toHaveLength(3);
-  // The track's columns are labelled over their dots, the shared before and after ride on them;
+  // The track's columns are labelled over their dots, the shared before and after read once as a caption;
   // only the row that differs keeps its detail.
   const labels = container.querySelectorAll(".cc-track-labels > span");
-  expect(Array.from(labels).map((l) => l.textContent)).toEqual(["main", "branch"]);
-  expect(labels[0].getAttribute("title")).toContain("fails on origin/main");
+  expect(Array.from(labels).map((l) => l.textContent)).toEqual(["before", "after"]);
+  expect(container.querySelector(".cc-proof-caption")!.textContent).toContain("fails on origin/main");
   expect(Array.from(container.querySelectorAll(".cc-proof-detail")).filter((d) => d.textContent).length).toBe(1);
   // The goal is one muted line in the cause header; every section and fact is named one way.
   expect(container.querySelector(".cc-goal")!.textContent).toContain(`serves ${card.goal.name}`);
@@ -90,9 +90,11 @@ test("an answerable surface says the recommendation once, on the control", async
   await unmount();
 });
 
-test("an example input shows only when it says more than its Before", () => {
-  expect(exampleInputAdds(card.examples[0].input, card.examples[0].before)).toBe(true);
+test("an example input shows only when its Before does not already quote it", () => {
+  // A Before that is a run of the input only repeats it, so the input is dropped.
+  expect(exampleInputAdds(card.examples[0].input, card.examples[0].before)).toBe(false);
   expect(exampleInputAdds("fix the bug", "Fix the bug.")).toBe(false);
+  expect(exampleInputAdds("the deploy fails after the bun upgrade", "Railway deploy is broken")).toBe(true);
 });
 
 test("a settled card says what happened in place of the recommendation", async () => {
@@ -122,7 +124,7 @@ test("the line is one dense proof summary", async () => {
   const { container, unmount } = await mount(<ChangeCardView card={card} density="line" />);
   expect(container.querySelectorAll(".cc-pip-fixed")).toHaveLength(4);
   // Proof and the card's own checks are named apart.
-  expect(container.textContent).toContain("proof 4/4");
+  expect(container.textContent).toContain("4/4 misses fixed");
   expect(container.textContent).toContain("checks 3/3");
   expect(container.textContent).toContain("recommends Ship");
   expect(container.textContent).not.toContain("$1.96");
