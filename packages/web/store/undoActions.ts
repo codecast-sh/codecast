@@ -1,11 +1,19 @@
+// The animated session gestures. Undo itself is generic: every action these
+// call has a spec in store/undo/policies/sessions.ts, so the engine records the
+// cells it changed and puts them back through the ordinary action pipeline.
+// What stays here is motion (rows collapse out and grow back in) and the
+// grouping that makes a multi-row gesture one undo.
 import { askRetireInstead } from "../lib/seatKill";
 import { soundDormant } from "../lib/sounds";
-import { bridgeUserId, useInboxStore, type InboxSession, type ConversationMeta } from "./inboxStore";
+import { useInboxStore, type InboxSession } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
-import { broadcastGesture } from "./gestureBridge";
-import { pushUndo, showUndoToast } from "./undoStack";
-import { declareViewNav } from "./viewNav";
+import { undoGroup, type UndoEntry } from "./undoStack";
+import { registerUndoRevert } from "./undo/onRevert";
+import { USER_REST_LABEL } from "./undo/policies/sessions";
+import { counted } from "./undo/labels";
 import { toast } from "sonner";
+
+export { USER_REST_LABEL };
 
 // How long a restored row may take to mount before its entrance is dropped.
 const ENTER_WAIT_MS = 1000;
@@ -57,6 +65,7 @@ export type HideSessionOpts = { hidden?: boolean };
 /** Collapse a session card out of its list, then run `then` (the store write
  *  that moves the row). Runs `then` at once when the card is not on screen. */
 function animateSessionExit(id: string, then: (leaving: Element | null) => void) {
+  if (typeof document === "undefined") return then(null);
   const card = document.querySelector(`[data-session-id="${id}"]`);
   const wrapper = card?.parentElement;
   if (!wrapper) return then(null);
@@ -74,342 +83,85 @@ function animateSessionExit(id: string, then: (leaving: Element | null) => void)
   setTimeout(finish, 250);
 }
 
-/** Animate a session card sliding out, then call undoableHideSession. */
+/** Fold every undoable write `fn` makes into one undo. One write keeps its own
+ *  label; several take `summary`. */
+export function undoAsOne<T>(summary: string, fn: () => T): T {
+  return undoGroup((entries: UndoEntry[]) => (entries.length === 1 ? entries[0]!.label : summary), fn);
+}
+
+const exitFinished = (id: string) => new Promise<Element | null>((resolve) => animateSessionExit(id, resolve));
+
+/** Animate a session card sliding out, then stash or kill it. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
-  if (mode === "kill" && askRetireInstead(id)) return;
-  animateSessionExit(id, () => undoableHideSession(id, mode, opts));
+  void animatedHideSessions([id], mode, opts);
 }
 
-type StoreState = ReturnType<typeof useInboxStore.getState>;
-
-function snapshotSession(state: StoreState, id: string) {
-  const sessionValues = Object.values(state.sessions) as InboxSession[];
-  const childIds = sessionValues
-    .filter((s) => s.parent_conversation_id === id)
-    .map((s) => s._id);
-  const allIds = [id, ...childIds];
-
-  const sessions: Record<string, InboxSession> = {};
-  const conversations: Record<string, ConversationMeta> = {};
-  const pending: Record<string, any> = {};
-
-  for (const sid of allIds) {
-    if (state.sessions[sid]) sessions[sid] = { ...state.sessions[sid] };
-    if (state.conversations[sid]) conversations[sid] = { ...state.conversations[sid] };
-    for (const key of Object.keys(state.pending)) {
-      if (key.startsWith(`sessions:${sid}`)) pending[key] = state.pending[key];
-    }
+/** Stash or kill a selection as one gesture: every card collapses out, then
+ *  all of them are hidden together as one undo. A seat asks to be retired
+ *  instead of killed and is left out. Resolves to the ids it hid. */
+export async function animatedHideSessions(ids: string[], mode: HideSessionMode, opts?: HideSessionOpts): Promise<string[]> {
+  const list = mode === "kill" ? ids.filter((id) => !askRetireInstead(id)) : ids;
+  if (list.length === 0) return list;
+  await Promise.all(list.map(exitFinished));
+  const store = useInboxStore.getState();
+  if (mode === "kill") {
+    if (list.length === 1) store.killSession(list[0]!);
+    else store.killSessions(list);
+  } else {
+    const verb = opts?.hidden ? "Stashed and hid" : "Stashed";
+    undoAsOne(`${verb} ${counted(list.length, "session")}`, () => {
+      for (const id of list) store.stashSession(id, opts);
+    });
   }
-
-  return {
-    allIds,
-    sessions,
-    conversations,
-    pending,
-    currentSessionId: state.currentSessionId,
-    clientState: { ...state.clientState },
-  };
+  return list;
 }
 
-// Hide a session with undo. "stash" sets the session aside (agent keeps
-// running); "kill" retires it (the server kills the agent on the hide
-// transition). Undo restores the snapshot and clears BOTH hide flags — the
-// kill itself isn't undoable (the session stays resumable), same as before.
-export function undoableHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
-  if (mode === "kill" && askRetireInstead(id)) return;
-  const state = useInboxStore.getState();
-  const session = state.sessions[id];
-  const label = session?.title || "session";
-  const verb = mode === "kill" ? "Killed" : opts?.hidden ? "Stashed and hid" : "Stashed";
-  const snap = snapshotSession(state, id);
-
-  if (mode === "kill") useInboxStore.getState().killSession(id);
-  else useInboxStore.getState().stashSession(id, opts);
-
-  pushUndo({
-    label: `${verb} ${label}`,
-    undo: () => {
-      const store = useInboxStore.getState();
-      const restoredSessions = { ...store.sessions };
-      const restoredConvos = { ...store.conversations };
-      const restoredPending = { ...store.pending };
-
-      for (const sid of snap.allIds) {
-        if (snap.sessions[sid]) restoredSessions[sid] = snap.sessions[sid];
-        if (snap.conversations[sid]) restoredConvos[sid] = snap.conversations[sid];
-        delete restoredPending[`sessions:${sid}`];
-      }
-      for (const [key, val] of Object.entries(snap.pending)) {
-        restoredPending[key] = val;
-      }
-
-      // Push the SNAPSHOT flags, not blanket nulls: undoing a dismiss of a
-      // session that was stashed at the time must land it back in Stashed.
-      // The pin and snooze the hide cleared travel too, or the server keeps
-      // them cleared and the row loses them on the next push.
-      const restoredFlags = Object.fromEntries(
-        snap.allIds.map((sid) => {
-          const prev = snap.sessions[sid] ?? (snap.conversations[sid] as any);
-          return [sid, {
-            inbox_dismissed_at: prev?.inbox_dismissed_at ?? null,
-            inbox_stashed_at: prev?.inbox_stashed_at ?? null,
-            inbox_stash_hidden: prev?.inbox_stash_hidden ?? null,
-            ...(prev?.inbox_pinned_at ? { inbox_pinned_at: prev.inbox_pinned_at } : {}),
-            ...(prev?.inbox_snoozed_until ? { inbox_snoozed_until: prev.inbox_snoozed_until } : {}),
-          }];
-        })
-      );
-      // ONE timestamp for the whole gesture: the locks and the sibling
-      // broadcast below all key off it.
-      const ts = Date.now();
-
-      // Before the row comes back, so the enter animation is on it in the
-      // first frame it paints.
-      animateSessionEnter(id);
-      // User-invoked undo putting them back where they were at snapshot time.
-      declareViewNav("undo");
-      useInboxStore.setState({
-        sessions: restoredSessions,
-        conversations: restoredConvos,
-        pending: restoredPending,
-        currentSessionId: snap.currentSessionId,
-        clientState: snap.clientState,
-      });
-      // Lock the restored flags until the server echoes them, exactly as a
-      // sibling window applies this undo. The server has usually applied the
-      // hide by now, so every push until the undo lands still carries it;
-      // without the locks the first one hides the row again.
-      store.applyReplicatedFields("conversations", restoredFlags, ts);
-      store.applyReplicatedFields("sessions", Object.fromEntries(
-        Object.entries(restoredFlags).map(([sid, f]) => [sid, f.inbox_pinned_at ? { ...f, is_pinned: true } : f]),
-      ), ts);
-      store.applyUndoPatches({
-        conversations: restoredFlags,
-        client_state: { _: { current_conversation_id: snap.currentSessionId } },
-      });
-      // killSession/stashSession announced the hide, so siblings now hold the
-      // HIDDEN row; an un-announced undo leaves it there and that stale row
-      // re-puts the undone hide into shared IDB, resurrecting it. A "fields"
-      // message per id rather than a "restore": the snapshot is not always all
-      // null (undoing a kill of a row that was stashed must land it back in
-      // Stashed), so each id carries its own verbatim values — the same ones
-      // applyUndoPatches dispatches, which is what lets the receiver's field
-      // lock retire on the server echo. ONE timestamp for the whole gesture, so
-      // the sibling's locks all key off the single undo. redo() re-hides
-      // through kill/stashSession, which broadcast on their own.
-      for (const [sid, fields] of Object.entries(restoredFlags)) {
-        broadcastGesture({ kind: "fields", id: sid, fields, ts }, bridgeUserId(store));
-      }
-      // Schedules the kill canceled come back with the session: the patch above
-      // clears inbox_dismissed_at, and the server's un-hide transition
-      // (dispatch.applyPatches) re-arms the stamped tasks authoritatively.
-      // Redo re-kills through the hide transition, which re-cancels them.
-    },
-    redo: () => {
-      if (mode === "kill") useInboxStore.getState().killSession(id);
-      else useInboxStore.getState().stashSession(id, opts);
-    },
-  });
-
-}
-
-export const USER_REST_LABEL: Record<UserRest, string> = {
-  needs_input: "Needs input",
-  done: "Done",
-  dormant: "Dormant",
-};
-
-// The fields one gesture stamps, named once. `session` is what the action
-// writes on the session row (its derived twin included); `conversation` is the
-// stamps the undo both restores locally and dispatches back to the server.
-type GestureFields = {
-  session: readonly string[];
-  conversation: readonly string[];
-};
-
-// Absent reads back as null, never undefined: a field the gesture SET has to
-// travel as an explicit tombstone or the dispatch drops it from the patch and
-// the server keeps the value we are undoing.
-function previousValues(row: Record<string, any> | undefined, fields: readonly string[]) {
-  const prev: Record<string, any> = {};
-  for (const field of fields) prev[field] = row?.[field] ?? null;
-  return prev;
-}
-
-// Every triage gesture that stamps fields (defer, a rest verdict, pin) is the
-// same four moves: snapshot the fields, stamp them, and offer an undo that puts
-// them back on the session row, on the conversation meta and on the server,
-// releasing the pending locks the stamp took. Only the field names, the label
-// and the action itself differ, so those are the arguments — and `apply` is
-// both the gesture and its redo, which is why they can never drift apart.
-//
-// Naming the fields in ONE place is also what keeps an undo honest: each of
-// these actions clears a snooze on the way (clearSessionSnoozeInDraft), and the
-// hand-written versions of defer and pin restored their own field while leaving
-// the snooze cleared — undoing a gesture used to silently eat a snooze.
-function undoableFieldGesture(
-  id: string,
-  fields: GestureFields,
-  label: string,
-  apply: () => void,
-  afterUndo?: (store: StoreState) => void,
-) {
-  const state = useInboxStore.getState();
-  const prevSession = previousValues(state.sessions[id], fields.session);
-  const prevConversation = previousValues(state.conversations[id], fields.conversation);
-
-  apply();
-
-  pushUndo({
-    label,
-    undo: () => {
-      const store = useInboxStore.getState();
-      const sessions = { ...store.sessions };
-      if (sessions[id]) sessions[id] = { ...sessions[id], ...prevSession };
-      const conversations = { ...store.conversations };
-      if (conversations[id]) conversations[id] = { ...conversations[id], ...prevConversation };
-      const pending = { ...store.pending };
-      for (const field of fields.session) delete pending[`sessions:${id}:${field}`];
-
-      useInboxStore.setState({ sessions, conversations, pending });
-      store.applyUndoPatches({ conversations: { [id]: prevConversation } });
-      afterUndo?.(store);
-    },
-    redo: apply,
-  });
-}
-
-const DEFER_FIELDS: GestureFields = {
-  session: ["is_deferred", "inbox_deferred_at", "inbox_snoozed_until"],
-  conversation: ["inbox_deferred_at", "inbox_snoozed_until"],
-};
-
-const REST_FIELDS: GestureFields = {
-  session: ["user_rest", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until"],
-  conversation: ["inbox_rest", "inbox_rest_at", "inbox_snoozed_until"],
-};
-
-const PIN_FIELDS: GestureFields = {
-  session: ["is_pinned", "inbox_pinned_at", "inbox_snoozed_until"],
-  conversation: ["inbox_pinned_at", "inbox_snoozed_until"],
-};
-
-const sessionTitle = (id: string) => useInboxStore.getState().sessions[id]?.title || "session";
-
-export function undoableDeferSession(id: string) {
-  undoableFieldGesture(id, DEFER_FIELDS, `Defer ${sessionTitle(id)}`, () =>
-    useInboxStore.getState().deferSession(id));
-}
-
-export function undoableSetSessionRest(id: string, rest: UserRest) {
-  undoableFieldGesture(id, REST_FIELDS, `${USER_REST_LABEL[rest]} ${sessionTitle(id)}`, () =>
-    useInboxStore.getState().setSessionRest(id, rest));
-}
-
-/** File a session under a rest verdict the way stash moves it: the card
- *  collapses out of its section and grows into the one it lands in. Dormant
+/** File sessions under a rest verdict the way stash moves them: each card
+ *  collapses out of its section, and once every collapse has ended they are
+ *  filed together (one undo) and grow into the section they land in. Dormant
  *  sounds its own cue, once per gesture however many rows it files. */
-export function animatedSetSessionRest(ids: string | string[], rest: UserRest) {
+export async function animatedSetSessionRest(ids: string | string[], rest: UserRest): Promise<void> {
   const list = typeof ids === "string" ? [ids] : ids;
   if (list.length === 0) return;
   if (rest === "dormant") soundDormant();
-  for (const id of list) {
-    // Already filed there: the row stays put, so nothing should leave or enter.
-    if (useInboxStore.getState().sessions[id]?.user_rest === rest) {
-      undoableSetSessionRest(id, rest);
-      continue;
-    }
-    animateSessionExit(id, (leaving) => {
-      animateSessionEnter(id, leaving);
-      undoableSetSessionRest(id, rest);
-    });
-  }
+  const rows = useInboxStore.getState().sessions;
+  // Already filed there: the row stays put, so nothing should leave or enter.
+  const moving = list.filter((id) => rows[id]?.user_rest !== rest);
+  const leaving = new Map(await Promise.all(moving.map(async (id) => [id, await exitFinished(id)] as const)));
+  // The entrance arms before the write, so it is on the row's first frame.
+  for (const id of moving) animateSessionEnter(id, leaving.get(id));
+  const label = `Filed ${counted(list.length, "session")} as ${USER_REST_LABEL[rest]}`;
+  undoAsOne(label, () => {
+    const store = useInboxStore.getState();
+    for (const id of list) store.setSessionRest(id, rest);
+  });
 }
 
 /**
  * File many sessions under one rest verdict at once: the drop on a status
  * section, the multi-selection menu and the selection bar all land here.
- * Killed rows are skipped; each row stays individually undoable.
+ * Killed rows are skipped; the rest file as one undo.
  */
-export function fileSessionsAsRest(ids: string[], rest: UserRest) {
+export function fileSessionsAsRest(ids: string[], rest: UserRest): Promise<void> {
   const store = useInboxStore.getState();
   const rows = ids.map((id) => store.sessions[id]).filter((row): row is InboxSession => !!row);
   const live = rows.filter((row) => !row.inbox_killed_at);
-  if (live.length === 0) { if (rows.length) toast.error("A killed session can't be filed — restore it first"); return; }
-  animatedSetSessionRest(live.map((row) => row._id), rest);
-  toast.success(live.length > 1 ? `${live.length} sessions: ${USER_REST_LABEL[rest]}` : USER_REST_LABEL[rest]);
+  if (live.length === 0) {
+    if (rows.length) toast.error("A killed session can't be filed — restore it first");
+    return Promise.resolve();
+  }
+  return animatedSetSessionRest(live.map((row) => row._id), rest);
 }
 
-export function undoablePinSession(id: string) {
-  const state = useInboxStore.getState();
-  const wasPinned = !!state.sessions[id]?.is_pinned;
-  const prevPinnedAt = state.conversations[id]?.inbox_pinned_at ?? null;
-
-  undoableFieldGesture(
-    id,
-    PIN_FIELDS,
-    wasPinned ? `Unpin ${sessionTitle(id)}` : `Pin ${sessionTitle(id)}`,
-    () => useInboxStore.getState().pinSession(id),
-    (store) => {
-      // pinSession broadcast the flip, so a sibling now holds the PINNED row;
-      // undoing without announcing leaves it there, and that stale row both
-      // re-puts the undone pin into shared IDB and inverts the sibling's next
-      // toggle (`!is_pinned` reads the value we just reverted). Carry the exact
-      // restored inbox_pinned_at — the receiver's pending lock retires only
-      // when the server echo matches it, and applyUndoPatches dispatches this
-      // same value. redo() calls pinSession, which broadcasts on its own.
-      broadcastGesture(
-        { kind: "pin", id, pinned: wasPinned, pinnedAt: prevPinnedAt, ts: Date.now() },
-        bridgeUserId(store),
-      );
-    },
-  );
-}
-
-export function undoableRenameSession(id: string, title: string) {
-  const state = useInboxStore.getState();
-  const prevTitle = state.sessions[id]?.title || "";
-
-  useInboxStore.getState().renameSession(id, title);
-
-  pushUndo({
-    label: `Rename to ${title}`,
-    undo: () => {
-      useInboxStore.getState().renameSession(id, prevTitle);
-    },
-    redo: () => {
-      useInboxStore.getState().renameSession(id, title);
-    },
-  });
-}
-
-export function undoableArchiveDoc(id: string) {
-  const state = useInboxStore.getState();
-  const doc = state.docs[id];
-  const detail = state.docDetails[id];
-  if (!doc) return;
-
-  const label = doc.title || "document";
-  const docSnap = { ...doc };
-  const detailSnap = detail ? { ...detail } : null;
-
-  useInboxStore.getState().archiveDoc(id);
-
-  pushUndo({
-    label: `Archive ${label}`,
-    undo: () => {
-      const store = useInboxStore.getState();
-      const newDocs = { ...store.docs, [id]: docSnap };
-      const newDetails = { ...store.docDetails };
-      if (detailSnap) newDetails[id] = detailSnap;
-
-      useInboxStore.setState({ docs: newDocs, docDetails: newDetails });
-      store.restoreArchivedDoc(id);
-    },
-    redo: () => {
-      useInboxStore.getState().archiveDoc(id);
-    },
-  });
-
-  showUndoToast(`Archived ${label}`);
-}
+// An undo that un-hides a session row plays the row's entrance, whichever
+// gesture hid it: a stash, a kill, a snooze, a teammate's row the hide forgot.
+const HIDE_FIELDS = new Set(["inbox_dismissed_at", "inbox_stashed_at", "inbox_killed_at", "inbox_snoozed_until"]);
+registerUndoRevert("sessions", (rows) => {
+  for (const { id, cells } of rows) {
+    const unhid = cells.some((c) =>
+      c.field === undefined
+        ? c.hadBefore && !c.hadAfter
+        : HIDE_FIELDS.has(c.field) && !!c.after && !c.before);
+    if (unhid) animateSessionEnter(id);
+  }
+});

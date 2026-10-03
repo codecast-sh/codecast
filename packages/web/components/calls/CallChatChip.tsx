@@ -1,5 +1,6 @@
 import { MessageSquare } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { useFaceRowSelect } from "../../hooks/useFaceRow";
+import { callRoomOf } from "../../lib/faces/faceRow";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { requestCallThread } from "../../lib/calls/callStage";
 import "./arrival.css";
@@ -9,7 +10,9 @@ import "./arrival.css";
  *  only under the pointer, so the card is the one surface always in view.
  *  Nothing while everything is read; a click opens the call on its thread. */
 export function CallChatChip({ onOpen }: { onOpen: () => void }) {
-  const roomKey = useInboxStore((s: any) => s.call.roomKey ?? null);
+  // The call the card is about, wherever it is held: a float drawing a call
+  // another window hosts has an idle slice of its own.
+  const roomKey = useFaceRowSelect(callRoomOf);
   const { unread, latest } = useRoomThreadUnread(roomKey);
   const agent = !!latest?.agent;
   if (unread <= 0) return null;

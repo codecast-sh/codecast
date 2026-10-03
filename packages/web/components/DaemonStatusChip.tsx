@@ -1,5 +1,5 @@
 import { StatusDot } from "./StatusDot";
-import { TopbarButton } from "./TopbarButton";
+import { TopbarButton, TopbarChip } from "./TopbarButton";
 import { Check, TriangleAlert, Unplug } from "lucide-react";
 import { useState } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -55,7 +55,7 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
   if (quiet) {
     return (
       <ShortcutTooltip label={panel} panel align="end">
-        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="hover:text-current">
+        <TopbarButton desktopOnly data-daemon-pill="quiet" aria-label={label} onClick={handleClick} style={{ color }} className="h-6 w-6 rounded-full hover:text-current">
           {copied ? <Check /> : <TriangleAlert />}
         </TopbarButton>
       </ShortcutTooltip>
@@ -64,23 +64,17 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
 
   return (
     <ShortcutTooltip label={panel} panel align="end">
-      <button
-        type="button"
+      <TopbarChip
         data-daemon-pill="pill"
         aria-label={label}
         onClick={handleClick}
-        className="hidden md:flex h-7 items-center gap-1.5 rounded-full px-2 cursor-pointer select-none transition-all duration-300"
-        style={{
-          background: `color-mix(in srgb, ${color} 12%, transparent)`,
-          border: `1px solid color-mix(in srgb, ${color} 28%, transparent)`,
-          boxShadow: `0 0 10px color-mix(in srgb, ${color} 12%, transparent)`,
-        }}
+        tone={color}
+        alert
+        className="hidden md:flex cursor-pointer"
       >
-        {copied ? <Check className="h-2.5 w-2.5 shrink-0" style={{ color }} /> : <StatusDot color={color} ping />}
-        <span className="max-w-[112px] truncate font-mono text-[11px] font-bold" style={{ color }}>
-          {view.short}
-        </span>
-      </button>
+        {copied ? <Check className="h-2.5 w-2.5 shrink-0" /> : <StatusDot color={color} ping />}
+        <span className="max-w-[112px] truncate">{view.short}</span>
+      </TopbarChip>
     </ShortcutTooltip>
   );
 }

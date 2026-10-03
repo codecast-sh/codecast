@@ -99,7 +99,9 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { undoableArchiveDoc, undoableHideSession, undoableDeferSession, animatedSetSessionRest } from "../store/undoActions";
+import { animatedSetSessionRest, undoAsOne } from "../store/undoActions";
+import { counted } from "../store/undo/labels";
+import type { UserRest } from "@codecast/shared/contracts";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
@@ -337,6 +339,22 @@ function palettePerson(row: TeammateWhereabouts, following: boolean, session?: {
     session: id ? (session ?? useInboxStore.getState().sessions[id] ?? { _id: id, title: row.title }) : null,
   };
 }
+
+// The undo label of a per-session palette verb run over a selection.
+const PALETTE_SESSION_VERB: Record<string, string> = {
+  session_restore: "Restored",
+  session_kill: "Killed",
+  session_stash: "Stashed",
+  session_stash_hide: "Stashed and hid",
+  session_unsnooze: "Woke",
+  session_defer: "Deferred",
+};
+
+const PALETTE_REST_VERDICT: Partial<Record<string, UserRest>> = {
+  session_dormant: "dormant",
+  session_done: "done",
+  session_needs_input: "needs_input",
+};
 
 /**
  * One palette row per teammate: their name, and where they are under it.
@@ -841,7 +859,9 @@ export function ActionSubmenu({
     }
     if (mode === "snooze") {
       const until = sessionSnoozeUntil(item.key as SessionSnoozeKey);
-      for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
+      undoAsOne(`Snoozed ${counted(targets.length, "session")}`, () => {
+        for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
+      });
       toast.success(`Snoozed for ${item.label}`);
       onClose();
       return;
@@ -915,13 +935,15 @@ export function ActionSubmenu({
           if (!date || localDate !== search.trim()) { toast.error("Enter a date as YYYY-MM-DD"); return; }
           fields = { target_date: date.getTime() };
         } else fields = mode === "rename" ? { title: search.trim() } : mode === "project" ? { project_id: item.key } : { status: item.key };
-        for (const row of targets) {
-          if (targetType === "session") store.renameSession(row._id, fields.title);
-          else if (targetType === "task") store.updateTask(row.short_id, fields);
-          else if (targetType === "doc") store.updateDoc(row._id, fields);
-          else if (targetType === "plan") store.updatePlan(row.short_id || row._id, fields);
-          else if (targetType === "project") store.updateProject(row._id, fields);
-        }
+        undoAsOne(`Changed ${counted(targets.length, targetType === "doc" ? "document" : targetType)}`, () => {
+          for (const row of targets) {
+            if (targetType === "session") store.renameSession(row._id, fields.title);
+            else if (targetType === "task") store.updateTask(row.short_id, fields);
+            else if (targetType === "doc") store.updateDoc(row._id, fields);
+            else if (targetType === "plan") store.updatePlan(row.short_id || row._id, fields);
+            else if (targetType === "project") store.updateProject(row._id, fields);
+          }
+        });
       }
       onClose();
       return;
@@ -997,13 +1019,12 @@ export function ActionSubmenu({
         return isConvexId(real) || store.sessions[real] || store.conversations[real] ? real : null;
       };
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
-        let applied = 0;
-        for (const t of targets) {
-          const convId = resolveConvId(t);
-          if (!convId) continue;
-          store.assignSessionToBucket(convId, bucketId);
-          applied++;
-        }
+        const convIds = targets.map(resolveConvId).filter((id): id is string => !!id);
+        const applied = convIds.length;
+        const sessions = counted(applied, "session");
+        undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
+          for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
+        });
         if (!applied) {
           toast.error("Session is no longer available");
           return;
@@ -1035,9 +1056,9 @@ export function ActionSubmenu({
 
     if (targetType === "task") {
       const applyTaskUpdate = (fields: Record<string, any>) => {
-        for (const t of targets as TaskItem[]) {
-          updateTask(t.short_id, fields);
-        }
+        undoAsOne(`Changed ${counted(targets.length, "task")}`, () => {
+          for (const t of targets as TaskItem[]) updateTask(t.short_id, fields);
+        });
       };
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
@@ -1052,9 +1073,12 @@ export function ActionSubmenu({
         // and stranding a doomed local state the server refuses.
         if (fields.status === "done" || fields.status === "dropped") {
           let deferred = false;
-          for (const t of targets as TaskItem[]) {
-            if (closeTaskWithGuard(t.short_id, fields.status, undefined, fields.status_id).needsConfirm) deferred = true;
-          }
+          const status = fields.status;
+          undoAsOne(`Moved ${counted(targets.length, "task")} to ${item.label}`, () => {
+            for (const t of targets as TaskItem[]) {
+              if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
+            }
+          });
           if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
         } else {
           applyTaskUpdate(fields);
@@ -1064,7 +1088,9 @@ export function ActionSubmenu({
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        for (const task of targets as TaskItem[]) updateTask(task.short_id, { labels: item.active ? (task.labels || []).filter(l => l !== item.key) : [...new Set([...(task.labels || []), item.key])] });
+        undoAsOne(`${item.active ? "Removed" : "Added"} label ${item.key} on ${counted(targets.length, "task")}`, () => {
+          for (const task of targets as TaskItem[]) updateTask(task.short_id, { labels: item.active ? (task.labels || []).filter(l => l !== item.key) : [...new Set([...(task.labels || []), item.key])] });
+        });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       } else if (mode === "assign") {
         applyTaskUpdate({ assignee: item.key });
@@ -1072,10 +1098,12 @@ export function ActionSubmenu({
         toast.success(item.key ? `Assigned to ${item.face ? item.label : memberDisplayName(member, "user")}` : "Unassigned");
       } else if (mode === "parent") {
         let failed = 0;
-        for (const t of targets as TaskItem[]) {
-          const res = setTaskParent(t.short_id, item.key);
-          if (!res.ok) failed++;
-        }
+        undoAsOne(`Nested ${counted(targets.length, "task")} under ${item.key}`, () => {
+          for (const t of targets as TaskItem[]) {
+            const res = setTaskParent(t.short_id, item.key);
+            if (!res.ok) failed++;
+          }
+        });
         if (failed === 0) toast.success(`Nested under ${item.key}`);
         else toast.error(`${failed} could not be nested (cycle, depth, or workspace)`);
       }
@@ -1087,10 +1115,14 @@ export function ActionSubmenu({
       }
     } else {
       if (mode === "type") {
-        for (const row of targets) updateDoc(row._id, { doc_type: item.key });
+        undoAsOne(`Changed the type of ${counted(targets.length, "document")}`, () => {
+          for (const row of targets) updateDoc(row._id, { doc_type: item.key });
+        });
         toast.success(`Type \u2192 ${item.label}`);
       } else if (mode === "labels") {
-        for (const row of targets) updateDoc(row._id, { labels: item.active ? (row.labels || []).filter((l: string) => l !== item.key) : [...new Set([...(row.labels || []), item.key])] });
+        undoAsOne(`${item.active ? "Removed" : "Added"} label ${item.key} on ${counted(targets.length, "document")}`, () => {
+          for (const row of targets) updateDoc(row._id, { labels: item.active ? (row.labels || []).filter((l: string) => l !== item.key) : [...new Set([...(row.labels || []), item.key])] });
+        });
         toast.success(`${item.active ? "Removed" : "Added"} label: ${item.key}`);
       }
     }
@@ -1574,7 +1606,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const pinDoc = useInboxStore((s) => s.pinDoc);
   // Kill from the palette says what schedules died with the session, same as
   // the sidebar kill button (the webList subscription inside is deduped).
-  const { killWithNotice } = useTriggerKillNotice();
+  const { killWithNotice, killManyWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
   const openDm = useOpenDm();
@@ -2209,9 +2241,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (actionKey.startsWith("trigger_")) { state.triggerAction(target._id, actionKey.slice(8) as "pause" | "resume" | "runNow" | "reactivate"); closePalette(); return; }
 
     if (actionKey === "remove_parent" && targetType === "task") {
-      for (const t of targets as TaskItem[]) {
-        if ((t as any).parent_id) setTaskParent(t.short_id, "");
-      }
+      const nested = (targets as TaskItem[]).filter((t) => (t as any).parent_id);
+      undoAsOne(`Removed the parent of ${counted(nested.length, "task")}`, () => {
+        for (const t of nested) setTaskParent(t.short_id, "");
+      });
       toast.success("Parent removed");
       closePalette();
       return;
@@ -2234,9 +2267,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
     if (actionKey === "drop" && targetType === "task") {
       let deferred = false;
-      for (const t of targets as TaskItem[]) {
-        if (closeTaskWithGuard(t.short_id, "dropped").needsConfirm) deferred = true;
-      }
+      undoAsOne(`Dropped ${counted(targets.length, "task")}`, () => {
+        for (const t of targets as TaskItem[]) {
+          if (closeTaskWithGuard(t.short_id, "dropped").needsConfirm) deferred = true;
+        }
+      });
       if (!deferred) toast.success("Task dropped");
       closePalette();
       return;
@@ -2251,7 +2286,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
 
     if (actionKey === "archive" && targetType === "doc") {
-      for (const doc of targets) undoableArchiveDoc(doc._id);
+      undoAsOne(`Archived ${counted(targets.length, "document")}`, () => {
+        for (const doc of targets) state.archiveDoc(doc._id);
+      });
       router.push("/docs");
       closePalette();
       return;
@@ -2273,24 +2310,34 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         // The teardown rides the hide transition server side (dispatch.applyPatches);
         // the notice hook names any schedules the kill cancels.
         session_kill: (id) => killWithNotice(id),
-        session_stash: (id) => undoableHideSession(id, "stash"),
-        session_stash_hide: (id) => undoableHideSession(id, "stash", { hidden: true }),
+        session_stash: (id) => state.stashSession(id),
+        session_stash_hide: (id) => state.stashSession(id, { hidden: true }),
         session_unsnooze: (id) => state.wakeSnoozedSession(id),
-        session_defer: (id) => undoableDeferSession(id),
-        session_dormant: (id) => animatedSetSessionRest(id, "dormant"),
-        session_done: (id) => animatedSetSessionRest(id, "done"),
-        session_needs_input: (id) => animatedSetSessionRest(id, "needs_input"),
+        session_defer: (id) => state.deferSession(id),
       };
-      const run = each[actionKey];
-      if (!run) return;
-      for (const t of targets) run(t._id);
+      // The rest verdicts animate every row out, then file them as one undo.
+      const rest = PALETTE_REST_VERDICT[actionKey];
+      const ids = targets.map((t) => t._id);
+      if (rest) void animatedSetSessionRest(ids, rest);
+      // Several kills are one bulk kill: one undo, one sound, one notice.
+      else if (actionKey === "session_kill" && ids.length > 1) killManyWithNotice(ids);
+      else {
+        const run = each[actionKey];
+        if (!run) return;
+        const verb = actionKey === "session_pin" ? (session.is_pinned ? "Unpinned" : "Pinned")
+          : actionKey === "session_favorite" ? (session.is_favorite ? "Unfavorited" : "Favorited")
+          : PALETTE_SESSION_VERB[actionKey] ?? "Changed";
+        undoAsOne(`${verb} ${counted(ids.length, "session")}`, () => {
+          for (const id of ids) run(id);
+        });
+      }
       if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
       if (actionKey === "session_favorite") toast.success(session.is_favorite ? "Removed from favorites" : "Added to favorites");
       if (targets.length > 1) useInboxSelection.getState().clear();
       closePalette();
       return;
     }
-  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, openCreateModal, runPersonAction]);
+  }, [targets, targetType, closePalette, pinDoc, router, navigate, navigateToSession, killWithNotice, killManyWithNotice, openCreateModal, runPersonAction]);
 
   const hasTargets = targets.length > 0 && targetType;
   const target = targets[0] as any;

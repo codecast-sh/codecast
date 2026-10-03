@@ -5,7 +5,6 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
 import { useLocalDaemonHealth } from "../hooks/useLocalDaemonHealth";
-import { blocksDelivery } from "../hooks/useDaemonHealth";
 import { connectionChipCopy, useAppOffline } from "../hooks/useAppOffline";
 import { describeDaemonHealth, type DaemonHealthCopy } from "../lib/daemonHealthCopy";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -196,15 +195,14 @@ export function SyncStatusChip() {
   // A fixed 20px slot in every state. The LED never carries text, so nothing
   // next to it shifts when sync starts, ticks through scopes, or settles: the
   // only thing that changes is the color and its pulse ring.
-  // A daemon issue colours the dot; only one that is making a message late
-  // right now makes it pulse. The hour record is not a live symptom.
-  const active = mounted && (coldLoad || stalled || (!!daemonIssue && blocksDelivery(daemonHealth)) || !!connection);
+  // A daemon issue never colours the dot: the daemon chip beside it in the
+  // tray already says so, and two red marks for one fault read as two faults.
+  // The panel still lists it.
+  const active = mounted && (coldLoad || stalled || !!connection);
   const color = !mounted
     ? "var(--sol-text-dim)"
     : connection
       ? "var(--sol-yellow)"
-      : daemonIssue
-      ? `var(${daemonIssue.colorVar})`
       : stalled
       ? "var(--sol-yellow)"
       : active
@@ -216,7 +214,7 @@ export function SyncStatusChip() {
         <TooltipTrigger asChild>
           <button
             type="button"
-            className="relative hidden md:flex h-7 w-5 flex-shrink-0 items-center justify-center rounded cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
+            className="relative hidden md:flex h-6 w-5 flex-shrink-0 items-center justify-center rounded-full cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
             aria-label={`Sync status: ${connection?.label ?? daemonIssue?.label ?? (!mounted || !syncing ? "Up to date" : stalled ? "Sync is slow" : "Syncing")}`}
           >
             <StatusDot

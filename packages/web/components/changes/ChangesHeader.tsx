@@ -193,6 +193,8 @@ export function ChangesHeader(props: {
   setUrl: SetChangesUrl;
   mode: "day" | "week";
   onDay: (day: string) => void;
+  /** Today in the mode on screen: the day, or this week. */
+  onToday: () => void;
   onStep: (delta: number) => void;
   onMode: (mode: "day" | "week") => void;
   filterOpen: boolean;
@@ -235,7 +237,7 @@ export function ChangesHeader(props: {
             <ChevronRight className="h-3.5 w-3.5" />
           </button>
           {!atToday && (
-            <button type="button" onClick={() => props.onDay(today)} className="ml-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text">
+            <button type="button" onClick={props.onToday} className="ml-1 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text">
               today
             </button>
           )}

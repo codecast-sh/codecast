@@ -10131,12 +10131,15 @@ export async function buildAskingParents(
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
-      if ((c.message_count ?? 0) === 0) continue;
       const status = trustedAgentStatus(
         maps.agentStatusMap.get(cid), c.updated_at, now, isLiveAt(maps, cid, now), verifiedWaitingFor(maps, cid, now),
       );
+      // A permission prompt is the child's own ask (ownAsk) whatever its
+      // message count, so it lifts the parent the same way on every side.
       if (status === "permission_blocked") { asking.add(pid); break; }
-      if (status !== undefined && status !== "idle") {
+      // Only a child with content can hold an AskUserQuestion poll: an empty
+      // one never spends the probe's message read.
+      if ((c.message_count ?? 0) > 0 && status !== undefined && status !== "idle") {
         const key = `${cid}:${c.message_count ?? 0}`;
         const hit = childAuqProbeCache.get(key);
         if (hit !== undefined) {

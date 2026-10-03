@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { History, ArrowUpRight, ExternalLink, Link2 } from "lucide-react";
+import { TopbarButton } from "./TopbarButton";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { resolveRecentVisits, type ResolvedVisit } from "../lib/recentVisits";
@@ -78,14 +79,14 @@ export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: 
   return (
     <div ref={menuRef} className="relative">
       <ShortcutTooltip label="Recently viewed" action="recents.open">
-        <button
+        <TopbarButton
           onClick={(e) => { toggle(); tipActions.whisper("recents.open", e); }}
-          className={`p-1.5 transition-colors rounded hover:bg-sol-bg-alt ${open ? "text-sol-text bg-sol-bg-alt" : "text-sol-text-muted hover:text-sol-text"}`}
+          active={open}
           aria-label="Recently viewed"
           aria-expanded={open}
         >
-          <History className="w-4 h-4" />
-        </button>
+          <History />
+        </TopbarButton>
       </ShortcutTooltip>
       {open && (
         <RecentsPanel

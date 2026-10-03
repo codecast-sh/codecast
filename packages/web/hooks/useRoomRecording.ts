@@ -1,11 +1,17 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { callRecordingUrlWindow, humanizeConvexError } from "@codecast/shared/contracts";
-import { useInboxStore } from "../store/inboxStore";
+import { callRecordingUrlWindow, humanizeConvexError, type CallRecordingStopReason } from "@codecast/shared/contracts";
+import { useInboxStore, useTrackedStore } from "../store/inboxStore";
+import { useFeederError } from "./useSyncCollection";
+import { useConvexSync } from "./useConvexSync";
+import { useServerAuthSettled } from "./useServerAuthSettled";
+import { useCollectionRows } from "./useCollectionRows";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useNowWhen } from "./useCoarseNow";
 import { subscribeWalkie, walkieCallState } from "../lib/calls/walkie";
+import { syncTransaction } from "../store/syncTransaction";
+import { isRefusedDispatchError } from "../store/mutativeMiddleware";
 
 // A huddle's video recording, as the room's people see it (convex
 // callRecordings). Two reads, on purpose:
@@ -32,7 +38,18 @@ export type RoomRecordingLive = {
   started_at: number | null;
 };
 
-export type RoomRecordingState = { configured: boolean; live: RoomRecordingLive | null };
+/** How the room's last run ended (convex roomRecordingEnd): still being
+ *  finished, finished, or failed, why, and who stopped it if somebody did.
+ *  Absent on a server older than it. */
+export type RoomRecordingEnd = {
+  run_id: string;
+  status: "stopping" | "ready" | "failed";
+  stop_reason: CallRecordingStopReason | null;
+  error: string | null;
+  stopped_by: { id: string; name: string } | null;
+};
+
+export type RoomRecordingState = { configured: boolean; live: RoomRecordingLive | null; ended?: RoomRecordingEnd | null };
 
 /** Is the room being recorded right now (a run starting or filming)? */
 export function useRoomRecordingOn(roomKey: string | null | undefined): boolean {
@@ -121,7 +138,9 @@ export function useRoomRecordingPress(roomKey: string | null | undefined): boole
 
 /** Press Record or Stop for the whole room. The mark moves at once (store
  *  setRoomRecording) and holds while the press is in flight; a refused press
- *  rolls it back and says why. */
+ *  rolls it back and says why. A press that is only delayed (parked for the
+ *  next dispatch binding, a transient failure the outbox re-drives) is left
+ *  standing: it is still on its way, and the next push settles the flag. */
 export function setRoomRecording(roomKey: string, on: boolean): Promise<void> {
   notePress(roomKey, on);
   if (!on) stops.set(roomKey, Date.now());
@@ -131,6 +150,7 @@ export function setRoomRecording(roomKey: string, on: boolean): Promise<void> {
     .then(
       () => undefined,
       (err: unknown) => {
+        if (!isRefusedDispatchError(err)) return;
         useInboxStore.getState().undoRoomRecordingPress(roomKey, on);
         toast.error(humanizeConvexError(err));
       },
@@ -254,6 +274,9 @@ export type CallRecordings = {
   configured: boolean;
   share_link: boolean;
   video_shared: boolean;
+  /** This window deleted a run of the call, at this time (store
+   *  deleteCallRecording); the thread's line says so for everyone else. */
+  deleted_here_at?: number;
   recordings: CallRecordingRow[];
 };
 
@@ -265,19 +288,131 @@ export function useCallRecordingUrlWindow(): number {
   return callRecordingUrlWindow(now);
 }
 
+// A call's video lives in the store (registry callRecordings and
+// callRecordingCalls), fed by whatever shows it. Every caller mounts the
+// feeder: the call page, its share popover and each frame embed of the call
+// ask the same question, so Convex holds one subscription between them, and a
+// surface that mounts later paints from what the store already holds. One
+// answer feeds both collections in one store transaction (syncTransaction),
+// so no render sees a call's files without its facts. The window rolling
+// over is a new question with the same rows: the store keeps the last answer
+// while the next loads, so the player on screen is never unmounted. Its
+// URLs are signed for a window, though, so an answer held past them is not
+// painted (useCallRecordings).
+
+const CALL_FACTS = ["short_id", "call_started_at", "call_ended_at", "configured", "share_link", "video_shared"] as const;
+type CallRecordingFacts = Omit<CallRecordings, "recordings" | "transcript_id"> & { _id: string };
+type StoredRecordingRow = CallRecordingRow & { transcript_id: string };
+
+function applyCallRecordings(data: CallRecordings | null | undefined): void {
+  if (!data) return;
+  const st = useInboxStore.getState() as any;
+  const rows = data.recordings.map((r) => ({ ...r, transcript_id: data.transcript_id }));
+  syncTransaction(() => {
+    st.syncTable("callRecordingCalls", [
+      { _id: data.transcript_id, ...Object.fromEntries(CALL_FACTS.map((k) => [k, data[k]])) } as CallRecordingFacts,
+    ]);
+    // Each answer is the call's complete set of files: a run deleted from
+    // another window leaves this one too.
+    st.syncTable("callRecordings", rows, {
+      isDelta: true,
+      pruneAbsentScope: (r: any) => r.transcript_id === data.transcript_id,
+    });
+    st.settleCallRecordingTombstones(rows.map((r) => r._id));
+  });
+}
+
+// Every field a reader paints: the player and the notices (status, clock,
+// URL, who started it, whose screen), the chips (grouped by identity) and
+// the sort (requested_at). The rest of a row never changes after insert.
+const rowSig = (r: StoredRecordingRow) =>
+  `${r.status}|${r.started_at}|${r.ended_at}|${r.duration_ms}|${r.size_bytes}|${r.url}|${r.url_expires_at}|${r.error}|${r.stop_reason}|${r.can_delete ? 1 : 0}|${r.participant_identity}|${r.participant_name}|${r.started_by_name}|${r.requested_at}`;
+const byRequestThenStart = (a: StoredRecordingRow, b: StoredRecordingRow) =>
+  a.requested_at - b.requested_at || (a.started_at ?? 0) - (b.started_at ?? 0);
+const NO_ROWS: StoredRecordingRow[] = [];
+const FACTS_SIG_FIELDS = [...CALL_FACTS, "deleted_here_at"] as const;
+
+/** The call's facts in the store, found by either name it was asked under. */
+function callFactsOf(st: any, call: string | null | undefined): CallRecordingFacts | undefined {
+  if (!call) return undefined;
+  const calls = (st.callRecordingCalls ?? {}) as Record<string, CallRecordingFacts>;
+  return calls[call] ?? Object.values(calls).find((c) => c.short_id === call);
+}
+
+/** A signed URL past its window: an element handed it would be refused. */
+const urlLapsed = (r: CallRecordingRow, now: number) => !!r.url && r.url_expires_at !== null && r.url_expires_at <= now;
+
 /** A call's recordings (`cl-42` or a full id): undefined while loading, null
  *  when there is nothing to show (no such call for this viewer, or a server
  *  without callRecordings, whose error degrades to "no video" rather than a
  *  surface that waits forever). */
 export function useCallRecordings(call: string | null | undefined): CallRecordings | null | undefined {
   const urlWindow = useCallRecordingUrlWindow();
-  // The window rolling over is a refresh, not a new question: the last answer
-  // stands while the next loads, so the player on screen is never unmounted.
-  const { data, error } = useQueryNoThrow(api.callRecordings.webCallRecordings, call ? { call, url_window: urlWindow } : "skip", {
-    keepPrevious: call ?? undefined,
-  });
-  if (error) return null;
-  return data as CallRecordings | null | undefined;
+  const authSettled = useServerAuthSettled();
+  const args = call && authSettled ? { call, url_window: urlWindow } : ("skip" as const);
+  const { data, error } = useQueryNoThrow(api.callRecordings.webCallRecordings, args);
+  useFeederError("callRecordings.webCallRecordings", error);
+  useConvexSync(data as CallRecordings | null | undefined, applyCallRecordings);
+
+  const factsSig = useMemo(
+    () =>
+      Object.assign(
+        (st: any) => {
+          const row = callFactsOf(st, call) as any;
+          return row ? `${row._id}|${FACTS_SIG_FIELDS.map((k) => row[k]).join("|")}` : "";
+        },
+        { label: "callRecordingFacts" },
+      ),
+    [call],
+  );
+  const s = useTrackedStore([factsSig]);
+  const factsKey = factsSig(s);
+  const facts = callFactsOf(s, call);
+  const transcriptId = facts?._id ?? null;
+  const where = useMemo(() => (r: StoredRecordingRow) => r.transcript_id === transcriptId, [transcriptId]);
+  const rows = useCollectionRows<StoredRecordingRow>("callRecordings", { where, sig: rowSig, sort: byRequestThenStart });
+  const recordings = transcriptId ? rows : NO_ROWS;
+  // The store holds a call's rows for the life of the tab, and their URLs
+  // for one window. Until this window's answer lands, rows signed for an
+  // earlier one are not an answer: painted, the element would be refused
+  // and the surface would say the video could not load. The page holds the
+  // player's place and the frame its pulse instead.
+  const answered = data !== undefined;
+  const lapsed = !answered && recordings.some((r) => urlLapsed(r, Date.now()));
+
+  return useMemo(() => {
+    if (!call || data === null) return null;
+    if (!facts) return error ? null : undefined;
+    if (lapsed) return undefined;
+    const { _id, ...rest } = facts;
+    return { ...rest, transcript_id: _id, recordings };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- facts is read through its signature
+  }, [call, data === null, !!error, factsKey, recordings, lapsed]);
+}
+
+/** Delete a recording run from the call page: it leaves at once (store
+ *  deleteCallRecording). A refusal has already put it back by the time the
+ *  promise rejects (the receipt's rollback), so only the reason is left to
+ *  say. A failure that is not a refusal stays queued and lands later. */
+export function deleteRecordingRun(recordingId: string): void {
+  void useInboxStore
+    .getState()
+    .deleteCallRecording(recordingId)
+    .catch((err: unknown) => {
+      if (isRefusedDispatchError(err)) toast.error(humanizeConvexError(err));
+    });
+}
+
+/** Turn the call's video on or off for its share link (store
+ *  setCallShareVideo). A refusal lifts the switch's lock, so it falls back
+ *  to what the server holds, and says why; any other failure stays queued. */
+export function setCallVideoShared(transcriptId: string, include: boolean): void {
+  void useInboxStore
+    .getState()
+    .setCallShareVideo(transcriptId, include)
+    .catch((err: unknown) => {
+      if (isRefusedDispatchError(err)) toast.error(humanizeConvexError(err));
+    });
 }
 
 /** A row as the player and the frame embed read it (lib/calls/callVideo). */

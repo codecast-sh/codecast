@@ -95,6 +95,10 @@ describe('the ask replay', () => {
     expect(citationCheck('- msg 131–164: the invite was dead', shown)).toEqual({ invented: [], unshownInRanges: 2 });
     expect(citationCheck('- msg 89–90: 196 rows', shown)).toEqual({ invented: ['msg 89–90'], unshownInRanges: 0 });
     expect(citationCheck('msg 131, 133 and 400', shown).invented).toEqual(['msg 400']);
+    // Shown ends do not carry a range over mostly unshown lines, nor one across the unread stretch of a long session.
+    expect(citationCheck('msg 1–50: the whole plan', [1, 50]).invented).toEqual(['msg 1–50']);
+    expect(citationCheck('msg 131–150 and msg 160', [131, 150, 160]).invented).toEqual(['msg 131–150']);
+    expect(citationCheck('msg 900–-40: it was retried throughout', [900, -40]).invented).toEqual(['msg 900–-40']);
   });
 
   test('the judge sees the question and a selection of the session', () => {

@@ -211,4 +211,10 @@ describe('the previous run set', () => {
     expect(batchSet(history, 'b1').map((r) => r.id)).toEqual(['rerun']);
     expect(previousRunSet(history, 'now').map((r) => r.id)).toEqual(['rerun']);
   });
+
+  test('a batch whose reps on a freeze all crashed graded nothing there, so the comparison falls back to the newest batch that did', () => {
+    // The 2026-10-02 opus union-base8 shape: every rep of the newest batch a crash after rescore, an older batch scored.
+    const history = [{ ...run('a', 'b2', 'crash'), id: 'c1' }, { ...run('a', 'b2', 'crash'), id: 'c2', seed: 2 }, run('a', 'b1'), run('b', 'b2')];
+    expect(previousRunSet(history, 'now').map((r) => r.id).sort()).toEqual(['a-b1', 'b-b2']);
+  });
 });

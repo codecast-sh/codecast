@@ -231,7 +231,9 @@ parent a child's ask lifts: a subagent or orphan rolls up to its `parent_convers
 a plan handoff (parent pointer plus parent message) is its own member and speaks for
 itself; an agent team teammate rolls up to its lead. The server pool grouping and the
 replica's asking derivation both group by it, and a child's pending `cast decide` lifts
-its parent on both sides. Which pending decide lifts at all is one shared rule too,
+its parent on both sides, as does its permission prompt whatever its message count (the
+child's own ask, `ownAsk`, never reads the count; only the AskUserQuestion probe needs
+content to read). Which pending decide lifts at all is one shared rule too,
 `isStackedAsk`: a blocking ask, or an advisory one someone filed into a named stack. An
 advisory ask leaves its agent working on the default, so it lifts nothing on either side.
 The server's asking child may be a live pool row outside the replica's window, which

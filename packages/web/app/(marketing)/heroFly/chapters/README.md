@@ -25,16 +25,16 @@ Region rectangles are in `world.ts` (px from the surface's top-left; on the phon
 |---|---|---|---|---|---|---|
 | 1 | `inbox` | Inbox | 0 to 7.4 | 2.5 to 6.9 desk | `desk.topbar` 0, `desk.sidebar` 0, `desk.list` 10 (grouped sections; the lead and its workers in Working) | leadLands, leadSelected |
 | 2 | `conversation` | Steer | 7.4 to 13.5 | 8.0 to 13.0 desk, in on the conversation | `desk.header` 0, `desk.transcript` 10, `desk.composer` 0 | prompt, testsPass |
-| 3 | `fanout` | Fan out | 13.5 to 19.8 | 14.1 to 16.5 desk; 18.3 to 21.0 pair, gliding onto the API worker as it asks | `desk.transcript` 20, `desk.list` 20 (worker rows), `pairA.header` 0, `pairB.header` 0, `pairA.transcript` 10, `pairB.transcript` 10 | spawnA, spawnB, workerRowA, workerRowB |
-| 4 | `phone` | Chat | 19.8 to 29.7 | the question lands in the pair hold (20.0); 22.6 to 25.9 phone; 27.0 to 29.3 phone and the API worker | `pairA.transcript` 15 (the question, the answer and the reply), `pairB.scrim` 0, `phone.main` 0 (the app's session screen, components/PhoneSession.tsx, from `@codecast/shared/render/mobileSessionStyle`) | question, answered, answerDrawn |
-| 5 | `talk` | Talk | 29.7 to 36.6 | 31.0 to 35.7 pair | `pairA.transcript` 20, `pairB.transcript` 20, `pairB.header` 10 and `pairB.transcript` 30 (the fork's window, over the dashboard worker's) | messageSent, replySent, forked |
-| 6 | `decide` | Decide | 36.6 to 41.3 | 37.5 to 42.0 desk, on the card over the conversation, then the task filed under it | `desk.scrim` 0 (veil), `desk.side` 0 | decisionAsked, decisionAnswered |
-| 7 | `work` | Track | 41.3 to 48.6 | 43.4 to 47.8 board | `desk.transcript` 40 (files the task), `board.main` 0 | taskFiled, taskLands, taskClaimed |
+| 3 | `fanout` | Fan out | 13.5 to 19.8 | 14.1 to 16.5 desk; 18.3 to 20.8 pair, gliding onto the API worker as it asks | `desk.transcript` 20, `desk.list` 20 (worker rows), `pairA.header` 0, `pairB.header` 0, `pairA.transcript` 10, `pairB.transcript` 10 | spawnA, spawnB, workerRowA, workerRowB |
+| 4 | `phone` | Chat | 19.8 to 29.7 | the question lands in the pair hold (20.0); 22.7 to 29.3 the phone beside the API worker it answers (a phone's frame holds on the phone alone) | `pairA.transcript` 15 (the question, the answer and the reply), `phone.main` 0 (the app's session screen, components/PhoneSession.tsx, from `@codecast/shared/render/mobileSessionStyle`) | question, answered, answerDrawn |
+| 5 | `talk` | Talk | 29.7 to 36.6 | 31.0 to 35.1 pair | `pairA.transcript` 20, `pairB.transcript` 20, `pairB.header` 10 and `pairB.transcript` 30 (the fork's window, over the dashboard worker's) | messageSent, replySent, forked |
+| 6 | `decide` | Decide | 36.6 to 41.3 | 37.6 to 41.8 desk, on the card over the conversation, then the task filed under it | `desk.scrim` 0 (veil), `desk.side` 0 | decisionAsked, decisionAnswered |
+| 7 | `work` | Track | 41.3 to 48.6 | 43.5 to 47.8 board | `desk.transcript` 40 (files the task), `board.main` 0 | taskFiled, taskLands, taskClaimed |
 | 8 | `automation` | Automate | 48.6 to 54.5 | 49.5 to 53.7 auto | `auto.main` 0 | triggerFires |
-| 9 | `team` | Team | 54.5 to 61.6 | 55.4 to 60.8 team (channel, then the huddle) | `team.main` 0 | |
-| 10 | `integrations` | GitHub | 61.6 to 68.0 | 62.5 to 66.9 pr | `pr.main` 0 | prOpened, checksGreen, merged |
+| 9 | `team` | Team | 54.5 to 61.6 | 55.4 to 60.5 team (channel, then the huddle) | `team.main` 0 | |
+| 10 | `integrations` | GitHub | 61.6 to 68.0 | 62.7 to 66.9 pr | `pr.main` 0 | prOpened, checksGreen, merged |
 | 11 | `publish` | Publish | 68.0 to 74.8 | 69.1 to 73.9 page | `page.main` 0 | published |
-| 12 | `memory` | Memory | 74.8 to 82.3 | 75.8 to 78.0 palette; 79.3 to 81.3 blame | `palette.main` 0, `blame.main` 0 | threeWeeks |
+| 12 | `memory` | Memory | 74.8 to 82.3 | 75.8 to 77.9 palette; 79.6 to 81.1 blame | `palette.main` 0, `blame.main` 0 | threeWeeks |
 | 13 | `remote` | Anywhere | 82.3 to 88.8 | 83.0 to 86.0 desk | `desk.header` 10, `desk.transcript` 60 (the cloud worker's pane over the lead's) | remoteOpen |
 
 A chapter's parts stay mounted for the whole film. Surfaces are reused across chapters (the desk carries chapters 1 to 4, 6, 7 and 13), so a part shows its state for the current time: before its cue it renders nothing (or takes no height) and it enters with a beat; after its chapter it stays in its finished state. Other chapters' changes to what you render arrive as cues in `story.ts` (the API worker waits on its question from `CUES.question` and works again from `CUES.answered`, which the inbox row and the fan-out chapter's header read; the question opens its own room at the foot of the worker's feed with `FilmGrow`).

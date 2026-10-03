@@ -161,7 +161,10 @@ describe("skip and settle", () => {
     expect(skipHeadline(row, [commitOf("c1", "fix(cli): retry uploads", { cli: [1, 5, 1] })])).toBeNull();
     expect(skipHeadline(row, [commitOf("c1", "chore(cli): " + "tidy ".repeat(15), { cli: [1, 5, 1] })])).toBeNull();
     // A slice of a batch commit: its subject speaks for every area.
-    expect(skipHeadline(row, [commitOf("c1", long, { cli: [1, 5, 1], web: [1, 5, 1], convex: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", long, { cli: [1, 5, 1], web: [1, 5, 1], convex: [1, 5, 1] })])).toBeNull();    // A list of changes, or one too long to fit unclipped, goes to the model.
+    expect(skipHeadline(row, [commitOf("c1", "feat(cli): palette search results, PR review popover, composer pill radius", { cli: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", "fix(cli): record a mirror's synced set when a pass has nothing to send; version skew test", { cli: [1, 5, 1] })])).toBeNull();
+    expect(skipHeadline(row, [commitOf("c1", "fix(cli): " + "uploads retry patiently ".repeat(5), { cli: [1, 5, 1] })])).toBeNull();
   });
 
   test("a story settles 20 minutes after its last commit, or when its day ends", () => {
@@ -208,6 +211,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
 };
 
 const REPO = "acme/app";

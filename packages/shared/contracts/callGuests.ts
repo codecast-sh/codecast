@@ -58,12 +58,20 @@ export function callParticipantKind(identity: string): CallParticipantKind {
 // room, written into transcripts and spoken to agents. So it is cleaned once,
 // here: control characters and runs of whitespace go, it is capped, and an
 // empty one is refused rather than defaulted (a room admitting "Guest" has no
-// idea whom it let in).
+// idea whom it let in). Markdown's emphasis, code and link marks and the colon
+// go too: a transcript line reads `**Name**: words` (formatTranscriptChunk),
+// and a name carrying `**: ` could forge a second speaker inside one line of
+// what the agents read.
 export const GUEST_NAME_MAX = 40;
 
 /** The name a guest may go by, or null when nothing usable was typed. */
 export function normalizeGuestName(raw: string | null | undefined): string | null {
-  const flat = (raw ?? "").normalize("NFC").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, " ").replace(/\s+/g, " ").trim();
+  const flat = (raw ?? "")
+    .normalize("NFC")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, " ")
+    .replace(/[*_`[\]:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   // The "(guest)" marking is the room's to add (guestDisplayName), never the
   // guest's: typed in, it would read "Sam (guest) (guest)" everywhere.
   const clean = Array.from(flat.replace(/(?:\s*\(\s*guest\s*\))+$/i, "").trim());
@@ -111,15 +119,21 @@ export function guestMayJoin(status: CallGuestStatus): boolean {
 export const CALL_GUEST_LEFT_REASONS = ["self", "huddle_ended", "lapsed"] as const;
 export type CallGuestLeftReason = (typeof CALL_GUEST_LEFT_REASONS)[number];
 
-/** Is this guest at the door or in the room right now? The same lease a seat
- *  has (CALL_MEMBER_STALE_MS): the guest's page beats while it is open, and a
- *  page that closed without saying so reads as gone within one window. Only a
- *  waiting or admitted row can be present at all. */
+/** Is this guest at the door or in the room right now? At the door, the
+ *  lease a seat has (CALL_MEMBER_STALE_MS): the page beats while it is open,
+ *  and a knock from a page that closed drops off the door within one window.
+ *  Inside, the admission's own window (GUEST_ADMISSION_LAPSE_MS): a guest in
+ *  the media room is still there while their phone holds a background page's
+ *  timers, and is seen by the media server's roster besides, so the room's
+ *  list does not blink them out between beats. The server ends an admission
+ *  that outlives that window, so nobody is listed past it. Only a waiting or
+ *  admitted row can be present at all. */
 export function isGuestPresent(
   row: { status: CallGuestStatus; last_seen: number },
   now: number,
 ): boolean {
-  return (row.status === "waiting" || row.status === "admitted") && now - row.last_seen < CALL_MEMBER_STALE_MS;
+  if (row.status === "waiting") return now - row.last_seen < CALL_MEMBER_STALE_MS;
+  return row.status === "admitted" && now - row.last_seen < GUEST_ADMISSION_LAPSE_MS;
 }
 
 // What the guest's own page shows, one word per screen it can be on. The
@@ -163,7 +177,9 @@ export const GUEST_ADMISSION_LAPSE_MS = 2 * CALL_MEMBER_STALE_MS;
 // stays good for a reconnect.
 export const GUEST_TOKEN_TTL_S = 5 * 60;
 // A guest at the door of an empty room is waiting for somebody nobody has
-// told: the link's creator gets one push per arrival, at most this often.
+// told: the link's creator gets a push, at most this often per link however
+// many arrive (a link anybody can hold must not become a pager), and one push
+// names everybody waiting when there is more than one.
 export const GUEST_CREATOR_NOTICE_MS = 10 * 60_000;
 export const CALL_GUEST_WAITING_PUSH_TYPE = "call_guest_waiting";
 // The range a link creator may pick; the default is GUEST_LINK_TTL_MS.

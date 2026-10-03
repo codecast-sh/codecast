@@ -32,6 +32,7 @@ const modules = {
   "./transcripts.ts": () => import("./transcripts"),
   "./callChat.ts": () => import("./callChat"),
   "./publicShare.ts": () => import("./publicShare"),
+  "./dispatch.ts": () => import("./dispatch"),
 };
 
 const ENV: Record<string, string> = {
@@ -349,7 +350,16 @@ describe("a run, start to finish", () => {
     ]);
     expect(await events(t)).toEqual(["record_on", "record_off:pressed"]);
     expect(String((await eventRows(t))[1].user_id)).toBe(String(ben));
-    expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).live.status).toBe("stopping");
+    const whileStopping = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
+    expect(whileStopping.live.status).toBe("stopping");
+    // How it ended, for the room's notice: still being finished, stopped by Ben.
+    expect(whileStopping.ended).toEqual({
+      run_id: recording_id,
+      status: "stopping",
+      stop_reason: "pressed",
+      error: null,
+      stopped_by: { id: String(ben), name: "Ben" },
+    });
     await settle(t);
     expect(world.stops().sort()).toEqual(["EG_1", "EG_2"]);
 
@@ -358,7 +368,9 @@ describe("a run, start to finish", () => {
     world.complete("EG_2", scr0.r2_key, s0, 40_000);
     await look(t, recording_id);
     await settle(t);
-    expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).live).toBeNull();
+    const after = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
+    expect(after.live).toBeNull();
+    expect(after.ended).toMatchObject({ run_id: recording_id, status: "ready", stop_reason: "pressed" });
     expect(world.deletes).toEqual([comp0.live_frame_key]);
     expect((await rows(t)).every((r: any) => r.live_frame_key === undefined)).toBe(true);
     // Stopped by a press: told once, not again when the file lands.
@@ -397,6 +409,20 @@ describe("a run, start to finish", () => {
     expect(cli.recordings.map((r: any) => new URL(r.url).pathname)).toEqual(read.recordings.map((r: any) => new URL(r.url).pathname));
     expect(cli.recordings.every((r: any) => new URL(r.url).searchParams.get("X-Amz-Expires") === "600" && r.live_frame_url === null)).toBe(true);
     expect(Math.abs(cli.server_now - Date.now())).toBeLessThan(5_000);
+    // The query's own answer carries keys and no URL, so a cached copy of it
+    // (an ended call's rows never change again) cannot hand the CLI a link
+    // that lapsed: the route signs on its own clock, two windows later too.
+    const cached = await t.query(internal.callRecordings.cliCallRecordings, { api_token: TOKEN, call: call.short_id });
+    expect(cached.recordings.every((r: any) => r.url === null && typeof r.r2_key === "string")).toBe(true);
+    const realNow = Date.now;
+    const later = realNow() + 2 * CALL_RECORDING_URL_WINDOW_MS;
+    Date.now = () => later;
+    try {
+      const signedLater = await signForCli(cached);
+      expect(signedLater.recordings.every((r: any) => r.url_expires_at > later)).toBe(true);
+    } finally {
+      Date.now = realNow;
+    }
     expect((await t.query(api.transcripts.cliListCalls, { api_token: TOKEN })).find((r: any) => r._id === transcript_id).video).toBe("ready");
     expect(await as(String(cat)).query(api.callRecordings.webCallRecordings, { call: call.short_id, url_window: win })).toBeNull();
     expect(await as(String(cat)).query(api.callRecordings.getRoomRecording, { room_key: room })).toBeNull();
@@ -409,14 +435,21 @@ describe("a run, start to finish", () => {
     expect(signingMoment(1, now)).toBe(now - CALL_RECORDING_URL_WINDOW_MS);
   });
 
-  test("the last person leaving stops the recording, and the room is told why", async () => {
+  test("the last person leaving stops the recording once the room stays empty, and the room is told why", async () => {
     const { t, ana, ben, room, as } = await seed();
     world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
-    await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
     await settle(t);
+    await quietLoops(t);
     await as(String(ana)).mutation(api.calls.leaveRoom, { room_key: room });
     expect((await rows(t))[0].status).toBe("starting");
+    // The last leave is not yet the end: the web leaves on beforeunload, so a
+    // reload is a leave and a join a second apart, and must not cut the video.
     await as(String(ben)).mutation(api.calls.leaveRoom, { room_key: room });
+    expect((await rows(t))[0].status).toBe("starting");
+    // LiveKit's room holding nobody for the empty-room window is the end.
+    world.setParticipants([]);
+    await look(t, recording_id, { empty_since: Date.now() - 31_000 });
     const [row] = await rows(t);
     expect(row).toMatchObject({ status: "stopping", stop_reason: "huddle_ended" });
     expect(row.stopped_by).toBeUndefined();
@@ -467,8 +500,11 @@ describe("a run, start to finish", () => {
     await settle(t);
     const [row] = await rows(t);
     expect(row).toMatchObject({ status: "failed", stop_reason: "failed", error: "LiveKit refused this server's credentials, so the recording could not start." });
-    // A failed press frees the room to try again.
-    expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).live).toBeNull();
+    // A failed press frees the room to try again, and the room's notice can
+    // say it failed rather than that a video is saving.
+    const state = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
+    expect(state.live).toBeNull();
+    expect(state.ended).toEqual({ run_id: String(row._id), status: "failed", stop_reason: "failed", error: row.error, stopped_by: null });
     expect(await events(t)).toEqual(["record_on", "record_off:failed"]);
     expect((await eventRows(t))[1].text).toBe(row.error);
   });
@@ -717,6 +753,40 @@ describe("who may watch and delete", () => {
       await ctx.db.patch(m._id, { role: "admin" });
     });
     expect(await as(String(ben)).mutation(api.callRecordings.deleteRecording, { recording_id })).toEqual({ deleted: 1 });
+  });
+
+  test("the store's delete is receipt-backed: a refusal is its recorded outcome, a retry reads it back, and a run already gone is done", async () => {
+    const { t, ana, ben, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
+    world.complete("EG_1", (await rows(t))[0].r2_key, Date.now(), 1_000);
+    await look(t, recording_id);
+    const del = (u: string, commandId: string) =>
+      as(u).mutation(api.dispatch.dispatch, {
+        action: "deleteCallRecording",
+        args: [recording_id],
+        result: { receiptActionVersion: 1, commandId, localResult: { recordingId: recording_id } },
+      });
+
+    // Ben did not press it: refused as data, the run untouched, and the same
+    // command asked again answers the same.
+    const refused = await del(String(ben), "cmd-ben-1");
+    expect(refused).toMatchObject({ commandId: "cmd-ben-1", status: "rejected", rejection: { code: "FORBIDDEN" } });
+    expect(await del(String(ben), "cmd-ben-1")).toEqual(refused);
+    expect(await rows(t)).toHaveLength(1);
+
+    // Ana's delete lands once; its retry (an answer lost on the way back)
+    // reads the receipt rather than meeting "not found".
+    const done = await del(String(ana), "cmd-ana-1");
+    expect(done).toMatchObject({ status: "acknowledged", result: { deleted: 1 } });
+    expect(await rows(t)).toEqual([]);
+    expect(await del(String(ana), "cmd-ana-1")).toEqual(done);
+    // A second window's delete of the same run: already gone, so done.
+    expect(await del(String(ana), "cmd-ana-2")).toMatchObject({ status: "acknowledged", result: { deleted: 0 } });
+    expect((await eventRows(t)).filter((r: any) => r.event === "record_deleted")).toHaveLength(1);
   });
 
   test("everyone the video showed may watch it, spoken or not", async () => {

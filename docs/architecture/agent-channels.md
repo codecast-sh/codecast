@@ -33,13 +33,18 @@ every line. Three delivery modes and a small set of noise rules.
    the mentioning session as a session message when the mention came from a
    session (extend `buildSessionRelay`). That relay is an agent waking an
    agent, so it spends the same hourly caps a mention does
-   (`takeMentionWakeCaps`, per sender and per target) and folds past them the
-   same way: the line is stamped `mention_folded`, nothing is enqueued, and the
-   mentioning session reads the reply on its next wake. A folded relay counts
-   as delivered for the mention rail, so a reply that also names the asker is
-   not charged twice. Without this, one mention each way would license an
-   unbounded loop of replies. A person's reply on a session's thread is not a
-   mention reply and spends none of these caps.
+   (`reserveMentionWakeCaps`, per sender and per target). Its sender is the
+   replying session, not the person who owns it: the person's budget already
+   paid for the mentions that asked, so a session that names several of its
+   owner's sessions at once still hears every answer. Past a cap the relay
+   folds the same way a mention does: the line is stamped `mention_folded` and
+   nothing is enqueued, so the answer stays in the thread for the mentioning
+   session to read there. A folded relay counts as delivered for the mention
+   rail, so a reply that also names the asker is not charged twice. Both caps
+   are reserved before the relay's per-minute limit and spent after it, so a
+   relay refused by either spends neither. Without this, one mention each way
+   would license an unbounded loop of replies. A person's reply on a session's
+   thread is not a mention reply and spends none of these caps.
 3. Digest. A role's routine can post a daily digest of a channel or of its
    scope into a channel (project updates already do this for projects); the
    routine is a trigger the role owns.
@@ -114,8 +119,9 @@ string[] }`; a retried `sendMessage` returns the same shape zeroed. `skipped`
 reasons: `role_has_no_session:<handle>`, `relayed:<short id>` (the thread
 relay already carried the line to that session, or folded it there), `excluded_actor:<handle>`
 (the T3 loop rules: a role's own hand or a subordinate role wrote the line),
-`delivery_failed:<handle>`. The caps are taken after every free skip, so a
-mention that cannot wake anyone spends no credit.
+`delivery_failed:<handle>`. The caps are taken after every free skip, and the
+sender and target caps are spent together or not at all, so a mention that
+cannot wake anyone spends no credit.
 
 A role mention and a session mention are each one pending message
 (`pendingMessages.tellRole` for a role, keyed `chat-mention:<message>:<target>`):
@@ -150,8 +156,9 @@ bot author; `is_agent` is a bot author or an `origin: "agent"` line.
 
 Caps live in `chat_agent_quota` (`key`, `bucket`, `count`): keys
 `post:<channel>:<poster>`, `root:<channel>:<poster>` on a UTC day bucket,
-`mention_from:<user>`, `mention_to:<role or conversation id>` on a UTC hour
-bucket. `orgChannels.follow` / `unfollow` (`/cli/role/follow`,
+`mention_from:<user>` (a mention), `mention_from:<user>:<session>` (a
+mention reply, charged to the replying session),
+`mention_to:<role or conversation id>` on a UTC hour bucket. `orgChannels.follow` / `unfollow` (`/cli/role/follow`,
 `/cli/role/unfollow`, `cast role follow|unfollow <handle> <#name|id>`) edit
 `org_roles.follow_channel_ids`; the admin grant (host, owner, team admin) is
 required. `followChannelForRole(ctx, role, channelId)` is exported for the

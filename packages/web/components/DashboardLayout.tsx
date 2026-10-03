@@ -19,7 +19,6 @@ import { UserMenu } from "./UserMenu";
 import { Sidebar } from "./Sidebar";
 import { MobileDrawer } from "./MobileDrawer";
 import { GlobalSearch } from "./GlobalSearch";
-import { ThemeToggle } from "./ThemeToggle";
 import { NotificationBell } from "./NotificationBell";
 import { TeamSwitcher } from "./TeamSwitcher";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -45,7 +44,8 @@ import { StatusNoticeStack } from "./StatusNoticeStack";
 import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { StatusDot } from "./StatusDot";
-import { TopbarButton, TopbarDivider } from "./TopbarButton";
+import { TopbarButton, TopbarChip, TopbarTray } from "./TopbarButton";
+import { TopbarRow } from "./TopbarRow";
 import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
@@ -86,6 +86,7 @@ import { useSyncMentionTasks } from "../hooks/useSyncTasks";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
+import { UndoTimelineHost } from "./undo/UndoTimeline";
 import { TabBar, AttachTabButton } from "./TabBar";
 import { AppWindowBar } from "./desktop/AppWindowBar";
 import { useAppWindowRegistry } from "../hooks/useAppWindowRegistry";
@@ -193,24 +194,17 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
   const activeAgentCount = working.length;
   return (
     <ShortcutTooltip label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}>
-      <button
+      <TopbarChip
         onClick={() => {
           const store = useInboxStore.getState();
           if (!selectSessionRailOpen(store)) store.toggleSidePanel();
           if (working[0]) openSession(working[0]._id);
         }}
-        className="hidden md:flex items-center gap-1.5 px-2 py-0.5 rounded-full cursor-pointer select-none transition-all duration-300"
-        style={{
-          background: 'color-mix(in srgb, var(--sol-green) 12%, transparent)',
-          border: '1px solid color-mix(in srgb, var(--sol-green) 20%, transparent)',
-          boxShadow: '0 0 10px color-mix(in srgb, var(--sol-green) 12%, transparent)',
-        }}
+        aria-label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}
       >
         <StatusDot color="var(--sol-green)" ping pingDuration="1.5s" />
-        <span className="text-[11px] font-mono font-bold tabular-nums" style={{ color: 'var(--sol-green)' }}>
-          {activeAgentCount}
-        </span>
-      </button>
+        <span className="text-sol-text">{activeAgentCount}</span>
+      </TopbarChip>
     </ShortcutTooltip>
   );
 });
@@ -1108,9 +1102,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
-        <div data-cc-topbar-row className="px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3">
-          {/* Left section: Sidebar toggle + nav */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+        <TopbarRow
+          nav={<>
             <ShortcutTooltip label={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <TopbarButton
                 onClick={(e) => { s.setNavCollapsed(!sidebarCollapsed); tipActions.whisper('sidebar.toggleLeft', e); }}
@@ -1153,10 +1146,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <Menu />
               </TopbarButton>
             )}
-          </div>
-
-          {/* Team switcher and avatars — left-aligned */}
-          <div className="hidden sm:flex items-center gap-2 flex-shrink-0">
+          </>}
+          workspace={<>
             <ErrorBoundary name="TeamSwitcher" level="inline">
               <TeamSwitcher />
             </ErrorBoundary>
@@ -1166,35 +1157,27 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <ErrorBoundary name="FollowPill" level="inline">
               <FollowPill />
             </ErrorBoundary>
-          </div>
-
-          {/* Center section: Search */}
-          <div data-cc-topbar-search className="hidden sm:flex flex-1 justify-center min-w-0">
+          </>}
+          search={<>
             <ErrorBoundary name="GlobalSearch" level="inline">
               <GlobalSearch />
             </ErrorBoundary>
-          </div>
-
-          {/* Right section, three groups left to right: STATUS (dot-led
-              pills: account usage, daemon, sync, running agents), ACTIONS
-              (new session, anchor, notifications, theme, account) and
-              LAYOUT (comments, terminal, sessions panel). Every icon
-              control is a TopbarButton so the row reads as one set. */}
-          <div data-cc-topbar-actions className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            <div data-cc-topbar-group className="hidden md:flex items-center gap-1.5">
-              <ErrorBoundary name="AccountUsageChip" level="inline">
-                <AccountUsageChip />
-              </ErrorBoundary>
-              <ErrorBoundary name="DaemonStatusChip" level="inline">
-                <DaemonStatusChip />
-              </ErrorBoundary>
+          </>}
+          status={<TopbarTray>
+              {/* The sync light leads, the steady facts follow, and an alert
+                  (the daemon) comes last, where the row's eye lands. */}
               <ErrorBoundary name="SyncStatusChip" level="inline">
                 <SyncStatusChip />
               </ErrorBoundary>
+              <ErrorBoundary name="AccountUsageChip" level="inline">
+                <AccountUsageChip />
+              </ErrorBoundary>
               <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            </div>
-            <TopbarDivider />
-            <div data-cc-topbar-group className="flex items-center gap-0.5">
+              <ErrorBoundary name="DaemonStatusChip" level="inline">
+                <DaemonStatusChip />
+              </ErrorBoundary>
+            </TopbarTray>}
+          actions={<>
               <ShortcutTooltip label="New session" action="session.create">
                 <TopbarButton
                   onClick={(e) => {
@@ -1213,13 +1196,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <ErrorBoundary name="NotificationBell" level="inline">
                 <NotificationBell />
               </ErrorBoundary>
-              <ThemeToggle />
               <ErrorBoundary name="UserMenu" level="inline">
                 <UserMenu />
               </ErrorBoundary>
-            </div>
-            <TopbarDivider />
-            <div data-cc-topbar-group className="flex items-center gap-0.5">
+          </>}
+          panels={<>
               {showCommentsToggle && (
                 <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
                   <TopbarButton
@@ -1258,9 +1239,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                   <PanelRight />
                 </TopbarButton>
               </ShortcutTooltip>
-            </div>
-          </div>
-        </div>
+          </>}
+        />
       </header>
 
       {/* Status notices (connection, storage, CLI offline, tmux missing) render
@@ -1476,6 +1456,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <FindBar />
       </ErrorBoundary>
       <RecentSwitcherHost />
+      <UndoTimelineHost />
     </div>
   );
 }

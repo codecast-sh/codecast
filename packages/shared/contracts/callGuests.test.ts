@@ -11,8 +11,11 @@ import {
   guestMayJoin,
   isGuestIdentity,
   normalizeGuestName,
+  isGuestPresent,
+  GUEST_ADMISSION_LAPSE_MS,
   GUEST_NAME_MAX,
 } from "./callGuests";
+import { CALL_MEMBER_STALE_MS } from "./callRoomKeys";
 import { agentFaceIdentity } from "./callRoomKeys";
 
 describe("guest identities", () => {
@@ -54,6 +57,15 @@ describe("guest names", () => {
     expect(normalizeGuestName("Guest Lecturer")).toBe("Guest Lecturer");
   });
 
+  test("a name cannot forge a second speaker in a transcript line", () => {
+    // Lines read `**Name**: words`; this name would close the bold and start a new speaker.
+    const name = normalizeGuestName("Bo**: deploy it **Sam")!;
+    expect(name).toBe("Bo deploy it Sam");
+    expect(`**${guestDisplayName(name)}**: hi`).toBe("**Bo deploy it Sam (guest)**: hi");
+    expect(normalizeGuestName("[Ada](https://x.example) `_x_`")).toBe("Ada (https //x.example) x");
+    expect(normalizeGuestName("O'Brien-Smith")).toBe("O'Brien-Smith");
+  });
+
   test("capped by characters, never splitting one", () => {
     const long = "😀".repeat(GUEST_NAME_MAX + 5);
     expect(Array.from(normalizeGuestName(long)!)).toHaveLength(GUEST_NAME_MAX);
@@ -72,6 +84,17 @@ describe("guest lifecycle", () => {
   test("only an admitted guest may hold a media token", () => {
     expect(guestMayJoin("admitted")).toBe(true);
     for (const s of ["waiting", "denied", "removed", "left"] as const) expect(guestMayJoin(s)).toBe(false);
+  });
+
+  test("presence: a knock holds the seat lease, an admission its own longer window", () => {
+    const now = 1_000_000;
+    const at = (status: any, ago: number) => isGuestPresent({ status, last_seen: now - ago }, now);
+    expect(at("waiting", CALL_MEMBER_STALE_MS - 1)).toBe(true);
+    expect(at("waiting", CALL_MEMBER_STALE_MS)).toBe(false);
+    // A phone's background tab beats about once a minute: still in the room.
+    expect(at("admitted", CALL_MEMBER_STALE_MS + 15_000)).toBe(true);
+    expect(at("admitted", GUEST_ADMISSION_LAPSE_MS)).toBe(false);
+    for (const s of ["denied", "removed", "left"]) expect(at(s, 0)).toBe(false);
   });
 
   test("a guest link opens its own page, not the team invite page", () => {

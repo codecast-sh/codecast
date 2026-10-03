@@ -89,14 +89,14 @@ export function waitingKeys(day: readonly StoryRow[], live: readonly LiveRow[]):
 }
 
 /** Whether a story matches the dimming filters: areas and a live tile's surface. */
-function inFocus(s: StoryRow, url: ChangesUrl): boolean {
+export function inFocus(s: StoryRow, url: ChangesUrl): boolean {
   if (url.areas.length && !url.areas.includes(s.area)) return false;
   if (url.surface && !surfaceCoversArea(url.surface, s.area)) return false;
   return true;
 }
 
 /** Whether a story survives the hiding filters: person, risk, waiting, text. */
-function survives(s: StoryRow, url: ChangesUrl, waiting: Set<string>): boolean {
+export function survives(s: StoryRow, url: ChangesUrl, waiting: Set<string>): boolean {
   if (url.person && !s.author_names.includes(url.person) && !s.actor_user_ids.some((id) => String(id) === url.person)) return false;
   if (url.risk && s.risks.length === 0) return false;
   if (url.waiting && !waiting.has(s.story_key)) return false;
@@ -143,6 +143,12 @@ export function areaTouches(day: readonly StoryRow[]): AreaTouch[] {
   return [...touches.entries()]
     .map(([area, n]) => ({ area, touches: n, commits: commits.get(area)?.size ?? 0 }))
     .sort((a, b) => b.touches - a.touches || a.area.localeCompare(b.area));
+}
+
+/** "Showing 3 of 9 stories (cli)" while a filter is on, else null. The day and the week say it the same way. */
+export function showingLine(url: ChangesUrl, matching: number, total: number, personName: (id: string) => string = (id) => id): string | null {
+  if (!hasFilters(url)) return null;
+  return `Showing ${matching} of ${total} ${total === 1 ? "story" : "stories"} (${filterLabel(url, personName)})`;
 }
 
 function filterLabel(url: ChangesUrl, personName: (id: string) => string): string {
@@ -238,9 +244,7 @@ export function buildEdition(input: {
     standfirst: prose && edition!.narrative.trim() ? edition!.narrative.trim() : null,
     releases,
     areas: areaTouches(day),
-    filterLine: hasFilters(url)
-      ? `Showing ${matching} of ${day.length} ${day.length === 1 ? "story" : "stories"} (${filterLabel(url, input.personName ?? ((id) => id))})`
-      : null,
+    filterLine: showingLine(url, matching, day.length, input.personName),
   };
 }
 

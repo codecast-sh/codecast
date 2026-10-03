@@ -17,7 +17,7 @@
 import type { Scheduler } from "convex/server";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { sliceDek, statsHeadline } from "@codecast/shared/changes";
+import { isoWeekOf, sliceDek, statsHeadline } from "@codecast/shared/changes";
 import { teamHasFeature } from "./teamFeatureGuard";
 import { addDays, dayBounds, localDate, teamTimezone } from "./teamDay";
 import { isHarnessScratch, normalizeRepository } from "./gitRefs";
@@ -197,29 +197,37 @@ export async function markInsightDirty(
 
 const plural = (n: number, one: string) => `${n} ${n === 1 ? one : `${one}s`}`;
 
-/** The edition's headline and standfirst go back to the stats line until prose runs again. */
-async function resetEdition(ctx: { db: any }, story: Doc<"change_stories">): Promise<void> {
-  const edition: Doc<"digests"> | null = await ctx.db
-    .query("digests")
-    .withIndex("by_team_repo_scope_date", (q: any) =>
-      q.eq("team_id", story.team_id).eq("repository", story.repository).eq("scope", "day").eq("date", story.date))
-    .first();
-  if (!edition || (edition.status !== "written" && edition.status !== "final")) return;
-  await ctx.db.patch(edition._id, {
-    headline: statsHeadline(edition.stats ?? { commits: 0, stories: 0, releases: 0 }),
-    narrative: "",
-    status: "facts",
-    inputs_hash: undefined,
-  });
+/**
+ * The day and week editions holding the story go back to their stats line
+ * until prose runs again. The week also drops its editor's pick of stories,
+ * which was made reading the withdrawn text; the heaviest five lead until the
+ * week is rebuilt (changesWeek.ts).
+ */
+async function resetEditions(ctx: { db: any }, story: Doc<"change_stories">): Promise<void> {
+  for (const [scope, date] of [["day", story.date], ["week", isoWeekOf(story.date)]] as const) {
+    const edition: Doc<"digests"> | null = await ctx.db
+      .query("digests")
+      .withIndex("by_team_repo_scope_date", (q: any) =>
+        q.eq("team_id", story.team_id).eq("repository", story.repository).eq("scope", scope).eq("date", date))
+      .first();
+    if (!edition || (edition.status !== "written" && edition.status !== "final")) continue;
+    await ctx.db.patch(edition._id, {
+      headline: statsHeadline(edition.stats ?? { commits: 0, stories: 0, releases: 0 }),
+      narrative: "",
+      status: "facts",
+      inputs_hash: undefined,
+      top_story_keys: undefined,
+    });
+  }
 }
 
 /**
  * Story inputs whose session the team may no longer read, or now reads at
  * `summary` where the story was built at `full`, are withdrawn in this
  * transaction: the input row goes (or narrows), the story drops the session,
- * and its prose and its edition's prose fall back to facts. The text written
- * from the session is gone before any rebuild runs; layer 0 restores the
- * subject-based text when it does. Returns the stories it reset.
+ * and its prose and its day and week editions' prose fall back to facts. The
+ * text written from the session is gone before any rebuild runs; layer 0
+ * restores the subject-based text when it does. Returns the stories it reset.
  */
 export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_story_inputs">[]): Promise<Id<"change_stories">[]> {
   const byTeam = new Map<string, Doc<"change_story_inputs">[]>();
@@ -259,7 +267,7 @@ export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_st
         ? { headline: `${plural(story.commit_shas.length, "commit")} in ${story.area}`, dek: sliceDek(story.area_counts) }
         : {}),
     });
-    await resetEdition(ctx, story);
+    await resetEditions(ctx, story);
     reset.push(story._id);
   }
   return reset;

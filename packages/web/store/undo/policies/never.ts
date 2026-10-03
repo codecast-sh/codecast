@@ -104,6 +104,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   upsertAgentChain: CREATE,
 
   // Deletes
+  deleteCallRecording: DELETE,
   deleteComment: DELETE,
   deleteSavedView: DELETE,
   deleteSession: DELETE,
@@ -165,6 +166,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   markKilling: MACHINE,
 
   // Sharing
+  setCallShareVideo: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setTeamMembershipVisibility: SHARING,

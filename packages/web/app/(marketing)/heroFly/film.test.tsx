@@ -85,6 +85,24 @@ describe("FilmGrow", () => {
     });
   }, 30_000);
 
+  test("moves every frame of a tall entry's opening in whole px, never standing still between two moving frames", async () => {
+    const [at, dur, full] = [10, 0.5, 277];
+    const film = await mount(<FilmGrow at={at} dur={dur}><div data-h={full}>entry</div></FilmGrow>, at - 0.05);
+    const seen: number[] = [];
+    for (let t = at; t <= at + dur; t += 1 / 60) {
+      await film.seek(t);
+      seen.push(heightOf(film.host.firstElementChild as HTMLElement | null, full)!);
+    }
+    await film.unmount();
+    seen.forEach((h) => expect(Number.isInteger(h), `${h}`).toBe(true));
+    // Away from its eased ends, every frame moves, and no frame moves twice as far as the one before it (no stair-steps).
+    const steps = seen.slice(1).map((h, i) => h - seen[i]);
+    steps.slice(3, -3).forEach((d, i) => {
+      expect(d, `frame ${i + 4}`).toBeGreaterThan(0);
+      expect(d, `frame ${i + 4}: ${steps.slice(0, i + 5).join(",")}`).toBeLessThanOrEqual(Math.max(3, steps[i + 2] * 2));
+    });
+  }, 30_000);
+
   test("measures a box that holds its children's margins, so the height it opens to is the height it rests at", async () => {
     // jsdom lays nothing out, so this pins the structure: a block child's margin collapses through a plain div and escapes offsetHeight, then reappears the frame the clip lifts.
     const film = await mount(<FilmGrow at={0} dur={0.5}><p data-h={40} style={{ margin: "12px 0" }}>entry</p></FilmGrow>, 0.2);
@@ -116,4 +134,25 @@ describe("FilmSwap", () => {
       expect(h - seen[i - 1], `frame ${i}: ${seen[i - 1]} -> ${h}`).toBeLessThanOrEqual((to - from) / 5);
     });
   }, 30_000);
+
+  // Back-to-back cues: each state's height is read in the tick that draws it, and a crossing is whole before the next starts,
+  // so no frame collapses below the smaller of two neighbouring states or jumps between them.
+  for (const gap of [0.4, 0.3]) {
+    test(`cues ${gap}s apart cross without a frame below either state (${gap === 0.4 ? "exactly its duration" : "sooner than it"})`, async () => {
+      const cues = [20, 20 + gap, 20 + 2 * gap];
+      const hs = [307, 318, 338, 300];
+      const film = await mount(<FilmSwap cues={cues} dur={0.4} render={(step) => <div data-h={hs[step]} data-step={step}>state</div>} />, 19.9);
+      const seen: { t: number; h: number }[] = [];
+      for (let t = 19.9; t <= 20 + 3 * gap + 0.5; t += 1 / 60) {
+        await film.seek(t);
+        seen.push({ t, h: heightOf(film.host.firstElementChild as HTMLElement, Number(film.host.querySelector("[data-step]")!.getAttribute("data-h"))) ?? 0 });
+      }
+      await film.unmount();
+      seen.forEach(({ t, h }, i) => {
+        expect(h, `${t.toFixed(3)}`).toBeGreaterThanOrEqual(Math.min(...hs) - 0.5);
+        if (i) expect(Math.abs(h - seen[i - 1].h), `${t.toFixed(3)}: ${seen[i - 1].h} -> ${h}`).toBeLessThanOrEqual(10);
+      });
+      expect(seen[seen.length - 1].h).toBe(hs[3]);
+    }, 30_000);
+  }
 });

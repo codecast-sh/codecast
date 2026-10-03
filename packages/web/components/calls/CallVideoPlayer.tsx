@@ -13,6 +13,7 @@ import {
   type CallVideoNotice,
 } from "../../lib/calls/callVideo";
 import { RecordingMark } from "./RecordingMark";
+import { KeyCap } from "../KeyboardShortcutsHelp";
 import { fmtClock } from "./speakers";
 
 // A call's video on its page, kept in step with the transcript the way the
@@ -200,8 +201,11 @@ export function CallVideoPlayer({
   /** The element refused its URL (expired, or the window rolled): carry on
    *  from the same moment on whatever URL comes next. */
   const onError = (file: CallVideoFile) => (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    // A seek still waiting for this file (a `?t=` landing, a line pressed
+    // before the element loaded) is where the person asked to be: keep it
+    // over where the element last was, which on a fresh element is 0.
     const seconds = fileSecondsAt(file, callStartedAt, lastSeen.current.callMs) ?? e.currentTarget.currentTime ?? 0;
-    pending.current.set(file.id, { seconds, play: lastSeen.current.playing });
+    pending.current.set(file.id, pending.current.get(file.id) ?? { seconds, play: lastSeen.current.playing });
     media.refused(file.id);
   };
 
@@ -445,12 +449,15 @@ export function CallVideoNoticeLine({
 
 /** Delete a recording, asked twice: the first press says what it does, the
  *  second does it. Everyone loses it, so it says "for everyone". The question
- *  goes away on Esc from anywhere in it, a press outside, or focus leaving. */
+ *  goes away on Esc from anywhere in it, a press outside, or focus leaving.
+ *  Focus lands on the question, not on Delete (as RecordConfirm does for
+ *  Record): a stray Enter after the first press must not destroy the film. */
 export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) {
   const [asking, setAsking] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
   useWatchEffect(() => {
     if (!asking) return;
+    rootRef.current?.focus();
     const onDown = (e: PointerEvent) => {
       if (!rootRef.current?.contains(e.target as Node)) setAsking(false);
     };
@@ -472,7 +479,8 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
   return (
     <span
       ref={rootRef}
-      className="flex items-center gap-1 animate-in fade-in duration-150"
+      tabIndex={-1}
+      className="flex items-center gap-1 outline-none animate-in fade-in duration-150"
       role="group"
       aria-label="Delete this recording?"
       onKeyDown={(e) => {
@@ -487,7 +495,6 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
       <span className="text-sol-text-secondary">Delete for everyone?</span>
       <button
         type="button"
-        autoFocus
         onClick={() => {
           setAsking(false);
           onConfirm();
@@ -499,9 +506,9 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
       <button
         type="button"
         onClick={() => setAsking(false)}
-        className="rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
+        className="flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors hover:bg-white/[0.06] hover:text-sol-text"
       >
-        Keep
+        Keep <KeyCap size="xs">Esc</KeyCap>
       </button>
     </span>
   );

@@ -1259,6 +1259,33 @@ export function findEchoedPendingMessage<
     ?? recentlyDeliveredMatch();
 }
 
+// The pending rows a transcript echo can adopt: every send queued for this
+// conversation, matched by findEchoedPendingMessage against the redacted echo.
+export async function pendingRowsForEcho(ctx: { db: any }, conversationId: Id<"conversations">): Promise<Doc<"pending_messages">[]> {
+  return await ctx.db
+    .query("pending_messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .collect();
+}
+
+// The echo's ack, once findEchoedPendingMessage paired a transcript user turn
+// with the send it delivered. The echo is durable proof the agent received it,
+// so the row turns "delivered" here, atomic with the message write, so the ack
+// cannot be missed by a side channel and the 120s stuck reset stops
+// re-injecting it (delivered is terminal). Tying the row to its message keeps
+// a later identical send from re-adopting it (the delivered tier of the match
+// keys off echo_message_id); a row already tied keeps its first message.
+// Every adoption path (addMessage, and addMessages' insert and duplicate row)
+// goes through here.
+export async function settleEchoedPending(
+  ctx: { db: any },
+  pending: Doc<"pending_messages">,
+  messageId: Id<"messages">,
+): Promise<void> {
+  await markPendingDelivered(ctx, pending);
+  if (!pending.echo_message_id) await ctx.db.patch(pending._id, { echo_message_id: messageId });
+}
+
 
 // ── Usage rollup (org-roles-standing.md T4) ──
 // Claude's JSONL assistant records carry `message.usage`; the CLI parser
@@ -1483,10 +1510,7 @@ export const addMessage = mutation({
     let fromUserIdToStore: Id<"users"> | undefined;
     let matchingPending: Doc<"pending_messages"> | undefined;
     if (args.role === "user") {
-      const pendingMsgs = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-        .collect();
+      const pendingMsgs = await pendingRowsForEcho(ctx, args.conversation_id);
       matchingPending = findEchoedPendingMessage(pendingMsgs, safeContent, msgTimestamp);
       if (matchingPending) {
         contentToStore = redactSecrets(matchingPending.content);
@@ -1495,8 +1519,6 @@ export const addMessage = mutation({
         // transcript echo itself carries no sender identity, so this is the
         // only point where "who typed it" is known.
         fromUserIdToStore = matchingPending.from_user_id;
-        // Agent echoed the message → durable proof of delivery; promote to terminal "delivered".
-        await markPendingDelivered(ctx, matchingPending);
       }
       const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
       images = (resolved === null
@@ -1522,11 +1544,7 @@ export const addMessage = mutation({
       client_id: clientIdToStore,
       timestamp: msgTimestamp,
     });
-    if (matchingPending) {
-      // Tie the row to its echo so a later identical send can never re-adopt it
-      // (the delivered-tier match in findEchoedPendingMessage keys off this).
-      await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
-    }
+    if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
     await scheduleUserSend(ctx, conversation, { role: args.role, content: contentToStore, tool_results: safeToolResults, from_user_id: fromUserIdToStore }, msgTimestamp);
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
@@ -1914,12 +1932,7 @@ export const addMessages = mutation({
     // unless the batch actually carries a user message. consumedPendingIds keeps a
     // pending row from matching two different user messages in the same batch.
     const batchHasUserMsg = args.messages.some((m) => m.role === "user");
-    const pendingMsgs = batchHasUserMsg
-      ? await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_id", (q) => q.eq("conversation_id", args.conversation_id))
-          .collect()
-      : [];
+    const pendingMsgs = batchHasUserMsg ? await pendingRowsForEcho(ctx, args.conversation_id) : [];
     const consumedPendingIds = new Set<Id<"pending_messages">>();
 
     for (const [batchIndex, msg] of args.messages.entries()) {
@@ -2034,10 +2047,7 @@ export const addMessages = mutation({
               if (Object.keys(dupPatch).length > 0) {
                 await ctx.db.patch(dup._id, dupPatch);
               }
-              await markPendingDelivered(ctx, matchingPending);
-              if (!matchingPending.echo_message_id) {
-                await ctx.db.patch(matchingPending._id, { echo_message_id: dup._id });
-              }
+              await settleEchoedPending(ctx, matchingPending, dup._id);
             }
             ids.push(dup._id);
             continue;
@@ -2052,11 +2062,6 @@ export const addMessages = mutation({
           consumedPendingIds.add(matchingPending._id);
           contentToStore = redactSecrets(matchingPending.content);
           clientIdToStore = matchingPending.client_id;
-          // The agent echoed this user message to its JSONL — durable proof it was received.
-          // Promote the pending row to "delivered" here (atomic with the insert, content-matched)
-          // so the ack can't be missed by a fire-and-forget side-channel or a non-acking sync
-          // path. delivered is terminal, so the 120s stuck-message reset stops re-injecting it.
-          await markPendingDelivered(ctx, matchingPending);
       }
       if (msg.role === "user") {
         const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
@@ -2086,11 +2091,7 @@ export const addMessages = mutation({
         client_id: clientIdToStore,
         timestamp: msgTimestamp,
       });
-      if (matchingPending) {
-        // Tie the row to its echo so a later identical send can never re-adopt
-        // it (the delivered-tier match in findEchoedPendingMessage keys off this).
-        await ctx.db.patch(matchingPending._id, { echo_message_id: messageId });
-      }
+      if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
       ids.push(messageId);
       insertedCount++;
       insertedIndexes.add(batchIndex);

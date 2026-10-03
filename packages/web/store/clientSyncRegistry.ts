@@ -662,11 +662,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // The org tree (people, roles, anchors, top sessions per parent): one
   // server-derived snapshot for the active workspace. Singleton; the store's
   // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
+  // Two feeds, one home: org.tree for the surfaces that draw sessions, and
+  // org.roles (roles and seats, no session read) for the ones that only name
+  // a role; ORG_SYNC_REGISTRY fills a roles-only push from the held tree.
   orgTree: {
     persistence: { kind: "meta", key: "orgTree" },
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
-    feeds: ["org.tree"],
+    feeds: ["org.tree", "org.roles"],
   },
   // The company's flow signals and flags (org-staffing.md S3): one snapshot
   // for the active workspace, painted by the staffing pane and the node
@@ -908,6 +911,36 @@ export const CLIENT_SYNC_REGISTRY = {
   guestLinks: {
     sync: { isDelta: true },
     feeds: ["callGuests.listGuestLinks"],
+  },
+  // A call's video, as callRecordings.webCallRecordings answers it: one row
+  // per recorded file in `callRecordings` (keyed by the recording's id, each
+  // carrying its transcript_id), and the facts about the call itself (its
+  // clock, whether its share link hands out the video) in `callRecordingCalls`,
+  // keyed by transcript id. One feeder fills both (hooks/useRoomRecording
+  // useCallRecordings), mounted by whatever shows the call's video: the call
+  // page, its share popover and every `cl-42@12:34` frame. Each push is the
+  // call's complete set of files, so it syncs as a delta pruned to the call,
+  // and the feeder lets go of the exclude tombstones the push has answered.
+  // localFirst: a deleted run leaves the page in the same frame (its rows go
+  // on the draft and the exclude tombstones hold them out of a push computed
+  // before the delete committed), and the share switch moves on the press
+  // (a field lock on video_shared). Never persisted: every row carries a URL
+  // signed for one window, so a cached row would be a dead link by the next
+  // load; the call page asks again when it opens.
+  callRecordings: {
+    sync: { isDelta: true },
+    localFirst: true,
+    feeds: ["callRecordings.webCallRecordings"],
+  },
+  // `deleted_here_at` is this window's own mark that it deleted a run of the
+  // call (store deleteCallRecording): the server never sends it, so a push
+  // keeps it (preserveFields) and it holds no lock waiting for an echo
+  // (unprotectedFields). A refused delete clears it.
+  callRecordingCalls: {
+    sync: { isDelta: true, preserveFields: ["deleted_here_at"] },
+    localFirst: true,
+    unprotectedFields: ["deleted_here_at"],
+    feeds: ["callRecordings.webCallRecordings"],
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -1323,6 +1356,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // feeders), like the liveRooms roster it is split from.
   callRooms: "local",
   guestLinks: "local",
+  // Per-view, like guestLinks: fed by the window showing the call.
+  callRecordings: "local",
+  callRecordingCalls: "local",
   clientState: "shared",
   liveInboxIdList: "shared",
   teamInboxIdSnapshot: "shared",

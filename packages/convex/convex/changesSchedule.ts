@@ -154,15 +154,19 @@ export const rescheduleStrandedDays = internalMutation({
   handler: async (ctx): Promise<number> => rescheduleStranded(ctx, Date.now()),
 });
 
-/** Every 6 hours (crons.ts): days of the last three with commits and no final edition, and rebuilds that died. */
+/** Every 6 hours (crons.ts): days of the last three with commits and no final edition, weeks that ended unfinished, and rebuilds that died. */
 export const reconcile = internalAction({
   args: {},
-  handler: async (ctx): Promise<{ teams: number; marked: number; rescheduled: number }> => {
+  handler: async (ctx): Promise<{ teams: number; marked: number; weeks: number; rescheduled: number }> => {
     const teams: Array<{ team_id: Id<"teams">; timezone: string }> = await ctx.runQuery(internal.changesSchedule.changesTeams, {});
     let marked = 0;
-    for (const team of teams) marked += await markRecentDays(ctx, team.team_id, team.timezone, RECONCILE_DAYS, true);
+    let weeks = 0;
+    for (const team of teams) {
+      marked += await markRecentDays(ctx, team.team_id, team.timezone, RECONCILE_DAYS, true);
+      weeks += await ctx.runMutation(internal.changesWeek.reconcileWeeks, { team_id: team.team_id });
+    }
     const rescheduled: number = await ctx.runMutation(internal.changesSchedule.rescheduleStrandedDays, {});
-    return { teams: teams.length, marked, rescheduled };
+    return { teams: teams.length, marked, weeks, rescheduled };
   },
 });
 

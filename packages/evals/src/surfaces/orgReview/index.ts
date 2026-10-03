@@ -7,7 +7,7 @@ import { UsageError } from '@platform/evals/cli';
 import { readFrozenVerbs } from '../../served';
 import type { ReplayResult, SurfaceImpl } from '../../surface';
 import { buildBriefing, type OrgHashes, type OrgMode } from './build';
-import { freezeContext, gradeDir, gradeExisting, handlePool, loadGradeSets, snapshotsRoot, snapshotWorkspace, tryJson, type GradeSets, type OrgGrade } from './grade';
+import { freezeContext, gradeDir, gradeExisting, handlePool, loadGradeSets, snapshotsRoot, snapshotWorkspace, tryJson, wrongClosesOf, type GradeSets, type OrgGrade } from './grade';
 
 // org-review: the Head of People's analyzer run as an agent against a saved
 // workspace (a served dir under EVALS_HOME/snapshots/org-review). A replay
@@ -73,6 +73,15 @@ const impl: SurfaceImpl = {
   // frozen-reads and no-unexpected-writes are route gates; these are the surface's own.
   gates: (_snap, out, label) => gradeOf(out, label).gates,
   checks: (_snap, out, label) => gradeOf(out, label).checks,
+
+  /** Which must-stay-open records the set's reps closed, and in how many reps: the plan's ct-49328 gate reads here. */
+  summarize(scores) {
+    const closed = new Map<string, number>();
+    for (const s of scores) for (const id of new Set(wrongClosesOf(s))) closed.set(id, (closed.get(id) ?? 0) + 1);
+    const held = scores.filter((s) => !wrongClosesOf(s).length).length;
+    const list = [...closed].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([id, n]) => `${id} in ${n}`);
+    return [`no-wrong-close held in ${held}/${scores.length} graded reps${list.length ? `; closed ${list.join(', ')}` : ''}`];
+  },
 
   describe(snap: { captured_at?: string; argv?: string[][]; workspace?: string }): ConvoMessage[] {
     const reads = (snap?.argv ?? []).map((a) => `cast ${a.join(' ')}`).join('; ');

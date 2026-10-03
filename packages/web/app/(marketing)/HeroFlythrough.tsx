@@ -73,11 +73,11 @@ const BLEED: CSSProperties = {
 };
 
 /** Room a chapter takes beside its name: the dot, the gap after it, the button's padding, and the gap between chapters (px). */
-const CHAPTER_CHROME = 6 + 6 + 12 + 4;
+const CHAPTER_CHROME = 6 + 4 + 8 + 4;
 /** A chapter's room inside its own box: the chrome less the gap between chapters. */
 const CHAPTER_INNER = CHAPTER_CHROME - 4;
 /** A dot's own room: the dot and the button's padding. */
-const CHAPTER_DOT = 6 + 12;
+const CHAPTER_DOT = 6 + 8;
 /** The bar's width (px) from which every name fits whole, before the names are measured: their characters at the 11px mono's advance, with each chapter's chrome. */
 const CHAPTER_NAMES_FIT = Math.ceil(SCENES.reduce((n, s) => n + s.name.length * 6.7 + CHAPTER_CHROME, 0));
 /** How a chapter's room eases as the current chapter changes or the bar resizes. */
@@ -100,6 +100,8 @@ const FALLBACK_SCALE_CSS = [
   "@media (prefers-reduced-motion:reduce){.hf-chaps li,.hf-chaps [data-name]{transition:none!important}}",
   // A region whose views arrive after the prerender (the poster's conversation pane) fades in rather than popping.
   "@keyframes hf-in{from{opacity:0}}.hf-in{animation:hf-in 300ms ease}",
+  // Inside the film every change is film time's (FilmSwap, FilmGrow, beats): a view's own wall-clock transition would replay a change the film already made, or stall in a background tab.
+  ".hf-stage *{transition:none!important}",
   // A region's box lets clicks through to the regions under it; the views placed in it take them (heroFly/surfaces.tsx RegionSlot).
   "[data-region]>*{pointer-events:auto}",
   // The chapter bar before it has measured its names (useChapterNamesFit): the current chapter named and dots for the rest, every name once the bar is wide enough for all of them (CHAPTER_NAMES_FIT, about what the measure finds), so the first paint is the measured layout.
@@ -219,6 +221,8 @@ export function HeroFlythrough() {
       onScreen: true,
       docVisible: document.visibilityState !== "hidden",
       mobile: forceMobile || mq.matches,
+      // How far the page reaches beyond either side of the film, in stage px: windows come and go beyond it (timeline.ts transitOpacity).
+      side: undefined as number | undefined,
       scene: POSTER_SCENE,
       still: 0,
     };
@@ -227,7 +231,7 @@ export function HeroFlythrough() {
       if (stale) scan();
       st.t = wrapT(t);
       clock.set(st.t);
-      const f = frame(st.t, st.mobile);
+      const f = frame(st.t, st.mobile, st.side);
       put(world, "t", (v) => (world.style.transform = v), f.camera);
       put(world, "will", (v) => (world.style.willChange = v), f.moving && !reduced ? "transform" : "auto");
       const write = (fr: ReturnType<typeof frame>, els: Map<string, HTMLElement | SVGElement>, texts: Map<string, HTMLElement>) => {
@@ -266,7 +270,9 @@ export function HeroFlythrough() {
       stage.style.height = `${h}px`;
       stage.style.top = "0px";
       stage.style.setProperty("--hf-s", String(s));
-      bleed.style.setProperty("--hf-page-w", `${document.documentElement.clientWidth}px`);
+      const pageW = document.documentElement.clientWidth;
+      bleed.style.setProperty("--hf-page-w", `${pageW}px`);
+      st.side = Math.max(0, (pageW - wrap.clientWidth) / 2 / s);
     };
 
     let raf = 0;
@@ -343,7 +349,11 @@ export function HeroFlythrough() {
       render(st.t);
     };
     mq.addEventListener("change", onMq);
-    const ro = new ResizeObserver(fit);
+    // A new page width moves where windows come and go: redraw the frame for it, playing or not.
+    const ro = new ResizeObserver(() => {
+      fit();
+      render(st.t);
+    });
     ro.observe(wrap);
     // The root's width changes without the film's when a scrollbar comes or goes.
     ro.observe(document.documentElement);
@@ -451,7 +461,7 @@ export function HeroFlythrough() {
                 onClick={() => ctl.current?.jump(i)}
                 aria-current={i === scene ? "step" : undefined}
                 aria-label={`Chapter ${i + 1}: ${s.name}`}
-                className="group relative flex min-h-6 w-full items-center gap-1.5 overflow-hidden rounded-md px-1.5 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
+                className="group relative flex min-h-6 w-full items-center gap-1 overflow-hidden rounded-md px-1 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
               >
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: DOTS[i % DOTS.length], opacity: i === scene ? 1 : 0.55 }} />
                 <span
@@ -461,12 +471,12 @@ export function HeroFlythrough() {
                 >
                   {s.name}
                 </span>
-                <span className="absolute inset-x-1.5 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
+                <span className="absolute inset-x-1 bottom-0 h-[2px] rounded-full" style={{ backgroundColor: "#eee8d5" }} />
                 <span
                   ref={(b) => {
                     barsRef.current[i] = b;
                   }}
-                  className="absolute inset-x-1.5 bottom-0 h-[2px] origin-left rounded-full"
+                  className="absolute inset-x-1 bottom-0 h-[2px] origin-left rounded-full"
                   // Constant after mount (the poster's scene, not `scene`), so React never overwrites what the driver wrote.
                   style={{ backgroundColor: DOTS[i % DOTS.length], transform: `scaleX(${i === POSTER_SCENE ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
                 />

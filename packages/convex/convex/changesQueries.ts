@@ -15,11 +15,11 @@
 import { v } from "convex/values";
 import { query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { latestShips, waitingStories, type ShipEvent } from "@codecast/shared/changes";
+import { isoWeekOf, latestShips, waitingStories, weekMonday, type ShipEvent } from "@codecast/shared/changes";
 import { getUserOrToken } from "./lib/auth";
 import { isTeamMember } from "./lib/access";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
-import { teamVisibleRecentInsights } from "./lib/changesAccess";
+import { teamVisibleInputs, teamVisibleRecentInsights } from "./lib/changesAccess";
 import { addDays, localDate, teamTimezone } from "./lib/teamDay";
 import { normalizeRepository, prUrl } from "./lib/gitRefs";
 import { accessibleCommits } from "./commits";
@@ -38,6 +38,8 @@ const STORY_PAGE = 600;
 const STORY_PAGE_BYTES = 768 * 1024;
 /** Editions are one small row per day and scope. */
 const EDITION_WINDOW_DAYS = 120;
+/** Week editions one read may return. */
+const EDITION_WINDOW_WEEKS = 20;
 /** A surface exists when it shipped in this window (spec 7.3). */
 const SURFACE_WINDOW_DAYS = 30;
 /** Recent ship events read directly, ahead of the next rebuild folding them into an edition. */
@@ -77,6 +79,14 @@ export function dateWindow(from: string, to: string, maxDays: number): { from: s
   if (!DATE.test(from) || !DATE.test(to)) return null;
   const [lo, hi] = from <= to ? [from, to] : [to, from];
   const floor = addDays(hi, -(maxDays - 1));
+  return { from: lo < floor ? floor : lo, to: hi };
+}
+
+/** A from/to pair of ISO weeks (`2026-W40`), ordered and clamped to `maxWeeks`, or null when malformed. */
+export function weekWindow(from: string, to: string, maxWeeks: number): { from: string; to: string } | null {
+  if (!weekMonday(from) || !weekMonday(to)) return null;
+  const [lo, hi] = from <= to ? [from, to] : [to, from];
+  const floor = isoWeekOf(addDays(weekMonday(hi)!, -7 * (maxWeeks - 1)));
   return { from: lo < floor ? floor : lo, to: hi };
 }
 
@@ -130,7 +140,7 @@ export const listStories = query({
 
 // ── Editions ─────────────────────────────────────────────────────────────
 
-export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd"> & {
+export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "scheduled_id"> & {
   /** When the day was first marked for a rebuild that has not run yet, else null. */
   dirty_since: number | null;
   /** dirty_since is older than STALE_AFTER_MS as of this read. The time moves on without a new read, so a page holding the row compares dirty_since itself. */
@@ -153,7 +163,10 @@ export const listEditions = query({
   },
   handler: async (ctx, args): Promise<EditionRow[] | null> => {
     if (!(await changesReader(ctx, args.team_id, args.api_token))) return null;
-    const window = dateWindow(args.from_date, args.to_date, EDITION_WINDOW_DAYS);
+    // Day editions are keyed by day, week editions by ISO week.
+    const window = args.scope === "week"
+      ? weekWindow(args.from_date, args.to_date, EDITION_WINDOW_WEEKS)
+      : dateWindow(args.from_date, args.to_date, EDITION_WINDOW_DAYS);
     if (!window) return [];
     const repository = repositoryOf(args.repository);
     const rows: Doc<"digests">[] = repository
@@ -169,7 +182,7 @@ export const listEditions = query({
         .query("change_dirty")
         .withIndex("by_key", (q) => q.eq("team_id", args.team_id).eq("repository", d.repository!).eq("date", d.date))
         .first();
-      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, ...rest } = d;
+      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, scheduled_id: _s, ...rest } = d;
       return { ...rest, dirty_since: dirty?.since ?? null, stale: !!dirty && now - dirty.since > STALE_AFTER_MS };
     }));
   },
@@ -453,5 +466,57 @@ export const inTheWorks = query({
           q.eq("team_id", teamId).eq("date", today)).take(WORKS_BRANCH_STORY_SCAN);
     out.push(...branchRows(teamId, stories));
     return out;
+  },
+});
+
+// ── Story sessions ───────────────────────────────────────────────────────
+
+/** Turns one drawer shows per session, and the length of each "did" line, as the story prompt reads them. */
+const SESSION_TURNS = 8;
+const SESSION_DID_CHARS = 160;
+
+export type StorySessionRow = {
+  /** `<story id>|<conversation id>`: one row per session a story drew on. */
+  _id: string;
+  team_id: Id<"teams">;
+  story_id: Id<"change_stories">;
+  conversation_id: Id<"conversations">;
+  headline: string | null;
+  summary: string | null;
+  /** The session's asks and what was done for each; only when its owner shares it with the team in full. */
+  turns: Array<{ ask: string; did: string[] }>;
+};
+
+/**
+ * The sessions behind a story for its evidence drawer (spec 3, level 3): each
+ * session's insight headline and summary, and its turns as ask/did pairs. The
+ * story's sessions passed teamVisibleInputs() when it was built; they pass it
+ * again here, so a session made private since, or whose owner now shows the
+ * team less, drops out at once, and turns go out only at mode `full`.
+ */
+export const storySessions = query({
+  args: { story_id: v.id("change_stories"), api_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<StorySessionRow[] | null> => {
+    const story = await ctx.db.get(args.story_id);
+    if (!story) return null;
+    if (!(await changesReader(ctx, story.team_id, args.api_token))) return null;
+    const visible = await teamVisibleInputs(ctx, story.team_id, story.conversation_ids);
+    return story.conversation_ids.flatMap((id) => {
+      const input = visible.get(String(id));
+      if (!input) return [];
+      const insight = input.insight;
+      return [{
+        _id: `${story._id}|${id}`,
+        team_id: story.team_id,
+        story_id: story._id,
+        conversation_id: id,
+        headline: insight?.headline ?? null,
+        summary: insight?.summary || null,
+        turns: (insight?.turns ?? []).slice(0, SESSION_TURNS).map((t) => ({
+          ask: t.ask,
+          did: t.did.map((d) => (d.length > SESSION_DID_CHARS ? `${d.slice(0, SESSION_DID_CHARS - 1)}…` : d)),
+        })),
+      }];
+    });
   },
 });

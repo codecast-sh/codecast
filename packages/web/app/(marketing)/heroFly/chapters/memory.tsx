@@ -26,6 +26,7 @@ import "@/components/CommandPalette.css";
 import "@/components/repo/repo.css";
 import type { PartProps } from "./contract";
 import { fly, useFilmTime } from "../filmClock";
+import { FilmSwap } from "../film";
 import { typed } from "../timeline";
 import { FILE, MEMORY, RECENT, RESULTS, SEARCH_MIN, TASK, VIEWER, blameRanges } from "../fixtures/memory";
 import { PEOPLE, SESSIONS } from "../fixtures/story";
@@ -38,6 +39,54 @@ const AUTHOR = PEOPLE.me.name;
 /** Every word of the query somewhere in the text: how the fixtures stand in for the server's content search. */
 const wordsIn = (q: string, text: string) => q.split(/\s+/).filter(Boolean).every((w) => text.toLowerCase().includes(w));
 
+/** When the film's query reaches the server search's three letters: the list goes from Recent to what the search finds. */
+const SEARCH_AT = MEMORY.typeAt + SEARCH_MIN / MEMORY.typeRate;
+
+/** The palette's groups for a query, as the app lists them. */
+function PaletteGroups({ query, now }: { query: string; now: number }) {
+  const q = query.trim().toLowerCase();
+  const recent = RECENT.filter((r) => sessionMatchesQuery({ ...r, authorName: VIEWER.name }, q)).slice(0, 4);
+  const searching = q.length >= SEARCH_MIN;
+  const results = searching ? RESULTS.filter((r) => wordsIn(q, `${r.session.title} ${r.match}`)) : [];
+  const tasks = searching && wordsIn(q, `${TASK.title} ${TASK.short_id} webhook retry`) ? [TASK] : [];
+  return (
+    <>
+      {recent.length > 0 && (
+        <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
+          {recent.map((r) => (
+            <PaletteSessionRow key={r._id} conv={{ ...r, updated_at: now - r.ago, isOwn: true }} bucket={null} onSelect={noop} />
+          ))}
+        </CommandPrimitive.Group>
+      )}
+      {searching && (
+        <CommandPrimitive.Group heading={`Search Results (${results.length})`} className={groupClass}>
+          {results.map((r) => (
+            <PaletteSearchResultRow
+              key={r.session.id}
+              result={{
+                conversationId: r.session.id,
+                title: r.session.title,
+                updatedAt: now - r.ago,
+                isOwn: false,
+                authorName: AUTHOR,
+                matches: Array.from({ length: r.matches }, (_, i) => ({ content: i === 0 ? r.match : undefined })),
+              }}
+              onSelect={noop}
+            />
+          ))}
+        </CommandPrimitive.Group>
+      )}
+      {tasks.length > 0 && (
+        <CommandPrimitive.Group heading="Tasks" className={groupClass}>
+          {tasks.map((t) => (
+            <PaletteTaskRow key={t._id} task={{ ...t, updated_at: now - t.ago }} status={TASK_STATUS} onSelect={noop} />
+          ))}
+        </CommandPrimitive.Group>
+      )}
+    </>
+  );
+}
+
 export function PaletteSearch({ now }: PartProps) {
   const filmQuery = useFilmTime((t) => typed(MEMORY.query, t, MEMORY.typeAt, MEMORY.typeRate));
   const [typedByVisitor, setTypedByVisitor] = useState<string | null>(null);
@@ -46,64 +95,35 @@ export function PaletteSearch({ now }: PartProps) {
   // palette is face-on, where that scroll has nothing to move.
   const [picked, setPicked] = useState("");
   const onScreen = useFilmTime((t) => t >= MEMORY.selectFrom && t < MEMORY.selectTo);
-  const query = typedByVisitor ?? filmQuery;
-  const q = query.trim().toLowerCase();
-  const recent = RECENT.filter((r) => sessionMatchesQuery({ ...r, authorName: VIEWER.name }, q)).slice(0, 4);
-  const searching = q.length >= SEARCH_MIN;
-  const results = searching ? RESULTS.filter((r) => wordsIn(q, `${r.session.title} ${r.match}`)) : [];
-  const tasks = searching && wordsIn(q, `${TASK.title} ${TASK.short_id} webhook retry`) ? [TASK] : [];
+  const visitor = typedByVisitor !== null;
   return (
     // The dialog is the surface, flush: one window, one shadow (the surface's).
     <div className="flex h-full" {...fly("palette/memory.palette")}>
       <CommandPrimitive
         className={`${paletteClass} !h-full !w-full !rounded-none !border-0 !shadow-none`}
         filter={paletteItemScore}
+        // The film lists what the search finds, staged; a visitor's own typing filters live, as the app does.
+        shouldFilter={visitor}
         loop
         label="Command menu"
-        value={onScreen || typedByVisitor !== null ? picked : ""}
+        value={onScreen || visitor ? picked : ""}
         onValueChange={setPicked}
       >
         <PaletteSearchBar trailing={<KeyCap>Esc</KeyCap>}>
           <CommandPrimitive.Input
             data-hero-live=""
-            value={query}
+            value={typedByVisitor ?? filmQuery}
             onValueChange={setTypedByVisitor}
             placeholder="Jump to..."
             className={paletteInputClass}
           />
         </PaletteSearchBar>
         <CommandPaletteList>
-          {recent.length > 0 && (
-            <CommandPrimitive.Group heading="Recent Sessions" className={groupClass}>
-              {recent.map((r) => (
-                <PaletteSessionRow key={r._id} conv={{ ...r, updated_at: now - r.ago, isOwn: true }} bucket={null} onSelect={noop} />
-              ))}
-            </CommandPrimitive.Group>
-          )}
-          {searching && (
-            <CommandPrimitive.Group heading={`Search Results (${results.length})`} className={groupClass}>
-              {results.map((r) => (
-                <PaletteSearchResultRow
-                  key={r.session.id}
-                  result={{
-                    conversationId: r.session.id,
-                    title: r.session.title,
-                    updatedAt: now - r.ago,
-                    isOwn: false,
-                    authorName: AUTHOR,
-                    matches: Array.from({ length: r.matches }, (_, i) => ({ content: i === 0 ? r.match : undefined })),
-                  }}
-                  onSelect={noop}
-                />
-              ))}
-            </CommandPrimitive.Group>
-          )}
-          {tasks.length > 0 && (
-            <CommandPrimitive.Group heading="Tasks" className={groupClass}>
-              {tasks.map((t) => (
-                <PaletteTaskRow key={t._id} task={{ ...t, updated_at: now - t.ago }} status={TASK_STATUS} onSelect={noop} />
-              ))}
-            </CommandPrimitive.Group>
+          {visitor ? (
+            <PaletteGroups query={typedByVisitor} now={now} />
+          ) : (
+            // The list changes once, as the query reaches the search: the results dissolve in over the recent sessions while the rest of the query types.
+            <FilmSwap cues={[SEARCH_AT]} dur={0.45} render={(step) => <PaletteGroups query={step ? MEMORY.query : ""} now={now} />} />
           )}
         </CommandPaletteList>
       </CommandPrimitive>

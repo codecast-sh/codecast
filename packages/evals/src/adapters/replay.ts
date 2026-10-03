@@ -7,7 +7,7 @@ import { summarizeRunFolder } from '@platform/evals/fs';
 import { runFolderName, writeRunFolder, type RunJson } from '../layout';
 import { homePaths } from '../paths';
 import { loadSurface, surfaceMeta } from '../registry';
-import { dirtySurfaces, gitHead, sourceHashes } from '../state';
+import { addSpend, dirtySurfaces, gitHead, sourceHashes } from '../state';
 import { gate, type AgentResult, type CallResult, type ReplayCtx, type ReplayResult, type SurfaceMeta } from '../surface';
 import { assertAnswered, runAgent, runCall } from './dryRun';
 import { judgeReply, PASS_AT } from './judge';
@@ -333,6 +333,8 @@ export async function replayRep(p: PreparedFreeze, rep: number, reps: number, o:
   const summary = summarizeRunFolder(root, dir.slice(root.length + 1));
   if (summary) {
     spent.usd += summary.costUsd;
+    // The day's ledger hears of each rep as it finishes, so a long or killed check never hides what it spent.
+    if (!o.dry) addSpend(summary.costUsd);
     lane.done++;
     lane.doneUsd += summary.costUsd;
   }

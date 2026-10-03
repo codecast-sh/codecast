@@ -112,6 +112,7 @@ describe("the lobby and the door", () => {
         waitingSince={null}
         accepted={null}
         creatorTold={false}
+        doorFull={false}
         signedIn={false}
         {...over}
       />,
@@ -138,6 +139,13 @@ describe("the lobby and the door", () => {
     expect(text(lobby("waiting", { live: false }))).not.toContain("Sam know");
     expect(text(lobby("waiting", { live: false }))).toContain("Someone can let you in once the call starts");
     expect(text(lobby("waiting"))).toContain("Stop asking");
+  });
+
+  test("a page that came back to a full door says so and keeps trying", () => {
+    const t = text(lobby("waiting", { doorFull: true }));
+    expect(t).toContain("Lots of people are waiting");
+    expect(t).toContain("Keep this page open");
+    expect(t).not.toContain("Someone in the call will let you in");
   });
 
   test("let in but not yet back in the room: one press", () => {

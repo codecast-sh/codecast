@@ -108,6 +108,7 @@ test("the stage is an ordinary window: no float, no click-through, resizable", (
 test("the float is above the work, on every desktop, and lets the mouse through", () => {
   assert.deepEqual(callWindowChrome("float"), {
     alwaysOnTop: true,
+    level: "status",
     visibleOnAllWorkspaces: true,
     clickThrough: true,
     resizable: false,

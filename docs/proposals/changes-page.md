@@ -261,7 +261,7 @@ Filters run client-side over store rows and are instant. Repo (single select), a
 
 ## 7. Generation pipeline
 
-All generation lives in a new module `packages/convex/convex/changes.ts` (functions) with pure logic in `packages/shared/src/changes/` (imported by both Convex and web). Building runs inside an internal action that calls small paged internal queries, so the 1s user-JS and 16 MiB caps never apply to clustering.
+All generation lives in a new module `packages/convex/convex/changes.ts` (functions) with pure logic in `packages/shared/changes/`, exported as `@codecast/shared/changes` (imported by both Convex and web). Building runs inside an internal action that calls small paged internal queries, so the 1s user-JS and 16 MiB caps never apply to clustering.
 
 ### 7.1 Layer 0: facts (deterministic, free)
 
@@ -275,9 +275,9 @@ All generation lives in a new module `packages/convex/convex/changes.ts` (functi
    - Area: `packages/<x>`, `apps/<x>`, `backend/<x>`, else the first path segment. The scope names the area when the files agree.
 4. **Resolve sessions** through `teamVisibleInputs()` (section 8.4). A commit whose conversation fails the gate is "private provenance": its commit text is usable (it is team-readable today through `canAccessCommit`), its session is not.
 5. **Cluster into stories**, in order:
-   - (a) commits sharing a team-visible conversation, or team-visible conversations sharing a task;
+   - (a) commits sharing a team-visible conversation, or team-visible conversations sharing a task. A session whose commits that day span 4 or more areas (`SPREAD_AREAS`) is committing a tree rather than pursuing one intent: it stays listed on every story its commits land in, but its commits group by rule (b). A session can cross that line mid-day, which retires its anchored story key; `buildDay` deletes stories whose key disappeared, and the commits land under their rule (b) keys;
    - (b) remaining commits grouped by (branch if not default, else area plus conventional scope) with a 3 hour gap;
-   - (c) a batch commit touching 3 or more areas is split by area into slices, each joining the matching story. MVP splits by path only; phase 2 attributes slices to sessions through `file_changes` (section 12).
+   - (c) a default-branch batch commit touching 3 or more areas is split by area into slices, each joining the nearest default-branch story of its area within 3 hours; slices nothing claims stay together as the commit's own story. MVP splits by path only; phase 2 attributes slices to sessions through `file_changes` (section 12).
 6. **Join PRs** through `pull_requests.linked_session_ids` and `external_events` `pr_merged` rows.
 7. **Assign releases**: a story gets "shipped in X" when the first release of a surface whose paths cover the story's area comes after its last commit.
 8. **Compute risk signals** (code decides, the model only words them):
@@ -292,8 +292,9 @@ Output per story: `story_key`, commit shas, visible conversation ids, PR ids, ar
 
 ### 7.2 Keys and hashes
 
-- `story_key = sha1(team_id, repository, date, anchor)` where anchor is the anchor conversation id, or `branch|area|scope|first_sha` for clusters. Stable as late commits join.
-- `inputs_hash = sha1(PROMPT_VERSION, sorted shas, for each visible insight its _id and generated_at, each visible conversation's effective visibility mode, each owner's membership level for the session, PR ids with updated_at, risk codes)`. Only fields the prompt uses are hashed, so unrelated churn never regenerates.
+- `story_key = hash64(team_id, repository, date, anchor)` where anchor is the anchor conversation id, or `branch|area|scope|first_sha` for clusters. Stable as late commits join.
+- `inputs_hash = hash64(PROMPT_VERSION, sorted shas, for each visible insight its _id and generated_at, each visible conversation's effective visibility mode, each owner's membership level for the session, PR ids with updated_at, risk codes)`. Only fields the prompt uses are hashed, so unrelated churn never regenerates.
+- `hash64` (`packages/shared/changes/keys.ts`) is a pure JS 64-bit hash, because Convex's default runtime has no node crypto: two independent 32-bit lanes, the existing FNV-1a and a multiply-xorshift lane.
 
 ### 7.3 Release and deploy signals
 
@@ -303,7 +304,7 @@ MVP sources, all landing as `external_events` rows so the existing team event st
 2. **Tag pushes.** `githubWebhooks.ts:1356` returns "Not a branch push" today. Handle `refs/tags/*` there: insert `external_events { kind: "release", repository, payload: {tag, sha} }`.
 3. **Convex deploy marker.** `packages/convex/deploy.sh` runs `cast ship mark --surface backend --sha <HEAD>` after a successful deploy. The CLI command posts to a new authenticated mutation `changes.markDeploy` that inserts `external_events { kind: "deploy", payload: {surface, sha, version?} }` for the repo's team. If the CLI is logged out, the mark is skipped with a warning and the deploy still succeeds.
 
-Surface detection: a surface exists when it has at least one signal in 30 days. Path map defaults live in `packages/shared/src/changes/surfaces.ts`: cli `packages/cli/, packages/shared/`; desktop `packages/electron/, packages/web/, packages/shared/`; backend `packages/convex/`; web `packages/web/, packages/shared/`; extension `packages/chrome-extension/`. Teams without a mapped surface but with tags get one surface, `release`, covering everything.
+Surface detection: a surface exists when it has at least one signal in 30 days. Path map defaults live in `packages/shared/changes/surfaces.ts`: cli `packages/cli/, packages/shared/`; desktop `packages/electron/, packages/web/, packages/shared/`; backend `packages/convex/`; web `packages/web/, packages/shared/`; extension `packages/chrome-extension/, packages/browser-extension/`. Teams without a mapped surface but with tags get one surface, `release`, covering everything.
 
 Phase 2: GitHub `release` and `deployment_status` webhooks (Railway web deploys), which need a GitHub App permission update.
 
@@ -496,9 +497,9 @@ Work: add `change_stories`, `change_story_inputs`, `change_dirty`; reshape `dige
 Accept: `cast check convex` green; `admin_mergeUser` test passes with a team digest row; `teamDay.test.ts` covers UTC fallback and DST boundaries.
 
 **T2. Shared layer 0 logic.** Depends on nothing.
-Files: `packages/shared/src/changes/{classify,dedupe,cluster,surfaces,risks,keys}.ts` and tests.
+Files: `packages/shared/changes/{classify,dedupe,cluster,surfaces,risks,keys,headline}.ts` and tests, exported as `@codecast/shared/changes`.
 Work: pure functions for the release regex and burst grouping, dedupe, area, conventional parse, clustering (a, b, c), release assignment, risk signals, `story_key` and `inputs_hash`.
-Accept: unit tests on fixtures copied from the 10-02 codecast day (scrubbed): the two rebase pairs collapse; the three release commits form one burst with restamp folded in; the line-pages batch commit splits into area slices; a Littlebird-shaped 760-commit fixture clusters in under 200ms.
+Accept: unit tests on fixtures copied from the 10-02 codecast day (scrubbed): the two rebase pairs collapse; the three release commits form one burst with restamp folded in; the 5-area ci commit `e7d2da040` splits into area slices (the line-pages commit `0de614861` touches only `packages/web`); a Littlebird-shaped 760-commit fixture clusters in under 200ms.
 
 **T3. Access gate.** Depends on T1.
 Files: `convex/lib/changesAccess.ts`, `convex/lib/changesAccess.test.ts`, `convex/changesAccess.guard.test.ts`.

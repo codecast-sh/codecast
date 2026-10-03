@@ -38,7 +38,7 @@ import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
 import { hasEditionProse, projectCommit } from "./changes";
 
-export const EDITION_PROMPT_VERSION = "edition-1";
+export const EDITION_PROMPT_VERSION = "edition-2";
 
 /** A story is written once no commit has joined it for this long, or once its day has ended (spec 7.4). */
 export const SETTLE_MS = 20 * 60_000;
@@ -281,15 +281,15 @@ export function storyRequest(input: StoryPromptInput): SurfaceRequest {
 
 Write the story of this work.
 
-- Say what changed for the people who use the product or work on it, in plain words. Lead with the effect, not the files or the mechanics.
-- Give a reason only when one of the inputs states it, and set why_source to the input it came from: ${sources.map((s) => `"${s}"`).join(", ")}. When none of them says why, set it to "none" and describe what changed without guessing at motive.
+- Say what changed, in plain words, as it shows up for the people who use the product or work on it: what happens now that did not before. Lead with that, not with the files or the mechanics.
+- A reason is anything that says why the change was made or what it is for: a purpose, a benefit, a problem it solves, any "to ...", "so that ..." or "making it easier to ..." clause. Give one only when an input states it, and set why_source to the input it came from: ${sources.map((s) => `"${s}"`).join(", ")}. When no input states one, set why_source to "none" and write no reason anywhere: not in the headline, the dek or the body.
 - Use only what the inputs say. Name no person or session the inputs do not name, and copy ids such as jx7c6zk, ct-1234 and #412 exactly as written.
 ${riskCodes.length ? `- For each flagged risk (${riskCodes.join(", ")}), write one plain line telling a teammate what to watch, keyed by its code in risk_lines.\n` : ""}- No em dashes.
 
 Fields:
 - headline: what changed, in sentence case, at most ${HEADLINE_MAX} characters.
-- dek: one sentence of at most ${DEK_MAX} characters, carrying the reason when there is one.
-- body: up to ${BODY_SENTENCES} sentences adding what the headline and dek leave out, or "" when they say it all.
+- dek: one short sentence, at most ${DEK_MAX} characters, carrying the stated reason when there is one, otherwise one fact the headline leaves out.
+- body: "" unless the inputs hold facts the headline and dek leave out; then up to ${BODY_SENTENCES} sentences of those facts and nothing else.
 - kind: one of ${KINDS.join(", ")}.
 - importance: 1 to 5, how much a teammate needs to know this today. 5 is a change everyone will notice, 1 is housekeeping.
 - why_source: as above.
@@ -309,10 +309,10 @@ export type StoryProse = {
   risk_lines?: Record<string, string>;
 };
 
-const str = (x: unknown): string => (typeof x === "string" ? x.replace(/\s+/g, " ").trim() : "");
+export const str = (x: unknown): string => (typeof x === "string" ? x.replace(/\s+/g, " ").trim() : "");
 
 /** At most `n` sentences. */
-function sentences(text: string, n: number): string {
+export function sentences(text: string, n: number): string {
   const parts = text.match(/[^.!?]+(?:[.!?]+(?=\s|$)|$)/g)?.map((s) => s.trim()).filter(Boolean) ?? [];
   return parts.slice(0, n).join(" ");
 }
@@ -357,7 +357,8 @@ export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "ses
  * The skip path (spec 7.4): a story of one whole fix or feature commit with no
  * session, whose subject is already a sentence, takes the subject as its
  * headline with no call. A slice of a batch commit never does: its subject
- * describes the whole batch.
+ * describes the whole batch. Neither does a subject that lists several changes
+ * or would have to be clipped to fit.
  */
 export function skipHeadline(story: Pick<Doc<"change_stories">, "commit_shas" | "conversation_ids" | "area_counts">, commits: readonly ChangeCommit[]): string | null {
   if (story.commit_shas.length !== 1 || story.conversation_ids.length) return null;
@@ -365,7 +366,13 @@ export function skipHeadline(story: Pick<Doc<"change_stories">, "commit_shas" | 
   if (!c || Object.keys(c.areas).some((a) => !(a in story.area_counts))) return null;
   const kind = subjectKind(c.subject);
   const cleaned = cleanSubject(c.subject);
-  return (kind === "fix" || kind === "feature") && cleaned.length >= SKIP_SUBJECT_CHARS ? clip(cleaned, HEADLINE_MAX) : null;
+  if (kind !== "fix" && kind !== "feature") return null;
+  return cleaned.length >= SKIP_SUBJECT_CHARS && cleaned.length <= HEADLINE_MAX && namesOneChange(cleaned) ? cleaned : null;
+}
+
+/** A subject that lists several changes ("a, b; c") is a batch summary, not a headline. */
+function namesOneChange(subject: string): boolean {
+  return !/[;,]\s/.test(subject);
 }
 
 /** When a story may be written: 20 minutes after its last commit, or when its day ends, whichever is first. */
@@ -439,7 +446,7 @@ export function editionRequest(input: EditionPromptInput): SurfaceRequest {
 
 Edit this day into an edition.
 
-- The headline says what the day was about for the team, naming the releases that went out when there were any. Sentence case, at most ${EDITION_HEADLINE_MAX} characters.
+- The headline is the day's news in one plain sentence: the change that mattered most and what it means for the team. It is a headline, not an inventory, so it does not string areas, releases or topics together; a release belongs in it only when shipping it was the news. Sentence case, at most ${EDITION_HEADLINE_MAX} characters.
 - The standfirst gives the shape of the day in two or three sentences, at most ${STANDFIRST_WORDS} words: what mattered most, and how it hangs together.
 - The lead is the one story a teammate most needs to read today, by its key.
 - section_order lists the areas (${areas.join(", ")}) in the order their news matters today.
@@ -670,11 +677,11 @@ export const readEdition = internalQuery({
 
 // ── Writes ───────────────────────────────────────────────────────────────
 
-const usageArg = v.object({ model: v.string(), input_tokens: v.number(), output_tokens: v.number(), cost_usd: v.number() });
-type Usage = typeof usageArg.type;
+export const usageArg = v.object({ model: v.string(), input_tokens: v.number(), output_tokens: v.number(), cost_usd: v.number() });
+export type Usage = typeof usageArg.type;
 
 /** A row's spend after one more call. Tokens and dollars add up over every call the row has had. */
-function spend(row: { input_tokens?: number; output_tokens?: number; cost_usd?: number }, usage: Usage | undefined) {
+export function spend(row: { input_tokens?: number; output_tokens?: number; cost_usd?: number }, usage: Usage | undefined) {
   if (!usage) return {};
   return {
     model: usage.model,
@@ -870,7 +877,10 @@ export type ProseResult = {
   spent_usd: number;
 };
 
-const usageOf = (model: string, u: { input_tokens: number; output_tokens: number }): Usage => ({
+/** Edition outcomes of an ended day that schedule its week (changesWeek.ts). */
+const WEEK_AFTER: ReadonlySet<ProseResult["edition"]> = new Set(["final", "failed", "capped", "held"]);
+
+export const usageOf = (model: string, u: { input_tokens: number; output_tokens: number }): Usage => ({
   model,
   input_tokens: u.input_tokens,
   output_tokens: u.output_tokens,
@@ -893,7 +903,7 @@ type Budget = { spent: number };
 type StoryStep = "written" | "skipped" | "failed" | "stale" | "deferred" | "capped" | "held" | "gone";
 
 /** A deployment without a model key writes no prose and marks nothing failed: the stories wait for one. */
-const hasModelKey = () => !!process.env.ANTHROPIC_API_KEY;
+export const hasModelKey = () => !!process.env.ANTHROPIC_API_KEY;
 
 async function proseForStory(ctx: ActionCtx, storyId: Id<"change_stories">, dayEnd: number, now: number, budget: Budget, settle: number[]): Promise<StoryStep> {
   const read: StoryRead | null = await ctx.runQuery(internal.changesProse.readStory, { story_id: storyId });
@@ -1014,6 +1024,11 @@ export async function runProse(
 
   if (result.capped || result.edition === "capped") {
     await ctx.runMutation(internal.changesProse.markCapped, { team_id: args.team_id, repository: args.repository, date: args.date });
+  }
+  // An ended day's edition is as written as it will get (prose, or facts the
+  // cap, a missing key or a failure left): its week is built from it.
+  if (now >= day.end && WEEK_AFTER.has(result.edition)) {
+    await ctx.runMutation(internal.changesWeek.scheduleWeek, { team_id: args.team_id, repository: args.repository, date: args.date });
   }
   if (settle.length) {
     await ctx.runMutation(internal.changesProse.deferDay, {

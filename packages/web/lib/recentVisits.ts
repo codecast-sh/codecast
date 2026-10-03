@@ -85,54 +85,76 @@ function countViewSessions(state: any) {
   return { byBucket, byProject };
 }
 
+// What resolving several visits shares: the inbox scope and the per-view
+// session counts, each built once and only when a visit needs it.
+export type VisitResolveMemo = {
+  scoped?: Record<string, any>;
+  counts?: ReturnType<typeof countViewSessions>;
+};
+
+/**
+ * One visit as a display row, resolved live from the store, or null when it
+ * is not a place this workspace can go: a session the inbox scope hides, an
+ * untitled blank, a deleted label. The recents surfaces and the undo timeline
+ * (lib/undoHistory) resolve through it, so a title and a scope rule are the
+ * same everywhere. Pass one `memo` across a loop to build the scope once.
+ */
+export function resolveVisit(
+  state: any,
+  v: RecentVisit,
+  opts?: { skipViews?: boolean },
+  memo: VisitResolveMemo = {},
+): ResolvedVisit | null {
+  if (v.kind === "session") {
+    // The cache holds rows from other scopes and previously viewed teams; a
+    // session the inbox scope hides is not a place this workspace can go.
+    memo.scoped ??= state.sessions ? filterInboxScopeFromState(state) : {};
+    if (state.sessions?.[v.key] && !memo.scoped[v.key]) return null;
+    const sess = state.sessions?.[v.key] ?? state.conversations?.[v.key];
+    // Untitled blanks (pre-warm stubs the user summoned but never used) are
+    // noise, and entries we can't name at all are unrenderable — skip both.
+    if (sess && !sess.title && (sess.message_count ?? 0) === 0) return null;
+    const title = cleanTitle(sess?.title || v.label || "");
+    if (!title) return null;
+    return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: "session", entity: sess, sessionId: v.key };
+  }
+  if (v.kind === "view") {
+    if (opts?.skipViews) return null;
+    const counts = (memo.counts ??= countViewSessions(state));
+    if (v.key.startsWith("label:")) {
+      const id = v.key.slice("label:".length);
+      const bucket = state.buckets?.[id];
+      const name = bucket?.name ?? v.label;
+      // A deleted/archived label is no longer a place you can go.
+      if (!name || bucket?.archived_at) return null;
+      return {
+        key: v.key, kind: v.kind, ts: v.ts, title: name, objectType: "label", entity: bucket,
+        sessionCount: counts.byBucket.get(id) ?? 0, bucketId: id,
+      };
+    }
+    const name = v.label ?? v.key.slice("project:".length);
+    return {
+      key: v.key, kind: v.kind, ts: v.ts, title: name, objectType: "project",
+      sessionCount: counts.byProject.get(name) ?? 0, projectName: name, projectPath: v.path ?? null,
+    };
+  }
+  const path = v.path ?? v.key.slice("page:".length);
+  const obj = resolvePageObject(state, path);
+  const title = obj.title ?? v.label ?? pathLabel(path);
+  return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path };
+}
+
 export function resolveRecentVisits(
   state: any,
   limit: number,
   opts?: { skipViews?: boolean },
 ): ResolvedVisit[] {
   const out: ResolvedVisit[] = [];
-  let scoped: Record<string, any> | null = null;
-  let counts: ReturnType<typeof countViewSessions> | null = null;
+  const memo: VisitResolveMemo = {};
   for (const v of (state.recentVisits ?? []) as RecentVisit[]) {
     if (out.length >= limit) break;
-    if (v.kind === "session") {
-      // The cache holds rows from other scopes and previously viewed teams; a
-      // session the inbox scope hides is not a place this workspace can go.
-      scoped ??= state.sessions ? filterInboxScopeFromState(state) : {};
-      if (state.sessions?.[v.key] && !scoped[v.key]) continue;
-      const sess = state.sessions?.[v.key] ?? state.conversations?.[v.key];
-      // Untitled blanks (pre-warm stubs the user summoned but never used) are
-      // noise, and entries we can't name at all are unrenderable — skip both.
-      if (sess && !sess.title && (sess.message_count ?? 0) === 0) continue;
-      const title = cleanTitle(sess?.title || v.label || "");
-      if (!title) continue;
-      out.push({ key: v.key, kind: v.kind, ts: v.ts, title, objectType: "session", entity: sess, sessionId: v.key });
-    } else if (v.kind === "view") {
-      if (opts?.skipViews) continue;
-      counts ??= countViewSessions(state);
-      if (v.key.startsWith("label:")) {
-        const id = v.key.slice("label:".length);
-        const bucket = state.buckets?.[id];
-        const name = bucket?.name ?? v.label;
-        // A deleted/archived label is no longer a place you can go.
-        if (!name || bucket?.archived_at) continue;
-        out.push({
-          key: v.key, kind: v.kind, ts: v.ts, title: name, objectType: "label", entity: bucket,
-          sessionCount: counts.byBucket.get(id) ?? 0, bucketId: id,
-        });
-      } else {
-        const name = v.label ?? v.key.slice("project:".length);
-        out.push({
-          key: v.key, kind: v.kind, ts: v.ts, title: name, objectType: "project",
-          sessionCount: counts.byProject.get(name) ?? 0, projectName: name, projectPath: v.path ?? null,
-        });
-      }
-    } else {
-      const path = v.path ?? v.key.slice("page:".length);
-      const obj = resolvePageObject(state, path);
-      const title = obj.title ?? v.label ?? pathLabel(path);
-      out.push({ key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path });
-    }
+    const row = resolveVisit(state, v, opts, memo);
+    if (row) out.push(row);
   }
   return out;
 }
