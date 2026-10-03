@@ -1,3 +1,4 @@
+import { formatSessionMessage } from "@codecast/shared/contracts";
 const maxSubagentPromptLength = 256_000;
 const conversationId = /^jx[a-z0-9]{30}$/;
 
@@ -5,7 +6,7 @@ export function formatAgentPrompt(from: string, body: string, subagent = false):
   if (!conversationId.test(from)) throw new Error("Agent prompt requires a resolved parent conversation ID");
   if (subagent && body.length + 96 > maxSubagentPromptLength) throw new Error("Subagent launch prompt is too large");
   if (!body.trim()) throw new Error("Agent prompt is empty");
-  return `<session-message from="${from}"${subagent ? ' subagent="true"' : ''}>\n${body}\n</session-message>`;
+  return formatSessionMessage(from, body, { subagent });
 }
 
 export function subagentPromptParent(content: string, knownParents: ReadonlySet<string>, self?: string): string | undefined {

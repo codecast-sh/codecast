@@ -94,6 +94,18 @@ export function isAgentContextMessage(rawContent: string | null | undefined): bo
     || /^# (?:AGENTS\.md instructions|Project context)(?:\s|$)/.test(text);
 }
 
+// The wire format for a session→session message (`cast send`, a spawn's
+// launch prompt): the one writer, beside its parsers. `from` is the sender's
+// short id on a send, its full conversation id on a launch; `name` labels a
+// sender with no session of its own; `subagent` marks a launch that may make
+// a parent relationship (cli agentPromptOrigin). Readers tolerate either
+// attribute (ConversationView classifyUserMessage / SessionMessageBlock).
+export function formatSessionMessage(from: string, body: string, opts: { name?: string; subagent?: boolean } = {}): string {
+  const nameAttr = opts.name ? ` name="${opts.name.replace(/"/g, "'")}"` : "";
+  const subagentAttr = opts.subagent ? ' subagent="true"' : "";
+  return `<session-message from="${from}"${nameAttr}${subagentAttr}>\n${body}\n</session-message>`;
+}
+
 // Lightweight detection that a user message is actually an inbound
 // session→session message (delivered by `cast send`). Keys off the OPENING tag
 // only, so it still fires on a truncated preview (last_message_preview is

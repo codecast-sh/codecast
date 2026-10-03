@@ -13,7 +13,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
 import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
@@ -508,7 +508,7 @@ export async function tellRole(
     const from = fields.from_conversation_id ? await ctx.db.get(fields.from_conversation_id) : null;
     rest.content = from
       ? formatSessionMessage(from.short_id ?? String(from._id).slice(0, 7), fields.content)
-      : formatSessionMessage("unknown", fields.content, "codecast");
+      : formatSessionMessage("unknown", fields.content, { name: "codecast" });
   }
   return await enqueuePendingMessage(ctx, conversation, from_user_id ?? conversation.user_id, rest);
 }
@@ -672,17 +672,10 @@ export const sendMessageV2 = mutation({
   },
 });
 
-// The wire format for a session→session message. The body is wrapped so the
-// receiving agent (and the web client) can tell who sent it. Keep this tag name
-// in sync with the parser in packages/web/components/ConversationView.tsx
-// (classifyUserMessage / SessionMessageBlock).
-export function formatSessionMessage(fromShortId: string, body: string, fromName?: string): string {
-  // `name` is an optional display label for the sender — used when `from` doesn't
-  // resolve to a clickable session (e.g. a link collaborator with no session of
-  // their own). The parser tolerates the extra attribute, so old readers ignore it.
-  const nameAttr = fromName ? ` name="${fromName.replace(/"/g, "'")}"` : "";
-  return `<session-message from="${fromShortId}"${nameAttr}>\n${body}\n</session-message>`;
-}
+// The wire format for a session→session message lives with its parsers in
+// the shared contract (machineMessages.formatSessionMessage); re-exported
+// here for the callers that write it.
+export { formatSessionMessage };
 
 // True if the conversation has at least one managed session that has beaten its heartbeat
 // recently — i.e. a daemon is alive and could deliver right now. Used to give the sender an
@@ -855,7 +848,7 @@ export async function performSessionSend(
       ? body
       : args.direct
       ? formatUserMessage(senderName ?? "a teammate", body)
-      : formatSessionMessage(fromShortId, body, fromName),
+      : formatSessionMessage(fromShortId, body, { name: fromName }),
     image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
     // Only a cross-user send needs the failure-feedback channel. A self-send keeps the original
