@@ -28,6 +28,7 @@ import { createProjectFolder, useDirListing } from "../../lib/fsBrowse";
 import { CollabComposer } from "../CollabComposer";
 import { useInboxStore, isConvexId, convBucketMap, type BucketItem, resolveCloudStartFrom } from "../../store/inboxStore";
 import { isParkedDispatchError } from "../../store/mutativeMiddleware";
+import { withoutUndo } from "../../store/undoStack";
 import { getLabelColor } from "../../lib/labelColors";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { browseProjectOrder, frequentProjectChips, mergeRecentProjectPaths, recentProjectPathsFromSessionKeys, recentProjectSessionKey } from "../../lib/recentProjectPaths";
@@ -526,7 +527,8 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot }: {
       cloudStartFrom: resolveCloudStartFrom(useInboxStore.getState().clientState.ui),
     })).catch((err) => {
       if (isParkedDispatchError(err)) return;
-      if (prevPath) useInboxStore.getState().updateSessionProject(convexId!, prevPath);
+      // The switch failed: putting the path back is not an undoable change.
+      if (prevPath) withoutUndo(() => useInboxStore.getState().updateSessionProject(convexId!, prevPath));
       toast.error(err instanceof Error ? err.message : "Failed to switch project");
     });
   }, [storeSession, conversation._id, convCommand, currentPath, isolatedToggle, cloudMode, cloudHost, routedMachine, machineChips, scopedDeviceId]);
@@ -1121,7 +1123,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     const real = store.getConvexId(convId) ?? convId;
     if (!isConvexId(real)) return;
     if (Object.values(store.bucketAssignments).some((row) => row.conversation_id === real)) return;
-    store.assignSessionToBucket(real, activeBucketFilter);
+    withoutUndo(() => store.assignSessionToBucket(real, activeBucketFilter));
   }, [convId, activeBucketFilter, assigned]);
 
   if (visibleBuckets.length === 0) return null;

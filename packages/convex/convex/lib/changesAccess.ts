@@ -7,10 +7,10 @@
 // A conversation passes when the team can already read it, by the same rules
 // the team feed applies (createTeamFeedFilter: sharing, a locked-private
 // override, the owner's membership level at the session's start), when its
-// visible team is this team, and when its effective visibility mode is above
-// `minimal`. The mode decides what prose may use: `summary` allows the
-// insight's headline and summary, `full` (the feed's `full` or `detailed`)
-// allows its turns too. An insight written while the session sat in another
+// owner is still a member, when its visible team is this team, and when its
+// effective visibility mode is above `minimal`. The mode decides what prose
+// may use: `summary` allows the insight's headline and summary, `full` (the
+// feed's `full` or `detailed`) allows its turns too. An insight written while the session sat in another
 // team is withheld even when the session itself passes.
 
 import type { Doc, Id } from "../_generated/dataModel";
@@ -87,10 +87,14 @@ export async function teamVisibleInputs(
   if (ids.length === 0) return out;
 
   const filter = await createTeamFeedFilter(ctx, teamId);
+  // A former member's sessions keep their team_id and sharing, and the feed
+  // filter reads a missing membership as the default level, so ending a
+  // membership withdraws only through this check.
+  const members = new Set(filter.memberships.map((m) => String(m.user_id)));
   const conversations: Array<Doc<"conversations"> | null> = await Promise.all(ids.map((id) => ctx.db.get(id)));
 
   await Promise.all(conversations.map(async (conv) => {
-    if (!conv) return;
+    if (!conv || !members.has(String(conv.user_id))) return;
     if (String(teamVisibleConvTeam(conv)) !== String(teamId)) return;
     if (!filter.isVisible(conv)) return;
     const level = filter.getVisibilityFor(conv) as TeamVisibilityLevel;

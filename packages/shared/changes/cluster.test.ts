@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { commit, MIN, T0 } from "./__fixtures__/commit";
 import { littlebirdDay } from "./__fixtures__/littlebird";
 import days from "./__fixtures__/codecastDays.json";
-import { buildLayerZero, type LayerZeroInput } from "./cluster";
+import { buildLayerZero, SPREAD_AREAS, type LayerZeroInput } from "./cluster";
 import type { ChangeCommit, LayerZeroStory, VisibleConversation } from "./types";
 
 const REPO = "codecast-sh/codecast";
@@ -158,6 +158,20 @@ describe("rules (a) to (c) in isolation", () => {
     expect(r.stories[0].anchor).toBe("s1");
     expect(r.stories[0].conversation_ids).toEqual(["s1", "s2"]);
     expect(r.stories[0].task_ids).toEqual(["ct1"]);
+  });
+
+  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that still name it", () => {
+    const areas = ["web", "cli", "convex", "mobile"];
+    const cs = areas.map((a, i) => commit({ sha: `w${i}`, subject: `feat(${a}): step ${i}`, conversation_id: "s9", timestamp: T0 + i * 20 * MIN, paths: { [`packages/${a}/x.ts`]: 10 } }));
+    const visible = [{ conversation_id: "s9" }];
+    const morning = build({ commits: cs.slice(0, SPREAD_AREAS - 1), visible });
+    expect(morning.stories).toHaveLength(1);
+    expect(morning.stories[0].anchor).toBe("s9");
+    const evening = build({ commits: cs, visible });
+    expect(evening.stories.map((s) => s.anchor)).not.toContain("s9");
+    expect(evening.stories.map((s) => s.story_key)).not.toContain(morning.stories[0].story_key);
+    expect(evening.stories).toHaveLength(areas.length);
+    for (const s of evening.stories) expect(s.conversation_ids).toEqual(["s9"]);
   });
 
   test("rule (b) breaks on a 3 hour gap and on scope; a branch groups whole", () => {

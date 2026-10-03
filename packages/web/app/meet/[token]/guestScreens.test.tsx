@@ -37,6 +37,10 @@ describe("the end of the road, in plain words", () => {
     expect(t).toContain("This link has expired");
     expect(t).toContain("Ask whoever sent it for a new one");
     expect(t).not.toContain("Ask again");
+    // Said once, in the heading: the body under it is what to do next.
+    expect(t.split("This link has expired").length - 1).toBe(1);
+    // A reason the heading does not carry is still explained.
+    expect(outcome({ kind: "refused", reason: "inviter_gone" })).toContain("can no longer invite guests");
   });
 
   test("turned away: a countdown, then Ask again", () => {
@@ -44,10 +48,24 @@ describe("the end of the road, in plain words", () => {
     expect(outcome(view("denied", { retryAt: Date.now() - 600_000 }))).toContain("You can ask again now");
   });
 
-  test("removed is final", () => {
+  test("removed is final, and promises only what the server enforces", () => {
     const t = outcome(view("removed", { canAskAgain: true }));
     expect(t).toContain("You were removed from the call");
     expect(t).not.toContain("Rejoin");
+    expect(t).not.toContain("This link no longer works");
+    expect(outcome(view("removed", { canAskAgain: false }))).toContain("This link no longer works");
+  });
+
+  test("a place let go without anybody deciding it says which, and walks back in while it is held", () => {
+    const dropped = outcome(view("left", { leftReason: "lapsed", resumable: true }));
+    expect(dropped).toContain("You were disconnected");
+    expect(dropped).toContain("Your place is still held");
+    expect(dropped).toContain("Rejoin");
+    const never = outcome(view("left", { leftReason: "not_joined", resumable: true }));
+    expect(never).toContain("You didn't join in time");
+    expect(never).not.toContain("lost touch");
+    expect(never).toContain("Join now");
+    expect(outcome(view("left", { leftReason: "not_joined", resumable: false }))).toContain("Ask to join again");
   });
 
   test("leaving, being dropped and the call ending each say which, with the way back only while the link works", () => {
@@ -112,6 +130,8 @@ describe("the lobby and the door", () => {
         waitingSince={null}
         accepted={null}
         creatorTold={false}
+        doorFull={false}
+        heldUntil={null}
         signedIn={false}
         {...over}
       />,
@@ -140,8 +160,33 @@ describe("the lobby and the door", () => {
     expect(text(lobby("waiting"))).toContain("Stop asking");
   });
 
+  test("a page that came back to a full door says so and keeps trying", () => {
+    const t = text(lobby("waiting", { doorFull: true }));
+    expect(t).toContain("Lots of people are waiting");
+    expect(t).toContain("Keep this page open");
+    expect(t).not.toContain("Someone in the call will let you in");
+    // Not in line, and nobody inside can see them: no minutes, no knocking ring.
+    expect(t).toContain("waiting for a place at the door");
+    expect(t).not.toContain("waiting less than a minute");
+    const html = lobby("waiting", { doorFull: true });
+    expect(html).not.toContain("meet-knock-ring");
+    expect(lobby("waiting")).toContain("meet-knock-ring");
+  });
+
   test("let in but not yet back in the room: one press", () => {
     expect(text(lobby("rejoin"))).toContain("Join the call");
+  });
+
+  test("while the browser's prompt is up, Join waits for it rather than joining without devices", () => {
+    const asking = { ...preview, getSnapshot: () => ({ ...preview.getSnapshot(), asking: true }) };
+    const html = lobby("rejoin", { preview: asking });
+    expect(text(html)).toContain("Waiting for your camera and microphone");
+    expect(html).toMatch(/<button type="button" disabled=""/);
+  });
+
+  test("a place held for them while they read says for how long", () => {
+    expect(text(lobby("rejoin", { heldUntil: Date.now() + 4 * 60_000 + 10_000 }))).toContain("your place is held for 5 min");
+    expect(text(lobby("rejoin"))).not.toContain("your place is held");
   });
 
   test("a recording that started while they waited is told at the door and marked new", () => {
@@ -155,7 +200,7 @@ describe("the lobby and the door", () => {
   });
 
   test("a signed-in browser is pointed at the app, to join as themselves", () => {
-    expect(text(lobby("ask", { signedIn: true }))).toContain("Join from the app as yourself");
+    expect(text(lobby("ask", { signedIn: true }))).toContain("Join as yourself, not as a guest: open codecast and join from Live now in the sidebar");
     expect(text(lobby("ask"))).not.toContain("as yourself");
   });
 });
@@ -193,7 +238,8 @@ describe("inside the call", () => {
           myName="Ada"
           transcribed
           recording={false}
-          recordingAccepted={false}
+          accepted={null}
+          reconnecting={false}
           serverTrouble={false}
           onLeave={() => {}}
           onReconnect={() => {}}
@@ -223,11 +269,39 @@ describe("inside the call", () => {
   });
 
   test("a recording they did not join under is said in words on the way in, with what they can do", () => {
-    const t = inCall(fakeCall(), { recording: true, recordingAccepted: false });
+    const t = inCall(fakeCall(), { recording: true, accepted: { recording: false, transcribed: true } });
     expect(t).toContain("This call is being recorded, video and screen shares included.");
     expect(t).toContain("Turn camera off");
     expect(t).toContain("Stop recording");
     // Joined under it: the mark in the bar, no line.
-    expect(inCall(fakeCall(), { recording: true, recordingAccepted: true })).not.toContain("Turn camera off");
+    expect(inCall(fakeCall(), { recording: true, accepted: { recording: true, transcribed: true } })).not.toContain("Turn camera off");
+  });
+
+  test("a transcript they did not join under is said in words too, with a way to mute", () => {
+    const t = inCall(fakeCall(), { transcribed: true, accepted: { recording: false, transcribed: false } });
+    expect(t).toContain("This call is transcribed: what everyone says is written down.");
+    expect(t).toContain("Mute");
+    expect(inCall(fakeCall(), { transcribed: true, accepted: { recording: false, transcribed: true } })).not.toContain("written down.");
+  });
+
+  test("an agent's face is counted and marked apart from the people", () => {
+    const t = inCall(
+      fakeCall({
+        people: [
+          { identity: "guest:g1", name: "Ada", kind: "guest", isLocal: true, muted: false, sharing: false },
+          { identity: "u1", name: "Sam Lee", kind: "person", isLocal: false, muted: true, sharing: false },
+          { identity: "agent:c9", name: "Claude", kind: "agent", isLocal: false, muted: false, sharing: false },
+        ],
+      }),
+      { accepted: { recording: false, transcribed: true } },
+    );
+    expect(t).toContain("2 · 1 agent");
+    expect(t).toContain("Claude agent");
+  });
+
+  test("a reconnect the page is making keeps the stage, under its line", () => {
+    const t = inCall(fakeCall({ phase: "connecting", people: [] }), { reconnecting: true, accepted: { recording: false, transcribed: true } });
+    expect(t).toContain("Reconnecting");
+    expect(t).toContain("reconnecting…");
   });
 });

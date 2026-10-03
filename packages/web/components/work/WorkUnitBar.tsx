@@ -19,9 +19,9 @@ import { identityLine, identityRowOf } from "../../lib/sessionIdentity";
 import { sessionLiveAt } from "../../lib/liveness";
 import { compactAge, threadStateView } from "../../lib/threadState";
 import { cleanTitle } from "../../lib/conversationProcessor";
-import { canOpenBeside, openBeside, sessionPanePath } from "../../lib/stage";
+import { openBeside, sessionPanePath, stageClose, stageFocus, stageHasRoom } from "../../lib/stage";
 import { useTabContext } from "../../lib/tabParams";
-import { InsideWorkUnit, setSessionStacked, taskFacePath, useSessionStacked, useSwitchFace, type WorkFace } from "../../lib/workUnit";
+import { InsideWorkUnit, setSessionStacked, taskFacePath, useLeafShowing, useSessionStacked, useSwitchFace, type WorkFace } from "../../lib/workUnit";
 import { HeightGrip, savedGripHeight } from "../HeightGrip";
 import { SessionPane } from "../stage/SessionPane";
 import { RoutePane } from "../RoutePane";
@@ -81,11 +81,10 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   const frameRef = useRef<HTMLDivElement>(null);
   const switchFace = useSwitchFace();
   const personifyAll = usePersonifyAll();
-  // The store row is the live truth for the session (and the task's status);
-  // the props are what the page already had in hand.
-  // The re-render signature: identity, declared state, the task's status
-  // and its subtask tally. Heartbeats are left out on purpose (they tick about
-  // once a second); liveness is re-read on the coarse clock instead.
+  // The store rows are the live truth; the props are what the page already
+  // had in hand. The re-render signature covers identity, declared state, the
+  // task's status and its subtask tally. Heartbeats are left out on purpose
+  // (they tick about once a second); liveness is re-read on the coarse clock.
   const sig = useInboxStore((s) => `${liveSig(s.sessions[session._id])}|${(s.tasks as any)[task._id]?.status ?? ""}|${subtaskTally(task._id, s.tasks)}`);
   const st = useInboxStore.getState();
   const liveRow: any = { ...session, ...(st.sessions[session._id] ?? {}) };
@@ -104,6 +103,11 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
   const taskPath = taskFacePath(task);
   const sessionPath = sessionPanePath(session._id);
   const otherPath = face === "task" ? sessionPath : taskPath;
+  // The other face already open in a pane beside this one: its tab focuses
+  // that pane, and Both (pressed) closes it.
+  const otherLeaf = useLeafShowing(otherPath);
+  const together = stacked || otherLeaf !== null;
+  const goOther = () => { if (otherLeaf) stageFocus(otherLeaf); else switchFace(otherPath); };
 
   const stateView = threadStateView(liveRow, liveRow.message_count ?? 0, now);
   const pinned = stateView?.text ?? null;
@@ -173,7 +177,7 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
         <button
           role="tab"
           aria-selected={face === "task"}
-          onClick={() => face !== "task" && switchFace(taskPath)}
+          onClick={() => face !== "task" && goOther()}
           className={segment(face === "task")}
           title={face === "task" ? "This task" : `Open the task: ${task.short_id ?? ""} ${task.title}`}
         >
@@ -183,7 +187,7 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
         <button
           role="tab"
           aria-selected={face === "session"}
-          onClick={() => face !== "session" && switchFace(sessionPath)}
+          onClick={() => face !== "session" && goOther()}
           className={segment(face === "session")}
           title={face === "session" ? "The session doing this task" : `Open the session doing this task: ${line.name ? `${line.name} · ` : ""}${sessionTitle}`}
         >
@@ -200,20 +204,21 @@ function WorkUnitBarInner({ face, task, session }: { face: WorkFace; task: WorkU
           Move to review
         </button>
       )}
-      <ShortcutTooltip label={stacked ? "Show this face alone" : "Show the task and the session together"}>
+      <ShortcutTooltip label={together ? "Show this face alone" : "Show the task and the session together"}>
         <button
           type="button"
           onClick={() => {
             if (stacked) { setStacked(false); return; }
-            if (canOpenBeside() && openBeside(otherPath)) return;
+            if (otherLeaf) { stageClose(otherLeaf); return; }
+            if (stageHasRoom() && openBeside(otherPath)) return;
             setStacked(true);
           }}
-          aria-pressed={stacked}
+          aria-pressed={together}
           className={`flex items-center gap-1 h-6 px-2 rounded-md border text-[11px] transition-colors flex-shrink-0 ${
-            stacked ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
+            together ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40"
           }`}
         >
-          {canOpenBeside() && !stacked ? <Columns2 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
+          {otherLeaf || (stageHasRoom() && !stacked) ? <Columns2 className="w-3.5 h-3.5" /> : <Rows2 className="w-3.5 h-3.5" />}
           <span>Both</span>
         </button>
       </ShortcutTooltip>

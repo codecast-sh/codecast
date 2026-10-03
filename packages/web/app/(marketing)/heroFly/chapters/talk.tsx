@@ -14,6 +14,8 @@ import { CastCommandBlock } from "@/components/conversation/blocks/castBlocks";
 import { SessionMessageBlock } from "@/components/conversation/blocks/systemBlocks";
 import { AssistantBlock, ForkSeedMark, UserPrompt } from "@/components/conversation/blocks/turnBlocks";
 import { WORKERS } from "../fixtures/fanout";
+import { REPLY as PHONE_REPLY, STEER } from "../fixtures/phone";
+import { WorkerPlan, WorkerTask } from "./fanout";
 import { FORK_ANSWER, FORK_CHILDREN, FORK_PROMPT, FORK_REPLAY, forkRow, MAIN_LINE, MESSAGE, REPLY, REPLY_RESULT, REPLY_SEND, SEND, SEND_RESULT } from "../fixtures/talk";
 import { PEOPLE, SESSIONS } from "../fixtures/story";
 import { fly, useFilmTime } from "../filmClock";
@@ -23,7 +25,7 @@ import type { PartProps } from "./contract";
 
 const noop = () => {};
 /**
- * A 540px window is narrower than the conversation the "Message from" card is
+ * A worker's window is narrower than the conversation the "Message from" card is
  * laid out for: its header keeps the sender's pill on one line and wraps the
  * link to the sending message under it, rather than breaking the session's name.
  */
@@ -114,6 +116,11 @@ export function ForkFeed({ now }: PartProps) {
   return (
     <div {...fly("pairB/talk.forkCover")} className="absolute inset-0 bg-sol-bg">
       <div {...fly("pairB/talk.forkFeed")} className="absolute inset-0 flex flex-col justify-end px-3 pb-1">
+        {/* A fork carries its parent's history up to the turn it branched at, so its window opens on the API worker's story, then the mark where it diverged. */}
+        <WorkerTask which="api" now={now - 60_000} />
+        <WorkerPlan which="api" now={now - 60_000} />
+        <UserPrompt content={STEER} timestamp={now - 30_000} messageId="hero-m-fork-steer" userName={PEOPLE.me.name} avatarUrl={null} />
+        <AssistantBlock content={PHONE_REPLY} timestamp={now - 25_000} messageId="hero-m-fork-reply" agentType={SESSIONS.api.agent} />
         <ForkSeedMark parentId={SESSIONS.api.id} parentTitle={SESSIONS.api.title} convLink={convLink} />
         <UserPrompt content={FORK_PROMPT} timestamp={now - 3_000} messageId="hero-m-fork-seed" userName={PEOPLE.me.name} avatarUrl={null} />
         <FilmGrow at={TALK_AT.forkAnswer}>

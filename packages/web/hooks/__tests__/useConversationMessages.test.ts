@@ -38,8 +38,8 @@ describe("history jumps are one-shot fetches", () => {
     expect(fn).not.toContain("useQuery");
   });
 
-  it("the around useQuery is bookmark/deeplink only, not jumpTimestamp", () => {
-    const at = src.indexOf("const aroundData = useQuery(");
+  it("the around subscription is bookmark/deeplink only, not jumpTimestamp", () => {
+    const at = src.indexOf("const aroundData = useQueryNoThrow(");
     expect(at).toBeGreaterThan(-1);
     const args = src.slice(at, src.indexOf(");", at) + 2);
     expect(args).toContain("jumpMode === null");

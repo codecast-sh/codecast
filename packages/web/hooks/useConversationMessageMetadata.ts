@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { isConvexId } from "../store/inboxStore";
@@ -50,14 +50,14 @@ export function useConversationMessageMetadata(conversationId: string | undefine
   const canQuery = !!conversationId && isConvexId(conversationId);
   const convexConversationId = conversationId as Id<"conversations">;
 
-  const commentSummary = useQuery(
+  const commentSummary = useQueryNoThrow(
     api.comments.getConversationCommentSummary,
     canQuery ? { conversation_id: convexConversationId } : "skip"
-  );
-  const bookmarkedMessageIds = useQuery(
+  ).data;
+  const bookmarkedMessageIds = useQueryNoThrow(
     api.bookmarks.getConversationBookmarks,
     canQuery ? { conversation_id: convexConversationId } : "skip"
-  );
+  ).data;
 
   const metadata = useMemo(
     () => buildConversationMessageMetadata({ commentSummary, bookmarkedMessageIds }),

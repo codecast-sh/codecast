@@ -11,6 +11,7 @@ import { patchConversationVisibility } from "./lib/access";
 import { applyMembershipVisibilityChange, endMembership } from "./teams";
 import { upsertLocalCommit } from "./repos";
 import { recordExternalEvent } from "./externalEvents";
+import { makeChangeTrackedDb } from "./changeLog";
 import {
   INVALIDATE_DELAY_MS,
   MEMBER_PAGE,
@@ -28,6 +29,7 @@ const modules = {
   "./changes.ts": () => import("./changes"),
   "./changesSchedule.ts": () => import("./changesSchedule"),
   "./changesProse.ts": () => import("./changesProse"),
+  "./changesWeek.ts": () => import("./changesWeek"),
   "./githubWebhooks.ts": () => import("./githubWebhooks"),
   "./sessionInsights.ts": () => import("./sessionInsights"),
   "./teamFeatures.ts": () => import("./teamFeatures"),
@@ -344,6 +346,24 @@ describe("invalidation", () => {
     expect((await s.dirty()).map((r) => r.date)).toEqual([DATE]);
   });
 
+  test("deleting a session takes it and its prose out of the stories it fed at once", async () => {
+    const s = await setup({ flag: true });
+    const story = await writtenDay(s);
+    const schemaRisk = { code: "schema", evidence: ["a1"] };
+    await s.t.run(async (ctx) => {
+      await ctx.db.patch(story._id, { risks: [schemaRisk, { code: "blocked", evidence: [String(s.ids.vis)] }] });
+      // Every wrapped mutation deletes through this interceptor (functions.ts).
+      await makeChangeTrackedDb(ctx.db).delete(s.ids.vis);
+      const row = (await ctx.db.get(story._id))!;
+      expect(row.conversation_ids).toEqual([]);
+      expect(row.risks).toEqual([schemaRisk]);
+      expect(row.actor_user_ids).toEqual([]);
+      expect(await ctx.db.query("change_story_inputs").collect()).toEqual([]);
+    });
+    expect(await everything(s)).not.toContain(SECRET);
+    expect((await s.dirty()).map((r) => r.date)).toEqual([DATE]);
+  });
+
   test("a member going hidden takes their sessions' prose out at once", async () => {
     const s = await setup({ flag: true });
     const story = await writtenDay(s);
@@ -357,7 +377,7 @@ describe("invalidation", () => {
     expect((await s.dirty()).map((r) => r.date)).toEqual([DATE]);
   });
 
-  test("a member leaving the team narrows their sessions to the default level at once", async () => {
+  test("a member leaving the team takes their sessions out at once, and a rebuild keeps them out", async () => {
     const s = await setup({ flag: true });
     const story = await writtenDay(s);
     await s.t.run(async (ctx) => {
@@ -365,9 +385,12 @@ describe("invalidation", () => {
       const row = (await ctx.db.get(story._id))!;
       expect(JSON.stringify(row)).not.toContain(SECRET);
       expect(row.prose_status).toBe("pending");
-      expect((await ctx.db.query("change_story_inputs").collect()).map((i) => i.mode)).toEqual(["summary"]);
+      expect(row.conversation_ids).toEqual([]);
+      expect(await ctx.db.query("change_story_inputs").collect()).toEqual([]);
     });
+    await s.build();
     expect(await everything(s)).not.toContain(SECRET);
+    expect(await s.t.run(async (ctx) => ctx.db.query("change_story_inputs").collect())).toEqual([]);
   });
 
   test("a member with many story inputs withdraws one page inline and the rest in scheduled pages", async () => {
@@ -432,7 +455,7 @@ describe("reconcile and backfill", () => {
       await ctx.db.insert("change_dirty", { team_id: s.ids.team, repository: "acme/old", date: "2026-01-01", since: Date.now() - 3_600_000 });
     });
     const result = await s.t.action(internal.changesSchedule.reconcile, {});
-    expect(result).toEqual({ teams: 1, marked: 1, rescheduled: 1 });
+    expect(result).toEqual({ teams: 1, marked: 1, weeks: 0, rescheduled: 1 });
     const rows = await s.dirty();
     expect(rows.map((r) => r.date).sort()).toEqual(["2026-01-01", today()]);
     expect(rows.every((r) => r.scheduled_id)).toBe(true);

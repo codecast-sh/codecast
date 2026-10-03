@@ -66,7 +66,7 @@ test("the float is above the work, on every desktop, click-through, revealed wit
   const rig = loadShell();
   const { win, sender } = bootHost(rig);
   assert.equal(setSize(rig, sender, "float"), "float");
-  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
   assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);

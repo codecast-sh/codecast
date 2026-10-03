@@ -1,5 +1,5 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useQuery, useQueries } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -9,8 +9,24 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { useInboxStore } from "../../../store/inboxStore";
+import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { ActivityHeatmap } from "../../../components/ActivityHeatmap";
-import { TimelineCharts, fmtK, type PunchRow, type TimelineMetric } from "../../../components/ActivityCharts";
+import {
+  BrushRect,
+  RangeControl,
+  TimelineCharts,
+  fillDays,
+  fmtDayLabel,
+  fmtK,
+  rangeLabel,
+  sliceRange,
+  timeAxisLabels,
+  useDayBrush,
+  type DayRange,
+  type PunchRow,
+  type TimelineMetric,
+} from "../../../components/ActivityCharts";
+import { HoverTip, useContainerWidth } from "../../../components/ActivityHeatmap";
 import { SegmentedToggle } from "../../../components/SegmentedToggle";
 
 // Team-wide activity: every member's punchcard merged into one grid, plus a
@@ -37,7 +53,7 @@ const sum = (a: number[]) => a.reduce((s, v) => s + v, 0);
 function TeamChartsContent() {
   const currentUser = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
-  const myTeams = useQuery(api.teams.getUserTeams, {});
+  const myTeams = useQueryNoThrow(api.teams.getUserTeams, {}).data;
   const defaultTeamId = activeTeamId || currentUser?.active_team_id || currentUser?.team_id;
   const [pickedTeam, setPickedTeam] = useState<string | null>(null);
   const teamId = (pickedTeam ?? (defaultTeamId ? String(defaultTeamId) : null)) as Id<"teams"> | null;
@@ -94,6 +110,10 @@ function TeamChartsContent() {
       .sort((a, b) => a.date.localeCompare(b.date)) as PunchRow[];
   }, [allLoaded, members, punchResults]);
 
+  // One window for every section below the heatmap, set from the header.
+  const [range, setRange] = useState<DayRange>({ preset: "1m" });
+  const days = useMemo(() => fillDays(rows), [rows]);
+
   const heatmapData = useMemo(() => {
     if (!rows) return null;
     return rows.map((r) => ({
@@ -118,6 +138,11 @@ function TeamChartsContent() {
           </div>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          {rows && (
+            <div className="scale-[0.82] origin-right">
+              <RangeControl value={range} onChange={setRange} days={days} />
+            </div>
+          )}
           {myTeams && myTeams.length > 1 && (
             <select
               value={String(teamId)}
@@ -145,8 +170,14 @@ function TeamChartsContent() {
       {rows && (
         <>
           {heatmapData && heatmapData.length > 0 && <ActivityHeatmap data={heatmapData} />}
-          <TimelineCharts punchcard={rows} />
-          <MemberBreakdown members={members ?? []} punchResults={punchResults} />
+          <TimelineCharts punchcard={rows} range={range} onRangeChange={setRange} />
+          <MemberBreakdown
+            members={members ?? []}
+            punchResults={punchResults}
+            dayKeys={sliceRange(days, range).map((d) => d.date)}
+            range={range}
+            onRangeChange={setRange}
+          />
         </>
       )}
       {members && members.length === 0 && (
@@ -156,20 +187,24 @@ function TeamChartsContent() {
   );
 }
 
-/* Per-member breakdown: 30-day totals + a comparative line chart. */
+/* Per-member breakdown: totals over the page's window + a comparative line chart. */
 function MemberBreakdown({
   members,
   punchResults,
+  dayKeys,
+  range,
+  onRangeChange,
 }: {
   members: MemberInfo[];
   punchResults: Record<string, PunchRow[] | undefined>;
+  /** The window's day slots, shared so every member's line is comparable point-for-point. */
+  dayKeys: string[];
+  range: DayRange;
+  onRangeChange: (r: DayRange) => void;
 }) {
   const [metric, setMetric] = useState<TimelineMetric>("hours");
-
-  const cutoffKey = useMemo(() => {
-    const d = new Date(Date.now() - 30 * 86400000);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }, []);
+  const from = dayKeys[0] ?? "";
+  const to = dayKeys[dayKeys.length - 1] ?? "";
 
   const metricOf = (r: PunchRow) =>
     metric === "hours" ? sum(r.hours) : metric === "msgs" ? sum(r.msgs) : sum(r.sends ?? []);
@@ -177,7 +212,7 @@ function MemberBreakdown({
   const ranked = useMemo(() => {
     return members
       .map((m) => {
-        const recent = (punchResults[String(m._id)] ?? []).filter((r) => r.date >= cutoffKey);
+        const recent = (punchResults[String(m._id)] ?? []).filter((r) => r.date >= from && r.date <= to);
         return {
           ...m,
           display_name: m.name || m.github_username || "Unnamed",
@@ -189,17 +224,7 @@ function MemberBreakdown({
         };
       })
       .sort((a, b) => b.month_hours - a.month_hours);
-  }, [members, punchResults, cutoffKey]);
-
-  // 30 shared day slots so every member's line is comparable point-for-point.
-  const dayKeys = useMemo(() => {
-    const keys: string[] = [];
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(Date.now() - i * 86400000);
-      keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`);
-    }
-    return keys;
-  }, []);
+  }, [members, punchResults, from, to]);
 
   const series = useMemo(() => {
     return ranked.slice(0, LINE_COLORS.length).map((m, i) => {
@@ -221,7 +246,7 @@ function MemberBreakdown({
   return (
     <div className="mt-6">
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest">Members · last 30 days</span>
+        <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest">Members · {rangeLabel(range)}</span>
         <div className="flex-1 h-px bg-sol-border/10" />
         <div className="scale-[0.82] origin-right">
           <SegmentedToggle
@@ -236,7 +261,12 @@ function MemberBreakdown({
         </div>
       </div>
 
-      <MemberLines series={series} />
+      <MemberLines
+        series={series}
+        dayKeys={dayKeys}
+        fmt={metric === "hours" ? (v) => `${v.toFixed(1)}h` : (v) => fmtK(Math.round(v))}
+        onPickRange={(a, b) => onRangeChange({ from: a, to: b })}
+      />
 
       <div className="mt-3 space-y-px">
         {ranked.map((m, i) => (
@@ -271,30 +301,103 @@ function MemberBreakdown({
   );
 }
 
-/* Overlaid per-member lines over the shared 30-day axis. */
-function MemberLines({ series }: { series: { name: string; color: string; values: number[] }[] }) {
-  const w = 720, h = 120, padL = 4, padR = 4, padT = 6, padB = 6;
-  const n = series[0]?.values.length ?? 0;
+/* Overlaid per-member lines over the window's shared day axis. Hover lists
+ * every member's value for that day; drag across days to zoom into them. */
+function MemberLines({
+  series,
+  dayKeys,
+  fmt,
+  onPickRange,
+}: {
+  series: { name: string; color: string; values: number[] }[];
+  dayKeys: string[];
+  fmt: (v: number) => string;
+  onPickRange: (from: string, to: string) => void;
+}) {
+  const { ref, width } = useContainerWidth();
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverAt, setHover] = useState<{ idx: number; x: number; y: number } | null>(null);
+  const brush = useDayBrush((a, b) => { setHover(null); onPickRange(dayKeys[a], dayKeys[b]); });
+  const h = 140, padL = 32, padR = 8, padT = 6, padB = 20;
+  const n = dayKeys.length;
   const max = useMemo(() => {
     let m = 1;
     for (const s of series) for (const v of s.values) if (v > m) m = v;
     return m;
   }, [series]);
+  const plotH = h - padT - padB;
+  const toX = (i: number) => padL + (i / Math.max(n - 1, 1)) * (width - padL - padR);
+  const toY = (v: number) => padT + (1 - v / max) * plotH;
+  const xLabels = useMemo(() => timeAxisLabels(dayKeys, toX), [dayKeys, width]);
   if (n === 0) return null;
-  const toX = (i: number) => padL + (i / Math.max(n - 1, 1)) * (w - padL - padR);
-  const toY = (v: number) => padT + (1 - v / max) * (h - padT - padB);
+  // A hover left over from a wider window (before a zoom) points past this one.
+  const hover = hoverAt && hoverAt.idx < n ? hoverAt : null;
+  const idxAt = (clientX: number) => {
+    const r = svgRef.current?.getBoundingClientRect();
+    if (!r) return null;
+    const i = Math.round(((clientX - r.left - padL) / Math.max(width - padL - padR, 1)) * (n - 1));
+    return { i: Math.max(0, Math.min(n - 1, i)), r };
+  };
+  const rows = hover
+    ? series.map((s) => ({ ...s, v: s.values[hover.idx] })).filter((s) => s.v > 0).sort((a, b) => b.v - a.v)
+    : [];
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full block" preserveAspectRatio="none" style={{ height: 120 }}>
-      {series.map((s) => (
-        <path
-          key={s.name}
-          d={s.values.map((v, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(" ")}
-          fill="none"
-          stroke={s.color}
-          strokeWidth={1.5}
-          opacity={0.75}
-        />
-      ))}
-    </svg>
+    <div ref={ref} className="w-full relative">
+      <svg
+        ref={svgRef}
+        width={width}
+        height={h}
+        className="block cursor-crosshair select-none"
+        onMouseLeave={() => { setHover(null); brush.cancel(); }}
+        onMouseDown={(e) => { const at = idxAt(e.clientX); if (at) { e.preventDefault(); brush.start(at.i); } }}
+        onMouseUp={brush.end}
+        onMouseMove={(e) => {
+          const at = idxAt(e.clientX);
+          if (!at) return;
+          setHover({ idx: at.i, x: at.r.left + toX(at.i), y: at.r.top + padT });
+          brush.move(at.i);
+        }}
+      >
+        {[0, 0.5, 1].map((f) => (
+          <g key={f}>
+            <line x1={padL} x2={width - padR} y1={toY(max * f)} y2={toY(max * f)} stroke="currentColor" className="text-sol-border/8" strokeWidth={0.5} strokeDasharray={f === 0 ? "none" : "2,3"} />
+            <text x={padL - 4} y={toY(max * f) + 3} textAnchor="end" className="fill-sol-base01/25" style={{ fontSize: 8 }}>{fmt(max * f)}</text>
+          </g>
+        ))}
+        {xLabels.map((l, i) => (
+          <text key={i} x={l.x} y={h - 5} textAnchor="start" className="fill-sol-base01/25" style={{ fontSize: 9 }}>{l.label}</text>
+        ))}
+        <BrushRect drag={brush.drag} toX={toX} top={padT} height={plotH} />
+        {series.map((s) => (
+          <path
+            key={s.name}
+            d={s.values.map((v, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(v).toFixed(1)}`).join(" ")}
+            fill="none"
+            stroke={s.color}
+            strokeWidth={1.5}
+            opacity={0.75}
+          />
+        ))}
+        {hover && (
+          <>
+            <line x1={toX(hover.idx)} x2={toX(hover.idx)} y1={padT} y2={padT + plotH} stroke="currentColor" className="text-sol-text/30" strokeWidth={0.5} strokeDasharray="3,3" />
+            {rows.map((s) => <circle key={s.name} cx={toX(hover.idx)} cy={toY(s.v)} r={2.5} fill={s.color} />)}
+          </>
+        )}
+      </svg>
+      {hover && (
+        <HoverTip x={hover.x} y={hover.y}>
+          <div className="font-semibold mb-0.5">{fmtDayLabel(dayKeys[hover.idx])}</div>
+          {rows.length === 0 && <div className="opacity-60">No activity</div>}
+          {rows.map((s) => (
+            <div key={s.name} className="flex items-center gap-1.5 tabular-nums">
+              <span className="w-1.5 h-1.5 rounded-full" style={{ background: s.color }} />
+              <span className="flex-1">{s.name}</span>
+              <span className="pl-3">{fmt(s.v)}</span>
+            </div>
+          ))}
+        </HoverTip>
+      )}
+    </div>
   );
 }

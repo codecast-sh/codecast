@@ -14,7 +14,7 @@ export function EditionHead({ headline, standfirst, reserve, filterLine, onClear
 }) {
   return (
     <div>
-      <h2 className="chg-headline text-sol-text line-clamp-2">
+      <h2 className="chg-headline text-sol-text" style={reserve ? { minHeight: "2.3em" } : undefined}>
         <FadeText text={headline} />
       </h2>
       {(standfirst || reserve) && (

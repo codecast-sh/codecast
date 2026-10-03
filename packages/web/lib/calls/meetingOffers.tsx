@@ -23,7 +23,7 @@ function offerToastId(app: string) {
 /** The faces are dark glass in every theme, hugging the toaster's right edge
  *  the way the desktop window hugs the screen corner. */
 function glass(face: ReactNode) {
-  return <div className="dark flex w-full justify-end">{face}</div>;
+  return <div className="rec-toast dark flex w-full justify-end">{face}</div>;
 }
 
 /** The offer times itself out (MeetingOfferFace's drain, paused on hover and

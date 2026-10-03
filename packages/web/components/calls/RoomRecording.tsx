@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { recordingKeptWords } from "@codecast/shared/contracts";
+import { recordingFailureWords, recordingKeptWords } from "@codecast/shared/contracts";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -16,16 +16,16 @@ import {
   stoppedHere,
   useRoomRecording,
   useRoomRecordingMark,
-  useRoomRecordingOn,
   useRoomRecordingPress,
   useSeatedRoomKey,
+  type RoomRecordingEnd,
   type RoomRecordingLive,
 } from "../../hooks/useRoomRecording";
 import { isCallPanelWindow } from "../../lib/desktop";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { RecordingMark } from "./RecordingMark";
 import { STAGE_CTL, STAGE_CTL_IDLE } from "./stageHost";
-import { firstName } from "./speakers";
+import { firstName, speakerShortName } from "./speakers";
 
 // Recording a huddle, from inside it: the Record button on the stage's
 // control bar, the red mark on the stage's header and on the face row's card,
@@ -74,9 +74,8 @@ const selectEngagedRoom = (row: FaceRow) => row.room;
  *  and REC, beside the controls, for the room the card is about. */
 export function CallCardRecordingMark() {
   const roomKey = useFaceRowSelect(selectEngagedRoom);
-  const on = useRoomRecordingOn(roomKey);
-  const press = useRoomRecordingPress(roomKey);
-  if (!(press ?? on)) return null;
+  const { status } = useRoomRecordingMark(roomKey);
+  if (!status) return null;
   return <RecordingMark size="dot" className="mr-1" />;
 }
 
@@ -253,19 +252,38 @@ function startedWords(live: RoomRecordingLive): string {
   return `${firstName(live.started_by.name)} started recording. Anyone in the call can stop it.`;
 }
 
+/** What the room is told when a run stops, from how it ended (convex
+ *  roomRecordingEnd): who stopped it, or why it stopped on its own, and
+ *  whether there is a video at all. "Saving" is said only of a run that was
+ *  filming; a run LiveKit refused or lost left nothing to save. Unknown (a
+ *  server older than the end facts), it says only that it stopped. */
+export function stoppedWords(end: RoomRecordingEnd | null, me: string | null): { title: string; body: string; failed: boolean } {
+  const by = end?.stopped_by ? (me && end.stopped_by.id === me ? "You" : speakerShortName(end.stopped_by.name)) : null;
+  const pressed = by && end?.stop_reason === "pressed" ? `${by} stopped recording` : null;
+  if (end?.status === "failed") {
+    return { title: pressed ?? "Recording failed", body: recordingFailureWords(end.error), failed: !pressed };
+  }
+  const title = pressed ?? (end?.stop_reason === "limit" ? "Recording stopped at its time limit" : "Recording stopped");
+  return { title, body: end ? "The video is saving to the call." : "", failed: false };
+}
+
 /** The room's recording as this window owes its person: the notice of a run
  *  somebody else started (or that was already running when they walked in),
- *  and a quiet line when somebody else stops one. Each is claimed once per
+ *  and a line saying how it ended when somebody else stops one or it stops
+ *  by itself (stoppedWords). Each is claimed once per
  *  run across every window, and only while `present` (this window on screen
  *  and focused): a hidden window that showed it to nobody must not stand the
  *  others down. */
 function useRecordingNotices(
   roomKey: string | null,
   present: boolean,
-  say: { started: (live: RoomRecordingLive) => void; stopped: (live: RoomRecordingLive) => void },
+  say: { started: (live: RoomRecordingLive) => void; stopped: (live: RoomRecordingLive, end: RoomRecordingEnd | null) => void },
 ): void {
   const state = useRoomRecording(roomKey);
   const live = state ? state.live : undefined;
+  // Read in the effect, not a dependency: the end lands in the same answer
+  // that ends the run, and a later change to it is not a new stop.
+  const ended = state?.ended ?? null;
   const me = useMe();
   // The run last seen filming in this room, to tell a stop from a room never
   // recorded.
@@ -281,7 +299,7 @@ function useRecordingNotices(
       const key = `stop:${was.run_id}`;
       if (present && !stoppedHere(roomKey) && !recordingNoticed(key)) {
         noteRecordingNoticed(key);
-        say.stopped(was);
+        say.stopped(was, ended?.run_id === was.run_id ? ended : null);
       }
     }
     if (present && owesRecordingNotice(running, me)) {
@@ -298,10 +316,15 @@ function useRecordingNotices(
  *  away; somebody else's Stop gets a quiet line that goes by itself. */
 export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
   const present = useWindowPresent();
-  const [shown, setShown] = useState<{ live: RoomRecordingLive; mode: "started" | "confirm" | "stopped" } | null>(null);
+  const me = useMe();
+  const [shown, setShown] = useState<{
+    live: RoomRecordingLive;
+    mode: "started" | "confirm" | "stopped";
+    end?: RoomRecordingEnd | null;
+  } | null>(null);
   useRecordingNotices(roomKey, present, {
     started: (live) => setShown({ live, mode: "started" }),
-    stopped: (live) => setShown({ live, mode: "stopped" }),
+    stopped: (live, end) => setShown({ live, mode: "stopped", end }),
   });
   useWatchEffect(() => {
     if (shown?.mode !== "stopped") return;
@@ -313,9 +336,10 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
   // A run that ended without a word from here (this window's own Stop) takes
   // its notice with it.
   if (shown.mode !== "stopped" && (status === null || status === "stopping")) return null;
+  const stopped = shown.mode === "stopped" ? stoppedWords(shown.end ?? null, me) : null;
   const words =
-    shown.mode === "stopped"
-      ? { title: "Recording stopped", body: "The video is saving to the call." }
+    stopped
+      ? stopped
       : shown.mode === "confirm"
         ? { title: "Stop recording for everyone?", body: "The video so far is kept with the call." }
         : { title: STARTED_TITLE, body: startedWords(shown.live) };
@@ -324,16 +348,22 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
     <div
       role="status"
       className={`pointer-events-auto flex max-w-[380px] items-start gap-2.5 rounded-lg bg-sol-base03/90 px-3 py-2.5 shadow-2xl ring-1 backdrop-blur animate-in fade-in slide-in-from-top-1 duration-200 motion-reduce:animate-none ${
-        shown.mode === "stopped" ? "ring-white/10" : "ring-sol-red/30"
+        stopped?.failed ? "ring-sol-orange/30" : stopped ? "ring-white/10" : "ring-sol-red/30"
       }`}
     >
       <span
-        className={shown.mode === "stopped" ? "mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim" : "rec-pill-dot mt-[5px] !h-[7px] !w-[7px]"}
+        className={
+          stopped?.failed
+            ? "mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full bg-sol-orange"
+            : stopped
+              ? "mt-[5px] h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim"
+              : "rec-pill-dot mt-[5px] !h-[7px] !w-[7px]"
+        }
         aria-hidden="true"
       />
       <div className="min-w-0 flex-1">
         <div className="font-mono text-[12px] text-sol-text">{words.title}</div>
-        <div className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">{words.body}</div>
+        {words.body && <div className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">{words.body}</div>}
         {shown.mode !== "stopped" && (
           <div className="mt-2 flex items-center gap-1.5">
             {shown.mode === "confirm" ? (
@@ -383,6 +413,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
  *  The call window has its banner instead. Mounted with the app's call
  *  effects. */
 export function useRecordingNoticeToast(): void {
+  const me = useMe();
   const panel = isCallPanelWindow();
   const seated = useSeatedRoomKey();
   const present = useWindowPresent();
@@ -411,9 +442,13 @@ export function useRecordingNoticeToast(): void {
         },
       });
     },
-    stopped: (live) => {
+    stopped: (live, end) => {
       toast.dismiss(`call-recording-${live.run_id}`);
-      toast("Recording stopped", { description: "The video is saving to the call.", duration: 5_000 });
+      const words = stoppedWords(end, me);
+      (words.failed ? toast.warning : toast)(words.title, {
+        ...(words.body ? { description: words.body } : {}),
+        duration: words.failed ? 8_000 : 5_000,
+      });
     },
   });
 }

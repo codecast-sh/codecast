@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   useInboxStore,
@@ -471,10 +471,10 @@ export function useForkTree(conversation: ForkConversationLike, open: boolean) {
       : (typeof conversation?.forked_from === "string" && isConvexId(conversation.forked_from)
           ? conversation.forked_from
           : conversation?.forked_from?.toString());
-  const serverRes = useQuery(
+  const serverRes = useQueryNoThrow(
     api.conversations.getConversationTree,
     open && queryId && isConvexId(queryId) ? { conversation_id: queryId as any } : "skip",
-  );
+  ).data;
   const serverTree =
     serverRes && !("error" in serverRes) ? ((serverRes as any).tree as ServerTreeNode) : null;
 

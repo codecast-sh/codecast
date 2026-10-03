@@ -6,6 +6,7 @@ import { useDesktopWindowRole } from "../../hooks/useDesktopWindowRole";
 import { useTrackedStore } from "../../store/inboxStore";
 import { useWalkieStatus } from "../../hooks/useWalkie";
 import { useFaceRow } from "../../hooks/useFaceRow";
+import { callRoomOf } from "../../lib/faces/faceRow";
 import { useCallsAvailable } from "../../lib/teamFeatures";
 import { CallStage } from "./CallStage";
 import { FloatingFaceRow } from "../faces/FaceRow";
@@ -33,6 +34,7 @@ import {
   setCallWindowInteractive,
   setCallWindowSize,
   setRingAttention,
+  showCallPanel,
   voiceShapeForCallSize,
   type CallWindowSize,
   type VoiceWindowShape, navigateMainWindow, useFacesFloating } from "../../lib/desktop";
@@ -153,6 +155,26 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   }, [call.phase]);
 
   const inCall = call.phase !== "idle" && !!call.roomKey;
+  // THE CALL THE ROW SHOWS, wherever it lives. The row draws a live card
+  // from this window's call, the walkie's room, or a seat the server lists
+  // (a call held by another window, a browser tab, another machine), so
+  // what the float offers for the call (Open, the chat, the recording mark)
+  // follows the row, not this window's slice: a live card with no way to
+  // open it is the float lying about what it can do.
+  const rowCall = callRoomOf(row);
+  // Open takes the person to the call full size: this window's stage when
+  // the call is here; the window that holds it, raised by the shell; and a
+  // call held nowhere on this machine comes here, onto the stage.
+  const openCall = useCallback(() => {
+    if (inCall) return expand();
+    void (async () => {
+      if (await showCallPanel()) return;
+      if (!rowCall || !claim(rowCall)) return;
+      expand();
+      await takeOverCall({ roomKey: rowCall, mic: !call.muted, camera: false });
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- claim reads a ref
+  }, [inCall, rowCall, call.muted, expand]);
   const ringIn = row.card.kind === "ring-in" ? row.card : null;
   const view: VoiceWindowShape = voiceHostView({
     engaged: row.me !== null,
@@ -325,8 +347,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
           // The profile opens where the work is: the main window, raised.
           onOpenProfile={(m) => navigateMainWindow(`/team/${m.github_username || m._id}`)}
           chrome={{
-            inCall,
-            onExpand: expand,
+            onExpand: openCall,
             onClose: closeFloat,
             closeWord: floating.floating ? "Dock" : "Hide",
             closeTitle: floating.floating ? "Dock the faces back in the header" : "Hide the faces until the next call or voice",
@@ -338,10 +359,10 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
               card={row.card}
               density="float"
               accessory={
-                inCall && (
+                (inCall || !!rowCall) && (
                   <>
                     <CallCardRecordingMark />
-                    <CallChatChip onOpen={expand} />
+                    <CallChatChip onOpen={openCall} />
                   </>
                 )
               }

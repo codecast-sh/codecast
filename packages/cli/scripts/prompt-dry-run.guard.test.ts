@@ -155,6 +155,16 @@ describe("guard cast: served reads", () => {
     }
   });
 
+  test("stack show and ls are reads; any other stack verb writes and never reaches the real CLI", () => {
+    const w = world();
+    expect(w.cast("stack", "show", "ds-5").out).toBe("LIVE stack show ds-5 dir=/real/state\n");
+    expect(w.cast("stack", "ls").out).toBe("LIVE stack ls dir=/real/state\n");
+    for (const argv of [["stack", "create", "Billing"], ["stack", "add", "ds-5", "sd-9"], ["stack", "policy", "ds-5", "--due", "tomorrow"]]) {
+      expect(w.cast(...argv).code).toBe(1);
+      expect(w.log()).not.toContain(`LIVE ${argv.join(" ")}`);
+    }
+  });
+
   test("brief and call reads go live; brief edit, call hold and call snap write and are refused", () => {
     const w = world();
     for (const argv of [["brief"], ["brief", "@chief-of-staff", "--json"], ["call", "cl-42"], ["call", "cl-42", "15:25", "--transcript"]]) {

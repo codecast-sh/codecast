@@ -89,6 +89,13 @@ function callWindowChrome(size, opts = {}) {
   const floating = s !== "panel";
   return {
     alwaysOnTop: floating,
+    // Above every other app's floating panels, not among them. At macOS's
+    // "floating" level the row shared a layer with every other app's
+    // always-on-top window, and whichever was ordered front last won: the
+    // faces were over the work some of the time and under it the rest.
+    // "status" sits above all of those and still below menus and the
+    // system's own overlays.
+    ...(floating ? { level: "status" } : {}),
     visibleOnAllWorkspaces: floating,
     clickThrough: floating,
     resizable: !floating,

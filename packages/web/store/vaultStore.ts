@@ -11,7 +11,7 @@ import { create } from "zustand";
 import type { ConvexReactClient } from "convex/react";
 import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
 import { isVaultMarkdownPath, VAULT_MAX_PREVIEW_BYTES } from "@codecast/shared/contracts";
-import { lastDiscoveryFailure, type DiscoveryFailure } from "../lib/terminal/endpoint";
+import { lastDiscoveryFailure, loopbackFailureReason, type LoopbackUnreachableReason } from "../lib/terminal/endpoint";
 import {
   fetchRemoteBody,
   fetchRemoteNotes,
@@ -102,7 +102,6 @@ export interface RenameReport {
  *  endpoint-discovery outcomes plus the ones only the vault routes produce.
  *  Named so the teaching panel can bind to it instead of restating the members
  *  — a new discovery outcome must not be able to drift out of the UI. */
-export type VaultUnreachableReason = DiscoveryFailure | "old-daemon" | "refused" | "error";
 
 interface VaultState {
   connection: VaultConnection;
@@ -126,7 +125,7 @@ interface VaultState {
   isRemote: boolean;
   /** Why the local daemon couldn't be reached — drives cause-specific guidance
    *  instead of one message that blames the daemon for a browser permission. */
-  unreachableReason: VaultUnreachableReason;
+  unreachableReason: LoopbackUnreachableReason;
   /** The underlying failure text, shown verbatim in the teaching state so a
    *  cause we did not anticipate is still diagnosable from the screen. */
   unreachableDetail: string | null;
@@ -1005,7 +1004,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       set((s) => ({
         connection: s.scannedAt ? "cached" : "no-daemon",
         endpoint: ep,
-        unreachableReason: status === 404 ? "old-daemon" : status ? "refused" : "error",
+        unreachableReason: loopbackFailureReason(status),
         unreachableDetail: e instanceof Error ? e.message : String(e),
       }));
       return;

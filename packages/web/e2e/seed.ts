@@ -1,9 +1,7 @@
-import { ConvexHttpClient } from "convex/browser";
+// Seeds sessions for the e2e kill test on the e2e deployment (target.ts):
+// `bun run e2e/seed.ts 3` prints three conversation ids, two messages each.
 import { api } from "@codecast/convex/convex/_generated/api";
-const tokens = JSON.parse(await Bun.file("/tmp/e2e-tokens.json").text());
-const jwt = (tokens.tokens ?? tokens).token;
-const c = new ConvexHttpClient("https://convex.codecast.sh");
-c.setAuth(jwt);
+import { client as c } from "./target";
 const me: any = await c.query(api.users.getCurrentUser, {});
 const n = Number(process.argv[2] ?? 3);
 const ids: string[] = [];

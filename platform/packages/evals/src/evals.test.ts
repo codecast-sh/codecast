@@ -258,7 +258,8 @@ describe('cli', () => {
     },
   };
   const captured: string[] = [];
-  const run = async (...args: string[]) => {
+  /** A command's output and its exit code; `run` is the usual form, which expects the command to succeed. */
+  const runCode = async (...args: string[]): Promise<{ out: string; code: number }> => {
     captured.length = 0;
     const write = process.stdout.write.bind(process.stdout);
     process.stdout.write = ((chunk: string) => {
@@ -277,12 +278,19 @@ describe('cli', () => {
       htmlDir: join(root, 'html'),
     };
     registerEvals(program, sources);
+    let code: number;
     try {
-      await runEvalsCli(program, ['bun', 'xrun', ...args]);
+      code = await runEvalsCli(program, ['bun', 'xrun', ...args]);
     } finally {
       process.stdout.write = write;
     }
-    return captured.join('');
+    return { out: captured.join(''), code };
+  };
+  /** A command's output, failing the test when it exits nonzero: a command that prints the expected text and still fails is a failure. */
+  const run = async (...args: string[]): Promise<string> => {
+    const r = await runCode(...args);
+    if (r.code !== 0) throw new Error(`xrun ${args.join(' ')} exited ${r.code}:\n${r.out}`);
+    return r.out;
   };
 
   test('convo inbox, show, msg, find, who, candidates', async () => {

@@ -415,7 +415,7 @@ describe("pull request references in chat", () => {
     // Chat has no repository to complete `#3263` from, and the card path must
     // not leak the `pr:` carrier the plugin wrote for the conversation view.
     const html = render("- #3263\n- PR 3262");
-    expect(html).not.toContain("pr:#");
+    expect(html).not.toContain("pr:");
     expect(html).not.toContain("entity-card");
     expect(html).toContain("#3263");
     expect(html).toContain("PR 3262");
@@ -440,7 +440,7 @@ describe("a transcript promotes a staffing proposal alone", () => {
   // the plugin with `types: ["proposal"]`: an `op-N` on its own line draws
   // the proposal live (org-staffing.md S24), while a lone task id keeps the
   // inline pill a transcript always gave it.
-  const TRANSCRIPT = [...entityRemarkPlugins, [remarkEntityCards, { types: ["proposal"] }]] as any[];
+  const TRANSCRIPT = [...entityRemarkPlugins, [remarkEntityCards, { types: ["proposal"], aloneOnly: true }]] as any[];
   const renderTranscript = (markdown: string) => renderToStaticMarkup(
     <MemoryRouter>
       <ReactMarkdown remarkPlugins={TRANSCRIPT} components={MD_COMPONENTS as any}>{markdown}</ReactMarkdown>
@@ -451,6 +451,15 @@ describe("a transcript promotes a staffing proposal alone", () => {
     const html = renderTranscript("Here is the change.\n\nop-5\n\nSay the word.");
     expect(html).toContain('class="entity-card-row"');
     expect(html).toContain("Here is the change.");
+  });
+
+  test("op-N inside a sentence stays the inline pill; the sentence is not split around a card", () => {
+    // cl-117@5:19 mid-sentence in an agent's message became a frame card that
+    // cut "And inline, ... reads as a pill." in two (2026-10-03).
+    const html = renderTranscript("Proposed it in op-5 and it waits on you.");
+    expect(html).not.toContain("entity-card-row");
+    expect(html).toContain("entity-ref");
+    expect(html).toMatch(/<p>Proposed it in .*and it waits on you\.<\/p>/);
   });
 
   test("a lone task id stays the inline pill", () => {

@@ -63,17 +63,25 @@ export function riskText(story: Pick<StoryRow, "risks" | "risk_lines">): string 
     .join("\n");
 }
 
+/** The story's risks for a screen reader, inside the control that names the story. */
+export function RiskSrText({ story }: { story: Pick<StoryRow, "risks" | "risk_lines"> }) {
+  if (!story.risks.length) return null;
+  return <span className="sr-only">Risk: {riskText(story)}</span>;
+}
+
 /** The story's left edge: the area rail, or the risk hatch in its place. */
 export function StoryEdge({ story, width = 2 }: { story: Pick<StoryRow, "area" | "risks" | "risk_lines">; width?: number }) {
-  const risky = story.risks.length > 0;
-  const edge = (
-    <span
-      aria-hidden={!risky}
-      className="absolute inset-y-0 left-0 rounded-l-[inherit]"
-      style={risky ? { width: 3, background: RISK_HATCH } : { width, background: areaColor(story.area) }}
-    />
+  if (!story.risks.length) {
+    return <span aria-hidden className="absolute inset-y-0 left-0 rounded-l-[inherit]" style={{ width, background: areaColor(story.area) }} />;
+  }
+  // The hatch is 3px; the tooltip answers on a 10px strip over it.
+  return (
+    <Tip text={<span className="whitespace-pre-line">{riskText(story)}</span>} side="left">
+      <span aria-label="Risk" className="absolute inset-y-0 left-0 z-[1] w-2.5 cursor-help rounded-l-[inherit]">
+        <span aria-hidden className="absolute inset-y-0 left-0 rounded-l-[inherit]" style={{ width: 3, background: RISK_HATCH }} />
+      </span>
+    </Tip>
   );
-  return risky ? <Tip text={<span className="whitespace-pre-line">{riskText(story)}</span>} side="left">{edge}</Tip> : edge;
 }
 
 /** The one line under a dek that names a risk in words (spec 4.4). */
@@ -111,8 +119,19 @@ export function FadeText({ text, className = "" }: { text: string; className?: s
 
 const WHY: Record<string, string> = { commit: "from commit message", pr: "from PR", none: "not stated" };
 
+type WhyFacts = Pick<StoryRow, "why_source" | "conversation_ids" | "pr_ids" | "prose_status">;
+
+/**
+ * Whether a story has a "why" line to show. "not stated" accuses a session or
+ * PR that existed and gave no reason; a story with neither had nowhere to
+ * state one, so it says nothing.
+ */
+export const hasProvenance = (story: WhyFacts) =>
+  story.why_source !== "none" || story.conversation_ids.length > 0 || story.pr_ids.length > 0;
+
 /** Where the story's "why" came from: the page's trust mechanism (spec 4.4). */
-export function Provenance({ story, className = "" }: { story: Pick<StoryRow, "why_source" | "conversation_ids" | "prose_status">; className?: string }) {
+export function Provenance({ story, className = "" }: { story: WhyFacts; className?: string }) {
+  if (!hasProvenance(story)) return null;
   const src = story.why_source;
   const session = story.conversation_ids[0];
   let body: ReactNode;
@@ -164,10 +183,10 @@ export function People({ story, size = 16, max = 4 }: { story: Pick<StoryRow, "a
 }
 
 /** The sessions behind a story, as pills. */
-export function SessionPills({ story, max = 3 }: { story: Pick<StoryRow, "conversation_ids">; max?: number }) {
+export function SessionPills({ story, max = 3, className = "" }: { story: { conversation_ids: readonly string[] }; max?: number; className?: string }) {
   if (!story.conversation_ids.length) return null;
   return (
-    <span className="inline-flex flex-wrap items-center gap-1">
+    <span className={`inline-flex flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>
       {story.conversation_ids.slice(0, max).map((id) => (
         <EntityIdPill key={String(id)} type="session" id={String(id)} compact />
       ))}

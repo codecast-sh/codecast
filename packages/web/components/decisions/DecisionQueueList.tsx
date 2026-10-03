@@ -73,8 +73,10 @@ export function DecisionQueueList() {
   // but they are the lead's to clear, so they count on their own group header.
   const mine = pending.filter((d) => d.holder?.kind !== "role").length;
   const withLead = pending.length - mine;
-  // Exactly one surface claims the digit keys: the first stack group.
-  const firstStackKey = groups.find((g) => g.kind === "stack")?.key;
+  // Exactly one surface claims the digit keys: the group on top (a lead's
+  // fold only when nothing else is waiting), and inside it its first row, so
+  // the KeyCaps show on the row the digits answer.
+  const keysGroup = (groups.find((g) => g.kind !== "role") ?? groups[0])?.key;
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
@@ -124,7 +126,7 @@ export function DecisionQueueList() {
 
         <div className="space-y-7">
           {groups.map((g) => (
-            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === firstStackKey} />
+            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === keysGroup} />
           ))}
 
           {terminal.length > 0 && (
@@ -225,7 +227,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
           onToggle={() => setOpen((v) => !v)}
           open={open}
         />
-        {open && <div className="space-y-2">{group.items.map((d) => <DecisionCompactCard key={d._id} decision={d} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}</div>}
+        {open && <div className="space-y-2">{group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}</div>}
       </section>
     );
   }
@@ -233,7 +235,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
     <section>
       <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />
       <div className="space-y-2">
-        {group.items.map((d) => <DecisionCompactCard key={d._id} decision={d} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
+        {group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
       </div>
     </section>
   );

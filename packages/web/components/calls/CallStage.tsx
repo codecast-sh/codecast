@@ -133,13 +133,20 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
 // ambient pill and the call continues beside the work.
 // What a member's stage adds to the shared views (StageViews): the room the
 // cursors ride on is the call manager's, following somebody opens their work
-// in the app, and a guest can be put out from beside their name.
+// in the app, and a guest can be put out from beside their name (of the room
+// the stage is drawing, which the host is made for: memberStageHost).
 const MEMBER_STAGE_HOST: StageHost = {
   getRoom,
   FollowChip,
   useFollowLeader: () => useInboxStore((s) => s.followLeaderId),
-  personActions: ({ identity, name, variant }) => <GuestRemoveButton identity={identity} name={name} variant={variant} />,
 };
+function memberStageHost(roomKey: string | null): StageHost {
+  if (!roomKey) return MEMBER_STAGE_HOST;
+  return {
+    ...MEMBER_STAGE_HOST,
+    personActions: ({ identity, name, variant }) => <GuestRemoveButton roomKey={roomKey} identity={identity} name={name} variant={variant} />,
+  };
+}
 
 
 /**
@@ -244,6 +251,7 @@ export function CallStage({
   // ran only once the record answered, and the hook count changing between
   // renders crashed the whole stage.
   const transcribeOff = useRoomTranscribeOff(call.roomKey);
+  const stageHost = useMemo(() => memberStageHost(call.roomKey), [call.roomKey]);
   const transcribing = !!live && !transcribeOff;
 
   const [view, setView] = useState<StageView>("auto");
@@ -529,7 +537,7 @@ export function CallStage({
 
       {/* The stage itself. */}
       <div className="flex min-h-0 flex-1 gap-2 px-3 pb-3 pt-3">
-        <StageHostProvider value={MEMBER_STAGE_HOST}>
+        <StageHostProvider value={stageHost}>
         <div key={view} className="flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col">
           {view === "grid" ? (
             <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />

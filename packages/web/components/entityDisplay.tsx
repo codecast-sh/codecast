@@ -34,18 +34,26 @@ export function DiffStat({
   deletions,
   files,
   className = "",
+  themed = false,
 }: {
   additions?: number | null;
   deletions?: number | null;
   files?: number | null;
   className?: string;
+  /** Color from the theme's --sol-green and --sol-red rather than the fixed
+   *  Solarized classes, so the counts follow every theme. */
+  themed?: boolean;
 }) {
   if (additions == null && deletions == null && files == null) return null;
   return (
     <span className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-[10px] ${className}`}>
-      {files != null && <span className="text-sol-text-dim">{files} file{files === 1 ? "" : "s"}</span>}
-      {additions != null && additions > 0 && <span className="text-sol-green">+{additions}</span>}
-      {deletions != null && deletions > 0 && <span className="text-sol-red">-{deletions}</span>}
+      {files != null && <span className="text-sol-text-dim">{files.toLocaleString()} file{files === 1 ? "" : "s"}</span>}
+      {additions != null && additions > 0 && (
+        <span className={themed ? undefined : "text-sol-green"} style={themed ? { color: "var(--sol-green)" } : undefined}>+{additions.toLocaleString()}</span>
+      )}
+      {deletions != null && deletions > 0 && (
+        <span className={themed ? undefined : "text-sol-red"} style={themed ? { color: "var(--sol-red)" } : undefined}>-{deletions.toLocaleString()}</span>
+      )}
     </span>
   );
 }

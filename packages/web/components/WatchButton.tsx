@@ -1,5 +1,6 @@
 "use client";
-import { useQuery, useMutation } from "convex/react";
+import { useMutation } from "convex/react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 
 function BellIcon({ filled, className }: { filled: boolean; className: string }) {
@@ -20,10 +21,10 @@ export function WatchButton({
   /** "chip" renders the standalone pill; "menuItem" a full-width dropdown row. */
   variant?: "chip" | "menuItem";
 }) {
-  const isWatching = useQuery(
+  const isWatching = useQueryNoThrow(
     (api as any).notifications.isWatching,
     entityId ? { entity_type: entityType, entity_id: entityId } : "skip"
-  );
+  ).data;
   const toggleWatch = useMutation((api as any).notifications.toggleWatch);
   const title = isWatching ? "Watching — click to unwatch" : "Watch for notifications";
 

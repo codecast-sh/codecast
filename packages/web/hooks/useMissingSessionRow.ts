@@ -13,12 +13,21 @@ import { isConvexId, sessionRowFromSummary, type InboxSession } from "../store/i
  * server rejection must degrade to "unavailable", not crash the surface.
  */
 export function useMissingSessionRow(id: string | null): InboxSession | null | undefined {
+  return useMissingSessionLookup(id).row;
+}
+
+/**
+ * The same lookup, with `failed` set when the `null` is a server error rather
+ * than an answer: nothing is known about the row then, so a surface that says
+ * why it cannot open the session must not claim it was deleted or withheld.
+ */
+export function useMissingSessionLookup(id: string | null): { row: InboxSession | null | undefined; failed: boolean } {
   const valid = !!id && isConvexId(id);
   const { data, error } = useQueryNoThrow(
     api.conversations.getConversation,
     valid ? { conversation_id: id, limit: 1 } : "skip",
   );
-  return useMemo(() => {
+  const row = useMemo(() => {
     if (!id) return undefined;
     if (!valid) return null;
     if (data === undefined && !error) return undefined;
@@ -32,4 +41,5 @@ export function useMissingSessionRow(id: string | null): InboxSession | null | u
       author_name: data.user?.name ?? null,
     });
   }, [id, valid, data, error]);
+  return { row, failed: valid && !!error };
 }

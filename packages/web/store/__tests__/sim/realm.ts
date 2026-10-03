@@ -7,9 +7,11 @@
 // harness re-exports it.
 //
 // RANDOM. Math.random and crypto.randomUUID draw from a seeded stream: the
-// running server call's while one runs, else the active window's, else the
-// world's. Each stream is makeRng(fnv1a32(`${seed}:${name}`)), so a draw in one
-// window never moves another window's sequence.
+// store being built by createWindowStore while it runs, else the running
+// server call's, else the active window's, else the world's. Each stream is
+// makeRng(fnv1a32(`${seed}:${name}`)), so a draw in one window never moves
+// another window's sequence, and a store that draws as it is built moves none
+// but its own.
 //
 // TIMERS. setTimeout and setInterval become deliveries on `timer:<owner>`
 // (the active window, or "global"), due at now + delay, through the net the
@@ -142,7 +144,11 @@ function swap(obj: object, key: string, value: unknown, accessor = false): () =>
 
 // -- Random --
 
+// The stream of the store createWindowStore is building, while it builds it.
+let building: Rng | null = null;
+
 function currentRng(r: Installed): Rng {
+  if (building) return building;
   const call = r.opts.serverCall?.();
   if (call) return call.rng;
   if (active) return r.windows.get(active)!.rng;
@@ -156,6 +162,23 @@ export function uuidFrom(rng: Rng): string {
   b[8] = (b[8] & 0x3f) | 0x80;
   const hex = b.map((x) => x.toString(16).padStart(2, "0")).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * A window's store, built with its draws on the `store:<name>` stream. Product
+ * code may draw randomness while a store is created (an engine instance id),
+ * and the realm decides nothing about when that happens: whatever is or is
+ * not running around the construction, those draws never reach the world's,
+ * a window's or a server call's stream.
+ */
+export function createWindowStore(name: string): SimStore {
+  if (building) throw new Error("sim realm: createWindowStore() inside another store's creation");
+  building = stream(`store:${name}`);
+  try {
+    return __createInboxStoreForTests();
+  } finally {
+    building = null;
+  }
 }
 
 // -- Timers --

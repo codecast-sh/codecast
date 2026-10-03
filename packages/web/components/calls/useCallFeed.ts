@@ -13,6 +13,7 @@ import {
 import { AVATAR_KEYS } from "@codecast/shared/contracts/orgAvatars";
 import { characterNameFor, defaultCharacterFor, type Character } from "@codecast/shared/contracts/sessionCharacter";
 import { SessionCreatePendingError, defaultNewSessionPath, useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { withoutUndo } from "../../store/undoStack";
 import { getRoom, ringInto, startTranscribing } from "../../lib/calls/callManager";
 import { useRecentProjectsFeed } from "../../hooks/useRecentProjectsFeed";
 import { describeRoomLive } from "../../lib/calls/roomLabels";
@@ -305,7 +306,8 @@ export function useAddLiveFeed(opts: {
               return huddleFeedBriefing({ name: character.name, label });
             },
             (id) => {
-              if (character) st.setSessionCharacter(id, { avatar: character.avatar, name: character.name });
+              // The feed names its own session; that is not the user's change.
+              if (character) withoutUndo(() => st.setSessionCharacter(id, { avatar: character!.avatar, name: character!.name }));
             },
             teamId ?? (st.clientState?.ui?.active_team_id as string | undefined),
           );

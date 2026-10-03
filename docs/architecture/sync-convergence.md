@@ -231,7 +231,9 @@ parent a child's ask lifts: a subagent or orphan rolls up to its `parent_convers
 a plan handoff (parent pointer plus parent message) is its own member and speaks for
 itself; an agent team teammate rolls up to its lead. The server pool grouping and the
 replica's asking derivation both group by it, and a child's pending `cast decide` lifts
-its parent on both sides. Which pending decide lifts at all is one shared rule too,
+its parent on both sides, as does its permission prompt whatever its message count (the
+child's own ask, `ownAsk`, never reads the count; only the AskUserQuestion probe needs
+content to read). Which pending decide lifts at all is one shared rule too,
 `isStackedAsk`: a blocking ask, or an advisory one someone filed into a named stack. An
 advisory ask leaves its agent working on the default, so it lifts nothing on either side.
 The server's asking child may be a live pool row outside the replica's window, which
@@ -364,15 +366,22 @@ message is a user turn (`last_role_is_user`, probed), the row's own heartbeat
 (`daemon_alive_until`, the user's daemons folded in), the instant its last producing
 child goes quiet (`producing_until`), and whether an AskUserQuestion poll is open
 (`auq_open`). Those six ship as facts (beside `child_asking`, the asking rollup's child
-half, C3), and ONE shared function, `deriveLiveAt(facts, t)`,
+half, C3), with the daemon's raw status (`agent_status_raw`) beside the overlay's
+coerced `agent_status`, and ONE shared function, `deriveLiveAt(facts, t)`,
 is the idle rule: the overlay runs it at its epoch to stamp the row, the replica runs it
 at its own clock to render, and the time flip runs it at each deadline on both sides.
-Every term is monotone in `t` for fixed facts, so re-running it over the already coerced
-shipped status is idempotent and only ever moves a row toward settled. The row's time
+Every term is monotone in `t` for fixed facts, so it only ever moves a row toward
+settled. Its status trust runs over the raw status, never over a shipped verdict: working
+decays to idle past the trust TTL while the heartbeat lives and to stopped once it lapses,
+but a shipped idle stays idle, so a replica deriving from it kept a stopped anchor hidden
+(ct-56054). A payload shipped at one instant must derive every later instant exactly as
+the raw facts do, and an older server's payload without the raw status falls back to the
+coerced one, as before. A local write of the status (the Escape press) therefore writes
+the raw status too, so its lock holds the fact the derivation reads. The row's time
 terms are one shared list too (`rowLiveDeadlines`): the server's time flip and the
 replica's recompute scheduler read it, so no deadline exists on one side only. The
-property tests pin all three: idempotence, monotonicity, and constancy between adjacent
-deadlines. The old client only sweep (a quiet row read as settled, a frozen queue flag
+property tests pin all four: idempotence, replay from a shipped payload, monotonicity,
+and constancy between adjacent deadlines. The old client only sweep (a quiet row read as settled, a frozen queue flag
 blanked) and the coverage gate around it are gone: a row with no facts at all takes the
 server's no status branch and settles by the activity grace. One rule this makes exact
 on the replica that the client could not apply before: a declared dormant home whose

@@ -115,6 +115,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
   private meter: MicMeter | null = null;
   private handedOff = false;
   private disposed = false;
+  private starting: Promise<void> | null = null;
   // A headset plugged in while they choose shows up in the pickers at once.
   private stopWatching = onDeviceChange(() => void this.refreshDevices());
 
@@ -142,7 +143,21 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
    *  permission prompt rather than two; then whatever is still closed on its
    *  own, so a refused camera leaves the microphone working and the page can
    *  say which one is the problem. */
-  async start(want: { mic: boolean; camera: boolean }): Promise<void> {
+  start(want: { mic: boolean; camera: boolean }): Promise<void> {
+    const run = this.open(want);
+    this.starting = run;
+    return run;
+  }
+
+  /** Resolves once the devices asked for are open or refused: a Join pressed
+   *  while the browser's prompt is up waits for the answer, so the guest
+   *  walks in with the camera and microphone they just allowed rather than
+   *  with none (the tracks a prompt grants after the hand-off are stopped). */
+  settled(): Promise<void> {
+    return this.starting ?? Promise.resolve();
+  }
+
+  private async open(want: { mic: boolean; camera: boolean }): Promise<void> {
     this.set({ asking: true });
     if (want.mic && want.camera && !this.snap.audio && !this.snap.video) {
       try {
@@ -367,6 +382,18 @@ export class GuestCall extends Emitter<CallSnapshot> {
     }
     this.refresh();
     void this.refreshDevices();
+  }
+
+  /** Join again after the connection dropped, in place of the call that
+   *  lost it: no lobby in between (the stage stays up under its
+   *  "Reconnecting" line), so nothing is handed over and the devices open the
+   *  way the guest last left them (`wants`), never back on by themselves. */
+  async reconnectWith(creds: { url: string; token: string }): Promise<void> {
+    await this.connect(creds, { video: null, audio: null });
+    if (this.left) return;
+    const { mic, camera } = this.snap.wants;
+    if (mic) await this.setMic(true);
+    if (camera) await this.setCamera(true);
   }
 
   async refreshDevices(): Promise<void> {

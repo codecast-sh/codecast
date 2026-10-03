@@ -359,7 +359,12 @@ export interface LocalMirrorStamp {
   hash: string;
   at: string;
   last_failure?: { reason: string; at: string; hash: string };
-  /** The host's receiver releases, never deletes, a tracked project file the bundle stops carrying (apply.ts). */
+  /**
+   * The host's receiver last said it releases, never deletes, a tracked
+   * project file the bundle stops carrying (apply.ts). A hint for which bundle
+   * the fast tick hashes; a push narrows only on the --verify read it makes
+   * just before sending.
+   */
   keeps_tracked?: boolean;
 }
 
@@ -426,11 +431,20 @@ function resolveDeps(partial: Partial<MirrorDeps> = {}, signal?: AbortSignal): M
   };
 }
 
-async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorStamp): Promise<void> {
+/** Whether a receiver's answer (a --verify read or an apply result) says it keeps tracked files. */
+function receiverKeepsTracked(answer: { capabilities?: string[] } | null | undefined): boolean {
+  return !!answer?.capabilities?.includes("keeps-tracked");
+}
+
+/**
+ * `keepsTracked` is what the receiver said this time; undefined when nothing
+ * answered (a build or transport failure), which keeps the last answer.
+ */
+async function saveHostStamp(deps: MirrorDeps, key: string, stamp: LocalMirrorStamp, keepsTracked?: boolean): Promise<void> {
   await deps.lock("stamps", async () => {
     const latest = deps.readLocalStamps();
-    // What a host's receiver can do outlives any one push's stamp.
-    deps.writeLocalStamps({ ...latest, [key]: { ...(latest[key]?.keeps_tracked ? { keeps_tracked: true } : {}), ...stamp } });
+    const keeps = keepsTracked ?? latest[key]?.keeps_tracked;
+    deps.writeLocalStamps({ ...latest, [key]: { ...stamp, ...(keeps ? { keeps_tracked: true } : {}) } });
   });
 }
 
@@ -478,12 +492,13 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
     opts.signal?.throwIfAborted();
     const key = hostKey(host);
     const projects = deps.readProjects(host);
-    // Inside a repo, carry only agent context, once the
-    // host's receiver has said it releases tracked files instead of deleting
-    // them; an older receiver keeps getting the wider bundle.
-    const narrowProjects = !!deps.readLocalStamps()[key]?.keeps_tracked;
-    const buildOpts = { config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects, sources: opts.sources, narrowProjects };
-    const cacheKey = JSON.stringify([key, buildOpts.hostHome, opts.takeOver ?? false, opts.localGitRoot ?? "", projects, config.cloud_mirror_include ?? "", config.cloud_mirror_exclude ?? "", narrowProjects]);
+    // Inside a repo, carry only agent context when the host's receiver
+    // releases tracked files instead of deleting them; an older receiver gets
+    // the wider bundle. The last answer picks the bundle the fast tick hashes;
+    // the --verify read below decides what is sent.
+    const buildOpts: BuildHomeMirrorOptions & { hostHome: string } = { config, hostHome: remoteHome(host), takeOver: opts.takeOver, localGitRoot: opts.localGitRoot, projects, sources: opts.sources, narrowProjects: !!deps.readLocalStamps()[key]?.keeps_tracked };
+    const cacheKeyFor = () => JSON.stringify([key, buildOpts.hostHome, opts.takeOver ?? false, opts.localGitRoot ?? "", projects, config.cloud_mirror_include ?? "", config.cloud_mirror_exclude ?? "", buildOpts.narrowProjects]);
+    let cacheKey = cacheKeyFor();
     const build = async (): Promise<BuiltBundle> => {
       let built: BuiltBundle;
       try {
@@ -510,11 +525,16 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
       else if (previous?.hash !== built.hash) for (const warning of warnings) deps.log(`context compatibility: ${warning}`);
       return built;
     };
-    const cached = opts.force ? undefined : buildCache.get(cacheKey);
     let built: BuiltBundle | undefined;
-    let hash: string;
-    if (cached && await (opts.sources?.stillHolds(cached.ledger) ?? ledgerUnchanged(cached.ledger))) hash = cached.hash;
-    else { built = await build(); hash = built.hash; }
+    let hash = "";
+    // The hash for the current build options: the remembered build's while its ledger holds, else a fresh build.
+    const settle = async () => {
+      const cached = opts.force ? undefined : buildCache.get(cacheKey);
+      built = undefined;
+      if (cached && await (opts.sources?.stillHolds(cached.ledger) ?? ledgerUnchanged(cached.ledger))) hash = cached.hash;
+      else { built = await build(); hash = built.hash; }
+    };
+    await settle();
     // The bytes, only when a push needs them. A change the ledger missed
     // surfaces here as a different hash; the push carries the fresh bundle
     // and the stamps record it.
@@ -532,25 +552,35 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
     }
     try {
       const remote = await deps.readStamp(host);
+      // The receiver installed now decides the bundle, not one an earlier
+      // push talked to: a host back on an older cast keeps the stamp a newer
+      // receiver wrote, and a narrow bundle would have it delete the tracked
+      // files that stamp still owns.
+      const keepsTracked = receiverKeepsTracked(remote);
+      if (keepsTracked !== buildOpts.narrowProjects) {
+        buildOpts.narrowProjects = keepsTracked;
+        cacheKey = cacheKeyFor();
+        await settle();
+      }
       // Memories the host's sessions wrote come home first, so this push carries them back instead of reporting a conflict.
       try {
         const pulled = await deps.pullMemory(host, projects, remote);
         if (pulled.written > 0 || pulled.reconciled.length) {
-          (buildOpts as BuildHomeMirrorOptions).reconciled = pulled.reconciled;
+          buildOpts.reconciled = pulled.reconciled;
           buildCache.delete(cacheKey); built = await build(); hash = built.hash;
         }
       } catch (err) {
         deps.log(`memory from ${key} not read: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
       }
       if (!opts.force && remote?.complete === true && remote.hash === hash) {
-        await saveHostStamp(deps, key, { hash, at });
+        await saveHostStamp(deps, key, { hash, at }, keepsTracked);
         return { pushed: false, hash, skipped: "in step", changed: 0 };
       }
       opts.signal?.throwIfAborted();
       const wire = await bundle();
       opts.onProgress?.(`syncing ${wire.header.files.length} configuration files (${(wire.bytes.length / 1024 / 1024).toFixed(1)} MiB)…`);
       let r = await deps.push(host, wire.bytes);
-      const keeps = r.result?.capabilities?.includes("keeps-tracked") ? { keeps_tracked: true } : {};
+      const keeps = r.result ? receiverKeepsTracked(r.result) : keepsTracked;
       let retiredTargets = false;
       if (r.result?.retired_projects?.length) {
         await deps.retireProjects(host, r.result.retired_projects.map((root) => path.posix.join(remoteHome(host), root)));
@@ -560,10 +590,10 @@ async function mirrorUnderLock(host: RemoteHost, opts: MirrorHomeOptions, deps: 
         r = { ...r, pushed: false, reason: isApplyResult(r.result) ? applyFailure(r.result) || "receiver returned a different bundle hash" : "receiver returned an incomplete apply result" };
       }
       if (r.pushed) {
-        await saveHostStamp(deps, key, { hash, at, ...keeps });
+        await saveHostStamp(deps, key, { hash, at }, keeps);
         return { ...r, changed: (r.result?.applied.length ?? 0) + (r.result?.pruned.length ?? 0) };
       }
-      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash }, ...keeps });
+      await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: r.reason ?? "refused", at, hash } }, keeps);
       return { ...r, changed: 0, ...(retiredTargets ? { retiredTargets } : {}) };
     } catch (err) {
       await saveHostStamp(deps, key, { hash: "", at, last_failure: { reason: err instanceof Error ? err.message : String(err), at, hash } });

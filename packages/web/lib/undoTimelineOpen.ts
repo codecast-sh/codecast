@@ -3,6 +3,11 @@
 // palette row, the chord or a toast's History action, keyboard-driven).
 // A module-level external store so the toast notifier, the shortcut handlers
 // and the card's host all read one value without a React context.
+/** "hidden": no header button and no settings row; the palette row, the
+ *  chord, the toast's History action, the held peek and the milestone tip
+ *  are the doorways (S9). "visible" adds the header button. */
+export const UNDO_HISTORY_TIER: "hidden" | "visible" = "hidden";
+
 export type UndoTimelineMode = "peek" | "interactive";
 export type UndoTimelineSnapshot = { open: boolean; mode: UndoTimelineMode };
 
@@ -15,12 +20,53 @@ function set(next: UndoTimelineSnapshot): void {
   for (const listener of [...listeners]) listener();
 }
 
+// Focus goes back where it was when the card opened, on every close (Esc,
+// the chord again, an act), not only Esc. An overlay that opened the card
+// (the palette, whose input still holds focus as it closes) is not a place to
+// return to, so the target is the last focus outside any overlay.
+const OVERLAY = '[role="dialog"], [cmdk-root], [data-radix-popper-content-wrapper]';
+let lastSteadyFocus: HTMLElement | null = null;
+let returnTo: HTMLElement | null = null;
+
+const steady = (el: Element | null): el is HTMLElement =>
+  !!el && el instanceof HTMLElement && el !== document.body && !el.closest(OVERLAY);
+
+// Installed by the first subscriber (UndoTimelineHost mounts with the app),
+// against whatever document is live then.
+let trackedDoc: Document | null = null;
+function trackFocus(): void {
+  if (typeof document === "undefined" || trackedDoc === document) return;
+  trackedDoc = document;
+  document.addEventListener(
+    "focusin",
+    (e) => {
+      if (steady(e.target as Element | null)) lastSteadyFocus = e.target as HTMLElement;
+    },
+    true,
+  );
+}
+
+const cardEl = () => (typeof document !== "undefined" ? document.querySelector("[data-undo-timeline]") : null);
+
 export function open(mode: UndoTimelineMode = "interactive"): void {
+  if (!snapshot.open && typeof document !== "undefined") {
+    const active = document.activeElement;
+    returnTo = steady(active) ? active : lastSteadyFocus;
+  }
   set({ open: true, mode });
 }
 
 export function close(): void {
+  if (!snapshot.open) return;
+  const target = returnTo;
+  returnTo = null;
+  // Only when focus is in the card (or already fell to the body): a close
+  // that follows a click elsewhere leaves focus where the click put it.
+  const active = typeof document !== "undefined" ? document.activeElement : null;
+  const card = cardEl();
+  const lost = !active || active === document.body || (!!card && card.contains(active));
   set({ open: false, mode: snapshot.mode });
+  if (lost && target?.isConnected) target.focus({ preventScroll: true });
 }
 
 /** Close when open; otherwise open in `mode`. */
@@ -43,6 +89,7 @@ export function getSnapshot(): UndoTimelineSnapshot {
 }
 
 export function subscribe(fn: () => void): () => void {
+  trackFocus();
   listeners.add(fn);
   return () => {
     listeners.delete(fn);

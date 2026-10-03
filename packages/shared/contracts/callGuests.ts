@@ -58,12 +58,20 @@ export function callParticipantKind(identity: string): CallParticipantKind {
 // room, written into transcripts and spoken to agents. So it is cleaned once,
 // here: control characters and runs of whitespace go, it is capped, and an
 // empty one is refused rather than defaulted (a room admitting "Guest" has no
-// idea whom it let in).
+// idea whom it let in). Markdown's emphasis, code and link marks and the colon
+// go too: a transcript line reads `**Name**: words` (formatTranscriptChunk),
+// and a name carrying `**: ` could forge a second speaker inside one line of
+// what the agents read.
 export const GUEST_NAME_MAX = 40;
 
 /** The name a guest may go by, or null when nothing usable was typed. */
 export function normalizeGuestName(raw: string | null | undefined): string | null {
-  const flat = (raw ?? "").normalize("NFC").replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, " ").replace(/\s+/g, " ").trim();
+  const flat = (raw ?? "")
+    .normalize("NFC")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff]/g, " ")
+    .replace(/[*_`[\]:]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   // The "(guest)" marking is the room's to add (guestDisplayName), never the
   // guest's: typed in, it would read "Sam (guest) (guest)" everywhere.
   const clean = Array.from(flat.replace(/(?:\s*\(\s*guest\s*\))+$/i, "").trim());
@@ -104,22 +112,32 @@ export function guestMayJoin(status: CallGuestStatus): boolean {
 
 // Why an admitted or waiting guest is now `left`: they walked out, the
 // huddle they were let into ended under them (an admission is for one huddle,
-// the way an accepted ring is), or their page went quiet for longer than a
+// the way an accepted ring is), their page went quiet for longer than a
 // blink (GUEST_ADMISSION_LAPSE_MS) and the server put them out rather than
-// keep a seat nobody can see. Their page says which, because "you left" to
-// somebody who did not is a small lie at the end of a meeting.
-export const CALL_GUEST_LEFT_REASONS = ["self", "huddle_ended", "lapsed"] as const;
+// keep a seat nobody can see ("lapsed"), or they were let in and never came
+// into the media before their place was let go ("not_joined": the lobby held
+// them for a notice that changed, or a permission prompt, and they did not
+// press Join in time). Their page says which, because "you left" to somebody
+// who did not, or "you lost connection" to somebody who never connected, is
+// a small lie at the end of a meeting.
+export const CALL_GUEST_LEFT_REASONS = ["self", "huddle_ended", "lapsed", "not_joined"] as const;
 export type CallGuestLeftReason = (typeof CALL_GUEST_LEFT_REASONS)[number];
 
-/** Is this guest at the door or in the room right now? The same lease a seat
- *  has (CALL_MEMBER_STALE_MS): the guest's page beats while it is open, and a
- *  page that closed without saying so reads as gone within one window. Only a
- *  waiting or admitted row can be present at all. */
+/** Is this guest at the door or in the room right now? At the door, the
+ *  lease a seat has (CALL_MEMBER_STALE_MS): the page beats while it is open,
+ *  and a knock from a page that closed drops off the door within one window.
+ *  Inside, the admission's own window (GUEST_ADMISSION_LAPSE_MS): a guest in
+ *  the media room is still there while their phone holds a background page's
+ *  timers, and is seen by the media server's roster besides, so the room's
+ *  list does not blink them out between beats. The server ends an admission
+ *  that outlives that window, so nobody is listed past it. Only a waiting or
+ *  admitted row can be present at all. */
 export function isGuestPresent(
   row: { status: CallGuestStatus; last_seen: number },
   now: number,
 ): boolean {
-  return (row.status === "waiting" || row.status === "admitted") && now - row.last_seen < CALL_MEMBER_STALE_MS;
+  if (row.status === "waiting") return now - row.last_seen < CALL_MEMBER_STALE_MS;
+  return row.status === "admitted" && now - row.last_seen < GUEST_ADMISSION_LAPSE_MS;
 }
 
 // What the guest's own page shows, one word per screen it can be on. The
@@ -157,13 +175,22 @@ export const GUEST_REKNOCK_MIN_MS = 10_000;
 // sit in the call unseen. Twice a seat's lease, so a slow network is not
 // mistaken for a departure.
 export const GUEST_ADMISSION_LAPSE_MS = 2 * CALL_MEMBER_STALE_MS;
+// A guest whose place was let go without anybody deciding it ("lapsed" or
+// "not_joined": a phone that slept in a pocket, a lobby left open) may walk
+// back in without knocking for this long, while the huddle they were let into
+// still runs: the room already let them in, and asking it again mid-meeting
+// for a blink of the network is noise. Past it, or once that huddle ends,
+// they knock like anyone.
+export const GUEST_RESUME_MS = 10 * 60_000;
 // A guest's media token. LiveKit refreshes a connected participant's token
 // by itself, so the lifetime does not end a session (removal does, server
 // side); it bounds how long a token copied out of a removed guest's client
 // stays good for a reconnect.
 export const GUEST_TOKEN_TTL_S = 5 * 60;
 // A guest at the door of an empty room is waiting for somebody nobody has
-// told: the link's creator gets one push per arrival, at most this often.
+// told: the link's creator gets a push, at most this often per link however
+// many arrive (a link anybody can hold must not become a pager), and one push
+// names everybody waiting when there is more than one.
 export const GUEST_CREATOR_NOTICE_MS = 10 * 60_000;
 export const CALL_GUEST_WAITING_PUSH_TYPE = "call_guest_waiting";
 // The range a link creator may pick; the default is GUEST_LINK_TTL_MS.
@@ -180,16 +207,50 @@ export const GUEST_LINK_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export type GuestLinkRefusal = "not_found" | "revoked" | "expired" | "unavailable" | "inviter_gone";
 
 /** What a guest is told for each refusal, in words for somebody who has never
- *  heard of codecast and only wants to get into a meeting. The server throws
- *  these from a knock and the guest page shows them for a link it describes,
- *  so the two never word the same door differently. */
-export const GUEST_LINK_REFUSAL_TEXT: Record<GuestLinkRefusal, string> = {
-  not_found: "This link isn't valid. Ask whoever sent it for a new one.",
-  revoked: "This link was turned off. Ask whoever sent it for a new one.",
-  expired: "This link has expired. Ask whoever sent it for a new one.",
-  unavailable: "This meeting isn't taking guests right now.",
-  inviter_gone: "Whoever sent this link can no longer invite guests to this meeting. Ask someone else in it for a new one.",
+ *  heard of codecast and only wants to get into a meeting: what happened, and
+ *  what they can do about it. Two parts because the guest page puts the first
+ *  in its own heading and only the second under it (a body that repeats its
+ *  heading reads as a mistake); everything else says both, as one line
+ *  (GUEST_LINK_REFUSAL_TEXT). */
+export const GUEST_LINK_REFUSAL_PARTS: Record<GuestLinkRefusal, { what: string; next: string }> = {
+  not_found: { what: "This link isn't valid.", next: "Ask whoever sent it for a new one." },
+  revoked: { what: "This link was turned off.", next: "Ask whoever sent it for a new one." },
+  expired: { what: "This link has expired.", next: "Ask whoever sent it for a new one." },
+  unavailable: { what: "This meeting isn't taking guests right now.", next: "Try the link again later." },
+  inviter_gone: {
+    what: "Whoever sent this link can no longer invite guests to this meeting.",
+    next: "Ask someone else in it for a new one.",
+  },
 };
+
+/** The whole refusal as one line. The server throws these from a knock, the
+ *  link's unfurl carries them, and the guest page words the same door from the
+ *  same parts, so no two places word it differently. */
+export const GUEST_LINK_REFUSAL_TEXT = Object.fromEntries(
+  Object.entries(GUEST_LINK_REFUSAL_PARTS).map(([k, p]) => [k, `${p.what} ${p.next}`]),
+) as Record<GuestLinkRefusal, string>;
+
+/** Why an admitted guest's page may not join the media right now
+ *  (callGuests.mintGuestToken). Carried as a ConvexError code, because a
+ *  plain Error's words do not survive to a client in production, and the
+ *  page acts on the code: the ones that end the visit move it to the
+ *  matching ending instead of an error line under a Join button. */
+export type GuestJoinRefusal = "not_a_guest" | "not_admitted" | "removed" | "ended" | "unavailable";
+
+export const GUEST_JOIN_REFUSAL_TEXT: Record<GuestJoinRefusal, string> = {
+  not_a_guest: "This page no longer holds your place in the call. Reload to ask to join again.",
+  not_admitted: "You aren't let in right now. Ask to join again and someone inside can let you in.",
+  removed: "Someone in the call removed you.",
+  ended: "This call has ended.",
+  unavailable: GUEST_LINK_REFUSAL_TEXT.unavailable,
+};
+
+/** The refusal code a thrown join error carries, or null for anything else
+ *  (a network failure, LiveKit itself). */
+export function guestJoinRefusalOf(err: unknown): GuestJoinRefusal | null {
+  const code = (err as any)?.data?.code;
+  return typeof code === "string" && code in GUEST_JOIN_REFUSAL_TEXT ? (code as GuestJoinRefusal) : null;
+}
 
 /** What is kept of a call, as a guest is told it. */
 export type GuestNotice = { recording: boolean; transcribed: boolean };

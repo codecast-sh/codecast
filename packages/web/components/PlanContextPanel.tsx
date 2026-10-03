@@ -1,5 +1,5 @@
-import { useQuery } from "convex/react";
 import { ShortId } from "./ShortId";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
@@ -56,7 +56,7 @@ const PRIORITY_COLOR: Record<string, string> = {
 };
 
 export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
-  const queryPlan = useQuery(api.plans.webPlanContext, { plan_id: planId });
+  const queryPlan = useQueryNoThrow(api.plans.webPlanContext, { plan_id: planId }).data;
   const [expanded, setExpanded] = useState(false);
 
   // Local-first first paint: the strip used to pop in a round-trip after the
