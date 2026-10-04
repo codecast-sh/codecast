@@ -7,6 +7,7 @@ const DEFAULT_SHORTCUTS = {
   togglePalette: "Control+Alt+Space",
   newSession: "Control+Shift+N",
   toggleEnv: "CommandOrControl+Alt+L",
+  toggleAgentDock: "Control+Alt+A",
 };
 
 // newSession's pre-rename key and its only historical default. saveSettings

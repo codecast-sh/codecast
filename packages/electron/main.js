@@ -77,6 +77,7 @@ const {
   startedApps,
   decideOffer,
 } = require("./meetingDetector");
+const { mergeAgentDock, placeAgentDock } = require("./agentDock");
 const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
 const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
@@ -1544,6 +1545,12 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   const mayResize = opts.mayResize || (() => true);
   const anchor = opts.anchor || (() => "top-left");
   const getWindow = opts.getWindow;
+  // Older windows speak on `set-<prefix>-<verb>` through their own preload
+  // methods; a newer one reaches the same three switches through the bridge's
+  // generic `call`, which lands on `app:<prefix>.<verb>` and needs no preload.
+  const listen = opts.appChannel
+    ? (verb, fn) => shellIpc.handle(`app:${prefix}.${verb}`, (e, arg) => { fn(e, arg); })
+    : (verb, fn) => shellIpc.on(`set-${prefix}-${verb}`, fn);
   let dragTimer = null;
   // The renderer's pin, last time it gave one: the point (window pixels from
   // the top) that holds still on screen across a resize. The float's faces.
@@ -1557,7 +1564,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   // circle. Only the click-through states have anything to lift: the call
   // stage takes every click by construction, and letting a renderer turn that
   // off would make the panel unclickable with no way back.
-  shellIpc.on(`set-${prefix}-interactive`, (e, on) => {
+  listen("interactive", (e, on) => {
     const win = resolveSender(e);
     if (!win || !mayInteract()) return;
     win.setIgnoreMouseEvents(on !== true, { forward: true });
@@ -1565,7 +1572,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
 
   // The float is sized to its contents: the renderer measures the row and
   // the card and says how big the window has to be.
-  shellIpc.on(`set-${prefix}-content-size`, (e, size) => {
+  listen("content-size", (e, size) => {
     const win = resolveSender(e);
     if (!win || !mayResize()) return;
     if (!size || typeof size !== "object") return;
@@ -1625,7 +1632,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   // takes the mouse events, so the renderer would never learn the pointer had
   // left and the window would stay stuck taking clicks that belong to the
   // application underneath.
-  shellIpc.on(`set-${prefix}-dragging`, (e, on) => {
+  listen("dragging", (e, on) => {
     const win = resolveSender(e);
     if (!win) return;
     stopDrag();
@@ -2512,6 +2519,156 @@ shellIpc.on("call-ring-answer", (e, inviteId, roomKey) => {
   accept();
 });
 
+// ---------------------------------------------------------------------------
+// The agent dock: a pill on the screen's edge with one dot per live agent,
+// and beside it a card for whichever one needs you (route /agent-dock). It is
+// opt-in per machine (settings.json `agentDock`, agentDock.js); off, there is
+// no window at all.
+//
+// One see-through window, sized to its content through the shared
+// see-through switches (registerSeeThroughIpc, on the bridge's app channel):
+// click-through everywhere except over the pill and the card, so the desktop
+// behind it keeps its clicks.
+//
+// It is an NSPanel (`type: "panel"`): it can take the keyboard for the card's
+// keys without activating Codecast, so answering an agent from the dock never
+// drags the main window in front of whatever the person was doing.
+// ---------------------------------------------------------------------------
+let agentDockWindow = null;
+
+function loadAgentDock() {
+  return mergeAgentDock(loadFullSettings().agentDock);
+}
+
+function createAgentDockWindow() {
+  const zoom = getAutoZoomFactor();
+  const setting = loadAgentDock();
+  const area = screen.getPrimaryDisplay().workArea;
+  const win = createShellWindow({
+    ...placeAgentDock(area, { width: 56, height: 320 }, setting),
+    type: process.platform === "darwin" ? "panel" : undefined,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    hasShadow: false,
+    acceptFirstMouse: true,
+    webPreferences: {
+      ...preloadPrefs(),
+      zoomFactor: zoom,
+      additionalArguments: [`--zoom-factor=${zoom}`, "--agent-dock-window"],
+      // The dots are live: a throttled background window would show an agent
+      // still working a minute after it asked for you.
+      backgroundThrottling: false,
+    },
+  });
+  agentDockWindow = win;
+  pinWindowTitle(win, "Codecast Dock");
+  win.setAlwaysOnTop(true, "floating");
+  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  win.setIgnoreMouseEvents(true, { forward: true });
+  win.loadURL(`${currentBaseUrl}/agent-dock`);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: "deny" };
+  });
+  win.webContents.on("did-finish-load", () => {
+    if (!win.isDestroyed()) {
+      win.webContents.executeJavaScript("document.documentElement.classList.add('electron-desktop')");
+      win.showInactive();
+    }
+  });
+  win.on("closed", () => {
+    if (agentDockWindow === win) agentDockWindow = null;
+  });
+  return win;
+}
+
+// Build or tear down the window to match the setting. Off costs nothing: no
+// window, no subscription.
+function syncAgentDock() {
+  const on = loadAgentDock().enabled;
+  const live = !!agentDockWindow && !agentDockWindow.isDestroyed();
+  if (on && !live) createAgentDockWindow();
+  if (!on && live) agentDockWindow.destroy();
+}
+
+const senderIsAgentDock = (e) =>
+  agentDockWindow && !agentDockWindow.isDestroyed() && e.sender === agentDockWindow.webContents ? agentDockWindow : null;
+
+registerSeeThroughIpc("agentDock", senderIsAgentDock, {
+  appChannel: true,
+  anchor: () => (loadAgentDock().edge === "left" ? "top-left" : "top-right"),
+  getWindow: () => agentDockWindow,
+});
+
+shellIpc.handle("app:agentDock.get", () => ({ ...loadAgentDock(), supported: true }));
+shellIpc.handle("app:agentDock.set", (_e, patch) => {
+  const next = mergeAgentDock({ ...loadAgentDock(), ...(patch && typeof patch === "object" ? patch : {}) });
+  updateSettings({ agentDock: next });
+  syncAgentDock();
+  registerShortcuts();
+  if (agentDockWindow && !agentDockWindow.isDestroyed()) {
+    const [w, h] = agentDockWindow.getSize();
+    const area = screen.getDisplayMatching(agentDockWindow.getBounds()).workArea;
+    agentDockWindow.setResizable(true);
+    agentDockWindow.setBounds(placeAgentDock(area, { width: w, height: h }, next));
+    agentDockWindow.setResizable(false);
+  }
+  return next;
+});
+
+// The card takes the keyboard while it is open (a panel, so Codecast is not
+// activated) and gives it back when it closes.
+shellIpc.handle("app:agentDock.focus", (e, on) => {
+  const win = senderIsAgentDock(e);
+  if (!win) return;
+  if (on === true) win.focus();
+  else win.blur();
+});
+
+// "Open agent": the conversation lands in the main window, which this time
+// does come forward, because the person asked to go there.
+shellIpc.handle("app:agentDock.open", (e, navPath) => {
+  if (!senderIsAgentDock(e)) return false;
+  const clean = sanitizeTabPath(navPath);
+  if (!clean) return false;
+  routeToWindow(clean, null);
+  app.focus({ steal: true });
+  return true;
+});
+
+// Frame a region of the screen: the system's own picker (`screencapture -i`),
+// so there is no capture code of ours to hold Screen Recording rights badly.
+// Resolves a PNG data URL, or null when the person pressed Esc.
+shellIpc.handle("app:agentDock.capture", async (e) => {
+  if (!senderIsAgentDock(e) || process.platform !== "darwin") return null;
+  const file = path.join(app.getPath("temp"), `codecast-dock-${crypto.randomUUID()}.png`);
+  try {
+    await execFileP("/usr/sbin/screencapture", ["-i", "-x", file]);
+    if (!fs.existsSync(file)) return null;
+    return `data:image/png;base64,${fs.readFileSync(file).toString("base64")}`;
+  } finally {
+    fs.rm(file, { force: true }, () => {});
+  }
+});
+
+function summonAgentDock() {
+  if (!loadAgentDock().enabled) return;
+  if (!agentDockWindow || agentDockWindow.isDestroyed()) createAgentDockWindow();
+  const win = agentDockWindow;
+  if (!win.isVisible()) win.showInactive();
+  win.webContents.send("app:agentDock.summon", { at: Date.now() });
+  win.focus();
+}
+
 // "Open the transcript" from the recording face: the card is not a place to
 // read, so the transcript lands in the main window.
 shellIpc.on("meeting-offer-open-call", (e, id) => {
@@ -3273,6 +3430,7 @@ const SHORTCUT_HANDLERS = {
   togglePalette: () => togglePalette(),
   newSession: () => showCompose(),
   toggleEnv: () => toggleEnvironment(),
+  toggleAgentDock: () => summonAgentDock(),
 };
 
 // Bindings that failed their last registration attempt, keyed by shortcut key
@@ -3288,6 +3446,9 @@ function registerShortcuts() {
   for (const [key, handler] of Object.entries(SHORTCUT_HANDLERS)) {
     const acc = shortcuts[key];
     if (!acc) continue; // "" = binding removed by the user
+    // An opt-in feature's key is held only while the feature is on: a dock
+    // nobody enabled must not take a chord away from every other app.
+    if (key === "toggleAgentDock" && !loadAgentDock().enabled) continue;
     let ok = false;
     // register() returns false when another app already holds the accelerator
     // and throws on a malformed one — both must land in issues, not crash.
@@ -3408,6 +3569,8 @@ app.whenReady().then(() => {
   registerShortcuts();
   // Starts the meeting poller only if the setting asks for it; off is free.
   syncMeetingWatch();
+  // The agent dock, if this machine asked for one.
+  syncAgentDock();
 
   // No startup notification needed -- macOS registers the app when
   // Notification.show() is first called from any code path (idle, error, etc.).

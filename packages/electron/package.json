@@ -39,6 +39,7 @@
       "callWindowPolicy.js",
       "paletteFace.js",
       "meetingDetector.js",
+      "agentDock.js",
       "notificationRouter.js",
       "osPermissions.js",
       "computerPermissions.js",
