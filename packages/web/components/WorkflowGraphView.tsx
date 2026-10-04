@@ -58,6 +58,8 @@ interface WorkflowGraphViewProps {
   chrome?: boolean;
   /** The margin fitView keeps around the graph, as a fraction of the box. Default 0.2. */
   fitPadding?: number;
+  /** Nodes tagged "edited" (a customized line's stations that differ from shipped). */
+  markedNodeIds?: ReadonlySet<string>;
 }
 
 // Solarized palette
@@ -136,6 +138,7 @@ function WorkflowNode({ data, selected }: { data: any; selected?: boolean }) {
   const node = data.wfNode as WFNode;
   const nodeStatus = data.nodeStatus as NodeStatus | undefined;
   const isCurrent = data.isCurrent as boolean;
+  const marked = data.marked as boolean;
   const { theme } = useTheme();
   const p = SOL[theme];
   const colors = getNodeColors(node.type, p);
@@ -177,6 +180,11 @@ function WorkflowNode({ data, selected }: { data: any; selected?: boolean }) {
       <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.2, textAlign: "center", padding: "0 8px", color: p.text }}>
         {node.label.length > 22 ? node.label.slice(0, 20) + "…" : node.label}
       </div>
+      {marked && (
+        <div data-marked style={{ position: "absolute", top: 2, left: 6, fontSize: 7, color: p.magenta, fontFamily: "monospace", letterSpacing: 0.3 }}>
+          edited
+        </div>
+      )}
       {node.goal_gate && (
         <div style={{ position: "absolute", top: 2, right: 5, fontSize: 7, color: p.yellow, opacity: 0.8, fontFamily: "monospace" }}>
           gate
@@ -291,7 +299,7 @@ function bfsLayers(nodes: WFNode[], edges: WFEdge[]): WFNode[][] {
   return layers;
 }
 
-function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeStatuses?: Record<string, NodeStatus>, currentNodeId?: string) {
+function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeStatuses?: Record<string, NodeStatus>, currentNodeId?: string, markedNodeIds?: ReadonlySet<string>) {
   const layers = bfsLayers(wfNodes, wfEdges);
 
   // Re-detect back-edges for edge styling
@@ -330,6 +338,7 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeSta
       label: n.label,
       nodeStatus: nodeStatuses?.[n.id],
       isCurrent: currentNodeId === n.id,
+      marked: markedNodeIds?.has(n.id) ?? false,
     },
     style: { width: NODE_W, height: NODE_H },
   }));
@@ -354,14 +363,14 @@ function buildGraph(wfNodes: WFNode[], wfEdges: WFEdge[], p: SolPalette, nodeSta
   return { nodes, edges };
 }
 
-export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true, fitPadding = 0.2 }: WorkflowGraphViewProps) {
+export function WorkflowGraphView({ nodes: wfNodes, edges: wfEdges, onNodeSelect, selectedNodeId, nodeStatuses, currentNodeId, chrome = true, fitPadding = 0.2, markedNodeIds }: WorkflowGraphViewProps) {
   const { theme } = useTheme();
   const p = SOL[theme];
 
   const { nodes: graphNodes, edges: graphEdges } = useMemo(
-    () => buildGraph(wfNodes, wfEdges, p, nodeStatuses, currentNodeId),
+    () => buildGraph(wfNodes, wfEdges, p, nodeStatuses, currentNodeId, markedNodeIds),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [wfNodes, wfEdges, theme, nodeStatuses, currentNodeId]
+    [wfNodes, wfEdges, theme, nodeStatuses, currentNodeId, markedNodeIds]
   );
 
   const nodesWithSelection = useMemo(() =>

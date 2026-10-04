@@ -1,10 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
 import { canonical } from './adapters/resolver';
+import { FULL_SHA_RE as SHA, git, gitOrThrow, type CommitPlace } from './git';
 import { evalsHome, homePaths, PIN_REF_PREFIX, REPO_ROOT, treeRoot, writeJsonAtomic } from './paths';
 import { sourceHashes } from './state';
 import type { SurfaceMeta } from './surface';
@@ -14,32 +14,6 @@ import type { SurfaceMeta } from './surface';
 // branch, where `git gc` collects it and the record names nothing. So every
 // recorded head is pinned under refs/evals/heads/, and heads.json says where
 // each head sits now and which main-line commit carries the same change.
-
-const SHA = /^[0-9a-f]{40}$/;
-
-interface GitResult {
-  ok: boolean;
-  out: string;
-  err: string;
-}
-
-function git(root: string, args: string[], input?: string, env?: Record<string, string>): GitResult {
-  const r = spawnSync('git', args, { cwd: root, input, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024, env: env ? { ...process.env, ...env } : undefined });
-  return { ok: r.status === 0, out: r.stdout ?? '', err: (r.stderr ?? '').trim() || (r.error?.message ?? '') };
-}
-
-function gitOrThrow(root: string, args: string[], input?: string): string {
-  const r = git(root, args, input);
-  if (!r.ok) throw new Error(`git ${args.join(' ')} failed in ${root}: ${r.err}`);
-  return r.out;
-}
-
-/** The full sha a name resolves to as a commit, or null. */
-export function resolveCommit(name: string, root = treeRoot()): string | null {
-  const r = git(root, ['rev-parse', '--verify', '--quiet', `${name}^{commit}`]);
-  const sha = r.out.trim();
-  return r.ok && SHA.test(sha) ? sha : null;
-}
 
 /** Where a head sits: on the main line, on another branch only, on no branch, or gone from the repo. */
 export type HeadPlace = 'main' | 'branch' | 'none' | 'missing';
@@ -77,6 +51,27 @@ export function readHeads(path = homePaths().heads): HeadsFile | null {
 /** The main line: local main and origin/main, whichever exist. */
 export function mainLineRefs(root = treeRoot()): string[] {
   return ['refs/heads/main', 'refs/remotes/origin/main'].filter((ref) => git(root, ['rev-parse', '--verify', '--quiet', ref]).ok);
+}
+
+/** Whether a commit is on the main line, asked once per process per root and sha. */
+const onMainCache = new Map<string, boolean>();
+function isOnMain(sha: string, root: string): boolean {
+  const key = `${root}\0${sha}`;
+  const hit = onMainCache.get(key);
+  if (hit !== undefined) return hit;
+  const yes = mainLineRefs(root).some((ref) => git(root, ['merge-base', '--is-ancestor', sha, ref]).ok);
+  onMainCache.set(key, yes);
+  return yes;
+}
+
+/** Where a logged commit sits for the pages: itself on the main line, else its main-line twin through heads.json (null when it has none). */
+export function placeByHeads(heads = readHeads(), root = treeRoot()): CommitPlace {
+  return (sha) => {
+    if (isOnMain(sha, root)) return { onMain: true, mainSha: sha };
+    const h = heads?.heads[sha];
+    // With no twin, the pages quote heads.json's reason and near (evals-ui.md section 5, unattributable).
+    return { onMain: false, mainSha: h?.mainSha ?? null, ...(h && !h.mainSha && h.reason ? { twinReason: h.reason } : {}), ...(h?.near ? { near: h.near } : {}) };
+  };
 }
 
 /** The commits among `shas` this repo still holds. One `cat-file --batch-check` for all of them. */
@@ -118,10 +113,22 @@ export function pinHeads(shas: string[], root = treeRoot()): PinResult {
   return { pinned: todo, already: want.filter((s) => already.has(s)), missing: want.filter((s) => !have.has(s)) };
 }
 
-/** Pin one head (a batch's HEAD at start). Never throws: a run must not fail because a ref could not be written. */
-export function pinHead(sha: string, root = treeRoot()): boolean {
+/**
+ * Pin one head (a batch's HEAD at start) and give it its heads.json entry
+ * when it has none, so where it sits is known from its batch's first rep, not
+ * from the next `pin --backfill`. Never throws: a run must not fail because a
+ * ref or the map could not be written.
+ */
+export function pinHead(sha: string, root = treeRoot(), headsPath = homePaths().heads): boolean {
   try {
-    return pinHeads([sha], root).missing.length === 0;
+    if (pinHeads([sha], root).missing.length) return false;
+    if (!readHeads(headsPath)?.heads[sha]) {
+      const one = mapHeads([sha], root, null);
+      // Read again just before the write, so an entry another process wrote meanwhile survives.
+      const now = readHeads(headsPath);
+      writeJsonAtomic(headsPath, { updatedAt: one.updatedAt, mainLine: one.mainLine, heads: { ...now?.heads, [sha]: one.heads[sha]! } } satisfies HeadsFile);
+    }
+    return true;
   } catch {
     return false;
   }

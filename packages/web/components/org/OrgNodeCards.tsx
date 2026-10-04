@@ -18,6 +18,7 @@ import type { OrgPerson, OrgRole, OrgSession, StateCounts, OrgParentRef } from "
 import { ORG_STATE_ORDER } from "./orgTypes";
 import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf } from "./orgMeta";
 import { RoleFace } from "./RoleFace";
+import { useZoomLevel, type ZoomLevel } from "./orgZoom";
 import { GhostTag } from "./ghostChrome";
 import { CHIP_STATUS, ghostFrameStyle } from "./orgMeta";
 import { RoleHoverCard, SessionIdentityLine, SessionMark } from "../identity";
@@ -25,7 +26,7 @@ import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
 import { isHeadOfPeopleRole, roleWords } from "./orgStaffingTypes";
 import type { OrgGhostChip, OrgGhostMeta, OrgGhostMove, OrgGhostStub } from "./orgLayout";
-import { ORG_SIZES, seatRowHeight } from "./orgLayout";
+import { ORG_SIZES, runningSessions, seatRowHeight } from "./orgLayout";
 import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 import { RoleWeekBody } from "./orgFlowViz";
@@ -87,6 +88,9 @@ type CardData = {
   loadingCluster?: boolean;
   /** org.health's flags on this node (org-staffing.md S3): a dot each. */
   flags?: HealthFlag[];
+  /** The middle zoom level card's height inside the node's box (orgZoom); the
+   *  box itself is the close level's. Absent on a session or a cluster. */
+  mid?: number;
   // Ghosts (S5): what an open proposal draws on this card, from the layout.
   ghost?: OrgGhostStub;
   retire?: OrgGhostMeta;
@@ -136,12 +140,12 @@ function FlagDots({ flags }: { flags?: HealthFlag[] }) {
  *  is its title. A change whose handle nothing answers to is a warning chip.
  *  A click focuses the change (the pane shows its rationale, the card its
  *  actions). */
-export function GhostChips({ chips, focusChangeId, onFocusChange }: { chips?: OrgGhostChip[]; focusChangeId?: string | null; onFocusChange?: (id: string) => void }) {
+export function GhostChips({ chips, focusChangeId, onFocusChange, wide }: { chips?: OrgGhostChip[]; focusChangeId?: string | null; onFocusChange?: (id: string) => void; /** A goal card: a metric and its target read whole. */ wide?: boolean }) {
   if (!chips?.length) return null;
   const shown = chips.slice(0, 3);
   const rest = chips.slice(3);
   // One or two chips have the row to themselves; three share it.
-  const cap = chips.length <= 1 ? "max-w-[200px]" : chips.length === 2 ? "max-w-[100px]" : "max-w-[66px]";
+  const cap = chips.length <= 1 ? (wide ? "max-w-[280px]" : "max-w-[200px]") : chips.length === 2 ? (wide ? "max-w-[138px]" : "max-w-[100px]") : (wide ? "max-w-[90px]" : "max-w-[66px]");
   return (
     <div className="mt-1.5 flex items-center gap-1 min-w-0 overflow-hidden" data-ghost-chips={chips.length}>
       {shown.map((c) => {
@@ -191,7 +195,8 @@ const STRIP_H = 28;
  *  is scaled by the inverse of the canvas zoom (up to a limit) so its hit
  *  size does not shrink with the tree. Accepted and applied changes show
  *  their word instead; a failed one keeps its actions (it stays decidable). */
-function GhostActions({ meta, word, data }: { meta: OrgGhostMeta; word: string; data: CardData }) {
+export type GhostActionHandlers = Pick<CardData, "chips" | "onDecideChange" | "onEditChange">;
+export function GhostActions({ meta, word, data, below: belowProp }: { meta: OrgGhostMeta; word: string; data: GhostActionHandlers; /** Fully under the card (the goals lens reserves the row); default: only past a chips row. */ below?: boolean }) {
   const decided = meta.status === "accepted" || meta.status === "applied";
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   // The canvas zoom; only strips subscribe, so a zoom tick re-renders the one
@@ -201,7 +206,7 @@ function GhostActions({ meta, word, data }: { meta: OrgGhostMeta; word: string; 
   const btn = "nodrag inline-flex items-center gap-1 h-full px-2 text-[10.5px] font-semibold transition-colors hover:brightness-110";
   // Straddling the bottom edge on a plain card; fully below one that ends in
   // a chips row, so the strip never covers the chips (the level gap is 56px).
-  const below = !!data.chips?.length;
+  const below = belowProp ?? !!data.chips?.length;
   return (
     <div
       className="absolute left-1/2 flex items-center rounded-full border overflow-hidden shadow-sm h-[28px] [@media(pointer:coarse)]:h-[44px]"
@@ -252,7 +257,7 @@ function actionOf(data: CardData): { meta: OrgGhostMeta; word: string } | null {
   return chip ? { meta: chip, word: CHANGE_KIND_WORD[chip.kind] ?? String(chip.kind) } : null;
 }
 
-function Ports() {
+export function Ports() {
   // Edges need handles; the cards hide them so the tree reads as plain lines.
   const hidden = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1, border: 0, background: "transparent", pointerEvents: "none" as const };
   return (
@@ -263,7 +268,7 @@ function Ports() {
   );
 }
 
-function Frame({
+export function Frame({
   children, selected, dropTarget, dragging, className, style, accent, kind,
 }: {
   children: ReactNode; selected?: boolean; dropTarget?: boolean; dragging?: boolean; className?: string; style?: React.CSSProperties;
@@ -359,6 +364,36 @@ export function OverflowTally({ overflow, counts }: { overflow: number; counts: 
   );
 }
 
+/** The far and middle cards keep the middle height at the top of the box; the close card fills it. */
+const levelHeight = (level: ZoomLevel, mid: number | undefined): React.CSSProperties => (level !== "close" && mid ? { height: mid } : {});
+
+/** The far card (orgZoom): the name, large, and one dot in the seat's colour. */
+function FarBody({ name, color, hollow, dim }: { name: string; color: string; hollow?: boolean; dim?: boolean }) {
+  return (
+    <div className="flex h-full min-w-0 items-center gap-3" data-zoom-far>
+      <span className="block h-[14px] w-[14px] shrink-0 rounded-full" style={hollow ? { border: `2px solid ${color}` } : { background: color }} aria-hidden />
+      <span className="line-clamp-2 min-w-0 text-[24px] font-semibold leading-[27px] tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)", opacity: dim ? GHOST.opacity : 1 }}>{name}</span>
+    </div>
+  );
+}
+
+/** The close card's running sessions, one line each (ORG_SIZES.runningRow). */
+function RunningList({ holder }: { holder: { sessions: OrgSession[] } }) {
+  const running = runningSessions(holder);
+  if (running.length === 0) return null;
+  return (
+    <div className="mt-1.5" data-running={running.length}>
+      {running.map((x) => (
+        <div key={x._id} className="flex min-w-0 items-center gap-1.5 text-[10px]" style={{ height: ORG_SIZES.runningRow, color: "var(--sol-text-muted)" }}>
+          <span className="h-[6px] w-[6px] shrink-0 rounded-full" style={{ background: ORG_STATE_META.working.color }} aria-hidden />
+          <span className="shrink-0 font-mono" style={{ color: "var(--sol-text-dim)" }}>{x.short_id}</span>
+          <span className="min-w-0 truncate">{x.title}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 const PRESENCE: Record<NonNullable<OrgPerson["presence"]>, string> = {
   online: "var(--sol-green)",
   away: "var(--sol-yellow)",
@@ -368,8 +403,17 @@ const PRESENCE: Record<NonNullable<OrgPerson["presence"]>, string> = {
 export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<PersonNodeData>>) {
   const { person: p, collapsed, hidden, overflow } = data;
   const action = actionOf(data);
+  const level = useZoomLevel();
+  if (level === "far") {
+    return (
+      <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"} style={levelHeight(level, data.mid)}>
+        <Ports />
+        <FarBody name={p.name} color={p.presence ? PRESENCE[p.presence] : PRESENCE.offline} />
+      </Frame>
+    );
+  }
   return (
-    <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"}>
+    <Frame selected={data.selected} dropTarget={data.dropTarget} accent="var(--sol-cyan)" className="px-3 py-2.5" kind={p.is_me ? "me" : "person"} style={levelHeight(level, data.mid)}>
       <Ports />
       <FlagDots flags={data.flags} />
       {action && <GhostActions meta={action.meta} word={action.word} data={data} />}
@@ -405,6 +449,7 @@ export const PersonCard = memo(function PersonCard({ id, data }: NodeProps<Node<
         <OverflowTally overflow={overflow} counts={p.counts} />
       </div>
       <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} />
+      {level === "close" && <RunningList holder={p} />}
     </Frame>
   );
 });
@@ -447,6 +492,23 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
   // layout resolved it against the whole tree, so the card paints a string and
   // repaints whenever the layout does.
   const tenure = data.tenure;
+  const level = useZoomLevel();
+  const frameStyle: React.CSSProperties = ghost ? ghostFrameStyle(ghost) : {
+    // A seat: a double rule at the top, like a name plate on a desk.
+    borderTopWidth: 3,
+    borderTopColor: faded ? `color-mix(in srgb, ${plate} 40%, transparent)` : plate,
+    background: "linear-gradient(180deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 42%)",
+    opacity: faded ? 0.75 : 1,
+  };
+  if (level === "far") {
+    return (
+      <Frame selected={data.selected} dropTarget={data.dropTarget && !ghost} dragging={data.dragging} accent="var(--sol-violet)" className="px-3 py-2.5" kind={ghost && !ghost.solid ? "ghost" : isHeadOfPeople(r) ? "head" : "role"} style={{ ...frameStyle, ...levelHeight(level, data.mid) }}>
+        <Ports />
+        {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} />}
+        <FarBody name={roleWords(r).name} color={ghost && !ghost.solid ? GHOST.color : plate} hollow={!r.standing} dim={dim} />
+      </Frame>
+    );
+  }
   return (
     <Frame
       selected={data.selected}
@@ -456,13 +518,7 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       accent="var(--sol-violet)"
       className="px-3 pt-3 pb-2.5"
       kind={ghost && !ghost.solid ? "ghost" : isHeadOfPeople(r) ? "head" : "role"}
-      style={ghost ? ghostFrameStyle(ghost) : {
-        // A seat: a double rule at the top, like a name plate on a desk.
-        borderTopWidth: 3,
-        borderTopColor: faded ? `color-mix(in srgb, ${plate} 40%, transparent)` : plate,
-        background: "linear-gradient(180deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 42%)",
-        opacity: faded ? 0.75 : 1,
-      }}
+      style={{ ...frameStyle, ...levelHeight(level, data.mid) }}
     >
       <Ports />
       {data.retire && <div aria-hidden className="absolute inset-0 rounded-xl pointer-events-none" style={{ background: GHOST.hatch }} data-ghost-retire={data.retire.change_id} />}
@@ -578,6 +634,11 @@ export const RoleCard = memo(function RoleCard({ id, data }: NodeProps<Node<Role
       )}
       </div>
       <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} />
+      {/* The close card (orgZoom): what the seat is for, in its own words, and what runs under it now. */}
+      {level === "close" && r.charter?.trim() && (
+        <p className="mt-1.5 line-clamp-2 text-[10px] leading-[14px]" style={{ height: ORG_SIZES.charterRows - 6, color: "var(--sol-text-muted)", opacity: dim ? GHOST.opacity : 1 }} title={r.charter} data-role-charter>{r.charter}</p>
+      )}
+      {level === "close" && <RunningList holder={r} />}
     </Frame>
   );
 });
@@ -613,6 +674,17 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
   // one the viewer is looking from.
   const ghost = data.ghost;
   const dim = !!ghost && !ghost.solid;
+  const level = useZoomLevel();
+  // Far (orgZoom): the title alone, large, on the state's stripe.
+  if (level === "far" && !ghost) {
+    return (
+      <Frame selected={data.selected} dragging={data.dragging} accent={st.color} className="pl-3.5 pr-2.5 flex items-center overflow-hidden" style={{ borderRadius: 10 }} kind="session">
+        <Ports />
+        <span className="absolute left-0 top-0 bottom-0 w-[4px]" style={{ background: st.color, opacity: s.state === "idle" ? 0.4 : 1 }} aria-hidden />
+        <span className="truncate text-[17px] font-medium tracking-tight" style={{ color: "var(--sol-text)" }} data-zoom-far>{s.title}</span>
+      </Frame>
+    );
+  }
   if (ghost) {
     // An adopt stub is taller than a session row (ORG_SIZES.adoptRow): line
     // one names the session, line two the role it joins, in the ghost violet.

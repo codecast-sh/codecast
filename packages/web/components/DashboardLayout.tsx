@@ -871,7 +871,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // window. Isolated-worktree creation lives as a toggle inside the compose surface.
   useShortcutAction('session.create', handleNewFullSession);
 
-  useShortcutAction('session.compose', openCompose);
+  // Handlers receive the dispatch source ("key" | "named"); never let it reach
+  // openCompose's initialQuery.
+  useShortcutAction('session.compose', () => openCompose());
   useShortcutAction('session.composeDock', useInboxStore.getState().toggleComposeDock);
 
   // Persist user-driven resizes only, once, at drag end (useDragGatedLayoutPersist).

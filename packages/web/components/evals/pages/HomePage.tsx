@@ -9,8 +9,9 @@ import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import { DEFAULT_WALL_CADENCE, SurfaceWallView } from "../SurfaceWallView";
+import { SurfaceWallView } from "../SurfaceWallView";
 import { isBisectLive } from "../bisectModel";
+import { DEFAULT_WALL_CADENCE } from "../wallModel";
 
 export function HomePage({ view }: { view: Extract<EvalsView, { view: "home" }> }) {
   const router = useRouter();

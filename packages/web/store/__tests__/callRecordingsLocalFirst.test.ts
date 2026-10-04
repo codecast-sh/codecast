@@ -34,7 +34,7 @@ describe("call recordings local-first", () => {
   beforeEach(() => {
     calls = [];
     answer = "ack";
-    useInboxStore.setState({ callRecordings: {}, callRecordingCalls: {}, pending: {} } as any);
+    useInboxStore.setState({ callRecordings: {}, callRecordingCalls: {}, callFrameShares: {}, pending: {} } as any);
     useInboxStore.getState()._setDispatch(async (action: string, args: any[], _patches: any, result: any) => {
       calls.push({ action, args });
       if (answer === "transient") throw new Error("Your request timed out");
@@ -117,6 +117,30 @@ describe("call recordings local-first", () => {
     expect(released.sort()).toEqual(["a1", "a2"]);
     st().settleCallRecordingTombstones(released);
     expect(tombstones()).toEqual([]);
+  });
+
+  // A picture of the call on a public link (registry callFrameShares) leaves
+  // the list on the press, stays gone through a push computed before the
+  // delete committed, and its tombstone goes with the first answer that no
+  // longer sends it; another collection's tombstones are not touched.
+  it("a shared picture taken down leaves at once, and only its own tombstone settles", async () => {
+    const share = (id: string) => ({ _id: id, transcript_id: CALL, recording_id: "a2", kind: "screen", at_ms: 150_000, url: `https://img/${id}`, shared_by: "u1", shared_by_name: "Ana", created_at: 5 });
+    useInboxStore.getState().syncTable("callFrameShares", [share("f1"), share("f2")], { isDelta: true });
+    await st().deleteCallRecording("b1");
+    const down = st().deleteCallFrameShare("f1");
+    expect(Object.keys(st().callFrameShares)).toEqual(["f2"]);
+    await down;
+    expect(calls.map((c) => [c.action, c.args]).at(-1)).toEqual(["deleteCallFrameShare", ["f1"]]);
+    useInboxStore.getState().syncTable("callFrameShares", [share("f1"), share("f2")], { isDelta: true, pruneAbsentScope: (r: any) => r.transcript_id === CALL });
+    expect(Object.keys(st().callFrameShares)).toEqual(["f2"]);
+    const { releasedRecordingTombstones } = await import("../../hooks/useRoomRecording");
+    const seen = new Map([[CALL, new Set(["f1", "f2"])]]);
+    expect(releasedRecordingTombstones(st().pending, CALL, ["f1", "f2"], seen, "callFrameShares")).toEqual([]);
+    const released = releasedRecordingTombstones(st().pending, CALL, ["f2"], seen, "callFrameShares");
+    expect(released).toEqual(["f1"]);
+    st().settleCallRecordingTombstones(released, "callFrameShares");
+    expect(Object.keys(st().pending).filter((k) => k.startsWith("callFrameShares:"))).toEqual([]);
+    expect(tombstones()).toEqual(["callRecordings:b1"]);
   });
 
   it("a tombstone from an earlier life of the tab goes with the first answer that lacks it", async () => {

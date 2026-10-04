@@ -8,6 +8,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(git rev-parse --show-toplevel)"
 
+# Run as an Interactive launchd job on macOS. Started from an agent shell, a
+# deploy inherits the utility QoS clamp and spends most of an hour in its
+# typecheck under load, holding the lock below that every other deploy waits
+# on (2026-10-02, 2026-10-04). The job reruns this script with
+# CAST_LAUNCHD_LABEL set, which skips this step.
+if [ "$(uname)" = "Darwin" ] && [ -z "${CAST_LAUNCHD_LABEL:-}" ] && [ -z "${DEPLOY_NO_INTERACTIVE:-}" ]; then
+    exec bun "$ROOT/packages/cli/scripts/run-interactive.ts" -- "$PWD/deploy.sh" "$@"
+fi
+
 # One deploy at a time per checkout. A push ships the tree as it was bundled,
 # and under load a run spends most of an hour typechecking, so two overlapping
 # runs can finish out of order and the older snapshot reverts the newer one.
@@ -16,6 +25,13 @@ LOCK="$(git rev-parse --path-format=absolute --git-common-dir)/convex-deploy.loc
 while ! mkdir "$LOCK" 2>/dev/null; do
     HOLDER="$(cat "$LOCK/pid" 2>/dev/null || true)"
     if [ -n "$HOLDER" ] && ! kill -0 "$HOLDER" 2>/dev/null; then
+        rm -rf "$LOCK"
+        continue
+    fi
+    # A holder that died between taking the lock and writing its pid leaves a
+    # lock nobody can name; past a few seconds it is no deploy's.
+    AGE=$(( $(date +%s) - $(stat -f %m "$LOCK" 2>/dev/null || stat -c %Y "$LOCK" 2>/dev/null || date +%s) ))
+    if [ -z "$HOLDER" ] && [ "$AGE" -gt 30 ]; then
         rm -rf "$LOCK"
         continue
     fi

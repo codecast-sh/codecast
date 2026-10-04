@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 536" role="img" aria-labelledby="t d">
+  <title id="t">How the owning session hears about its pull request</title>
+  <desc id="d">A reviewer submits a review from the pull request page or cast pr review. reviews.submitReviewWithNotes posts one GitHub review and then deliverSubmittedReview queues the whole review as one message to the owning session, stamping session_delivered_at. Everything GitHub reports (reviews, line comments, checks, review requests) arrives as a webhook in githubWebhooks.ts, the sole writer of pull_requests, which calls wakeShepherd. A review by a codecast user waits 20 seconds and is skipped if it was already delivered. A wake sets run_at on the standing pr_shepherd trigger with a fresh prompt, and the daemon runs it into the owning session, retrying every 20 seconds up to five times while the session is busy. cast pr shepherd on binds the session and creates the trigger; a merge or close retires it.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="536" rx="12"/>
+  <text class="h" x="24" y="36">How the owning session hears about its pull request</text>
+
+  <!-- Row 1: a review submitted in codecast -->
+  <rect class="card" x="24" y="64" width="200" height="100" rx="8"/>
+  <circle class="person" cx="44" cy="88" r="5"/>
+  <text class="l" x="56" y="92">reviewer</text>
+  <text class="n" x="40" y="116">page: Submit review</text>
+  <text class="n" x="40" y="134">cast pr review</text>
+
+  <rect class="card" x="296" y="64" width="300" height="100" rx="8"/>
+  <text class="l" x="312" y="90">reviews.submitReviewWithNotes</text>
+  <text class="n" x="312" y="112">one GitHub review with a verdict,</text>
+  <text class="n" x="312" y="130">then deliverSubmittedReview</text>
+  <text class="n" x="312" y="148">hands it to the owning session</text>
+
+  <rect class="card" x="660" y="64" width="276" height="100" rx="8"/>
+  <text class="l" x="676" y="90">one message</text>
+  <text class="n" x="676" y="112">review batch prompt, queued by</text>
+  <text class="n" x="676" y="130">enqueuePendingMessage; stamps</text>
+  <text class="n" x="676" y="148">reviews.session_delivered_at</text>
+
+  <!-- Row 2: the session -->
+  <rect class="agent" x="660" y="200" width="276" height="72" rx="8"/>
+  <text class="l" x="676" y="230">owning session</text>
+  <text class="n" x="676" y="252">shepherd_conversation_id</text>
+
+  <!-- Row 3: everything GitHub reports -->
+  <rect class="card" x="24" y="308" width="200" height="100" rx="8"/>
+  <text class="l" x="40" y="334">GitHub</text>
+  <text class="n" x="40" y="356">reviews, line comments,</text>
+  <text class="n" x="40" y="374">checks, review requests</text>
+
+  <rect class="card" x="296" y="308" width="300" height="120" rx="8"/>
+  <text class="l" x="312" y="334">githubWebhooks.ts</text>
+  <text class="n" x="312" y="356">sole writer of pull_requests</text>
+  <text class="n" x="312" y="374">calls wakeShepherd(reason);</text>
+  <text class="n" x="312" y="392">a codecast user's review waits</text>
+  <text class="n" x="312" y="410">20 s, skipped if delivered</text>
+
+  <rect class="card" x="660" y="308" width="276" height="120" rx="8"/>
+  <text class="l" x="676" y="334">standing trigger</text>
+  <text class="n" x="676" y="356">agent_tasks row, event filter</text>
+  <text class="n" x="676" y="374">pr_shepherd; a wake sets run_at</text>
+  <text class="n" x="676" y="392">with a fresh buildWakePrompt</text>
+  <text class="n" x="676" y="410">busy: retry 20 s, up to 5 times</text>
+
+  <!-- Arrows -->
+  <path class="cmd" d="M224 114 H292" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="232" y="106">submit</text>
+  <path class="data" d="M596 114 H656" marker-end="url(#aData)"/>
+
+  <path class="data" d="M330 164 V236 H124 V304" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="140" y="228">posts the review</text>
+
+  <path class="data" d="M224 358 H292" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="232" y="350">webhook</text>
+  <path class="cmd" d="M596 358 H656" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="608" y="350">wake</text>
+
+  <path class="data" d="M798 164 V196" marker-end="url(#aData)"/>
+  <text class="n" x="808" y="185">daemon delivers</text>
+  <path class="cmd" d="M798 308 V276" marker-end="url(#aCmd)"/>
+  <text class="n" x="808" y="297">trigger run</text>
+
+  <!-- Binding -->
+  <rect class="zone" x="24" y="452" width="912" height="60" rx="10"/>
+  <text class="n" x="40" y="476">cast pr shepherd on (prCli.shepherd, bindShepherd) binds the session and creates the trigger (ensureShepherdTask)</text>
+  <text class="n" x="40" y="496">a merge or close retires it (closeOutShepherd); quiet reasons such as checks_green never wake</text>
+</svg>

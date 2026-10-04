@@ -9,8 +9,10 @@ import { X } from "lucide-react";
 import type { BatchStats, BatchesResponse, EvalRoute } from "@codecast/shared/contracts/evalsApi";
 import { ExamplePair } from "../decisions/ChangeCardView";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph, batchLabel, flipFreezeHref, plural, score2, shortModel, usd, verdictOfSet } from "./parts";
+import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
+import { plural, score2, shortModel, usd, batchLabel } from "./format";
+import { flipFreezeHref, verdictOfSet } from "./verdictModel";
 
 export interface ComparePanelProps {
   surface: string;

@@ -375,8 +375,6 @@ export async function defaultRemote(cwd: string): Promise<string | null> {
   return out?.split("\n")[0]?.trim() || null;
 }
 
-/** Where a clobbered local tree is parked so nothing is ever unrecoverable. */
-export const BACKUP_REF_PREFIX = "refs/codecast/backup";
 
 /**
  * createWipSnapshot as a POSIX shell one-liner, for a machine reachable only over
@@ -411,73 +409,83 @@ export function remoteSnapshotScript(opts: { cwd: string; ref: string }): string
 }
 
 export type ApplyResult =
-  | { ok: true; base: string; branch?: string; appliedWork: boolean; backupRef?: string }
+  | { ok: true; base: string; branch?: string; appliedWork: boolean; conflicts: string[] }
   | { ok: false; reason: string };
 
+const isWipSnapshotMessage = (message: string) => message.startsWith(WIP_SNAPSHOT_SUBJECT) && parseSnapshotTrailer(message, BRANCH_TRAILER) !== null;
+
 /**
- * Land an already-fetched snapshot onto the CURRENT branch, fast-forward only.
+ * Bring a session's work home from an already-fetched snapshot of the host
+ * (`snapRef`: the host's tree, parented on the host's HEAD).
  *
- * This is the `cast remote back` half: the same tree materialization as
- * restoreWipSnapshot, but with two different rules, because here we're writing
- * into a worktree the user owns rather than a throwaway reparent clone:
+ * The folder it lands in is often shared: other sessions keep editing it while
+ * this one was away, and its branch may have moved on. So the host's work comes
+ * back as a CHANGE, never as a replacement tree:
  *
- *  - FAST-FORWARD ONLY. If the local branch has commits the remote doesn't, we
- *    refuse and change nothing — the caller reports a conflict. restoreWipSnapshot
- *    force-moves the branch; doing that here could silently drop local commits.
- *  - BACKS UP FIRST. Reproducing the remote's tree necessarily overwrites the
- *    local one, and since a move now leaves the source dirty (its work is no
- *    longer committed away), local IS expected to be dirty here. So any local
- *    tree state is first captured as its own snapshot under refs/codecast/backup/
- *    — recoverable with `git diff <ref>` / `git checkout <ref> -- .` — before the
- *    clobber. Nothing the user had is ever unrecoverable.
+ *  - The change is everything the host did since it was handed this session:
+ *    `start` (the commit the move pushed) to the snapshot. Without `start`, it is
+ *    the newest wip snapshot or locally known commit on the host's first-parent
+ *    history.
+ *  - Host commits on top of a real local commit fast-forward the branch, but only
+ *    when git can do it without touching anyone's uncommitted edits; otherwise
+ *    they arrive as uncommitted changes like the rest.
+ *  - The change is applied with a three-way merge onto the working tree as it is
+ *    now. Overlapping edits are left as conflict markers and named in
+ *    `conflicts`; nothing is reset, and the branch never lands on a wip snapshot.
  */
 export async function applySnapshotFastForward(
   cwd: string,
   snapRef: string,
-  opts: { now?: number } = {},
+  opts: { start?: string } = {},
 ): Promise<ApplyResult> {
   const snap = await gitTry(cwd, ["rev-parse", snapRef]);
-  const base = await gitTry(cwd, ["rev-parse", `${snapRef}^`]);
-  if (!snap || !base) return { ok: false, reason: `no usable snapshot at ${snapRef}` };
-
+  const hostHead = await gitTry(cwd, ["rev-parse", `${snapRef}^`]);
+  if (!snap || !hostHead) return { ok: false, reason: `no usable snapshot at ${snapRef}` };
   const head = await gitTry(cwd, ["rev-parse", "HEAD"]);
   if (!head) return { ok: false, reason: "local worktree has no HEAD" };
+  const branch = parseSnapshotTrailer((await gitTry(cwd, ["show", "-s", "--format=%B", snap])) ?? "", BRANCH_TRAILER);
 
-  // Refuse rather than clobber: local commits the remote never saw mean the two
-  // genuinely diverged, which is a human decision.
-  if ((await gitTry(cwd, ["merge-base", "--is-ancestor", head, base])) === null) {
-    return {
-      ok: false,
-      reason: "local and remote diverged; not fast-forwardable. Resolve manually.",
-    };
-  }
-
-  const message = (await gitTry(cwd, ["show", "-s", "--format=%B", snap])) ?? "";
-  const branch = parseSnapshotTrailer(message, BRANCH_TRAILER);
-
-  // Park whatever is here before overwriting it.
-  let backupRef: string | undefined;
-  if (await gitTry(cwd, ["status", "--porcelain"])) {
-    const local = await createWipSnapshot(cwd);
-    if (local) {
-      backupRef = `${BACKUP_REF_PREFIX}/${opts.now ?? Date.now()}`;
-      await gitTry(cwd, ["update-ref", backupRef, local.sha]);
+  let start = opts.start && (await gitTry(cwd, ["cat-file", "-e", `${opts.start}^{commit}`])) !== null ? opts.start : undefined;
+  if (!start) {
+    for (const c of ((await gitTry(cwd, ["rev-list", "--first-parent", "--max-count=200", hostHead])) ?? "").split("\n").filter(Boolean)) {
+      const message = (await gitTry(cwd, ["show", "-s", "--format=%B", c])) ?? "";
+      if (isWipSnapshotMessage(message) || (await gitTry(cwd, ["merge-base", "--is-ancestor", c, head])) !== null) { start = c; break; }
     }
   }
+  if (!start) return { ok: false, reason: "cannot tell where the host's work began; nothing was changed here" };
 
+  // Real host commits on a real local tip: keep them as commits when that is a clean fast-forward.
+  let from = start;
+  const startIsWip = isWipSnapshotMessage((await gitTry(cwd, ["show", "-s", "--format=%B", start])) ?? "");
+  if (!startIsWip && hostHead !== start && head === start
+    && (await gitTry(cwd, ["merge", "--ff-only", "-q", hostHead])) !== null) {
+    from = hostHead;
+  }
+
+  const patch = await gitTry(cwd, ["diff", "--binary", "--full-index", from, snap]);
+  if (!patch) return { ok: true, base: from, branch, appliedWork: false, conflicts: [] };
+  const file = path.join(os.tmpdir(), `codecast-back-${process.pid}-${Date.now()}.patch`);
+  fs.writeFileSync(file, patch + "\n");
   try {
-    await git(cwd, ["reset", "-q", "--hard", base]); // ff verified + backed up above
-    const snapTree = await gitTry(cwd, ["rev-parse", `${snap}^{tree}`]);
-    const baseTree = await gitTry(cwd, ["rev-parse", `${base}^{tree}`]);
-    if (!snapTree || snapTree === baseTree) return { ok: true, base, branch, appliedWork: false, backupRef };
-    await git(cwd, ["read-tree", "-u", "--reset", snap]);
-    await git(cwd, ["reset", "-q", "--mixed", base]);
-    return { ok: true, base, branch, appliedWork: true, backupRef };
-  } catch (e) {
-    const err = e as { stderr?: string | Buffer; message?: string };
-    return {
-      ok: false,
-      reason: `could not apply the remote's tree${backupRef ? ` (local state saved at ${backupRef})` : ""}: ${(err.stderr?.toString() || err.message || String(e)).slice(0, 200)}`,
-    };
+    if ((await gitTry(cwd, ["apply", "--whitespace=nowarn", file])) !== null) {
+      return { ok: true, base: from, branch, appliedWork: true, conflicts: [] };
+    }
+    // Overlaps with what changed here meanwhile: merge them. --3way works through
+    // the index, so the touched paths are unstaged again afterwards.
+    const touched = ((await gitTry(cwd, ["diff", "--name-only", from, snap])) ?? "").split("\n").filter(Boolean);
+    // The index must hold what is on disk now for those paths, or --3way refuses them.
+    const tracked = new Set(((await gitTry(cwd, ["ls-files", "--", ...touched])) ?? "").split("\n").filter(Boolean));
+    const present = touched.filter((p) => tracked.has(p) || fs.existsSync(path.join(cwd, p)));
+    if (present.length) await gitTry(cwd, ["add", "-A", "--", ...present]);
+    let threeWay = true;
+    try { await git(cwd, ["apply", "--3way", "--whitespace=nowarn", file]); } catch { threeWay = false; }
+    const conflicts = ((await gitTry(cwd, ["diff", "--name-only", "--diff-filter=U"])) ?? "").split("\n").filter(Boolean);
+    if (touched.length) await gitTry(cwd, ["reset", "-q", "--", ...touched]);
+    if (!threeWay && conflicts.length === 0) {
+      return { ok: false, reason: "the host's changes do not apply to this folder as it is now; nothing was changed here" };
+    }
+    return { ok: true, base: from, branch, appliedWork: true, conflicts };
+  } finally {
+    fs.rmSync(file, { force: true });
   }
 }

@@ -449,14 +449,22 @@ function checkDestination(home: string, rel: string): void {
   }
 }
 
-function destinationRelative(home: string, rel: string, kind?: MirrorKind): string {
+/**
+ * Where an instruction file is written. A link to another instruction file
+ * writes through to it: beside it in the same directory, or anywhere inside
+ * the registered project that holds it (a checkout that tracks
+ * `AGENTS.md -> outreach/CLAUDE.md`).
+ */
+function destinationRelative(home: string, rel: string, kind: MirrorKind | undefined, projectRoots: readonly string[]): string {
   assertSafePath(rel);
   if (kind !== "claude-md" && kind !== "agents-md") { checkDestination(home, rel); return rel; }
   const file = path.join(home, rel);
   if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) { checkDestination(home, rel); return rel; }
   const target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
   assertSafePath(target);
-  if (path.dirname(target) !== path.dirname(rel) || !/^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i.test(path.basename(target))) throw new Error("instruction alias leaves its directory");
+  const project = projectRoots.find((root) => rel.startsWith(`${root}/`));
+  const withinProject = !!project && target.startsWith(`${project}/`);
+  if (path.dirname(target) !== path.dirname(rel) && !withinProject || !/^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i.test(path.basename(target))) throw new Error("instruction alias leaves its directory");
   checkDestination(home, target);
   return target;
 }
@@ -512,7 +520,7 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
         if (fs.lstatSync(path.join(home, rel), { throwIfNoEntry: false })) complete = false;
         continue;
       }
-      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind, stamp.project_roots ?? []);
       if (info.alias && info.alias !== dest) complete = false;
       const hash = info.kind === "claude-mcp" && info.mcp_fields
         ? claudeMcpWritten(fs.readFileSync(path.join(home, dest)), info)
@@ -879,7 +887,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         result.unchanged++;
         continue;
       }
-      const dest = destinationRelative(home, file.path, file.kind);
+      const dest = destinationRelative(home, file.path, file.kind, projectRoots);
       const abs = path.join(home, dest);
       const current = VERBATIM_KINDS.includes(file.kind) && hashIfRegular(abs) === file.sha256 ? file.bytes : readIfRegular(abs);
       if (before && before.source === undefined && !VERBATIM_KINDS.includes(file.kind) && before.sha !== file.sha256) {
@@ -1018,7 +1026,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
           result.pruned.push(rel);
           continue;
         }
-        dest = destinationRelative(home, rel, info.kind);
+        dest = destinationRelative(home, rel, info.kind, [...projectRoots, ...(prev.project_roots ?? [])]);
         if (info.alias) {
           const entry = fs.lstatSync(abs, { throwIfNoEntry: false });
           if (!entry) stampFiles[rel] = { ...info, removed: true };
@@ -1108,7 +1116,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   for (const [rel, info] of Object.entries(stampFiles)) {
     if (info.host_edited || info.removed) continue;
     try {
-      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind, projectRoots);
       if ((fs.statSync(path.join(home, dest)).mode & 0o777) !== Number.parseInt(info.mode, 8)) throw new Error("mode changed during refresh");
       if (VERBATIM_KINDS.includes(info.kind ?? "verbatim")) {
         if (hashIfRegular(path.join(home, dest)) !== info.written) throw new Error("file changed during refresh");

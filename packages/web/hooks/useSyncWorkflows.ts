@@ -5,6 +5,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
+import { stableRefId } from "../store/wakeSig";
 
 const api = _api as any;
 
@@ -21,6 +22,18 @@ export function useWorkflows(): { workflows: any[]; ready: boolean } {
   const workflows = useCollectionRows<any>("workflows", { sig: workflowSig, sort: newestFirst });
   return { workflows, ready };
 }
+
+/** Reader: the viewer's workflow of one slug, or null (undefined while cold).
+ *  Its graph is in the signature, so an edited station re-renders. */
+export function useWorkflowBySlug(slug: string | null | undefined): any | null | undefined {
+  const { ready } = useSyncWorkflows(!!slug);
+  const where = useMemo(() => (w: any) => !!slug && w.slug === slug, [slug]);
+  const rows = useCollectionRows<any>("workflows", { where, sig: workflowGraphSig });
+  if (!slug) return null;
+  if (rows[0]) return rows[0];
+  return ready ? null : undefined;
+}
+const workflowGraphSig = (w: any) => `${workflowSig(w)}|${w.nodes ? stableRefId(w.nodes) : 0}|${w.edges ? stableRefId(w.edges) : 0}`;
 
 /** Feeder: the viewer's dynamic (multi-agent) runs window. */
 export function useSyncDynamicRuns(enabled = true) {

@@ -10,7 +10,7 @@ import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
-import { fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
+import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
   MAX_TASK_DEPTH,
@@ -42,7 +42,7 @@ import { projectTasks } from "./lib/projectWork";
 import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
-import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { agentCommentLevelOf, dropThreadRead, taskCommentAuthorKind, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
 import { extractMentionHandles } from "@codecast/shared/chat";
@@ -75,7 +75,7 @@ import {
   visibleInTeamList,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
-import { claimTaskOwnership, type TaskOwnerRef } from "./lib/taskOwner";
+import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -2267,6 +2267,33 @@ export const update = mutation({
 // moves for, so the Threads inbox and the notification never disagree about
 // what is news. `tokenOwner` is who the write ran under: an agent posts under
 // its owner's token, and its own comments never ring its owner.
+/**
+ * Relay a person's comment into the session that owns the task (lib/taskOwner)
+ * while that session is working, framed as a <task-comment> so the agent knows
+ * whose words they are and that a reply belongs on the task. A quiet owner is
+ * left alone: waking a cold session rebuilds its whole context for one line,
+ * and the comment waits on the task where it reads it next. Returns the
+ * conversation it reached, or null.
+ */
+async function deliverCommentToOwner(
+  ctx: any,
+  task: any,
+  c: { commentId: Id<"task_comments">; actorId: Id<"users">; from: string; text: string; imageIds?: string[] },
+): Promise<Id<"conversations"> | null> {
+  if (!task.short_id || !c.text.trim()) return null;
+  const [owner] = await boundSessionsOf(ctx, task);
+  if (!owner) return null;
+  if (!(await isSessionWorking(ctx, owner, Date.now()))) return null;
+  if (!(await canSendProductMessage(ctx, c.actorId, owner))) return null;
+  await enqueuePendingMessage(ctx, owner, c.actorId, {
+    content: formatTaskCommentMessage({ task: task.short_id, title: task.title ?? "", from: c.from, body: c.text.trim() }),
+    client_id: `task-comment:${c.commentId}`,
+    ...(c.imageIds?.length ? { image_storage_ids: c.imageIds as Id<"_storage">[] } : {}),
+    human: true,
+  });
+  return owner._id;
+}
+
 export async function insertTaskComment(
   ctx: any,
   taskId: Id<"tasks">,
@@ -2325,6 +2352,13 @@ export async function insertTaskComment(
       actorId,
       activityAt: now,
     });
+    // A person's words, not posted from a session: they reach the session
+    // doing the task while it works, so commenting on the task talks to the
+    // work. A bot account's comment is an agent's and never relays.
+    if (actorId && !fields.conversation_id && !actor?.is_bot) {
+      const deliveredTo = await deliverCommentToOwner(ctx, task, { commentId: id, actorId, from: fields.author, text: fields.text, imageIds: fields.image_storage_ids });
+      if (deliveredTo) await ctx.db.patch(id, { delivered_to_conversation_id: deliveredTo });
+    }
     if (notify) {
       await ctx.runMutation(internal.notificationRouter.emit, {
         event_type: "task_commented",

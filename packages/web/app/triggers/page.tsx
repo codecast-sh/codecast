@@ -25,7 +25,9 @@ import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
 import { openRunInStore } from "../../components/TriggerRunHistory";
 import { SelectBox } from "../../components/ui/select-box";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
-import { useInboxStore, filterInboxScopeFromState } from "../../store/inboxStore";
+import { useInboxStore, filterInboxScopeFromState, type TriggerEdit } from "../../store/inboxStore";
+import { gestureToast } from "../../store/undoStack";
+import { isTriggerEditable } from "../../lib/triggerEditable";
 import {
   Clock,
   Plus,
@@ -160,7 +162,6 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   const isEdit = !!editTask;
   const init = useMemo(() => deriveInitial(editTask ?? seedTask), [editTask, seedTask]);
   const create = useMutation(api.agentTasks.webCreate);
-  const updateTask = useMutation(api.agentTasks.webUpdate);
   const [prompt, setPrompt] = useState(init.prompt);
   const [title, setTitle] = useState(init.title);
   const [kind, setKind] = useState<SchedKind>(init.kind);
@@ -203,7 +204,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     if (!valid || submitting) return;
     setSubmitting(true);
     try {
-      const args: any = {
+      const args: TriggerEdit & Record<string, any> = {
         prompt: prompt.trim(),
         title: title.trim() || undefined,
         mode,
@@ -224,9 +225,11 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
         args.run_at = kind === "in" ? Date.now() + parsed! : Date.now();
       }
       if (isEdit) {
-        const ok = await updateTask({ task_id: editTask._id, ...args });
-        if (ok === false) { toast.error("Can't edit — it may be running or finished"); return; }
-        toast.success("Saved");
+        // Through the store: the edit paints at once and is one undo.
+        const state = useInboxStore.getState();
+        const row = state.agentTasks[editTask._id] ?? state.foreignTriggers[editTask._id];
+        if (!isTriggerEditable((row ?? editTask).status)) { toast.error("Can't edit — it may be running or finished"); return; }
+        gestureToast("Saved", () => state.editTrigger(editTask._id, args));
       } else {
         await create(args);
         toast.success(kind === "now" ? "Queued — runs within ~30s" : "Trigger set");

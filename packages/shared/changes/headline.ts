@@ -16,6 +16,19 @@ export function clip(text: string, max: number): string {
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.]+$/, "")}…`;
 }
 
+/**
+ * Fit `max` chars ending on a whole sentence, keeping line breaks: a prompt
+ * shown a sentence cut mid-thought writes about the cut. Falls back to clip()
+ * when no sentence ends in the latter half.
+ */
+export function clipToSentence(text: string, max: number): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max + 1);
+  const end = Math.max(...[...head.matchAll(/[.!?](?=\s)/g)].map((m) => m.index!), -1);
+  return end > max / 2 ? t.slice(0, end + 1) : clip(t, max);
+}
+
 /** Where a sentence can stop and still be a whole thought. */
 const CLAUSE_BREAKS = [", ", "; ", " and ", " while ", " with "];
 

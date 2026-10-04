@@ -11,7 +11,7 @@ import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATHS, signForCli } from "./callRecordings";
-import { callRecordingsBucketFromEnv, PRIVATE_OBJECT_GET_PARAMS, r2FreshGetUrl } from "./lib/r2";
+import { callRecordingGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
@@ -4358,10 +4358,11 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
 });
-// A repo's declared finders onto its projects (line-profile.md LP3).
+// A repo's resolved line profile onto its projects (line-profile.md LP3).
+// device_id is the publisher's machine, where an edit of the file is routed.
 cliRoute("/cli/line/profile/publish", async (ctx, body) => {
   return await ctx.runMutation(api.signals.publishProfile, body);
-});
+}, { forwardDeviceId: true });
 // The goals brief the ground node reads (the-line-end-to-end.md LE5).
 cliRoute("/cli/goals/brief", async (ctx, body) => {
   return await ctx.runQuery(api.goals.brief, body);
@@ -4382,14 +4383,18 @@ cliRoute("/cli/calls/recordings", async (ctx, body) => {
   const res = await ctx.runQuery(internal.callRecordings.cliCallRecordings, { api_token: body.api_token, call: body.call });
   return res ? await signForCli(res) : null;
 });
-// `cast call snap --share`: tie a frame just uploaded as a public image to
-// the recording file it came from, so deleting the recording deletes it.
-// body: { recording_id, storage_id }.
+// `cast call snap --share`: store a frame as a public image tied to the
+// recording file it came from, so deleting the recording deletes it.
+// body: { recording_id, image_base64, at_ms? }. The picture travels in the
+// request and the server stores it itself: a storage id is never taken from
+// the client (callRecordings.cliShareFrame says why). `at_ms` is the moment
+// it shows, on the call's clock, for the room's thread line.
 cliRoute("/cli/calls/frame-share", async (ctx, body) => {
-  return await ctx.runMutation(internal.callRecordings.cliNoteFrameShare, {
+  return await ctx.runAction(internal.callRecordings.cliShareFrame, {
     api_token: body.api_token,
     recording_id: String(body.recording_id ?? ""),
-    storage_id: String(body.storage_id ?? ""),
+    image_base64: String(body.image_base64 ?? ""),
+    ...(typeof body.at_ms === "number" && Number.isFinite(body.at_ms) ? { at_ms: body.at_ms } : {}),
   });
 });
 // `cast call hold <duration>|off`: a fed agent asks its huddle for time.
@@ -5029,10 +5034,9 @@ const sharedCallVideo = httpAction(async (ctx, request) => {
   const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!token || !Number.isFinite(at)) return notFound();
   const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
-  const bucket = callRecordingsBucketFromEnv();
-  if (!key || !bucket) return notFound();
-  const { url } = await r2FreshGetUrl(bucket, key, Date.now(), PRIVATE_OBJECT_GET_PARAMS);
-  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  const signed = key ? await callRecordingGetUrl(key, "fresh") : null;
+  if (!signed) return notFound();
+  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
 for (const path of SHARED_CALL_VIDEO_PATHS) http.route({ path, method: "GET", handler: sharedCallVideo });
 

@@ -125,15 +125,22 @@ function failureOf(sent: Sent | "no-daemon"): { reason: BrowserTabFailure; detai
   return { reason: "unreachable" };
 }
 
-function tabQuery(target: string | BrowserSessionRef): URLSearchParams {
-  return new URLSearchParams(
-    typeof target === "string"
-      ? { tab: target }
-      : { ...(target.sessionUuid ? { session_uuid: target.sessionUuid } : {}), ...(target.tmuxSession ? { tmux_session: target.tmuxSession } : {}) },
-  );
+/**
+ * A tab a row named, the session it ran in, or both. With both, the daemon
+ * falls back to the session's current tab when the row's is gone.
+ */
+export type BrowserTabTarget = string | ({ tabId?: string | null } & BrowserSessionRef);
+
+function tabQuery(target: BrowserTabTarget): URLSearchParams {
+  const t: Exclude<BrowserTabTarget, string> = typeof target === "string" ? { tabId: target } : target;
+  return new URLSearchParams({
+    ...(t.tabId ? { tab: t.tabId } : {}),
+    ...(t.sessionUuid ? { session_uuid: t.sessionUuid } : {}),
+    ...(t.tmuxSession ? { tmux_session: t.tmuxSession } : {}),
+  });
 }
 
-async function askAboutTab(convex: ConvexReactClient, route: "focus" | "probe", target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+async function askAboutTab(convex: ConvexReactClient, route: "focus" | "probe", target: BrowserTabTarget, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
   const sent = await sendToDaemon(realDeps(convex, deps), `/browser/${route}?${tabQuery(target)}`, { method: "POST" }, FOCUS_REQUEST_TIMEOUT_MS);
   if (sent !== "no-daemon" && !("transport" in sent) && sent.res.ok) {
     const pid = sent.body?.pid;
@@ -144,10 +151,10 @@ async function askAboutTab(convex: ConvexReactClient, route: "focus" | "probe", 
 
 /**
  * Ask the daemon to raise the tab: the one a row named, or, when its output
- * named none, the one the session drives now (the tab "watch live" shows).
- * Never throws.
+ * named none or that tab is gone, the one the session drives now (the tab
+ * "watch live" shows). Never throws.
  */
-export function focusBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+export function focusBrowserTab(convex: ConvexReactClient, target: BrowserTabTarget, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
   return askAboutTab(convex, "focus", target, deps);
 }
 
@@ -157,7 +164,7 @@ export function focusBrowserTab(convex: ConvexReactClient, target: string | Brow
  * bare 404, which reads as "unreachable": callers act only on "tab-gone" and
  * "browser-stopped". Never throws.
  */
-export function probeBrowserTab(convex: ConvexReactClient, target: string | BrowserSessionRef, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
+export function probeBrowserTab(convex: ConvexReactClient, target: BrowserTabTarget, deps?: Partial<FocusTabDeps>): Promise<FocusOutcome> {
   return askAboutTab(convex, "probe", target, deps);
 }
 

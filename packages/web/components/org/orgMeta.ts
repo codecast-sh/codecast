@@ -179,11 +179,15 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   initiative_shape: "shape",
 };
 
-/** A ghost's colour (org-staffing.md S5): the page's violet, dashed, at 55%. */
+/** A ghost's colour (org-staffing.md S5): the page's violet at 55%. On the
+ *  chart a proposed card wears ONE quiet mark of it (`frame` and `fill`: a
+ *  thin solid violet outline over a soft tint, with its icon in violet); the
+ *  dashed `border` is the proposal card's own, where a role row still frames. */
 export const GHOST = {
   color: "var(--sol-violet)",
   opacity: 0.55,
   border: "1.5px dashed color-mix(in srgb, var(--sol-violet) 70%, transparent)",
+  frame: "1px solid color-mix(in srgb, var(--sol-violet) 45%, transparent)",
   fill: "color-mix(in srgb, var(--sol-violet) 8%, transparent)",
   /** A retire proposal's hatch, laid over the card. */
   hatch: "repeating-linear-gradient(135deg, transparent 0 7px, color-mix(in srgb, var(--sol-violet) 14%, transparent) 7px 9px)",
@@ -252,9 +256,19 @@ export const CHIP_STATUS: Record<OrgChangeStatus, { border: string; color: strin
   removed: { border: "1.5px dashed color-mix(in srgb, var(--sol-border) 60%, transparent)", color: "var(--sol-text-dim)" },
 };
 
-/** The frame styling of a ghost stub: dashed violet, no plate, 55% content. */
+/** A chart card's frame under a change, one quiet mark: a thin solid outline
+ *  in the status colour over the ghost tint while proposed or failed, the
+ *  accepted outline alone once accepted. Never dashed: a proposed goal is a
+ *  violet flag and a tint, not a box of dashes. */
+export function changeFrameStyle(status: OrgChangeStatus, unresolved?: boolean): CSSProperties {
+  const color = unresolved ? CHIP_STATUS.failed.color : CHIP_STATUS[status].color;
+  const tint = unresolved || status === "proposed" || status === "failed";
+  return { border: `1px solid color-mix(in srgb, ${color} 45%, transparent)`, ...(tint ? { background: GHOST.fill } : {}) };
+}
+
+/** The frame styling of a ghost stub: the change frame, no plate, 55% content. */
 export function ghostFrameStyle(stub: OrgGhostStub): CSSProperties {
   return stub.solid
     ? { borderTopWidth: 3, borderTopColor: "var(--sol-cyan)", background: "var(--sol-card)" }
-    : { border: GHOST.border, borderTopWidth: 1.5, background: GHOST.fill };
+    : { ...changeFrameStyle(stub.status), borderTopWidth: 1 };
 }

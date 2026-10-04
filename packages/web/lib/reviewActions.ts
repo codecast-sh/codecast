@@ -4,7 +4,8 @@
 // inboxStore plus the composer-injection callback passed in by the caller.
 
 import { useInboxStore } from "../store/inboxStore";
-import { toBlockquote, formatPendingComments, sortPendingComments, type PendingComment, type QuotedImage } from "./quoteFormat";
+import { toBlockquote, formatPendingComments, sortPendingComments, pinNumbers, type PendingComment, type QuotedImage, type QuotedPage } from "./quoteFormat";
+import type { ImageMarker } from "./markedImage";
 
 export type PopulateFn = (text: string, opts?: { append?: boolean }) => void;
 
@@ -52,9 +53,10 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 // a plan rendered under its own namespaced key) and clear just those, leaving any
 // other pending comments untouched.
 //
-// Pass `firstImageNumber` when the send attaches the quoted images (the ids
-// from quotedImageStorageIds, after the composer's own): each such image quote
-// then names its attachment as `[Image N]`, numbered from there.
+// Pass `firstImageNumber` when the send attaches the quoted images (from
+// quotedImages, after the composer's own, each with its pins drawn on it):
+// each such image quote then names its attachment as `[Image N]`, numbered
+// from there, and its point as the marker number drawn on it.
 export function takeReviewBatch(conversationId: string, messageId?: string, firstImageNumber?: number): string {
   const s = useInboxStore.getState();
   const taken = sortPendingComments(s
@@ -65,7 +67,7 @@ export function takeReviewBatch(conversationId: string, messageId?: string, firs
     const i = c.image?.storageId ? attached.indexOf(c.image.storageId) : -1;
     return i >= 0 ? [[c.id, firstImageNumber! + i] as const] : [];
   }));
-  const text = formatPendingComments(taken, numbers);
+  const text = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
   if (!text) return "";
   if (messageId) {
     taken.forEach((c) => s.removeReviewComment(conversationId, c.id));
@@ -89,14 +91,26 @@ export function attachReviewToMessage(conversationId: string, typed: string, fir
 
 // Pictures whose bytes live in storage ride along on the send as real
 // attachments, once each however many notes pin them, so the agent receives
-// the picture itself. Batch order, which is the order takeReviewBatch numbers
-// them in.
+// the picture itself, with every note's point on it as a numbered marker.
+// Batch order, which is the order takeReviewBatch numbers them in.
 function attachedImageIds(comments: PendingComment[]): string[] {
   return [...new Set(comments.flatMap((c) => (c.image?.storageId ? [c.image.storageId] : [])))];
 }
 
-export function quotedImageStorageIds(conversationId: string): string[] {
-  return attachedImageIds(sortPendingComments(useInboxStore.getState().getReviewComments(conversationId)));
+export type QuotedAttachment = { storageId: string; src: string; markers: ImageMarker[] };
+
+export function quotedImages(conversationId: string): QuotedAttachment[] {
+  const comments = useInboxStore.getState().getReviewComments(conversationId);
+  const numbers = pinNumbers(comments);
+  const sorted = sortPendingComments(comments);
+  return attachedImageIds(sorted).map((storageId) => {
+    const pins = comments.filter((c) => c.image?.storageId === storageId);
+    return {
+      storageId,
+      src: pins[0].image!.src,
+      markers: pins.flatMap((c) => (c.image!.point && numbers.has(c.id) ? [{ ...c.image!.point, number: numbers.get(c.id)! }] : [])),
+    };
+  });
 }
 
 // Where a gallery image came from, in words the agent can match against its
@@ -157,6 +171,34 @@ export function addImagePin(
     body: "",
     createdAt: Date.now(),
     image: { ...(Object.fromEntries(Object.entries(picture).filter(([, v]) => v !== undefined)) as typeof picture), point },
+  });
+  s.setReviewEditingId(id);
+  return id;
+}
+
+// Pin a note to a spot of a published page framed in the thread: it joins the
+// same batch as paragraph quotes and image pins. The quote names the page by
+// its address and the spot by the words there (what the agent can find in the
+// page's source), falling back to how far down the page it sits.
+export function addPageNote(
+  conversationId: string,
+  messageId: string,
+  page: QuotedPage & { title: string; url: string },
+): string {
+  const s = useInboxStore.getState();
+  const id = genCommentId();
+  const { title, url, ...anchor } = page;
+  const where = anchor.snippet
+    ? `, at "${clip(anchor.snippet, 160)}"`
+    : anchor.point ? `, ${Math.round(anchor.point.y * 100)}% down the page` : "";
+  s.addReviewComment(conversationId, {
+    id,
+    messageId,
+    blockIndex: 0,
+    quote: `Published page "${title}" (${url})${where}`,
+    body: "",
+    createdAt: Date.now(),
+    page: anchor,
   });
   s.setReviewEditingId(id);
   return id;

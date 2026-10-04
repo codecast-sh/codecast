@@ -11,14 +11,16 @@ import type { ReactNode } from "react";
 import { type TaskDetail } from "../../store/inboxStore";
 import { useSyncTaskDetail } from "../../hooks/useSyncTasks";
 import { useTaskRow } from "../../hooks/useThreadPreviews";
-import { TaskCommentStream } from "./TaskCommentStream";
+import { TaskCommentStream, type TaskOwnerRef } from "./TaskCommentStream";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import "../threads/threads.css";
 
 const EMPTY_COMMENTS: NonNullable<TaskDetail["comments"]> = [];
 
-export function TaskInlineThread({ taskId, newSince, focusComposer = false, children }: {
+export function TaskInlineThread({ taskId, newSince, focusComposer = false, owner, children }: {
   taskId: string;
+  /** The task's owning session, when the surface knows it (the comment box says it will see the comment). */
+  owner?: TaskOwnerRef | null;
   /** The reader's frozen unread boundary; unset shows the whole stream. */
   newSince?: number;
   focusComposer?: boolean;
@@ -37,7 +39,7 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, chil
         </details>
       )}
       {children}
-      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? EMPTY_COMMENTS} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments />
+      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? EMPTY_COMMENTS} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments owner={owner} />
     </>
   );
 }

@@ -95,7 +95,8 @@ could never find a token and is refused.
 
 A connection is a credential owned by exactly one workspace: a team
 (`team_id`) or a person (`scope_user_id`). Every connection table carries
-that pair — `app_installations` (Linear, Notion), `slack_installations`,
+that pair: `app_installations` (Linear, Notion, and the token connectors in
+`tokenConnectors.ts`), `slack_installations`,
 `github_app_installations`; `google_installations` is personal only. The
 shared catalog (`appDescriptors.ts`) says which scopes each connector takes.
 
@@ -146,7 +147,7 @@ them as health.
 |-----------------------|------------------------------------------|---------------------------------------|
 | title                 | title                                    | title                                 |
 | description           | description (markdown)                   | body (markdown)                       |
-| status (category)     | state.type: triage,backlog -> backlog; unstarted -> open; started -> in_progress; completed -> done; canceled, duplicate -> dropped. Team states named like "review" under started -> in_review | open -> open (in_progress if assigned to an agent session); closed+completed -> done; closed+not_planned -> dropped |
+| status (category)     | state.type: triage,backlog -> backlog; unstarted -> open; started -> in_progress; completed -> done; canceled, duplicate -> dropped. Team states named like "review" under started -> in_review | open -> open; closed+not_planned -> dropped; any other closed -> done (`githubStatusFor`) |
 | priority              | 0 none, 1 urgent, 2 high, 3 medium, 4 low | not synced (GitHub has none)          |
 | assignee              | assignee.email -> users.email / alternate_emails | assignees[0].login -> users.github_username |
 | labels                | labels[].name                            | labels[].name                         |
@@ -207,6 +208,8 @@ push clears it; an inbound never does.
 
 ## S4. Echo and loop prevention
 
+![Inbound webhooks and the 15 minute reconcile go through applyRemote, which never pushes; local edits go through patchTask, which schedules pushTask; the echo of our own push writes nothing](../diagrams/issue-sync-loop.svg)
+
 1. Inbound never calls outbound. Inbound handlers write through
    `issueSync.applyRemote` (internal mutation) which patches the task directly
    and does not schedule `pushTask`. Our own writes of a synced field all go
@@ -256,7 +259,8 @@ Both write `external.synced_at`, `external.field_ts`, and `last_error` on
 failure. Failures are logged, never retried in a loop: the 15 minute reconcile
 (S6) is the retry.
 
-Tokens: Linear via `oauthConnectors.getFreshAccessTokenForTeam`, which
+Tokens: Linear via `oauthConnectors.getFreshAccessToken` (team first, then
+the source's acting user), which
 refreshes the 24 hour access token ahead of `access_expires_at` and stores
 the rotated refresh token in the same write; a refused refresh lands on the
 connection's `last_error` and parks the source with a "reconnect" message.
@@ -321,7 +325,7 @@ A task with `external` becomes a session three ways:
    `issues/labeled`, `issues/closed`, `issue_comment/created`, with
    `repository` set to the repo full name or the Linear team key. The CLI
    shorthands are `issue_opened`, `issue_assigned`, `issue_labeled`,
-   `issue_commented`.
+   `issue_closed`, `issue_commented` (`shared/contracts/triggerEvents.ts`).
 
 The spawn posts one provider comment ("Codecast session <link> picked this
 up"). The session's `cast task comment` and `cast task done` go through the
@@ -348,15 +352,16 @@ accent and verb through `registerExternalEventStyles` in
 
 ## S9. Integrations page
 
-`/settings/integrations` lists Slack, GitHub, Linear, Google and Notion from
-`appDescriptors` and `appConnections.listConnections`, in two ledgers: team
+`/settings/integrations` lists every app in `APP_IDS` (Slack, GitHub, Gmail,
+Linear, Notion, and the token connectors Sentry, PostHog and a product's own
+app) from `shared/contracts/appDescriptors.ts` and `appConnections.listConnections`, in two ledgers: team
 connections for the team the reader is looking at, and personal connections
 (S1.6). The query answers once per app per scope the connector supports,
 plus the team's name; with no live team membership it answers personal
 entries only, and the team ledger says so instead of claiming "not
 connected". Each card carries connect, disconnect, who connected, health
 (S1.5) and what it enables. GitHub and Linear cards carry the issue sync
-sources — once, under the ledger that matches the current workspace, since
+sources, once, under the ledger that matches the current workspace, since
 sources belong to the workspace and not to a connection: add, pause, remove,
 sync now, delegation settings. The import picker lists the team's
 installations and the reader's own. The OAuth confirm step
@@ -367,5 +372,5 @@ installations and the reader's own. The OAuth confirm step
 
 - `cast task show/ls` print the identifier and url when `external` is set.
 - `cast task start <id> --spawn`.
-- `cast trigger add --on issue_opened|issue_assigned|issue_labeled|issue_commented`.
-- `cast integrations ls|connect <provider> [--personal|--team]|disconnect <provider> [--personal|--team]|import <provider> <ref> [--project <ref>]|sources|sync <source>|pause <source>|remove <source>`. `connect` binds to the active team unless `--personal`; `disconnect` acts on the one connected scope, or the one named.
+- `cast trigger add --on issue_opened|issue_assigned|issue_labeled|issue_closed|issue_commented`.
+- `cast integrations ls|connect <provider> [--personal|--team]|disconnect <provider> [--personal|--team]|candidates <provider>|import <provider> <ref> [--project <ref>] [--kind <kind>]|sources|sync <source>|pause <source>|resume <source>|remove <source>|set <source> [--delegate-label] [--delegate-assignee] [--auto-spawn on|off] [--push-new-tasks on|off]`. `connect` binds to the active team unless `--personal`; `disconnect` acts on the one connected scope, or the one named.

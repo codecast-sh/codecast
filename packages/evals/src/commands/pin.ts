@@ -2,8 +2,9 @@ import type { Command } from 'commander';
 import { fmt } from '@platform/cli-kit/colors';
 import { clip, pad, plural } from '@platform/cli-kit/text';
 
+import { resolveCommit } from '../git';
 import { homePaths, PIN_REF_PREFIX, treeRoot } from '../paths';
-import { backfillPins, type HeadsFile, mapOrphans, pinHeads, recordedHeads, resolveCommit } from '../provenance';
+import { backfillPins, type HeadsFile, mapOrphans, pinHeads, recordedHeads } from '../provenance';
 
 // `./evals pin`: keep the commits runs ran on. A rebase can leave a run's
 // head on no branch, where `git gc` collects it and the record names nothing,

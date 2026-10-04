@@ -51,7 +51,8 @@ import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
-import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
+import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
+import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
@@ -716,6 +717,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // The scope's line (the-line.md L2): human only, logged, wakes the role.
   setRoleLine: async (ctx, _userId, [roleId, slug]: [string, string]) => {
     return await ctx.runMutation!((api as any).orgRoles.setLine, { role_id: roleId, slug });
+  },
+  // A project's customized line (plan pl-838): the whole workflow by slug.
+  saveLineWorkflow: async (ctx, _userId, [wf]: [{ slug: string; name: string; goal?: string; source?: string; nodes: any[]; edges: any[] }]) => {
+    const { slug, name, goal, source, nodes, edges } = wf;
+    return await ctx.runMutation!((api as any).workflows.webUpsert, { slug, name, goal, source, nodes, edges });
   },
   // A role following a chat channel (agent-channels.md C1). orgChannels
   // resolves the role by short id or handle and checks the admin grant.
@@ -1490,6 +1496,25 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...charterWire(fields) });
   },
 
+  // An edit of a project's .codecast/line.toml from /line/settings (pl-838).
+  // The file is the truth, so the store's paint is only a preview: this asks
+  // the daemon on the machine that published the profile to apply the edits
+  // in place, validate them with the loader and republish, and answers the
+  // daemon command id the page watches for a refusal. The checkout and the
+  // machine come from the row, never the client. A throw is a permanent
+  // refusal, so the client takes its paint back.
+  editLineProfile: async (ctx, userId, [projectId, edits]: [string, unknown]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    if (!Array.isArray(edits) || edits.length === 0 || edits.length > 50) throw new ConvexError("An edit names one to fifty changes");
+    const project = await ctx.db.get(projectId as Id<"projects">);
+    if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new ConvexError("Project not found");
+    const lp = project.line_profile;
+    if (!lp?.root || !lp.device_id) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+    const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id)
+      .catch(() => { throw new ConvexError("The checkout is on a machine that is not yours: its owner can edit this file"); });
+    return { command_id: commandId };
+  },
+
   // Naming a project's lead (org-roles-run-work.md R4): the owner and, when
   // the role's scope does not list the project, the scope, in one transaction.
   setProjectLead: async (ctx, userId, [projectId, roleId, opts]: [string, string | null, { leave_sessions?: boolean } | undefined]) => {
@@ -1800,6 +1825,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setTriggerInterval: async (ctx, userId, [taskId, intervalMs]: [string, number]) => {
     return await (ctx as any).runMutation(api.agentTasks.webUpdate, { task_id: taskId, interval_ms: intervalMs });
   },
+  // The triggers page's edit form, and its undo with the prior values. A
+  // trigger that ran or ended in the meantime refuses the edit; throwing makes
+  // the refusal permanent, so the client takes its optimistic edit back.
+  editTrigger: async (ctx, userId, [taskId, fields]: [string, Record<string, unknown>]) => {
+    const ok = await (ctx as any).runMutation(api.agentTasks.webUpdate, { ...fields, task_id: taskId });
+    if (ok === false) throw new Error("This trigger can no longer be edited: it is running or finished");
+    return ok;
+  },
 
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
     return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });
@@ -2001,6 +2034,30 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       file_path: anchor?.filePath || undefined,
       line_number: typeof anchor?.lineNumber === "number" ? anchor.lineNumber : undefined,
       resolved: !!resolved,
+    });
+  },
+
+  // Code review threads (review_comments). The server settles a whole thread
+  // from any one comment in it, so one call per gesture is enough; a stub
+  // (no server row yet) has nothing to resolve.
+  resolveCodeCommentThread: async (ctx, _userId, [commentIds, resolved]: [string[], boolean]) => {
+    const id = (commentIds ?? []).find((c) => isServerId(c));
+    if (!id) return;
+    return ctx.runMutation!(resolved ? api.codeComments.resolve : api.codeComments.unresolve, {
+      comment_id: id as Id<"review_comments">,
+    });
+  },
+  editCodeComment: async (ctx, _userId, [commentId, content]: [string, string]) => {
+    if (!isServerId(commentId)) return;
+    return ctx.runMutation!(api.codeComments.update, {
+      comment_id: commentId as Id<"review_comments">,
+      content,
+    });
+  },
+  deleteCodeComment: async (ctx, _userId, [commentId]: [string]) => {
+    if (!isServerId(commentId)) return;
+    return ctx.runMutation!(api.codeComments.remove, {
+      comment_id: commentId as Id<"review_comments">,
     });
   },
 
@@ -2415,6 +2472,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   setCallShareVideo: async (ctx, _userId, [transcriptId, include]: [string, boolean]) => {
     return await ctx.runMutation!(api.callRecordings.setCallShareVideo, { call: transcriptId, include: !!include });
+  },
+  // A picture of the call taken off its public link (store
+  // deleteCallFrameShare drops the row first). Already gone is acknowledged.
+  deleteCallFrameShare: async (ctx, _userId, [shareId]: [string]) => {
+    return await ctx.runMutation!(api.callRecordings.deleteCallFrameShare, { share_id: shareId });
   },
   setChatSlackMember: async (
     ctx,

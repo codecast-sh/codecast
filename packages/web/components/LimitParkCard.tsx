@@ -16,14 +16,14 @@
 
 import Link from "next/link";
 import { Check, Hourglass, Loader2, RefreshCw, TimerReset, Zap } from "lucide-react";
-import { exhaustionBannerCopy, fleetAccount, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { describeDecision, pendingProposal, fallbackProfiles, formatAgo, standingLabel } from "@codecast/shared/contracts";
+import { exhaustionBannerCopy, isExhaustionCurrent, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
+import { describeDecision, pendingProposal, formatAgo, standingLabel } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useInboxStore } from "../store/inboxStore";
-import { isParkedDispatchError } from "../store/mutativeMiddleware";
-import { DISPATCH_REFUSED, latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
+import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
+import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
@@ -57,55 +57,20 @@ export function LimitParkCard({
   const pinnedAccount = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.cc_account : undefined));
 
   const profiles: Profile[] = device?.profiles ?? [];
-  // The account the session ran on: its own token pin when it has one, else
-  // the machine's fleet account (the launch profile after a token switch,
-  // else the keychain login — fleetAccount).
-  const fleetEmail = fleetAccount(device, now).email;
-  const active = profiles.find((p) => p.email && p.email === fleetEmail);
+  // The account the session ran on (its own token pin when it has one, else
+  // the machine's fleet account) and the account the button continues on: one
+  // rule, shared with the phone (lib/limitContinue).
+  const { fleetEmail, active, best } = limitContinueTarget(device, now, live);
   const accountLabel = pinnedAccount ?? active?.name ?? fleetEmail;
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
-  // A switch the machine recommended and is waiting on. Only while this park
-  // is still live — a settled session's old proposal is history, not an ask.
   const proposal = live && device ? pendingProposal([device], now) : null;
-  // The freshest OTHER saved account with room left — the one manual recovery
-  // worth a button, by the same rule auto-switch chooses from (fallbackProfiles:
-  // no dead login without a live token, no pegged window). When the machine
-  // has PROPOSED a target, the button is that proposal's approval, so it
-  // offers the proposed account itself: the sentence the card just read out
-  // and the account the click switches to are one value, never two rankings
-  // that could disagree.
-  const eligible = fallbackProfiles(profiles, fleetEmail, now);
-  const proposed = proposal?.target_email
-    ? eligible.find((p) => p.email === proposal.target_email)
-    : undefined;
-  const best = proposed ?? eligible[0];
   // The standing shown on the button matches the meters: "stale" when a rolled
   // window is unmeasured, never a confident green percent the switcher distrusts.
   const bestNote = best ? standingLabel(best.usage, now) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
 
-  // Continue THIS session on another account: paint the "continue" it is
-  // about to receive, stamp it revive-in-flight, and hand the daemon the same
-  // client id so the echo replaces the painted bubble (the fleet banner's
-  // contract, scoped to one conversation).
   const switchAndContinue = () => {
-    if (!best?.email || !conversationId) return;
-    const store = useInboxStore.getState();
-    const clientId = `acct-revive-${Math.random().toString(36).slice(2, 10)}-${conversationId}`;
-    store.addOptimisticMessage(conversationId, "continue", undefined, clientId);
-    store.markBlockedReviveRequested([conversationId]);
-    // A refusal raises the dispatch-failure toast and ends the row failed;
-    // take back the "continue" painted for it.
-    requestAccountSwitchCommand({
-      email: best.email,
-      conversation_ids: [conversationId],
-      include_subagents: true,
-      continue_client_ids: { [conversationId]: clientId },
-    }, { profile: best.name }).catch((err: unknown) => {
-      if (isParkedDispatchError(err)) return;
-      store.removeOptimisticMessage(conversationId, clientId);
-      store.clearBlockedReviveRequested([conversationId]);
-    });
+    if (best && conversationId) continueOnAccount(conversationId, best);
   };
   const continueNow = () => {
     if (!conversationId) return;

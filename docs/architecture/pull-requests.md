@@ -84,6 +84,8 @@ keeps the two sides from disagreeing.
 
 ## S4. The review is a batch
 
+![A review submitted in codecast reaches the owning session as one message; everything GitHub reports arrives as a webhook and wakes the session through its standing pr_shepherd trigger](../diagrams/pr-shepherd-wake.svg)
+
 A note written with the review switch on is a `review_comments` row with
 `pending_review: true`. It is the author's alone: every read path hides other
 people's pending notes, nothing announces it, nothing mirrors it. The notes
@@ -115,6 +117,11 @@ same way on every path.
 `cast pr comment --hold` adds a note from the terminal, `cast pr notes` lists
 them, `cast pr review` sends them.
 
+`cast pr shepherd on` (`prCli.shepherd`, then `prShepherd.bindShepherd`) binds
+the owning session and creates its standing trigger, an `agent_tasks` row with
+the `pr_shepherd` event filter. `wakeShepherd` sets that trigger's `run_at`
+with a prompt rebuilt from the current row; a merge or close retires it.
+
 ## S5. One action layer
 
 `prCli.ts` is the server behind `cast pr` and behind the pull request page.
@@ -126,8 +133,11 @@ name; the CLI reaches them through `/cli/pr/*` routes in `http.ts`.
 
 ## S6. The page
 
-`/pr/:owner/:repo/:number` reads the store (`pullRequests`, `codeComments`)
-and never a query. The header names the state, the merge standing, the review
+`/pr/:owner/:repo/:number` reads the pull request and its comments from the
+store (`pullRequests`, `codeComments`); reviews still come from
+`reviews.getReviewsForPR` through `useQueryNoThrow`. Its four views,
+Conversation, Files, Commits and Checks, are paths of their own
+(`.../files`, `lib/prView.ts`), on keys `1` to `4`. The header names the state, the merge standing, the review
 decision, the labels and the assignees, and carries the verbs: the review menu
 (what is waiting, the verdict, submit or send to the session), merge with its
 method and branch deletion, and the rest behind one more button.
@@ -142,6 +152,7 @@ because its diff sits flush inside a clipped card. A switch above a fresh
 line's composer chooses between holding the note and posting it now; a held note is drawn dashed; the tree
 counts open threads and held notes per file and dims files marked viewed. `n`
 and `p` walk the open threads, `m` marks the file viewed and moves on, `r`
-opens the review menu. Commits is its own tab. The conversation nests each
+opens the review menu. While notes are held, `PRReviewBar` pins the review to
+the bottom of the page and `r` opens the menu there. The conversation nests each
 review's line notes under it, and hides the empty "commented" reviews GitHub
 wraps a lone reply in.

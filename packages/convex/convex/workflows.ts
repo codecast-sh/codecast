@@ -2,6 +2,8 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Id } from "./_generated/dataModel";
+import { LINE_SLUG_RE } from "@codecast/shared/contracts/orgProposal";
 
 const nodeV = v.object({
   id: v.string(),
@@ -38,64 +40,80 @@ const edgeV = v.object({
   condition: v.optional(v.string()),
 });
 
-export const upsert = mutation({
-  args: {
-    api_token: v.string(),
-    name: v.string(),
-    slug: v.string(),
-    goal: v.optional(v.string()),
-    source: v.optional(v.string()),
-    nodes: v.array(nodeV),
-    edges: v.array(edgeV),
-    model_stylesheet: v.optional(v.string()),
-    // The graph attribute stack (the-line.md L4). Accepted so the push does
-    // not fail; the row has no stack column yet, so a daemon run reads it
-    // back from `source` (daemonGraph.ts). Store it here once
-    // `workflows.stack` exists in the schema.
-    stack: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const result = await verifyApiToken(ctx, args.api_token);
-    if (!result) return { error: "Unauthorized" };
+const upsertArgs = {
+  name: v.string(),
+  slug: v.string(),
+  goal: v.optional(v.string()),
+  source: v.optional(v.string()),
+  nodes: v.array(nodeV),
+  edges: v.array(edgeV),
+  model_stylesheet: v.optional(v.string()),
+  // The graph attribute stack (the-line.md L4). Accepted so the push does
+  // not fail; the row has no stack column yet, so a daemon run reads it
+  // back from `source` (daemonGraph.ts). Store it here once
+  // `workflows.stack` exists in the schema.
+  stack: v.optional(v.string()),
+};
 
-    const user = await ctx.db.get(result.userId);
-    if (!user) return { error: "User not found" };
+// One body for the CLI push and the web's edit: a row per (user, slug).
+async function upsertWorkflowFor(ctx: any, userId: Id<"users">, args: { name: string; slug: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string }) {
+  const now = Date.now();
+  const existing = await ctx.db
+    .query("workflows")
+    .withIndex("by_user_slug", (q: any) => q.eq("user_id", userId).eq("slug", args.slug))
+    .first();
 
-    const now = Date.now();
-    const existing = await ctx.db
-      .query("workflows")
-      .withIndex("by_user_slug", (q) => q.eq("user_id", result.userId).eq("slug", args.slug))
-      .first();
-
-    if (existing) {
-      await ctx.db.patch(existing._id, {
-        name: args.name,
-        goal: args.goal,
-        source: args.source,
-        nodes: args.nodes,
-        edges: args.edges,
-        model_stylesheet: args.model_stylesheet,
-        updated_at: now,
-      });
-      return { id: existing._id, updated: true };
-    }
-
-    const id = await ctx.db.insert("workflows", {
-      user_id: result.userId,
-      // Personal by default: workflows carry no project_path to resolve a
-      // directory mapping against, and stamping the active team here would
-      // expose them wholesale the day a team read path lands on by_team_id.
+  if (existing) {
+    await ctx.db.patch(existing._id, {
       name: args.name,
-      slug: args.slug,
       goal: args.goal,
       source: args.source,
       nodes: args.nodes,
       edges: args.edges,
       model_stylesheet: args.model_stylesheet,
-      created_at: now,
       updated_at: now,
     });
-    return { id, updated: false };
+    return { id: existing._id, updated: true };
+  }
+
+  const id = await ctx.db.insert("workflows", {
+    user_id: userId,
+    // Personal by default: workflows carry no project_path to resolve a
+    // directory mapping against, and stamping the active team here would
+    // expose them wholesale the day a team read path lands on by_team_id.
+    name: args.name,
+    slug: args.slug,
+    goal: args.goal,
+    source: args.source,
+    nodes: args.nodes,
+    edges: args.edges,
+    model_stylesheet: args.model_stylesheet,
+    created_at: now,
+    updated_at: now,
+  });
+  return { id, updated: false };
+}
+
+export const upsert = mutation({
+  args: { api_token: v.string(), ...upsertArgs },
+  handler: async (ctx, { api_token, stack: _stack, ...args }) => {
+    const result = await verifyApiToken(ctx, api_token);
+    if (!result) return { error: "Unauthorized" };
+    const user = await ctx.db.get(result.userId);
+    if (!user) return { error: "User not found" };
+    return await upsertWorkflowFor(ctx, result.userId, args);
+  },
+});
+
+// The web's write (line settings, plan pl-838): the store's saveLineWorkflow
+// rides dispatch here. A line slug must be one a role's line may name.
+export const webUpsert = mutation({
+  args: upsertArgs,
+  handler: async (ctx, { stack: _stack, ...args }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not signed in");
+    if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
+    return await upsertWorkflowFor(ctx, userId, args);
   },
 });
 

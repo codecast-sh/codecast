@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 532" role="img" aria-labelledby="t d">
+  <title id="t">Issue sync: two one-way paths that cannot loop</title>
+  <desc id="d">Inbound, a Linear or GitHub issue change arrives as a webhook at /api/webhooks/linear or /api/webhooks/github-app, deduplicated by delivery id with codecast-sh[bot] events dropped, or through the 15 minute reconcileSources pull. Both go through issueSync.applyRemote, which applies a field only when the provider updatedAt is at least the field_ts of our last local write, writes nothing when values are equal, and never schedules a push, then patches the tasks row and its external object. Outbound, a person or agent edit goes through patchTask in lib/taskWrite.ts, which writes the task and schedules issueSync.pushTask for the fields that moved; pushTask makes one provider write, stamps field_ts and never retries in a loop. The echo of our own push maps to equal values, so applyRemote writes nothing and the loop ends.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="532" rx="12"/>
+  <text class="h" x="24" y="36">Issue sync: two one-way paths that cannot loop</text>
+
+  <!-- Provider -->
+  <rect class="card" x="24" y="150" width="160" height="200" rx="8"/>
+  <text class="l" x="40" y="178">Linear issue</text>
+  <text class="l" x="40" y="198">GitHub issue</text>
+  <text class="n" x="40" y="226">its updatedAt is</text>
+  <text class="n" x="40" y="242">the clock S3</text>
+  <text class="n" x="40" y="258">compares against</text>
+
+  <!-- Inbound -->
+  <rect class="card" x="248" y="64" width="216" height="120" rx="8"/>
+  <text class="l" x="264" y="90">webhooks</text>
+  <text class="n" x="264" y="112">/api/webhooks/linear</text>
+  <text class="n" x="264" y="128">/api/webhooks/github-app</text>
+  <text class="n" x="264" y="150">dedupe by delivery id,</text>
+  <text class="n" x="264" y="166">drop codecast-sh[bot]</text>
+
+  <rect class="card" x="496" y="64" width="216" height="120" rx="8"/>
+  <text class="l" x="512" y="90">issueSync.applyRemote</text>
+  <text class="n" x="512" y="112">apply a field only if</text>
+  <text class="n" x="512" y="128">updatedAt &gt;= field_ts</text>
+  <text class="n" x="512" y="150">equal values: no write;</text>
+  <text class="n" x="512" y="166">never schedules a push</text>
+
+  <rect class="card" x="248" y="212" width="216" height="64" rx="8"/>
+  <text class="l" x="264" y="238">reconcile, 15 min</text>
+  <text class="n" x="264" y="258">reconcileSources</text>
+
+  <!-- Task -->
+  <rect class="core" x="756" y="150" width="180" height="200" rx="10"/>
+  <text class="h" x="772" y="178">tasks row</text>
+  <text class="n" x="772" y="202">external:</text>
+  <text class="n" x="772" y="220">id, identifier, url</text>
+  <text class="n" x="772" y="238">remote_updated_at</text>
+  <text class="n" x="772" y="256">field_ts per field</text>
+  <text class="n" x="772" y="274">last_error</text>
+
+  <!-- Outbound -->
+  <rect class="card" x="496" y="304" width="216" height="120" rx="8"/>
+  <text class="l" x="512" y="330">lib/taskWrite.ts</text>
+  <text class="n" x="512" y="352">patchTask: every local</text>
+  <text class="n" x="512" y="368">write of a synced field,</text>
+  <text class="n" x="512" y="390">then schedules pushTask</text>
+  <text class="n" x="512" y="406">for the fields that moved</text>
+
+  <rect class="card" x="248" y="304" width="216" height="120" rx="8"/>
+  <text class="l" x="264" y="330">issueSync.pushTask</text>
+  <text class="n" x="264" y="352">one provider write,</text>
+  <text class="n" x="264" y="368">stamps field_ts</text>
+  <text class="n" x="264" y="390">no retry loop: the</text>
+  <text class="n" x="264" y="406">reconcile is the retry</text>
+
+  <rect class="card" x="756" y="380" width="180" height="44" rx="8"/>
+  <circle class="person" cx="776" cy="402" r="5"/>
+  <text class="l" x="788" y="406">person or agent</text>
+
+  <!-- Arrows: inbound -->
+  <path class="data" d="M184 166 H244" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="190" y="158">webhook</text>
+  <path class="data" d="M464 124 H492" marker-end="url(#aData)"/>
+  <path class="data" d="M712 124 H846 V146" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="722" y="116">patch</text>
+  <path class="data" d="M184 244 H244" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="196" y="236">pull</text>
+  <path class="data" d="M464 244 H604 V188" marker-end="url(#aData)"/>
+
+  <!-- Arrows: outbound -->
+  <path class="cmd" d="M756 402 H716" marker-end="url(#aCmd)"/>
+  <path class="data" d="M712 330 H752" marker-end="url(#aData)"/>
+  <path class="cmd" d="M496 364 H468" marker-end="url(#aCmd)"/>
+  <path class="data" d="M248 330 H188" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="196" y="322">write</text>
+
+  <!-- Footer -->
+  <rect class="zone" x="24" y="448" width="912" height="60" rx="10"/>
+  <text class="n" x="40" y="472">our own push comes back as a webhook with values equal to ours: applyRemote writes nothing and the loop ends (S3, S4)</text>
+  <text class="n" x="40" y="492">comments follow the same two paths: pushComment stamps the provider id, and an inbound comment with a known id is skipped</text>
+</svg>

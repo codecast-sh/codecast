@@ -1946,6 +1946,9 @@ export const autoSwitchCheck = internalMutation({
     const parksOnActive = targets.filter((c) =>
       parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
+    // The models the parked sessions run: an account's model-scoped week
+    // spends only those (limitWindows).
+    const parkedModels = targets.flatMap((c) => (c.model ? [c.model] : []));
     const decision = decideAutoSwitch({
       now,
       // No resetCredit: a Codex reset credit clears a CODEX account's windows
@@ -1962,6 +1965,7 @@ export const autoSwitchCheck = internalMutation({
       // A dead login (splitAuthParks) means "continue" can't help even the
       // limit-parked sessions until the machine has a live account.
       activeDead,
+      models: parkedModels,
     });
 
     if (decision.action === "wait") {
@@ -2044,7 +2048,7 @@ export const autoSwitchCheck = internalMutation({
     // human approves through the same requestAccountSwitch the manual button
     // calls, so the ask path and the manual path are one codepath.
     if (askFirst) {
-      const best = fallbackProfiles(activeProfiles, activeEmail, now)[0];
+      const best = fallbackProfiles(activeProfiles, activeEmail, now, parkedModels)[0];
       if (best) {
         const proposal = buildDecision("propose", best);
         const already =

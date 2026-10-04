@@ -192,6 +192,9 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   // around the content it reports (the first report is the reveal — always
   // without focus), hides it on request, and lands "open the transcript" in
   // the main window.
+  // A see-through window (createShellWindow): the boot page and the route
+  // loader paint nothing in it, so loading is invisible.
+  isTransparentWindow: process.argv.includes("--transparent-window"),
   isMeetingOfferWindow: process.argv.includes("--meeting-offer-window"),
   meetingOfferSize: (size) => ipcRenderer.send("meeting-offer-size", size),
   meetingOfferHide: () => ipcRenderer.send("meeting-offer-hide"),
