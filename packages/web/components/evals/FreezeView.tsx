@@ -428,7 +428,6 @@ export function FreezeRepStrip({ runs, epochs, footing, cells, pair, pinnedBatch
         {cols.map((c, i) =>
           c.reps.map((rep) => {
             const cx = colOf.get(c.batch)!.x + jitter(rep.id, spread);
-            const sel = pair.a === rep.id ? "A" : pair.b === rep.id ? "B" : null;
             const cy = repY(rep, y);
             return (
               <RepMark
@@ -446,19 +445,27 @@ export function FreezeRepStrip({ runs, epochs, footing, cells, pair, pinnedBatch
               >
                 {/* A wider target than the dot, so a dense column is still clickable. */}
                 <circle cx={cx} cy={cy} r={Math.max(r + 3, 6)} fill="transparent" />
-                {sel && (
-                  <g data-ev-rep-selected={sel}>
-                    <circle cx={cx} cy={cy} r={r + 3.2} fill="none" stroke="var(--sol-text)" strokeWidth={1.3} />
-                    {/* Haloed like the pass mark's label, so the median step line never runs through the letter. */}
-                    <text x={cx} y={cy - r - 6} textAnchor="middle" className="ev-mono ev-sf-ylabel--halo" style={{ fontSize: 10, fontWeight: 700, fill: "var(--sol-text)" }}>
-                      {sel}
-                    </text>
-                  </g>
-                )}
               </RepMark>
             );
           }),
         )}
+        {/* A and B sit above every rep, so a later rep in the same column never paints over the letter. */}
+        {(["A", "B"] as const).map((slot) => {
+          const rep = runs.find((x) => x.id === (slot === "A" ? pair.a : pair.b));
+          const col = rep?.batch ? colOf.get(rep.batch) : undefined;
+          if (!rep || !col || !shownRep(rep)) return null;
+          const cx = col.x + jitter(rep.id, spread);
+          const cy = repY(rep, y);
+          return (
+            <g key={slot} data-ev-rep-selected={slot} data-ev-selected-rep={rep.id} pointerEvents="none">
+              <circle cx={cx} cy={cy} r={r + 3.2} fill="none" stroke="var(--sol-text)" strokeWidth={1.3} />
+              {/* Haloed like the pass mark's label, so the median step line and neighbouring dots never run through the letter. */}
+              <text x={cx} y={cy - r - 6} textAnchor="middle" className="ev-mono ev-sf-ylabel--halo" style={{ fontSize: 10, fontWeight: 700, fill: "var(--sol-text)" }}>
+                {slot}
+              </text>
+            </g>
+          );
+        })}
         {/* Drawn after the reps, with a halo, so a dot near the mark never hides its label. */}
         <text x={PAD_L + 2} y={y(PASS_MARK) + 11} className="ev-sf-ylabel ev-sf-ylabel--mark ev-sf-ylabel--halo">
           {PASS_MARK}

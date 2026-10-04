@@ -17,8 +17,10 @@ import "../threads/threads.css";
 
 const EMPTY_COMMENTS: NonNullable<TaskDetail["comments"]> = [];
 
-export function TaskInlineThread({ taskId, newSince, focusComposer = false, children }: {
+export function TaskInlineThread({ taskId, newSince, focusComposer = false, ownerSessionId, children }: {
   taskId: string;
+  /** The task's owning session, when the surface knows it (the comment box says it will see the comment). */
+  ownerSessionId?: string | null;
   /** The reader's frozen unread boundary; unset shows the whole stream. */
   newSince?: number;
   focusComposer?: boolean;
@@ -37,7 +39,7 @@ export function TaskInlineThread({ taskId, newSince, focusComposer = false, chil
         </details>
       )}
       {children}
-      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? EMPTY_COMMENTS} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments />
+      <TaskCommentStream shortId={task?.short_id} comments={task?.comments ?? EMPTY_COMMENTS} composerAutoOpen composerAutoFocus={focusComposer} newSince={newSince} clampComments ownerSessionId={ownerSessionId} />
     </>
   );
 }

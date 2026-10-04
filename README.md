@@ -24,7 +24,7 @@
 
 ---
 
-Codecast is the workspace where a team works alongside its coding agents. Chat, calls, tasks, docs, pull requests and decisions live in one place, with Claude Code, Codex, Cursor, Gemini, OpenCode and pi as teammates in every one. Everything links back to the session that did it.
+Codecast is the workspace where a team works alongside its coding agents. Chat, calls, tasks, docs, pull requests and decisions live in one place, with Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark as teammates in every one. Everything links back to the session that did it.
 
 It works with the agents you already run. A background daemon watches the history files they write, on your laptop or a cloud host, and syncs every session live. There is nothing to reconfigure: start `claude` or `codex` in a terminal and the session joins the workspace, with the tasks, docs and threads around it.
 
@@ -35,9 +35,8 @@ One person can run dozens of agents and still be in command of them. An inbox so
 ## Install
 
 ```bash
-curl -fsSL codecast.sh/install | sh
-cast setup
-cast start
+curl -fsSL codecast.sh/install | sh   # installs cast, starts the daemon, signs you in
+cast setup                            # start the daemon on login
 ```
 
 On Windows:
@@ -72,12 +71,12 @@ Codecast watches your local agent history files and syncs conversations in real 
 
 ![Inbox triage queue: sessions grouped by label with live status, model badges, and summaries alongside the open conversation](docs/screenshots/inbox.png)
 
-- **Every agent.** Claude Code, Codex, Cursor, Gemini, OpenCode and pi, plus cloud agents from Cursor and OpenAI. See [Supported Agents](#supported-agents) for what each one can do.
+- **Every agent.** Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark, plus cloud agents from Cursor and OpenAI. See [Supported Agents](#supported-agents) for what each one can do.
 - **Every machine.** Laptops and cloud hosts in one list. `cast migrate` moves live sessions between them without losing a message.
 - **Live state.** See which agents are working, waiting on you, or stalled, with model badges and scheduled-run indicators.
 - **Labels.** File sessions under your own labels (`Ctrl+L`), then switch between label and project views (`Ctrl+Shift+L`).
 - **Stash or kill.** Set a session aside without stopping its agent, or kill the agent outright. Killed sessions stay resumable.
-- **Privacy.** Conversations are private by default, secrets are redacted before sync, and end-to-end encryption is optional.
+- **Privacy.** Conversations are private by default and secrets are redacted before sync.
 
 ### Conversations
 
@@ -86,7 +85,7 @@ Every conversation renders with syntax-highlighted code, collapsible tool calls,
 ![Conversation view showing code blocks, tool call summaries, and insight blocks](docs/screenshots/conversation.png)
 
 - **Steer from anywhere.** Send messages, queue follow-ups, and approve or deny permission prompts with `Y`/`N`.
-- **Inline review.** Quote and comment on any assistant reply (`R`), batch the comments, and send them as one review.
+- **Inline review.** Quote selected text into your reply, or step through the replies and comment on them (`R`), then send the comments as one review.
 - **Forking.** Branch a conversation from any message (`Alt+F`). Fork chips show the tree inline and `cast tree` prints it.
 - **File changes.** See which files a session touched, with a diff for each edit.
 - **Kill and restart.** Restart a dead or wedged session from the web, with step-by-step progress.
@@ -177,7 +176,7 @@ A command palette (`Cmd+K`) for everything: sessions, tasks, plans, docs, and ac
 
 ![Command palette showing recent sessions and jump-to navigation](docs/screenshots/command-palette.png)
 
-More than 70 context-aware shortcuts keep the whole app usable from the keyboard (`?` shows them all).
+More than 140 context-aware shortcuts keep the whole app usable from the keyboard (`?` shows them all).
 
 ### Teams and privacy
 
@@ -204,7 +203,7 @@ cast stable team        # Inject recent team activity into every new session
 cast stable solo -g     # Inject your sessions across all projects
 ```
 
-`cast install` writes to `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`, and `~/.cursor/rules/codecast.mdc`. `cast stable` injects a rolling window of recent conversations into every new session, so agents start aware of what has been happening across the project or team.
+`cast install` writes to `~/.claude/CLAUDE.md`, and to `~/.codex/AGENTS.md` and `~/.grok/AGENTS.md` when those agents are installed. `cast stable` injects a rolling window of recent conversations into every new session, so agents start aware of what has been happening across the project or team.
 
 ### Memory
 
@@ -298,6 +297,8 @@ cast setup              # Auto-start on login (launchd/systemd/Task Scheduler)
 
 ## Architecture
 
+![How codecast fits together: agents write history files, the cast daemon syncs them to the Convex backend, and every client reads and acts through Convex](docs/diagrams/system-overview.svg)
+
 ```
 codecast/
   packages/
@@ -317,23 +318,25 @@ codecast/
 
 ### Supported Agents
 
-codecast integrates nine agent clients, local and cloud. Support is not all-or-nothing: each client
+codecast integrates eleven agent clients, local and cloud. Support is not all-or-nothing: each client
 is a registry descriptor (`packages/shared/contracts/agentClients.ts`) that
 declares only the capabilities it actually has. A capability a client lacks is
 simply absent, and the session never breaks. The matrix below states the real
-per-client reality as merged; ✓ = supported, — = not available.
+per-client reality as merged; ✓ = supported, ✗ = not available.
 
 | Agent | History location | Launch from web | Transcript sync | `cast send` | State detection | Resume | Fork | Model control | Permissions |
 |-------|------------------|:---------------:|:---------------:|:-----------:|:---------------:|:------:|:----:|:-------------:|:-----------:|
 | Claude Code | `~/.claude/projects/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (mid-session) | ✓ |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ (+ app-server) | ✓⁸ | ✓ (at launch) | ✓ |
 | OpenCode | `~/.local/share/opencode/opencode.db` (SQLite) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓¹ | ✓ (at launch) | auto² |
-| pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | —³ | tracked⁴ | — |
-| Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl` (CLI and IDE), IDE SQLite for older chats | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ (at launch) | auto⁵ |
-| Cursor Cloud | Cloud Agents API (api.cursor.com), mirrored to `~/.codecast/cursor-cloud/` | ✓⁹ | ✓ | ✓ | ✓ | ✓ | — | ✓ (at launch) | cloud |
-| Codex Cloud | Codex Cloud's private API (chatgpt.com), mirrored to `~/.codecast/codex-cloud/` | ✓¹⁰ | ✓ | ✓ | ✓ | ✓ | attempts¹⁰ | — | cloud |
-| OpenAI Agents API | Agents API (api.openai.com), mirrored to `~/.codecast/openai-agents/` | ✓¹¹ | ✓ | ✓ | ✓ | ✓ | — | ✓ (at launch) | cloud |
-| Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | ✓ | ✓ | ✓ | —⁶ | ✓⁷ | — | — | — |
+| pi | `~/.pi/agent/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗³ | tracked⁴ | ✗ |
+| Cursor | `~/.cursor/projects/**/agent-transcripts/*.jsonl` (CLI and IDE), IDE SQLite for older chats | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (at launch) | auto⁵ |
+| Cursor Cloud | Cloud Agents API (api.cursor.com), mirrored to `~/.codecast/cursor-cloud/` | ✓⁹ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (at launch) | cloud |
+| Codex Cloud | Codex Cloud's private API (chatgpt.com), mirrored to `~/.codecast/codex-cloud/` | ✓¹⁰ | ✓ | ✓ | ✓ | ✓ | attempts¹⁰ | ✗ | cloud |
+| OpenAI Agents API | Agents API (api.openai.com), mirrored to `~/.codecast/openai-agents/` | ✓¹¹ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (at launch) | cloud |
+| Gemini CLI | `~/.gemini/tmp/**/*.jsonl` | ✓ | ✓ | ✓ | ✗⁶ | ✓⁷ | ✗ | ✗ | ✗ |
+| Grok | `~/.grok/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ (at launch) | auto¹² |
+| Muse Spark | `~/.local/share/muse/sessions/**/*.jsonl` | ✓ | ✓ | ✓ | ✓ | ✓ | ✗ | ✓ (at launch) | auto¹² |
 
 1. OpenCode forks through an `opencode serve` sidecar (`POST /session/:id/fork`, ct-39079/ct-39150): a fork at the conversation tip copies the full session, a mid-history fork truncates to the fork point to match the copied transcript. If the sidecar is unreachable the fork degrades to a fresh session rather than fabricated context.
 2. OpenCode launches auto-approved (`--auto`): the daemon reads its turn state from the SQLite store and can't answer the TUI's permission prompts, so there is no per-session permission control.
@@ -346,6 +349,7 @@ per-client reality as merged; ✓ = supported, — = not available.
 9. Pick a `Cloud · …` model under Cursor (or `cast spawn --agent cursor --model cloud`). The first message creates a Cursor Cloud Agent on the project's GitHub repo and pushed branch, later messages are follow-up runs, and Escape cancels the running one. It needs a Cursor API key on the machine that drives it (`cast keys set cursor`). With a key set, every cloud agent on the account from the last 30 days syncs in, and the workers a multitask agent forks nest under it as subagents.
 10. Pick Codex and turn on "run in OpenAI's cloud", then "ChatGPT plan" (or `cast spawn --agent codex --model cloud`). The first message starts a Codex Cloud task in the repository's Codex environment, from the checkout's branch when it is on GitHub, later messages are follow-ups, and Escape cancels the running turn. The composer's **ask** switch runs it in ask mode (`cloud:ask`), and **attempts** (1 to 4, `cloud:x3`) makes each extra attempt a branch of the session. It runs on your ChatGPT plan through the `codex login` saved on the machine that drives it, which codecast reads and never refreshes. The session header opens a draft pull request, applies a line's changes to your checkout, and archives the task. "Sync Codex Cloud tasks" (off by default) imports the account's other tasks from the last 30 days. See the [Codex Cloud guide](https://codecast.sh/documentation/codex-cloud).
 11. Pick Codex, turn on "run in OpenAI's cloud", then "API key" (or `cast spawn --agent codex --model api`). Each session runs in an OpenAI-hosted sandbox, billed to an OpenAI API key on the machine that drives it (Settings, Provider Keys, or `cast keys set openai`). The sandbox clones the repository from GitHub without credentials, so it works on public repositories only and cannot push. It streams as it works, and a message sent mid-turn steers it. "Sync OpenAI Agents API sessions" is off by default.
+12. Grok launches with `--permission-mode bypassPermissions` and Muse Spark with `--yolo`, because the web cannot see either TUI's permission prompt. A permission flag in the agent's configured args, or `agent_permission_modes.muse: "default"`, opts out.
 
 ### Tech Stack
 
@@ -378,7 +382,9 @@ Configure your Convex instance URL in each `.env.local`. See [Getting Started](d
 ./dev.sh 1        # https://local.1.codecast.sh (parallel instance)
 ```
 
-Starts both the Convex backend and Vite web dashboard. The CLI daemon runs separately with `cast start`.
+Starts the Vite web app on port 3200 (3200 + N for instance N) and the gated Convex pusher (`packages/convex/scripts/gated-push.ts`), which pushes each quiet, typechecked change to the deployment your env names and refuses to start from a tree behind origin/main. Run `sudo ./setup-hosts.sh` once so the `local.*.codecast.sh` names resolve. The CLI daemon runs separately with `cast start`.
+
+Deploy Convex only through `packages/convex/deploy.sh`, never a raw `npx convex deploy`: a deploy pushes the whole tree, so one from a stale checkout deletes newer functions from the deployment.
 
 ### Run the daemon from source
 
@@ -405,19 +411,28 @@ To switch back to a released build, run `setup` and `restart --wait` using the i
 ### Type check
 
 ```bash
-bun run typecheck
+cast check          # cli, web and convex, through one shared tsc watcher each
+cast check web      # one program
 ```
+
+The programs are listed in `.codecast/check.toml`. Avoid a fresh `tsc --noEmit` per session: each one rebuilds the whole program.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for code conventions and architecture details.
 
 ## Documentation
 
+Start at the [docs index](docs/README.md), which lists every guide, spec and architecture note. The main guides:
+
 | Guide | Description |
 |-------|-------------|
-| [Getting Started](docs/GETTING-STARTED.md) | Dev environment setup, env files, testing |
+| [Getting Started](docs/GETTING-STARTED.md) | Dev environment setup, env files, testing, releases |
 | [Self-Hosting](docs/SELF-HOSTING.md) | Full setup guide: Convex, web, CLI, auth, mobile, desktop |
 | [Contributing](CONTRIBUTING.md) | Code conventions, architecture, dev setup |
 | [Releasing Mobile](docs/RELEASING-MOBILE.md) | iOS build, TestFlight, and App Store submission |
+| [Orchestration](docs/orchestration-guide.md) | Running a plan's tasks in parallel waves across agents |
+| [cast exec](docs/exec.md) | One-shot agent runs from scripts and other sessions |
+| [Multi-client](docs/multi-client.md) | Using codecast from several devices and clients at once |
+| [Prompting](docs/prompting.md) and [Principles](docs/principles.md) | How we write agent prompts and build the product |
 | [Changelog](CHANGELOG.md) | Version history and release notes |
 
 ## Configuration
@@ -438,11 +453,9 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 ## Privacy & Security
 
 - API keys and secrets are automatically redacted before sync
-- Project paths are hashed for privacy
-- Optional end-to-end encryption for conversations
-- Per-conversation privacy controls (private, summary-only, full)
+- Conversations are private by default; per-conversation team visibility is private, summary or full
 - Directory-based team sharing with explicit opt-in
-- All data stored on self-hosted infrastructure
+- Data lives in a Convex deployment: codecast.sh's, or your own when you self-host
 
 ## Keyboard Shortcuts
 
@@ -451,8 +464,8 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 | `Cmd+K` | Command palette |
 | `Cmd+/` | Search |
 | `Ctrl+J / K` | Next / previous session |
-| `Ctrl+I` | Jump to idle session |
-| `Ctrl+P` | Jump to pinned session |
+| `Ctrl+I` | Jump to the top needs-input session |
+| `Ctrl+P` (`Alt+P` off macOS) | Jump to pinned session |
 | `Ctrl+Shift+P` | Pin/unpin session |
 | `Ctrl+L` | Label session |
 | `Ctrl+Shift+L` | Switch label/project view |
@@ -463,9 +476,9 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 | `Ctrl+Tab` | Switch session (most recently used) |
 | `Ctrl+Shift+E` | Rename session |
 | `D` | Toggle diff panel (in conversation) |
-| `T` | Toggle file tree (in conversation) |
+| `T` | Toggle branch map (in conversation) |
 | `H` | Toggle thinking blocks (in conversation) |
-| `R` | Review / comment on a reply |
+| `R` | Quote selection into your reply, or review replies |
 | `Y / N` | Approve / deny permission prompt |
 | `Alt+J / K` | Next / previous user message |
 | `Alt+F` | Fork from message |
@@ -476,7 +489,7 @@ Self-hosters: replace the URLs with your own. See [Self-Hosting](docs/SELF-HOSTI
 | `Ctrl+[ / ]` | Toggle left / right sidebars |
 | `?` | Toggle shortcuts help |
 
-The full registry of 70+ context-aware shortcuts is available in-app via `?`.
+The full registry of 140+ context-aware shortcuts is available in-app via `?`.
 
 ## License
 

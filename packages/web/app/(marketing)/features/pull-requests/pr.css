@@ -1,0 +1,114 @@
+/*
+ * Motion for /features/pull-requests. Every element's resting style is its
+ * final state; animations only play the way there. `[data-static]` on the root
+ * (?static) and prefers-reduced-motion both skip them, so a page whose timers
+ * never run still reads complete.
+ *
+ * The hero tells one story on a clock (--d is each element's delay):
+ *   .prx-in   appears at --d and stays (the final state)
+ *   .prx-a    is there from the start and leaves at --d
+ *   .prx-b    arrives at --d and leaves at --d2
+ *   .prx-pkt  crosses the tether from the PR to the session (.prx-back: the other way)
+ */
+
+@keyframes prx-rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes prx-show {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes prx-hide {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+@keyframes prx-cross {
+  0% { left: 0%; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { left: 100%; opacity: 0; }
+}
+@keyframes prx-cross-back {
+  0% { left: 100%; opacity: 0; }
+  12% { opacity: 1; }
+  88% { opacity: 1; }
+  100% { left: 0%; opacity: 0; }
+}
+@keyframes prx-flash {
+  0% { box-shadow: 0 0 0 0 rgba(42, 161, 152, 0.55); }
+  100% { box-shadow: 0 0 0 10px rgba(42, 161, 152, 0); }
+}
+@keyframes prx-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@keyframes prx-dash {
+  to { stroke-dashoffset: -24; }
+}
+@keyframes prx-fill {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+.prx-rise { animation: prx-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) var(--d, 0s) both; }
+.prx-in { animation: prx-show 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) var(--d, 0s) both; }
+.prx-a { opacity: 0; animation: prx-hide 0.3s ease var(--d, 0s) both; }
+.prx-b {
+  opacity: 0;
+  animation:
+    prx-show 0.35s ease var(--d, 0s) both,
+    prx-hide 0.3s ease var(--d2, 0s) forwards;
+}
+.prx-flash { animation: prx-flash 0.9s ease-out var(--d, 0s) both; }
+.prx-fill { transform-origin: left; animation: prx-fill 0.5s ease var(--d, 0s) both; }
+
+/* Swap: stacked children share one cell, so a value can change in place. */
+.prx-swap { display: inline-grid; }
+.prx-swap > * { grid-area: 1 / 1; }
+
+.prx-pkt {
+  position: absolute;
+  top: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%);
+  animation: prx-cross 1s cubic-bezier(0.45, 0, 0.3, 1) var(--d, 0s) both;
+  pointer-events: none;
+}
+.prx-pkt.prx-back { animation-name: prx-cross-back; }
+
+.prx-live { animation: prx-pulse 1.8s ease-in-out infinite; }
+.prx-wire { animation: prx-dash 1.2s linear infinite; }
+
+/* The hero backdrop: a diff's gutter, very faint. */
+.prx-gutter {
+  background-image:
+    linear-gradient(90deg, rgba(133, 153, 0, 0.07) 0 44px, transparent 44px),
+    repeating-linear-gradient(180deg, transparent 0 27px, rgba(147, 161, 161, 0.13) 27px 28px);
+}
+
+/* Pressable chips (verdict picker, terminal tabs). */
+.prx-chip { transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease, transform 0.1s ease; }
+.prx-chip:active { transform: scale(0.97); }
+
+.prx-card { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+.prx-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px -16px rgba(0, 43, 54, 0.35); }
+
+[data-static] .prx-rise,
+[data-static] .prx-in,
+[data-static] .prx-a,
+[data-static] .prx-b,
+[data-static] .prx-flash,
+[data-static] .prx-fill,
+[data-static] .prx-pkt,
+[data-static] .prx-live,
+[data-static] .prx-wire {
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .prx-rise, .prx-in, .prx-a, .prx-b, .prx-flash, .prx-fill, .prx-pkt, .prx-live, .prx-wire {
+    animation: none !important;
+  }
+  .prx-card:hover { transform: none; }
+}

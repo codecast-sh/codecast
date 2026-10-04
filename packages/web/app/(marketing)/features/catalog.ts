@@ -17,10 +17,10 @@ export type FeatureDeepDive = {
 };
 
 export const FEATURE_DEEP_DIVES: FeatureDeepDive[] = [
-  { slug: "browser", name: "cast browser", command: "cast browser open <url>", color: "#268bd2",
+  { slug: "browser", name: "cast browser", command: "cast browser open <url>", color: "#dc322f",
     title: "cast browser: your agents drive your own Chrome",
     dek: "Agents verify UI, read behind sign-ins and reproduce bugs in a background tab of the Chrome you already use, with every screenshot and console error landing in the conversation." },
-  { slug: "computer", name: "cast computer", command: "cast computer get-app-state --app Slack", color: "#d33682",
+  { slug: "computer", name: "cast computer", command: "cast computer get-app-state --app com.apple.Preview", color: "#d33682",
     title: "cast computer: agents that use your Mac's native apps",
     dek: "Agents read any macOS window as an accessibility tree and act on it by name, in the background, without taking your screen, your mouse or your keyboard." },
   { slug: "publish", name: "cast publish", command: "cast publish report.html", color: "#2aa198",

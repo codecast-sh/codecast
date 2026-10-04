@@ -1,0 +1,26 @@
+{
+  "name": "changes-story agent-prompt-and-screens",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:agent-prompt-and-screens"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:agent-prompt-and-screens",
+    "title": "changes-story agent-prompt-and-screens"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/agent-prompt-and-screens.json"
+  },
+  "judge": "the body is a short structured article at the product level: it says what the refund agent now does differently (asks for and confirms the order before promising a refund), quotes the instruction as it read before and after, gives the measured eval result (12/20 to 19/20), covers the new refund window settings screen and places the settings screenshot (img2) with a caption while leaving out the terminal screenshot (img1); the headline and dek stay brief; no reason is given that the inputs do not state",
+  "notes": null,
+  "tags": [],
+  "id": "e2ac976a-4ccf-494a-b0c3-d5528055eafc",
+  "createdAt": "2026-10-04T19:01:54.955Z"
+}

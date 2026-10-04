@@ -217,6 +217,7 @@ import type * as lib_seatKill from "../lib/seatKill.js";
 import type * as lib_sessionAsk from "../lib/sessionAsk.js";
 import type * as lib_sessionAskCitations from "../lib/sessionAskCitations.js";
 import type * as lib_sessionIdentityFields from "../lib/sessionIdentityFields.js";
+import type * as lib_sessionMedia from "../lib/sessionMedia.js";
 import type * as lib_siteUrl from "../lib/siteUrl.js";
 import type * as lib_slackApi from "../lib/slackApi.js";
 import type * as lib_slackFiles from "../lib/slackFiles.js";
@@ -590,6 +591,7 @@ declare const fullApi: ApiFromModules<{
   "lib/sessionAsk": typeof lib_sessionAsk;
   "lib/sessionAskCitations": typeof lib_sessionAskCitations;
   "lib/sessionIdentityFields": typeof lib_sessionIdentityFields;
+  "lib/sessionMedia": typeof lib_sessionMedia;
   "lib/siteUrl": typeof lib_siteUrl;
   "lib/slackApi": typeof lib_slackApi;
   "lib/slackFiles": typeof lib_slackFiles;

@@ -8,6 +8,33 @@ import type { ShortcutAction } from "./registry";
 // dispatcher (GenericListView) honour the same selector.
 export const OWNS_KEYS_SELECTOR = '[data-review-region="active"], [data-owns-keys]';
 
+type KeyTarget = { closest?: (selector: string) => unknown } | null | undefined;
+
+/**
+ * Focus sits in a region that owns its plain keys (the undo timeline, the
+ * branch map, an active review), and that region is not `ownRoot` (the
+ * surface asking). The dispatcher skips such focus through KEY_OWNERSHIP;
+ * every window key listener outside it asks the same question here.
+ */
+export function keysOwnedElsewhere(
+  target: KeyTarget | EventTarget,
+  ownRoot?: { contains: (node: any) => boolean } | null,
+): boolean {
+  const t = target as KeyTarget;
+  return !!t?.closest?.(OWNS_KEYS_SELECTOR) && !ownRoot?.contains(t);
+}
+
+/**
+ * A page's window key listener leaves this key alone: focus is in a text
+ * field, or in a region that owns its keys (keysOwnedElsewhere).
+ */
+export function keyBelongsElsewhere(target: EventTarget | null | undefined): boolean {
+  const el = target as HTMLElement | null | undefined;
+  if (!el) return false;
+  if (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) return true;
+  return keysOwnedElsewhere(el);
+}
+
 export const KEY_OWNERSHIP: Pick<KeydownOptions<ShortcutAction>, "inputLikeSelector" | "keyboardOwners"> = {
   // Some regions own their own single-letter keys and must not leak them to the
   // global conversation shortcuts (h/t/d/r, and critically y/n which approve or

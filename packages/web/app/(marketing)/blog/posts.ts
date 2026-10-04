@@ -18,6 +18,15 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "one-repository-twenty-checkouts",
+    title: "One repository, twenty checkouts",
+    dek: "Running several agents at once is easy until two of them edit the same file. Codecast gives each one its own worktree, with the env files, dependencies and a port of its own, in one command.",
+    author: "the codecast team",
+    date: "2026-10-04",
+    dateLabel: "October 4, 2026",
+    readingMinutes: 5,
+  },
+  {
     slug: "what-your-team-sees",
     title: "What your team sees",
     dek: "Sharing your Claude Code sessions with a team is a great idea right up to the session where you pasted a customer's data. Codecast answers with two dials, a dry run, and one command that shows the whole picture.",

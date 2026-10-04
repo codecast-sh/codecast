@@ -15,6 +15,7 @@ import { RailChip, RailDetail, RailProgress } from "../ContextRail";
 import { taskVisual } from "../TaskStatusBadge";
 import { TaskInlineThread } from "../tasks/TaskInlineThread";
 import { SubtasksSection } from "../tasks/SubtasksSection";
+import { TaskStatusPicker } from "../tasks/TaskStatusPicker";
 import { useTaskRow } from "../../hooks/useThreadPreviews";
 import { openBeside } from "../../lib/stage";
 import { taskFacePath, useSwitchFace } from "../../lib/workUnit";
@@ -61,7 +62,7 @@ export function TaskContextPanel({ task: ref, sessionId }: {
         <RailDetail data-cc-task-detail="">
           <div className="px-4 py-2.5 space-y-2.5 max-h-[60vh] overflow-y-auto">
             <div className="flex items-center gap-3 text-[11px] min-w-0">
-              <span className={`flex items-center gap-1 flex-shrink-0 ${color}`}><StatusIcon className="w-3 h-3" />{label}</span>
+              <div className="-ml-2 flex-shrink-0"><TaskStatusPicker task={task as any} /></div>
               <span className="ml-auto flex items-center gap-1 flex-shrink-0">
                 {finishedAhead && (
                   <button
@@ -91,7 +92,7 @@ export function TaskContextPanel({ task: ref, sessionId }: {
                 </button>
               </span>
             </div>
-            <TaskInlineThread taskId={ref._id}>
+            <TaskInlineThread taskId={ref._id} ownerSessionId={sessionId}>
               {task.short_id && <SubtasksSection task={task as any} onNavigate={(id) => switchFace(`/tasks/${id}`)} />}
             </TaskInlineThread>
           </div>

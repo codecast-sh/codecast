@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Film, MonitorUp, Phone } from "lucide-react";
-import { CALL_FRAME_PREFER, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
+import { CALL_FRAME_PREFER, isRecordingFilming, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
 import { formatCallTime, parseCallRef } from "@codecast/shared/entities";
 import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import { useNearViewport } from "../../hooks/useNearViewport";
@@ -108,7 +108,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
     // still being written is "not yet", not "never"; one still filming is
     // "now", not "saving").
     const miss = locateCallMoment({ callStartedAt: recs.call_started_at, atMs, recordings: files });
-    const filming = files.some((f) => (f.status === "starting" || f.status === "recording") && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
+    const filming = files.some((f) => isRecordingFilming(f.status) && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
     return {
       ok: false as const,
       reason: miss.ok ? ("outside" as const) : miss.reason,

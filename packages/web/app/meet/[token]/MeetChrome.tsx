@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { AudioLines, Camera, Mic, Volume2 } from "lucide-react";
-import { guestNoticeLines, type GuestNotice } from "@codecast/shared/contracts";
+import { guestNoticeLines, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 import type { DeviceChoice } from "../../../lib/calls/guestRoom";
 import { LogoMark } from "../../../components/Logo";
 
@@ -35,18 +35,27 @@ export function MeetShell({ children, bar }: { children: ReactNode; bar?: ReactN
 export function CallNotice({
   transcribed,
   recording,
+  videoPublic = false,
   compact = false,
   since,
 }: {
   transcribed: boolean;
   recording: boolean;
+  /** The recording's video goes to the call's public link: part of what the
+   *  guest agrees to, so it is said wherever the recording is. */
+  videoPublic?: boolean;
   compact?: boolean;
   /** The notice the guest asked to join under, when they already have: a
    *  row that was not part of it is marked as new, so a recording that
    *  started while they waited is not just one more line in a list. */
   since?: GuestNotice | null;
 }) {
-  const lines = guestNoticeLines({ recording, transcribed }, compact ? "short" : "long");
+  const notice: GuestNotice = { recording, transcribed, video_public: recording && videoPublic };
+  const lines = guestNoticeLines(notice, compact ? "short" : "long");
+  const news = noticeNews(since, notice);
+  // A recording they were told of that went to the public link since is
+  // news of its own, and worded as that rather than as a fresh start.
+  const nowPublic = !!since?.recording && news.rec;
   if (lines.length === 0) {
     return (
       <p className="text-[11.5px] leading-relaxed text-sol-text-muted">
@@ -58,7 +67,7 @@ export function CallNotice({
     <div className="flex flex-col gap-1.5">
       {lines.map((l) => {
         const rec = l.key === "rec";
-        const fresh = !!since && (rec ? !since.recording : !since.transcribed);
+        const fresh = rec ? news.rec : news.words;
         return (
           <div
             key={l.key}
@@ -76,7 +85,7 @@ export function CallNotice({
             <span className="text-[11.5px] leading-relaxed text-sol-text-secondary">
               {fresh && (
                 <span className={`mr-1.5 font-medium ${rec ? "text-sol-red" : "text-sol-cyan"}`}>
-                  {rec ? "Started while you waited." : "Turned on while you waited."}
+                  {rec ? (nowPublic ? "Now shared by public link." : "Started while you waited.") : "Turned on while you waited."}
                 </span>
               )}
               {l.text}

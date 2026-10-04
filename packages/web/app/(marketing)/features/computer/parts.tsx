@@ -1,0 +1,162 @@
+"use client";
+
+import { useState, type CSSProperties, type ReactNode } from "react";
+import { useWatchEffect } from "@/hooks/useWatchEffect";
+import { copyToClipboard } from "@/lib/utils";
+import { SOL } from "../../blog/blogChrome";
+import { CURSOR_ORANGE, type TermLine } from "./data";
+
+/**
+ * Still mode: the reader asked for reduced motion, or the URL carries
+ * `?static` (how a background tab, where timers stall, gets the end state).
+ * Mocks render their finished frame and run no timers.
+ */
+export function useStillMode(): boolean {
+  const [still, setStill] = useState(false);
+  useWatchEffect(() => {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const read = () => setStill(reduce.matches || new URLSearchParams(window.location.search).has("static"));
+    read();
+    reduce.addEventListener("change", read);
+    return () => reduce.removeEventListener("change", read);
+  }, []);
+  return still;
+}
+
+/**
+ * A section whose heading reads like a line of the tree cast computer prints:
+ * a dim index and role, then the name. The page is the window, each section an
+ * element in it.
+ */
+export function Section({ id, index, role, title, lede, children, tone = "light", wide = false }: {
+  id: string;
+  index: number;
+  role: string;
+  title: ReactNode;
+  lede?: ReactNode;
+  children: ReactNode;
+  tone?: "light" | "paper" | "dark";
+  wide?: boolean;
+}) {
+  const bg = tone === "dark" ? SOL.base03 : tone === "paper" ? "#f6efda" : SOL.base3;
+  const ink = tone === "dark" ? SOL.base2 : SOL.base03;
+  const sub = tone === "dark" ? SOL.base1 : SOL.base00;
+  return (
+    <section id={id} className="cx-section relative scroll-mt-20" style={{ backgroundColor: bg }}>
+      <div className={`${wide ? "max-w-7xl" : "max-w-6xl"} mx-auto px-5 sm:px-8 py-20 sm:py-28`}>
+        <h2 className="font-mono font-bold tracking-[-0.03em] text-[28px] sm:text-[38px] leading-[1.1] max-w-4xl [text-wrap:balance]" style={{ color: ink }}>
+          <span className="cx-treeidx mr-3 font-normal tracking-normal" style={{ color: tone === "dark" ? SOL.base01 : SOL.base1 }}>
+            {index} {role}
+          </span>
+          {title}
+        </h2>
+        {lede && <p className="mt-5 max-w-2xl text-[17px] leading-[1.7]" style={{ color: sub }}>{lede}</p>}
+        <div className="mt-12">{children}</div>
+      </div>
+    </section>
+  );
+}
+
+const LINE_COLOR: Record<TermLine["t"], string> = {
+  cmd: SOL.base2,
+  head: SOL.base1,
+  out: SOL.base0,
+  dim: SOL.base01,
+  add: SOL.green,
+  rem: SOL.red,
+  ok: SOL.cyan,
+  bad: SOL.yellow,
+};
+
+/** One printed line: commands get the green prompt; tabs become tree guides. */
+export function TermLineView({ line, className = "", style }: { line: TermLine; className?: string; style?: CSSProperties }) {
+  const depth = /^\t*/.exec(line.s)?.[0].length ?? 0;
+  const text = line.s.slice(depth);
+  return (
+    <div className={`cx-tl ${className}`} style={{ color: LINE_COLOR[line.t], paddingLeft: `${depth * 1.6 + (line.t === "cmd" ? 1.2 : 0)}ch`, textIndent: line.t === "cmd" ? "-1.2ch" : undefined, ...style }}>
+      {line.t === "cmd" && <span style={{ color: SOL.green }}>$ </span>}
+      {text}
+    </div>
+  );
+}
+
+/** The site's terminal card, with lines instead of a <pre>, so long output wraps with a hanging indent. */
+export function Term({ label, children, className = "", bodyClassName = "" }: { label: string; children: ReactNode; className?: string; bodyClassName?: string }) {
+  return (
+    <div className={`rounded-xl border overflow-hidden shadow-[0_24px_60px_-28px_rgba(0,43,54,0.55)] ${className}`} style={{ backgroundColor: SOL.base03, borderColor: "#094959" }}>
+      <div className="flex items-center gap-2 px-4 py-2.5" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #094959" }}>
+        <div className="flex gap-1.5" aria-hidden>
+          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.red }} />
+          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.yellow }} />
+          <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.green }} />
+        </div>
+        <span className="text-[11px] font-mono ml-2 truncate" style={{ color: SOL.base01 }}>{label}</span>
+      </div>
+      <div className={`p-4 font-mono text-[12px] leading-[1.65] break-words ${bodyClassName}`}>{children}</div>
+    </div>
+  );
+}
+
+/** A command on one line with a copy button. */
+export function CopyCommand({ command, tone = "light" }: { command: string; tone?: "light" | "dark" }) {
+  const [copied, setCopied] = useState(false);
+  const dark = tone === "dark";
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        await copyToClipboard(command);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1600);
+      }}
+      className="group inline-flex max-w-full items-center gap-3 rounded-lg px-4 py-2.5 font-mono text-[13px] text-left transition-colors"
+      style={{ backgroundColor: dark ? SOL.base02 : SOL.base03, color: SOL.base2, border: `1px solid ${dark ? "#0b4a5a" : SOL.base03}` }}
+    >
+      <span className="truncate"><span style={{ color: SOL.green }}>$</span> {command}</span>
+      <span className="shrink-0 text-[11px] transition-colors" style={{ color: copied ? SOL.green : SOL.base01 }}>{copied ? "copied" : "copy"}</span>
+    </button>
+  );
+}
+
+/**
+ * The agent's own pointer, drawn the way AgentCursor.swift draws it: an orange
+ * arrow with a white edge and a dark "agent" tag beside the tip.
+ */
+export function AgentCursorGlyph({ size = 1, tag = true }: { size?: number; tag?: boolean }) {
+  return (
+    <span className="relative inline-block" style={{ width: `${2.2 * size}em`, height: `${2.6 * size}em` }} aria-hidden>
+      <svg viewBox="0 0 22 26" className="absolute inset-0 w-full h-full overflow-visible" style={{ filter: "drop-shadow(0 0.15em 0.25em rgba(0,0,0,0.35))" }}>
+        <path d="M2 1.5 L2 21 L7 16.4 L10.4 24 L13.6 22.6 L10.3 15.2 L17 15.2 Z" fill={CURSOR_ORANGE} stroke="#fff" strokeWidth="1.6" strokeLinejoin="round" />
+      </svg>
+      {tag && (
+        <span className="absolute font-sans font-semibold whitespace-nowrap rounded-[0.35em] px-[0.45em] py-[0.1em]" style={{ left: `${1.7 * size}em`, top: `${1.85 * size}em`, fontSize: `${0.95 * size}em`, color: "#fff", backgroundColor: "rgba(33,33,41,0.92)" }}>
+          agent
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** The plain black pointer the human is holding. */
+export function HumanCursorGlyph() {
+  return (
+    <svg viewBox="0 0 22 26" className="w-[1.9em] h-[2.25em] overflow-visible" aria-hidden style={{ filter: "drop-shadow(0 0.1em 0.15em rgba(0,0,0,0.3))" }}>
+      <path d="M2 1.5 L2 21 L7 16.4 L10.4 24 L13.6 22.6 L10.3 15.2 L17 15.2 Z" fill="#111" stroke="#fff" strokeWidth="1.5" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** macOS traffic lights; an inactive window's are grey, as on a real Mac. */
+export function Lights({ active }: { active: boolean }) {
+  const c = active ? ["#ff5f57", "#febc2e", "#28c840"] : ["#d6d1c4", "#d6d1c4", "#d6d1c4"];
+  return (
+    <span className="flex gap-[0.55em]" aria-hidden>
+      {c.map((col, i) => <span key={i} className="block w-[1.15em] h-[1.15em] rounded-full" style={{ backgroundColor: col, boxShadow: "inset 0 0 0 0.06em rgba(0,0,0,0.12)" }} />)}
+    </span>
+  );
+}
+
+/** Inline code in prose. */
+export function C({ children }: { children: ReactNode }) {
+  return <code className="font-mono text-[0.88em] px-1.5 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>{children}</code>;
+}

@@ -4,7 +4,7 @@ import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, p
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/conversationMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
@@ -332,6 +332,10 @@ export function classifyUserMessage(
   // note the wrapper carries for the agent stays out of the bubble.
   const proposalMsg = parseProposalMessage(t);
   if (proposalMsg) return { kind: 'direct_user', from: proposalMsg.from, body: proposalMsg.about ? `> ${proposalMsg.about}\n\n${proposalMsg.body}` : proposalMsg.body };
+  // A person's comment on the task this session owns, delivered while it
+  // works: their words under a quote naming the task, the same as above.
+  const taskComment = parseTaskCommentMessage(t);
+  if (taskComment) return { kind: 'direct_user', from: taskComment.from, body: taskComment.about ? `> ${taskComment.about}\n\n${taskComment.body}` : taskComment.body };
   if (isSessionEscalationMessage(tNoReminders)) {
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };

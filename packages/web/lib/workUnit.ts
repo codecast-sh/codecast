@@ -9,6 +9,11 @@ import { sessionPanePath, stageNavigateLeaf } from "./stage";
 import { leavesOf } from "../store/stageSplit";
 import { useInboxStore } from "../store/inboxStore";
 import { useTabContext } from "./tabParams";
+import { sessionLiveAt } from "./liveness";
+import { identityLine, identityRowOf } from "./sessionIdentity";
+import { cleanTitle } from "./conversationProcessor";
+import { useCoarseNow } from "../hooks/useCoarseNow";
+import { usePersonifyAll } from "../hooks/usePersonifyAll";
 
 export function taskFacePath(task: { _id: string; short_id?: string | null }): string {
   return `/tasks/${task.short_id || task._id}`;
@@ -35,4 +40,25 @@ export function useLeafShowing(path: string): string | null {
 /** Is the session's own page a pane of this tab's stage. */
 export function useSessionOnScreen(sessionId: string): boolean {
   return useLeafShowing(sessionPanePath(sessionId)) !== null;
+}
+
+// How recently a session must have moved to count as working when its daemon
+// is not heartbeating: the server's own rule (convex lib/taskOwner.ts
+// isSessionWorking), so the composer's promise and the relay agree.
+const RECENT_ACTIVITY_MS = 15 * 60 * 1000;
+
+/** The name of the task's owning session when it is working, so a comment
+ *  composer can say who will receive the comment (convex tasks.ts
+ *  deliverCommentToOwner relays a person's comment to it). Null otherwise. */
+export function useWorkingOwnerName(ownerSessionId: string | null | undefined): string | null {
+  const personifyAll = usePersonifyAll();
+  const now = useCoarseNow(30_000);
+  return useInboxStore((s) => {
+    const r: any = ownerSessionId ? s.sessions[ownerSessionId] : null;
+    if (!r || r.status === "completed" || r.inbox_killed_at) return null;
+    const working = sessionLiveAt(r, now) || now - (r.updated_at ?? 0) < RECENT_ACTIVITY_MS;
+    if (!working) return null;
+    const title = cleanTitle(String(r.title || "")) || "the session";
+    return identityLine(identityRowOf(r), title, personifyAll).name ?? title;
+  });
 }

@@ -2645,6 +2645,14 @@ shellIpc.handle("app:agentDock.open", (e, navPath) => {
   return true;
 });
 
+// "+": the floating quick compose, the same popup the newSession shortcut
+// opens, so a new agent from the dock is the new agent from anywhere else.
+shellIpc.handle("app:agentDock.compose", (e) => {
+  if (!senderIsAgentDock(e)) return false;
+  showCompose();
+  return true;
+});
+
 // Frame a region of the screen: the system's own picker (`screencapture -i`),
 // so there is no capture code of ours to hold Screen Recording rights badly.
 // Resolves a PNG data URL, or null when the person pressed Esc.
