@@ -18,7 +18,7 @@
     "visibility": "public",
     "snapshot": "fixtures/changes-edition/branch-flood.json"
   },
-  "judge": "on a day of 760 commits, the headline and standfirst pick out what mattered (the sync conflict fix, annual billing, the mobile releases) instead of listing everything, the standfirst stays within 60 words, the lead is one of the two importance 5 stories, and the branch work is not presented as shipped",
+  "judge": "on a day of 760 commits, the headline is one short plain sentence (under about 80 characters) naming what mattered most (the sync conflict fix or annual billing) instead of listing everything, the lead is one of the two importance 5 stories, and branch work is not presented as shipped",
   "notes": null,
   "tags": [],
   "id": "362dc3f3-9030-43a2-901b-1956c7ed5d8a",

@@ -295,7 +295,8 @@ describe('./evals', () => {
     expect(failed.code).toBe(1);
     const bad = JSON.parse(readFileSync(out, 'utf8')).surfaces[0];
     expect(bad.ok).toBe(false);
-    expect(bad.reasons).toContain(`proven freeze ${boom.slice(0, 8)} still fails`);
+    // boom crashes every rep, so the branch scored nothing: that is not "still fails".
+    expect(bad.reasons).toContain(`proven freeze ${boom.slice(0, 8)} was not scored on the branch`);
     expect(bad.reasons).toContain('1 rep(s) crashed');
   }, 480_000);
 
