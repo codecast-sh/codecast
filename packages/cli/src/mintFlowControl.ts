@@ -1,3 +1,4 @@
+import { oauthApprovalCode } from "@codecast/shared/contracts";
 import { pasteTextIntoPane, type TmuxExec } from "./tmuxPaste.js";
 
 export class MintFlowControl {
@@ -33,16 +34,9 @@ export class MintFlowControl {
   }
 }
 
-export function mintApprovalCode(value: string): string {
-  const code = value.trim();
-  if (!/^[A-Za-z0-9_-]+(?:#[A-Za-z0-9_-]+)?$/.test(code) || code.length > 4096) {
-    throw new Error("Paste the approval code shown by Claude, without any extra text.");
-  }
-  return code;
-}
-
-export async function submitMintApprovalCode(exec: TmuxExec, target: string, value: string): Promise<void> {
-  const code = mintApprovalCode(value);
+/** Type a pasted approval code into a sign-in pane waiting at "Paste code here if prompted >" (login and mint alike). */
+export async function submitApprovalCode(exec: TmuxExec, target: string, value: string): Promise<void> {
+  const code = oauthApprovalCode(value);
   await pasteTextIntoPane(async args => {
     if (args[0] === "send-keys") throw new Error("Could not send approval code. Try again.");
     return exec(args);

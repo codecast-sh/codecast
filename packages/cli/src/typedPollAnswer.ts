@@ -10,6 +10,16 @@
 //
 // A bare number picks that row. It must be tried before labels, because labels
 // contain digits too: "1" otherwise matched "Fable 5.1" in the /model menu.
+//
+// Text names an option by the option's own words: the whole label, or its
+// opening words. A word met in the middle of a label names nothing: "continue"
+// read as "Wait here, then continue automatically at Oct 5 at 3pm".
+//
+// A limit dialog is never answered by text. It is a park whose options are
+// billing actions and a day-long wait; delivery dismisses it and types the
+// message at the composer instead.
+
+import { isUsageLimitDialog } from "@codecast/shared/contracts";
 
 type TypedPrompt = { options: Array<{ label: string }>; isConfirmation?: boolean };
 
@@ -18,6 +28,7 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim().toLowerCase();
 export function typedPollAnswer(prompt: TypedPrompt, content: string): string | null {
   const text = norm(content);
   if (!text || prompt.options.length === 0) return null;
+  if (isUsageLimitDialog(prompt.options.map(o => o.label))) return null;
 
   if (prompt.isConfirmation) {
     const labelHead = (i: number) => prompt.options[i] ? norm(prompt.options[i].label).split(" (")[0] : null;
@@ -39,7 +50,7 @@ export function typedPollAnswer(prompt: TypedPrompt, content: string): string | 
     if (n >= 1 && n <= labels.length) idx = n - 1;
   } else {
     idx = labels.indexOf(text);
-    if (idx < 0) idx = labels.findIndex(l => text.includes(l) || l.includes(text));
+    if (idx < 0) idx = labels.findIndex(l => text.includes(l) || (l.startsWith(text) && /\W/.test(l.charAt(text.length))));
   }
   if (idx < 0) return null;
   return JSON.stringify({ __cc_poll: true, keys: [String(idx + 1)], display: prompt.options[idx].label });

@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { encryptProviderKey } from "../../web/lib/providerKeyCrypto";
 import { getProviderKeyPublicKey, decryptProviderKeyPayload } from "./providerKeyCrypto";
-import { submitMintApprovalCode } from "./mintFlowControl";
+import { submitApprovalCode } from "./mintFlowControl";
 import { extractSetupToken } from "./ccAccounts";
 import { requestMintToken, submitMintCode, reportMintFlow } from "../../convex/convex/accountSwitch";
 import { makeFakeDb } from "../../convex/convex/testDb";
@@ -39,7 +39,7 @@ test("browser code crosses the command transport and finishes a real terminal ap
     const command = JSON.parse(tables.daemon_commands.at(-1).args);
     expect(JSON.stringify(command)).not.toContain("fixture_code");
     const calls: string[][] = [];
-    await submitMintApprovalCode(async args => { calls.push(args); return exec(args); }, target, decryptProviderKeyPayload(dir, command.mint_code));
+    await submitApprovalCode(async args => { calls.push(args); return exec(args); }, target, decryptProviderKeyPayload(dir, command.mint_code));
     expect(calls.flat().join(" ")).not.toContain("fixture_code");
     let token: string | null = null;
     let pane = "";

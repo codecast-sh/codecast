@@ -45,19 +45,24 @@ import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import {
   CALL_FRAME_PREFER,
-  callMomentHref,
+  callFrameHref,
   coveredSpans,
+  describeSpans,
   lineMomentMs,
   locateCallMoment,
+  nearestRecordedMs,
+  parseCallViewParam,
   playableFiles,
   recordingSubject,
   recordingWindow,
   sampleCallMoments,
   segmentAt,
+  wholeSecond,
   type CallCoveredSpan,
   type CallMomentPrefer,
   type CallRecordingKind,
   type CallRecordingSpan,
+  type CallView,
 } from "@codecast/shared/contracts";
 import { callRefId, formatCallTime, parseCallRef, parseCallTime, parseEntityUrl } from "@codecast/shared/entities";
 import { spawn, whichBin, TOOL_PATH, installCommandFor, installHintFor } from "./proc.js";
@@ -78,12 +83,26 @@ export const ROOM_FRAME_GAP_MS = 5000;
  *  slide that animates in yields one frame, not three. */
 export const SCREEN_FRAME_GAP_MS = 2000;
 /** The scene score (ffmpeg `scene`, 0 to 1, between consecutive keyframes)
- *  that counts as the screen changing. A new slide or window scores 0.3 and
- *  up; typing and a blinking cursor stay under 0.02; a scroll lands between.
- *  Candidates above this are ranked by score, so the threshold only has to
- *  keep noise out, not pick the frames. It assumes a keyframe about every
- *  second, which the screen egress asks for. */
+ *  that makes a change a cut: a new slide, window or page. Cuts take a
+ *  range's frames first, biggest first. Every other change the scene pass
+ *  reports (SCENE_CHANGED) is real too, only gradual, and the frames left
+ *  go to those, spread through time. Measured 2026-10-04 on 1920x1080
+ *  editor recordings through sceneArgs' chain: a new slide of code scores
+ *  about 0.045, a line typed or a scroll step under 0.002. It assumes a
+ *  keyframe about every second, which the screen egress asks for. */
 export const SCENE_THRESHOLD = 0.04;
+/** What counts as the screen having changed, as ffmpeg's mpdecimate on the
+ *  480 px copy a scene pass reads: some 8x8 block differs from the last
+ *  picture KEPT by more than `hi`, or more than `frac` of the blocks by more
+ *  than `lo`. Against the last picture kept, not the previous frame, so a
+ *  screen changing a little at a time (code typed a line a second, a slow
+ *  scroll) adds up to a change, where a consecutive-frame score never rises
+ *  off the floor. `hi` at 64*16 keeps every line typed or scrolled and
+ *  drops a blinking text cursor (measured 2026-10-04: a cursor blinking on
+ *  an idle editor passed at 64*12, not at 64*16; one line typed a second
+ *  passed at every value up to 64*32). Encoder noise on a still screen
+ *  never passes. */
+export const SCENE_CHANGED = "mpdecimate=hi=64*16:lo=64*3:frac=0.05";
 /** How much of a screen file one scene pass may read. Skipping decoding
  *  (keyframes only) does not skip downloading: the demuxer still pulls every
  *  packet in the stretch, measured at the file's whole bitrate. Past this a
@@ -153,6 +172,10 @@ export type SnapRecordings = {
   recordings: RecordingRow[];
   server_now: number;
   live_frame_interval_ms?: number;
+  /** False when the server kept the live frames back: only someone in the
+   *  room (or a session the call feeds live) may see it as it is now. Absent
+   *  from an older server, which handed them to every reader. */
+  live_watch?: boolean;
 };
 
 // ── The reference ────────────────────────────────────────────────────────
@@ -165,6 +188,9 @@ export type SnapMoment =
 export type SnapTarget = {
   call: string;
   moment: SnapMoment;
+  /** The view a pasted call page link was on (`view=screen:<identity>`):
+   *  the screen the person was watching when they copied it. */
+  view?: CallView;
   /** `cl-42:12:34` reads as lines 12 to 34 (the way `cast call cl-42 12:34`
    *  prints them), but it is also how a person mistypes the time 12:34. Set
    *  when the pair is a valid time, so the answer can say which was meant. */
@@ -180,10 +206,18 @@ export const SNAP_FORMS =
  * scanned for it. A command can afford to read more, and an agent arrives
  * with two other spellings this CLI itself prints: bare seconds (a call page
  * link ends `?t=754`, JSON carries `at_ms`) and the unit form of a frame's
- * file name (`12m34s`, `1h02m03s`).
+ * file name (`12m34s`, `1h02m03s`). Any of them may end in a fraction of a
+ * second (`2:30.5`, `150.5s`, `2m30.5s`, to the millisecond): a range's
+ * frames and `shown_at_ms` are not always on a whole second, and an agent
+ * stepping between two frames a second apart asks for the middle.
  */
 export function parseSnapTime(text: string | null | undefined): number | null {
   const s = (text ?? "").trim();
+  const frac = /^(.*\d)\.(\d{1,3})(s?)$/i.exec(s);
+  if (frac) {
+    const whole = parseSnapTime(`${frac[1]}${frac[3]}`);
+    return whole === null ? null : whole + Math.round(Number(`0.${frac[2]}`) * 1000);
+  }
   const prose = parseCallTime(s);
   if (prose !== null) return prose;
   if (/^\d+$/.test(s)) return Number(s) * 1000;
@@ -235,6 +269,20 @@ function joinMoment(ref: string, extra: string): string | null {
  * the moment linked.
  */
 export function parseSnapTarget(raw: string | null | undefined, extra?: string | null): SnapTarget | null {
+  const target = readSnapTarget(raw, extra);
+  // A pasted link keeps the screen it was copied on, so the snap shows the
+  // picture the person pointed at.
+  const link = (raw ?? "").trim();
+  if (!target || !/^https?:\/\//i.test(link)) return target;
+  try {
+    const view = parseCallViewParam(new URL(link).searchParams);
+    return view ? { ...target, view } : target;
+  } catch {
+    return target;
+  }
+}
+
+function readSnapTarget(raw: string | null | undefined, extra?: string | null): SnapTarget | null {
   let s = (raw ?? "").trim();
   if (/^https?:\/\//i.test(s)) {
     const link = parseEntityUrl(s);
@@ -244,9 +292,8 @@ export function parseSnapTarget(raw: string | null | undefined, extra?: string |
     // (`?t=12:34`, `#t=754`) is read here, or refused.
     const t = linkTime(raw!.trim());
     if (t !== null && !/[@:]/.test(s)) {
-      const ms = parseSnapTime(t);
-      if (ms === null) return null;
-      s = `${s}@${Math.floor(ms / 1000)}s`;
+      if (parseSnapTime(t) === null) return null;
+      s = `${s}@${t}`;
     }
   }
   if (extra != null && extra.trim()) {
@@ -257,12 +304,13 @@ export function parseSnapTarget(raw: string | null | undefined, extra?: string |
   const now = /^(.+)@now$/i.exec(s);
   if (now) s = now[1];
   // A time in any spelling snap reads, handed on in the one the shared
-  // grammar does.
+  // grammar does (whole seconds), its exact ms kept beside it.
   const at = /^([^@]+)@(.+)$/.exec(s);
+  let exactMs: number | null = null;
   if (at) {
-    const ms = parseSnapTime(at[2]);
-    if (ms === null) return null;
-    s = `${at[1]}@${Math.floor(ms / 1000)}s`;
+    exactMs = parseSnapTime(at[2]);
+    if (exactMs === null) return null;
+    s = `${at[1]}@${Math.floor(exactMs / 1000)}s`;
   }
   // A colon pair is lines, as the transcript printer reads it.
   let alsoTime: number | undefined;
@@ -275,7 +323,7 @@ export function parseSnapTarget(raw: string | null | undefined, extra?: string |
   const fromRef = (call: string, ref: ReturnType<typeof parseCallRef>): SnapTarget | null => {
     if (!ref) return null;
     if (now) return ref.turns || ref.at_ms != null ? null : { call, moment: { kind: "now" } };
-    if (ref.at_ms != null) return { call, moment: { kind: "time", atMs: ref.at_ms } };
+    if (ref.at_ms != null) return { call, moment: { kind: "time", atMs: exactMs ?? ref.at_ms } };
     if (ref.turns) return withTime({ call, moment: { kind: "line", from: ref.turns.from_seq, to: ref.turns.to_seq } });
     return { call, moment: { kind: "now" } };
   };
@@ -300,14 +348,6 @@ export function isServerCallRef(call: string): boolean {
 
 // ── Time ─────────────────────────────────────────────────────────────────
 
-/** The whole second at or after `ms`, or before it when that would pass
- *  `limit`: a moment a citation (`cl-42@m:ss`, whole seconds) can name
- *  exactly. */
-function wholeSecond(ms: number, limit = Infinity): number {
-  const up = Math.ceil(ms / 1000) * 1000;
-  return up <= limit ? up : Math.floor(ms / 1000) * 1000;
-}
-
 /**
  * The moment a line's frame is taken: the first whole second a little after
  * its first word. A little after, because a line's t0 is where the recognizer
@@ -315,54 +355,65 @@ function wholeSecond(ms: number, limit = Infinity): number {
  * with it; a whole second, because the citation printed beside the frame is
  * `cl-42@12:34` and a whole second is what it can name, so the frame an
  * agent cites is the frame it saw. A line too short to reach that second
- * takes the whole second nearest its start that it still spans.
+ * takes the first whole second at or after its start, even when that is a
+ * moment past its last word: never a second before it began, which shows
+ * what was on screen during the line before it (a quarter of the lines of a
+ * real call span no whole second), and at most a second late, still the
+ * picture being pointed at.
  */
 export function lineFrameMs(seg: { t0: number; t1: number }): number {
   const start = lineMomentMs(seg);
   const end = Math.max(start, seg.t1);
   const nudged = Math.ceil((start + 250) / 1000) * 1000;
-  return nudged <= end ? nudged : wholeSecond(start, end);
+  return nudged <= end ? nudged : Math.ceil(start / 1000) * 1000;
 }
 
-/** A call time as a file name wants it: `0m07s`, `12m34s`, `1h02m03s`. */
+/** The part of a second past the whole one, as written after a clock's
+ *  seconds (`.5`, `.25`), or "" on a whole second. */
+function fraction(ms: number): string {
+  const f = Math.round(ms) % 1000;
+  return f ? `.${String(f).padStart(3, "0").replace(/0+$/, "")}` : "";
+}
+
+/** A call time to the millisecond when it is not on a whole second
+ *  (`2:30.5`), for a moment asked for between two seconds. A citation
+ *  (`cl-42@2:30`) still names whole seconds; this is what was asked. */
+export function preciseCallTime(ms: number): string {
+  return `${formatCallTime(ms)}${fraction(ms)}`;
+}
+
+/** The moment as a snap command takes it: the citation, with the part of a
+ *  second kept when there is one (`cl-42@2:30.5`). */
+export function snapMomentRef(handle: string, ms: number): string {
+  return `${callRefId(handle, null, ms)}${fraction(ms)}`;
+}
+
+/** A call time as a file name wants it: `0m07s`, `12m34s`, `1h02m03s`, and
+ *  `2m30.5s` between two seconds. */
 export function clockForName(ms: number): string {
   const parts = formatCallTime(ms).split(":");
   const sec = parts.pop()!;
   const m = parts.pop()!;
   const h = parts.pop();
-  return `${h ? `${h}h${m}` : m}m${sec}s`;
+  return `${h ? `${h}h${m}` : m}m${sec}${fraction(ms)}s`;
 }
 
 /** The file a frame is written to when no path is given: the call, the
  *  moment and what the picture is, `cl-42_12m34s_screen.png`, so a directory
- *  of frames reads in order and says what each one is. */
-export function frameFileName(handle: string, atMs: number, kind: CallRecordingKind, live = false): string {
-  return `${handle}_${clockForName(atMs)}_${kind}${live ? "_live" : ""}.png`;
+ *  of frames reads in order and says what each one is. Part of a frame
+ *  (--crop) names its part, `cl-42_12m34s_screen_top-left.png`: the whole
+ *  frame an agent already holds is never written over by a piece of it,
+ *  and two crops of one moment are two files. */
+export function frameFileName(handle: string, atMs: number, kind: CallRecordingKind, live = false, crop: CropRegion | null = null): string {
+  return `${handle}_${clockForName(atMs)}_${kind}${live ? "_live" : ""}${crop ? `_${cropTag(crop)}` : ""}.png`;
 }
 
 // ── What was recorded ────────────────────────────────────────────────────
 
-/** The recorded spans as one line: `0:00-4:10 the room, 1:02-3:30 Ana's screen`. */
-export function describeSpans(spans: readonly CallCoveredSpan[]): string {
-  return spans
-    .map((s) => `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`)
-    .join(", ");
-}
-
-/** The recorded moment nearest `atMs`, for a "try this instead" hint: the
- *  moment itself when covered, else the closest edge of a finished span (a
- *  whole second inside it, since an end is exclusive), so the hint is a
- *  reference that will itself succeed. */
-export function nearestRecordedMs(spans: readonly CallCoveredSpan[], atMs: number): number | null {
-  let best: number | null = null;
-  for (const s of spans) {
-    if (s.pending) continue;
-    const at = wholeSecond(Math.min(Math.max(atMs, s.fromMs), s.toMs - 1), s.toMs - 1);
-    if (at < s.fromMs) continue;
-    if (best === null || Math.abs(at - atMs) < Math.abs(best - atMs)) best = at;
-  }
-  return best;
-}
+// describeSpans and nearestRecordedMs live in the shared contract (the call
+// page says the same spans and offers the same nearest moment); re-exported
+// for this module's callers.
+export { describeSpans, nearestRecordedMs };
 
 /** The first whole second in [fromMs, toMs) that a finished span covers, or
  *  null: where a line that began before the press was first on camera. */
@@ -396,6 +447,68 @@ export function callVideoSpans(recs: Pick<SnapRecordings, "recordings" | "call_s
   return coveredSpans(rows(recs), recs.call_started_at, recs.server_now);
 }
 
+/** Whether a line was on camera: some span covers the moment its frame is
+ *  taken (lineFrameMs), the moment `cast call snap cl-42:<line>` shows. */
+export function lineFilmed(spans: readonly CallCoveredSpan[], seg: { t0: number; t1: number }): boolean {
+  const at = lineFrameMs(seg);
+  return spans.some((s) => s.fromMs <= at && at < s.toMs);
+}
+
+/** The first line a finished span filmed (lineFilmed), or null: the line a
+ *  hint names as the way to a frame, so the command it offers is one that
+ *  answers with a picture. A line said before Record was pressed is
+ *  skipped even when the first recorded second falls in its pause. */
+export function firstFilmedLine<T extends { seq: number; t0: number; t1: number }>(spans: readonly CallCoveredSpan[], segments: readonly T[]): T | null {
+  const done = spans.filter((s) => !s.pending);
+  let best: T | null = null;
+  for (const seg of segments) if (lineFilmed(done, seg) && (!best || seg.seq < best.seq)) best = seg;
+  return best;
+}
+
+/** The first and last transcript line filmed inside each span, by the same
+ *  rule (lineFilmed), or null for a span no line falls in (a silent
+ *  stretch). What lets `cast call <id>` say "video: lines 6-41" rather than
+ *  leave the reader to hold call times against the transcript. */
+export function spanLines(spans: readonly CallCoveredSpan[], segments: readonly SnapSegment[]): Array<{ from: number; to: number } | null> {
+  return spans.map((sp) => {
+    const inside = segments.filter((seg) => lineFilmed([sp], seg)).map((seg) => seg.seq);
+    return inside.length ? { from: Math.min(...inside), to: Math.max(...inside) } : null;
+  });
+}
+
+/** describeSpans with the lines each span holds leading it: `lines 6-41
+ *  (2:12-6:15) Ana's screen`. A span with no line in it reads as before. */
+export function describeSpansByLine(spans: readonly CallCoveredSpan[], segments: readonly SnapSegment[]): string {
+  const lines = spanLines(spans, segments);
+  return spans
+    .map((s, i) => {
+      const l = lines[i];
+      const clock = `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)}`;
+      const head = l ? `${l.from === l.to ? `line ${l.from}` : `lines ${l.from}-${l.to}`} (${clock})` : clock;
+      return `${head} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`;
+    })
+    .join(", ");
+}
+
+/**
+ * The snap command for what a `cast call` view shows, or null when no
+ * finished recording covers it: a moment (`atMs`), or lines (`seqs`, whose
+ * own words span [fromMs, toMs]). Every view that offers a snap asks here,
+ * so none offers one that would be refused.
+ */
+export function snapHint(
+  handle: string,
+  spans: readonly CallCoveredSpan[],
+  want: { atMs: number } | { from: number; to: number; fromMs: number; toMs: number },
+): string | null {
+  const done = spans.filter((s) => !s.pending);
+  if ("atMs" in want) {
+    return done.some((s) => s.fromMs <= want.atMs && want.atMs < s.toMs) ? `cast call snap ${snapMomentRef(handle, want.atMs)}` : null;
+  }
+  if (!done.some((s) => s.fromMs < Math.max(want.toMs, want.fromMs + 1) && want.fromMs < s.toMs)) return null;
+  return `cast call snap ${callRefId(handle, { from_seq: want.from, to_seq: want.to })}`;
+}
+
 // ── What was said ────────────────────────────────────────────────────────
 
 /** The line being spoken at `atMs`, or the last one said shortly before it,
@@ -413,7 +526,7 @@ export type SceneCandidate = { atMs: number; score: number };
 
 /**
  * The scene scores ffmpeg's `metadata=print` filter logs, one pair of lines
- * per frame that passed the select: `frame:3 pts:… pts_time:12.4` then
+ * per frame that passed SCENE_CHANGED: `frame:3 pts:… pts_time:12.4` then
  * `lavfi.scene_score=0.42`. Times are seconds in the file (sceneArgs keeps
  * the file's clock); returned in ms.
  */
@@ -433,11 +546,15 @@ export function parseSceneScores(log: string): SceneCandidate[] {
 }
 
 /**
- * The frames of a screen share worth showing: the moments the screen changed
- * most, never closer than `minGapMs`, at most `max`, in time order. A
- * candidate with an infinite score (the first picture of a stretch) always
- * goes in first, so a range whose screen never changed still yields the one
- * frame that shows it.
+ * The frames of a screen share worth showing, never closer than `minGapMs`,
+ * at most `max`, in time order. Every candidate is a moment the screen
+ * changed (sceneArgs reports nothing else). The cuts go in first, biggest
+ * first; a candidate with an infinite score (the first picture of a
+ * stretch) before any. The frames left go to the gradual changes, each the
+ * one farthest from every frame already taken, so code typed or scrolled
+ * through a range is followed across it instead of shown once at its start.
+ * A screen that never changed yields the one frame that shows it, and no
+ * budget is spent on copies of it.
  */
 export function pickSceneMoments(
   cands: readonly SceneCandidate[],
@@ -445,15 +562,26 @@ export function pickSceneMoments(
 ): number[] {
   const gap = opts.minGapMs ?? SCREEN_FRAME_GAP_MS;
   const threshold = opts.threshold ?? SCENE_THRESHOLD;
-  const ranked = cands
-    .filter((c) => c.score >= threshold)
-    .slice()
-    .sort((a, b) => b.score - a.score || a.atMs - b.atMs);
   const picked: number[] = [];
-  for (const c of ranked) {
+  const distance = (at: number) => picked.reduce((d, p) => Math.min(d, Math.abs(p - at)), Infinity);
+  const cuts = cands.filter((c) => c.score >= threshold).sort((a, b) => b.score - a.score || a.atMs - b.atMs);
+  for (const c of cuts) {
     if (picked.length >= opts.max) break;
-    if (picked.some((p) => Math.abs(p - c.atMs) < gap)) continue;
-    picked.push(c.atMs);
+    if (distance(c.atMs) >= gap) picked.push(c.atMs);
+  }
+  const gradual = cands.filter((c) => c.score < threshold).sort((a, b) => a.atMs - b.atMs);
+  while (picked.length < opts.max) {
+    let best: number | null = null;
+    let bestDistance = gap;
+    for (const c of gradual) {
+      const d = distance(c.atMs);
+      if (d >= bestDistance && (best === null || d > bestDistance)) {
+        best = c.atMs;
+        bestDistance = d;
+      }
+    }
+    if (best === null) break;
+    picked.push(best);
   }
   return picked.sort((a, b) => a - b);
 }
@@ -486,6 +614,9 @@ const secs = (ms: number) => (Math.max(0, ms) / 1000).toFixed(3);
  * `dropBlank` is for the one grab no probe chose the frame of: nothing was
  * on screen before the moment, so the first picture after it is taken, and
  * LiveKit's black filler (DROP_BLANK_FRAMES) is not a picture.
+ *
+ * showinfo runs on a live frame too, for its size (`s:WxH`, shownSize): the
+ * size a crop is measured against and the one printed beside the path.
  */
 export function frameArgs(source: string, offsetMs: number | null, out: string, fromMs: number | null = offsetMs, dropBlank = false): string[] {
   const jpeg = /\.jpe?g$/i.test(out);
@@ -497,15 +628,132 @@ export function frameArgs(source: string, offsetMs: number | null, out: string, 
     "showinfo",
   ].join(",");
   return [
-    "-nostdin", "-hide_banner", "-loglevel", offsetMs === null ? "error" : "info",
+    "-nostdin", "-hide_banner", "-loglevel", "info",
     ...netArgs(source),
     ...seek,
     "-i", source,
-    ...(offsetMs === null ? [] : ["-copyts", "-start_at_zero", "-vf", pick]),
+    ...(offsetMs === null ? ["-vf", "showinfo"] : ["-copyts", "-start_at_zero", "-vf", pick]),
     "-frames:v", "1", "-an", "-update", "1",
     ...(jpeg ? ["-q:v", "2"] : []),
     "-y", out,
   ];
+}
+
+// ── Part of a frame ──────────────────────────────────────────────────────
+
+/** Past this width a frame is shrunk before a model reads it (image input is
+ *  read at about 1.15 megapixels, so a 1920x1080 frame arrives at roughly
+ *  1430x805), and small text on a shared screen can blur out of reach. The
+ *  printed hint offers a crop then. */
+export const SMALL_TEXT_WIDTH = 1600;
+
+/** The named parts of a frame, as fractions of it: x, y, width, height. */
+const CROP_REGIONS: Record<string, [number, number, number, number]> = {
+  top: [0, 0, 1, 0.5],
+  bottom: [0, 0.5, 1, 0.5],
+  left: [0, 0, 0.5, 1],
+  right: [0.5, 0, 0.5, 1],
+  "top-left": [0, 0, 0.5, 0.5],
+  "top-right": [0.5, 0, 0.5, 0.5],
+  "bottom-left": [0, 0.5, 0.5, 0.5],
+  "bottom-right": [0.5, 0.5, 0.5, 0.5],
+  center: [0.25, 0.25, 0.5, 0.5],
+};
+const CROP_ALIASES: Record<string, string> = { tl: "top-left", tr: "top-right", bl: "bottom-left", br: "bottom-right", centre: "center", middle: "center" };
+
+/** One side of a box: pixels, or a percent of the frame's width or height. */
+type CropValue = { n: number; pct: boolean };
+/** A part of a frame as asked: a named region, or x,y,w,h. */
+export type CropRegion = { name: string } | { box: [CropValue, CropValue, CropValue, CropValue] };
+/** A part of a frame in its own pixels. */
+export type CropRect = { x: number; y: number; w: number; h: number };
+
+export const CROP_FORMS = `${Object.keys(CROP_REGIONS).join(", ")}, or x,y,w,h in pixels or percent (0,0,960,540 or 0,0,50%,50%)`;
+
+/** --crop as given, or a refusal that lists what it takes. */
+export function parseCrop(raw: string | null | undefined): CropRegion | null {
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  const name = CROP_ALIASES[s] ?? s;
+  if (CROP_REGIONS[name]) return { name };
+  const parts = s.split(/\s*,\s*/);
+  const values = parts.map((p) => /^(\d+(?:\.\d+)?)(%?)$/.exec(p)).map((m) => (m ? { n: Number(m[1]), pct: m[2] === "%" } : null));
+  if (values.length !== 4 || values.some((v) => !v || (v.pct && v.n > 100))) {
+    throw new SnapError("bad_option", `--crop takes ${CROP_FORMS} (got "${raw}")`);
+  }
+  const box = values as [CropValue, CropValue, CropValue, CropValue];
+  if (box[2].n === 0 || box[3].n === 0) throw new SnapError("bad_option", `--crop needs a width and height above zero (got "${raw}")`);
+  return { box };
+}
+
+/** A crop as a file name says it: the region's name (`top-left`), or the
+ *  box as asked, `x0y0w960h540`, with a percent written `p` (`w50p`). */
+export function cropTag(region: CropRegion): string {
+  if ("name" in region) return region.name;
+  const v = (c: CropValue) => `${c.n}${c.pct ? "p" : ""}`;
+  const [x, y, w, h] = region.box;
+  return `x${v(x)}y${v(y)}w${v(w)}h${v(h)}`;
+}
+
+/** --tiles as given (columns x rows, 1 to 4 each, more than one tile), or a
+ *  refusal. */
+export function parseTiles(raw: string | null | undefined): { cols: number; rows: number } | null {
+  if (raw == null) return null;
+  const m = /^\s*([1-4])\s*x\s*([1-4])\s*$/i.exec(String(raw));
+  if (!m || (m[1] === "1" && m[2] === "1")) throw new SnapError("bad_option", `--tiles takes columns x rows, 1 to 4 each: 2x2 for quadrants, 2x1 for halves side by side, 1x2 stacked (got "${raw}")`);
+  return { cols: Number(m[1]), rows: Number(m[2]) };
+}
+
+/** A region in the pixels of a `width` x `height` frame, cut back to the
+ *  frame where it runs past an edge. Null when nothing of it is inside. */
+export function cropRect(region: CropRegion, width: number, height: number): CropRect | null {
+  const [fx, fy, fw, fh] =
+    "name" in region
+      ? CROP_REGIONS[region.name]
+      : region.box.map((v, i) => (v.pct ? v.n / 100 : v.n / (i % 2 === 0 ? width : height)));
+  const x = Math.round(fx * width);
+  const y = Math.round(fy * height);
+  const w = Math.min(width - x, Math.round(fw * width));
+  const h = Math.min(height - y, Math.round(fh * height));
+  return x < width && y < height && w > 0 && h > 0 ? { x, y, w, h } : null;
+}
+
+/** The tiles of a frame, each with the suffix its file takes: quadrants as
+ *  tl/tr/bl/br, halves as l/r or t/b, finer grids by row and column. Every
+ *  tile keeps the frame's own pixels. */
+export function tileRects(cols: number, rows: number, width: number, height: number): Array<{ suffix: string; rect: CropRect }> {
+  const out: Array<{ suffix: string; rect: CropRect }> = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const x = Math.floor((width * c) / cols);
+      const y = Math.floor((height * r) / rows);
+      const rect = { x, y, w: Math.floor((width * (c + 1)) / cols) - x, h: Math.floor((height * (r + 1)) / rows) - y };
+      const suffix =
+        cols === 2 && rows === 2 ? ["tl", "tr", "bl", "br"][r * 2 + c] : rows === 1 && cols === 2 ? ["l", "r"][c] : cols === 1 && rows === 2 ? ["t", "b"][r] : `r${r + 1}c${c + 1}`;
+      out.push({ suffix, rect });
+    }
+  }
+  return out;
+}
+
+/** Cuts `rect` out of a frame already written (a local image, so no network
+ *  and no seek): the crop and every tile are made this way, after the frame
+ *  is read once and its size is known. */
+export function cutArgs(source: string, rect: CropRect, out: string): string[] {
+  return [
+    "-nostdin", "-hide_banner", "-loglevel", "error",
+    "-i", source,
+    "-vf", `crop=${rect.w}:${rect.h}:${rect.x}:${rect.y}`,
+    "-frames:v", "1", "-update", "1",
+    ...(/\.jpe?g$/i.test(out) ? ["-q:v", "2"] : []),
+    "-y", out,
+  ];
+}
+
+/** The size showinfo logged for the frame written, or null. */
+export function shownSize(log: string): { width: number; height: number } | null {
+  const m = /\bs:(\d+)x(\d+)\b/.exec(log);
+  return m ? { width: Number(m[1]), height: Number(m[2]) } : null;
 }
 
 /** How far back from a moment grab() looks for the picture on screen at it,
@@ -611,7 +859,10 @@ export function sceneArgs(source: string, startMs: number, durMs: number): strin
     "-an", "-copyts", "-start_at_zero",
     // Filler dropped before scoring, so a stall reads as no change rather
     // than two cuts (to black and back) that would each claim a frame.
-    "-vf", `scale=480:-2,${DROP_BLANK_FRAMES},select='gt(scene,0)',metadata=print:key=lavfi.scene_score`,
+    // select scores every keyframe against the one before it (how big a
+    // cut it is), then SCENE_CHANGED keeps only the ones that differ from
+    // the last picture kept, and only those are logged.
+    "-vf", `scale=480:-2,${DROP_BLANK_FRAMES},select='gte(scene,0)',${SCENE_CHANGED},metadata=print:key=lavfi.scene_score`,
     "-f", "null", "-",
   ];
 }
@@ -941,6 +1192,10 @@ export type SnapOptions = {
   max?: string | number;
   share?: boolean;
   json?: boolean;
+  /** A part of each frame (CROP_FORMS), cut at the frame's own pixels. */
+  crop?: string;
+  /** Each frame also as a grid of tiles (`2x2`), each at full resolution. */
+  tiles?: string;
 };
 
 export type PlannedFrame = {
@@ -952,6 +1207,9 @@ export type PlannedFrame = {
   /** A change in a range's last partial second: the frame is taken at the
    *  change itself, which no whole-second citation names. */
   offBeat?: boolean;
+  /** The line asked for, when one was (`cl-42:15`): the frame is reported
+   *  against it, never against whatever line is nearest its second. */
+  line?: SnapSegment;
 };
 
 /** How a range's frames were chosen: where a shared screen changed, evenly
@@ -967,6 +1225,9 @@ type PlanInput = {
   prefer: CallMomentPrefer;
   /** --screen: only a shared screen will do. */
   strictScreen: boolean;
+  /** The sharer a pasted link was watching (`view=screen:<identity>`): their
+   *  file is preferred wherever it covers the moment. */
+  identity?: string | null;
   max: number;
   ffmpeg: () => FfmpegRunner;
   /** A URL ffmpeg can read a file at. */
@@ -1070,7 +1331,7 @@ function outside(handle: string, spans: readonly CallCoveredSpan[], atMs: number
 function frameAt(input: PlanInput, all: SnapRecording[], atMs: number, notes: string[], asked: string, identity: string | null = null): PlannedFrame {
   const { recs, handle } = input;
   const strict = input.strictScreen;
-  const at = { callStartedAt: recs.call_started_at, atMs, prefer: input.prefer, identity, now: recs.server_now };
+  const at = { callStartedAt: recs.call_started_at, atMs, prefer: input.prefer, identity: identity ?? input.identity ?? null, now: recs.server_now };
   const playable = playableFiles(all).filter((r) => !strict || r.kind === "screen");
   const hit = locateCallMoment({ ...at, recordings: playable });
   if (hit.ok) return { atMs, recording: hit.recording, offsetMs: hit.offsetMs, live: false };
@@ -1094,11 +1355,14 @@ function frameAt(input: PlanInput, all: SnapRecording[], atMs: number, notes: st
         return { ...live, atMs: nowMs };
       }
     }
+    // The live picture is offered only to a caller who may see it.
+    const watch = recs.live_watch !== false;
     throw new SnapError(
       "not_ready",
       `${handle} is still recording, and LiveKit uploads a recording's video only when Record is stopped or the huddle ends. ` +
-        `${formatCallTime(atMs)} can be snapped once that happens. Until then only the live picture is there: cast call snap ${handle}`,
-      { try: [`cast call snap ${handle}`], recorded: spanDetails(spans) },
+        `${formatCallTime(atMs)} can be snapped once that happens. ` +
+        (watch ? `Until then only the live picture is there: cast call snap ${handle}` : "Until then only someone in the call sees it, live."),
+      { ...(watch ? { try: [`cast call snap ${handle}`] } : {}), recorded: spanDetails(spans) },
     );
   }
   // The same moment without --screen, as its own reference: a range frame's
@@ -1262,7 +1526,7 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
     if (recs.call_ended_at != null) {
       if (nothing) throw nothingRecorded(handle, recs, all, "");
       // Suggest moments that will work: the first recorded second, and the
-      // line being said then.
+      // first line that was filmed.
       const spans = coveredSpans(all, recs.call_started_at, recs.server_now);
       const first = spans.find((s) => !s.pending);
       if (!first) {
@@ -1273,9 +1537,9 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
         });
       }
       const at = nearestRecordedMs(spans, first.fromMs) ?? first.fromMs;
-      const line = lineAt(segments, at);
+      const line = firstFilmedLine(spans, segments);
       const atCmd = `cast call snap ${callRefId(handle, null, at)}`;
-      const lineCmd = line ? `cast call snap ${callRefId(handle, { from_seq: line.seg.seq, to_seq: line.seg.seq })}` : null;
+      const lineCmd = line ? `cast call snap ${callRefId(handle, { from_seq: line.seq, to_seq: line.seq })}` : null;
       throw new SnapError(
         "not_live",
         `${handle} has ended, so there is no "now" to show. Name a moment: ${atCmd}` + (lineCmd ? `, or a transcript line: ${lineCmd}` : "") + `. Recorded: ${describeSpans(spans)}.`,
@@ -1283,6 +1547,14 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
       );
     }
     const live = liveFrame(input, all);
+    // Filming, but the live picture is not this caller's to see: watching
+    // from outside would be unseen by the room (callRecordings.mayWatchLive).
+    if (!live && recs.live_watch === false && all.some((r) => r.status === "starting" || r.status === "recording")) {
+      throw new SnapError(
+        "not_live",
+        `${handle} is being recorded right now, and only someone in the call sees it as it is now. Join the call to see it live; the video can be snapped here once the recording stops.`,
+      );
+    }
     if (!live) {
       // Only the room's file writes a live picture (LiveKit will not write
       // one beside a screen's file), so a screen being recorded is never
@@ -1341,7 +1613,7 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
     const line = lines[0];
     const asked = `Line ${line.seq}`;
     try {
-      return { frames: [frameAt(input, all, lineFrameMs(line), notes, asked)], notes, range: null };
+      return { frames: [{ ...frameAt(input, all, lineFrameMs(line), notes, asked), line }], notes, range: null };
     } catch (err) {
       // A line that began a moment before the press (egress takes a few
       // seconds to start), or ran into a gap or a share starting, was still
@@ -1356,8 +1628,11 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
         // reader to work out that 0:14 is its line 3. The nearest recorded
         // moment is offered still, with the warning that other words are
         // being said there, and the line's own words as the way back.
+        // `at` is where the frame would be, which finds the nearest moment;
+        // the words name when the line began, the clock the transcript
+        // prints beside it.
         const at = lineFrameMs(line);
-        const said = formatCallTime(at);
+        const said = formatCallTime(line.t0);
         const words = `cast call ${handle} ${line.seq}`;
         const tail = { words: ` That is not line ${line.seq}: other words are being said there. Its own words: ${words}`, try: [words] };
         if (err.code === "no_screen") {
@@ -1390,12 +1665,14 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
             (into >= 1000 ? `, ${Math.round(into / 1000)}s into it.` : `, its first recorded second.`),
         );
       }
-      return { frames: [frame], notes, range: null };
+      return { frames: [{ ...frame, line }], notes, range: null };
     }
   }
 
   // A range. Each moment still goes through frameAt (locateCallMoment), so a
-  // range frame and a single snap of the same moment are one picture.
+  // range frame and a single snap of the same moment are one picture. It
+  // starts where its first line's frame is, which is never before that
+  // line's first word (lineFrameMs).
   const fromMs = lineFrameMs(lines[0]);
   const toMs = Math.max(fromMs, ...lines.map((l) => Math.max(l.t0, l.t1)));
   const { moments: raw, range } = await rangeMoments(input, all, fromMs, toMs, notes);
@@ -1452,7 +1729,7 @@ export type SnapDeps = {
   resolveCallId: (ref: string) => Promise<string>;
   baseUrl: string;
   /** Uploads a written frame (`cast image`'s pipeline). */
-  upload?: (file: string, alt: string) => Promise<{ url: string; markdown: string }>;
+  upload?: (file: string, alt: string) => Promise<{ url: string; markdown: string; storageId?: string }>;
   /** Tests hand in a fake; otherwise the machine's ffmpeg is found. */
   ffmpeg?: FfmpegRunner;
   /** Tests hand in a directory; otherwise the scratch directory. */
@@ -1463,8 +1740,19 @@ export type SnapDeps = {
   progress?: (line: string) => void;
 };
 
+/** One tile of a frame (--tiles): its file, its place, its size. */
+export type SnapTile = { path: string; part: string; x: number; y: number; width: number; height: number };
+
 export type SnapFrameResult = {
   path: string;
+  /** The picture's size in pixels (after --crop), null when ffmpeg did not
+   *  say. What a crop or tile is measured in. */
+  width: number | null;
+  height: number | null;
+  /** --crop: the part of the frame written, in the frame's own pixels. */
+  crop: CropRect | null;
+  /** --tiles: the frame again as a grid, each tile at full resolution. */
+  tiles?: SnapTile[];
   ref: string;
   at: string;
   at_ms: number;
@@ -1485,7 +1773,9 @@ export type SnapFrameResult = {
    *  stalled, not uploaded. The top-level `notes` say the same for a reader. */
   notes: string[];
   call_url: string;
-  line: { ref: string; speaker: string; text: string; at: string; during: boolean } | null;
+  /** The line being said, or the last one said: `at`/`at_ms` is when it
+   *  began, `ended_ms` when its words ended. */
+  line: { ref: string; speaker: string; text: string; at: string; at_ms: number; ended_ms: number; during: boolean } | null;
   /** Whether `ref` in a message renders as this very picture. False when the
    *  snap asked for a view the citation does not take (--composite over a
    *  share, say), or the picture is a live one. */
@@ -1501,6 +1791,10 @@ export type SnapFrameResult = {
 export type SnapResult = {
   call: { id: string; short_id: string | null; title: string | null };
   target: string;
+  /** --crop and --tiles as asked, null when not: a reader of the frames
+   *  knows whether it was offered part of the picture. */
+  crop: string | null;
+  tiles: string | null;
   range: SnapRangeKind | null;
   frames: SnapFrameResult[];
   notes: string[];
@@ -1527,6 +1821,8 @@ type Grabbed = {
   /** How far back was searched for a picture, when that is not the file's
    *  start; null when the search reached the start (or was not needed). */
   searchedMs: number | null;
+  /** The picture's size, from showinfo; null when it did not say. */
+  size: { width: number; height: number } | null;
 };
 
 /**
@@ -1596,7 +1892,61 @@ async function grab(ffmpeg: FfmpegRunner, source: string, frame: PlannedFrame, o
     stalled,
     forward,
     searchedMs: forward ? searchedMs : null,
+    size: shownSize(res.stderr),
   };
+}
+
+/**
+ * --crop and --tiles on a frame already written to `out`: the crop replaces
+ * the frame (`size` becomes the crop's), and tiles are written beside it as
+ * `<name>_tl.png` and so on, cut from what `out` now holds. Each is a local
+ * ffmpeg run on one image. A frame whose size ffmpeg did not report cannot
+ * be measured, and is refused rather than cut by guess.
+ */
+async function cutFrame(
+  ffmpeg: FfmpegRunner,
+  out: string,
+  size: { width: number; height: number } | null,
+  crop: CropRegion | null,
+  tiles: { cols: number; rows: number } | null,
+  scratch: boolean,
+): Promise<{ size: { width: number; height: number } | null; crop: CropRect | null; tiles: SnapTile[] | null }> {
+  if (!crop && !tiles) return { size, crop: null, tiles: null };
+  if (!size) throw new SnapError("ffmpeg_failed", `ffmpeg did not report the size of ${path.basename(out)}, so it cannot be cut. The whole frame is at ${out}.`);
+  const ext = path.extname(out);
+  const stem = out.slice(0, -ext.length);
+  const run = async (rect: CropRect, dest: string) => {
+    const res = await ffmpeg(cutArgs(out, rect, dest), { timeoutMs: GRAB_TIMEOUT_MS });
+    if (res.code !== 0 || !fs.existsSync(dest)) throw new SnapError("ffmpeg_failed", `Could not cut ${path.basename(dest)}: ${ffmpegFailure(res.stderr, res.code === null)}. The whole frame is at ${out}.`);
+    if (scratch) secureTempFile(dest);
+  };
+  let rect: CropRect | null = null;
+  let now = size;
+  if (crop) {
+    rect = cropRect(crop, size.width, size.height);
+    if (!rect) throw new SnapError("bad_option", `That --crop is outside the ${size.width}x${size.height} frame. The whole frame is at ${out}.`);
+    const tmp = `${stem}.cut${ext}`;
+    await run(rect, tmp);
+    fs.renameSync(tmp, out);
+    now = { width: rect.w, height: rect.h };
+  }
+  const made: SnapTile[] = [];
+  if (tiles) {
+    for (const t of tileRects(tiles.cols, tiles.rows, now.width, now.height)) {
+      const dest = `${stem}_${t.suffix}${ext}`;
+      await run(t.rect, dest);
+      made.push({ path: dest, part: t.suffix, x: t.rect.x, y: t.rect.y, width: t.rect.w, height: t.rect.h });
+    }
+  }
+  return { size: now, crop: rect, tiles: tiles ? made : null };
+}
+
+/** The answer for a call the server did not return: none by that name, or
+ *  none this account may read (the two are one answer, so a call's
+ *  existence is not told to someone who cannot read it). `cast call` says
+ *  the same. */
+export function unreadableCall(call: string): SnapError {
+  return new SnapError("not_found", `No call ${call} that you can read. \`cast calls\` lists the calls you can.`, { try: ["cast calls"] });
 }
 
 /** A server or lookup failure as a refusal, so it prints the same way and
@@ -1636,7 +1986,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     // `cl-42:1:02:03` is a time typed with a colon: say so.
     const colon = /^(cl-\d+)[:\s]+(\S+)$/i.exec(shown);
     const asTime = colon ? parseSnapTime(colon[2]) : null;
-    const timeRef = colon && asTime !== null ? callRefId(colon[1].toLowerCase(), null, asTime) : null;
+    const timeRef = colon && asTime !== null ? snapMomentRef(colon[1].toLowerCase(), asTime) : null;
     throw new SnapError(
       "bad_target",
       `"${shown}" is not a moment of a call. Use ${SNAP_FORMS}.` + (timeRef ? ` For a time, write ${timeRef}: a colon names transcript lines, @ names a time.` : ""),
@@ -1657,13 +2007,15 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
   }
   if (options.screen && options.composite) throw new SnapError("bad_option", "Pick one of --screen and --composite.");
   const max = parseMax(options.max);
+  const crop = parseCrop(options.crop);
+  const tiles = parseTiles(options.tiles);
 
   // The moment as asked, on another call name: what a refusal offers.
   const refOn = (call: string) =>
     target.moment.kind === "line"
       ? callRefId(call, { from_seq: target.moment.from, to_seq: target.moment.to })
       : target.moment.kind === "time"
-        ? callRefId(call, null, target.moment.atMs)
+        ? snapMomentRef(call, target.moment.atMs)
         : call;
   const callArg = await asked(isServerCallRef(target.call) ? Promise.resolve(target.call) : deps.resolveCallId(target.call)).catch((err: SnapError) => {
     // A short id typed without its prefix (`107@4:05`): the lookup offers
@@ -1676,9 +2028,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
   });
   const fetchRecs = () => deps.post("/cli/calls/recordings", { call: callArg }) as Promise<SnapRecordings | null>;
   const [call, recs] = (await asked(Promise.all([deps.post("/cli/calls/get", { transcript_id: callArg }), fetchRecs()]))) as [SnapCall | null, SnapRecordings | null];
-  if (!call || !recs) {
-    throw new SnapError("not_found", `No call ${target.call} that you can read. \`cast calls\` lists the calls you can.`, { try: ["cast calls"] });
-  }
+  if (!call || !recs) throw unreadableCall(target.call);
   if (!Array.isArray(recs.recordings)) {
     throw new SnapError("not_configured", "This server does not serve call recordings yet.");
   }
@@ -1702,6 +2052,9 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
       moment: target.moment,
       prefer: options.composite ? "composite" : CALL_FRAME_PREFER,
       strictScreen: !!options.screen,
+      // A pasted link copied on someone's screen asks for that screen, the
+      // way --screen asks for any; --composite asked for the room instead.
+      identity: options.composite ? null : (target.view?.identity ?? null),
       max,
       ffmpeg,
       source,
@@ -1717,7 +2070,11 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     const all = rows(recs);
     const playable = playableFiles(all);
     const spans = coveredSpans(all, recs.call_started_at, recs.server_now);
-    const names = plan.frames.map((f) => ({ name: frameFileName(handle, f.atMs, f.recording.kind, f.live), atMs: f.atMs }));
+    // A moment asked for between two seconds is named and printed to the
+    // millisecond; a range's off-beat change keeps its whole second, which
+    // its citation and the frames around it are written in.
+    const shownAt = (f: PlannedFrame) => (f.offBeat ? Math.floor(f.atMs / 1000) * 1000 : f.atMs);
+    const names = plan.frames.map((f) => ({ name: frameFileName(handle, shownAt(f), f.recording.kind, f.live, crop), atMs: shownAt(f) }));
     const paths = outputPaths(names, options.out, deps.scratch);
     // A frame as written, with what is only settled once every frame is in:
     // `held` is its "no new picture since" sentence, dropped when the frame
@@ -1728,7 +2085,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     for (const [i, f] of plan.frames.entries()) {
       if (plan.frames.length > 1) deps.progress?.(`Frame ${i + 1}/${plan.frames.length} at ${formatCallTime(f.atMs)}`);
       const out = paths[i];
-      const { shownMs, stalled, forward, searchedMs } = await grab(run, await source(f.recording, f.live), f, out);
+      const { shownMs, stalled, forward, searchedMs, size } = await grab(run, await source(f.recording, f.live), f, out);
       // A screen that did not change between two moments of a range gives
       // both the same frame of the same file. One picture is one file: the
       // copy is removed, and the first says how many moments it stands for.
@@ -1740,6 +2097,9 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
         continue;
       }
       if (!options.out) secureTempFile(out);
+      // Part of the picture, cut from the frame just written, now that its
+      // size is known: one read of the recording whatever is cut from it.
+      const cut = await cutFrame(run, out, size, crop, tiles, !options.out);
       // When the picture was written, on the call's own clock. A screen that
       // did not change shows the picture last written to it; say from when, so
       // a reader never takes a held frame for a fresh one. A frame from after
@@ -1748,7 +2108,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
       const shownAtMs = shownMs !== null && f.offsetMs !== null ? f.atMs - (f.offsetMs - shownMs) : null;
       const subject = recordingSubject(f.recording);
       const Subject = `${subject[0].toUpperCase()}${subject.slice(1)}`;
-      const at = formatCallTime(f.atMs);
+      const at = preciseCallTime(shownAt(f));
       const ref = callRefId(handle, null, f.atMs);
       const own: string[] = [];
       let held: string | null = null;
@@ -1764,7 +2124,11 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
       } else if (late) {
         own.push(`${Subject} had no picture yet at ${at}; this frame is its first, from ${formatCallTime(shownAtMs!)}.`);
       }
-      if (f.offBeat) own.push(`The screen changed just after ${at}, in the last moment of these lines; this frame is the picture after the change, and ${ref} names the one before it.`);
+      if (f.offBeat) own.push(`The screen changed just after ${formatCallTime(f.atMs)}, in the last moment of these lines; this frame is the picture after the change, and ${ref} names the one before it.`);
+      // A moment asked for between two seconds: the citation names the whole
+      // second before it, which may be another picture.
+      const between = !f.offBeat && !f.live && f.atMs % 1000 !== 0;
+      if (between) own.push(`${at} is between two seconds, and a citation names whole seconds: ${ref} renders the picture at ${formatCallTime(f.atMs)}, which may not be this one.`);
       // --composite is a preference, the way a bare snap prefers the screen:
       // where no finished room file reaches, the share is the only picture
       // there is. Either the room was not being filmed then (a share's file
@@ -1773,7 +2137,9 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
       // taken for the room asked for.
       const roomSaving = spans.some((x) => x.kind === "composite" && x.pending && x.fromMs <= f.atMs && f.atMs < x.toMs);
       const swapped: "saving" | "unfilmed" | null = options.composite && f.recording.kind !== "composite" ? (roomSaving ? "saving" : "unfilmed") : null;
-      const said = lineAt(call.segments, f.atMs);
+      // A line asked for is the line the frame is of, said through it or a
+      // moment before it; any other frame takes the line being said then.
+      const said = f.line ? { seg: f.line, during: f.line.t0 <= f.atMs && f.atMs < f.line.t1 } : lineAt(call.segments, f.atMs);
       // What `ref` renders as in a message: the view CALL_FRAME_PREFER picks
       // at that moment, on screen at that moment. It is this picture unless
       // the snap asked for another view, the picture came from after it, or
@@ -1782,6 +2148,10 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
       const citedRec = cited?.ok ? cited.recording : null;
       const result: SnapFrameResult = {
         path: out,
+        width: cut.size?.width ?? null,
+        height: cut.size?.height ?? null,
+        crop: cut.crop,
+        ...(cut.tiles ? { tiles: cut.tiles } : {}),
         ref,
         at,
         at_ms: f.atMs,
@@ -1794,15 +2164,19 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
         shown_at_ms: shownAtMs,
         requested_kind: requested,
         notes: own,
-        citation_matches: !!citedRec && citedRec.id === f.recording.id && !late && !stalled && !f.offBeat,
+        citation_matches: !!citedRec && citedRec.id === f.recording.id && !late && !stalled && !f.offBeat && !between,
         citation_shows: citedRec ? recordingSubject(citedRec) : null,
-        call_url: `${deps.baseUrl}${callMomentHref(recs.transcript_id, f.atMs)}`,
+        // On the picture this frame is: a screen's file opens that sharer's
+        // screen, the room's opens the room.
+        call_url: `${deps.baseUrl}${callFrameHref(recs.transcript_id, f.atMs, f.recording)}`,
         line: said
           ? {
               ref: callRefId(handle, { from_seq: said.seg.seq, to_seq: said.seg.seq }),
               speaker: said.seg.speaker_name,
               text: said.seg.text,
               at: formatCallTime(said.seg.t0),
+              at_ms: said.seg.t0,
+              ended_ms: Math.max(said.seg.t0, said.seg.t1),
               during: said.during,
             }
           : null,
@@ -1811,7 +2185,18 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
         // The image is public to whoever holds its link, and its alt text
         // travels with it: the moment and the view, never the call's title.
         try {
-          result.image = await deps.upload(out, `${ref}, ${subject}${f.live ? ", live" : ""}`);
+          const image = await deps.upload(out, `${ref}, ${subject}${f.live ? ", live" : ""}`);
+          result.image = { url: image.url, markdown: image.markdown };
+          // Tied to the file it came from, so deleting the recording
+          // deletes the public image too. A server that cannot tie it
+          // leaves an image that outlives the recording: say so.
+          const tied = image.storageId
+            ? await deps.post("/cli/calls/frame-share", { recording_id: f.recording.id, storage_id: image.storageId }).then(
+                () => true,
+                () => false,
+              )
+            : false;
+          if (!tied) own.push(`${path.basename(out)} is shared, but deleting the recording will not remove it: ${image.url}`);
         } catch (err) {
           result.image_error = err instanceof Error ? err.message : String(err);
           own.push(`Could not upload ${path.basename(out)}: ${result.image_error}. The frame is still at ${out}.`);
@@ -1849,6 +2234,8 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     return {
       call: { id: recs.transcript_id, short_id: recs.short_id ?? call.short_id ?? null, title: call.title ?? null },
       target: target.moment.kind === "line" ? askedRef : frames[0]?.ref ?? handle,
+      crop: options.crop != null ? String(options.crop) : null,
+      tiles: options.tiles != null ? String(options.tiles) : null,
       range: plan.range,
       frames,
       notes,
@@ -1900,11 +2287,10 @@ export function formatSnapResult(res: SnapResult): string {
     // Every row leads with its own reference: the thing to cite it by.
     const title = !many && res.call.title ? fmt.muted(` · ${res.call.title}`) : "";
     out.push(`${fmt.success(icons.check)} ${fmt.highlight(f.ref)} ${fmt.muted("·")} ${f.shows}${live}${title}`);
-    out.push(`  ${fmt.path(f.path)}`);
-    if (f.line) {
-      const when = f.line.during ? "" : fmt.muted(` (said at ${f.line.at}, just before)`);
-      out.push(`  ${fmt.accent(f.line.speaker)} ${fmt.muted(f.line.ref)} ${quote(f.line.text)}${when}`);
-    }
+    const dims = f.width && f.height ? fmt.muted(` ${f.width}x${f.height}${f.crop ? ` (cropped at ${f.crop.x},${f.crop.y})` : ""}`) : "";
+    out.push(`  ${fmt.path(f.path)}${dims}`);
+    for (const t of f.tiles ?? []) out.push(`    ${fmt.path(t.path)} ${fmt.muted(`${t.part} ${t.width}x${t.height}`)}`);
+    if (f.line) out.push(`  ${fmt.accent(f.line.speaker)} ${fmt.muted(f.line.ref)} ${quote(f.line.text)}${lastSaid(f)}`);
     if (f.image) out.push(`  ${f.image.markdown}`);
   }
   for (const note of res.notes) out.push(fmt.warning(`Note: ${note}`));
@@ -1913,7 +2299,26 @@ export function formatSnapResult(res: SnapResult): string {
     out.push("");
     out.push(fmt.muted(citationWords(res.frames)));
   }
+  // A wide screen is shrunk before a model reads it; small text may need
+  // part of the frame. Offered once, only where it can help.
+  const wide = res.frames.find((f) => f.kind === "screen" && !f.crop && !f.tiles && (f.width ?? 0) > SMALL_TEXT_WIDTH);
+  if (wide && !res.crop && !res.tiles) {
+    out.push(fmt.muted(`Text small? cast call snap ${res.target} --crop top-left (any of ${Object.keys(CROP_REGIONS).join(", ")}, or x,y,w,h), or --tiles 2x2 for all four quarters at full size`));
+  }
   return out.join("\n");
+}
+
+/** When a frame's line was said, against the frame: nothing while it is
+ *  being said, else when it was said and how long before the picture its
+ *  words ended ("just before" within a few seconds), so words and picture
+ *  are never read as one moment when they are not. The gap is measured from
+ *  the end of the words, the last moment they and the picture shared. */
+function lastSaid(f: SnapFrameResult): string {
+  if (!f.line || f.line.during) return "";
+  const ended = formatCallTime(f.line.ended_ms);
+  const said = ended === f.line.at ? `said at ${f.line.at}` : `said ${f.line.at}-${ended}`;
+  const gap = f.at_ms - f.line.ended_ms;
+  return fmt.muted(gap < 3000 ? ` (${said}, just before)` : ` (${said}, ${Math.round(gap / 1000)}s before this frame)`);
 }
 
 /**

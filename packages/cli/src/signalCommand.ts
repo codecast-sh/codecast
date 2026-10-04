@@ -109,6 +109,18 @@ export function lineDefaults(): { team?: string; project?: string } {
   }
 }
 
+/** The project a write files under: the one named, else the repo profile's
+ *  `[line] project`, but only when the write lands in the profile's own
+ *  workspace. A --team naming another workspace (personal, say) gets no
+ *  project from the profile, since that project lives in the profile's team. */
+export function lineProjectFor(team: string | undefined, project: string | undefined): string | undefined {
+  if (project?.trim()) return project;
+  const defaults = lineDefaults();
+  const norm = (v: string | undefined) => v?.trim().toLowerCase() || undefined;
+  if (norm(team) && norm(team) !== norm(defaults.team)) return undefined;
+  return defaults.project;
+}
+
 /** The named workspace, else the repo profile's `[line] team`, else the
  *  server's own rule (the session's team, the directory). A write naming a
  *  team that is not one of yours stops here. `project` rides along for the
@@ -149,7 +161,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
       } catch (err) {
         fail(err instanceof Error ? err.message : String(err));
       }
-      const project = options.project || lineDefaults().project;
+      const project = lineProjectFor(options.team, options.project);
       const result = await apiPost(deps, "/cli/signal/add", { ...body, ...(await scopeFor(deps, options.team, true, project)) });
       if (options.json) {
         console.log(JSON.stringify(result, null, 2));

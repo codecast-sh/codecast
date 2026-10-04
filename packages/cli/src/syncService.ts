@@ -688,6 +688,17 @@ export class SyncService {
     return res?.revived ?? 0;
   }
 
+  // The login flow's sign-in URL (the code-paste one), so a person on another
+  // device can open it and paste the code back (submitLoginCode).
+  async reportLoginFlowUrl(url: string): Promise<void> {
+    await this.throttle();
+    await this.mutate("accountSwitch:reportLoginFlowUrl" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+      url,
+    });
+  }
+
   // Report a setup-token mint's state (switch_account {mint}): pending with
   // the sign-in URL once the browser page is known, then confirmed/rejected.
   // The token itself never leaves the machine.

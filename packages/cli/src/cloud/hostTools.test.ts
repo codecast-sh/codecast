@@ -76,6 +76,8 @@ describe("helper extraction from hook commands, shebangs and skill text", () => 
     expect(commandWords('echo "cat | rm" # cat')).toEqual(["echo"]);
     expect(commandWords("timeout 30 node script.js || exit 1")).toEqual(["node"]);
     expect(commandWords("~/.local/bin/mytool --flag")).toEqual(["mytool"]);
+    expect(commandWords("&>/dev/null peon --quiet")).toEqual(["peon"]);
+    expect(commandWords("complete -F _peon peon; compgen -W x")).toEqual([]);
   });
   test("shebangInterpreter", () => {
     expect(shebangInterpreter("#!/usr/bin/env bash\necho")).toBe("bash");
@@ -103,6 +105,11 @@ describe("helper extraction from hook commands, shebangs and skill text", () => 
     expect(required.bun).toBe("1.4.0");
     expect(required.clients).toEqual({ codex: "0.153.4" });
     expect(required.node.minMajor).toBe(22);
+  });
+  test("a settings hook that runs a script by its ~/.claude path is a mirrored file, not a PATH tool", () => {
+    write(home, ".claude/settings.json", JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: `${home}/.claude/hooks/legacy-sync.sh` }, { command: "~/.claude/hooks/y.sh --flag" }] }] } }));
+    write(home, ".claude/hooks/legacy-sync.sh", "#!/bin/bash\nfrob 2>&1 &>/dev/null\n");
+    expect(scanMirroredHelpers({ laptopHome: home }).tools.map((t) => t.tool)).toEqual(["frob"]);
   });
   test("a Mach-O file under hooks is reported unsupported with its path and is not a helper requirement", () => {
     write(home, ".claude/hooks/notify", Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0x07, 0x00, 0x00, 0x01]), 0o755);

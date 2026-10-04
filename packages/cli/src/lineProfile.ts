@@ -13,6 +13,18 @@ import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signal
 export const LINE_PROFILE_REL_PATH = ".codecast/line.toml";
 /** codecast's prompting standard, for a repo that names none (LP2). The repo is public. */
 export const CODECAST_PROMPTING = "https://github.com/codecast-sh/codecast/blob/main/docs/prompting.md";
+/**
+ * The shared principles every project's line reads in addition to the
+ * profile's own files (LP5). A link, because the review node runs in the
+ * project's worktree, where codecast's docs/ is not on disk.
+ */
+export const CODECAST_PRINCIPLES = "https://github.com/codecast-sh/codecast/blob/main/docs/principles.md";
+
+/** The principles a line reads, as prose for a node prompt: the shared set, then the profile's own files. */
+export function principlesProse(paths: string[]): string {
+  const shared = `${CODECAST_PRINCIPLES} (the shared set)`;
+  return paths.length ? `${shared} and ${paths.join(", ")} (this project's own)` : shared;
+}
 
 export interface LineFinder {
   id: string;
@@ -261,13 +273,13 @@ export function lineCommandEnv(context: Record<string, string>): Record<string, 
 /**
  * The profile as flat `line.<key>` variables (the runner's `$line.commands.check`).
  * Commands absent from the profile are empty, so an edge condition can test
- * them; principles read as prose in a node prompt (paths joined, or "none").
+ * them; principles read as prose in a node prompt (the shared set, then the profile's files).
  */
 export function lineProfileVars(profile: LineProfile): Record<string, string> {
   const vars: Record<string, string> = {
     "line.team": profile.team ?? "",
     "line.project": profile.project ?? "",
-    "line.principles": profile.principles.length ? profile.principles.join(", ") : "none",
+    "line.principles": principlesProse(profile.principles),
     "line.prompting": profile.prompting,
     "line.size_budget": String(profile.size_budget),
     "line.watch_days": String(profile.watch_days),
@@ -283,7 +295,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   const rows: Array<[string, string]> = [
     ["team", p.team ?? "(none: the session's team, else the directory's mapping)"],
     ["project", p.project ?? "(none)"],
-    ["principles", p.principles.length ? p.principles.join(", ") : "(none)"],
+    ["principles", `${p.principles.length ? p.principles.join(", ") : "(none)"}, read with the shared set`],
     ["prompting", p.prompting],
     ["size_budget", String(p.size_budget)],
     ["watch_days", String(p.watch_days)],
@@ -301,4 +313,44 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
   if (r.notes.length) out.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.warnings.length) out.push("", ...r.warnings.map((w) => `warning: ${w}`));
   return `${out.join("\n")}\n`;
+}
+
+/**
+ * A starter `.codecast/line.toml` for a repo that has none (LP7): the defaults
+ * written out so a person sees what is in force, with the project (and team,
+ * when known) filled in. Optional commands and a finder stay as comments with
+ * their contract, so the file parses to exactly the defaults plus those two.
+ */
+export function starterLineProfile(opts: { project: string; team?: string | null }): string {
+  const d = LINE_PROFILE_DEFAULTS;
+  const q = (value: string) => JSON.stringify(value);
+  return [
+    `# The line for this repository (docs/architecture/line-profile.md).`,
+    `# Every value is the default a repository without this file gets, except`,
+    `# the project. Change what differs; \`cast line profile\` shows what is in force.`,
+    `[line]`,
+    opts.team ? `team = ${q(opts.team)}` : `# team = "..."                 # workspace for writes from this repo`,
+    `project = ${q(opts.project)}`,
+    `# principles = ["docs/line/principles.md"]   # this project's own, read after the shared set`,
+    `prompting = ${q(d.prompting)}`,
+    `size_budget = ${d.size_budget}                  # changed lines before a run returns to plan`,
+    `watch_days = ${d.watch_days}`,
+    ``,
+    `[line.commands]                    # run from the run's worktree; $vars expand`,
+    `check = ${q(d.commands.check)}           # exits 0 when the branch is sound`,
+    `# prove = "..."                    # exits 0 only when the miss is shown; writes $run_dir/proven.json`,
+    `# eval = "..."                     # writes $run_dir/reps.json`,
+    `# ship = "..."                     # lands the change and prints what is true now`,
+    ``,
+    `[line.caps]`,
+    `cards = ${d.caps.cards}                          # open cards per person, across their lines`,
+    ``,
+    `# [[line.finders]]                 # what this project listens to; one table per finder`,
+    `# id = "lessons"`,
+    `# source = "lesson"`,
+    `# kind = "cohesion"`,
+    `# fingerprint = "lesson:<rule>"`,
+    `# runs = "the weekly lessons routine"`,
+    ``,
+  ].join("\n");
 }

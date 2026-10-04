@@ -3,7 +3,7 @@ import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
-import { pairDeliveryAcks } from "@codecast/shared/contracts";
+import { codePasteSignInUrl, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
@@ -198,7 +198,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { readCodexModelBeforeOffset } from "./codexTranscriptModel.js";
-import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, detectCliFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGeminiProjectHash, extractGrokCwd, extractParentUuid, extractPiCwd, extractMuseCwd, extractSlug, extractSummaryTitle, extractTeamInfo, isCompletedNativeCodexReviewChild, isCodexProgramLaunch, isCompletedStandaloneCodexReview, isCursorRoleHeaderLine, isGrokInternalSession, parseCodexSessionFile, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -379,7 +379,7 @@ import {
 } from "./execution/index.js";
 import { providerKeySourcePrefix } from "./providerKeyLaunch.js";
 import { providerKeyStorePath, readProviderKeyStore } from "./providerKeyStore.js";
-import { MintFlowControl, submitMintApprovalCode } from "./mintFlowControl.js";
+import { MintFlowControl, submitApprovalCode } from "./mintFlowControl.js";
 import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload, type ProviderKeyVerifier } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
@@ -3835,10 +3835,18 @@ export function agentLoginPaneCommand(command: string, env: Record<string, strin
   return `PATH=${shellEscapeForSh(agentSpawnPath())} ${vars}${command}; sleep 4`;
 }
 
-export function buildLoginFlowCommand(email: string | undefined, storeDir?: string): string {
+export function buildLoginFlowCommand(email: string | undefined, storeDir?: string, browserHook?: string): string {
   // A profile sign-in lands in that profile's own credential store, so the
-  // machine's keychain login is untouched by it.
-  return agentLoginPaneCommand(`claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`, storeDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: storeDir } : {});
+  // machine's keychain login is untouched by it. The $BROWSER hook records the
+  // sign-in URL instead of opening it (see writeBrowserHook).
+  return agentLoginPaneCommand(`claude auth login --claudeai${email ? ` --email ${shellEscapeForSh(email)}` : ""}`, {
+    ...(storeDir ? { CLAUDE_SECURESTORAGE_CONFIG_DIR: storeDir } : {}),
+    ...(browserHook ? { BROWSER: browserHook } : {}),
+  });
+}
+
+function loginUrlPath(): string {
+  return path.join(CONFIG_DIR, "login-flow.url");
 }
 
 /** A utility tmux pane running one command (a sign-in the CLI wants a TTY for); a pane of that name is replaced. */
@@ -3866,7 +3874,9 @@ async function runCloudAgentLogin({ argv, headlessArgv, missing }: CloudAgentLog
   log(`[LOGIN-FLOW] started \`${argv.join(" ")}\` (tmux ${pane})`);
 }
 
-async function startLoginFlow(email: string | undefined, force = false, profile?: string): Promise<string> {
+// `openBrowser` false: the person is on another device (the phone), finishing
+// through the code-paste URL the watcher reports, so nothing opens here.
+async function startLoginFlow(email: string | undefined, force = false, profile?: string, openBrowser = true): Promise<string> {
   // A second click while a flow is live joins it — the browser tab is already
   // open, and a second `claude auth login` would fight it for the callback
   // port. A FORCED relaunch (the banner's "reopen" action) supersedes it
@@ -3888,9 +3898,11 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   try {
     const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
     const baselineHash = credentialHashOf(await readCredential());
-    await startUtilityPane(LOGIN_FLOW_TMUX, buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined));
+    fs.rmSync(loginUrlPath(), { force: true });
+    const hook = writeBrowserHook("login-browser-hook.sh", loginUrlPath());
+    await startUtilityPane(LOGIN_FLOW_TMUX, buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined, hook));
     log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""}${profile ? ` into profile "${profile}"` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
-    void watchLoginFlow(baselineHash, email, gen, profile)
+    void watchLoginFlow(baselineHash, email, gen, profile, openBrowser)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
     return "login_flow_started";
@@ -3908,9 +3920,11 @@ async function watchLoginFlow(
   requestedEmail: string | undefined,
   gen: number,
   profile?: string,
+  openBrowser = true,
 ): Promise<void> {
   const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
   let lastPane = "";
+  let urlHandled = false;
   const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
 
   // The keychain and the pane are read off the loop: this polls every 2s for
@@ -3925,6 +3939,7 @@ async function watchLoginFlow(
   const finishRejected = async (reason: string): Promise<void> => {
     log(`[LOGIN-FLOW] rejected: ${reason}`);
     await killTmuxSessionAndTree(LOGIN_FLOW_TMUX).catch(() => {});
+    fs.rmSync(loginUrlPath(), { force: true });
     await syncServiceRef?.completeLoginFlow("rejected", requestedEmail, reason, profile).catch((err) => {
       log(`[LOGIN-FLOW] outcome report failed: ${err instanceof Error ? err.message : String(err)}`);
       return 0;
@@ -3973,6 +3988,12 @@ async function watchLoginFlow(
     // flow's; touching or reporting anything now would sabotage it.
     if (gen !== loginFlowGeneration) return;
     if (await confirmedNow()) return finishConfirmed();
+    if (!urlHandled) urlHandled = handleSignInUrl(loginUrlPath(), lastPane, openBrowser, (url) => {
+      log("[LOGIN-FLOW] sign-in URL ready");
+      syncServiceRef?.reportLoginFlowUrl(url).catch((err) => {
+        log(`[LOGIN-FLOW] url report failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
     // Keep the freshest pane content so a dying CLI still leaves us its last
     // words; a capture failure means the pane (= the CLI) is gone.
     try {
@@ -3987,7 +4008,7 @@ async function watchLoginFlow(
       const health = credentialHealth(await readCredential(), Date.now());
       if (health.pushable) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
-      return finishRejected(tail ?? "the sign-in window closed before completing");
+      return finishRejected(tail && !/paste code here/i.test(tail) ? tail : "the sign-in window closed before completing");
     }
   }
   if (gen !== loginFlowGeneration) return;
@@ -4020,11 +4041,25 @@ function mintUrlPath(): string {
   return path.join(CONFIG_DIR, "mint-flow.url");
 }
 
-/** The $BROWSER hook: CC hands it the OAuth URL as its one argument. */
-function writeMintBrowserHook(): string {
-  const hook = path.join(CONFIG_DIR, "mint-browser-hook.sh");
-  fs.writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$1" > ${shellEscapeForSh(mintUrlPath())}\n`, { mode: 0o700 });
+/** A $BROWSER hook: CC hands it the OAuth URL as its one argument, and the hook records it at `urlPath` instead of opening it. */
+function writeBrowserHook(name: string, urlPath: string): string {
+  const hook = path.join(CONFIG_DIR, name);
+  fs.writeFileSync(hook, `#!/bin/sh\nprintf '%s\\n' "$1" > ${shellEscapeForSh(urlPath)}\n`, { mode: 0o700 });
   return hook;
+}
+
+/**
+ * Once the hook has recorded the sign-in URL: open it here when the person is
+ * at this machine, and hand `report` the code-paste URL, which finishes on any
+ * device (oauthCodePaste.ts). True once handled.
+ */
+function handleSignInUrl(urlPath: string, pane: string, openHere: boolean, report: (url: string) => void): boolean {
+  let url = "";
+  try { url = fs.readFileSync(urlPath, "utf-8").trim(); } catch {}
+  if (!url.startsWith("http")) return false;
+  if (openHere) openInDefaultBrowser(url);
+  report(codePasteSignInUrl(url, pane) ?? url);
+  return true;
 }
 
 // Same PATH rule as the login flow (the pane inherits launchd's PATH); the
@@ -4048,7 +4083,7 @@ async function startMintFlow(profile: string, force = false, startedAt?: number)
       const meta = listProfiles().find((p) => p.name === profile);
       if (!meta) throw new Error(`no saved profile "${profile}" on this machine`);
       fs.rmSync(mintUrlPath(), { force: true });
-      const hook = writeMintBrowserHook();
+      const hook = writeBrowserHook("mint-browser-hook.sh", mintUrlPath());
       await startUtilityPane(MINT_FLOW_TMUX, buildMintFlowCommand(hook));
       log(`[MINT-FLOW] started setup-token mint for "${profile}"${meta.email ? ` (${meta.email})` : ""}${force ? " [forced relaunch]" : ""}`);
       void watchMintFlow(profile, meta.email, gen, startedAt)
@@ -4163,18 +4198,12 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, MINT_FLOW_POLL_MS));
     if (!mintFlow.current(gen)) return;
-    if (!urlHandled) {
-      let url = "";
-      try { url = fs.readFileSync(mintUrlPath(), "utf-8").trim(); } catch {}
-      if (url.startsWith("http")) {
-        urlHandled = true;
-        openInDefaultBrowser(url);
-        log(`[MINT-FLOW] sign-in page opened in the default browser for "${profile}"`);
-        syncServiceRef?.reportMintFlow("pending", profile, email, undefined, url, startedAt).catch((err) => {
-          log(`[MINT-FLOW] url report failed: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }
-    }
+    if (!urlHandled) urlHandled = handleSignInUrl(mintUrlPath(), lastPane, true, (url) => {
+      log(`[MINT-FLOW] sign-in page opened in the default browser for "${profile}"`);
+      syncServiceRef?.reportMintFlow("pending", profile, email, undefined, url, startedAt).catch((err) => {
+        log(`[MINT-FLOW] url report failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    });
     let pane: string;
     try {
       // -J joins wrapped lines: the token is ~100 chars and the pane is narrower.
@@ -6792,7 +6821,7 @@ async function executeRemoteCommand(
         if (parsed.mint_code) {
           result = await mintFlow.run(async () => {
             if (!mintFlow.active || mintFlow.startedAt !== parsed.mint_started_at) throw new Error("This mint has ended. Start again.");
-            await submitMintApprovalCode(args => tmuxExec(args, { timeout: 3000 }), MINT_FLOW_TMUX,
+            await submitApprovalCode(args => tmuxExec(args, { timeout: 3000 }), MINT_FLOW_TMUX,
               decryptProviderKeyPayload(CONFIG_DIR, parsed.mint_code));
             return "mint_code_submitted";
           });
@@ -7004,8 +7033,22 @@ async function executeRemoteCommand(
         // machine's keychain login stays as it is.
         const profile: string | undefined =
           typeof parsed.profile === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.profile) ? parsed.profile : undefined;
+        // The approval code from the code-paste page, typed into the waiting CLI.
+        if (typeof parsed.login_code === "string") {
+          if (!loginFlowActive) {
+            error = "This sign-in has ended. Start again.";
+            break;
+          }
+          try {
+            await submitApprovalCode(args => tmuxExec(args, { timeout: 3000 }), LOGIN_FLOW_TMUX, parsed.login_code);
+            result = "login_code_submitted";
+          } catch (err) {
+            error = err instanceof Error ? err.message : String(err);
+          }
+          break;
+        }
         try {
-          result = await startLoginFlow(email, parsed.force === true, profile);
+          result = await startLoginFlow(email, parsed.force === true, profile, parsed.open_browser !== false);
         } catch (err) {
           error = `Sign-in launch failed: ${err instanceof Error ? err.message : String(err)}`;
           // The web is watching cc_login_flow, not command errors — report the
@@ -11759,6 +11802,8 @@ async function processCodexSessionPass(
             parentMessageUuid: undefined,
             parentConversationId,
             isSubagent: !!nativeParentSessionId || !!parentConversationId || undefined,
+            // The mark the claude path stamps for `claude -p`.
+            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row
@@ -13997,6 +14042,19 @@ export function usageLimitMenuBanner(
   return `You've hit your usage limit · ${resets ?? "parked at the usage limit dialog"}`;
 }
 
+// Is the live pane one of the two limit dialogs above? Both are parks, not
+// questions: a message for the session dismisses the dialog (Escape, its own
+// "cancel") and is then typed at the composer. Answering it with an option
+// instead is the hazard: since Claude Code 2.1.289 option 2 reads "Wait here,
+// then continue automatically at <reset>", and a recovery "continue" read as
+// that option armed a day-long wait on 24 sessions and never delivered the
+// continue itself (2026-10-04).
+export function limitDialogOnPane(pane: string): boolean {
+  if (spendLimitDialogBanner(pane)) return true;
+  const prompt = parseInteractivePrompt(pane, true);
+  return !!prompt && usageLimitMenuBanner(pane, prompt.options.map((o) => o.label)) !== null;
+}
+
 // Claude Code renders each assistant message with a leading bullet ("⏺" on current
 // builds, "●" on older ones) and indents its continuation lines two spaces. A turn
 // that ends in AskUserQuestion is buffered out of the JSONL until answered, so while
@@ -14908,6 +14966,7 @@ export type TmuxLiveState =
   | "trust"         // workspace "Quick safety check" prompt — Enter accepts ("Yes, I trust" is preselected)
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
+  | "limit_dialog"  // usage/spend limit dialog — Escape (its options are billing actions and a day-long wait)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "signed_out"    // the agent's own login splash — hold, press nothing; the machine must log in
   | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
@@ -15000,6 +15059,9 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // the next one opens the real Rewind dialog (2026-09-30: three Escapes left a
   // limit-parked session holding every message for two hours). It is no modal.
   const dialogText = region.split("\n").filter((line) => !isClaudeAutoContinueLine(line)).join("\n");
+  // The limit dialog ends in "Esc to cancel" too; named first so its Escape is
+  // a deliberate dismissal, not a Rewind cancel that happens to fit.
+  if (limitDialogOnPane(region)) return "limit_dialog";
   if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -16722,7 +16784,7 @@ function assertPromptAbsent(pane: string): void {
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
   // delivery on a dialog the launch path already knows how to dismiss.
-  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane)) return;
+  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane)) return;
   if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
@@ -16758,6 +16820,13 @@ export async function captureTmuxLiveState(target: string, glyphlessPattern: Reg
   return { stdout, region, state };
 }
 
+// Is Claude Code's automatic continue at a usage limit armed on this pane?
+// Its footer ("Continuing automatically at <reset> · esc to cancel") or system
+// line is the only sign: the composer under it is live.
+export function autoContinueArmedOnPane(region: string): boolean {
+  return region.split("\n").some((line) => isClaudeAutoContinueLine(line));
+}
+
 export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number): Promise<{ busy: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
@@ -16765,6 +16834,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
   let lastCorrectiveState: TmuxLiveState | null = null;
   let sameStateAttempts = 0;
   let loggedStarting = false;
+  let cancelledAutoContinue = false;
 
   // Glyph-less clients (opencode/pi/grok) are classified from the WHOLE pane via
   // their registry readiness pattern, not the ❯/›-glyph whitelist (see
@@ -16786,6 +16856,25 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     }
     inspectPane?.(stdout);
 
+    // Claude Code's armed automatic continue sits under a live composer, so the
+    // pane reads idle, but a message for the session must cancel the wait first
+    // (Escape is its cancel) or the continue a recovery sent never runs. Exactly
+    // one Escape: a second one opens the Rewind dialog (2026-09-30). If the wait
+    // is still painted after it, defer rather than press again.
+    if (state === "idle" && autoContinueArmedOnPane(region)) {
+      if (cancelledAutoContinue) {
+        if (Date.now() - startedAt < STUCK_BUDGET_MS) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+          continue;
+        }
+        throw new Error("AGENT_NOT_READY: the automatic continue wait did not cancel after one Escape");
+      }
+      cancelledAutoContinue = true;
+      log(`Cancelling Claude Code's automatic continue wait in ${target} (one Escape) before delivering`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+      continue;
+    }
     if (state === "idle") return { busy: false };
     if (state === "exited") {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
@@ -16876,6 +16965,10 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "rewind") {
       log(`Cancelling Rewind dialog in ${target} (Escape, never Enter)`);
+      await tmuxExec(["send-keys", "-t", target, "Escape"]);
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } else if (state === "limit_dialog") {
+      log(`Dismissing limit dialog in ${target} (Escape, never an option)`);
       await tmuxExec(["send-keys", "-t", target, "Escape"]);
       await new Promise(resolve => setTimeout(resolve, 500));
     } else if (state === "update_menu") {

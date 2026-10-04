@@ -165,7 +165,7 @@ const SHELL_WORDS: ReadonlySet<string> = new Set([
   "exit", "return", "set", "unset", "export", "local", "declare", "typeset", "readonly", "shift", "source", ".", "trap", "eval", "exec", "read",
   "cd", "pushd", "popd", "let", "wait", "break", "continue", "alias", "unalias", "getopts", "hash", "ulimit", "umask", "builtin", "exec", "[", "[[", "]]",
   "{", "}", "(", ")", "!", "then", "do", "done", "fi", "esac",
-  "autoload", "bashcompinit", "compinit", "compdef", "zmodload", "setopt", "unsetopt", "bindkey", "zstyle",
+  "complete", "compgen", "compopt", "autoload", "bashcompinit", "compinit", "compdef", "zmodload", "setopt", "unsetopt", "bindkey", "zstyle",
 ]);
 const WORD = /^[A-Za-z][A-Za-z0-9._+-]*$/;
 
@@ -177,7 +177,7 @@ export function commandWords(line: string): string[] {
   for (const seg of stripped.split(/\|\||&&|\||;|\(|\)|\$\(|`/)) {
     const tokens = seg.trim().split(/\s+/).filter(Boolean);
     let i = 0;
-    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || /^\d*[<>]/.test(tokens[i]) || tokens[i] === "env" || tokens[i] === "exec" || tokens[i] === "nohup" || tokens[i] === "sudo" || tokens[i] === "time" || tokens[i] === "timeout" || /^-/.test(tokens[i]) || (tokens[i] === "then" || tokens[i] === "do" || tokens[i] === "else"))) {
+    while (i < tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]) || /^(\d*|&)[<>]/.test(tokens[i]) || tokens[i] === "env" || tokens[i] === "exec" || tokens[i] === "nohup" || tokens[i] === "sudo" || tokens[i] === "time" || tokens[i] === "timeout" || /^-/.test(tokens[i]) || (tokens[i] === "then" || tokens[i] === "do" || tokens[i] === "else"))) {
       if (tokens[i] === "timeout") { i++; while (i < tokens.length && /^(-|\d)/.test(tokens[i])) i++; continue; }
       i++;
     }
@@ -265,7 +265,9 @@ export function scanMirroredHelpers(opts: ScanOptions): { tools: HostToolRequire
   for (const cmd of settingsHookCommands(readJson(settingsFile))) {
     if (isCodecastHookCommand(cmd, home)) continue;
     if (/\buvx?\b/.test(cmd)) needsUv = true;
-    for (const w of commandWords(cmd)) add(w, settingsFile);
+    // A script called by its path under ~/.claude is a mirrored file (scanned below), not a tool the host's PATH must carry.
+    const mirrored = new Set([...cmd.matchAll(/[^\s'"]*\/\.claude\/[^\s'";|&]+/g)].map((m) => path.posix.basename(m[0])));
+    for (const w of commandWords(cmd)) if (!mirrored.has(w)) add(w, settingsFile);
   }
   for (const rel of [".claude/hooks", ".claude/skills"]) {
     for (const file of walkFiles(path.join(home, rel))) {
