@@ -77,6 +77,9 @@ export function mentionMatchRank(item: MentionItem, query: string, personifyAll 
   const persona = item.identity ? identityLine(item.identity, item.label, personifyAll).name : null;
   const name = Math.min(matchScore(item.label, q), persona ? matchScore(persona, q) : Infinity);
   if (name <= 1) return item.type === "person" ? 0 : 1;
+  // A session is named by any part of its title, as in ⌘K: "desk" finds
+  // "Broker desk v3 build" as surely as "Desk v3 Polish".
+  if (item.type === "session" && name !== Infinity) return 1;
   const handle = item.handle?.toLowerCase();
   const shortId = item.shortId?.toLowerCase().replace(/^@/, "");
   if (handle?.startsWith(q) || shortId?.startsWith(q)) return 2;
@@ -108,8 +111,34 @@ export function withMentionViewTime(item: MentionItem, times: Map<string, number
   };
 }
 
+// Among equally named candidates, the kinds come in ⌘K's order: the session
+// someone is reaching for leads the tasks, docs and plans around it.
+const TYPE_ORDER = ["person", "role", "session", "task", "plan", "doc"];
+const typeOrder = (type: string) => {
+  const i = TYPE_ORDER.indexOf(type);
+  return i === -1 ? TYPE_ORDER.length : i;
+};
+
 export function compareMentionRecency(a: MentionItem, b: MentionItem): number {
   return (b.viewedAt ?? 0) - (a.viewedAt ?? 0) || (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
+}
+
+/** Keep the first row per title (rows arrive best-first), so one name minted
+ *  many times (a workflow task re-filed every run, a worker spawned per round)
+ *  reads as one row. A row with no title key is always kept. */
+export function collapseSameTitle<T>(rows: Iterable<T>, keyOf: (row: T) => string | null | undefined, cap = Infinity): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const row of rows) {
+    const key = keyOf(row)?.trim().toLowerCase();
+    if (key) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    out.push(row);
+    if (out.length >= cap) break;
+  }
+  return out;
 }
 
 // Something this conversation already names outranks a stranger that matches
@@ -132,8 +161,12 @@ export function mergeMentionSuggestions(local: MentionItem[], remote: MentionIte
   const ranks = new Map<MentionItem, number>();
   for (const item of ranked) ranks.set(item, mentionMatchRank(item, query, personifyAll) - (item.contextAt ? CONTEXT_LIFT : 0));
   const counts = new Map<string, number>();
-  return ranked
-    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || (b.contextAt ?? 0) - (a.contextAt ?? 0) || compareMentionRecency(a, b))
+  const sorted = ranked
+    .sort((a, b) => ranks.get(a)! - ranks.get(b)! || (b.contextAt ?? 0) - (a.contextAt ?? 0)
+      || (query.trim() ? typeOrder(a.type) - typeOrder(b.type) : 0) || compareMentionRecency(a, b));
+  // Workers spawned round after round share their brief's title: offer the
+  // freshest one, not a page of copies.
+  return collapseSameTitle(sorted, (item) => (item.worker ? `worker:${item.label}` : null))
     .filter((item) => {
       const count = counts.get(item.type) ?? 0;
       counts.set(item.type, count + 1);

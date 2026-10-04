@@ -440,12 +440,20 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
       <section className="evb-section" data-evb-prompt-diffs={a.promptDiffs.length}>
         <h2>What the model saw at each end</h2>
         {a.promptDiffs.length ? (
-          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => (
-            <div key={f} data-evb-prompt-freeze={f}>
-              <div className="evb-note">{a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}</div>
-              <ChangedPrompts pairs={a.promptDiffs.filter((d) => d.freezeId === f)} />
-            </div>
-          ))
+          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => {
+            const pairs = a.promptDiffs.filter((d) => d.freezeId === f);
+            return (
+              <div key={f} data-evb-prompt-freeze={f}>
+                <div className="evb-note">
+                  {/* The freeze opened on the two reps diffed here. */}
+                  <EvalsLink className="evb-link" href={evalsHref.freeze(f, { a: pairs[0].a.runId, b: pairs[0].b.runId })}>
+                    {a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}
+                  </EvalsLink>
+                </div>
+                <ChangedPrompts pairs={pairs} />
+              </div>
+            );
+          })
         ) : (
           <div className="evb-note">The two ends share no rep on the same freeze, so there is no rendered prompt to compare.</div>
         )}

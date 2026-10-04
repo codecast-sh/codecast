@@ -14,7 +14,7 @@ import { findContextTooLarge } from "./mirror/discovery.js";
 import type { Command } from "commander";
 import { hostForDevice } from "../browser/cloudHost.js";
 import { convexClient } from "../remote/cli.js";
-import { normalizeCloudWorkspace, type CloudStartFrom, type CloudWorkspaceMode } from "@codecast/shared/contracts";
+import { CLOUD_LEAVE_OUT_MAX, normalizeCloudWorkspace, type CloudStartFrom, type CloudWorkspaceMode } from "@codecast/shared/contracts";
 import {
   acquireRemoteRootCheckout,
   acquireRemoteWorkspace,
@@ -385,11 +385,13 @@ export function registerCloudCommand(program: Command): void {
  * A context over the cap is a question for the human, not a dead end: print
  * the files that would have to stay behind as one JSON line (the daemon hands
  * it to cloud.reportPlacementFailure, the session banner asks), then fail.
+ * Past CLOUD_LEAVE_OUT_MAX files there is no offer to make: the error text
+ * alone reaches the row.
  */
 async function reportContextTooLarge(run: () => Promise<void>): Promise<void> {
   try { await run(); } catch (err) {
     const tooLarge = findContextTooLarge(err);
-    if (tooLarge) await writeStdout(JSON.stringify({ context_too_large: { total_bytes: tooLarge.totalBytes, cap_bytes: tooLarge.capBytes, files: tooLarge.files } }) + "\n");
+    if (tooLarge && tooLarge.files.length <= CLOUD_LEAVE_OUT_MAX) await writeStdout(JSON.stringify({ context_too_large: { total_bytes: tooLarge.totalBytes, cap_bytes: tooLarge.capBytes, files: tooLarge.files } }) + "\n");
     throw err;
   }
 }

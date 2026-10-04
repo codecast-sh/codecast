@@ -13,22 +13,22 @@ kind?               "single" | "multi" | "rank" | "form"     default single
 category?           string   from the vocabulary below (server assigned; asker may propose)
 category_proposed?  string
 doc_id?             Id<docs>  rich body (markdown doc); report_slug stays for a published page
-options[i]          + body_md?, evidence?: { label, url }[], cost?: string, risk?: string
+options[i]          + body_md?, evidence?: { label, url }[], cost?: string, risk?: string, page_slug?: string
 form?               { fields: { key, label, type: "text" | "number" | "select" | "bool", options?: string[] }[] }
 answer_json?        any      for multi (indexes), rank (ordered indexes), form (values)
 task_id?            Id<tasks>        the task this decision blocks or informs
 station?            string           task status category or team status id the task is held at
 stack_id?           Id<decision_stacks>
-holder              { kind: "user" | "role"; id: string }   who may answer; default the human(s)
+holder?             { kind: "user" | "role"; id: string }   who may answer; default the human(s)
+holder_key?         "user:<id>" | "role:<id>"   holder flattened for the index
 asked_user_ids?     Id<users>[]      the people it is visible to (materialized in decision_inbox)
 hops?               { role_id, recommendation?: number, note?, at }[]   recommendations attached on the way up
-answered_by?        { kind: "user" | "role"; id: string }
+answered_by?        { kind: "user" | "role" | "policy"; id: string }
 grant_id?           Id<decision_grants>   set when a role answered under a grant
+scope_keys?         string[]         the scope keys a grant may match for this row
 short_id?           "sd-N"
-indexes             by_task [task_id, status], by_stack [stack_id], by_holder_status [holder.kind? no: index on flattened holder_key string, status]
+indexes             by_task [task_id, status], by_stack [stack_id], by_holder_status [holder_key, status], by_short_id
 ```
-
-Add `holder_key: string` ("user:<id>" or "role:<id>") for the index.
 
 New tables:
 
@@ -36,11 +36,12 @@ New tables:
 decision_inbox     decision_id, user_id, status: "pending" | "done", created_at
                    index by_user_status [user_id, status], by_decision [decision_id]
 decision_stacks    short_id "ds-N", title, team_id? / scope_user_id? (anchor style access), owner_user_id,
-                   role_id?, decision_ids: Id[] (ordered), policy: { auto_default_after_ms?, delegate_role_id? },
-                   status: "open" | "done", created_at, updated_at
-                   index by_team, by_scope_user, by_short_id
-decision_grants    role_id, category, scope_key: string ("role:<id>" | "project:<id>" | "plan:<id>"),
-                   granted_by, granted_from_decision_id?, granted_at, expires_at, revoked_at?, revoked_reason?
+                   role_id?, decision_ids: Id[] (ordered), policy: { auto_default_after_ms?, delegate_role_id?, due_at? },
+                   status: "open" | "done", client_key?, created_at, updated_at
+                   index by_team, by_scope_user, by_short_id, by_status
+decision_grants    role_id, category, scope_key: string ("role:<id>" | "project:<id>" | "plan:<id>" | "stack:<id>"),
+                   granted_by, granted_from_decision_id?, granted_at, expires_at, revoked_at?, revoked_reason?,
+                   override_streak?
                    index by_role [role_id, category]
 ```
 
@@ -55,23 +56,24 @@ the category to the protected one).
 
 ## D2. The race
 
-- Insert: the decision is visible to its people at once, as today. People =
-  the asking session's owners; when the session has `org_role_id` or
-  `standing_role_id`, the responsible people of that role's scope (the role's
-  owner set, default the parent chain's first person). One `decision_inbox`
-  row per person.
-- Ladder: the roles from the asker up to the first person, skipping paused,
-  capped, parked, dead or retired roles (each skip is recorded as a hop with a
-  note). Each role gets an immediate wake. A role attaches a recommendation
-  with `cast decide recommend <sd> <n> [--note -]` within a hop deadline of
-  5 minutes; a late recommendation still lands but the card stops saying
-  "recommendation pending".
+- Insert (`routeFor` in `convex/sessionDecisions.ts`, org-staffing.md S28):
+  people = the asking session's owners plus the first person its reporting
+  line ends at. `--to` addresses named people instead and skips the ladder.
+  One `decision_inbox` row per person.
+- Ladder (`buildLadder`): the roles from the asker up to the first person; a
+  role that is not `active` is recorded as a skipped hop with a note. A
+  standing session's ladder starts at its parent role. Only the first role
+  hears, through its needs-input trigger (`tellHearingRole`); while it can be
+  told, the decision enters no person's queue (it answers, recommends, or
+  raises it in its own thread). With no role to tell, it lands in the
+  people's queue. A role on the ladder attaches a recommendation with `cast
+  decide recommend <sd> <n> [--note -]`; past the hop deadline of 5 minutes
+  (`HOP_DEADLINE_MS`) it still lands and is reported late.
 - Holder: the people, unless a role on the ladder holds a `decision_grants`
   row for (category, scope) that has not expired, in which case that role may
   answer first with `cast decide answer <sd> <n>`. A human answer always wins
   a race (the resolve mutation is idempotent, first writer wins).
-- Delivery of the answer: unchanged, straight to the asking session; every
-  role in the ladder receives it as a passive wake fact.
+- Delivery of the answer: straight to the asking session.
 - Grants come from the card: when a person picks the option a role
   recommended, and that role has recommended on 3 decisions of that category
   in that scope from 2 different askers and been agreed with each time, the
@@ -94,9 +96,10 @@ the category to the protected one).
 
 - `--doc <file.md>` or `--doc -` creates a docs row (doc_type "decision"; add
   to the union) holding the long body; `--report <file.html>` stays for a
-  published page. Option bodies: `-o "Label :: description" --option-body 2 <file.md>`
-  or a YAML/JSON spec `--spec decision.json` with kind, options, bodies,
-  evidence, cost, risk, form fields.
+  published page. Option bodies: `-o "Label :: description" --option-body 2=<file.md>`
+  (and `--option-page 2=<file|slug|url>` for an option's own page), or a JSON
+  spec `--spec decision.json` with kind, options, bodies, evidence, cost,
+  risk, form fields.
 - Route `/decisions/<sd>`: the document page. Header (question, asker, task,
   station, category with who assigned it, stack), the body (doc markdown or
   the report iframe), the options as full width rows with their bodies,
@@ -124,12 +127,12 @@ the category to the protected one).
 ## D6. CLI
 
 ```
-cast decide "<q>" -o .. -o .. [--task ct-x] [--station s] [--stack ds-N] [--category c] [--kind single|multi|rank|form] [--doc f] [--spec f] [--report f] [--advisory --default n]
+cast decide "<q>" -o .. -o .. [--task ct-x] [--station s] [--stack ds-N] [--category c] [--kind single|multi|rank|form] [--line <label>] [--to <who>] [--doc f] [--spec f] [--report f] [--card f] [--advisory --default n]
 cast decide recommend <sd> <n> [--note -]
 cast decide answer <sd> <n|"1,3"|"2>1>3"|--form key=value...>
-cast decide escalate <sd> [--note -]        # a role passes upward without a recommendation
-cast decide ls [--stack ds-N] [--task ct-x] [--mine|--with-roles]
-cast stack create "<title>" [--policy auto-default:<dur>] [--delegate @handle] | ls | show ds-N | add ds-N sd-N | policy ds-N ...
+cast decide show <sd> | edit | cancel
+cast decide ls [--stack ds-N] [--task ct-x] [--mine]
+cast stack create "<title>" [--policy auto-default:<dur>] [--delegate @handle] | ls | show ds-N | add ds-N sd-N | remove ds-N sd-N | reorder ds-N sd-a,sd-b | policy ds-N ... | delegate ds-N @handle
 ```
 
 `resolve` must accept a person who is in `asked_user_ids` (not only the host)

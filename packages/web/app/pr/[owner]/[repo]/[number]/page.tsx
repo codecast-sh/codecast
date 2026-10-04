@@ -59,6 +59,7 @@ import { usePageMeta } from "../../../../(marketing)/pageMeta";
 import { accentVar } from "../../../../../lib/externalEvents";
 import { TitlebarStrip } from "../../../../../lib/pageLayout";
 import "../../../../../components/pr/pr.css";
+import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; the call then fails and useQueryNoThrow reports it as
@@ -375,7 +376,7 @@ export function PRContent({
     if (!rootRef.current?.offsetParent) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     const hit = PR_TABS.find((t) => t.digit === e.key);
     if (hit) { setTab(hit.key); return; }
     if (e.key === "r" && isAuthenticated) {

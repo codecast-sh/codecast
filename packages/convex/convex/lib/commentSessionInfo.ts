@@ -9,7 +9,9 @@ import { identityFieldsOf } from "./sessionIdentityFields";
 // tasks[id].comments field, so one un-enriched channel (the change-feed
 // catch-up was the culprit) clobbers the enriched rows and every session
 // author falls back to the bare author string. The identity fields ride along
-// so the author wears the session's face and character name.
+// so the author wears the session's face and character name. A person's
+// comment that reached the task's owning session carries that session the
+// same way, as delivered_to_info.
 export type CommentSessionInfo = {
   _id: string;
   session_id: string;
@@ -23,13 +25,13 @@ export type CommentSessionInfo = {
 export type CommentSessionCache = Map<string, Promise<CommentSessionInfo | null>>;
 
 export async function attachCommentSessionInfo<
-  T extends { conversation_id?: Id<"conversations"> | null },
+  T extends { conversation_id?: Id<"conversations"> | null; delivered_to_conversation_id?: Id<"conversations"> | null },
 >(
   ctx: { db: any },
   comments: T[],
   userId: Id<"users">,
   cache: CommentSessionCache = new Map(),
-): Promise<(T & { session_info: CommentSessionInfo | null })[]> {
+): Promise<(T & { session_info: CommentSessionInfo | null; delivered_to_info?: CommentSessionInfo | null })[]> {
   const infoFor = (id: Id<"conversations">): Promise<CommentSessionInfo | null> => {
     const key = id.toString();
     let hit = cache.get(key);
@@ -51,7 +53,17 @@ export async function attachCommentSessionInfo<
   };
   return await Promise.all(comments.map(async (c) => {
     const session_info = c.conversation_id ? await infoFor(c.conversation_id) : null;
-    return { ...c, conversation_id: session_info ? c.conversation_id : undefined, session_info };
+    // A person's comment the owning session received (tasks.ts
+    // deliverCommentToOwner): the same compact identity, so the thread can
+    // say who it reached. A viewer who cannot read that session sees no mark.
+    const delivered_to_info = c.delivered_to_conversation_id ? await infoFor(c.delivered_to_conversation_id) : null;
+    return {
+      ...c,
+      conversation_id: session_info ? c.conversation_id : undefined,
+      delivered_to_conversation_id: delivered_to_info ? c.delivered_to_conversation_id : undefined,
+      session_info,
+      ...(delivered_to_info ? { delivered_to_info } : {}),
+    };
   }));
 }
 

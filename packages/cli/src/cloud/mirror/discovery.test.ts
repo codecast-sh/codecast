@@ -422,3 +422,45 @@ test("Claude state contributes only scrubbed MCP definitions and malformed sourc
   write(".claude.json", "{malformed");
   await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("cannot parse Claude MCP source");
 });
+
+test("a nested checkout inside the project is its own project: its agent folders and files stay out", async () => {
+  write("src/repo/CLAUDE.md", "root");
+  write("src/repo/.agents/worktrees/agent-a/.git", "gitdir: /elsewhere\n");
+  write("src/repo/.agents/worktrees/agent-a/CLAUDE.md", "copy");
+  write("src/repo/.agents/worktrees/agent-a/docs/big.md", "x".repeat(4096));
+  write("src/repo/.wt-copy/.git", "gitdir: /elsewhere\n");
+  write("src/repo/.wt-copy/AGENTS.md", "copy");
+  write("src/repo/.agents/skills/a/SKILL.md", "kept");
+  const ctx = await collectProjectContextAsync({ root, home, maxBytes: 2048 });
+  expect(ctx.files.map((f) => f.relativePath).sort()).toEqual([".agents/skills/a/SKILL.md", "CLAUDE.md"]);
+  expect(ctx.skipped.filter((s) => s.reason === "nested git checkout").map((s) => path.relative(root, s.path)).sort()).toEqual([".agents/worktrees/agent-a", ".wt-copy"]);
+});
+
+test("a unix socket in the project is skipped, not fatal (Bun's realpath refuses one)", async () => {
+  write("src/repo/CLAUDE.md", "root");
+  const server = (await import("node:net")).createServer();
+  await new Promise<void>((resolve) => server.listen(path.join(root, "list-sessions"), resolve));
+  try {
+    const ctx = await collectProjectContextAsync({ root, home });
+    expect(ctx.files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+  } finally { server.close(); }
+});
+
+test("files read only for their references do not count against the cap", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  write("src/repo/CLAUDE.md", "root");
+  write("src/repo/docs/huge.md", "x".repeat(8192));
+  const ctx = await collectProjectContextAsync({ root, home, agentContextOnly: true, maxBytes: 4096 });
+  expect(ctx.files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+});
+
+test("a socket named by a home instruction file is skipped by the home walk, not fatal", async () => {
+  const sock = path.join(home, "src/repo/list-sessions");
+  write(".claude/CLAUDE.md", `The daemon listens on ${sock}.\n`);
+  const server = (await import("node:net")).createServer();
+  await new Promise<void>((resolve) => server.listen(sock, resolve));
+  try {
+    const inv = await collectMirrorFiles({ home, hostHome: "/home/u" });
+    expect(inv.entries.map((e) => e.path)).toEqual([".claude/CLAUDE.md"]);
+  } finally { server.close(); }
+});

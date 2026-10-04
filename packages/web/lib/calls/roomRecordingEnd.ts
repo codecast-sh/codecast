@@ -15,7 +15,7 @@ import {
   type CallRecordingStopReason,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { speakerShortName } from "../../components/calls/speakers";
+import { firstName, speakerShortName } from "../../components/calls/speakers";
 import type { RoomRecordingLive } from "./roomRecordingFields";
 
 /** How the room's last run ended (convex roomRecordingEnd): still being
@@ -44,6 +44,26 @@ export function useRoomRecordingEnded(roomKey: string | null | undefined): RoomR
   const { data, error } = useQueryNoThrow(api.callRecordings.getRoomRecordingEnd, roomKey ? { room_key: roomKey } : "skip");
   if (error || data === null) return null;
   return data === undefined ? undefined : (data as RoomRecordingEnd);
+}
+
+/** What the room is told while a run is filming: the title every surface
+ *  shows (the web's toast, banner and system banner, the phone's card). */
+export const RECORDING_STARTED_TITLE = "This call is being recorded";
+
+/** What the room is told when the run's video will be on the call's public
+ *  link (callRecordings: a link whose video was chosen before this press):
+ *  faces and screens, guests' included, then reach anyone with the link. */
+export const RECORDING_SHARED_WORDS = "The video is shared by the call's public link.";
+
+/** The body under RECORDING_STARTED_TITLE: who pressed, whether the video
+ *  goes out with the public link, and that anyone may stop it. Consent copy,
+ *  so the web and the phone say it from this one place. Without the run (a
+ *  server too old to send it) it says what is kept, and nothing it cannot
+ *  know. */
+export function startedWords(live: Pick<RoomRecordingLive, "started_by" | "video_shared"> | null | undefined): string {
+  if (!live) return "Video and shared screens are kept with the call. Anyone in the call can stop it.";
+  const shared = live.video_shared ? ` ${RECORDING_SHARED_WORDS}` : "";
+  return `${firstName(live.started_by.name)} started recording.${shared} Anyone in the call can stop it.`;
 }
 
 /** The call a run's video went to, by its short id when the server sent
@@ -92,6 +112,19 @@ export function stoppedByItself(end: RoomRecordingEnd | null | undefined): boole
  *  went, quietly. */
 export function savedWords(end: RoomRecordingEnd | null): string {
   return `Recording saved to ${savedTo(end)}`;
+}
+
+/** A stop's notice as every surface shows it: the words for how it is said
+ *  (`saved`, the presser's own landed run; `say`, the stop or a failure),
+ *  whether it stays until dismissed (stoppedByItself), and where its Open
+ *  goes. The web's banner, toast and system banner and the phone's card all
+ *  take it from here, so none of them can say a stop differently or let one
+ *  that matters go by itself. */
+export type StopNoticeCard = { title: string; body: string; failed: boolean; sticky: boolean; href: string | null };
+
+export function stopNoticeCard(how: "saved" | "say", end: RoomRecordingEnd | null | undefined, me: string | null): StopNoticeCard {
+  const words = how === "saved" ? { title: savedWords(end ?? null), body: "", failed: false } : stoppedWords(end ?? null, me);
+  return { ...words, sticky: stoppedByItself(end), href: recordingEndHref(end) };
 }
 
 /** Whether a stopped run's line is said to this person yet, and which.

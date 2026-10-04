@@ -7,7 +7,7 @@
 // is a fixture of one screen, and a second machine that never asked for one
 // must not grow a pill because the first did.
 
-const DEFAULT_AGENT_DOCK = { enabled: false, edge: "right", offset: 0.28 };
+const DEFAULT_AGENT_DOCK = { enabled: false, edge: "right", offset: 0.28, minimized: false };
 
 // Persisted `agentDock` (may be undefined or hand-edited) → the effective
 // setting. Unknown keys are dropped so a stale field cannot ride along.
@@ -15,7 +15,7 @@ function mergeAgentDock(persisted) {
   const p = persisted && typeof persisted === "object" ? persisted : {};
   const edge = p.edge === "left" ? "left" : "right";
   const offset = Number.isFinite(p.offset) ? Math.min(0.9, Math.max(0, p.offset)) : DEFAULT_AGENT_DOCK.offset;
-  return { enabled: p.enabled === true, edge, offset };
+  return { enabled: p.enabled === true, edge, offset, minimized: p.minimized === true };
 }
 
 // Where the window goes on a display: flush against the chosen edge, its top

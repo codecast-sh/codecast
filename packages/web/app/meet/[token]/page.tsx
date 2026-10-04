@@ -12,6 +12,7 @@ import {
   humanizeConvexError,
   type CallGuestView,
   type GuestLinkRefusal,
+  noticeWidened,
   type GuestNotice,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -303,8 +304,7 @@ export default function GuestMeetPage() {
   const notice: GuestNotice = { recording, transcribed, video_public: videoPublic };
   // The room keeps more than the guest agreed to when they asked: a
   // recording, a transcript, or a recording whose video goes to a public link.
-  const widened =
-    !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed) || (videoPublic && !accepted.video_public));
+  const widened = noticeWidened(accepted, notice);
 
   // The lease. See the header: worker-timed, at once when the tab comes back
   // to the front, and for an admitted guest out of the media only while
@@ -783,6 +783,7 @@ export default function GuestMeetPage() {
         live={!!info?.live}
         transcribed={transcribed}
         recording={recording}
+        videoPublic={videoPublic}
         accepted={accepted}
         creatorTold={!!state?.creator_told}
         doorFull={doorFull}

@@ -57,10 +57,32 @@ test("a recorded moment is the video seeked there, linking to the page at that s
   const video = document.querySelector("video")!;
   // 70s into the call is 10s into a file that began 60s in.
   expect(video.getAttribute("src")).toBe("https://bucket.example/calls/r1.mp4?sig=1#t=10.00");
+  // Loaded with CORS, so the drawn frame can be kept (lib/calls/momentFrames).
+  expect(video.getAttribute("crossorigin")).toBe("anonymous");
   expect(document.querySelector("a")!.getAttribute("href")).toBe("/calls/cl-42?t=70");
   expect(document.body.textContent).toContain("1:10");
   expect(document.body.textContent).toContain("Pricing review");
   React.act(() => root.unmount());
+});
+
+test("a moment drawn before on this page is its kept picture: no video, the screen still named", async () => {
+  const { keepMomentFrame, momentFrameKey, keepCallFrames } = await import("../../../lib/calls/momentFrames");
+  const realCreate = document.createElement.bind(document);
+  // jsdom has no canvas: stand one in for the keep.
+  (document as any).createElement = (tag: string) =>
+    tag === "canvas" ? { getContext: () => ({ drawImage() {} }), toBlob: (cb: any) => cb(new Blob(["x"])) } : realCreate(tag);
+  try {
+    await keepMomentFrame(momentFrameKey("r1", 10), { call: "k1", recording: "r1" }, { videoWidth: 1280, videoHeight: 720 } as any);
+  } finally {
+    (document as any).createElement = realCreate;
+  }
+  recs = { call_started_at: T, recordings: [ready()] };
+  const root = render("cl-42@1:10");
+  expect(document.querySelector("video")).toBeNull();
+  expect(document.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+  expect(document.querySelector("img")!.getAttribute("alt")).toBe("The call at 1:10");
+  React.act(() => root.unmount());
+  keepCallFrames("k1");
 });
 
 test("a moment outside what was recorded says so", () => {

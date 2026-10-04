@@ -35,7 +35,7 @@ import { isHarnessScratch, normalizeRepository } from "./lib/gitRefs";
 import { canonicalCommandArguments } from "./localFirstCommands";
 
 /** Bumped by the story prompt (changesProse.ts) so every story's inputs_hash moves and prose regenerates. */
-export const STORY_PROMPT_VERSION = "story-3";
+export const STORY_PROMPT_VERSION = "story-4";
 
 /** Commits per page (spec 7.1 step 1). A commit someone opened on /commit carries its patches (up to
  *  1 MiB a row), so a page also stops at a byte budget well under the 16 MiB read cap. */

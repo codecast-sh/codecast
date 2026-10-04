@@ -992,7 +992,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       const kept = new Set(apply.map(cellKey));
       internal.left = cleared.filter((c) => !isStamp(c) && !kept.has(cellKey(c)));
     }
-    config.afterReplay?.(entry, "undo", apply);
+    config.afterReplay?.(entry, "undo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
   };
 
@@ -1012,7 +1012,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     entry.replayOutboxIds = [];
     entry.replayDir = "redo";
     passes.forEach((pass) => runPass(entry, pass, false, [], after, apply));
-    config.afterReplay?.(entry, "redo", apply);
+    config.afterReplay?.(entry, "redo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
   };
 
@@ -1091,7 +1091,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       entry.replayDir = replayDir;
       return redoPartial(entry, get(), applied);
     }
-    config.afterReplay?.(entry, "redo", entry.changes ?? []);
+    config.afterReplay?.(entry, "redo", entry.changes ?? [], "reinvoke");
     return { ok: true, applied: (entry.changes ?? []).filter((c) => !isStamp(c)).length, skipped: 0 };
   };
 

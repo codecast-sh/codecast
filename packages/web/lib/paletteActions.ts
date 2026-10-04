@@ -7,6 +7,7 @@ import { canControlModel } from "./modelSwitch";
 import { canSwitchSessionAgent } from "./sessionControl";
 import { isForeignSession } from "./liveEntities";
 import { isSessionKilled, isSessionSetAside } from "./sessionRetirement";
+import { isTriggerEditable } from "./triggerEditable";
 
 /** The entities a route or a collection names (paletteTarget). */
 export type PaletteEntityType = "session" | "task" | "doc" | "plan" | "project" | "trigger";
@@ -159,7 +160,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
       target.status === "paused" ? row("trigger_resume", "Resume trigger", Play, "p") : row("trigger_pause", "Pause trigger", Square, "p"),
       row("trigger_cancel", "Cancel trigger…", Trash2, "x"),
     ] : [row("trigger_reactivate", "Reactivate trigger", RefreshCw, "r")]),
-    ...(["scheduled", "paused"].includes(target.status) ? [row("trigger_edit", "Edit prompt & cadence…", Pencil, "e")] : []),
+    ...(isTriggerEditable(target.status) ? [row("trigger_edit", "Edit prompt & cadence…", Pencil, "e")] : []),
     row("trigger_duplicate", "Duplicate trigger…", Copy, "d"),
     row("trigger_prompt", "Copy prompt", Copy, "m"),
     ...(!armed ? [row("trigger_delete", "Delete trigger…", Trash2, "x")] : []),

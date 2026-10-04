@@ -50,7 +50,8 @@ export type OffloadDestination = {
   role: MachineRole;
   online: boolean;
   asleep?: boolean;
-  headroom?: { cpuPercentFree?: number; memoryAvailable?: number };
+  /** The destination's latest fresh sample; absent means its load is unknown, never idle. */
+  sample?: ResourcePoint;
   /** Undefined means the cost is unknown, never free. */
   costPerHour?: number;
 };
@@ -88,6 +89,8 @@ export type OffloadCandidate = {
 
 export type OffloadPlan = {
   deviceId: string;
+  /** The source's sample the plan was built from: the base every "after the move" figure is computed against. */
+  sourceSample: ResourcePoint;
   incident: ResourceIncident;
   generatedAt: number;
   destinations: OffloadDestination[];
