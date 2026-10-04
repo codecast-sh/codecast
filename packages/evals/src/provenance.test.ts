@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { PIN_REF_PREFIX } from './paths';
-import { backfillPins, pinnedHeads, readHeads, writeCheckoutPointer } from './provenance';
+import { backfillPins, pinHead, pinnedHeads, readHeads, writeCheckoutPointer } from './provenance';
 
 // A scratch repo with every place a run head can end up: on main, rebased
 // onto main and dropped (a patch-id twin), amended when it landed (no twin),
@@ -111,6 +111,23 @@ describe('backfillPins', () => {
     } finally {
       rmSync(bare, { recursive: true, force: true });
     }
+  }, 60_000);
+});
+
+describe('pinHead', () => {
+  test("maps a new batch head into heads.json at once, and keeps every other entry", () => {
+    const headsPath = join(home, 'heads.json');
+    const before = readHeads(headsPath)!.heads;
+    run(['checkout', '-q', 'side']);
+    const fresh = commit('t.txt', 't\n', 'more side work');
+    run(['checkout', '-q', 'main']);
+    expect(pinHead(fresh, repo, headsPath)).toBe(true);
+    const h = readHeads(headsPath)!.heads;
+    expect(h[fresh]).toMatchObject({ on: 'branch', mainSha: null, pinned: true });
+    for (const [sha, entry] of Object.entries(before)) expect(h[sha]).toEqual(entry);
+    // A head already mapped is left as it is.
+    expect(pinHead(shas.twin!, repo, headsPath)).toBe(true);
+    expect(readHeads(headsPath)!.heads[shas.twin!]).toEqual(before[shas.twin!]!);
   }, 60_000);
 });
 

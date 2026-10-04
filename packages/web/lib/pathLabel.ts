@@ -129,6 +129,7 @@ export function pathLabel(path: string): string {
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
     "/line": "The line",
+    "/line/settings": "Line settings",
     "/org": "Org",
     "/initiatives": "Initiatives",
     "/chat": "Chat",

@@ -17,7 +17,7 @@ describe("callDisplayTitle", () => {
   test("with nothing known it falls back to a plain word", () => {
     expect(callDisplayTitle({ title: null, room_key: "session:abc" })).toBe("Untitled huddle");
     expect(callDisplayTitle({ room_key: "dm:a:b" })).toBe("Untitled huddle");
-    expect(callDisplayTitle({ room_key: "rec:1fad0bfc-1234" }, { sessionTitle: "x" })).toBe("Untitled recording");
+    expect(callDisplayTitle({ room_key: "rec:1fad0bfc-1234" }, { sessionTitle: "x" })).toBe("Untitled voice note");
     expect(callDisplayTitle({ room_key: "dm:a:b" }, { untitled: "Typed huddle, nothing said" })).toBe("Typed huddle, nothing said");
   });
 
@@ -33,7 +33,7 @@ describe("callDisplayTitle", () => {
     // The place still wins, and the reader alone names nothing.
     expect(callDisplayTitle({ room_key: "channel:c1", participants: people }, { channelName: "design" })).toBe("Huddle in #design");
     expect(callDisplayTitle({ room_key: "channel:c1", participants: [people[0]] }, { viewerId: "me" })).toBe("Untitled huddle");
-    expect(callDisplayTitle({ room_key: "rec:1fad0bfc-1234", participants: people })).toBe("Untitled recording");
+    expect(callDisplayTitle({ room_key: "rec:1fad0bfc-1234", participants: people })).toBe("Untitled voice note");
   });
 
   test("a place name of the wrong kind is ignored", () => {

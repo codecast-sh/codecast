@@ -1,8 +1,8 @@
 "use client";
 // The line page (docs/architecture/the-line-end-to-end.md LE13): the whole
 // factory as one horizontal flow, from what the world reported to what
-// closed this week. Paints from the store: signals (useSyncSignals), tasks
-// with a `cause`, runs (useSyncRuns) and the decision queue. lib/lineFlow
+// closed this week. Paints from the store (useLineFloor): signals, tasks
+// with a `cause`, runs and the decision queue. lib/lineFlow
 // derives every column, stage state and the throughput strip. One project's
 // line at a time (line-profile.md LP1): LineProjects holds the switcher and
 // the "all projects" roll-up, and scopeLine narrows the rows.
@@ -12,13 +12,8 @@ import { useRouter } from "next/navigation";
 import { ChevronDown, ChevronRight, Copy } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
-import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
-import { useCollectionRows } from "../../hooks/useCollectionRows";
+import type { SessionDecisionItem } from "../../store/inboxStore";
 import { useInitiatives } from "../../hooks/useInitiatives";
-import { useSyncRuns, useWorkspaceRuns } from "../../hooks/useSyncRuns";
-import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { formatElapsed } from "../../lib/taskLine";
@@ -26,28 +21,23 @@ import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
-  ageShort, buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY, LINE_STEPS,
-  type LineProject, type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type LineCauseTask, type LineFlowRun, type SenseSource, type StageState, type WatchRow,
+  ageShort, buildLineFlow, groupBuild, lineHeadline, scopeLine, ALL_PROJECTS, DAY, LINE_STEPS,
+  type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
-import { LineProjectSwitcher, LineRollup, lineKeys, useLineProject } from "./LineProjects";
+import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
+import { useLineFloor } from "./useLineFloor";
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
 import { edgeAttrs, useScrollEdges } from "./useScrollEdges";
 import { cardAnswerIndexes, GoalChip } from "../decisions/ChangeCardView";
 import { evalsSenseHref } from "../evals/evalsPaths";
 import "./line.css";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
 /** formatElapsed without its zero units: "2d", "2d 5h", "40m", never "2d 0h". */
 const ago = (from: number | null | undefined, now: number) => (from == null ? null : (formatElapsed(from, now) ?? "").replace(/ 0[hm]$/, ""));
 const compactElapsed = (ms: number) => ago(0, ms) ?? "";
-
-const RUNS_FEED = { limit: 200 };
-
-const causeSig = (t: TaskItem & LineCauseTask) =>
-  t.cause ? `${t.status}|${t.updated_at ?? 0}|${t.watch_until ?? 0}|${t.goal_ref ?? ""}|${t.cause.signal_count}|${t.priority ?? ""}|${t.closed_at ?? 0}|${t.resolved_at ?? 0}|${t.project_id ?? ""}` : `|${t.project_id ?? ""}`;
-const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}`;
-const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${d.task_id ?? ""}|${d.workflow_run_id ?? ""}`;
 
 type StationKey = "sense" | "causes" | "build" | "awaiting" | "watching" | "closed";
 /** what and cmd teach an empty station: what feeds it, and the command. */
@@ -102,23 +92,9 @@ const template = (set: TrackSet, emptyOf: (s: Station) => boolean, stacked = fal
   }).join(" ");
 
 export function LinePage() {
-  useSyncSignals();
-  useSyncRuns(RUNS_FEED);
   const router = useRouter();
-  const now = useCoarseNow(30_000);
-
-  const signals = useWorkspaceSignals();
-  const tasks = useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig);
-  const runs = useWorkspaceRuns() as LineFlowRun[];
-  const cards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: isLineCard as (d: SessionDecisionItem) => boolean, sig: cardSig });
   const initiatives = useInitiatives();
-  const projects = useWorkspaceCollection<LineProject>("projects", projectSig);
-
-  // One project's line (LP1): the roll-up counts every line, the switcher
-  // picks one, and the flow below is built from that project's rows only.
-  const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
-  const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
-  const line = useLineProject(rollup, projects);
+  const { now, tasks, projects, lineRows, rollup, line } = useLineFloor();
   // With no line anywhere the roll-up has nothing to count: the page teaches instead.
   const rollupView = line.key === ALL_PROJECTS && rollup.length > 0;
   const finders = useMemo(() => projects.find((p) => p._id === line.key)?.line_profile?.finders, [projects, line.key]);
@@ -184,8 +160,7 @@ export function LinePage() {
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (keyBelongsElsewhere(e.target)) return;
       // Sideways skips stations with nothing in them, unless every station
       // is empty; a number jumps to any.
       const side = (dc: number) => {

@@ -1,5 +1,8 @@
 # Changes: a daily edition of what the team shipped and why
 
+> **Status (2026-10-04):** Shipped 2026-10-02 (6cd9a0dad), and still the living spec for `/changes`. Backend in `packages/convex/convex/changes*.ts`, page in `packages/web/components/changes/`, gated by `teams.features.changes`.
+> Of phase 2 (section 12), only the week edition has landed (`changesWeek.ts`, 2026-10-03); team-scoped commit attribution, `red_main`/`hotfix` risks, deploy webhooks and `merge_commit_sha` are not built yet. The "Status: proposal" line below is out of date.
+
 Status: proposal, ready to build. Route: `/changes`. Feature flag: `teams.features.changes` (default off, on for Ashot's teams first).
 
 This spec starts from the "editorial" design (a fixed day edition built from stories). It adds the live strip, the deploy markers and the computed risk flags from "ship-log", and the scheduler, stable story keys and later the Why box from "zoom". It also fixes every flaw the three reviews found. Those fixes are listed in section 13 so a reviewer can check them one by one.

@@ -153,9 +153,56 @@ test.skipIf(!Bun.which("tmux"))("a verification the server never acknowledged is
     expect(state().queued).toEqual(["Existing worker report."]);
     writeFileSync(finish, "done");
     await waitFor(() => !state().active);
-    await injectViaTmux(target, "continue", "claude", { delivery, journal, gateBudgetMs: 500, receiptSettleMs: 0 });
+    await injectViaTmux(target, "continue", "claude", { delivery, journal, gateBudgetMs: 500, receiptSettleMs: 0, readTranscript: async () => "" });
     expect(state().delivered).toEqual(["Existing worker report.", "continue"]);
     expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
+
+test.skipIf(!Bun.which("tmux")).each(["submit", "verified"] as const)("an idle pane with a %s receipt and an unsynced transcript never repeats the send", async phase => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-unsynced-delivery-"));
+  const statePath = join(cwd, "state.json");
+  const finish = join(cwd, "finish");
+  const transcriptPath = join(cwd, "transcript.jsonl");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, finish, "claude"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journalPath = join(cwd, "delivery.sqlite");
+  let journal = new TmuxDeliveryJournal(journalPath);
+  const delivery = { messageId: "unsynced-message", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  const readTranscript = async () => readFileSync(transcriptPath, "utf8");
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await injectViaTmux(target, "continue", "claude", { delivery, journal });
+    expect(state().queued).toEqual(["Existing worker report.", "continue"]);
+    const original = journal.get(delivery.messageId)!;
+    writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "echo", timestamp: new Date().toISOString(), message: { role: "user", content: "continue" } }) + "\n");
+    if (phase === "submit") {
+      journal.release(delivery.messageId);
+      journal.begin(delivery, original.generation, "continue");
+      journal.advance(delivery.messageId, "submit");
+      writeFileSync(transcriptPath, JSON.stringify({ type: "user", uuid: "echo", timestamp: new Date().toISOString(), message: { role: "user", content: "continue" } }) + "\n");
+    }
+    writeFileSync(finish, "done");
+    await waitFor(() => !state().active);
+    journal.close();
+    journal = new TmuxDeliveryJournal(journalPath);
+    await expect(injectViaTmux(target, "continue", "claude", { delivery, journal, receiptSettleMs: 0,
+      readTranscript: async () => { throw new Error("transcript unavailable"); } })).rejects.toThrow("cannot reconcile");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await injectViaTmux(target, "continue", "claude", { delivery, journal, receiptSettleMs: 0, readTranscript });
+    }
+    expect(state().delivered).toEqual(["Existing worker report.", "continue"]);
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+    await injectViaTmux(target, "continue", "claude", { delivery: { ...delivery, messageId: "intentional-repeat" }, journal });
+    expect(state().delivered).toEqual(["Existing worker report.", "continue", "continue"]);
   } finally {
     journal.close();
     pane.tearDown();

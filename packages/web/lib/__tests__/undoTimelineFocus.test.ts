@@ -90,4 +90,40 @@ describe("undo card focus return", () => {
     undoTimeline.close();
     expect(doc.activeElement).toBe(other);
   });
+
+  // Focus on the page itself (nothing focused) is a place too: the card gives
+  // it back as it found it, never to a field that had focus earlier, where the
+  // next single-key shortcut would type.
+  it("opened from the page body, focus returns to the body, interactive or peek", () => {
+    const composer = el("textarea");
+    composer.focus();
+    composer.blur();
+    expect(doc.activeElement).toBe(doc.body);
+    undoTimeline.open();
+    const card = mountCard();
+    expect(card.contains(doc.activeElement)).toBe(true);
+    undoTimeline.close();
+    card.remove();
+    expect(doc.activeElement).toBe(doc.body);
+    // The held peek never takes focus; its fade-out leaves the body as it was.
+    undoTimeline.open("peek");
+    el("div", { role: "dialog", "data-undo-timeline": "peek" });
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+
+  it("opened from the palette over the page body, focus returns to the body", () => {
+    const composer = el("textarea");
+    composer.focus();
+    composer.blur();
+    const palette = el("div", { "cmdk-root": "" });
+    const input = el("input", {}, palette);
+    input.focus();
+    undoTimeline.open();
+    palette.remove();
+    mountCard();
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(doc.body);
+  });
 });
+

@@ -113,13 +113,13 @@ export interface RunnerIo {
   commandStatus(commandId: string): Promise<CommandStatus | null>;
   finish(migrationId: string, args: { project_path: string; git_root?: string; verification?: string; source_path?: string }): Promise<{ ok: true; resume_command_id: string | null } | { ok: false; reason: string }>;
   confirm(migrationId: string, ok: boolean, detail?: { error?: string; stage?: string }): Promise<void>;
-  fail(migrationId: string, error: string, cancelled?: boolean): Promise<void>;
+  fail(migrationId: string, error: string, cancelled?: boolean, restore?: boolean): Promise<void>;
   sendNotice(conversationId: string, text: string): Promise<void>;
   deviceOnline(deviceId: string): Promise<boolean>;
 
   /** Wake and resolve the cloud host behind a device id (throws when this machine cannot reach it). */
   prepareHost(deviceId: string): Promise<void>;
-  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean }): Promise<TransferResult & { localCwd: string }>;
+  transferToCloud(facts: Extract<BeginResult, { ok: true }>, opts: { skipTree: boolean; pushedHead?: string; migrationId: string; batchId: string }): Promise<TransferResult & { localCwd: string; pushedHead?: string }>;
   transferToLocal(facts: Extract<BeginResult, { ok: true }>): Promise<TransferResult>;
   /** The reorientation notice for the moved agent, from what the transfer proved. */
   notice(facts: Extract<BeginResult, { ok: true }>, transfer: TransferResult): string | null;
@@ -171,25 +171,26 @@ export type RowOutcome = { migration_id: string; outcome: "done" | "failed" | "s
  * row to claim a (host, cwd) pushes it; later rows await that and skip it.
  */
 export class SharedTreeLedger {
-  private pushes = new Map<string, Promise<void>>();
-  private resolvers = new Map<string, () => void>();
+  private pushes = new Map<string, Promise<{ pushed: boolean; head?: string }>>();
+  private resolvers = new Map<string, (r: { pushed: boolean; head?: string }) => void>();
   /** Returns true when THIS caller owns the push for the key. */
   claim(key: string): boolean {
     if (this.pushes.has(key)) return false;
-    let resolve!: () => void;
-    this.pushes.set(key, new Promise<void>((r) => { resolve = r; }));
+    let resolve!: (r: { pushed: boolean; head?: string }) => void;
+    this.pushes.set(key, new Promise((r) => { resolve = r; }));
     this.resolvers.set(key, resolve);
     return true;
   }
-  async awaitPushed(key: string): Promise<void> {
-    await this.pushes.get(key);
+  /** How the owner's push ended: pushed, with the commit it landed (the folder's snapshot), or released after a failure. */
+  async awaitPushed(key: string): Promise<{ pushed: boolean; head?: string }> {
+    return this.pushes.get(key) ?? { pushed: false };
   }
-  settle(key: string): void {
-    this.resolvers.get(key)?.();
+  settle(key: string, head?: string): void {
+    this.resolvers.get(key)?.({ pushed: true, head });
   }
-  /** A failed push must not leave followers waiting forever: release them to push themselves. */
+  /** A failed push must not leave followers waiting forever, nor let them believe the tree arrived: they push themselves. */
   release(key: string): void {
-    this.settle(key);
+    this.resolvers.get(key)?.({ pushed: false });
     this.pushes.delete(key);
     this.resolvers.delete(key);
   }
@@ -209,9 +210,12 @@ export async function migrateRow(
     return { migration_id: id, outcome: "skipped", detail: begun.reason };
   }
   const facts = begun;
+  // Set once the session's running agent was stopped for the move: a failure
+  // after that restarts it where it is.
+  let stoppedRunning = false;
   const fail = async (error: string): Promise<RowOutcome> => {
-    io.log(`FAILED ${tag}: ${error}`);
-    await io.fail(id, error);
+    io.log(`FAILED ${tag}: ${error}${stoppedRunning ? " (restarting it here)" : ""}`);
+    await io.fail(id, error, false, stoppedRunning);
     return { migration_id: id, outcome: "failed", detail: error };
   };
   try {
@@ -268,6 +272,7 @@ export async function migrateRow(
       if (st.error) return fail(`could not stop the session: ${st.error}`);
       let parsed: any = {};
       try { parsed = st.result ? JSON.parse(st.result) : {}; } catch { /* non-JSON result: treat as done */ }
+      if (parsed.quiesced === true && parsed.had_pane) stoppedRunning = true;
       if (parsed.quiesced === false) {
         // A turn began between our check and the stop. Keep waiting inside
         // the same window; past it, force.
@@ -290,16 +295,19 @@ export async function migrateRow(
       }
       // Sessions that share a working tree push it once per host.
       const key = `${facts.to_device_id}:${facts.project_path ?? facts.session_id}`;
-      const owner = ledger.claim(key);
-      if (!owner) {
+      let owner = ledger.claim(key);
+      let pushedHead: string | undefined;
+      while (!owner) {
         await io.report(id, { status: "transferring", stage: "waiting for a sibling session to push the shared worktree" });
-        await ledger.awaitPushed(key);
+        const sibling = await ledger.awaitPushed(key);
+        if (sibling.pushed) { pushedHead = sibling.head; break; }
+        owner = ledger.claim(key);
       }
       await io.report(id, { status: "transferring", stage: owner ? "pushing worktree + transcript" : "pushing transcript (worktree already there)" });
       try {
-        const t = await io.transferToCloud(facts, { skipTree: !owner });
+        const t = await io.transferToCloud(facts, { skipTree: !owner, pushedHead, migrationId: id, batchId: batch.batch_id });
         transfer = t;
-        if (owner) ledger.settle(key);
+        if (owner) ledger.settle(key, t.pushedHead);
       } catch (err) {
         if (owner) ledger.release(key);
         throw err;

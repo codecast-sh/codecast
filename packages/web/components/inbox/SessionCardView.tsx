@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff } from "lucide-react";
 import Link from "next/link";
 import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
@@ -403,10 +404,8 @@ export function SessionCardView({
             </div>
           )}
           {session.active_task && (
-            <div className="flex items-center gap-1 mt-0.5">
-              <span className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-violet-900/20 text-violet-400/70 border border-violet-600/20 max-w-[160px] truncate" title={session.active_task.title}>
-                {session.active_task.title}
-              </span>
+            <div className="flex items-center gap-1 mt-0.5 min-w-0">
+              <SessionTaskChip task={session.active_task} />
             </div>
           )}
         </div>
@@ -681,6 +680,9 @@ export function SessionCardView({
             </span>
           )}
           {worktreeChip}
+          {/* The task this session owns: the fact that ties the card to its
+              work, so it stays in simple view too. */}
+          {session.active_task && <SessionTaskChip task={session.active_task} className="flex-shrink" />}
           {showModelBadge && session.model && (
             <span data-simple-hide className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
               {formatModel(session.model)}
@@ -710,11 +712,6 @@ export function SessionCardView({
             {session.active_plan && (
               <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
-              </span>
-            )}
-            {session.active_task && (
-              <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-violet/10 text-sol-violet border border-sol-violet/20 max-w-[140px] truncate" title={session.active_task.title}>
-                {session.active_task.title}
               </span>
             )}
             {session.is_workflow_primary && session.workflow_run_status === "paused" && (

@@ -101,6 +101,44 @@ export interface StepBand {
   label: string;
 }
 
+/** Cuts `s` to `max` characters with an ellipsis; nothing when there is no room for one. */
+export const truncate = (s: string, max: number) => (max <= 1 ? "" : s.length > max ? `${s.slice(0, Math.max(1, max - 1))}…` : s);
+
+export interface StepLabel {
+  /** 0 is the top row, 1 the row under it. */
+  row: 0 | 1;
+  x: number;
+  /** The actor and label after the verb, cut to the room it has. */
+  detail: string;
+}
+
+/**
+ * Where each step band's label goes along the top of the tape, so no label
+ * runs into another. A label keeps the top row while its verb fits before the
+ * next band's edge. A narrower band's label drops to the second row, where it
+ * may run until the band after next. A label that fits on neither row is left
+ * to the band's title. `x0(i)` places delivery index i; widths are estimated at
+ * `charW` per character.
+ */
+export function stepLabels(steps: readonly StepBand[], x0: (i: number) => number, right: number, charW: number): Array<StepLabel | null> {
+  const GAP = 5;
+  const EDGE = 4;
+  let row1End = -Infinity;
+  return steps.map((s, k) => {
+    const x = x0(s.at) + EDGE;
+    const verbW = s.verb.length * charW;
+    const full = s.actor === "world" ? s.label : `${s.actor}: ${s.label}`;
+    const detailFor = (room: number) => truncate(full, Math.floor((room - verbW - GAP) / charW));
+    const room0 = (k + 1 < steps.length ? x0(steps[k + 1].at) : right) - x - EDGE;
+    if (verbW <= room0) return { row: 0, x, detail: detailFor(room0) };
+    const room1 = (k + 2 < steps.length ? x0(steps[k + 2].at) : right) - x - EDGE;
+    if (x < row1End + GAP + EDGE || verbW > room1) return null;
+    const detail = detailFor(room1);
+    row1End = x + verbW + (detail ? GAP + detail.length * charW : 0);
+    return { row: 1, x, detail };
+  });
+}
+
 export interface Timeline {
   lanes: Lane[];
   marks: Mark[];

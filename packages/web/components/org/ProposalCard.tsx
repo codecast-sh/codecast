@@ -12,9 +12,10 @@
 // with the seen stamp), so it paints at once and a refusal puts it back.
 import React, { useCallback, useMemo } from "react";
 import Link from "next/link";
-import { AlertTriangle, Check, CheckSquare, FolderClosed, ListChecks, MessageSquareText, Sparkles, X } from "lucide-react";
+import { AlertTriangle, Check, CheckSquare, Flag, FolderClosed, ListChecks, MessageSquareText, Sparkles, X } from "lucide-react";
 import { describeOrgChange, editedOrgChange, isOrgQuietChange, latestOrgRevisionAt, isOrgChangeDecidable, withAboutProposal, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { useInboxStore } from "../../store/inboxStore";
+import { undoAsOne } from "../../store/undo/labels";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useReviewComposer } from "../reviewContext";
 import { focusComposer } from "../../lib/composerControl";
@@ -31,6 +32,8 @@ import { proposalOutcome, proposalTreeRows, type ProposalTreeFace, type Proposal
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 import { proposalSeen, useProposalChanges, useProposalTree } from "./proposalHooks";
+import { useInitiatives } from "../../hooks/useInitiatives";
+import { ProposalChartButton } from "./orgChartLink";
 
 // ---------------------------------------------------------------- the meta line
 
@@ -77,6 +80,13 @@ function Face({ face, size = 20, dim }: { face: ProposalTreeFace; size?: number;
       </span>
     );
   }
+  if (face.kind === "goal") {
+    return (
+      <span className="inline-flex shrink-0 items-center justify-center rounded-md" style={{ width: size, height: size, background: face.proposed ? GHOST.fill : "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: face.proposed ? GHOST.color : "var(--sol-cyan)", ...style }} data-face="goal">
+        <Flag className="h-3 w-3" />
+      </span>
+    );
+  }
   if (face.kind === "record") {
     const Icon = face.record === "task" ? CheckSquare : face.record === "plan" ? ListChecks : FolderClosed;
     return (
@@ -103,27 +113,39 @@ function NodeLine({ row }: { row: ProposalTreeRow }) {
   const proposed = row.status === "proposed" || row.status === "failed";
   const retire = row.kind === "retire";
   const struck = retire || !!row.closes || row.status === "skipped";
-  const m = row.unresolved ? CHIP_STATUS.failed : CHIP_STATUS[row.status];
+  // A goal's unresolved owner is drawn on the owner, not on the goal.
+  const nodeUnresolved = row.unresolved && !row.owner;
+  // A goal row is a line of text under its parent, not a ghost card: the
+  // flag carries the proposed colour, so a tree of goals is not a wall of dashes.
+  const goal = row.node.kind === "goal";
+  const m = nodeUnresolved ? CHIP_STATUS.failed : CHIP_STATUS[row.status];
   const name = row.node.name;
   return (
     <span className="flex min-w-0 items-center gap-1.5 [&>*:not(:first-child)]:shrink-0">
       <span
         className="inline-flex min-w-0 shrink items-center gap-1.5 rounded-md py-[2px] pl-[3px] pr-2"
-        style={{ border: proposed && !retire ? m.border : "1.5px solid transparent", background: retire ? GHOST.hatch : proposed ? GHOST.fill : "transparent" }}
+        style={{ border: proposed && !retire && !goal ? m.border : "1.5px solid transparent", background: retire ? GHOST.hatch : proposed && !goal ? GHOST.fill : "transparent" }}
         title={row.line}
         data-tree-node={row.node.kind}
         data-tree-node-id={row.node.id}
       >
         <Face face={row.node} dim={proposed && !retire} />
-        <span className={cn("truncate text-[12px] font-medium leading-tight", struck && "line-through")} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text)", opacity: proposed && !retire ? 0.85 : 1 }}>{name}</span>
+        <span className={cn("truncate text-[12px] font-medium leading-tight", struck && "line-through")} style={{ color: struck ? "var(--sol-text-dim)" : "var(--sol-text)", opacity: proposed && !retire && !goal ? 0.85 : 1 }}>{name}</span>
         {row.node.kind === "role" && <span className="truncate text-[10px] text-sol-text-dim">@{row.node.handle}</span>}
         {row.node.kind === "session" && <span className="truncate font-mono text-[10px] text-sol-text-dim">{row.node.short_id}</span>}
+        {row.node.kind === "goal" && row.node.short_id && <span className="truncate font-mono text-[10px] text-sol-text-dim">{row.node.short_id}</span>}
       </span>
-      <GhostTag label={row.unresolved ? "unknown" : row.tag} status={row.unresolved ? "failed" : status} tone={status !== "proposed" ? undefined : retire ? "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" : row.closes ? (row.closes === "done" ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))") : undefined} />
+      <GhostTag quiet={goal} label={nodeUnresolved ? "unknown" : row.tag} status={nodeUnresolved ? "failed" : status} tone={status !== "proposed" ? undefined : retire ? "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" : row.closes ? (row.closes === "done" ? "var(--sol-green)" : "color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))") : undefined} />
       {row.status !== "proposed" && row.status !== "applied" && row.status !== "accepted" && <StatusPill status={row.status} />}
       {(row.status === "applied" || row.status === "accepted") && (
         <span className="inline-flex items-center gap-0.5 text-[10px] font-medium" style={{ color: CHANGE_STATUS_META[row.status].color }} data-tree-status={row.status}>
           <Check className="h-3 w-3" /> {row.status}
+        </span>
+      )}
+      {row.owner && (
+        <span className="inline-flex min-w-0 !shrink items-center gap-1 text-[10.5px] text-sol-text-dim" data-tree-owner={row.owner.id}>
+          <Face face={row.owner} size={14} />
+          <span className="truncate" style={row.unresolved ? { color: CHIP_STATUS.failed.color } : undefined}>{row.owner.name}</span>
         </span>
       )}
       {row.chip && <span className="min-w-0 !shrink truncate text-[11px]" style={{ color: proposed ? GHOST.color : "var(--sol-text-muted)" }} data-tree-chip>{row.chip}</span>}
@@ -153,14 +175,18 @@ export function ProposalTreeView({ rows, className }: { rows: ProposalTreeRow[];
     else groups.push({ parent: row.parent, rows: [row] });
   }
   if (groups.length === 0) return null;
+  // A parent that is itself a row of this card (a goal set here) is drawn by
+  // its own row just above, so its children hang off it with no second line.
+  const drawn = new Set(rows.map((r) => `${r.node.kind}:${r.node.id}`));
+  const ownRow = (f: ProposalTreeFace | null) => !!f && drawn.has(`${f.kind}:${f.id}`);
   return (
     // not-prose: the card sits inside a message body, whose prose styles give
     // every img a 2em margin and would push a face out of its clipped box.
     <div className={cn("not-prose space-y-1.5", className)} data-proposal-tree={rows.length}>
       {groups.map((g, i) => (
-        <div key={i} className="min-w-0" data-tree-group>
-          {g.parent && <ParentLine face={g.parent} />}
-          <div className={cn("min-w-0 space-y-1", g.parent && "pl-[9px]")}>
+        <div key={i} className="min-w-0" data-tree-group data-tree-under={g.parent && ownRow(g.parent) ? g.parent.id : undefined}>
+          {g.parent && !ownRow(g.parent) && <ParentLine face={g.parent} />}
+          <div className={cn("min-w-0 space-y-1", g.parent && "pl-[9px]", ownRow(g.parent) && "-mt-0.5")}>
             {g.rows.map((row) => (
               <div key={row.change_id} className="flex min-w-0 items-start gap-1" data-tree-row={row.change_id} data-tree-kind={row.kind} data-tree-status={row.status}>
                 {g.parent && <span aria-hidden className="mt-[3px] h-[13px] w-[9px] shrink-0 rounded-bl-[4px] border-b border-l border-dashed" style={{ borderColor: row.status === "proposed" || row.status === "failed" ? `color-mix(in srgb, ${GHOST.color} 70%, transparent)` : "color-mix(in srgb, var(--sol-border) 80%, transparent)" }} />}
@@ -199,10 +225,13 @@ export function ProposalActions({ proposal, changes, href, className }: { propos
   const accept = useCallback(() => {
     useInboxStore.getState().acceptAllOrgProposal(proposal._id, { seen: proposalSeen(changes) });
   }, [proposal._id, changes]);
+  // One press, one row in the history, named like Accept's.
   const skip = useCallback(() => {
     const seen = proposalSeen(changes);
     const st = useInboxStore.getState();
-    for (const c of changes) if (isOrgChangeDecidable(c.status)) st.decideOrgProposalChange(c._id, "skip", undefined, seen);
+    undoAsOne("Skipped an org proposal", () => {
+      for (const c of changes) if (isOrgChangeDecidable(c.status)) st.decideOrgProposalChange(c._id, "skip", undefined, seen);
+    });
   }, [changes]);
   const ask = useCallback(() => {
     composer?.populate?.(withAboutProposal("", proposal.short_id, proposal.title));
@@ -220,6 +249,7 @@ export function ProposalActions({ proposal, changes, href, className }: { propos
           <OrgButton size="sm" onClick={skip} aria-label="Skip" data-skip><X className="h-3 w-3" /> Skip</OrgButton>
           {waiting.length > 1 && <span className="mr-1 text-[10.5px] text-sol-text-dim">all {waiting.length}</span>}
           {askNode}
+          <ProposalChartButton proposal={proposal} />
         </>
       ) : (
         <span className="inline-flex items-center gap-1 text-[11.5px] font-medium" style={{ color: proposal.status === "withdrawn" ? "var(--sol-text-dim)" : changes.some((c) => c.status === "applied" || c.status === "accepted") ? "var(--sol-green)" : "var(--sol-text-dim)" }} data-proposal-outcome>
@@ -227,6 +257,7 @@ export function ProposalActions({ proposal, changes, href, className }: { propos
         </span>
       )}
       {waiting.length === 0 && askNode}
+      {waiting.length === 0 && <ProposalChartButton proposal={proposal} />}
     </div>
   );
 }
@@ -236,7 +267,8 @@ export function ProposalActions({ proposal, changes, href, className }: { propos
 /** The collapsed card: the tree, then the verdicts. The rows are the same
  *  merge the chart draws (proposalTreeRows over ghostsFor). */
 export function ProposalSnippet({ proposal, changes, tree, href, compact }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; tree: OrgTree | null; href: string; compact: boolean }) {
-  const rows = useMemo(() => proposalTreeRows(tree, changes), [tree, changes]);
+  const goals = useInitiatives();
+  const rows = useMemo(() => proposalTreeRows(tree, changes, { goals }), [tree, changes, goals]);
   const shown = compact ? rows.slice(0, 3) : rows;
   const failedNote = changes.find((c) => c.status === "failed" && c.applied_note)?.applied_note;
   const quietOnly = rows.length === 0 && changes.some((c) => c.status !== "removed");
@@ -263,7 +295,8 @@ export function ProposalSnippet({ proposal, changes, tree, href, compact }: { pr
 
 /** The expanded card: the letter, every change with its rationale, the verdicts. */
 export function ProposalDetail({ proposal, changes, tree, href, summary }: { proposal: OrgProposalListRow; changes: readonly OrgProposalChange[]; tree: OrgTree | null; href: string; summary: React.ReactNode }) {
-  const rows = useMemo(() => proposalTreeRows(tree, changes), [tree, changes]);
+  const goals = useInitiatives();
+  const rows = useMemo(() => proposalTreeRows(tree, changes, { goals }), [tree, changes, goals]);
   return (
     <div className="space-y-2.5">
       {summary}

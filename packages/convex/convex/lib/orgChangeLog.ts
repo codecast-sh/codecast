@@ -72,8 +72,8 @@ const FIELDS: Record<string, string[]> = {
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
-  // A goal (I1, revised): its status (a create reads from nothing to proposed; an undone create is cancelled, never erased), who drives it, the projects that carry it, the goal it feeds and its metrics.
-  initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics"],
+  // A goal (I1, revised): its status (a create reads from nothing to proposed; an undone create is cancelled, never erased), who drives it, the projects that carry it, the goal it feeds, its metrics with the values a dropped metric took with it, and its intent record (I5).
+  initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics", "scoreboard", "score_history", "why", "done_when", "milestones", "questions", "decisions", "sources"],
   // An accepted upgrade waits on the instance row for the host step (org-hire.md H9); until then the acceptance is the one thing an undo can withdraw.
   org_template_instances: ["pending_upgrade"],
 };

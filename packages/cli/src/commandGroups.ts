@@ -103,6 +103,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./cloud/gitCredential.js").then((m) => m.registerGitCredentialCommand),
   },
   {
+    token: "migrate",
+    description: `Move many sessions between this machine and a cloud host at once`,
+    load: () => import("./migrate/cli.js").then((m) => m.registerMigrateCommand),
+  },
+  {
     token: "hosts",
     description: `Remote machines: what runs on them, and what they cost`,
     load: () => import("./hosts/cli.js").then((m) => m.registerHostsCommand),

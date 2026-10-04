@@ -5,29 +5,9 @@
 import { File, Folder } from "lucide-react";
 import type { RunFileEntry, RunFileResponse } from "@codecast/shared/contracts/evalsApi";
 import { CodeBlock } from "../CodeBlock";
-
-const LANGUAGES: Record<string, string> = { json: "json", jsonl: "json", md: "markdown", ts: "typescript", log: "text", txt: "text", patch: "diff" };
-
-export const fileLanguage = (path: string) => LANGUAGES[path.split(".").pop() ?? ""] ?? "text";
+import { fileLanguage, fileTree } from "./runModel";
 
 const kb = (size: number) => (size >= 1024 ? `${(size / 1024).toFixed(size >= 10_240 ? 0 : 1)} KB` : `${size} B`);
-
-/** Files under their folders, folders in path order, a folder's own files before its subfolders. */
-export function fileTree(files: readonly RunFileEntry[]): Array<{ dir: string; files: RunFileEntry[] }> {
-  const groups = new Map<string, RunFileEntry[]>();
-  for (const f of files) {
-    if (f.kind === "dir") {
-      if (!groups.has(f.path)) groups.set(f.path, []);
-      continue;
-    }
-    const cut = f.path.lastIndexOf("/");
-    const dir = cut < 0 ? "" : f.path.slice(0, cut);
-    groups.set(dir, [...(groups.get(dir) ?? []), f]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
-    .map(([dir, list]) => ({ dir, files: list.sort((a, b) => a.path.localeCompare(b.path)) }));
-}
 
 export interface OpenFile {
   path: string;

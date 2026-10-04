@@ -46,9 +46,19 @@ export function livePercent(w: { percent: number; resets_at?: number }, now: num
   return isWindowRolled(w, now) ? 0 : w.percent;
 }
 
-/** Every limit window an account reports, in the order the meters list them (labeledUsageWindows). */
-export function limitWindows(usage: CcUsage): { percent: number; resets_at?: number }[] {
-  return labeledUsageWindows(usage);
+/** The windows that cap a session: the 5h session and the all-model week,
+ *  plus any model-scoped week ("Fable") for a model in `models`. A scoped
+ *  window caps only sessions on its model, so with no `models` it stays on the
+ *  meters (labeledUsageWindows) and out of the account's standing. Counted for
+ *  every session, a pegged Fable week benched three accounts at 1-4% of their
+ *  week while auto-switch hopped an Opus fleet through accounts at 99%, each
+ *  spent within minutes (2026-10-04). */
+export function limitWindows(usage: CcUsage, models?: readonly string[]): { percent: number; resets_at?: number }[] {
+  const ids = (models ?? []).map((m) => m.toLowerCase());
+  const scoped = [usage.weekly_scoped, ...(usage.scoped ?? [])].filter(
+    (w): w is CcUsageWindow => !!w?.label && ids.some((id) => id.includes(w.label!.toLowerCase())),
+  );
+  return [usage.session, usage.weekly, ...scoped].filter((w): w is CcUsageWindow => !!w);
 }
 
 /** Each limit window an account reports, the one listing every surface
@@ -112,10 +122,11 @@ export function worstUsagePercent(usage: CcUsage | undefined | null, now: number
  * working on credits past the plan limit ("Now using usage credits"), so the
  * account is usable until the credit budget itself is spent. Such an account
  * still ranks after every account with plan headroom (rankByHeadroom scores
- * it at 100), so credits are the fallback, never the first pick. */
-export function isUsageExhausted(usage: CcUsage | undefined | null, now: number): boolean {
+ * it at 100), so credits are the fallback, never the first pick. `models`
+ * adds the model-scoped weeks of the models the sessions run (limitWindows). */
+export function isUsageExhausted(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): boolean {
   if (!usage) return false;
-  if (!limitWindows(usage).some((w) => livePercent(w, now) >= 100)) return false;
+  if (!limitWindows(usage, models).some((w) => livePercent(w, now) >= 100)) return false;
   return !(usage.extra?.enabled && usage.extra.percent < 100);
 }
 
@@ -212,7 +223,8 @@ export function headroomScore(usage: CcUsage | undefined | null, now: number): n
  * and can carry a session: its saved login still works, or a minted
  * setup-token is live (`login_expired_at` alone means the daemon's token
  * refresh was refused, so a switch there lands on a dead credential and parks
- * on an auth banner instead of un-parking anything). Best headroom first. Shared by the
+ * on an auth banner instead of un-parking anything), and is not spent for
+ * `models`, the models the sessions to move run. Best headroom first. Shared by the
  * auto-switch decision (which further excludes profiles already tried this
  * window) and `cast usage`, so what the CLI reports as "N accounts with
  * headroom" is the set auto-switch would choose from. */
@@ -223,12 +235,12 @@ export function fallbackProfiles<
     login_expired_at?: number | null;
     setup_token?: { expires_at: number } | null;
   },
->(profiles: readonly P[], activeEmail: string | undefined, now: number): P[] {
+>(profiles: readonly P[], activeEmail: string | undefined, now: number, models?: readonly string[]): P[] {
   // A dead saved login is still a target when a minted setup-token is live:
   // the switch lands sessions on the token and never touches the login.
   const reachable = (p: P) => !p.login_expired_at || (!!p.setup_token && p.setup_token.expires_at > now);
   return rankByHeadroom(
-    profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now)),
+    profiles.filter((p) => p.email && p.email !== activeEmail && reachable(p) && !isUsageExhausted(p.usage, now, models)),
     now,
   );
 }

@@ -9,7 +9,8 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from ".
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { evalsHref } from "./evalsPaths";
 import { CommitMarks } from "./CommitPanel";
-import { ChangedPrompts, EvalsLink, shortSha, whenLabel } from "./parts";
+import { ChangedPrompts, EvalsLink } from "./parts";
+import { shortSha, whenLabel } from "./format";
 
 export interface EpochDiffSheetProps {
   /** The surface, so a commit opens with its diff limited to the declared sources. */

@@ -7,11 +7,13 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { firstName, fmtClock, speakerColor, speakerShortName } from "./speakers";
+import { firstName, speakerColor, speakerShortName } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { GuestTag } from "./GuestTag";
 import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { groupTurns, turnsAnchor, type Turn } from "./transcriptTurnModel";
 import { CallLinkButton } from "./CallLinkButton";
+import { lineFilmed } from "@codecast/shared/contracts";
 
 /** The start of the line a click landed on, read from its `data-seq`; the
  *  turn's own start when it landed on the speaker row or between lines. */
@@ -26,13 +28,13 @@ function clickedLineMs(t: Turn, target: EventTarget | null): number {
  *  line being said, a dim REC red over the stretches that were filmed, and
  *  clear elsewhere. The other lines of the turn being said step back a
  *  shade, so the eye lands on the one line. */
-function lineClass(s: { seq: number; t0: number }, followed: boolean, inActive: boolean, activeSeq: number | null | undefined, filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
+function lineClass(s: { seq: number; t0: number; t1?: number }, followed: boolean, inActive: boolean, activeSeq: number | null | undefined, filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
   const base = "text-[13px] leading-relaxed";
   if (!followed) return `${base} text-sol-text`;
   const rail =
     activeSeq === s.seq
       ? "border-sol-cyan text-sol-text"
-      : `${filmed?.some((f) => s.t0 >= f.fromMs && s.t0 < f.toMs) ? "border-sol-red/25" : "border-transparent"} ${inActive ? "text-sol-text-secondary" : "text-sol-text"}`;
+      : `${filmed && lineFilmed(filmed, s) ? "border-sol-red/25" : "border-transparent"} ${inActive ? "text-sol-text-secondary" : "text-sol-text"}`;
   return `${base} -ml-2 border-l-2 pl-1.5 transition-colors ${rail}`;
 }
 
@@ -91,8 +93,8 @@ export function TranscriptTurnList({
                 tabIndex: 0,
                 "aria-pressed": selected,
                 "aria-label": compact
-                  ? `Line at ${fmtClock(t.t0)}`
-                  : `Turn by ${speakerShortName(t.speaker_name)} at ${fmtClock(t.t0)}`,
+                  ? `Line at ${formatCallTime(t.t0)}`
+                  : `Turn by ${speakerShortName(t.speaker_name, t.speaker_id)} at ${formatCallTime(t.t0)}`,
                 onClick: (e: React.MouseEvent) => onTurnClick(t.index, e, clickedLineMs(t, e.target)),
                 onKeyDown: (e: React.KeyboardEvent) => {
                   if (e.key === "Enter" || e.key === " ") {
@@ -117,7 +119,7 @@ export function TranscriptTurnList({
           {compact ? (
             <div className="flex gap-3">
               <span className="w-10 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-sol-text-dim">
-                {fmtClock(t.t0)}
+                {formatCallTime(t.t0)}
               </span>
               <div className="min-w-0 flex-1">
                 {t.segments.map((s) => (
@@ -133,7 +135,7 @@ export function TranscriptTurnList({
               <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
                 {firstName(t.speaker_name)}
                 {isGuestParticipant(t.speaker_id, t.speaker_name) && <GuestTag className="ml-1.5 align-[1px]" />}
-                <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
+                <span className="ml-2 font-normal text-sol-text-dim">{formatCallTime(t.t0)}</span>
                 {link(t)}
               </div>
               {t.segments.map((s) => (

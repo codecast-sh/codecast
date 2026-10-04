@@ -5,15 +5,7 @@
 
 import { useState } from "react";
 import { GUARD_STATUSES, type GuardCounts, type GuardEntry, type GuardStatus } from "@codecast/shared/contracts/evalsApi";
-
-export const GUARD_WORDS: Record<GuardStatus, string> = {
-  SERVED: "answered from the frozen world",
-  UNSERVED: "a read the frozen world did not capture",
-  LIVE: "read the live workspace: not reproducible",
-  REFUSED: "an attempted write, refused",
-  UNKNOWN: "a command the CLI does not have",
-  HELP: "asked for help text",
-};
+import { GUARD_WORDS, guardCounts } from "./runModel";
 
 const countKey = (s: GuardStatus) => s.toLowerCase() as keyof GuardCounts;
 
@@ -23,13 +15,6 @@ export function GuardChip({ status }: { status: GuardStatus | null }) {
       {status ?? "no mark"}
     </span>
   );
-}
-
-/** Counts per status from the entries, so the strip agrees with the table under it. */
-export function guardCounts(entries: readonly GuardEntry[]): Record<GuardStatus, number> {
-  const out = Object.fromEntries(GUARD_STATUSES.map((s) => [s, 0])) as Record<GuardStatus, number>;
-  for (const e of entries) if (e.status) out[e.status]++;
-  return out;
 }
 
 export function GuardLog({ entries, counts }: { entries: readonly GuardEntry[]; counts?: GuardCounts }) {

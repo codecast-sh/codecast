@@ -161,8 +161,6 @@ function FaceSeat({
   offCall = false,
   stackDepth = 0,
   onExpand,
-  onPointerDown,
-  onPointerUp,
   diameter,
 }: {
   entry: FaceEntry;
@@ -192,8 +190,6 @@ function FaceSeat({
   /** Its place in the stack, from the front: the first face sits on top. */
   stackDepth?: number;
   onExpand: () => void;
-  onPointerDown?: (e: React.PointerEvent) => void;
-  onPointerUp?: (e: React.PointerEvent) => void;
 }) {
   // An agent's face is its animal, the portrait the org chart and the inbox
   // draw for it: its anchor's own pick, else the animal its name maps to.
@@ -271,12 +267,7 @@ function FaceSeat({
           if (stacked) onExpand();
           else if (canOpen) onToggle(entry.id);
         }}
-        onPointerDown={(e) => {
-          onPress();
-          onPointerDown?.(e);
-        }}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
+        onPointerDown={onPress}
       >
         <CircleFace videoRef={videoRef} track={track} frame={frame} image={image} name={entry.name} diameter={diameter} />
       </button>
@@ -338,8 +329,6 @@ export function FaceRow({
   rootRef,
   belowRef,
   boxRef,
-  onDragStart,
-  onDragEnd,
   onOpenProfile,
   chrome,
   holdCard = false,
@@ -370,9 +359,6 @@ export function FaceRow({
   belowRef?: (el: HTMLDivElement | null) => void;
   /** The row's own box, for whoever sizes a window from it. */
   boxRef?: (el: HTMLDivElement | null) => void;
-  /** Held on a circle, the floating window follows the cursor. */
-  onDragStart?: (e: React.PointerEvent) => void;
-  onDragEnd?: (e: React.PointerEvent) => void;
   /** The card's profile door. Absent: the card names the person, and that is all. */
   onOpenProfile?: (member: any) => void;
   /** The float's controls: the footer of the card under the row, there
@@ -415,8 +401,8 @@ export function FaceRow({
   // changed width under the pointer carried the call across the screen (the
   // founder, 2026-10-02: "do not move the whole window"). There everyone off
   // the call keeps their seat's room at all times, folded out of sight behind
-  // one small circle after the strip; pointing at the circle fades them in
-  // where they already stand, and a click keeps them out.
+  // one small circle after the strip; pointing at the circle fans them out
+  // beside it as a small stack, and a click spreads them full size.
   const callRoom = callRoomOf(row);
   const outsiders = row.entries.length - callIds.length;
   const stackable = !!callRoom && callIds.length > 0 && outsiders >= (density === "float" ? 1 : 2);
@@ -426,6 +412,11 @@ export function FaceRow({
   const [peek, setPeek] = useState(false);
   const folds = stackable && density === "float";
   const folded = folds && !spread && !peek;
+  // Pointed at, the circle opens them as a small overlapped stack in their
+  // own room (no width changes, so the window holds still); a press on the
+  // stack or the circle spreads them out as ordinary faces.
+  const peekStack = folds && !spread && peek;
+  const tucked = stacked || folded || peekStack;
   const lastId = row.entries[row.entries.length - 1]?.id;
 
   const cameraOf = (id: string): ParticipantTile | undefined =>
@@ -473,7 +464,7 @@ export function FaceRow({
   // the hit test instead of the seats' own enter and leave. A face folded
   // into the stack opens nothing; its press spreads the team.
   const pointedOpens =
-    pointed != null && row.entries.some((e) => e.id === pointed && !((stacked || folded) && !onTheCall(e))) ? pointed : null;
+    pointed != null && row.entries.some((e) => e.id === pointed && !(tucked && !onTheCall(e))) ? pointed : null;
   useLayoutEffect(() => {
     if (pointed === undefined) return;
     hover(pointedOpens);
@@ -513,7 +504,7 @@ export function FaceRow({
     if (peekTimer.current) clearTimeout(peekTimer.current);
   }, []);
   // The card is gone when its person leaves the row, or folds into the stack.
-  const onRow = !openId || row.entries.some((e) => e.id === openId && !((stacked || folded) && !onTheCall(e)));
+  const onRow = !openId || row.entries.some((e) => e.id === openId && !(tucked && !onTheCall(e)));
   useLayoutEffect(() => {
     if (!onRow) close();
   }, [onRow, close]);
@@ -539,6 +530,7 @@ export function FaceRow({
   // The float's band hangs under the pointed face with its notch on it; the
   // bar's card carries its own notch and hangs from the header.
   const band = density === "float" ? floatBandPlacement(openId ? anchor : null, rowWidth) : null;
+  const controlsFirst = density === "float" && bandSide === "below";
 
   // Each seat's key, so the card's Talk is the face's own.
   const keys = useRef(new Map<string, FaceKey | null>());
@@ -639,12 +631,10 @@ export function FaceRow({
             registerKey={registerKey}
             diameter={folds && !onTheCall(entry) ? floatOffCallFace(diameter) : diameter}
             offCall={folds && !onTheCall(entry)}
-            stacked={stacked && !onTheCall(entry)}
+            stacked={(stacked || peekStack) && !onTheCall(entry)}
             folded={folded && !onTheCall(entry)}
             stackDepth={i - callIds.length}
             onExpand={() => setSpread(true)}
-            onPointerDown={onDragStart}
-            onPointerUp={onDragEnd}
           />
         );
         const out = kind
@@ -738,6 +728,10 @@ export function FaceRow({
           }}
           onMouseLeave={() => hover(null)}
         >
+          {/* The controls sit on the edge nearest the faces, so a card
+              opening under or over them never moves Move out from under
+              the pointer. */}
+          {controlsFirst && chrome}
           {openId && openGuest && row.room && (
             <GuestFaceCard
               roomKey={row.room}
@@ -761,7 +755,7 @@ export function FaceRow({
               onClose={close}
             />
           )}
-          {chrome}
+          {!controlsFirst && chrome}
         </div>
       ) : null}
     </div>
@@ -771,7 +765,7 @@ export function FaceRow({
 /**
  * The row as the floating window's contents: sized to its circles and the
  * band under them, click through everywhere but the faces and that band, and
- * dragged by a face. The bridge is the window's own, so the same row drives
+ * dragged by its Move grip alone. The bridge is the window's own, so the same row drives
  * whichever shell window is hosting it.
  *
  * THE BAND IS MEASURED, NOT COMPUTED. The row's own size follows from its
@@ -865,15 +859,13 @@ export function FloatingFaceRow({
       pointed={pointed}
       bandSide={side}
       boxRef={boxRef}
-      onDragStart={startDrag}
-      onDragEnd={endDrag}
       onOpenProfile={onOpenProfile}
       holdCard={hovered}
       chrome={
         chrome && hovered ? (
           <div className="faces-chrome face-row-chrome" data-chrome-hit role="toolbar" aria-label="Floating faces">
-            {/* The grip: held, the window follows the cursor (a face drags
-                it too, but a grip says so). */}
+            {/* The grip, the one handle: held, the window follows the
+                cursor. A face is a button and never drags. */}
             <button
               type="button"
               className="faces-btn face-row-grip"

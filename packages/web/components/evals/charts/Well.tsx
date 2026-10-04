@@ -5,6 +5,7 @@
 
 import type { CSSProperties } from "react";
 import type { LedgerCell } from "@codecast/shared/contracts/evalsApi";
+import { wellInk } from "./scale";
 
 export interface WellProps {
   cell: Pick<LedgerCell, "mean" | "majority" | "flip" | "reps"> | null;
@@ -15,9 +16,6 @@ export interface WellProps {
   /** The entrance pop's delay, for a plate filling column by column. */
   delayMs?: number;
 }
-
-/** How dense the ink is for a mean score: never fully clear, so a scored 0 still reads as a well. */
-export const wellInk = (mean: number | null) => (mean === null ? 0 : 0.08 + 0.72 * Math.max(0, Math.min(1, mean)));
 
 export function Well({ cell, size = 14, title, onClick, delayMs }: WellProps) {
   const style = delayMs !== undefined ? ({ "--ev-delay": `${delayMs}ms` } as CSSProperties) : undefined;
