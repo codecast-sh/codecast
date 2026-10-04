@@ -11,25 +11,30 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { Ionicons } from "@expo/vector-icons";
-import { useMutation, useQuery } from "convex/react";
+import { useQuery } from "convex/react";
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { roomRecordingLive, roomRecordingOn, type RoomRecordingFields } from "@codecast/web/lib/calls/roomRecordingFields";
 import {
   owedStopNotice,
-  recordingEndHref,
+  RECORD_ASK,
+  RECORDING_SHARED_WORDS,
+  RECORDING_STARTED_TITLE,
+  TRANSCRIPT_SHARED_WORDS,
   roomRunWatch,
-  savedWords,
-  stoppedWords,
+  startedWords,
+  stopNoticeCard,
+  STOP_RECORDING_ASK,
   useRoomRecordingEnded,
   watchRoomRun,
+  type StopNoticeCard,
 } from "@codecast/web/lib/calls/roomRecordingEnd";
-import { useRoomTranscribeOff } from "@codecast/web/hooks/useRoomTranscribeOff";
+import { pressRoomRecording, pressedRunOf, recordingMarkStatus, useRecordingCooling, useRoomRecordingPress } from "@codecast/web/lib/calls/recordingPress";
+import { useRoomTranscribeOff, useRoomWordsPublic } from "@codecast/web/hooks/useRoomTranscribeOff";
 import { livekit } from "@/lib/calls/livekitNative";
 import {
   guestIdFromIdentity,
-  humanizeConvexError,
-  isGuestParticipant,
-  RECORDING_RESTART_COOLDOWN_MS,
+  isRecordingFilming,
+  markedName,
 } from "@codecast/shared/contracts";
 import { mobileRouteForUrl } from "@/lib/linkRoutes";
 
@@ -217,7 +222,7 @@ export default function CallScreen() {
               <Text style={styles.plate}>
                 {screenRef.participant.isLocal
                   ? "your screen"
-                  : `${firstName(screenRef.participant.name || screenRef.participant.identity)}'s screen`}
+                  : participantName(screenRef.participant.identity, screenRef.participant.name || screenRef.participant.identity, "'s screen")}
               </Text>
             </View>
             {cameraRefs.length > 0 && (
@@ -394,53 +399,32 @@ function useRecordingField<K extends keyof RoomRecordingFields>(roomKey: string 
 
 const useMeId = () => useInboxStore((s) => ((s as any).currentUser?._id?.toString?.() as string | undefined) ?? null);
 
-// The run this phone's own press made, per room: what startRecording
-// answered. A press LiveKit refuses fails after the mutation returns (the run
-// is started on the server's own clock), so the presser is told through the
-// stop notice when the room's last run turns out to be that one, failed
-// (watchRoomRun, the rule the web keeps).
-const pressedRuns = new Map<string, string>();
 // Stops this phone has told its person about, by stopNoticeKey: collapsing
 // the call screen and coming back does not say one twice.
 const toldStops = new Set<string>();
 const stopTold = (key: string) => toldStops.has(key);
 
-/** A run that was stopped is still being written; a new press waits the
- *  server's short cooldown after the stop (the shared rule, counted from
- *  the stop, never from LiveKit's upload), then may record while the last
- *  file is still saving. True while it waits; re-renders when it ends. */
-function useRecordingCooling(roomKey: string | null): boolean {
-  const status = useRecordingField(roomKey, "recording_status");
-  const stopAt = useRecordingField(roomKey, "recording_stop_requested_at") ?? null;
-  const [, tick] = useState(0);
-  const left = status === "stopping" && stopAt !== null ? stopAt + RECORDING_RESTART_COOLDOWN_MS - Date.now() : 0;
-  useEffect(() => {
-    if (left <= 0) return;
-    const timer = setTimeout(() => tick((n) => n + 1), left + 50);
-    return () => clearTimeout(timer);
-  }, [left > 0, stopAt]);
-  return status === "stopping" && (stopAt === null || left > 0);
+/** The web's wait after a stop (recordingPress useRecordingCooling), read
+ *  off the room's row. */
+function useRoomRecordingCooling(roomKey: string | null): boolean {
+  return useRecordingCooling(useRecordingField(roomKey, "recording_status"), useRecordingField(roomKey, "recording_stop_requested_at"));
 }
 
 /** Start recording for everyone, asked first: the room is filmed and every
- *  person in it is told, so it is never one stray tap. The mark turns red
- *  when the server's row says the run began, the same moment every other
- *  surface turns. */
+ *  person in it is told, so it is never one stray tap. The press is the
+ *  web's (lib/calls/recordingPress): the mark moves the moment Record is
+ *  tapped, one press per room is in flight, and a press that does not land
+ *  is undone and said. */
 function useConfirmStartRecording(roomKey: string | null): () => void {
-  const start = useMutation(api.callRecordings.startRecording);
   return () =>
-    Alert.alert("Record this call?", "Video and shared screens are kept with the call. Everyone in it is told, and anyone can stop it.", [
+    Alert.alert(RECORD_ASK.title, RECORD_ASK.lines(roomKey).join("\n\n"), [
       { text: "Cancel", style: "cancel" },
       {
-        text: "Record",
+        text: RECORD_ASK.record,
         onPress: () => {
           if (!roomKey) return;
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          void start({ room_key: roomKey })
-            .then((res) => {
-              if (!res.existing) pressedRuns.set(roomKey, String(res.recording_id));
-            })
-            .catch((err: unknown) => Alert.alert("Couldn't start recording", humanizeConvexError(err, "Something went wrong")));
+          void pressRoomRecording(roomKey, true, (message) => Alert.alert("Couldn't start recording", message));
         },
       },
     ]);
@@ -449,29 +433,41 @@ function useConfirmStartRecording(roomKey: string | null): () => void {
 /** Stop for everyone, asked once more first: one tap must not end the room's
  *  recording. */
 function useConfirmStopRecording(roomKey: string | null): () => void {
-  const stop = useMutation(api.callRecordings.stopRecording);
   return () =>
-    Alert.alert("Stop recording for everyone?", "The video so far is kept with the call.", [
-      { text: "Keep recording", style: "cancel" },
+    Alert.alert(STOP_RECORDING_ASK.title, STOP_RECORDING_ASK.body, [
+      { text: STOP_RECORDING_ASK.keep, style: "cancel" },
       {
-        text: "Stop recording",
+        text: STOP_RECORDING_ASK.stop,
         style: "destructive",
         onPress: () => {
           if (!roomKey) return;
           void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-          void stop({ room_key: roomKey }).catch((err: unknown) =>
-            Alert.alert("Couldn't stop the recording", humanizeConvexError(err, "Something went wrong")),
-          );
+          void pressRoomRecording(roomKey, false, (message) => Alert.alert("Couldn't stop the recording", message));
         },
       },
     ]);
 }
 
+/** The room's red mark as the web's settles it (recordingMarkStatus): this
+ *  phone's press in flight decides, then the run on the room's row, then
+ *  the flag alone on a server too old to send the run. */
+function useRecordingMarkStatus(roomKey: string | null) {
+  const press = useRoomRecordingPress(roomKey);
+  return useInboxStore((s) => {
+    const row = roomKey ? ((s.callRooms as any)[roomKey] as RoomRecordingFields | undefined) : undefined;
+    return recordingMarkStatus({ press, flag: !!row?.recording, live: roomRecordingLive(row) });
+  });
+}
+
 function RecordingBadge({ roomKey, canStart }: { roomKey: string | null; canStart: boolean }) {
-  const recording = useRoomRecordingFlag(roomKey);
+  const recording = isRecordingFilming(useRecordingMarkStatus(roomKey));
+  // The run's video goes out with the call's public link: said on the mark
+  // itself, since a phone has no tooltip to carry it (the web's
+  // RecordingMark says it in its title).
+  const shared = !!useRecordingField(roomKey, "recording_video_shared");
   const configured = useRecordingField(roomKey, "recording_configured");
   const unavailable = useRecordingField(roomKey, "recording_unavailable");
-  const cooling = useRecordingCooling(roomKey);
+  const cooling = useRoomRecordingCooling(roomKey);
   const confirmStop = useConfirmStopRecording(roomKey);
   const confirmStart = useConfirmStartRecording(roomKey);
   if (!recording) {
@@ -524,10 +520,10 @@ function RecordingBadge({ roomKey, canStart }: { roomKey: string | null; canStar
       hitSlop={8}
       style={({ pressed }) => [styles.recBadge, pressed && styles.pressed]}
       accessibilityRole="button"
-      accessibilityLabel="This call is being recorded. Tap to stop it"
+      accessibilityLabel={`${RECORDING_STARTED_TITLE}.${shared ? ` ${RECORDING_SHARED_WORDS}` : ""} Tap to stop it`}
     >
       <LivePulse color={Theme.red} size={6} />
-      <Text style={styles.recText}>REC</Text>
+      <Text style={styles.recText}>{shared ? "REC · public" : "REC"}</Text>
     </Pressable>
   );
 }
@@ -539,11 +535,17 @@ function RecordingBadge({ roomKey, canStart }: { roomKey: string | null; canStar
 function TranscribingChip({ roomKey }: { roomKey: string | null }) {
   const live = useQuery(api.transcripts.getLive, roomKey ? { room_key: roomKey, tail: 3 } : "skip");
   const off = useRoomTranscribeOff(roomKey);
+  // The words reach anyone with the call's public link as they are said:
+  // marked the way the recording's mark says "REC · public".
+  const wordsPublic = useRoomWordsPublic(roomKey);
   if (!live || off) return null;
   return (
-    <View style={styles.transcribingChip} accessibilityLabel="This call is being transcribed">
+    <View
+      style={styles.transcribingChip}
+      accessibilityLabel={`This call is being transcribed.${wordsPublic ? ` ${TRANSCRIPT_SHARED_WORDS}` : ""}`}
+    >
       <LivePulse color={Theme.green} size={5} />
-      <Text style={styles.transcribingText}>transcribing</Text>
+      <Text style={styles.transcribingText}>{wordsPublic ? "transcribing · public" : "transcribing"}</Text>
     </View>
   );
 }
@@ -574,6 +576,11 @@ function RecordingNotice({ roomKey }: { roomKey: string | null }) {
   const me = useMeId();
   const by = useRecordingField(roomKey, "recording_by_id");
   const pressedByMe = !!me && by === me;
+  // Who pressed and whether the video goes out with the public link, read
+  // off the room's row as scalars: the words every web surface says
+  // (startedWords). A server too old to name the run gets the plain line.
+  const byName = useRecordingField(roomKey, "recording_by_name");
+  const videoShared = useRecordingField(roomKey, "recording_video_shared");
   const [shown, setShown] = useState<string | null>(null);
   useEffect(() => {
     if (!roomKey) return;
@@ -593,8 +600,8 @@ function RecordingNotice({ roomKey }: { roomKey: string | null }) {
     <View style={styles.recNotice} accessibilityRole="alert">
       <LivePulse color={Theme.red} size={6} />
       <View style={styles.recNoticeBody}>
-        <Text style={styles.recNoticeTitle}>This call is being recorded</Text>
-        <Text style={styles.recNoticeText}>Video and shared screens are kept with the call. Anyone in it can stop it.</Text>
+        <Text style={styles.recNoticeTitle}>{RECORDING_STARTED_TITLE}</Text>
+        <Text style={styles.recNoticeText}>{startedWords(byName ? { started_by: { id: by ?? "", name: byName }, video_shared: !!videoShared } : null)}</Text>
         <View style={styles.recNoticeActions}>
           <Pressable onPress={() => setShown(null)} hitSlop={6} style={({ pressed }) => [styles.recNoticeBtn, pressed && styles.pressed]}>
             <Text style={styles.recNoticeBtnText}>Got it</Text>
@@ -613,16 +620,21 @@ function RecordingNotice({ roomKey }: { roomKey: string | null }) {
  *  it stopped by itself, and where the video went, with a way to open it.
  *  Whoever pressed Stop is not told they stopped it, only where the file
  *  went once it lands, and whoever pressed Record for a run LiveKit refused
- *  is told why, even though the REC mark never came on. A failure stays
- *  until it is read; the rest go by themselves. */
+ *  is told why, even though the REC mark never came on. A run that stopped
+ *  by itself while the huddle goes on (it failed, hit a limit, the room
+ *  stood empty) stays until it is dismissed, and offers to record again;
+ *  the rest go by themselves (stopNoticeCard, the web's rule). */
 function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
   const router = useRouter();
   const me = useMeId();
+  const filming = isRecordingFilming(useRecordingMarkStatus(roomKey));
+  const unavailable = useRecordingField(roomKey, "recording_unavailable");
+  const confirmStart = useConfirmStartRecording(roomKey);
   const status = useRecordingField(roomKey, "recording_status");
   const runId = useRecordingField(roomKey, "recording_run_id");
   const end = useRoomRecordingEnded(roomKey);
   const watch = useRef(roomRunWatch(null));
-  const [card, setCard] = useState<{ title: string; body: string; failed: boolean; href: string | null } | null>(null);
+  const [card, setCard] = useState<StopNoticeCard | null>(null);
   useEffect(() => {
     if (watch.current.room !== roomKey) {
       watch.current = roomRunWatch(roomKey);
@@ -630,7 +642,7 @@ function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
     }
     if (!roomKey) return;
     const row = (useInboxStore.getState().callRooms as any)?.[roomKey] as RoomRecordingFields | undefined;
-    const { running } = watchRoomRun(watch.current, roomRecordingLive(row) ?? null, end, pressedRuns.get(roomKey) ?? null, stopTold, Date.now());
+    const { running } = watchRoomRun(watch.current, roomRecordingLive(row) ?? null, end, pressedRunOf(roomKey), stopTold, Date.now());
     // A newer run is the news now; the last one's line goes.
     if (running) setCard(null);
     const owed = owedStopNotice(watch.current, end, me, stopTold, Date.now());
@@ -638,17 +650,20 @@ function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
     if (watch.current.stop === owed.stop) watch.current.stop = null;
     if (owed.how === "drop") return;
     toldStops.add(owed.key);
-    const words = owed.how === "saved" ? { title: savedWords(owed.end), body: "", failed: false } : stoppedWords(owed.end, me);
-    setCard({ ...words, href: recordingEndHref(owed.end) });
-    if (words.failed) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    const next = stopNoticeCard(owed.how, owed.end, me);
+    setCard(next);
+    if (next.failed || next.sticky) void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
   }, [roomKey, status, runId, end?.run_id, end?.status, me]);
   useEffect(() => {
-    if (!card || card.failed) return;
+    if (!card || card.sticky || card.failed) return;
     const timer = setTimeout(() => setCard((cur) => (cur === card ? null : cur)), 10_000);
     return () => clearTimeout(timer);
   }, [card]);
   if (!card) return null;
   const route = card.href ? mobileRouteForUrl(card.href) : null;
+  // Somebody already pressed again, or LiveKit is refusing every recording:
+  // the old run's card has nothing to offer but itself.
+  const again = card.sticky && !unavailable && !filming;
   return (
     <View style={[styles.recNotice, card.failed ? styles.recNoticeFailed : styles.recNoticeEnded]} accessibilityRole="alert">
       <View style={[styles.recNoticeDot, { backgroundColor: card.failed ? Theme.orange : Theme.textDim }]} />
@@ -659,6 +674,19 @@ function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
           <Pressable onPress={() => setCard(null)} hitSlop={6} style={({ pressed }) => [styles.recNoticeBtn, pressed && styles.pressed]}>
             <Text style={styles.recNoticeBtnText}>Got it</Text>
           </Pressable>
+          {again && (
+            // The card stays while the question is up: a Cancel there keeps
+            // it, and the run the answer starts clears it (a newer run is
+            // the news).
+            <Pressable
+              onPress={confirmStart}
+              hitSlop={6}
+              style={({ pressed }) => [styles.recNoticeBtn, pressed && styles.pressed]}
+              accessibilityLabel="Record this call again for everyone"
+            >
+              <Text style={[styles.recNoticeBtnText, { color: Theme.red }]}>Record again</Text>
+            </Pressable>
+          )}
           {route && (
             <Pressable
               onPress={() => {
@@ -679,11 +707,13 @@ function RecordingEndNotice({ roomKey }: { roomKey: string | null }) {
 }
 
 /** A participant's first name, marked in words when they are a guest (a
- *  person from outside the team on a link): a phone's name plate has no room
- *  for the web's badge, and a guest must never pass for a teammate. The
- *  shared test (isGuestParticipant), the one the web's badge uses. */
-function participantName(identity: string, name: string | undefined): string {
-  return isGuestParticipant(identity, name) ? `${firstName(name ?? "")} (guest)` : firstName(name ?? "");
+ *  person from outside the team on a link) or an agent's face: a phone's
+ *  name plate has no room for the web's badge, and neither may pass for a
+ *  teammate. The words are the shared markedName, from the mark the web's badge
+ *  reads. `what` names something of theirs ("'s screen") and goes before
+ *  the mark: "riley's screen (guest)". */
+function participantName(identity: string, name: string | undefined, what = ""): string {
+  return markedName(firstName(name ?? ""), identity, name, what);
 }
 
 function firstName(name: string): string {

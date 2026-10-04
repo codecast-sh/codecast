@@ -21,6 +21,7 @@ import { TouchLedger, ledgerUnchanged, signLedger, type MirrorLedger } from "./l
 import { projectDestination, projectPathMappings, readProjectRegistrations, unregisterProjectContext, type ProjectRegistration } from "./projectRefresh.js";
 import { AGENT_RUNTIME_ROOTS, collectProjectContextAsync, type ProjectContext } from "./discovery.js";
 import { transformByKind, type MirrorKind } from "./transform.js";
+import { CLOUD_START_RUN_MS } from "@codecast/shared/contracts";
 
 const gzipAsync = promisify(gzip);
 
@@ -650,9 +651,10 @@ export function defaultDeps(signal?: AbortSignal): MirrorDeps {
     now: () => new Date(),
     loggedFailures: moduleLoggedFailures,
     // The holder is another push to the same host (the background runner, a
-    // placement): wait out a whole push rather than fail a placement that
-    // needed exactly the work the holder is doing.
-    lock: (key, fn) => withMirrorLock(path.join(defaultConfigDir(), "mirror-locks", sha256(key)), fn, signal, MIRROR_PUSH_TIMEOUT_MS + 60_000),
+    // placement): wait out a whole placement rather than fail one that needed
+    // exactly the work the holder is doing. A loaded laptop runs a holder's
+    // walk and push past any shorter guess (two launches, 2026-10-04).
+    lock: (key, fn) => withMirrorLock(path.join(defaultConfigDir(), "mirror-locks", sha256(key)), fn, signal, CLOUD_START_RUN_MS),
     readProjects: (host) => readProjectRegistrations(host),
     retireProjects: async (host, roots) => { for (const root of roots) await unregisterProjectContext(host, root); },
   };

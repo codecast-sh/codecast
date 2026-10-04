@@ -28,14 +28,16 @@
 /* Every column but the scenario shrinks to its content; the scenario takes the rest. */
 .evs-grid th:not(:first-child) { width: 1%; }
 .evs-grid td:not(:first-child) { white-space: nowrap; }
+/* The scenario cell takes whatever the other columns leave (max-width 0 is the table trick), and its path ellipsizes only at that edge. */
+.evs-grid td:first-child { max-width: 0; }
 .evs-grid th { text-align: left; font-weight: 500; font-size: 11px; color: var(--sol-text-dim); padding: 8px 10px; border-bottom: 1px solid var(--ev-rule); white-space: nowrap; }
 .evs-grid td { padding: 3px 10px; height: 42px; border-bottom: 1px solid var(--ev-rule); vertical-align: middle; }
 .evs-grid tr:last-child td { border-bottom: 0; }
 .evs-grid tr[data-evs-dim] td { opacity: 0.32; }
 .evs-grid tr[data-evs-selftest] td:first-child { color: var(--sol-text-muted); }
 .evs-scn { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.evs-scn b { font-weight: 500; font-family: var(--font-mono); font-size: 12px; font-variant-ligatures: none; }
-.evs-scn span { font-size: 10.5px; color: var(--sol-text-dim); max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evs-scn b { font-weight: 500; font-family: var(--font-mono); font-size: 12px; font-variant-ligatures: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.evs-scn span { font-size: 10.5px; color: var(--sol-text-dim); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .evs-group td { height: 26px; font-size: 11px; color: var(--sol-text-dim); background: var(--sol-bg-alt); }
 
 .evs-cell {
@@ -170,7 +172,7 @@ a.evs-cell:hover, button.evs-cell:hover { border-color: var(--ev-rule); backgrou
 .evs-playhead-knob { fill: var(--sol-text); }
 .evs-axis { font: 10px var(--font-mono); fill: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
 .evs-mark { transition: opacity 200ms ease; }
-.evs-mark[data-evs-off] { opacity: 0.14; }
+.evs-mark[data-evs-off] { opacity: 0.3; }
 .evs-mark-conn { stroke: var(--sol-text-muted); stroke-width: 1.6; stroke-linecap: round; }
 .evs-mark-solid { fill: var(--sol-text-muted); }
 .evs-mark-actor { fill: var(--sol-text); }

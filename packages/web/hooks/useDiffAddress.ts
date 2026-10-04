@@ -18,6 +18,7 @@ import { sharePageUrl } from "../lib/utils";
 import { copyText } from "../lib/copyText";
 import { useEventListener } from "./useEventListener";
 import { useWatchEffect } from "./useWatchEffect";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 
 export function useDiffAddress({
   diffHref,
@@ -64,7 +65,7 @@ export function useDiffAddress({
     if (!rootRef.current?.offsetParent) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     // y: a link to exactly what is on screen. The desktop app has no address
     // bar, so this is how a place in it gets handed to someone.
     if (e.key === "y") {

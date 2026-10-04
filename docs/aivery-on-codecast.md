@@ -1,5 +1,8 @@
 # Aivery on Codecast — an open framework for "tag an agent into your work"
 
+> **Status (2026-10-04):** Superseded, with most phases built in another shape. Persistent sessions and bot identities (`persistent`, `is_bot`, `bot_user_id` in `packages/convex/convex/schema.ts`), the Slack webhook and mirror (`/api/webhooks/slack`, `docs/architecture/slack-chat-mirror.md`) and named agent definitions (`docs/architecture/agent-definitions.md`) shipped; personas became org roles (`docs/architecture/org-roles.md`).
+> Taking over Aivery's own Union duties is now `docs/architecture/union-ops-role.md`, which is defined but not yet created.
+
 > Status: design / discussion. Author: derived from a deep read of Anthropic's
 > Claude Tag, Union's Aivery ops agent, and codecast's actual code (file:line
 > references throughout). Nothing here is built yet.

@@ -17,6 +17,7 @@ export const CHANGE_VERDICTS: readonly ChangeVerdict[] = ["ship", "revise", "dro
 export const RISK_CLASSES: readonly RiskClass[] = ["low", "review", "plan"];
 export const MAX_EXAMPLES = 3;
 const MAX_SENTENCE_CHARS = 360;
+const MAX_HEADLINE_CHARS = 80;
 
 export interface CardCheck {
   name: string;
@@ -34,6 +35,10 @@ export interface CardExample {
 export interface ChangeCard {
   cause: { task: string; title: string; signals: number; first_seen: number | null; sources: string[] };
   goal: { ref: string; name: string; why: string };
+  /** The card's title in plain words, for a reader who did not follow the work. */
+  headline?: string;
+  /** One sentence on what the affected part of the product is and who sees it. */
+  context?: string;
   wrong: string;
   change: string;
   proof: { before: CardCheck[]; after: CardCheck[] };
@@ -128,6 +133,14 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     str("goal.why", goal.why, false);
   }
 
+  if (c.headline !== undefined) {
+    str("headline", c.headline);
+    if (typeof c.headline === "string" && c.headline.length > MAX_HEADLINE_CHARS) err("headline", `${c.headline.length} characters; keep it under ${MAX_HEADLINE_CHARS}`);
+  }
+  if (c.context !== undefined) {
+    sentences("context", c.context);
+    if (typeof c.context === "string" && countSentences(c.context) > 1) err("context", "one sentence");
+  }
   sentences("wrong", c.wrong);
   sentences("change", c.change);
 
@@ -373,6 +386,8 @@ export interface CardAssemblyInput {
   proof?: ChangeCard["proof"] | null;
   diff?: { files: number; added: number; removed: number } | null;
   cost?: { tokens?: number; minutes?: number; usd?: number } | null;
+  headline?: string;
+  context?: string;
   wrong?: string;
   change?: string;
   recommend?: { verdict: ChangeVerdict; why: string } | null;
@@ -482,6 +497,8 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       name: task.goal_name?.trim() || (goalRef === "none" ? "" : goalRef),
       why: task.goal_why?.trim() ?? "",
     },
+    ...(input.headline?.trim() ? { headline: input.headline.trim() } : {}),
+    ...(input.context?.trim() ? { context: input.context.trim() } : {}),
     wrong: input.wrong?.trim() ?? "",
     change: input.change?.trim() ?? "",
     proof,

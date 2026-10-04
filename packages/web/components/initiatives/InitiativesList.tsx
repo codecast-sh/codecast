@@ -1,15 +1,16 @@
 "use client";
 // /initiatives (docs/architecture/initiatives-projects-role-page.md I1): the
 // goals the company is trying to reach, by status, each with who drives it,
-// how it is going, when it is due and how far along it is. Rows, not cards: a
-// person compares initiatives, so health and progress each run down a column.
+// how it is going, the number against its target, the next milestone, when it
+// is due and how far along it is. Rows, not cards: a person compares
+// initiatives, so health and progress each run down a column.
 // Paints from the store; progress derives at render from the tasks collection.
 import { useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Flag, Plus } from "lucide-react";
-import { INITIATIVE_STATUS_LABEL, type InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { INITIATIVE_STATUS_LABEL, metricReadings, metricTrends, milestoneCounts, nextMilestone, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInitiatives, useBoardTasks, useTasksBackfilled } from "../../hooks/useInitiatives";
@@ -18,7 +19,7 @@ import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { groupInitiativesByStatus, initiativeHref, initiativeProgress, newInitiativeKey, subInitiatives } from "../../lib/initiatives";
 import { cn } from "../../lib/utils";
-import { HealthChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
+import { HealthChip, MetricTile, NextMilestoneChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
 import { INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
@@ -41,8 +42,19 @@ export function InitiativesList() {
         @keyframes initiative-rise { from { opacity: 0; transform: translateY(5px); } }
         .initiative-row { animation: initiative-rise .26s cubic-bezier(.2,.7,.2,1) backwards; }
         @media (prefers-reduced-motion: reduce) { .initiative-row { animation: none; } }
+        /* The row by the width of the list, not the window: the list may sit in
+           a split pane. Narrow, the number and the next milestone are a second
+           line under the title; wide, each is a column of its own. */
+        .initiative-list-cq { container-type: inline-size; }
+        .initiative-grid { grid-template-columns: minmax(0,1fr) 140px 140px 64px 140px; }
+        .initiative-grid .initiative-extra { grid-column: 1 / -1; grid-row: 2; display: flex; align-items: center; column-gap: 16px; padding-left: 24px; min-width: 0; }
+        .initiative-grid .initiative-extra[data-empty] { display: none; }
+        @container (min-width: 1060px) {
+          .initiative-grid { grid-template-columns: minmax(0,1fr) 124px 124px 112px minmax(0,170px) 56px 124px; }
+          .initiative-grid .initiative-extra, .initiative-grid .initiative-extra[data-empty] { display: contents; }
+        }
       `}</style>
-      <div className={cn("mx-auto w-full max-w-[1040px]", phone ? "px-3 pt-4 pb-10" : "px-8 pt-8 pb-16")}>
+      <div className={cn("initiative-list-cq mx-auto w-full max-w-[1240px]", phone ? "px-3 pt-4 pb-10" : "px-8 pt-8 pb-16")}>
         <header className="flex items-end justify-between gap-4">
           <div className="min-w-0">
             <h1 className={cn("font-semibold tracking-tight leading-none", phone ? "text-[20px]" : "text-[26px]")} style={{ fontFamily: "var(--font-serif)" }}>Initiatives</h1>
@@ -85,6 +97,12 @@ export function InitiativesList() {
 
 function Row({ row, index, now, phone, progress, partial, nested }: { row: InitiativeRow; index: number; now: number; phone: boolean; progress: ReturnType<typeof initiativeProgress>; partial: boolean; nested?: boolean }) {
   const projects = row.project_ids.length;
+  // The first number is the one a list has room for; the page shows both.
+  const reading = metricReadings(row)[0];
+  const metric = reading ? <MetricTile reading={reading} trend={metricTrends(row)[reading.key]} now={now} size="chip" /> : null;
+  const next = nextMilestone(row);
+  const counts = milestoneCounts(row);
+  const milestone = next || counts.total ? <NextMilestoneChip milestone={next} now={now} counts={counts} /> : null;
   return (
     <Link
       href={initiativeHref(row)}
@@ -93,7 +111,7 @@ function Row({ row, index, now, phone, progress, partial, nested }: { row: Initi
       data-initiative-row={row.short_id || row._id}
       data-initiative-nested={nested ? "1" : undefined}
     >
-      <div className={cn("grid items-center gap-x-4 gap-y-1.5", phone ? "grid-cols-1" : "grid-cols-[minmax(0,1fr)_150px_150px_64px_150px]")}>
+      <div className={cn("grid items-center gap-x-4 gap-y-1.5", phone ? "grid-cols-1" : "initiative-grid")}>
         <div className={cn("min-w-0 flex items-center gap-2.5", nested && "pl-5")}>
           {nested ? <span className="w-3 h-px shrink-0" style={{ background: "var(--sol-text-dim)" }} aria-hidden /> : <Flag className="w-3.5 h-3.5 shrink-0" style={{ color: ended(row) ? "var(--sol-text-dim)" : INITIATIVE_ACCENT }} />}
           {/* The title owns the column; the id and the project count sit under it,
@@ -110,6 +128,8 @@ function Row({ row, index, now, phone, progress, partial, nested }: { row: Initi
           <div className="flex items-center gap-x-3 gap-y-1 flex-wrap pl-6">
             <OwnerChip owner={row.owner} size={14} />
             <HealthChip health={row.health} at={row.health_at} now={now} />
+            {metric}
+            {milestone}
             <TargetDate ts={row.target_date} now={now} done={ended(row)} />
             <ProgressBar progress={progress} partial={partial} className="basis-full" />
           </div>
@@ -117,6 +137,11 @@ function Row({ row, index, now, phone, progress, partial, nested }: { row: Initi
           <>
             <OwnerChip owner={row.owner} />
             <HealthChip health={row.health} at={row.health_at} now={now} />
+            {/* Always two cells, so a goal with no number keeps the columns after it in line. */}
+            <span className="initiative-extra" data-empty={metric || milestone ? undefined : ""}>
+              <span className="min-w-0 inline-flex" data-initiative-row-metric>{metric}</span>
+              <span className="min-w-0 inline-flex" data-initiative-row-milestone>{milestone}</span>
+            </span>
             <span className="text-right"><TargetDate ts={row.target_date} now={now} done={ended(row)} /></span>
             <ProgressBar progress={progress} partial={partial} />
           </>

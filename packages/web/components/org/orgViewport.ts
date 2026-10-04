@@ -9,7 +9,9 @@ export const FIT_PAD = 24;
 const ROOT_KINDS = new Set(["person", "role"]);
 
 type Rect = { x: number; y: number; w: number; h: number };
-function boundsOf(nodes: OrgLayoutNode[]): Rect | null {
+/** What the fit reads off a node: either lens' layout hands these. */
+export type OrgViewportNode = Rect & { id: string; kind: string };
+function boundsOf(nodes: readonly OrgViewportNode[]): Rect | null {
   if (nodes.length === 0) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const n of nodes) { x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + n.w); y1 = Math.max(y1, n.y + n.h); }
@@ -26,7 +28,7 @@ function boundsOf(nodes: OrgLayoutNode[]): Rect | null {
  * the free area.
  */
 export function computeOrgViewport(
-  nodes: OrgLayoutNode[],
+  nodes: readonly OrgViewportNode[],
   width: number,
   height: number,
   panelWidth: number,

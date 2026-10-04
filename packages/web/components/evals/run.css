@@ -34,7 +34,8 @@ a.ev-chip.ev-run-link { color: var(--sol-text); }
 .ev-seed-dot { cursor: pointer; }
 .ev-seed-dot:focus-visible { outline: none; }
 .ev-seed-dot:focus-visible circle { stroke: var(--sol-text); stroke-width: 2; }
-.ev-seed-self { stroke: var(--sol-text); stroke-width: 1.4; fill: none; }
+.ev-seed-self { stroke: var(--sol-text); stroke-width: 1.4; fill: none; pointer-events: none; }
+.ev-seeds-track { stroke: var(--sol-border); stroke-width: 1; }
 
 .ev-run-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .ev-keys { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-dim); }
@@ -72,8 +73,9 @@ a.ev-chip.ev-run-link { color: var(--sol-text); }
 .ev-row:hover .ev-row-anchor, .ev-row-anchor:focus-visible { opacity: 1; }
 .ev-row-body { margin: 6px 0 0 22px; font-size: 12.5px; line-height: 1.5; color: var(--sol-text-muted); }
 .ev-row[data-ev-target="true"] { background: color-mix(in srgb, var(--sol-cyan) 9%, var(--sol-card)); box-shadow: inset 2px 0 0 var(--sol-cyan); }
-.ev-row--gate-fail { box-shadow: inset 2px 0 0 var(--sol-red); }
-.ev-gate-x { color: var(--sol-red); }
+.ev-row--gate-fail, .ev-row--gate-fail[data-ev-target="true"] { box-shadow: inset 2px 0 0 var(--sol-red); }
+/* The glyph's svg carries its own quiet tone, so the red has to reach it. */
+.ev-gate-x, .ev-gate-x svg { color: var(--sol-red); }
 .ev-decided { font-size: 10.5px; padding: 0 5px; height: 17px; }
 .ev-excerpt-count { margin-top: 6px; font: 11px var(--font-mono); color: var(--sol-text-dim); }
 .ev-excerpt { margin-top: 6px; display: flex; gap: 8px; font: 11.5px var(--font-mono); }
@@ -180,6 +182,8 @@ a.ev-chip.ev-run-link { color: var(--sol-text); }
 .ev-gs--UNKNOWN { color: var(--sol-violet); border-color: color-mix(in srgb, var(--sol-violet) 45%, transparent); background: color-mix(in srgb, var(--sol-violet) 10%, transparent); }
 .ev-gs--HELP { color: var(--sol-text-dim); border-color: var(--ev-rule); border-style: dashed; background: transparent; }
 .ev-gs--none { color: var(--sol-text-dim); border-color: var(--ev-rule); border-style: dotted; background: transparent; }
+/* A count tile takes its mark's colour only; the dashed HELP outline belongs to the chip. */
+.ev-guard-count.ev-gs--HELP { border-style: solid; }
 .ev-guard-turn td { background: var(--sol-bg-alt); color: var(--sol-text-dim) !important; font-size: 11px; padding: 3px 12px !important; }
 
 /* ── Files ──────────────────────────────────────────────────────────────── */
@@ -224,7 +228,7 @@ a.ev-chip.ev-run-link { color: var(--sol-text); }
 .ev-empty-note { padding: 14px 16px; font-size: 12.5px; color: var(--sol-text-dim); }
 
 /* The compare picker. */
-.ev-picker { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; width: 380px; max-height: 360px; overflow: auto; padding: 4px; background: var(--sol-card); border: 1px solid var(--ev-rule); border-radius: 8px; box-shadow: 0 10px 30px color-mix(in srgb, var(--sol-text) 16%, transparent); }
+.ev-picker { position: absolute; z-index: 40; top: calc(100% + 6px); right: 0; width: 380px; max-height: 360px; overflow: auto; padding: 4px; background: var(--sol-card); border: 1px solid var(--sol-border); border-radius: 8px; box-shadow: 0 10px 30px color-mix(in srgb, var(--sol-text) 16%, transparent); }
 .ev-picker-group { padding: 6px 8px 2px; font-size: 10.5px; color: var(--sol-text-dim); }
 .ev-picker-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: none; color: var(--sol-text); font-size: 12px; text-align: left; cursor: pointer; }
 .ev-picker-item:hover, .ev-picker-item[aria-selected="true"] { background: var(--sol-bg-highlight); }

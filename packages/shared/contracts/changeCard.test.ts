@@ -286,3 +286,14 @@ describe("cardVerdictIndexes", () => {
   });
 });
 
+
+describe("headline and context", () => {
+  test("a cold-reader headline and one-sentence context validate; overlong or multi-sentence ones are refused", () => {
+    const base = JSON.parse(fs.readFileSync(path.join(DIR, "card.json"), "utf-8"));
+    expect(validateChangeCard({ ...base, headline: "Work summaries stop calling unfinished steps done", context: "Codecast writes a short summary of each agent session so a person can catch up fast." }).ok).toBe(true);
+    const long = validateChangeCard({ ...base, headline: "x".repeat(81) });
+    expect(long.ok).toBe(false);
+    const two = validateChangeCard({ ...base, context: "It is a summary. People read it." });
+    expect(two.ok ? [] : two.errors.join(" ")).toContain("context");
+  });
+});

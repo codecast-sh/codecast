@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import type { ConvoMessage } from '@platform/evals';
 import { UsageError } from '@platform/evals/cli';
 
-import { readFrozenVerbs } from '../../served';
+import { readCut, readFrozenVerbs } from '../../served';
 import type { ReplayResult, SurfaceImpl } from '../../surface';
 import { buildBriefing, type OrgHashes, type OrgMode } from './build';
 import { freezeContext, gradeDir, gradeExisting, handlePool, loadGradeSets, snapshotsRoot, snapshotWorkspace, tryJson, wrongClosesOf, type GradeSets, type OrgGrade } from './grade';
@@ -62,7 +62,7 @@ const impl: SurfaceImpl = {
     if (!servedDir) throw new Error('org-review replays a served dir; this freeze has none');
     const { workspace } = freezeContext(ctx.freeze);
     const mode = ((ctx.freeze.meta as { mode?: OrgMode } | undefined)?.mode ?? 'review') as OrgMode;
-    const b = buildBriefing({ inputsText: readFileSync(join(servedDir, 'org-inputs.json'), 'utf8'), workspace, served: basename(servedDir), proposalsDir: join(ctx.runDir, 'proposals'), frozen: readFrozenVerbs(servedDir), mode });
+    const b = buildBriefing({ inputsText: readFileSync(join(servedDir, 'org-inputs.json'), 'utf8'), workspace, served: basename(servedDir), proposalsDir: join(ctx.runDir, 'proposals'), frozen: readFrozenVerbs(servedDir), cut: readCut(servedDir), mode });
     mkdirSync(ctx.runDir, { recursive: true });
     writeFileSync(join(ctx.runDir, 'hashes.json'), JSON.stringify(b.hashes, null, 1));
     const a = await ctx.agent({ prompt: b.briefing, model: ctx.model, maxTurns: 200, promptSha: b.hashes.promptSha });

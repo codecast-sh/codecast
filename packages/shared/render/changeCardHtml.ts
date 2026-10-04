@@ -133,7 +133,9 @@ main{max-width:880px;margin:0 auto;padding:40px 24px 64px}
 .task{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 .risk{margin-left:auto;font-weight:600;color:var(--ink);border:1px solid var(--rule);padding:3px 10px;border-radius:8px}
 h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.015em;margin:18px 0 10px}
+.context{font-size:18px;line-height:1.45;margin:0 0 12px;max-width:62ch}
 .goal{color:var(--muted);margin:0}
+.found{color:var(--muted);font-size:13px;margin:6px 0 0;opacity:.8}
 .goal b{color:var(--ink);font-weight:600}
 .why{margin:6px 0 0;color:var(--muted);font-size:15px;max-width:62ch}
 .big.mid{font-size:18px}
@@ -239,8 +241,9 @@ export function renderChangeCardHtml(card: ChangeCard): string {
 <div class="sheet">
 <header>
   <div class="meta"><span class="verdict">${recommends}</span><span class="task">${esc(c.task)}</span>${signals}${sources}<span class="risk">${esc(riskLabel(card.risk))}</span></div>
-  <h1>${esc(c.title)}</h1>
-  ${goal}
+  <h1>${esc(card.headline || c.title)}</h1>
+  ${card.context ? `<p class="context">${esc(card.context)}</p>` : ""}
+  ${goal}${card.headline ? `<p class="found">Found as: ${esc(c.title)}</p>` : ""}
 </header>
 <div class="two">
   <div class="say wrong"><span class="lbl">What is wrong</span><p>${esc(card.wrong)}</p></div>

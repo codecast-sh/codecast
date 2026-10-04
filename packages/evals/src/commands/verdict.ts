@@ -90,9 +90,12 @@ export const footingChange = (a: Footing, b: Footing): 'model' | 'judge' | null 
  * crashed graded nothing there; and a batch on another model, or judged by
  * another prompt or criterion, would read the model or the ruler as a prompt
  * change. The comparison falls back past each of those, and `skipped` names
- * the newer batches it passed over for a footing that differs.
+ * the newer batches it passed over for a footing that differs. Newest means
+ * the batch that began last (batchStarts), its name breaking a tie only: a
+ * batch name need not be a time, and by name alone every named batch would
+ * outrank every stamped one.
  */
-export function previousRuns<R extends VerdictRun>(history: R[], batch: string, ruler: RulerOf<R> = defaultRuler): { set: R[]; skipped: SkippedBatch[] } {
+export function previousRuns<R extends VerdictRun>(history: R[], batch: string, ruler: RulerOf<R> = defaultRuler, starts: Map<string, string> = batchStarts(history)): { set: R[]; skipped: SkippedBatch[] } {
   const want = new Map<string, Footing>();
   for (const r of batchSet(history, batch)) if (r.status !== 'crash' && !want.has(r.freezeId ?? '')) want.set(r.freezeId ?? '', footingOf(r, ruler));
   // A bisect probe ran another commit, so it is no baseline for anything.
@@ -102,7 +105,12 @@ export function previousRuns<R extends VerdictRun>(history: R[], batch: string, 
   for (const r of real) if (r.status !== 'crash' && !graded.has(`${r.freezeId}\x1f${r.batch}`)) graded.set(`${r.freezeId}\x1f${r.batch}`, r);
   const newest = new Map<string, string>();
   const skipped: SkippedBatch[] = [];
-  for (const r of [...graded.values()].sort((x, y) => (y.batch! < x.batch! ? -1 : y.batch! > x.batch! ? 1 : 0))) {
+  const key = (r: R) => [starts.get(r.batch!) ?? '', r.batch!] as const;
+  const newerFirst = (x: R, y: R) => {
+    const [[xa, xb], [ya, yb]] = [key(x), key(y)];
+    return xa !== ya ? (xa < ya ? 1 : -1) : xb === yb ? 0 : xb < yb ? 1 : -1;
+  };
+  for (const r of [...graded.values()].sort(newerFirst)) {
     const freezeId = r.freezeId ?? '';
     if (newest.has(freezeId)) continue;
     const w = want.get(freezeId);
@@ -132,10 +140,12 @@ export const CADENCE_BASELINE_BATCHES = 7;
  */
 export function pooledRuns<R extends VerdictRun>(history: R[], batch: string, cadence: string, n: number, ruler: RulerOf<R> = defaultRuler): { set: R[]; skipped: SkippedBatch[]; batches: string[] } {
   let rest = history.filter((r) => r.batch === batch || r.cadence === cadence);
+  // When each batch began, read once: taking a batch's reps on one freeze must not move its start for the others.
+  const starts = batchStarts(history);
   const set: R[] = [];
   const skipped = new Map<string, SkippedBatch>();
   for (let i = 0; i < n; i++) {
-    const prev = previousRuns(rest, batch, ruler);
+    const prev = previousRuns(rest, batch, ruler, starts);
     if (!prev.set.length) break;
     set.push(...prev.set);
     for (const s of prev.skipped) skipped.set(`${s.batch}\x1f${s.freezeId}`, s);
@@ -154,11 +164,17 @@ export function pooledRuns<R extends VerdictRun>(history: R[], batch: string, ca
 export function verdictFlips(current: VerdictRun[], previous: VerdictRun[]): VerdictFlip[] {
   const now = majority(current);
   const before = majority(previous);
-  const ids = (runs: VerdictRun[], freezeId: string) => runs.filter((r) => (r.freezeId ?? '') === freezeId).map((r) => r.id);
+  // The reps that agree with their side's verdict come first, so a page that
+  // shows one rep per side (the flip's links, its prompt diff) shows the flip
+  // itself, never the dissenting rep of a 2-to-1 majority.
+  const ids = (runs: VerdictRun[], freezeId: string, passes: boolean) => {
+    const mine = runs.filter((r) => (r.freezeId ?? '') === freezeId);
+    return [...mine.filter((r) => repPassed(r) === passes), ...mine.filter((r) => repPassed(r) !== passes)].map((r) => r.id);
+  };
   return [...now].flatMap(([freezeId, passes]) => {
     if (!before.has(freezeId) || before.get(freezeId) === passes) return [];
     const rep = current.find((r) => (r.freezeId ?? '') === freezeId);
-    return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction: passes ? 'fixed' : 'broke', before: ids(previous, freezeId), after: ids(current, freezeId) } satisfies VerdictFlip];
+    return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction: passes ? 'fixed' : 'broke', before: ids(previous, freezeId, !passes), after: ids(current, freezeId, passes) } satisfies VerdictFlip];
   });
 }
 
@@ -242,13 +258,6 @@ export interface BatchVerdictOptions<R extends VerdictRun> {
   /** How many of its cadence's earlier batches a cadence batch is pooled against (check --baseline-batches). */
   baselineBatches?: number;
   ruler?: RulerOf<R>;
-  /**
-   * Weigh it only against batches that began before it; a named `against` is
-   * kept wherever it sits. The history views need this for an older batch.
-   * `check` weighs its newest batch, where it changes nothing, so the CLI
-   * leaves it off.
-   */
-  earlierOnly?: boolean;
 }
 
 /** When each batch began: its earliest rep. */
@@ -269,6 +278,38 @@ export function upTo<R extends VerdictRun>(history: R[], batch: string): R[] {
 }
 
 /**
+ * What batchVerdict weighs: the batch's set and the baseline it chose, both
+ * cut to graded reps on the freezes the batch ran. `prev` is null for a dry
+ * set, which is weighed against nothing.
+ */
+function weighing<R extends VerdictRun>(batch: string, history: R[], o: BatchVerdictOptions<R>) {
+  const { against, baselineBatches = CADENCE_BASELINE_BATCHES, ruler = defaultRuler } = o;
+  if (!against) history = upTo(history, batch);
+  const set = batchSet(history, batch);
+  const ran = new Set(set.map((r) => r.freezeId ?? ''));
+  history = history.filter((r) => r.batch === batch || ran.has(r.freezeId ?? ''));
+  const stats = batchStats(batch, set, ruler);
+  const current = set.filter((r) => r.status !== 'crash');
+  if (stats.dry) return { stats, current, prev: null, kind: null, previous: [] as R[] };
+  let prev: { set: R[]; skipped: SkippedBatch[]; batches: string[] };
+  let kind: NonNullable<BatchVerdict['baseline']>['kind'];
+  if (against) [prev, kind] = [{ set: batchSet(history, against), skipped: [], batches: [against] }, 'against'];
+  else if (stats.cadence && stats.cadence !== BISECT_CADENCE) [prev, kind] = [pooledRuns(history, batch, stats.cadence, baselineBatches, ruler), 'pooled'];
+  else {
+    const p = previousRuns(history, batch, ruler);
+    [prev, kind] = [{ ...p, batches: [...new Set(p.set.map((r) => r.batch!))].sort() }, 'previous'];
+  }
+  const ranNow = new Set(current.map((r) => r.freezeId ?? ''));
+  return { stats, current, prev, kind, previous: prev.set.filter((r) => ranNow.has(r.freezeId ?? '') && r.status !== 'crash') };
+}
+
+/** The freezes `batch` flipped against its baseline, as batchVerdict reports them, without weighing the separation: what a ledger marks per well. */
+export function batchFlips<R extends VerdictRun>(batch: string, history: R[], o: BatchVerdictOptions<R> = {}): VerdictFlip[] {
+  const w = weighing(batch, history, o);
+  return w.prev ? verdictFlips(w.current, w.previous) : [];
+}
+
+/**
  * A surface's run set `batch` weighed against its baseline: `against` when
  * named (check --against); else a cadence batch (its reps stamped by check
  * --cadence) against its own last `baselineBatches` batches (pooledRuns),
@@ -277,6 +318,12 @@ export function upTo<R extends VerdictRun>(history: R[], batch: string): R[] {
  * (previousRuns) with per-rep scores (separate). `history` is the surface's
  * runs, newest first.
  *
+ * The default baselines look only at batches that began before this one
+ * (upTo), and only at the freezes this batch ran: `check`, the wall and the
+ * surface page then weigh a batch alike, whether a later batch has landed
+ * since, overlapped it, or ran other freezes. A named `against` is kept
+ * wherever it sits.
+ *
  * Pass rate, mean, range and flips cover the set; the separation covers only
  * the freezes both sets ran, so a one-freeze run is never weighed against a
  * whole surface. A crash graded nothing (the model never answered, or the
@@ -284,28 +331,16 @@ export function upTo<R extends VerdictRun>(history: R[], batch: string): R[] {
  * nor a 0, on either side.
  */
 export function batchVerdict<R extends VerdictRun>(meta: Pick<SurfaceMeta, 'id' | 'model'>, batch: string, history: R[], o: BatchVerdictOptions<R> = {}): BatchVerdict {
-  const { against, baselineBatches = CADENCE_BASELINE_BATCHES, ruler = defaultRuler } = o;
-  if (o.earlierOnly && !against) history = upTo(history, batch);
-  const set = batchSet(history, batch);
-  const stats = batchStats(batch, set, ruler);
+  const { against, ruler = defaultRuler } = o;
+  const w = weighing(batch, history, o);
+  const stats = w.stats;
   const base = { surface: meta.id, batch, footing: stats.footing, set: stats };
-  if (stats.dry) {
+  if (!w.prev) {
     return { ...base, models: [], dry: true, baseline: null, compared: { current: [], previous: [], previousFreezes: 0 }, separation: { kind: 'too-few' }, footingNotes: [], flips: [], gatesFailed: [], regression: false };
   }
-  let prev: { set: R[]; skipped: SkippedBatch[]; batches: string[] };
-  let kind: NonNullable<BatchVerdict['baseline']>['kind'];
-  if (against) {
-    const set = batchSet(history, against);
-    [prev, kind] = [{ set, skipped: [], batches: [against] }, 'against'];
-  } else if (stats.cadence && stats.cadence !== BISECT_CADENCE) [prev, kind] = [pooledRuns(history, batch, stats.cadence, baselineBatches, ruler), 'pooled'];
-  else {
-    const p = previousRuns(history, batch, ruler);
-    [prev, kind] = [{ ...p, batches: [...new Set(p.set.map((r) => r.batch!))].sort() }, 'previous'];
-  }
-  const current = set.filter((r) => r.status !== 'crash');
+  const { prev, kind, current, previous } = w;
   const ranNow = new Set(current.map((r) => r.freezeId ?? ''));
   const ranBefore = new Set(prev.set.map((r) => r.freezeId ?? ''));
-  const previous = prev.set.filter((r) => ranNow.has(r.freezeId ?? '') && r.status !== 'crash');
   const compared = { current: current.filter((r) => ranBefore.has(r.freezeId ?? '')).map(scoreOrZero), previous: previous.map(scoreOrZero), previousFreezes: ranBefore.size };
   const separation = kind === 'pooled' ? separateNights(nightStrata(current, previous)) : separationOf(compared.current, compared.previous);
   // For a named baseline: the freezes weighed on another model or ruler, in the order the set's reps name them.

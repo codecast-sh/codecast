@@ -84,6 +84,13 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./workspace/cli.js").then((m) => m.registerWorkspaceCommand),
   },
   {
+    token: "dev",
+    args: ["[service...]"],
+    hasOptions: true,
+    description: `Start (or reuse) this checkout's dev server on its own port and print the URL`,
+    load: () => import("./workspace/devCli.js").then((m) => m.registerDevCommand),
+  },
+  {
     token: "remote",
     description: `Move sessions to and from cloud hosts, and mirror a cloud session's edits here`,
     load: () => import("./remote/cli.js").then((m) => m.registerRemoteCommand),
@@ -101,6 +108,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     hasOptions: true,
     description: `Git credential helper: a GitHub App installation token for this cloud host`,
     load: () => import("./cloud/gitCredential.js").then((m) => m.registerGitCredentialCommand),
+  },
+  {
+    token: "migrate",
+    description: `Move many sessions between this machine and a cloud host at once`,
+    load: () => import("./migrate/cli.js").then((m) => m.registerMigrateCommand),
   },
   {
     token: "hosts",

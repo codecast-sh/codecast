@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Change card: insight reports intended work as done: did items and outcome claim checks the excerpt never shows finishing</title>
+<style>
+:root{
+  --bg:#eef1ee; --paper:#fbfcfa; --ink:#18211d; --muted:#5b6862; --faint:#8b9792; --rule:#dde3df;
+  --red:#c2412d; --red-soft:#f8e5df; --green:#17845a; --green-soft:#dcf1e6; --blue:#2f5fb3; --blue-soft:#e2eaf8;
+  --neutral:#5b6862; --neutral-soft:#e4e9e6;
+  --sans:"Avenir Next","Seravek","Segoe UI Variable Text","Ubuntu","Helvetica Neue",sans-serif;
+  --mono:"JetBrains Mono","SF Mono","Cascadia Code",ui-monospace,Menlo,monospace;
+  color-scheme:light dark;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#0c1311; --paper:#121b18; --ink:#e3ebe7; --muted:#9aa9a2; --faint:#6c7a74; --rule:#23302b;
+  --red:#ff8a73; --red-soft:#3a1d18; --green:#5fd4a2; --green-soft:#12301f; --blue:#8fb2f2; --blue-soft:#18233a;
+  --neutral:#9aa9a2; --neutral-soft:#1b2622;
+}}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;font:16px/1.55 var(--sans);color:var(--ink);-webkit-font-smoothing:antialiased;
+  background:radial-gradient(1200px 380px at 50% -120px,var(--tone-soft),transparent 70%) no-repeat,var(--bg)}
+main{max-width:880px;margin:0 auto;padding:40px 24px 64px}
+.sheet{background:var(--paper);border:1px solid var(--rule);border-radius:18px;padding:36px 40px;box-shadow:0 1px 0 var(--rule),0 24px 48px -32px rgba(0,0,0,.25)}
+.meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;font-size:13.5px;color:var(--muted)}
+.verdict{display:inline-flex;align-items:center;gap:8px;font-weight:650;color:var(--tone);background:var(--tone-soft);padding:4px 12px 4px 10px;border-radius:999px}
+.verdict::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--tone)}
+.task{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
+.risk{margin-left:auto;font-weight:600;color:var(--ink);border:1px solid var(--rule);padding:3px 10px;border-radius:8px}
+h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.015em;margin:18px 0 10px}
+.goal{color:var(--muted);margin:0}
+.goal b{color:var(--ink);font-weight:600}
+.why{margin:6px 0 0;color:var(--muted);font-size:15px;max-width:62ch}
+.big.mid{font-size:18px}
+.goal code{font:12px var(--mono);background:var(--bg);border:1px solid var(--rule);padding:1px 6px;border-radius:6px;margin-left:4px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:28px 0 8px}
+.say{border-radius:12px;padding:16px 18px;background:var(--bg)}
+.say .lbl{display:block;font-size:13px;font-weight:650;margin-bottom:4px}
+.say.wrong .lbl{color:var(--red)} .say.change .lbl{color:var(--green)}
+.say p{margin:0;font-size:17px;line-height:1.5}
+.block{margin-top:32px}
+h2{font-size:15px;font-weight:650;margin:0 0 12px;display:flex;align-items:baseline;gap:12px}
+h2 .count{font-weight:500;color:var(--muted);font-size:14px}
+h3{font-size:13px;font-weight:650;color:var(--muted);margin:0 0 6px}
+.lbl{font-size:12.5px;font-weight:650;color:var(--muted)}
+.dim{color:var(--faint)}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.mark{display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;flex:none}
+.mark svg{width:13px;height:13px}
+.mark.ok{color:var(--green);background:var(--green-soft)} .mark.bad{color:var(--red);background:var(--red-soft)}
+.beads{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+.bead{display:inline-flex;border-radius:6px;overflow:hidden;box-shadow:0 0 0 1px var(--rule)}
+.bead i{width:16px;height:12px} .bead i.ok{background:var(--green)} .bead i.bad{background:var(--red)} .bead i.none{background:var(--rule)}
+.proof{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule)}
+.proof li{display:grid;grid-template-columns:minmax(0,1.1fr) minmax(0,1fr) 28px minmax(0,1fr);align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--rule)}
+.pname{font-size:14.5px;font-weight:550;overflow-wrap:anywhere}
+.pill{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;font-size:13px;line-height:1.35;min-width:0}
+.pill span{overflow-wrap:anywhere}
+.pill.ok{background:var(--green-soft)} .pill.bad{background:var(--red-soft)} .pill.none{background:var(--bg);color:var(--faint)}
+.arrow{color:var(--faint);display:grid;place-items:center} .arrow svg{width:24px;height:12px}
+.example{border:1px solid var(--rule);border-radius:14px;padding:16px;margin-bottom:14px;break-inside:avoid}
+.example blockquote{margin:6px 0 14px;padding:10px 14px;background:var(--bg);border-radius:10px;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.side{border-radius:10px;padding:10px 14px;border-top:3px solid}
+.side.before{border-color:var(--red);background:color-mix(in srgb,var(--red-soft) 55%,transparent)}
+.side.after{border-color:var(--green);background:color-mix(in srgb,var(--green-soft) 55%,transparent)}
+.reply{margin-top:4px;font-size:14.5px;white-space:pre-wrap;overflow-wrap:anywhere;max-height:15.5em;overflow:auto}
+.note{margin:12px 2px 0;font-size:14px;color:var(--muted)}
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:grid;grid-template-columns:20px 110px 1fr;gap:12px;align-items:start;padding:8px 0;border-bottom:1px solid var(--rule);font-size:14.5px}
+.cname{font-weight:600} .cdetail{color:var(--muted);overflow-wrap:anywhere}
+.panels{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:32px}
+.panel{background:var(--bg);border-radius:12px;padding:14px 16px}
+.big{font-size:24px;font-weight:600;line-height:1.2} .big small{font-size:13px;color:var(--muted);font-family:var(--sans);font-weight:500}
+.delta{font-size:13.5px;margin-top:2px} .delta .add{color:var(--green)} .delta .del{color:var(--red)}
+.dbar{display:flex;height:6px;border-radius:3px;overflow:hidden;margin:8px 0 6px;gap:2px}
+.dbar .add{background:var(--green)} .dbar .del{background:var(--red)}
+.sub{font-size:13px;color:var(--muted);margin-top:4px;overflow-wrap:anywhere}
+.sub a{color:var(--blue);text-decoration:none;font-family:var(--mono);font-size:12.5px}
+.costs{display:flex;flex-direction:column;gap:2px;font-size:14px}
+.costs .num{font-size:15px;color:var(--ink)}
+.rec{margin-top:28px;border-radius:14px;padding:18px 20px;background:var(--tone-soft);display:flex;gap:16px;align-items:baseline}
+.rec .word{font-size:22px;font-weight:700;color:var(--tone);flex:none}
+.rec p{margin:0;font-size:16px}
+footer{margin-top:18px;text-align:center;font-size:12.5px;color:var(--faint)}
+@media (max-width:640px){
+  main{padding:16px 10px 40px} .sheet{padding:22px 18px;border-radius:14px}
+  h1{font-size:24px} .two,.pair,.panels{grid-template-columns:1fr} .risk{margin-left:0}
+  .proof li{grid-template-columns:1fr 24px 1fr} .pname{grid-column:1/-1}
+  .checks li{grid-template-columns:20px 1fr} .cdetail{grid-column:2}
+  .rec{flex-direction:column;gap:4px}
+}
+@media print{
+  :root{--bg:#f2f4f2;--paper:#fff;--ink:#111;--muted:#4a5550;--faint:#7a8580;--rule:#d5dbd7;
+    --red:#b3361f;--red-soft:#f8e3dc;--green:#11744d;--green-soft:#dcf0e4;--blue:#2a56a3;--blue-soft:#e2eaf8}
+  html,body{background:#fff} body{font-size:11pt}
+  main{max-width:none;padding:0} .sheet{border:0;box-shadow:none;padding:0}
+  *{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  .reply{max-height:none;overflow:visible} .block,.panels,.rec,.proof li{break-inside:avoid}
+  footer{display:none}
+}
+:root{--tone:var(--neutral);--tone-soft:var(--neutral-soft)}</style>
+</head>
+<body>
+<main>
+<div class="sheet">
+<header>
+  <div class="meta"><span class="verdict">No recommendation</span><span class="task">ct-56750</span><span>1 signal since Oct 4</span><span>evals</span><span class="risk">Low risk</span></div>
+  <h1>insight reports intended work as done: did items and outcome claim checks the excerpt never shows finishing</h1>
+  <p class="goal">Serves <b>Codecast: Product</b></p><p class="why">Make codecast the place a person steers every agent from: one inbox, one org chart, one place to decide.</p>
+</header>
+<div class="two">
+  <div class="say wrong"><span class="lbl">What is wrong</span><p></p></div>
+  <div class="say change"><span class="lbl">What this changes</span><p></p></div>
+</div>
+<section class="block"><h2>Proof <span class="count">none recorded</span></h2></section>
+
+<section class="block"><h2>Checks</h2><ul class="checks"><li><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="cname">Verify</span><span class="cdetail">No new commit this round. The branch already holds the full fix: 8336bcc66, c3d9115b2 and 76cd9b1ee, pushed, HEAD 76cd9b1ee. It is a prompt-only change in insightRequest (packages/convex/convex/sessionInsights.ts) plus the regenerated request golden, 12 insertions and 10 deletions. Since the last implement round, the only change is the sharpened judge on 0706ea1a. So this round re-verifies the branch against that judge. Nothing new needed fixing.</span></li><li><span class="mark ok" title="passes"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="cname">Review</span><span class="cdetail">All criteria met; no unmet points.
+
+AC1: the rewrite is prompt text only in insightRequest (sessionInsights.ts): preamble, headline schema line, did schema line, turns rule, headline/summary/outcome_type rules, and the &quot;Deployed fix, confirmed memory stable&quot; example replaced by a measured result. Golden insight.json regenerated; `bun test convex/sessionInsights.request.test.ts` 4/4. No filter, retry, second call or parse guard. Freezes and judges untouched by the diff (the 0706ea1a judge was sharpened earlier, not loosened).
+AC2: only done steps go in did; running/waiting steps are never done/passed/verified; announced-next steps are neither done nor underway (summary names them as next); one result per bullet, mixed bullets claim only the shown part; headline claims only finished work. A completion notice is not a pass.
+AC3: shipped needs the excerpt to show deployed/merged/complete; progress covers a last step not shown finishing.
+AC4: run of record (eval-result.json, 08:57, haiku-4-5, 5 reps): miss 0706ea1a base 0/5 -&gt; branch 4/5; 79b1a58a 3/5 -&gt; 5/5; guards 8157ae70, c0c50f98, 23d5e903 5/5 on branch; no gate failures, 0 crashes; separated: better (p=2.9e-5). My own `./evals check insight --reps 5` on the branch: 24/25, 0706ea1a 5/5, 79b1a58a 5/5, c0c50f98 5/5, 8157ae70 5/5, 23d5e903 4/5 (one rep at 0.60; passes by majority, a note), no gates, not separated vs the prior branch run set (medians 0.93/0.93), not worse.
+AC5: `cast check convex` 0 errors in the branch worktree.
+
+Note: one branch rep on 0706ea1a in the run of record still wrote &quot;modal appears when clicked&quot;; my 5 reps had none. Isolated, not repeating.
+
+P12 checklist: P5 pass (each rule rewritten at its own site), P1 pass (opens with reader and intent), P2 pass (one call, one schema), P3 pass (example swap removes the anchoring &quot;confirmed&quot; closer; no new examples), P4 pass (reads clean, no history), P8 n/a, P9 pass (red on base, green on branch, same freezes, guards held, judges not loosened), P10 n/a (context unchanged), P11 pass (the earlier &quot;tests underway&quot; swing on c0c50f98 is gone: 5/5 in both runs).
+Principles checked: PR-prompt-1, PR-prompt-3, PR-code-1, PR-process-7, CC-verify-2, CC-ship-2.</span></li></ul></section>
+<div class="panels">
+  <div class="panel"><h3>Diff</h3><div class="big num">2 <small>files</small></div>
+<div class="num delta"><span class="add">+0</span> <span class="del">&minus;0</span></div><div class="sub"><span class="dim">no pull request</span></div></div>
+  <div class="panel"><h3>Risk</h3><div class="big mid">Low risk</div><div class="sub">Ground rated it low.</div></div>
+  <div class="panel"><h3>Cost</h3><div class="costs"><span><span class="num">$0.00</span></span><span><span class="num">0</span> tokens</span><span><span class="num">4 h 46 min</span> of agent time</span></div></div>
+</div>
+<div class="rec"><span class="word">No recommendation</span><p></p></div>
+</div>
+<footer>Change card for ct-56750</footer>
+</main>
+</body>
+</html>

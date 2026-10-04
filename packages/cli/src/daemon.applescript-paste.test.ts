@@ -114,32 +114,31 @@ describe("writeKittyInjectionPayload", () => {
 });
 
 describe("direct terminal message submission", () => {
-  test("Kitty and WezTerm route normal text through paste-then-one-submit", () => {
-    const submission = (name: string) => {
-      const body = functionBlock(source, name).text;
-      const start = body.indexOf("await pasteAndSubmitText({");
-      expect(start).toBeGreaterThanOrEqual(0);
-      return blockAt(body, start).text;
-    };
-    const kitty = submission("injectViaKitty");
-    const wezterm = submission("injectViaWezTerm");
+  test("Kitty, WezTerm and herdr route normal text through paste-then-one-submit", () => {
+    const body = functionBlock(source, "injectThroughPane").text;
+    const start = body.indexOf("await pasteAndSubmitText({");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const submission = blockAt(body, start).text;
 
-    expect(kitty).toContain("paste: () => kittySendText(match, content, bracketed, beforeInput)");
-    expect(kitty.match(/kittySendText\(/g)).toHaveLength(1);
-    expect(kitty.match(/kitty @ send-key/g)).toHaveLength(1);
-    expect(kitty).toContain("submit: async () => {");
-    expect(kitty).toContain("await beforeInput?.()");
-    expect(kitty.indexOf("await beforeInput?.()")).toBeLessThan(kitty.indexOf("kitty @ send-key"));
-    expect(kitty).toContain("await execAsync(`kitty @ send-key ${match} enter`)");
-    expect(wezterm).toContain("paste: async () => {");
-    expect(wezterm).toContain("await weztermSendText(paneId, content, { bracketed })");
-    expect(wezterm.match(/weztermSendText\(/g)).toHaveLength(1);
-    expect(wezterm.match(/weztermSendKeys\(/g)).toHaveLength(1);
-    expect(wezterm).toContain("await beforeInput?.()");
-    expect(wezterm.indexOf("await beforeInput?.()")).toBeLessThan(wezterm.indexOf("await weztermSendText("));
-    const submit = wezterm.slice(wezterm.indexOf("submit: async () => {"));
+    expect(submission).toContain("paste: () => t.sendText(content, beforeInput)");
+    expect(submission.match(/sendText\(/g)).toHaveLength(1);
+    expect(submission.match(/sendKey\(/g)).toHaveLength(1);
+    const submit = submission.slice(submission.indexOf("submit: async () => {"));
     expect(submit).toContain("await beforeInput?.()");
-    expect(submit.indexOf("await beforeInput?.()")).toBeLessThan(submit.indexOf("await weztermSendKeys("));
-    expect(submit).toContain('await weztermSendKeys(paneId, "\\r")');
+    expect(submit.indexOf("await beforeInput?.()")).toBeLessThan(submit.indexOf('await t.sendKey("Enter")'));
+
+    for (const name of ["injectViaKitty", "injectViaWezTerm", "injectViaHerdr"]) {
+      expect(functionBlock(source, name).text).toContain("await injectThroughPane(");
+    }
+  });
+
+  test("each transport runs the input guard right before it writes message text", () => {
+    expect(functionBlock(source, "kittySendText").text).toContain("await beforeInput?.()");
+    for (const name of ["injectViaWezTerm", "injectViaHerdr"]) {
+      const body = functionBlock(source, name).text;
+      const send = body.slice(body.indexOf("sendText: async (text, beforeInput) => {"));
+      expect(send.indexOf("await beforeInput?.()")).toBeGreaterThanOrEqual(0);
+      expect(send.indexOf("await beforeInput?.()")).toBeLessThan(send.indexOf("sendKey:"));
+    }
   });
 });

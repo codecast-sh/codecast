@@ -67,6 +67,7 @@ describe("the fixture world", () => {
     "GET /commit/:sha": { params: { sha: settle[0].gitHead!.slice(0, 9) } },
     "GET /patch/:sha": { params: { sha: settle.find((r) => r.treePatch)!.treePatch! } },
     "GET /changes": { query: { since: "0" } },
+    "GET /search": { query: { q: callRun.freezeId.slice(0, 6) } },
     "POST /bisect/plan": { body: { surface: "settle", good: batches[batches.length - 6], bad: batches[batches.length - 1] } },
     "POST /bisect": { body: { surface: "settle", good: batches[0], bad: batches[1] } },
     "GET /bisects": {},

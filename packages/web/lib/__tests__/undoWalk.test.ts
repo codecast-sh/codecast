@@ -5,6 +5,7 @@ import {
   PEEK_DELAY_MS,
   WALK_IDLE,
   createFieldUndoGuard,
+  fieldHoldsText,
   fieldOwnsStep,
   walk,
   walkTimer,
@@ -228,5 +229,42 @@ describe("createFieldUndoGuard", () => {
     at(150);
     guard.edited(field);
     expect(guard.declines("undo", field, { ...history, items: [{ id: "a", ts: 100, redoneAt: 200 }] }, () => {})).toBe(false);
+  });
+  // A field holding text keeps its own undo while it has one. A draft the
+  // app seeded (a triage step that lands on a session with one) has none:
+  // nobody edited it, and the browser's undo would do nothing.
+  describe("a field holding text", () => {
+    test("seeded and never edited, the press is the app's", () => {
+      const { guard } = setup();
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+
+    test("the browser or editor's own answer decides when it gives one", () => {
+      const { guard } = setup();
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(true);
+      expect(guard.keepsWithText(field, () => {}, false)).toBe(false);
+    });
+
+    test("edited, however long ago, it keeps the press until it has nothing left", () => {
+      const { guard, flush, at } = setup();
+      let appSteps = 0;
+      at(10);
+      guard.edited(field);
+      expect(guard.keepsWithText(field, () => { appSteps += 1; })).toBe(true);
+      // No input came of the browser's undo: the field had nothing, the app steps.
+      flush();
+      expect(appSteps).toBe(1);
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+  });
+});
+
+describe("fieldHoldsText", () => {
+  test("reads inputs by value, editables by text, and nothing else", () => {
+    expect(fieldHoldsText({ tagName: "TEXTAREA", value: "draft" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "INPUT", value: "" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: " \n" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: "note" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "DIV" } as any)).toBeNull();
   });
 });

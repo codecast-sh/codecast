@@ -11,6 +11,7 @@
 // this one file. Ids are strings here: the shared package knows no Convex.
 
 import { autonomyChangeWords, autonomyOn } from "./roleAutonomy";
+import { intentSourceKey, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type IntentSource } from "./initiative";
 import {
   andList,
   changeLine,
@@ -80,11 +81,18 @@ export type OrgLogFields = {
   /** The projects kind: what each entry of the change created or folded. */
   projects?: Array<{ op: "create"; project_id: string; title: string } | { op: "merge"; from_id: string; into_id: string }>;
   // An initiative: who drives it, the projects that carry it (ids, in order),
-  // the top level goal it feeds and the numbers it is read against.
+  // the top level goal it feeds, the numbers it is read against, and its
+  // intent record (I5), each list as the row stores it.
   owner?: OrgPartyRef | null;
   project_ids?: string[] | null;
   parent_initiative_id?: string | null;
   metrics?: Array<{ key: string; name: string; target: string }> | null;
+  why?: string | null;
+  done_when?: string | null;
+  milestones?: InitiativeMilestone[] | null;
+  questions?: InitiativeQuestion[] | null;
+  decisions?: InitiativeDecision[] | null;
+  sources?: IntentSource[] | null;
   // A session.
   parent?: OrgSessionParent;
 };
@@ -367,16 +375,39 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       return added.length ? { kind: "initiative_projects", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, projects: added.map((id) => nameOf(row, id, id)) } : null;
     }
     case "initiative_owner": return { kind: "initiative_owner", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, owner: partyName(row, row.after.owner) ?? "" };
-    case "initiative_shape": return {
-      kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
-      ...("parent_initiative_id" in row.after ? { parent: row.after.parent_initiative_id ? nameOf(row, row.after.parent_initiative_id, row.after.parent_initiative_id) : null } : {}),
-      ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
-    };
+    // The change kind places a goal, writes its words and adds to its lists.
+    // A row that did none of those (an entry edited, closed or removed, words
+    // cleared, the inverse of an add) reads through orgLogLine's own words.
+    case "initiative_shape": {
+      const { before: b, after: a } = row;
+      const milestones = addedEntries(b.milestones, a.milestones, (m) => m.key), questions = addedEntries(b.questions, a.questions, (q) => q.key), decisions = addedEntries(b.decisions, a.decisions, (d) => d.key), sources = addedEntries(b.sources, a.sources, intentSourceKey);
+      const says = "parent_initiative_id" in row.after || "metrics" in row.after || !!row.after.why || !!row.after.done_when || milestones.length + questions.length + decisions.length + sources.length > 0;
+      return !says ? null : {
+        kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
+        ...("parent_initiative_id" in row.after ? { parent: row.after.parent_initiative_id ? nameOf(row, row.after.parent_initiative_id, row.after.parent_initiative_id) : null } : {}),
+        ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
+        ...(row.after.why ? { why: row.after.why } : {}),
+        ...(row.after.done_when ? { done_when: row.after.done_when } : {}),
+        ...(milestones.length ? { milestones: milestones.map((m) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) })) } : {}),
+        ...(questions.length ? { questions: questions.map((q) => q.text) } : {}),
+        ...(decisions.length ? { decisions: decisions.map((d) => d.text) } : {}),
+        ...(sources.length ? { sources: sources.map((s) => s.ref ?? s.quote ?? s.kind) } : {}),
+      };
+    }
     default: return null;
   }
 }
 
-const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects", parent_initiative_id: "parent goal", metrics: "metrics" };
+/** The entries of a record list a row added: those after whose key was not there before. */
+function addedEntries<T>(before: readonly T[] | null | undefined, after: readonly T[] | null | undefined, keyOf: (e: T) => string): T[] {
+  const had = new Set((before ?? []).map(keyOf));
+  return (after ?? []).filter((e) => !had.has(keyOf(e)));
+}
+
+const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = {
+  name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects", parent_initiative_id: "parent goal", metrics: "metrics",
+  why: "purpose", done_when: "definition of done", milestones: "milestones", questions: "open questions", decisions: "decisions", sources: "sources",
+};
 
 /** The sentence of a kind the proposal vocabulary does not have. */
 function logOnlySentence(row: OrgLogRow): string {
@@ -411,6 +442,11 @@ export function orgLogLine(row: OrgLogRow): string {
   if (row.kind === "initiative_projects") {
     const removed = (row.before.project_ids ?? []).filter((id) => !(row.after.project_ids ?? []).includes(id));
     return `Remove ${andList(removed.map((id) => nameOf(row, id, id))) || "the projects"} from the goal ${row.subject.label}`;
+  }
+  // The change kind only adds to a goal's record; a row that edited, closed or removed an entry (or took an add back) names what it moved.
+  if (row.kind === "initiative_shape") {
+    const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[];
+    return `Change the ${andList(words) || "record"} of the goal ${row.subject.label}`;
   }
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);

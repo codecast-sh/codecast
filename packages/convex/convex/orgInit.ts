@@ -58,7 +58,8 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, metricsWords } from "@codecast/shared/contracts/orgProposal";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords } from "@codecast/shared/contracts/orgProposal";
+import { mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
 import { performSetTrust, standingConversationOf } from "./orgRoles";
@@ -1357,6 +1358,9 @@ export type ApplyOpts = {
    *  session here would make the later adopt a no-op and leave the workspace
    *  with two root agents while the note claimed the anchor was adopted. */
   awaiting_adopt?: string;
+  /** The accepted change row's evidence. A goal change persists it as the
+   *  goal's sources (initiatives-projects-role-page.md I5 "Proposals"). */
+  evidence?: OrgEvidenceLink[];
 };
 
 async function liveRole(ctx: Ctx, boundary: Boundary, handleRef: string) {
@@ -1619,7 +1623,7 @@ export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: B
 }
 
 // ── The company's goals (initiatives-projects-role-page.md "I1, revised") ──
-// Three changes, each a thin call into the initiatives module's own cores, so
+// Four changes, each a thin call into the initiatives module's own cores, so
 // a goal a review proposes is made the way a goal set on the page is made and
 // logged the same way (S21). Refs resolve inside the boundary: a project by
 // short id, id or title through the scope resolver; an initiative by in-N,
@@ -1646,7 +1650,33 @@ async function projectIdsOf(ctx: Ctx, boundary: Boundary, refs: string[]): Promi
   return out;
 }
 
-export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeChange, _opts: ApplyOpts): Promise<ApplyResult> {
+/**
+ * The sources a goal change brings that the goal does not hold yet (I5
+ * "Proposals"): the ones the change names, then its evidence (the change's
+ * own lines and the accepted row's links), each read the way a person writes
+ * one. A source already on the record is skipped, and so is one the record
+ * has no room for.
+ */
+function freshSources(goal: { sources?: IntentSource[] } | null, opts: ApplyOpts, named: readonly string[] = []): IntentSource[] {
+  const prior = goal?.sources ?? [];
+  const said = [...named, ...(opts.evidence ?? []).map((e) => e.href ?? e.label)].map((text) => parseIntentSource(text));
+  return mergeIntentSources(prior, said).slice(prior.length);
+}
+/** The entries of a list the goal does not hold yet, compared by their words; a repeat inside the change counts once. */
+function unheld<T>(given: readonly T[] | undefined, held: readonly string[], wordsOf: (e: T) => string): T[] {
+  const seen = new Set(held.map((w) => w.trim().toLowerCase()));
+  return (given ?? []).filter((e) => {
+    const words = wordsOf(e).trim().toLowerCase();
+    if (!words || seen.has(words)) return false;
+    seen.add(words);
+    return true;
+  });
+}
+const milestoneEntry = (m: { title: string; date?: number }) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) });
+const counted = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+const sourcesNote = (k: number) => k ? `; its record names ${counted(k, "source")} for it` : "";
+
+export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeChange, opts: ApplyOpts): Promise<ApplyResult> {
   // Idempotent by title: a re-run after a crash must not set the goal twice.
   const existing = await initiativeByRef(ctx, userId, boundary, p.title).catch(() => null);
   if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})` };
@@ -1654,39 +1684,74 @@ export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: B
   const owner = p.owner?.trim() ? await resolveReportsTo(ctx, userId, boundary, p.owner) : undefined;
   // The top level goal it feeds: a goal that exists, or one set earlier in the same proposal (the apply order keeps the proposal's order within a kind).
   const parent = p.parent?.trim() ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
-  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), { title: p.title, description: p.description, project_ids, ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}), ...(p.target_date ? { target_date: p.target_date } : {}), ...(parent ? { parent_initiative_id: String(parent._id) } : {}), ...(p.metrics?.length ? { metrics: p.metrics } : {}) });
-  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${coverNote(r.scope)}` };
+  const milestones = unheld(p.milestones, [], (m) => m.title).map(milestoneEntry);
+  const sources = freshSources(null, opts, [...(p.sources ?? []), ...(p.evidence ?? [])]);
+  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), {
+    title: p.title, description: p.description, project_ids,
+    ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}),
+    ...(p.target_date ? { target_date: p.target_date } : {}),
+    ...(parent ? { parent_initiative_id: String(parent._id) } : {}),
+    ...(p.metrics?.length ? { metrics: p.metrics } : {}),
+    ...(p.why?.trim() ? { why: p.why } : {}),
+    ...(p.done_when?.trim() ? { done_when: p.done_when } : {}),
+    ...(milestones.length ? { milestones } : {}),
+    ...(sources.length ? { sources } : {}),
+  });
+  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${milestones.length ? `, with ${counted(milestones.length, "milestone")}` : ""}${sourcesNote(sources.length)}${coverNote(r.scope)}` };
 }
 
-export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeShapeChange, _opts: ApplyOpts): Promise<ApplyResult> {
+// One call into the update core: the parent, the metrics and the words
+// replace what is there, and every list entry is an add, so a re-run finds
+// each one on the record and writes nothing twice.
+export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeShapeChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
-  const fields: Record<string, any> = {};
-  if (p.parent !== undefined) fields.parent_initiative_id = parent ? String(parent._id) : null;
-  if (p.metrics !== undefined) fields.metrics = p.metrics;
   const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
   const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map((m: any) => [m.name, m.target])) === JSON.stringify(p.metrics.map((m) => [m.name.trim(), m.target.trim()]));
-  if (sameParent && sameMetrics) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way` };
+  const held = (list: string, words: string): string[] => (initiative[list] ?? []).map((e: any) => String(e[words] ?? ""));
+  const milestones = unheld(p.milestones, held("milestones", "title"), (m) => m.title).map(milestoneEntry);
+  const questions = unheld(p.questions, held("questions", "text"), (q) => q).map((text) => ({ text }));
+  const decisions = unheld(p.decisions, held("decisions", "text"), (d) => d).map((text) => ({ text }));
+  const sources = freshSources(initiative, opts, p.sources);
+  const fields: Record<string, any> = {};
+  if (!sameParent) fields.parent_initiative_id = parent ? String(parent._id) : null;
+  if (!sameMetrics) fields.metrics = p.metrics;
+  if (p.why !== undefined && p.why.trim() !== (initiative.why ?? "")) fields.why = p.why;
+  if (p.done_when !== undefined && p.done_when.trim() !== (initiative.done_when ?? "")) fields.done_when = p.done_when;
+  for (const [list, entries] of Object.entries({ milestones, questions, decisions, sources })) if (entries.length) fields[list] = entries;
+  if (!Object.keys(fields).length) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way` };
   await performUpdateInitiative(ctx, userId, initiative, fields);
-  const said = [p.parent !== undefined ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "", p.metrics !== undefined ? (p.metrics.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : ""].filter(Boolean);
+  const gained = [milestones.length ? counted(milestones.length, "milestone") : "", questions.length ? counted(questions.length, "open question") : "", decisions.length ? counted(decisions.length, "decision") : "", sources.length ? counted(sources.length, "source") : ""].filter(Boolean);
+  const said = [
+    p.parent !== undefined ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "",
+    p.metrics !== undefined ? (p.metrics.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : "",
+    "why" in fields ? "says why it matters" : "",
+    "done_when" in fields ? "says what done looks like" : "",
+    gained.length ? `gained ${andListOf(gained)}` : "",
+  ].filter(Boolean);
   return { status: "applied", note: `the goal "${initiative.title}" (${initiative.short_id}) ${andListOf(said)}` };
 }
 
-export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, _opts: ApplyOpts): Promise<ApplyResult> {
+// A change that moved nothing writes nothing, its evidence included: the
+// sources ride with the change that brought them, in its one log row.
+export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const project_ids = await projectIdsOf(ctx, boundary, p.projects);
   const r = await performAddProjects(ctx, userId, initiative, project_ids);
   if (!r.added) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already carries ${andListOf(p.projects)}` };
-  return { status: "applied", note: `added ${andListOf(p.projects)} to the goal "${initiative.title}" (${initiative.short_id})${coverNote(r.scope)}` };
+  const sources = freshSources(r.row, opts);
+  if (sources.length) await performUpdateInitiative(ctx, userId, r.row, { sources });
+  return { status: "applied", note: `added ${andListOf(p.projects)} to the goal "${initiative.title}" (${initiative.short_id})${sourcesNote(sources.length)}${coverNote(r.scope)}` };
 }
 
-export async function applyInitiativeOwner(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeOwnerChange, _opts: ApplyOpts): Promise<ApplyResult> {
+export async function applyInitiativeOwner(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeOwnerChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const owner = await resolveReportsTo(ctx, userId, boundary, p.owner);
   const same = initiative.owner && initiative.owner.kind === owner.kind && String(owner.kind === "role" ? initiative.owner.role_id : initiative.owner.user_id) === String(owner.kind === "role" ? owner.role_id : owner.user_id);
   if (same) return { status: "applied", note: `${p.owner} already owns ${initiative.short_id} "${initiative.title}"` };
-  const r = await performUpdateInitiative(ctx, userId, initiative, { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any });
-  return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${coverNote(r.scope)}` };
+  const sources = freshSources(initiative, opts);
+  const r = await performUpdateInitiative(ctx, userId, initiative, { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any, ...(sources.length ? { sources } : {}) });
+  return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${sourcesNote(sources.length)}${coverNote(r.scope)}` };
 }
 /** What the owner role's area gained, and the sessions it took over with it, as the core reported them. */
 const coverNote = (scope: { added: string[]; took_over?: string } | null | undefined) => `${scope?.added.length ? `; the owner now looks after ${scope.added.length} more project${scope.added.length === 1 ? "" : "s"}` : ""}${scope?.took_over ? `; ${scope.took_over}` : ""}`;

@@ -1,9 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { EVALS_SHA_RE, largestDrops, narrowByRecords, sourceConfidence, type Attribution, type AttributionAnswer, type AttributionClass, type Candidate, type CommitRef, type Endpoint, type Footing, type RecordedProbe, type RunRow, type VerdictFlip } from '@codecast/shared/contracts/evalsApi';
 
+import { readProbe } from '../bisect/reading';
+import { git, gitLog, onMainLine, resolveCommit } from '../git';
 import { batchStarts, batchVerdict, footingChange, footingOf, majority, scoreOrZero, verdictFlips } from '../commands/verdict';
 import { DRY_RUN_SCRIPT_REL, publicFreezesDir, treeRoot } from '../paths';
 import { readHeads, type HeadsFile } from '../provenance';
@@ -35,37 +36,20 @@ export interface AttributionGit {
   show(sha: string, path: string): string | null;
 }
 
-const SESSION_TRAILER = 'Codecast-Session';
-
 /** The repo's git, argv only, never a shell string. */
 export function repoGit(root = treeRoot()): AttributionGit {
-  const run = (args: string[]) => spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  const log = (args: string[], onMain: boolean): CommitRef[] => {
-    const r = run(['log', '--reverse', `--format=%H%x1f%s%x1f%an%x1f%aI%x1f%(trailers:key=${SESSION_TRAILER},valueonly,separator=%x2C)%x1e`, ...args]);
-    if (r.status !== 0) return [];
-    return r.stdout
-      .split('\x1e')
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((l) => {
-        const [sha = '', subject = '', author = '', at = '', session = ''] = l.split('\x1f');
-        return { sha, subject, author, at, session: session.trim().split(',')[0] || null, mainSha: onMain ? sha : null, onMain };
-      });
-  };
+  const run = (args: string[]) => git(root, args);
   return {
-    resolve: (name) => {
-      const r = run(['rev-parse', '--verify', '--quiet', `${name}^{commit}`]);
-      return r.status === 0 ? r.stdout.trim() : null;
-    },
-    isAncestor: (a, b) => run(['merge-base', '--is-ancestor', a, b]).status === 0,
-    path: (good, bad, paths) => log(['--ancestry-path', `${good}..${bad}`, ...(paths ? ['--', ...paths] : [])], true),
+    resolve: (name) => resolveCommit(name, root),
+    isAncestor: (a, b) => run(['merge-base', '--is-ancestor', a, b]).ok,
+    path: (good, bad, paths) => gitLog(['--reverse', '--ancestry-path', `${good}..${bad}`, ...(paths ? ['--', ...paths] : [])], onMainLine, root).map(({ parents: _, ...c }) => c),
     changed: (a, b, paths) => {
       const r = run(['diff', '--name-only', a, b, '--', ...paths]);
-      return r.status === 0 ? r.stdout.split('\n').filter(Boolean) : [];
+      return r.ok ? r.out.split('\n').filter(Boolean) : [];
     },
     show: (sha, path) => {
       const r = run(['show', `${sha}:${path}`]);
-      return r.status === 0 ? r.stdout : null;
+      return r.ok ? r.out : null;
     },
   };
 }
@@ -126,8 +110,13 @@ interface Side {
   set: RunRow[];
 }
 
-/** An endpoint from a batch's graded reps: the commit most of them ran on, its main-line twin, and whether any ran on edits. */
-function sideOfBatch(rows: RunRow[], batch: string): Side {
+/**
+ * An endpoint from a batch's graded reps: the commit most of them ran on, its
+ * main-line twin, and whether any ran on edits. A head heads.json has no entry
+ * for sits nowhere known yet, so it has no twin rather than standing for
+ * itself on main; with no heads.json at all the head stands for itself.
+ */
+function sideOfBatch(rows: RunRow[], batch: string, heads: HeadsFile | null): Side {
   const set = gradedSet(rows, batch);
   const reps = set.length ? set : rows.filter((r) => r.batch === batch);
   const sha = modal(reps.map((r) => r.gitHead).filter((h): h is string => !!h)) ?? '';
@@ -136,7 +125,7 @@ function sideOfBatch(rows: RunRow[], batch: string): Side {
     end: {
       batch,
       sha,
-      mainSha: modal(onHead.map((r) => r.mainSha).filter((h): h is string => !!h)) ?? (onHead.some((r) => r.offBranch) ? null : sha || null),
+      mainSha: modal(onHead.map((r) => r.mainSha).filter((h): h is string => !!h)) ?? (onHead.some((r) => r.offBranch) || (heads && !heads.heads[sha]) ? null : sha || null),
       dirty: reps.some((r) => r.dirty),
       treePatch: reps.find((r) => r.treePatch)?.treePatch ?? null,
       footing: set[0] ? footingOf(set[0]) : { model: null, ruler: null },
@@ -148,14 +137,14 @@ function sideOfBatch(rows: RunRow[], batch: string): Side {
 
 /** An endpoint named by a batch or a sha. A sha stands for the newest clean batch that ran on it, or for the bare commit when none did. */
 function sideOf(rows: RunRow[], ref: string, git: AttributionGit, heads: HeadsFile | null): Side {
-  if (rows.some((r) => r.batch === ref)) return sideOfBatch(rows, ref);
+  if (rows.some((r) => r.batch === ref)) return sideOfBatch(rows, ref, heads);
   if (!EVALS_SHA_RE.test(ref)) throw new Error(`${ref} is neither a batch of this surface nor a sha`);
   const sha = git.resolve(ref);
   if (!sha) throw new Error(`${ref} is not a commit in this repo`);
   const ran = timeline(rows)
     .filter(({ reps }) => reps.some((r) => r.gitHead === sha) && !reps.some((r) => r.dirty) && gradedSet(rows, reps[0]!.batch!).length)
     .at(-1);
-  if (ran) return sideOfBatch(rows, ran.batch);
+  if (ran) return sideOfBatch(rows, ran.batch, heads);
   const entry = heads?.heads[sha];
   return { end: { batch: null, sha, mainSha: entry ? entry.mainSha : sha, dirty: false, treePatch: null, footing: { model: null, ruler: null }, at: null }, set: [] };
 }
@@ -168,7 +157,7 @@ function newestRed(rows: RunRow[], surface: string): string | undefined {
     .map((b) => b.batch)
     .find((batch) => {
       if (!gradedSet(rows, batch).length) return false;
-      const v = batchVerdict(meta, batch, rows, { earlierOnly: true });
+      const v = batchVerdict(meta, batch, rows);
       return v.regression || v.flips.some((f) => f.direction === 'broke');
     });
 }
@@ -190,16 +179,10 @@ function goodBefore(rows: RunRow[], bad: Side, freezes: string[]): string | null
 /** For a fall in score with no flip: the contract's rule, shared with the fixture world. */
 export { largestDrops };
 
-/** How a recorded batch reads against the endpoints, by the probe rule: majority per flipped freeze, or the separation in score mode. */
+/** How a recorded batch reads against the endpoints: the bisect's own probe rule (readProbe), a split read as unsure. */
 function classify(set: RunRow[], good: RunRow[], focus: string[], mode: Attribution['mode']): RecordedProbe['verdict'] {
-  const ran = set.filter((r) => focus.includes(r.freezeId));
-  if (mode === 'score') {
-    const s = separate(ran.map(scoreOrZero), good.filter((r) => focus.includes(r.freezeId)).map(scoreOrZero));
-    return s.kind === 'worse' ? 'bad' : s.kind === 'too-few' ? 'unsure' : 'good';
-  }
-  const m = majority(ran);
-  const failing = [...m.values()].filter((p) => !p).length;
-  return failing * 2 > m.size ? 'bad' : (m.size - failing) * 2 > m.size ? 'good' : 'unsure';
+  const reading = readProbe(set, focus, mode, good);
+  return reading === 'split' ? 'unsure' : reading;
 }
 
 /** Why a side's records cannot stand for one commit, or null. */
@@ -207,6 +190,7 @@ function unreplayable(name: string, s: Side, heads: HeadsFile | null): string | 
   if (s.end.dirty && !s.end.treePatch) return `${name} ${s.end.batch ?? short(s.end.sha)} ran on uncommitted edits to ${short(s.end.sha)} that nothing recorded can replay`;
   if (!s.end.mainSha) {
     const entry = heads?.heads[s.end.sha];
+    if (!entry) return `${name}'s head ${short(s.end.sha)} is not in heads.json yet, so where it sits is unknown: ./evals pin --backfill maps it`;
     return `${name}'s head ${short(s.end.sha)} is on no branch and has no main-line twin${entry?.reason ? ` (${entry.reason})` : ''}${entry?.near ? `; nearest on main: ${short(entry.near)}` : ''}`;
   }
   return null;
@@ -229,7 +213,7 @@ function sourceAnswer(input: AttributionInput, git: AttributionGit, heads: Heads
   const narrowedBy: Array<RecordedProbe & { at: number; clean: boolean }> = [];
   for (const { batch } of timeline(input.rows)) {
     if (batch === good.end.batch || batch === bad.end.batch) continue;
-    const s = sideOfBatch(input.rows, batch);
+    const s = sideOfBatch(input.rows, batch, heads);
     const i = at.get(s.end.mainSha ?? '');
     const ran = s.set.filter((r) => focus.includes(r.freezeId));
     if (i === undefined || !ran.length || (s.end.dirty && !s.end.treePatch)) continue;
@@ -260,7 +244,7 @@ export function attribute(input: AttributionInput): Attribution {
   const broke = (flips: VerdictFlip[]) => flips.filter((f) => f.direction === 'broke' && only(f.freezeId));
   let goodRef = input.good;
   if (!goodRef && bad.end.batch) {
-    const v = batchVerdict(meta, bad.end.batch, rows, { earlierOnly: true });
+    const v = batchVerdict(meta, bad.end.batch, rows);
     const f = broke(v.flips).map((x) => x.freezeId);
     goodRef = (f.length ? goodBefore(rows, bad, f) : v.baseline?.batches.at(-1)) ?? undefined;
   }
@@ -346,12 +330,15 @@ export function attribute(input: AttributionInput): Attribution {
   const separation = separate(bs.map(scoreOrZero), gs.map(scoreOrZero));
   check('noise', !answer, `${answer ? 'not the answer' : 'nothing else differs'}: ${separation.kind === 'too-few' ? 'too few reps to separate' : `${separation.kind}, p=${separation.p.toFixed(4)}`}`, () => ({ kind: 'noise', separation }));
 
-  // The rendered prompt, whatever the answer: the good side's newest rep against the bad side's first, per focus freeze.
-  // Unchanged files stay in, so a page can say the prompts held still rather than that nothing was there to compare.
+  // The rendered prompt, whatever the answer, per focus freeze. A flip shows the reps its own lists lead with (verdictFlips puts
+  // the reps that agree with each side's verdict first), as every other flip on the pages does; a fall in score with no flip
+  // takes the good side's newest rep against the bad side's first. Unchanged files stay in, so a page can say the prompts
+  // held still rather than that nothing was there to compare.
   const promptDiffs = focus.flatMap((f) => {
-    const g = gs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? 1 : -1))[0];
-    const b = bs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? -1 : 1))[0];
-    return g && b ? promptPairs(reader, f, g.id, b.id, false) : [];
+    const flip = flipped.find((x) => x.freezeId === f);
+    const g = flip ? flip.before[0] : gs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? 1 : -1))[0]?.id;
+    const b = flip ? flip.after[0] : bs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? -1 : 1))[0]?.id;
+    return g && b ? promptPairs(reader, f, g, b, false) : [];
   });
   return { surface: input.surface, good: good.end, bad: bad.end, mode, flipped, checklist, answer: answer!, promptDiffs, examples: [] };
 }

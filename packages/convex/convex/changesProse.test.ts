@@ -14,6 +14,7 @@ import { PROSE_ATTEMPTS } from "./changes";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ChangeCommit } from "@codecast/shared/changes";
 import { STRONG_MODEL, modelCost } from "./lib/anthropic";
+import { isInstructionEdit } from "./lib/sessionMedia";
 import { dayBounds, localDate } from "./lib/teamDay";
 import {
   DAILY_CAP_USD,
@@ -27,6 +28,7 @@ import {
   sentences,
   skipHeadline,
   storyPromptInput,
+  articleBody,
   storyRequest,
   type EditionPromptInput,
   type GatedSession,
@@ -141,7 +143,7 @@ describe("parseStoryReply", () => {
     expect(parseStoryReply(JSON.stringify({ headline: "x".repeat(121), why_source: "commit" }), input, fallback)!.headline).toBe("x".repeat(120));
     expect(prose.dek.length).toBeLessThanOrEqual(200);
     expect(prose.dek).not.toContain("…");
-    expect(prose.body).toBe("One. Two. Three.");
+    expect(prose.body).toBe("One. Two. Three. Four.");
     expect(prose.kind).toBe("fix");
     expect(prose.importance).toBe(2);
     expect(prose.risk_lines).toEqual({ schema: "Watch the migration." });
@@ -559,8 +561,9 @@ describe("runProse through rebuildDay", () => {
     const s = await setup();
     const now = Date.now();
     const date = localDate(now, "UTC");
-    const end = dayBounds(date, "UTC").end;
+    const { start, end } = dayBounds(date, "UTC");
     if (end - now < 2 * 60_000) return; // the day ends under the test: nothing live to hold back
+    if (now - start < 2 * SETTLE_MS) return; // a settled commit would fall on yesterday
     await s.commit("w1", "feat(web): line pages", now - 2 * SETTLE_MS, ["packages/web/line.tsx"], { conversation_id: s.ids.vis });
     await s.rebuild(date);
     expect(editionCalls()).toHaveLength(1);
@@ -630,6 +633,62 @@ describe("sentences", () => {
     expect(sentences(body, 3)).toBe("Each workspace now stores a timezone (migration 0042_workspace_timezone.sql). It shipped in cli 1.1.163. The schedule reads it.");
     expect(sentences("One. Two! Three? Four.", 2)).toBe("One. Two!");
     expect(sentences("No terminator at all", 3)).toBe("No terminator at all");
+  });
+});
+
+describe("story articles", () => {
+  const urls = { img1: "https://convex.example/api/storage/a", img2: "https://convex.example/api/storage/b" };
+
+  test("listed screenshots are placed by ref; unknown refs and outside URLs never reach the page", () => {
+    const body = articleBody(
+      "### Calls\n\nThe call card shows the contact first.\n\n![The new call card](img1)\n\n![a guess](img9) ![tracker](https://evil.example/x.png)\n\n\n\nDone.",
+      urls,
+    );
+    expect(body).toBe("### Calls\n\nThe call card shows the contact first.\n\n![The new call card](https://convex.example/api/storage/a)\n\nDone.");
+  });
+
+  test("an embed line becomes the page or the canvas it names; unknown refs go, and embeds do not count toward the cut", () => {
+    const canvas = "```cast-canvas\n<div data-canvas-title=\"Before and after\">" + "x".repeat(5000) + "</div>\n```";
+    const embeds = { page1: "https://codecast.sh/a/eval-report", canvas1: canvas };
+    const body = articleBody("The eval report:\n\nembed: page1\n\nThe flow, before and after:\n\nembed: canvas1\n\nembed: page7", {}, embeds);
+    expect(body).toBe(`The eval report:\n\nhttps://codecast.sh/a/eval-report\n\nThe flow, before and after:\n\n${canvas}`);
+  });
+
+  test("a long article is cut at the last paragraph that fits", () => {
+    const para = "word ".repeat(150).trim();
+    const body = articleBody([para, para, para, para, para].join("\n\n"), {});
+    expect(body.length).toBeLessThanOrEqual(3200);
+    expect(body.endsWith("word")).toBe(true);
+    expect(body.split("\n\n").every((p) => p === para)).toBe(true);
+  });
+
+  test("images and instruction edits come only from sessions seen in full, numbered, with URLs kept out of the prompt", () => {
+    const media = (url: string, at: number) => ({ images: [{ url, timestamp: at, context: `shot at ${at}` }], edits: [{ path: "prompts/story.md", before: "Be brief.", after: "Write an article.", timestamp: at }] });
+    const sessions: GatedSession[] = [
+      { conversation_id: "c1" as any, mode: "full", outcome_type: null, summary: "s1", media: media("https://convex.example/u2", 2) },
+      { conversation_id: "c2" as any, mode: "summary", outcome_type: null, summary: "s2", media: media("https://convex.example/secret", 1) },
+      { conversation_id: "c3" as any, mode: "full", outcome_type: null, summary: "s3", media: media("https://convex.example/u1", 1) },
+    ];
+    const input = storyPromptInput(facts(), [commitOf("c1", "feat(web): article", { web: [1, 5, 1] })], sessions, []);
+    expect(input.images.map((i) => i.ref)).toEqual(["img1", "img2"]);
+    expect(input.image_urls).toEqual({ img1: "https://convex.example/u1", img2: "https://convex.example/u2" });
+    expect(Object.values(input.image_urls)).not.toContain("https://convex.example/secret");
+    expect(input.edits).toHaveLength(2);
+    const prompt = storyRequest(input).prompt;
+    expect(prompt).toContain("img1");
+    expect(prompt).toContain("Write an article.");
+    expect(prompt).not.toContain("https://convex.example/");
+  });
+});
+
+describe("isInstructionEdit", () => {
+  test("instruction paths and prose count; code, data and tests do not", () => {
+    expect(isInstructionEdit("packages/x/prompts/story.md", "Be brief.")).toBe(true);
+    expect(isInstructionEdit("CLAUDE.md", "x")).toBe(true);
+    const prose = "Write for a teammate who was not there. Say what changed for the people who use the product, in plain words. Give a reason only when an input states one, and say which input it came from. Leave out the files and the mechanics.";
+    expect(isInstructionEdit("packages/convex/convex/changesProse.ts", prose)).toBe(true);
+    expect(isInstructionEdit("packages/convex/convex/changesProse.ts", "const x = a.map((b) => b.c).filter(Boolean); return { x, y: z ?? 1 };".repeat(4))).toBe(false);
+    expect(isInstructionEdit("packages/convex/convex/changesProse.test.ts", prose)).toBe(false);
   });
 });
 
