@@ -105,4 +105,19 @@ describe("match strength leads once the reader has typed", () => {
     );
     expect(ranked[0].id).toBe("s1");
   });
+  test("a typed query leads with sessions, title hits anywhere, and leaves closed tasks out", () => {
+    const candidates: MentionItem[] = [
+      { id: "t-done", type: "task", label: "Desk v2: the book as home", shortId: "ct-55348", status: "done", updatedAt: 900 },
+      { id: "t-open", type: "task", label: "Desk v2: iterative polish", shortId: "ct-55353", status: "in_review", updatedAt: 800 },
+      { id: "d1", type: "doc", label: "Desk v3: from the call", updatedAt: 700 },
+      { id: "s-mid", type: "session", label: "Broker desk v3 build", updatedAt: 100 },
+      { id: "s-pre", type: "session", label: "Desk v3 Polish", updatedAt: 50 },
+    ];
+    const times = new Map([["task:t-done", 1000], ["task:t-open", 999]]);
+    const ranked = mergeMentionSuggestions(candidates.filter((m) => mentionItemMatches(m, "desk")), [], times, Infinity, "desk");
+    expect(ranked.map((m) => m.id)).toEqual(["s-mid", "s-pre", "t-open", "d1"]);
+    // A closed task is still reachable by naming its short id.
+    expect(mentionItemMatches(candidates[0], "ct-55348")).toBe(true);
+    expect(mentionItemMatches(candidates[0], "")).toBe(false);
+  });
 });

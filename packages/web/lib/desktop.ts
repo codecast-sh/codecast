@@ -1043,6 +1043,7 @@ export const DESKTOP_SHORTCUTS: { key: string; label: string; description: strin
   { key: "toggleWindow", label: "Toggle Main Window", description: "Show or hide the main Codecast window" },
   { key: "togglePalette", label: "Quick Command Palette", description: "Open the floating command palette from anywhere" },
   { key: "toggleEnv", label: "Switch Local / Prod", description: "Switch between local dev and production" },
+  { key: "toggleAgentDock", label: "Agent Dock", description: "Open the agent dock's card from any app (only while the dock is on)" },
 ];
 
 export type DesktopShortcutConfig = {

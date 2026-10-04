@@ -9901,7 +9901,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resumeSession: (convId: string) => get().convCommand(convId, "resumeSession"),
 
-  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession"),
+  // The press time rides along so the daemon can tell an Escape aimed at the
+  // previous turn from one for the turn a queued message started after it.
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now() }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)

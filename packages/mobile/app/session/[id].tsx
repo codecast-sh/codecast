@@ -51,7 +51,9 @@ import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
 import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
-import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
+import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
+import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
+import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
@@ -3007,7 +3009,7 @@ function seedComposerDraft(conversationId: string, draftProp?: string | null): s
   return persisted;
 }
 
-function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null; autoFocus?: boolean }) {
+function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; isOwner: boolean; draft?: string | null; autoFocus?: boolean }) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
@@ -3220,6 +3222,18 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   };
 
   const canSend = !!message.trim() || selectedImages.length > 0;
+  const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
+  const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
+  const showStop = agentWorking && isOwner && !canSend;
+
+  // The interrupt is the shared store action (web's Escape); the daemon judges
+  // whether the agent is mid-turn and paints the interruption line.
+  const handleStop = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    useInboxStore.getState().sendEscape(conversationId).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Could not stop the agent');
+    });
+  };
 
   // Shared between the inline card and the fullscreen editor so both modes show
   // the same attachments/errors and drive the same send.
@@ -3279,17 +3293,22 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
           grey look; handleSend no-ops if the box is still empty. */}
+      {/* While the agent works and the box is empty, the send slot becomes
+          stop: the same interrupt web's Escape sends. Typing turns it back
+          into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
-        onPress={handleSend}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        onPress={showStop ? handleStop : handleSend}
         activeOpacity={0.7}
         delayPressIn={0}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
-        accessibilityLabel="Send"
+        accessibilityLabel={showStop ? 'Stop the agent' : 'Send'}
       >
-        <FontAwesome name="arrow-up" size={14} color="#fff" />
+        {showStop
+          ? <FontAwesome name="stop" size={11} color="#fff" />
+          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -3300,7 +3319,6 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   // the agent is not actively producing; a pill tap sends its text directly
   // through the shared dispatch, long-press fills the composer instead.
   const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
-  const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
@@ -3309,7 +3327,7 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
       {suggestionsEnabled && (
         <SuggestionPills
           conversationId={conversationId}
-          idle={!(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+          idle={!agentWorking}
           hidden={!!message.trim() || selectedImages.length > 0}
           onSend={(t) => dispatchSend(t)}
           onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
@@ -4319,29 +4337,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       showToast('Select messages to copy');
     };
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Copy whole conversation', 'Select messages', 'Cancel'],
-          cancelButtonIndex: 2,
-        },
-        (buttonIndex) => {
-          if (buttonIndex === 0) {
-            handleCopyAll();
-            return;
-          }
-          if (buttonIndex === 1) {
-            openMessageSelect();
-          }
-        }
-      );
-      return;
-    }
-
-    Alert.alert('Copy', undefined, [
-      { text: 'Copy whole conversation', onPress: handleCopyAll },
-      { text: 'Select messages', onPress: openMessageSelect },
-      { text: 'Cancel', style: 'cancel' },
+    showActionSheet('Copy', [
+      { label: 'Copy whole conversation', onPress: handleCopyAll },
+      { label: 'Select messages', onPress: openMessageSelect },
     ]);
   }, [handleCopyAll, handleStartShareSelection, shareSelectionMode, showToast]);
 
@@ -4377,75 +4375,43 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     onRefused: showToast,
   });
 
+  const huddle = useSessionHuddle(conversation?._id ? String(conversation._id) : '', conversation?.team_id ? String(conversation.team_id) : null);
+  const [renameVisible, setRenameVisible] = useState(false);
+
+  // Ordered by how often a phone user reaches for each: a live huddle first
+  // (time-sensitive), then the everyday reads and shares, then recovery, then
+  // the rare ones behind "More…" so the first sheet stays short.
   const handleMoreActions = useCallback(() => {
-    const options: string[] = [];
-    options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
-    options.push('Share');
-    options.push('Search');
-    options.push('Messages');
-    options.push('Copy');
-    if (conversation?.session_id) options.push('Copy Resume Command');
-    if (conversation && isConvexId(conversation._id)) {
-      options.push(isRestarting ? 'Restarting…' : 'Restart Session');
-    }
-    options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
+    const items: SheetItem[] = [];
+    if (huddle.enabled && huddle.inRoom > 0) items.push({ label: `Join Huddle (${huddle.inRoom})`, onPress: huddle.press });
+    items.push({ label: 'Search', onPress: () => setSearchVisible(v => !v) });
+    items.push({ label: 'Share', onPress: handleShareConversation });
+    items.push({ label: 'Copy', onPress: handleCopyMenu });
     // git_diff lives off the conversation doc now and is fetched lazily on
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
     // if there turns out to be no diff).
-    const hasDiff = !!conversation?.git_branch;
-    if (hasDiff) { setDiffWanted(true); options.push(diffExpanded ? 'Hide Diff' : 'View Diff'); }
-    if (hasForkFamily) options.push('Fork Tree');
-    options.push('Dismiss');
-    options.push('Cancel');
-
-    const destructiveIndex = options.indexOf('Dismiss');
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex: options.length - 1,
-          destructiveButtonIndex: destructiveIndex,
-        },
-        (idx) => {
-          const label = options[idx];
-          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
-          else if (label === 'Share') handleShareConversation();
-          else if (label === 'Search') setSearchVisible(v => !v);
-          else if (label === 'Messages') setNavSheetVisible(true);
-          else if (label === 'Copy') handleCopyMenu();
-          else if (label === 'Copy Resume Command') handleCopyResume();
-          else if (label === 'Restart Session') restartSession();
-          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
-          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
-          else if (label === 'Fork Tree') setTreeModalVisible(true);
-          else if (label === 'Dismiss') handleDismiss();
-        }
-      );
-      return;
+    if (conversation?.git_branch) {
+      setDiffWanted(true);
+      items.push({ label: diffExpanded ? 'Hide Diff' : 'View Diff', onPress: () => setDiffExpanded(d => !d) });
     }
-
-    Alert.alert('Actions', undefined, [
-      ...options.slice(0, -1).map(label => ({
-        text: label,
-        style: (label === 'Dismiss' ? 'destructive' : 'default') as any,
-        onPress: () => {
-          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
-          else if (label === 'Share') handleShareConversation();
-          else if (label === 'Search') setSearchVisible(v => !v);
-          else if (label === 'Messages') setNavSheetVisible(true);
-          else if (label === 'Copy') handleCopyMenu();
-          else if (label === 'Copy Resume Command') handleCopyResume();
-          else if (label === 'Restart Session') restartSession();
-          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
-          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
-          else if (label === 'Fork Tree') setTreeModalVisible(true);
-          else if (label === 'Dismiss') handleDismiss();
-        },
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [conversation, collapsed, diffExpanded, hasForkFamily, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
+    if (allSessionImages.length > 0) {
+      items.push({ label: `Images (${allSessionImages.length})`, onPress: () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); } });
+    }
+    if (boardHref) items.push({ label: 'Open Board', onPress: () => router.push(boardHref as never) });
+    if (huddle.enabled && huddle.inRoom === 0 && !huddle.pressDisabled) items.push({ label: 'Start Huddle', onPress: huddle.press });
+    items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
+    items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
+    if (conversation && isConvexId(conversation._id)) {
+      items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
+    }
+    const rare: SheetItem[] = [];
+    if (hasForkFamily) rare.push({ label: 'Fork Tree', onPress: () => setTreeModalVisible(true) });
+    rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
+    if (conversation?.session_id) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
+    items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
+    items.push({ label: 'Dismiss', destructive: true, onPress: handleDismiss });
+    showActionSheet(undefined, items);
+  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -5387,6 +5353,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           <MessageInput
             conversationId={id as Id<"conversations">}
             isActive={isActive}
+            isOwner={!!conversation.is_own}
             draft={conversation?.draft_message}
             autoFocus={focusParam === '1'}
           />
@@ -5901,6 +5868,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  stopButton: {
+    backgroundColor: Theme.red,
   },
   // Workflow event anchors
   wfStartedRow: {
