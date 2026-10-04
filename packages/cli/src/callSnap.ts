@@ -47,8 +47,12 @@ import {
   CALL_FRAME_PREFER,
   callFrameHref,
   coveredSpans,
+  describeClockSpan,
+  describeSpan,
   describeSpans,
-  lineMomentMs,
+  lineFilmed,
+  lineFrameMs,
+  isRecordingFilming,
   locateCallMoment,
   nearestRecordedMs,
   parseCallViewParam,
@@ -348,26 +352,6 @@ export function isServerCallRef(call: string): boolean {
 
 // ── Time ─────────────────────────────────────────────────────────────────
 
-/**
- * The moment a line's frame is taken: the first whole second a little after
- * its first word. A little after, because a line's t0 is where the recognizer
- * heard speech begin and the speaker is still finishing the gesture that goes
- * with it; a whole second, because the citation printed beside the frame is
- * `cl-42@12:34` and a whole second is what it can name, so the frame an
- * agent cites is the frame it saw. A line too short to reach that second
- * takes the first whole second at or after its start, even when that is a
- * moment past its last word: never a second before it began, which shows
- * what was on screen during the line before it (a quarter of the lines of a
- * real call span no whole second), and at most a second late, still the
- * picture being pointed at.
- */
-export function lineFrameMs(seg: { t0: number; t1: number }): number {
-  const start = lineMomentMs(seg);
-  const end = Math.max(start, seg.t1);
-  const nudged = Math.ceil((start + 250) / 1000) * 1000;
-  return nudged <= end ? nudged : Math.ceil(start / 1000) * 1000;
-}
-
 /** The part of a second past the whole one, as written after a clock's
  *  seconds (`.5`, `.25`), or "" on a whole second. */
 function fraction(ms: number): string {
@@ -410,10 +394,11 @@ export function frameFileName(handle: string, atMs: number, kind: CallRecordingK
 
 // ── What was recorded ────────────────────────────────────────────────────
 
-// describeSpans and nearestRecordedMs live in the shared contract (the call
-// page says the same spans and offers the same nearest moment); re-exported
-// for this module's callers.
-export { describeSpans, nearestRecordedMs };
+// describeSpans, nearestRecordedMs and the line rule (lineFrameMs,
+// lineFilmed) live in the shared contract (the call page says the same
+// spans, offers the same nearest moment and marks the same lines filmed);
+// re-exported for this module's callers.
+export { describeSpans, nearestRecordedMs, lineFrameMs, lineFilmed };
 
 /** The first whole second in [fromMs, toMs) that a finished span covers, or
  *  null: where a line that began before the press was first on camera. */
@@ -447,13 +432,6 @@ export function callVideoSpans(recs: Pick<SnapRecordings, "recordings" | "call_s
   return coveredSpans(rows(recs), recs.call_started_at, recs.server_now);
 }
 
-/** Whether a line was on camera: some span covers the moment its frame is
- *  taken (lineFrameMs), the moment `cast call snap cl-42:<line>` shows. */
-export function lineFilmed(spans: readonly CallCoveredSpan[], seg: { t0: number; t1: number }): boolean {
-  const at = lineFrameMs(seg);
-  return spans.some((s) => s.fromMs <= at && at < s.toMs);
-}
-
 /** The first line a finished span filmed (lineFilmed), or null: the line a
  *  hint names as the way to a frame, so the command it offers is one that
  *  answers with a picture. A line said before Record was pressed is
@@ -483,9 +461,7 @@ export function describeSpansByLine(spans: readonly CallCoveredSpan[], segments:
   return spans
     .map((s, i) => {
       const l = lines[i];
-      const clock = `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)}`;
-      const head = l ? `${l.from === l.to ? `line ${l.from}` : `lines ${l.from}-${l.to}`} (${clock})` : clock;
-      return `${head} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`;
+      return l ? describeSpan(s, `${l.from === l.to ? `line ${l.from}` : `lines ${l.from}-${l.to}`} (${describeClockSpan(s)})`) : describeSpan(s);
     })
     .join(", ");
 }
@@ -1068,15 +1044,46 @@ export type SourceServer = { urlFor(id: string, live: boolean): string; close():
 
 const FORWARDED_HEADERS = ["content-type", "content-length", "content-range", "accept-ranges", "last-modified", "etag"];
 
+/** The largest tail of a file the proxy keeps for the rest of a command:
+ *  a recording's index (its moov) runs about 2.4 MB an hour of room video,
+ *  about 14 MB at the longest run a recording can be. */
+export const TAIL_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+
+/** The start of an open-ended range (`bytes=45147540-`), or null. */
+function openRangeStart(range: string | undefined): number | null {
+  const m = /^bytes=(\d+)-$/.exec(range ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+/** The bytes a 206 holds from `start` to the end of the file, read from its
+ *  Content-Range (`bytes 45147540-45148212/45148213`), or null when the
+ *  answer is not that tail. */
+function tailLength(contentRange: string | null, start: number): number | null {
+  const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? "");
+  if (!m || Number(m[1]) !== start || Number(m[2]) !== Number(m[3]) - 1) return null;
+  return Number(m[3]) - start;
+}
+
 /**
  * A loopback HTTP server that hands ffmpeg the recordings without handing it
  * the signed links: each request (ranges included, which is how ffmpeg
  * seeks) is forwarded to the current link, signed again and retried once if
  * storage answers 403. Bound to 127.0.0.1 on a free port, behind a random
  * path, for the life of one command.
+ *
+ * It also keeps a file's tail. LiveKit writes its MP4s with the index (the
+ * moov) after the picture data, so every ffmpeg process a snap starts (one
+ * to four probes and one or two grabs a frame, eight frames for a range)
+ * opens with the same open-ended request for the end of the file: 136 KB
+ * for a 4-minute room, megabytes for an hour, each time over the network.
+ * The first answer to an open-ended range short enough to hold
+ * (TAIL_CACHE_MAX_BYTES) is kept whole and the rest are answered from
+ * memory with the same headers. Files only: a live frame is rewritten as
+ * the call goes on, so it is always asked for fresh.
  */
 export async function serveSources(sources: SignedSources): Promise<SourceServer> {
   const token = randomBytes(16).toString("hex");
+  const tails = new Map<string, { headers: Record<string, string>; body: Buffer }>();
   const server = http.createServer(async (req, res) => {
     const m = new RegExp(`^/${token}/([^/]+)/(file|live)$`).exec((req.url ?? "").split("?")[0]);
     if (!m || (req.method !== "GET" && req.method !== "HEAD")) {
@@ -1093,6 +1100,14 @@ export async function serveSources(sources: SignedSources): Promise<SourceServer
         headers: req.headers.range ? { range: req.headers.range } : {},
         signal: abort.signal,
       });
+    const tailStart = live ? null : openRangeStart(req.headers.range);
+    const tailKey = tailStart === null ? null : `${id}|${tailStart}`;
+    const kept = tailKey === null ? undefined : tails.get(tailKey);
+    if (kept) {
+      res.writeHead(206, kept.headers);
+      res.end(req.method === "HEAD" ? undefined : kept.body);
+      return;
+    }
     try {
       let url = await sources.url(id, live);
       if (!url) {
@@ -1115,9 +1130,23 @@ export async function serveSources(sources: SignedSources): Promise<SourceServer
         res.end();
         return;
       }
-      Readable.fromWeb(upstream.body as any)
-        .on("error", () => res.destroy())
-        .pipe(res);
+      const body = Readable.fromWeb(upstream.body as any);
+      // Kept only once the whole tail has arrived: ffmpeg often hangs up
+      // part way through a long open-ended read, and a partial body must
+      // never answer the next process.
+      const want = tailKey !== null && upstream.status === 206 ? tailLength(upstream.headers.get("content-range"), tailStart!) : null;
+      if (want !== null && want <= TAIL_CACHE_MAX_BYTES) {
+        const chunks: Buffer[] = [];
+        let got = 0;
+        body.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          got += chunk.length;
+        });
+        body.on("end", () => {
+          if (got === want) tails.set(tailKey!, { headers, body: Buffer.concat(chunks, got) });
+        });
+      }
+      body.on("error", () => res.destroy()).pipe(res);
     } catch {
       if (!res.headersSent) res.writeHead(502).end();
       else res.destroy();
@@ -1549,7 +1578,7 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
     const live = liveFrame(input, all);
     // Filming, but the live picture is not this caller's to see: watching
     // from outside would be unseen by the room (callRecordings.mayWatchLive).
-    if (!live && recs.live_watch === false && all.some((r) => r.status === "starting" || r.status === "recording")) {
+    if (!live && recs.live_watch === false && all.some((r) => isRecordingFilming(r.status))) {
       throw new SnapError(
         "not_live",
         `${handle} is being recorded right now, and only someone in the call sees it as it is now. Join the call to see it live; the video can be snapped here once the recording stops.`,
@@ -2303,7 +2332,7 @@ export function formatSnapResult(res: SnapResult): string {
   // part of the frame. Offered once, only where it can help.
   const wide = res.frames.find((f) => f.kind === "screen" && !f.crop && !f.tiles && (f.width ?? 0) > SMALL_TEXT_WIDTH);
   if (wide && !res.crop && !res.tiles) {
-    out.push(fmt.muted(`Text small? cast call snap ${res.target} --crop top-left (any of ${Object.keys(CROP_REGIONS).join(", ")}, or x,y,w,h), or --tiles 2x2 for all four quarters at full size`));
+    out.push(fmt.muted(`Text small? cast call snap ${res.target} --crop top-left, or --tiles 2x2 for all four quarters at full size. --crop takes ${CROP_FORMS}.`));
   }
   return out.join("\n");
 }

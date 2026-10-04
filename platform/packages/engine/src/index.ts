@@ -13,6 +13,7 @@ export type { Persistence, PersistenceHooks, StoreLike } from "./persistence";
 
 export {
   action,
+  afterCommit,
   sync,
   asyncAction,
   receiptAsyncAction,

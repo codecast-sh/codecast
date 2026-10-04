@@ -179,8 +179,8 @@ describe("the free answer", () => {
       expect(lines[at][0]).toBe(kind);
       expect(lines.slice(0, at).every(([, s]) => s === "same")).toBe(true);
       expect(container.querySelector(`[data-evb-answer="${kind}"]`)).toBeTruthy();
-      // The rendered prompt change is always shown.
-      expect(container.querySelector("[data-evb-prompt-diffs]")).toBeTruthy();
+      // The rendered prompt change is always shown: per focus freeze, the flips or in score mode the largest drops.
+      expect(Number(container.querySelector("[data-evb-prompt-diffs]")?.getAttribute("data-evb-prompt-diffs"))).toBeGreaterThan(0);
       if (k === "unattributable") expect(container.querySelector('[data-evb-confidence="unattributable"]')).toBeTruthy();
       if (k === "narrowed") expect(container.querySelectorAll("[data-evb-candidate]").length).toBeGreaterThan(1);
       await unmount();

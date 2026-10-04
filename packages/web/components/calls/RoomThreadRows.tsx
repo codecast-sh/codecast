@@ -19,7 +19,8 @@ import { SessionFace } from "../identity";
 import { TranscriptTurnList } from "./TranscriptTurns";
 import { CallLinkButton } from "./CallLinkButton";
 import { turnsAnchor } from "./transcriptTurnModel";
-import { firstName, fmtClock, speakerColor } from "./speakers";
+import { firstName, speakerColor } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { GuestTag } from "./GuestTag";
 import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { HEARS, type EventRow, type Passage, type ThreadRow } from "./roomThreadModel";
@@ -152,7 +153,7 @@ export function PassageBlock({
               use, so one thread has one clock; the turn rows inside read as
               the offset into the call. A recording keeps the offset, since a
               click seeks the audio by it. */}
-          {recording ? fmtClock(passage.t0) : fmtWallClock(passage.at, dayOf)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))}
+          {recording ? formatCallTime(passage.t0) : fmtWallClock(passage.at, dayOf)} · {fmtDuration(Math.max(1000, passage.t1 - passage.t0))}
           {/* The count leaves the head on the stage (roomThread.css): the
               names need the room more, and the title carries it. */}
           <span className="rt-passage-turns">

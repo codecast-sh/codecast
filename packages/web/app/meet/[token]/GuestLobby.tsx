@@ -1,6 +1,6 @@
 import { useRef, useSyncExternalStore, type FormEvent } from "react";
 import { Loader2, Mic, MicOff, RefreshCw, Video, VideoOff } from "lucide-react";
-import { GUEST_NAME_MAX, type GuestNotice } from "@codecast/shared/contracts";
+import { GUEST_NAME_MAX, noticeWidened, type GuestNotice } from "@codecast/shared/contracts";
 import { AvatarImg } from "../../../lib/avatarCache";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -36,6 +36,7 @@ export function GuestLobby({
   live,
   transcribed,
   recording,
+  videoPublic,
   accepted,
   creatorTold,
   doorFull,
@@ -59,6 +60,8 @@ export function GuestLobby({
   live: boolean;
   transcribed: boolean;
   recording: boolean;
+  /** The recording's video goes to the call's public link. */
+  videoPublic: boolean;
   /** The notice they asked to join under, this visit; what the room has
    *  started keeping since is marked as new. */
   accepted: GuestNotice | null;
@@ -89,7 +92,13 @@ export function GuestLobby({
 }) {
   const p = useSyncExternalStore(preview.subscribe, preview.getSnapshot, preview.getSnapshot);
   const inviterName = inviter?.name ? firstName(inviter.name) : null;
-  const widened = !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed));
+  const widened = noticeWidened(accepted, { recording, transcribed, video_public: videoPublic });
+  // On a phone the press rides the bottom of the screen only when there is
+  // nothing new to agree to. Before a knock, or when the call now keeps more
+  // than they agreed to, it sits in the page under the notice, so reaching
+  // it means scrolling past the words the press agrees to rather than
+  // pressing over them.
+  const pinned = mode === "rejoin" && !widened;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (mode === "ask" && name.trim() && !busy) onAsk();
@@ -107,28 +116,36 @@ export function GuestLobby({
           {mode === "waiting" ? "Asking to join" : mode === "rejoin" ? "You've been let in to" : "You're invited to"}
         </span>
         <h1 className="meet-title text-balance text-[30px] leading-[1.12] text-sol-text sm:text-[36px]">{title}</h1>
+        {/* Who it is from is the one fact that tells a stranger what this
+            is, so the live state wraps to a line of its own before the name
+            is cut, and its dot goes with it, clipped at the line's start. */}
         {inviter?.name && (
-          <div className="flex items-center gap-2 text-[12px] text-sol-text-secondary">
-            <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
-              <AvatarImg
-                src={inviter.image ?? undefined}
-                alt=""
-                className="h-full w-full object-cover"
-                fallback={
-                  <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[10px] text-sol-text-muted">
-                    {inviter.name.charAt(0).toUpperCase()}
-                  </span>
-                }
-              />
-            </span>
-            {/* The name gives way before the verb: cut short, the line
-                still says why the guest is here. */}
-            <span className="flex min-w-0">
-              <span className="truncate">{inviter.name}</span>
-              <span className="shrink-0">&nbsp;invited you</span>
-            </span>
-            <span className="text-sol-text-dim">·</span>
-            <LiveLine live={live} />
+          <div className="overflow-hidden">
+            <div className="-ml-4 flex flex-wrap items-center gap-y-1 text-[12px] text-sol-text-secondary">
+              <span className="ml-4 flex min-w-0 max-w-[calc(100%-1rem)] items-center gap-2">
+                <span className="inline-block h-5 w-5 shrink-0 overflow-hidden rounded-full">
+                  <AvatarImg
+                    src={inviter.image ?? undefined}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    fallback={
+                      <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[10px] text-sol-text-muted">
+                        {inviter.name.charAt(0).toUpperCase()}
+                      </span>
+                    }
+                  />
+                </span>
+                {/* The name gives way before the verb: cut short, the line
+                    still says why the guest is here. */}
+                <span className="flex min-w-0">
+                  <span className="truncate">{inviter.name}</span>
+                  <span className="shrink-0">&nbsp;invited you</span>
+                </span>
+              </span>
+              <span className="relative ml-4 flex shrink-0 before:absolute before:-left-[11px] before:text-sol-text-dim before:content-['·']">
+                <LiveLine live={live} />
+              </span>
+            </div>
           </div>
         )}
       </div>
@@ -165,7 +182,7 @@ export function GuestLobby({
             )}
             {/* Live while they wait: the room can start recording before it
                 lets them in, and they hear about it here first. */}
-            <CallNotice compact transcribed={transcribed} recording={recording} since={accepted} />
+            <CallNotice compact transcribed={transcribed} recording={recording} videoPublic={videoPublic} since={accepted} />
           </div>
         ) : (
           <form onSubmit={submit} className="flex flex-col gap-4">
@@ -184,12 +201,19 @@ export function GuestLobby({
                 />
               </label>
             )}
-            <CallNotice transcribed={transcribed} recording={recording} since={mode === "rejoin" ? accepted : null} />
+            <CallNotice transcribed={transcribed} recording={recording} videoPublic={videoPublic} since={mode === "rejoin" ? accepted : null} />
             {/* Joining while the browser's prompt is up would walk in with
-                no camera and no microphone, so the press waits for it. On a
-                phone the press stays in reach at the bottom of the screen,
-                over a fade into the page, while the rest scrolls under it. */}
-            <div className="max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-[#002b36] max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4">
+                no camera and no microphone, so the press waits for it. When
+                `pinned`, a phone keeps the press in reach at the bottom of
+                the screen, over a fade into the page, while the rest scrolls
+                under it. */}
+            <div
+              className={
+                pinned
+                  ? "max-sm:sticky max-sm:bottom-0 max-sm:z-10 max-sm:-mx-4 max-sm:-mt-4 max-sm:bg-gradient-to-t max-sm:from-[#002b36] max-sm:from-60% max-sm:to-transparent max-sm:px-4 max-sm:pb-[max(12px,env(safe-area-inset-bottom))] max-sm:pt-4"
+                  : undefined
+              }
+            >
               <button
                 type={mode === "ask" ? "submit" : "button"}
                 onClick={mode === "rejoin" ? onJoin : undefined}
@@ -389,8 +413,8 @@ function PreviewFrame({
   // The device notice sits over the picture where there is room, and under
   // it on a phone: four lines over a narrow preview ran its last one, the
   // "you can still join" that matters, under the switches. A phone's picture
-  // is held to a third of the screen, so the name field and the notice still
-  // fit above the sticky press on a short one.
+  // is held to a third of the screen, so the name field and the notice come
+  // up soon after it on a short one.
   return (
     <div className="relative">
       <div className="relative aspect-video w-full overflow-hidden rounded-2xl max-sm:max-h-[30dvh] bg-black/50 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.8)] ring-1 ring-white/[0.08]">

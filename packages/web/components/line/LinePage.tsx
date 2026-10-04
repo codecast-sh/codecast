@@ -37,6 +37,7 @@ import { edgeAttrs, useScrollEdges } from "./useScrollEdges";
 import { cardAnswerIndexes, GoalChip } from "../decisions/ChangeCardView";
 import { evalsSenseHref } from "../evals/evalsPaths";
 import "./line.css";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
 /** formatElapsed without its zero units: "2d", "2d 5h", "40m", never "2d 0h". */
 const ago = (from: number | null | undefined, now: number) => (from == null ? null : (formatElapsed(from, now) ?? "").replace(/ 0[hm]$/, ""));
@@ -184,8 +185,7 @@ export function LinePage() {
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (keyBelongsElsewhere(e.target)) return;
       // Sideways skips stations with nothing in them, unless every station
       // is empty; a number jumps to any.
       const side = (dc: number) => {

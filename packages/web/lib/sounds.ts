@@ -2,6 +2,7 @@ import { useInboxStore, type ClientUI } from "../store/inboxStore";
 import { isNotificationLeader, isVoiceHost } from "./desktop";
 import { agentAlertsSuppressed, deliverAlert, reportAlertError } from "./notificationDelivery";
 import type { CueSpec } from "./cueSpec";
+import { afterCommit } from "@platform/engine";
 import { scheduleCue } from "./cuePlay";
 import {
   CALL_JOIN,
@@ -109,11 +110,15 @@ function play(
   playCue({ master: masterGain, tones: notes.map((n) => ({ ...n, gain: n.gain ?? 1 })) });
 }
 
+// A cue asked for inside an action body plays when that action commits, and
+// never for a draft the undo engine throws away (a refused redo).
 function playCue(spec: CueSpec) {
   if (!isSupported()) return;
-  try {
-    scheduleCue(getCtx(), spec, volumeFactor());
-  } catch {}
+  afterCommit(() => {
+    try {
+      scheduleCue(getCtx(), spec, volumeFactor());
+    } catch {}
+  });
 }
 
 export function soundNewSession() {

@@ -488,7 +488,7 @@ export const createGuestLink = mutation({
     const mine = (
       await ctx.db
         .query("call_guest_links")
-        .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+        .withIndex("by_room_expires", (q) => q.eq("room_key", args.room_key).gt("expires_at", now))
         .collect()
     ).filter((l) => String(l.created_by) === String(userId) && linkOpen(l, now));
     if (!args.fresh && args.ttl_ms === undefined && mine.length > 0) {
@@ -529,7 +529,7 @@ export const listGuestLinks = query({
     const links = (
       await ctx.db
         .query("call_guest_links")
-        .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+        .withIndex("by_room_expires", (q) => q.eq("room_key", args.room_key).gt("expires_at", now))
         .collect()
     ).filter((l) => linkOpen(l, now));
     // Counts of the guests present now, from the room's own lease-bounded

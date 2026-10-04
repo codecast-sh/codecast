@@ -18,6 +18,8 @@ sources, `stale` that its sources changed at HEAD since its last run, `dirty`
 that they are edited in the checkout (`check --stale` waits for a commit), and
 `blocked` that it crashed twice on these sources.
 
+![The evals loop: a prod moment is frozen with ./evals freeze create into one of two data homes, ./evals check replays every freeze through prompt-dry-run.ts, the replies are graded by gates and the judge, each rep is compared with the previous run set in stats.ts, and the person edits the prompt and checks again](../diagrams/evals-loop.svg)
+
 ## Surfaces
 
 A surface is one production prompt with one call site. Each is a directory

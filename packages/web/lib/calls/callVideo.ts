@@ -12,7 +12,9 @@
 
 import {
   coveredSpans,
+  describeClockSpan,
   formatCallTime,
+  isRecordingFilming,
   locateCallMoment,
   nearestRecordedMs,
   offsetIntoRecording,
@@ -76,7 +78,7 @@ export type CallVideoRun = {
 function runState(rows: CallVideoFile[]): CallVideoRun["state"] {
   const composite = rows.find((r) => r.kind === "composite");
   const lead = composite ?? rows[0];
-  if (lead && (lead.status === "starting" || lead.status === "recording")) return "live";
+  if (lead && isRecordingFilming(lead.status)) return "live";
   if (rows.some((r) => r.status === "stopping")) return "saving";
   if (rows.some((r) => r.status === "ready")) return "ready";
   return "failed";
@@ -175,9 +177,11 @@ export function videoStretches(spans: readonly CallCoveredSpan[]): Array<{ fromM
   return out;
 }
 
-/** The stretches in words: `2:12–6:15, 9:40–12:02`. */
+/** The stretches in words: `2:12-6:15, 9:40-12:02`, each written the way
+ *  `cast call` writes a span (describeClockSpan), so a call reads the same
+ *  on the page and in the terminal. */
 export function describeStretches(stretches: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
-  return stretches.map((s) => `${formatCallTime(s.fromMs)}–${formatCallTime(s.toMs)}`).join(", ");
+  return stretches.map(describeClockSpan).join(", ");
 }
 
 /** What a page says when a line is clicked at a moment no video shows, and

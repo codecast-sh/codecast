@@ -1,886 +1,131 @@
-import {
-  useState,
-  useCallback } from 'react';
-import { StyleSheet,
-  TouchableOpacity,
-  Switch,
-  Alert,
-  ScrollView,
-  View as RNView,
-  ActionSheetIOS,
-  KeyboardAvoidingView,
-  Platform,
-  Share,
-  Image,
-} from 'react-native';
-import { Text as RNText, TextInput } from '@/components/Themed';
-import { copyToClipboard } from '@/lib/clipboard';
+import { StyleSheet, TouchableOpacity, View as RNView, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '@/lib/auth';
-import { useMutation } from 'convex/react';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { Text as RNText } from '@/components/Themed';
+import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { useAuth } from '@/lib/auth';
+import { useDevices } from '@/components/DevicesSection';
+import { SettingsScroll, SettingsGroup, NavRow } from '@/components/settings/SettingsUI';
+import {
+  UserAvatar,
+  appVersionLabel,
+  currentStatusOf,
+  useActiveTeamSettings,
+  useSettingsUser,
+  themeLabelOf,
+} from '@/components/settings/SettingsPages';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
-import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
-import { useTeamRosterIdentity } from '@codecast/web/hooks/useTeamRoster';
-import { DevicesSection } from '@/components/DevicesSection';
-import { liveActivityNative } from '@/modules/codecast-live-activity';
-import { peopleOf } from '@codecast/shared/team/memberKind';
 
-const THEME_OPTIONS = [
-  { key: undefined, label: 'System', icon: 'mobile' as const },
-  { key: 'light', label: 'Light', icon: 'sun-o' as const },
-  { key: 'dark', label: 'Dark', icon: 'moon-o' as const },
-] as const;
-
-const STATUS_OPTIONS = [
-  { key: 'available', label: 'Available', icon: 'circle' as const, color: Theme.green },
-  { key: 'busy', label: 'Busy', icon: 'minus-circle' as const, color: Theme.red },
-  { key: 'away', label: 'Away', icon: 'clock-o' as const, color: Theme.accent },
-] as const;
-
+// The settings home is a short list of rows; each opens its own screen
+// (app/settings/[section].tsx), so every switch is one tap deeper and the
+// first screen stays readable.
 export default function SettingsScreen() {
   const Theme = useTheme();
   const router = useRouter();
-  const {
-    signOut,
-    isBiometricAvailable,
-    isBiometricEnabled,
-    enableBiometric,
-    disableBiometric,
-  } = useAuth();
-
-  // The store's user row, so every switch below paints its own write in the
-  // same tick (currentUser is a localFirst singleton: a flip holds over pushes
-  // and rolls back if the server refuses).
-  const currentUser = useInboxStore((s) => s.currentUser) as any;
-  const updatePrefs = useInboxStore((s) => s.updateNotificationSettings);
-  const setMyStatus = useInboxStore((s) => s.setMyStatus);
-  const updateMyProfile = useInboxStore((s) => s.updateMyProfile);
-  const deleteAccountMutation = useMutation(api.users.deleteAccount);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [editingField, setEditingField] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState('');
+  const { signOut, isBiometricAvailable, isBiometricEnabled } = useAuth();
+  const currentUser = useSettingsUser();
+  const { activeTeam } = useActiveTeamSettings();
+  const { devices } = useDevices();
   const storeTheme = useInboxStore((s) => s.clientState?.ui?.theme);
-  const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
-  const updateClientUI = useInboxStore((s) => s.updateClientUI);
-
-  // The workspace mirror (unset = personal). The team's row paints from the
-  // store's teams list; its invite code from the persisted settings cache.
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? undefined) as Id<"teams"> | undefined;
-  const teamRow = useInboxStore((s) => (activeTeamId ? (s.teams as any[]).find((t) => t && String(t._id) === String(activeTeamId)) : undefined));
-  const teamRecord = useSettingsData("team", activeTeamId ?? null).data as any;
-  const activeTeam = teamRow || teamRecord ? { ...teamRow, ...teamRecord } : undefined;
-  const regenerateInvite = useMutation(api.teams.regenerateInviteCode);
-
-  const handleShareInvite = useCallback(async () => {
-    if (!activeTeam?.invite_code) return;
-    const url = `https://codecast.sh/join/${activeTeam.invite_code}`;
-    await Share.share({ message: `Join my team on Codecast: ${url}`, url });
-  }, [activeTeam]);
-
-  const handleCopyInvite = useCallback(async () => {
-    if (!activeTeam?.invite_code) return;
-    const url = `https://codecast.sh/join/${activeTeam.invite_code}`;
-    await copyToClipboard(url);
-    Alert.alert('Copied', 'Invite link copied to clipboard');
-  }, [activeTeam]);
-
-  const handleRegenerateInvite = useCallback(async () => {
-    if (!activeTeamId || !currentUser?._id) return;
-    Alert.alert('Regenerate Invite', 'This will invalidate the current invite link.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Regenerate',
-        onPress: async () => {
-          try {
-            await regenerateInvite({ team_id: activeTeamId, requesting_user_id: currentUser._id as Id<"users"> });
-            Alert.alert('Done', 'New invite code generated');
-          } catch (_e) {
-            Alert.alert('Error', 'Only admins can regenerate invite codes');
-          }
-        },
-      },
-    ]);
-  }, [activeTeamId, currentUser, regenerateInvite]);
-
-  const startEditing = useCallback((field: string, currentValue?: string | null) => {
-    setEditingField(field);
-    setEditValue(currentValue || '');
-  }, []);
-
-  const saveField = useCallback(() => {
-    if (!editingField) return;
-    // An emptied field is a real edit: send "" (updateProfile skips undefined).
-    updateMyProfile({ [editingField]: editValue.trim() });
-    setEditingField(null);
-  }, [editingField, editValue, updateMyProfile]);
-
-  const showStatusPicker = useCallback(() => {
-    const options = [...STATUS_OPTIONS.map(s => s.label), 'Cancel'];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: 'Set Status' },
-      (idx) => {
-        if (idx < STATUS_OPTIONS.length) setMyStatus(STATUS_OPTIONS[idx].key as any);
-      },
-    );
-  }, [setMyStatus]);
-
-  const showThemePicker = useCallback(() => {
-    const options = [...THEME_OPTIONS.map(t => t.label), 'Cancel'];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: 'Appearance' },
-      (idx) => {
-        if (idx < THEME_OPTIONS.length) {
-          updateClientUI({ theme: THEME_OPTIONS[idx].key as any });
-        }
-      },
-    );
-  }, [updateClientUI]);
-
-  const handleToggleBiometric = async () => {
-    if (isBiometricEnabled) {
-      await disableBiometric();
-    } else {
-      await enableBiometric();
-      Alert.alert(
-        'Biometric Unlock Enabled',
-        'You can now use Face ID or Touch ID to unlock the app'
-      );
-    }
-  };
-
-  const handleToggleNotifications = () => {
-    updatePrefs({ notifications_enabled: !currentUser?.notifications_enabled });
-  };
-
-  const handleToggleMachinePresence = () => {
-    updatePrefs({ machine_wide_presence: !(currentUser?.machine_wide_presence ?? true) });
-  };
-
-  // The roster, fed app-wide for the active team (useSyncWorkspaceData).
-  // Identity projection: presence heartbeats on the roster re-render nothing.
-  const roster = useTeamRosterIdentity();
-  const teamMembers = activeTeamId ? roster : undefined;
-
-  const handleToggleNotificationType = (type: 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity') => {
-    const currentPrefs = currentUser?.notification_preferences || {
-      team_session_start: true,
-      mention: true,
-      permission_request: true,
-      session_idle: true,
-      session_error: true,
-      task_activity: true,
-      doc_activity: true,
-      plan_activity: true,
-    };
-
-    const currentVal = (currentPrefs as any)[type] ?? true;
-    // The server ends an activity it started; one the app began on a phone
-    // without push-to-start is only addressable from here.
-    if (type === 'live_activity' && currentVal) liveActivityNative?.endAll().catch(() => {});
-    updatePrefs({
-      notification_preferences: {
-        ...currentPrefs,
-        session_idle: currentPrefs.session_idle ?? true,
-        session_idle_digest: (currentPrefs as any).session_idle_digest ?? true,
-        session_error: currentPrefs.session_error ?? true,
-        task_activity: currentPrefs.task_activity ?? true,
-        doc_activity: currentPrefs.doc_activity ?? true,
-        plan_activity: currentPrefs.plan_activity ?? true,
-        chat_activity: (currentPrefs as any).chat_activity ?? true,
-        [type]: !currentVal,
-      },
-    });
-  };
-
-  const handleToggleMuteMember = (memberId: Id<"users">) => {
-    const currentMuted = currentUser?.muted_members ?? [];
-    const isMuted = currentMuted.includes(memberId);
-    const newMuted = isMuted
-      ? currentMuted.filter((id: Id<"users">) => id !== memberId)
-      : [...currentMuted, memberId];
-    updatePrefs({ muted_members: newMuted });
-  };
+  const status = currentStatusOf(currentUser);
+  const online = devices.filter((d) => d.online).length;
+  // The route is cast for the same reason the inbox's pushes are: expo's
+  // typed-route union only regenerates when Metro runs.
+  const open = (section: string) => router.push(`/settings/${section}` as never);
 
   const handleSignOut = () => {
-    Alert.alert(
-      'Sign Out',
-      'Are you sure you want to sign out?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Sign Out',
-          style: 'destructive',
-          onPress: signOut,
-        },
-      ]
-    );
+    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign Out', style: 'destructive', onPress: signOut },
+    ]);
   };
 
-  const handleDeleteAccount = () => {
-    Alert.alert(
-      'Delete Account',
-      'This will permanently delete your account and all your data. This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            Alert.prompt(
-              'Confirm Deletion',
-              'Type DELETE to confirm account deletion:',
-              async (text) => {
-                if (text?.toUpperCase() === 'DELETE') {
-                  setIsDeleting(true);
-                  try {
-                    const result = await deleteAccountMutation({});
-                    if (result.completed) {
-                      await signOut();
-                      router.replace('/auth/login');
-                    } else {
-                      Alert.alert('Partial Deletion', result.message, [
-                        { text: 'OK', onPress: () => handleDeleteAccount() }
-                      ]);
-                    }
-                  } catch (error) {
-                    Alert.alert('Error', 'Failed to delete account. Please try again.');
-                  } finally {
-                    setIsDeleting(false);
-                  }
-                } else if (text) {
-                  Alert.alert('Error', 'Please type DELETE to confirm');
-                }
-              },
-              'plain-text'
-            );
-          },
-        },
-      ]
-    );
-  };
-
-  const currentStatus = STATUS_OPTIONS.find(s => s.key === currentUser?.status) || STATUS_OPTIONS[0];
-
   return (
-    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-      <RNView style={styles.section}>
-        <RNText style={styles.sectionTitle}>Profile</RNText>
-        <RNView style={styles.card}>
-          <RNView style={styles.userInfo}>
-            <RNView style={styles.avatar}>
-              <RNText style={styles.avatarText}>
-                {currentUser?.name?.[0]?.toUpperCase() || currentUser?.email?.[0]?.toUpperCase() || "?"}
-              </RNText>
-            </RNView>
-            <RNView style={styles.userDetails}>
-              <RNText style={styles.userName}>{currentUser?.name || "User"}</RNText>
-              <RNText style={styles.userEmail}>{currentUser?.email}</RNText>
+    <SettingsScroll>
+      <SettingsGroup>
+        <TouchableOpacity style={styles.profile} onPress={() => open('profile')} activeOpacity={0.6} accessibilityRole="button" accessibilityLabel="Profile">
+          <UserAvatar user={currentUser} size={48} />
+          <RNView style={styles.profileText}>
+            <RNText style={styles.name} numberOfLines={1}>{currentUser?.name || 'User'}</RNText>
+            <RNView style={styles.statusLine}>
+              <FontAwesome name={status.icon} size={10} color={status.color} />
+              <RNText style={styles.email} numberOfLines={1}>{status.label} · {currentUser?.email}</RNText>
             </RNView>
           </RNView>
-
-          <RNView style={styles.settingDivider} />
-          <EditableRow label="Name" value={currentUser?.name} field="name" editing={editingField} editValue={editValue} onEdit={startEditing} onChange={setEditValue} onSave={saveField} />
-          <RNView style={styles.settingDivider} />
-          <EditableRow label="Title" value={currentUser?.title} field="title" editing={editingField} editValue={editValue} onEdit={startEditing} onChange={setEditValue} onSave={saveField} placeholder="e.g. Software Engineer" />
-          <RNView style={styles.settingDivider} />
-          <EditableRow label="Bio" value={currentUser?.bio} field="bio" editing={editingField} editValue={editValue} onEdit={startEditing} onChange={setEditValue} onSave={saveField} placeholder="Short bio" multiline />
-          <RNView style={styles.settingDivider} />
-          <TouchableOpacity style={styles.setting} onPress={showStatusPicker} activeOpacity={0.6}>
-            <RNView style={styles.settingText}>
-              <RNText style={styles.settingLabel}>Status</RNText>
-            </RNView>
-            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <FontAwesome name={currentStatus.icon} size={12} color={currentStatus.color} />
-              <RNText style={{ fontSize: 15, color: Theme.textMuted }}>{currentStatus.label}</RNText>
-              <FontAwesome name="chevron-right" size={10} color={Theme.textMuted0} />
-            </RNView>
-          </TouchableOpacity>
-        </RNView>
-      </RNView>
-
-      <RNView style={styles.section}>
-        <RNText style={styles.sectionTitle}>Appearance</RNText>
-        <RNView style={styles.card}>
-          <TouchableOpacity style={styles.setting} onPress={showThemePicker} activeOpacity={0.6}>
-            <RNView style={styles.settingText}>
-              <RNText style={styles.settingLabel}>Theme</RNText>
-              <RNText style={styles.settingDescription}>Light, dark, or follow system</RNText>
-            </RNView>
-            <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <FontAwesome name={storeTheme === 'dark' ? 'moon-o' : storeTheme === 'light' ? 'sun-o' : 'mobile'} size={14} color={Theme.textMuted} />
-              <RNText style={{ fontSize: 15, color: Theme.textMuted }}>{storeTheme === 'dark' ? 'Dark' : storeTheme === 'light' ? 'Light' : 'System'}</RNText>
-              <FontAwesome name="chevron-right" size={10} color={Theme.textMuted0} />
-            </RNView>
-          </TouchableOpacity>
-          <RNView style={styles.settingDivider} />
-          <RNView style={styles.setting}>
-            <RNView style={styles.settingText}>
-              <RNText style={styles.settingLabel}>Image Thumbnails</RNText>
-              <RNText style={styles.settingDescription}>
-                Show a small thumbnail on inbox rows when a session contains images
-              </RNText>
-            </RNView>
-            <Switch
-              value={inboxImageThumbs}
-              onValueChange={(v) => updateClientUI({ inbox_image_thumbs: v })}
-              trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-              thumbColor="#fff"
-              ios_backgroundColor={Theme.bgHighlight}
-            />
-          </RNView>
-        </RNView>
-      </RNView>
-
-      <DevicesSection />
-
-      {activeTeam && (
-        <RNView style={styles.section}>
-          <RNText style={styles.sectionTitle}>Team</RNText>
-          <RNView style={styles.card}>
-            <RNView style={styles.setting}>
-              <RNView style={styles.settingText}>
-                <RNText style={styles.settingLabel}>{activeTeam.name}</RNText>
-                <RNText style={styles.settingDescription}>
-                  {activeTeam.invite_code ? `Invite code: ${activeTeam.invite_code}` : 'No invite code'}
-                </RNText>
-              </RNView>
-            </RNView>
-            <RNView style={styles.settingDivider} />
-            <TouchableOpacity style={styles.setting} onPress={handleShareInvite} activeOpacity={0.6}>
-              <RNView style={styles.settingText}>
-                <RNText style={styles.settingLabel}>Share Invite Link</RNText>
-                <RNText style={styles.settingDescription}>Invite someone to join your team</RNText>
-              </RNView>
-              <FontAwesome name="share-square-o" size={16} color={Theme.accent} />
-            </TouchableOpacity>
-            <RNView style={styles.settingDivider} />
-            <TouchableOpacity style={styles.setting} onPress={handleCopyInvite} activeOpacity={0.6}>
-              <RNView style={styles.settingText}>
-                <RNText style={styles.settingLabel}>Copy Invite Link</RNText>
-              </RNView>
-              <FontAwesome name="clipboard" size={16} color={Theme.textMuted} />
-            </TouchableOpacity>
-            <RNView style={styles.settingDivider} />
-            <TouchableOpacity style={styles.setting} onPress={handleRegenerateInvite} activeOpacity={0.6}>
-              <RNView style={styles.settingText}>
-                <RNText style={styles.settingLabel}>Regenerate Invite Code</RNText>
-                <RNText style={styles.settingDescription}>Invalidates the current code</RNText>
-              </RNView>
-              <FontAwesome name="refresh" size={14} color={Theme.textMuted0} />
-            </TouchableOpacity>
-          </RNView>
-        </RNView>
-      )}
-
-      <RNView style={styles.section}>
-        <RNText style={styles.sectionTitle}>Notifications</RNText>
-        <RNView style={styles.card}>
-          <RNView style={styles.setting}>
-            <RNView style={styles.settingText}>
-              <RNText style={styles.settingLabel}>Push Notifications</RNText>
-              <RNText style={styles.settingDescription}>
-                Receive notifications for team activity
-              </RNText>
-            </RNView>
-            <Switch
-              value={currentUser?.notifications_enabled ?? false}
-              onValueChange={handleToggleNotifications}
-              trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-              thumbColor="#fff"
-              ios_backgroundColor={Theme.bgHighlight}
-            />
-          </RNView>
-
-          {currentUser?.notifications_enabled && (
-            <>
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Wait Until I'm Away From My Mac</RNText>
-                  <RNText style={styles.settingDescription}>
-                    Hold phone notifications while you're using your Mac at all, not
-                    just Codecast — they arrive a few minutes after you step away, or
-                    after an hour regardless. Needs an up-to-date Codecast daemon
-                    running on a Mac.
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={(currentUser as any)?.machine_wide_presence ?? true}
-                  onValueChange={handleToggleMachinePresence}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Team Sessions</RNText>
-                  <RNText style={styles.settingDescription}>
-                    When a team member starts a session
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.team_session_start ?? true}
-                  onValueChange={() => handleToggleNotificationType('team_session_start')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Mentions</RNText>
-                  <RNText style={styles.settingDescription}>
-                    When someone mentions you
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.mention ?? true}
-                  onValueChange={() => handleToggleNotificationType('mention')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Permission Requests</RNText>
-                  <RNText style={styles.settingDescription}>
-                    When a session needs approval
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.permission_request ?? true}
-                  onValueChange={() => handleToggleNotificationType('permission_request')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Session Idle</RNText>
-                  <RNText style={styles.settingDescription}>
-                    When a session is waiting for input
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.session_idle ?? true}
-                  onValueChange={() => handleToggleNotificationType('session_idle')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Hourly Digest</RNText>
-                  <RNText style={styles.settingDescription}>
-                    Fold waiting sessions into one alert an hour
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={(currentUser?.notification_preferences as any)?.session_idle_digest ?? true}
-                  onValueChange={() => handleToggleNotificationType('session_idle_digest')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Session Errors</RNText>
-                  <RNText style={styles.settingDescription}>
-                    When a session encounters an error
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.session_error ?? true}
-                  onValueChange={() => handleToggleNotificationType('session_error')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              {Platform.OS === 'ios' && (
-                <>
-                  <RNView style={styles.settingDivider} />
-                  <RNView style={styles.setting}>
-                    <RNView style={styles.settingText}>
-                      <RNText style={styles.settingLabel}>Lock Screen</RNText>
-                      <RNText style={styles.settingDescription}>
-                        A Live Activity with every running agent, on the Lock Screen and in the Dynamic Island
-                      </RNText>
-                    </RNView>
-                    <Switch
-                      value={currentUser?.notification_preferences?.live_activity ?? true}
-                      onValueChange={() => handleToggleNotificationType('live_activity')}
-                      trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                      thumbColor="#fff"
-                      ios_backgroundColor={Theme.bgHighlight}
-                    />
-                  </RNView>
-                </>
-              )}
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Task Activity</RNText>
-                  <RNText style={styles.settingDescription}>
-                    Updates on tasks you're watching
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.task_activity ?? true}
-                  onValueChange={() => handleToggleNotificationType('task_activity')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Doc Activity</RNText>
-                  <RNText style={styles.settingDescription}>
-                    Updates on docs you're watching
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.doc_activity ?? true}
-                  onValueChange={() => handleToggleNotificationType('doc_activity')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              <RNView style={styles.settingDivider} />
-              <RNView style={styles.setting}>
-                <RNView style={styles.settingText}>
-                  <RNText style={styles.settingLabel}>Plan Activity</RNText>
-                  <RNText style={styles.settingDescription}>
-                    Updates on plans you're watching
-                  </RNText>
-                </RNView>
-                <Switch
-                  value={currentUser?.notification_preferences?.plan_activity ?? true}
-                  onValueChange={() => handleToggleNotificationType('plan_activity')}
-                  trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                  thumbColor="#fff"
-                  ios_backgroundColor={Theme.bgHighlight}
-                />
-              </RNView>
-
-              {teamMembers && teamMembers.length > 0 && (
-                <>
-                  <RNView style={{ paddingHorizontal: Spacing.lg, paddingTop: 16, paddingBottom: 4 }}>
-                    <RNText style={{ fontSize: 12, fontWeight: '600', color: Theme.textMuted, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                      Team Members
-                    </RNText>
-                  </RNView>
-                  {peopleOf(teamMembers as any[])
-                    .filter((m: any) => m._id !== currentUser?._id)
-                    .map((member: any, idx: number) => (
-                      <RNView key={member._id}>
-                        {idx > 0 && <RNView style={styles.settingDivider} />}
-                        <RNView style={styles.setting}>
-                          <RNView style={{ flexDirection: 'row', alignItems: 'center', flex: 1, marginRight: Spacing.md }}>
-                            {member.github_avatar_url ? (
-                              <Image source={{ uri: member.github_avatar_url }} style={{ width: 32, height: 32, borderRadius: 16, marginRight: Spacing.sm }} />
-                            ) : (
-                              <RNView style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: Theme.bgHighlight, alignItems: 'center', justifyContent: 'center', marginRight: Spacing.sm }}>
-                                <RNText style={{ fontSize: 14, fontWeight: '600', color: Theme.text }}>
-                                  {member.name?.[0]?.toUpperCase() || '?'}
-                                </RNText>
-                              </RNView>
-                            )}
-                            <RNText style={styles.settingLabel} numberOfLines={1}>{member.name || member.email}</RNText>
-                          </RNView>
-                          <Switch
-                            value={!(currentUser?.muted_members ?? []).includes(member._id)}
-                            onValueChange={() => handleToggleMuteMember(member._id)}
-                            trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                            thumbColor="#fff"
-                            ios_backgroundColor={Theme.bgHighlight}
-                          />
-                        </RNView>
-                      </RNView>
-                    ))}
-                </>
-              )}
-            </>
-          )}
-        </RNView>
-      </RNView>
-
-      <RNView style={styles.section}>
-        <RNText style={styles.sectionTitle}>Security</RNText>
-        <RNView style={styles.card}>
-          {isBiometricAvailable ? (
-            <RNView style={styles.setting}>
-              <RNView style={styles.settingText}>
-                <RNText style={styles.settingLabel}>Biometric Unlock</RNText>
-                <RNText style={styles.settingDescription}>
-                  Use Face ID or Touch ID
-                </RNText>
-              </RNView>
-              <Switch
-                value={isBiometricEnabled}
-                onValueChange={handleToggleBiometric}
-                trackColor={{ false: Theme.bgHighlight, true: Theme.accent }}
-                thumbColor="#fff"
-                ios_backgroundColor={Theme.bgHighlight}
-              />
-            </RNView>
-          ) : (
-            <RNView style={styles.setting}>
-              <RNText style={styles.settingDisabled}>
-                Biometric authentication not available
-              </RNText>
-            </RNView>
-          )}
-        </RNView>
-      </RNView>
-
-      <RNView style={styles.section}>
-        <TouchableOpacity style={styles.signOutButton} onPress={handleSignOut} activeOpacity={0.7}>
-          <RNText style={styles.signOutButtonText}>Sign Out</RNText>
+          <FontAwesome name="chevron-right" size={10} color={Theme.textMuted0} />
         </TouchableOpacity>
-      </RNView>
+      </SettingsGroup>
 
-      <RNView style={styles.section}>
-        <RNText style={styles.dangerSectionTitle}>Danger Zone</RNText>
-        <TouchableOpacity
-          style={styles.deleteButton}
-          onPress={handleDeleteAccount}
-          activeOpacity={0.7}
-          disabled={isDeleting}
-        >
-          <RNText style={styles.deleteButtonText}>
-            {isDeleting ? 'Deleting...' : 'Delete Account'}
-          </RNText>
-        </TouchableOpacity>
-        <RNText style={styles.deleteWarning}>
-          Permanently delete your account and all data. This cannot be undone.
-        </RNText>
-      </RNView>
+      <SettingsGroup>
+        <NavRow icon="key" label="Accounts" onPress={() => router.push('/accounts' as never)} />
+        <NavRow
+          icon="bell-o"
+          label="Notifications"
+          detail={currentUser?.notifications_enabled ? 'On' : 'Off'}
+          onPress={() => open('notifications')}
+        />
+        <NavRow
+          icon="laptop"
+          label="Devices"
+          detail={devices.length ? `${online} online` : undefined}
+          onPress={() => open('devices')}
+        />
+        <NavRow icon="adjust" label="Appearance" detail={themeLabelOf(storeTheme).label} onPress={() => open('appearance')} />
+        <NavRow
+          icon="lock"
+          label="Security"
+          detail={isBiometricAvailable ? (isBiometricEnabled ? 'On' : 'Off') : undefined}
+          onPress={() => open('security')}
+        />
+        {activeTeam ? <NavRow icon="users" label="Team" detail={activeTeam.name} onPress={() => open('team')} /> : null}
+        <NavRow icon="info-circle" label="About" detail={appVersionLabel().version} onPress={() => open('about')} />
+      </SettingsGroup>
 
-      <RNView style={styles.footer}>
-        <RNText style={styles.footerText}>Codecast v1.0.0</RNText>
-      </RNView>
-    </ScrollView>
-    </KeyboardAvoidingView>
-  );
-}
-
-function EditableRow({ label, value, field, editing, editValue, onEdit, onChange, onSave, placeholder, multiline }: {
-  label: string; value?: string | null; field: string; editing: string | null; editValue: string;
-  onEdit: (field: string, value?: string | null) => void; onChange: (v: string) => void; onSave: () => void;
-  placeholder?: string; multiline?: boolean;
-}) {
-  const Theme = useTheme();
-  const isEditing = editing === field;
-  return (
-    <TouchableOpacity style={styles.setting} onPress={() => !isEditing && onEdit(field, value)} activeOpacity={0.6} disabled={isEditing}>
-      <RNText style={[styles.settingLabel, { width: 60 }]}>{label}</RNText>
-      {isEditing ? (
-        <RNView style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <TextInput
-            style={[styles.editInput, multiline && { minHeight: 60, textAlignVertical: 'top' }]}
-            value={editValue}
-            onChangeText={onChange}
-            placeholder={placeholder || label}
-            placeholderTextColor={Theme.textMuted0}
-            autoFocus
-            multiline={multiline}
-            returnKeyType={multiline ? 'default' : 'done'}
-            onSubmitEditing={!multiline ? onSave : undefined}
-            autoCorrect={false}
-          />
-          <TouchableOpacity onPress={onSave} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-            <FontAwesome name="check" size={16} color={Theme.green} />
-          </TouchableOpacity>
-        </RNView>
-      ) : (
-        <RNView style={{ flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6 }}>
-          <RNText style={{ fontSize: 15, color: value ? Theme.text : Theme.textMuted0, textAlign: 'right' }} numberOfLines={1}>
-            {value || placeholder || 'Not set'}
-          </RNText>
-          <FontAwesome name="pencil" size={12} color={Theme.textMuted0} />
-        </RNView>
-      )}
-    </TouchableOpacity>
+      <TouchableOpacity style={styles.signOut} onPress={handleSignOut} activeOpacity={0.7}>
+        <RNText style={styles.signOutText}>Sign Out</RNText>
+      </TouchableOpacity>
+    </SettingsScroll>
   );
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Theme.bg,
-  },
-  section: {
-    marginTop: Spacing.xl,
-    paddingHorizontal: Spacing.lg,
-  },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Theme.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: Spacing.sm,
-    marginLeft: Spacing.xs,
-  },
-  card: {
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    overflow: 'hidden',
-  },
-  userInfo: {
+  profile: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: Spacing.lg,
   },
-  avatar: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: Theme.bgHighlight,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: Spacing.md,
-  },
-  avatarText: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: Theme.text,
-  },
-  userDetails: {
+  profileText: {
     flex: 1,
+    marginHorizontal: Spacing.md,
   },
-  userName: {
+  name: {
     fontSize: 17,
     fontWeight: '600',
     color: Theme.text,
-    marginBottom: 2,
   },
-  userEmail: {
-    fontSize: 14,
-    color: Theme.textMuted,
-  },
-  setting: {
+  statusLine: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: 14,
+    gap: 6,
+    marginTop: 3,
   },
-  settingDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: Theme.borderLight,
-    marginLeft: Spacing.lg,
-  },
-  settingText: {
-    flex: 1,
-    marginRight: Spacing.md,
-  },
-  settingLabel: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: Theme.text,
-    marginBottom: 2,
-  },
-  settingDescription: {
+  email: {
     fontSize: 13,
     color: Theme.textMuted,
+    flexShrink: 1,
   },
-  settingDisabled: {
-    fontSize: 14,
-    color: Theme.textMuted0,
-    fontStyle: 'italic',
-  },
-  signOutButton: {
+  signOut: {
+    marginTop: Spacing.xl,
     backgroundColor: Theme.bgAlt,
     padding: Spacing.lg,
     borderRadius: 12,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Theme.red,
-  },
-  signOutButtonText: {
-    color: Theme.red,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  dangerSectionTitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Theme.red,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: Spacing.sm,
-    marginLeft: Spacing.xs,
-  },
-  deleteButton: {
-    backgroundColor: Theme.red + '20',
-    padding: Spacing.lg,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: Theme.red,
-  },
-  deleteButtonText: {
-    color: Theme.red,
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  deleteWarning: {
-    fontSize: 12,
-    color: Theme.textMuted,
-    textAlign: 'center',
-    marginTop: Spacing.sm,
-    paddingHorizontal: Spacing.md,
-  },
-  editInput: {
-    flex: 1,
-    fontSize: 15,
-    color: Theme.text,
-    backgroundColor: Theme.bgHighlight,
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
-  footer: {
-    alignItems: 'center',
-    paddingVertical: Spacing.xxxl,
-  },
-  footerText: {
-    fontSize: 13,
-    color: Theme.textMuted0,
+  signOutText: {
+    color: Theme.red,
+    fontSize: 16,
+    fontWeight: '600',
   },
 }));

@@ -170,7 +170,7 @@ a.evs-cell:hover, button.evs-cell:hover { border-color: var(--ev-rule); backgrou
 .evs-playhead-knob { fill: var(--sol-text); }
 .evs-axis { font: 10px var(--font-mono); fill: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
 .evs-mark { transition: opacity 200ms ease; }
-.evs-mark[data-evs-off] { opacity: 0.14; }
+.evs-mark[data-evs-off] { opacity: 0.3; }
 .evs-mark-conn { stroke: var(--sol-text-muted); stroke-width: 1.6; stroke-linecap: round; }
 .evs-mark-solid { fill: var(--sol-text-muted); }
 .evs-mark-actor { fill: var(--sol-text); }

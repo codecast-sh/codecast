@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { action, actionKind, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
+import { action, actionKind, afterCommit, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
 import { createSyncEngine } from "./syncEngine";
 import { captureCells } from "./undo";
 import {
@@ -1575,6 +1575,37 @@ describe("redo checks every captured cell", () => {
     expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
     await sleep(5);
     expect(h.dispatched.slice(before).some((d) => d.action === "setTwo")).toBe(false);
+  });
+
+  // A vetoed re-invoke has run the action body on a draft that is thrown away,
+  // so the outside effects it asked for (a sibling-window broadcast, a sound)
+  // must be thrown away with it.
+  it("a vetoed redo runs none of the action body's commit effects", () => {
+    const effects: string[] = [];
+    const h = makeStore({
+      undo: withSpecs({ setTwoLoud: { label: () => "Set two loud" } }),
+      extra: {
+        setTwoLoud: action(function (this: any, id: string, title: string, color: string) {
+          this.items[id].title = title;
+          this.items[id].color = color;
+          afterCommit(() => effects.push(`${id}:${title}`));
+        }),
+      },
+    });
+    h.wrapped.seed(A, { title: "old", color: "red" });
+    h.wrapped.setTwoLoud(A, "new", "red");
+    expect(effects).toEqual([`${A}:new`]);
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "blue" } } });
+    performRedo();
+    expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
+    expect(effects).toEqual([`${A}:new`]);
+  });
+
+  it("an effect asked for outside any action runs at once", () => {
+    const effects: number[] = [];
+    afterCommit(() => effects.push(1));
+    expect(effects).toEqual([1]);
   });
 
   it("a row the forward wrote unchanged is not redone over a change made since the undo", () => {

@@ -2,7 +2,8 @@ import { useRef, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { fmtClock } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
+import { RECORDING_SHARED_WORDS } from "../../lib/calls/roomRecordingEnd";
 import "./recorder.css";
 
 // THE RED MARK: a huddle is being recorded. One look on every call surface
@@ -34,11 +35,6 @@ export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | nu
   const where = shared ? ` ${RECORDING_SHARED_WORDS}` : "";
   return `This call is being recorded.${who}${where} Anyone in the call can stop it`;
 }
-
-/** What the room is told when the run's video will be on the call's public
- *  link (callRecordings: a link whose video was chosen before this press):
- *  faces and screens, guests' included, then reach anyone with the link. */
-export const RECORDING_SHARED_WORDS = "The video is shared by the call's public link.";
 
 const SAVING_DOT = "h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim";
 
@@ -115,7 +111,7 @@ export function RecordingMark({
  *  shared with every other one in the app, so only this span re-renders. */
 function RecordingClock({ startedAt }: { startedAt: number }) {
   const now = useCoarseNow(1000);
-  return <span className="tabular-nums">{fmtClock(Math.max(0, now - startedAt))}</span>;
+  return <span className="tabular-nums">{formatCallTime(Math.max(0, now - startedAt))}</span>;
 }
 
 // ── Stopping, asked once more ────────────────────────────────────────────

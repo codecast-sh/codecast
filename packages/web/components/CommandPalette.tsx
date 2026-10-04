@@ -40,6 +40,7 @@ import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
+import { collapseSameTitle } from "../lib/mentionRanking";
 import { sessionMatchesQuery, sessionSearchHaystack, mergeSearchRows } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
@@ -100,6 +101,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
 import { animatedSetSessionRest, undoAsOne } from "../store/undoActions";
+import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 import type { UserRest } from "@codecast/shared/contracts";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -181,7 +183,7 @@ import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
 import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
 import { isTriageBarCompact } from "./triage/graduation";
-import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
+import { setTaskParent, closeTaskWithGuard, updateTasksAsOne } from "../lib/taskActions";
 import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
@@ -1033,15 +1035,15 @@ export function ActionSubmenu({
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
         const convIds = targets.map(resolveConvId).filter((id): id is string => !!id);
         const applied = convIds.length;
-        const sessions = counted(applied, "session");
-        undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
-          for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
-        });
         if (!applied) {
           toast.error("Session is no longer available");
           return;
         }
-        toast.success(bucketId ? `Labeled ${bucketLabel}` : "Label removed");
+        const sessions = counted(applied, "session");
+        gestureToast(bucketId ? `Labeled ${bucketLabel}` : "Label removed", () =>
+          undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
+            for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
+          }));
       };
       if (item.key === "__remove__") {
         applyBucket(null);
@@ -1067,11 +1069,10 @@ export function ActionSubmenu({
     }
 
     if (targetType === "task") {
-      const applyTaskUpdate = (fields: Record<string, any>) => {
-        undoAsOne(`Changed ${counted(targets.length, "task")}`, () => {
-          for (const t of targets as TaskItem[]) updateTask(t.short_id, fields);
-        });
-      };
+      // One undo named for the change; terminal moves route through the
+      // single close gateway (a parent with open subtasks opens its dialog).
+      const applyTaskUpdate = (fields: Record<string, any>) =>
+        updateTasksAsOne((targets as TaskItem[]).map((t) => t.short_id), fields);
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
       if (mode === "status") {
@@ -1079,23 +1080,7 @@ export function ActionSubmenu({
         // what the terminal check and the server's side effects key on.
         const picked = statusByKey(taskStatuses, item.key);
         if (!picked) return;
-        const fields = statusWriteFields(picked);
-        // Terminal moves route through the single close gateway so a parent
-        // with open subtasks opens the shared dialog instead of writing Done
-        // and stranding a doomed local state the server refuses.
-        if (fields.status === "done" || fields.status === "dropped") {
-          let deferred = false;
-          const status = fields.status;
-          undoAsOne(`Moved ${counted(targets.length, "task")} to ${item.label}`, () => {
-            for (const t of targets as TaskItem[]) {
-              if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
-            }
-          });
-          if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
-        } else {
-          applyTaskUpdate(fields);
-          toast.success(`${label} \u2192 ${item.label}`);
-        }
+        if (!applyTaskUpdate(statusWriteFields(picked)).needsConfirm) toast.success(`${label} \u2192 ${item.label}`);
       } else if (mode === "priority") {
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
@@ -1561,16 +1546,7 @@ function matchEntities(
   // task list covers entire plan" task minted every run), which floods the
   // palette with apparent dupes. Sorted best-first, so the first occurrence per
   // title is the highest-ranked, most-recent representative.
-  const seen = new Set<string>();
-  const out: MentionRecord[] = [];
-  for (const { rec } of ranked) {
-    const key = (rec.title || "").trim().toLowerCase();
-    if (key && seen.has(key)) continue;
-    seen.add(key);
-    out.push(rec);
-    if (out.length >= cap) break;
-  }
-  return out;
+  return collapseSameTitle(ranked.map((r) => r.rec), (rec) => rec.title, cap);
 }
 
 // Memoized: this overlay is ALWAYS mounted inside DashboardLayout, which
@@ -2341,12 +2317,17 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         const verb = actionKey === "session_pin" ? (session.is_pinned ? "Unpinned" : "Pinned")
           : actionKey === "session_favorite" ? (sessionFavorite ? "Unfavorited" : "Favorited")
           : PALETTE_SESSION_VERB[actionKey] ?? "Changed";
-        undoAsOne(`${verb} ${counted(ids.length, "session")}`, () => {
+        const runAll = () => undoAsOne(`${verb} ${counted(ids.length, "session")}`, () => {
           for (const id of ids) run(id);
         });
+        // One gesture, one toast: the confirmation is the entry's Undo toast,
+        // so it goes when the change is undone.
+        const confirm = actionKey === "session_pin" ? `${verb}${ids.length > 1 ? ` ${ids.length} sessions` : ""}`
+          : actionKey === "session_favorite" ? (sessionFavorite ? "Removed from favorites" : "Added to favorites")
+          : null;
+        if (confirm) gestureToast(confirm, runAll);
+        else runAll();
       }
-      if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
-      if (actionKey === "session_favorite") toast.success(sessionFavorite ? "Removed from favorites" : "Added to favorites");
       if (targets.length > 1) useInboxSelection.getState().clear();
       closePalette();
       return;

@@ -8,7 +8,7 @@
 // Move; the confirmation is recorded per session as such, never as a passed
 // check. Blockers cannot be overridden.
 import React from "react";
-import { AlertTriangle, Check, ChevronRight, Cloud, Laptop, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, Cloud, Laptop, RotateCcw, X } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { WAIT_PRESETS, isRowActive, isRowTerminal } from "../../lib/migrationPlan";
 import { MigrationStatusPill } from "../MigrationStatusPill";
@@ -24,82 +24,83 @@ function reliefText(lo: number | undefined, hi: number | undefined): string {
 }
 
 const SAFE_WAITS = WAIT_PRESETS.filter((p) => p.value > 0);
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
-function destIcon(d: OffloadDestination) {
-  return d.role === "local" ? <Laptop className="h-3 w-3" /> : <Cloud className="h-3 w-3" />;
+function destIcon(d: OffloadDestination, size = "h-3 w-3") {
+  return d.role === "local" ? <Laptop className={size} /> : <Cloud className={size} />;
+}
+
+function Disclosure({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div>
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text">
+        <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />{label}
+      </button>
+      {open && <div className="mt-2 space-y-3 pl-4 text-[11px] text-sol-text-muted">{children}</div>}
+    </div>
+  );
 }
 
 /** `destinationId` is set only when the user sent this one session somewhere other than the batch. */
 type Choice = { checked: boolean; destinationId?: string };
 
-function CandidateRow({ c, session, plan, destinationId, checked, overridden, onCheck, onDestination }: {
-  c: OffloadCandidate; session?: ResourceSession; plan: OffloadPlan; destinationId?: string; checked: boolean; overridden: boolean;
-  onCheck: (checked: boolean) => void; onDestination: (id: string) => void;
-}) {
-  const [open, setOpen] = React.useState(false);
-  const dest = destinationId ? c.perDestination[destinationId] : undefined;
-  const ok = movable(dest);
-  const title = session?.title ?? c.sessionId;
-  const elsewhere = overridden ? plan.destinations.find((d) => d.deviceId === destinationId) : undefined;
+function CandidateRow({ c, title, checked, elsewhere, onCheck }: { c: OffloadCandidate; title: string; checked: boolean; elsewhere?: OffloadDestination; onCheck: (checked: boolean) => void }) {
   return (
-    <div className={cn("border-b border-sol-border/15", checked && ok && "bg-sol-cyan/[0.04]")} data-candidate={c.sessionId}>
-      <div className="flex items-center gap-2.5 px-4 py-2">
-        <input
-          type="checkbox"
-          aria-label={`Move ${title}`}
-          className="h-3.5 w-3.5 shrink-0 accent-[var(--sol-cyan,#2aa198)] disabled:opacity-30"
-          disabled={!ok}
-          checked={checked && ok}
-          onChange={(e) => onCheck(e.target.checked)}
-        />
-        <button type="button" onClick={() => setOpen(!open)} className="flex min-w-0 flex-1 items-center gap-2 text-left" aria-expanded={open}>
-          <ChevronRight className={cn("h-3 w-3 shrink-0 text-sol-text-dim transition-transform", open && "rotate-90")} />
-          <span className={cn("truncate text-[12px]", ok ? "text-sol-text" : "text-sol-text-muted")}>{title}</span>
-          {c.disruption === "mid_turn" && <span className="shrink-0 rounded bg-sol-yellow/10 px-1 text-[10px] text-sol-yellow">working</span>}
-          {elsewhere && <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-sol-text-muted">{destIcon(elsewhere)}{elsewhere.name}</span>}
-          <span className="ml-auto shrink-0 text-right text-[10px] tabular-nums">
-            {ok
-              ? <><span className="text-sol-blue">{fmtCpu(c.relief.cpu)}</span><span className="text-sol-text-dim"> · </span><span className="text-sol-violet">{c.relief.rssHigh !== undefined ? fmtBytes(c.relief.rssHigh) : "?"}</span></>
-              : <span className="text-sol-red/80" title={dest?.blockers.join("\n")}>can't move</span>}
-          </span>
-        </button>
-      </div>
-      {open && (
-        <div className="space-y-1.5 pb-3 pl-[3.25rem] pr-4 text-[11px] text-sol-text-muted">
-          <div>{[session?.shortId, projectName(session?.projectPath)].filter(Boolean).join(" · ")}{session?.shortId ? " · " : ""}{c.reason}</div>
-          {dest?.blockers.map((b) => (
-            <div key={b} className="flex gap-1.5 text-sol-red"><X className="mt-px h-3 w-3 shrink-0" />{b}</div>
-          ))}
-          {dest?.notes?.map((n) => <div key={n} className="text-sol-text-dim">{n}</div>)}
-          {dest?.passed && dest.passed.length > 0 && (
-            <div className="flex gap-1.5"><Check className="mt-px h-3 w-3 shrink-0 text-sol-green" />{dest.passed.join("; ")}</div>
-          )}
-          {c.staysLocal.length > 0 && <div>Stays here: {c.staysLocal.map((s) => s.label).join(", ")}</div>}
-          {plan.destinations.length > 1 && (
-            <div className="flex flex-wrap gap-1 pt-0.5" role="radiogroup" aria-label="Destination">
-              {plan.destinations.map((d) => {
-                const r = c.perDestination[d.deviceId];
-                const picked = destinationId === d.deviceId;
-                return (
-                  <button
-                    key={d.deviceId}
-                    type="button"
-                    role="radio"
-                    aria-checked={picked}
-                    disabled={!movable(r)}
-                    title={!movable(r) ? r?.blockers.join("\n") : undefined}
-                    onClick={() => onDestination(d.deviceId)}
-                    className={cn(
-                      "inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] disabled:cursor-not-allowed disabled:opacity-40",
-                      picked ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 hover:text-sol-text",
-                    )}
-                  >
-                    {destIcon(d)}{d.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
+    <label className={cn("flex cursor-pointer items-center gap-3 px-3.5 py-2.5 transition-colors hover:bg-sol-bg-highlight/40", !checked && "opacity-55")} data-candidate={c.sessionId}>
+      <input
+        type="checkbox"
+        aria-label={`Move ${title}`}
+        className="h-4 w-4 shrink-0 accent-[var(--sol-cyan,#2aa198)]"
+        checked={checked}
+        onChange={(e) => onCheck(e.target.checked)}
+      />
+      <span className="min-w-0 flex-1 truncate text-[13px] text-sol-text">{title}</span>
+      {c.disruption === "mid_turn" && <span className="shrink-0 text-[10px] text-sol-yellow">working</span>}
+      {elsewhere && <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-sol-text-muted">{destIcon(elsewhere)}{elsewhere.name}</span>}
+      <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">
+        {[c.relief.cpu !== undefined ? fmtCpu(c.relief.cpu) : undefined, c.relief.rssHigh !== undefined ? fmtBytes(c.relief.rssHigh) : undefined].filter(Boolean).join(" · ")}
+      </span>
+    </label>
+  );
+}
+
+function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
+  c: OffloadCandidate; session?: ResourceSession; plan: OffloadPlan; destinationId?: string; onDestination: (id: string) => void;
+}) {
+  const dest = destinationId ? c.perDestination[destinationId] : undefined;
+  return (
+    <div className="space-y-1">
+      <div className="text-sol-text-secondary">{session?.title ?? c.sessionId}</div>
+      <div>{[session?.shortId, projectName(session?.projectPath), c.reason].filter(Boolean).join(" · ")}</div>
+      {dest?.notes?.map((n) => <div key={n} className="text-sol-text-dim">{n}</div>)}
+      {dest?.passed && dest.passed.length > 0 && (
+        <div className="flex gap-1.5"><Check className="mt-px h-3 w-3 shrink-0 text-sol-green" />Checked: {dest.passed.join("; ")}</div>
+      )}
+      {c.staysLocal.length > 0 && <div>Stays here: {c.staysLocal.map((s) => s.label).join(", ")}</div>}
+      {plan.destinations.length > 1 && (
+        <div className="flex flex-wrap gap-1 pt-0.5" role="radiogroup" aria-label="Destination">
+          {plan.destinations.map((d) => {
+            const r = c.perDestination[d.deviceId];
+            const picked = destinationId === d.deviceId;
+            return (
+              <button
+                key={d.deviceId}
+                type="button"
+                role="radio"
+                aria-checked={picked}
+                disabled={!movable(r)}
+                title={!movable(r) ? r?.blockers.join("\n") : undefined}
+                onClick={() => onDestination(d.deviceId)}
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] disabled:cursor-not-allowed disabled:opacity-40",
+                  picked ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 hover:text-sol-text",
+                )}
+              >
+                {destIcon(d)}{d.name}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -124,7 +125,6 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const [edited, setChoices] = React.useState<Record<string, Choice>>({});
   const [batchDest, setBatchDest] = React.useState<string | undefined>();
   const [wait, setWait] = React.useState(SAFE_WAITS[1]?.value ?? SAFE_WAITS[0].value);
-  const [showNotOffered, setShowNotOffered] = React.useState(false);
 
   // The batch goes where most sessions can go; a session that can't go there falls back to its own suggestion.
   const viableCount = (id: string) => plan.candidates.filter((c) => movable(c.perDestination[id])).length;
@@ -139,10 +139,10 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
     return { destinationId, checked: checked && !!destinationId && movable(c.perDestination[destinationId]), overridden: !!destinationId && destinationId !== target };
   };
   const resolved = new Map(plan.candidates.map((c) => [c.sessionId, resolve(c)]));
-  const ordered = [...plan.candidates].sort((a, b) => Number(movable(b.perDestination[resolved.get(b.sessionId)!.destinationId ?? ""])) - Number(movable(a.perDestination[resolved.get(a.sessionId)!.destinationId ?? ""])));
-  const canMove = plan.candidates.filter((c) => movable(c.perDestination[resolved.get(c.sessionId)!.destinationId ?? ""]));
-  const picked = canMove.filter((c) => resolved.get(c.sessionId)!.checked);
   const destOf = (c: OffloadCandidate) => resolved.get(c.sessionId)!.destinationId!;
+  const canMove = plan.candidates.filter((c) => movable(c.perDestination[resolved.get(c.sessionId)!.destinationId ?? ""]));
+  const blocked = plan.candidates.filter((c) => !canMove.includes(c));
+  const picked = canMove.filter((c) => resolved.get(c.sessionId)!.checked);
   // Pressing Move confirms the items no check can prove, shown once below for the whole batch.
   const selections: OffloadSelection[] = picked.map((c) => ({ sessionId: c.sessionId, destinationId: destOf(c), attested: [...c.perDestination[destOf(c)].pending] }));
   const toConfirm = [...new Set(picked.flatMap((c) => c.perDestination[destOf(c)].pending))];
@@ -162,126 +162,152 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
   const midTurn = picked.some((c) => c.disruption === "mid_turn");
   const allChecked = canMove.length > 0 && picked.length === canMove.length;
   const setAll = (checked: boolean) => setChoices((s) => Object.fromEntries(plan.candidates.map((c) => [c.sessionId, { ...s[c.sessionId], checked }])));
+  const titleOf = (id: string) => byId.get(id)?.title ?? id;
+  const stayCount = blocked.length + plan.notOffered.length + unevaluated.length;
 
   const off = actionsDisabledReason;
   const moveBlocked = !actions?.onStartOffload ? (off ?? "Moving is not available here") : picked.length === 0 ? "Select at least one session" : undefined;
   const targetDest = plan.destinations.find((d) => d.deviceId === target);
   const tight = targetDest?.headroom?.memoryAvailable !== undefined && rss > targetDest.headroom.memoryAvailable;
+  const relief = [cpu !== undefined ? `${fmtCpu(cpu)} CPU` : undefined, rss > 0 ? `${reliefText(0, rss)} memory` : undefined].filter(Boolean).join(", ");
 
   return (
     <section aria-label="Review offload" className="flex h-full min-h-0 flex-col bg-sol-bg">
-      <header className="flex items-center gap-3 border-b border-sol-border/30 px-4 py-3">
+      <header className="flex items-start gap-3 px-5 pb-3 pt-5">
         <div className="min-w-0 flex-1">
-          <h2 className="text-[13px] font-semibold text-sol-text">Move work off {sourceName}</h2>
-          <p className={cn("mt-0.5 truncate text-[11px]", plan.incident.level === "critical" ? "text-sol-red" : "text-sol-yellow")} title={plan.incident.reason}>
+          <h2 className="text-[17px] font-semibold tracking-tight text-sol-text">Free up {sourceName}</h2>
+          <p className="mt-1 flex items-center gap-1.5 truncate text-[12px] text-sol-text-muted" title={plan.incident.reason}>
+            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", plan.incident.level === "critical" ? "bg-sol-red" : "bg-sol-yellow")} />
             {plan.incident.reason} for {fmtAgo(plan.incident.since, now).replace(/ ago$/, "")}
           </p>
         </div>
-        <button type="button" onClick={onClose} aria-label="Close review" className="rounded p-1 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"><X className="h-4 w-4" /></button>
+        <button type="button" onClick={onClose} aria-label="Close review" className="-mr-1 rounded-full p-1.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"><X className="h-4 w-4" /></button>
       </header>
 
-      {plan.destinations.length === 0 ? (
-        <div className="border-b border-sol-border/20 bg-sol-bg-alt/60 px-4 py-3 text-[11px] text-sol-text-secondary">
-          No cloud host is set up, so nothing can move yet. Add one in Settings → Devices.
-        </div>
-      ) : (
-        <div className="flex items-center gap-2.5 border-b border-sol-border/30 px-4 py-2 text-[11px] text-sol-text-muted">
-          <input
-            type="checkbox"
-            aria-label="Select every session that can move"
-            className="h-3.5 w-3.5 accent-[var(--sol-cyan,#2aa198)] disabled:opacity-30"
-            disabled={canMove.length === 0}
-            checked={allChecked}
-            onChange={(e) => setAll(e.target.checked)}
-          />
-          <span>{canMove.length} of {plan.candidates.length} can move</span>
-          <span className="ml-auto text-[10px] text-sol-text-dim">CPU · memory</span>
-        </div>
-      )}
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-4">
+        {plan.destinations.length === 0 ? (
+          <div className="rounded-xl bg-sol-bg-alt px-4 py-3 text-[12px] text-sol-text-secondary">
+            No cloud host is set up yet. Add one in Settings → Devices.
+          </div>
+        ) : (
+          <>
+            {targetDest && (
+              <label className="relative flex items-center gap-3 rounded-xl bg-sol-bg-alt px-3.5 py-2.5">
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-sol-cyan/15 text-sol-cyan">{destIcon(targetDest, "h-3.5 w-3.5")}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[10px] uppercase tracking-wide text-sol-text-dim">Move to</span>
+                  <span className="block truncate text-[13px] font-medium text-sol-text">
+                    {targetDest.name}{targetDest.asleep ? " (asleep)" : !targetDest.online ? " (offline)" : ""}
+                  </span>
+                </span>
+                {tight && <span className="shrink-0 text-[11px] text-sol-yellow">may not fit</span>}
+                {plan.destinations.length > 1 && (
+                  <>
+                    <ChevronDown className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
+                    <select aria-label="Destination" value={target} onChange={(e) => setBatchDest(e.target.value)} className="absolute inset-0 cursor-pointer opacity-0">
+                      {plan.destinations.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.name}{d.asleep ? " (asleep)" : !d.online ? " (offline)" : ""}</option>)}
+                    </select>
+                  </>
+                )}
+              </label>
+            )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {ordered.map((c) => {
-          const r = resolved.get(c.sessionId)!;
-          return (
-            <CandidateRow
-              key={c.sessionId}
-              c={c}
-              session={byId.get(c.sessionId)}
-              plan={plan}
-              destinationId={r.destinationId}
-              checked={r.checked}
-              overridden={r.overridden}
-              onCheck={(checked) => setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked } }))}
-              onDestination={(destinationId) => setChoices((s) => ({ ...s, [c.sessionId]: { checked: true, destinationId } }))}
-            />
-          );
-        })}
-        {unevaluated.length > 0 && (
-          <div className="border-b border-sol-border/15 px-4 py-2 text-[11px] text-sol-text-muted">
-            Not part of this suggestion yet: {unevaluated.map((id) => byId.get(id)?.title ?? id).join(", ")}.
-          </div>
-        )}
-        {plan.notOffered.length > 0 && (
-          <div className="px-4 py-2 text-[11px]">
-            <button type="button" className="inline-flex items-center gap-1 text-sol-text-dim hover:text-sol-text" onClick={() => setShowNotOffered(!showNotOffered)}>
-              <ChevronRight className={cn("h-3 w-3 transition-transform", showNotOffered && "rotate-90")} />
-              {plan.notOffered.length} more stay here
-            </button>
-            {showNotOffered && plan.notOffered.map((n) => (
-              <div key={n.sessionId} className="mt-1 flex gap-2 pl-4 text-sol-text-muted">
-                <span className="truncate text-sol-text-secondary">{byId.get(n.sessionId)?.title ?? n.sessionId}</span>
-                <span className="ml-auto shrink-0 text-sol-text-dim">{n.reason}</span>
+            {canMove.length > 0 && (
+              <div>
+                <div className="mb-1.5 flex items-baseline px-1 text-[11px] text-sol-text-dim">
+                  <span>{plural(canMove.length, "session")}</span>
+                  {canMove.length > 1 && (
+                    <button type="button" className="ml-auto hover:text-sol-text" onClick={() => setAll(!allChecked)}>{allChecked ? "Select none" : "Select all"}</button>
+                  )}
+                </div>
+                <div className="divide-y divide-sol-border/15 overflow-hidden rounded-xl bg-sol-bg-alt">
+                  {canMove.map((c) => (
+                    <CandidateRow
+                      key={c.sessionId}
+                      c={c}
+                      title={titleOf(c.sessionId)}
+                      checked={resolved.get(c.sessionId)!.checked}
+                      elsewhere={resolved.get(c.sessionId)!.overridden ? plan.destinations.find((d) => d.deviceId === destOf(c)) : undefined}
+                      onCheck={(checked) => setChoices((s) => ({ ...s, [c.sessionId]: { ...s[c.sessionId], checked } }))}
+                    />
+                  ))}
+                </div>
               </div>
-            ))}
-          </div>
+            )}
+
+            <div className="space-y-2 px-1">
+              {stayCount > 0 && (
+                <Disclosure label={`${stayCount} stay${stayCount === 1 ? "s" : ""} here`}>
+                  {blocked.map((c) => (
+                    <div key={c.sessionId} data-candidate={c.sessionId}>
+                      <div className="text-sol-text-secondary">{titleOf(c.sessionId)}</div>
+                      {(c.perDestination[destOf(c) ?? ""]?.blockers ?? []).map((b) => (
+                        <div key={b} className="flex gap-1.5 text-sol-red"><X className="mt-px h-3 w-3 shrink-0" />{b}</div>
+                      ))}
+                    </div>
+                  ))}
+                  {plan.notOffered.map((n) => (
+                    <div key={n.sessionId}><div className="text-sol-text-secondary">{titleOf(n.sessionId)}</div><div className="text-sol-text-dim">{n.reason}</div></div>
+                  ))}
+                  {unevaluated.map((id) => (
+                    <div key={id}><div className="text-sol-text-secondary">{titleOf(id)}</div><div className="text-sol-text-dim">Not part of this suggestion yet</div></div>
+                  ))}
+                </Disclosure>
+              )}
+              {canMove.length > 0 && (
+                <Disclosure label="Details">
+                  {targetDest && (targetDest.headroom?.memoryAvailable !== undefined || targetDest.costPerHour !== undefined) && (
+                    <div className={cn(tight && "text-sol-yellow")}>
+                      {targetDest.name}: {[targetDest.headroom?.memoryAvailable !== undefined ? `${fmtBytes(targetDest.headroom.memoryAvailable)} free${tight ? ", may not fit" : ""}` : undefined,
+                        targetDest.costPerHour !== undefined ? `$${targetDest.costPerHour.toFixed(2)}/h` : undefined].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                  {midTurn && (
+                    <label className="flex items-center gap-1.5">
+                      Working sessions move after their turn; wait up to
+                      <select value={wait} onChange={(e) => setWait(Number(e.target.value))} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
+                        {SAFE_WAITS.map((p) => <option key={p.value} value={p.value}>{p.label.toLowerCase().replace(/^wait up to /, "")}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  {canMove.map((c) => (
+                    <CandidateDetail
+                      key={c.sessionId}
+                      c={c}
+                      session={byId.get(c.sessionId)}
+                      plan={plan}
+                      destinationId={resolved.get(c.sessionId)!.destinationId}
+                      onDestination={(destinationId) => setChoices((s) => ({ ...s, [c.sessionId]: { checked: true, destinationId } }))}
+                    />
+                  ))}
+                </Disclosure>
+              )}
+            </div>
+          </>
         )}
       </div>
 
       {plan.destinations.length > 0 && (
-        <footer className="space-y-2 border-t border-sol-border/30 bg-sol-bg-alt/50 px-4 py-3 text-[11px]">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <label className="flex items-center gap-1.5 text-sol-text-muted">
-              Send to
-              <select value={target} onChange={(e) => setBatchDest(e.target.value)} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
-                {plan.destinations.map((d) => <option key={d.deviceId} value={d.deviceId}>{d.name}{d.asleep ? " (asleep)" : !d.online ? " (offline)" : ""}</option>)}
-              </select>
-            </label>
-            {targetDest && (
-              <span className={cn("text-sol-text-dim", tight && "text-sol-yellow")}>
-                {[targetDest.headroom?.memoryAvailable !== undefined ? `${fmtBytes(targetDest.headroom.memoryAvailable)} free${tight ? ", may not fit" : ""}` : undefined,
-                  targetDest.costPerHour !== undefined ? `$${targetDest.costPerHour.toFixed(2)}/h` : undefined].filter(Boolean).join(" · ")}
-              </span>
-            )}
-            {midTurn && (
-              <label className="ml-auto flex items-center gap-1.5 text-sol-text-muted" title="A working session moves when its turn ends; if it is still running after this wait, it stays here.">
-                Wait for working sessions
-                <select value={wait} onChange={(e) => setWait(Number(e.target.value))} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
-                  {SAFE_WAITS.map((p) => <option key={p.value} value={p.value}>{p.label.toLowerCase().replace(/^wait /, "")}</option>)}
-                </select>
-              </label>
-            )}
+        <footer className="space-y-2.5 border-t border-sol-border/20 px-5 pb-5 pt-3.5">
+          <div className="text-center text-[11px] text-sol-text-muted">
+            {picked.length > 0 && relief ? <>Frees about <span className="tabular-nums text-sol-text-secondary">{relief}</span>. Nothing is interrupted.</> : "Nothing is interrupted."}
           </div>
-          <div className="flex items-center gap-3">
-            <div className="min-w-0 flex-1 text-[10px] leading-snug text-sol-text-dim">
-              {picked.length > 0 && <div>Frees about <span className="tabular-nums text-sol-blue">{fmtCpu(cpu)}</span> CPU and <span className="tabular-nums text-sol-violet">{reliefText(0, rss)}</span> here. Nothing is interrupted.</div>}
-              {toConfirm.length > 0 && (
-                <details>
-                  <summary className="cursor-pointer select-none hover:text-sol-text">Moving confirms {toConfirm.length} thing{toConfirm.length === 1 ? "" : "s"} no check can prove</summary>
-                  <ul className="mt-0.5 list-disc pl-4">{toConfirm.map((p) => <li key={p}>{p}</li>)}</ul>
-                </details>
-              )}
-              {moveBlocked && off && <div>{off}</div>}
-            </div>
-            <button
-              type="button"
-              disabled={!!moveBlocked}
-              title={moveBlocked}
-              onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
-              className="shrink-0 rounded bg-sol-cyan px-3 py-1.5 text-[12px] font-semibold text-sol-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Move {picked.length || ""} session{picked.length === 1 ? "" : "s"}
-            </button>
-          </div>
+          {toConfirm.length > 0 && picked.length > 0 && (
+            <details className="text-[11px] text-sol-text-muted">
+              <summary className="cursor-pointer select-none text-center hover:text-sol-text">You confirm {plural(toConfirm.length, "item")} not checked automatically</summary>
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">{toConfirm.map((p) => <li key={p}>{p}</li>)}</ul>
+            </details>
+          )}
+          <button
+            type="button"
+            disabled={!!moveBlocked}
+            title={moveBlocked}
+            onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
+            className="w-full rounded-xl bg-sol-cyan px-4 py-2.5 text-[14px] font-semibold text-sol-bg transition-opacity hover:opacity-90 active:opacity-80 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {toConfirm.length > 0 && picked.length > 0 ? "Confirm and move" : "Move"} {picked.length > 0 ? plural(picked.length, "session") : "sessions"}
+          </button>
+          {moveBlocked && off && <div className="text-center text-[10px] text-sol-text-dim">{off}</div>}
         </footer>
       )}
     </section>

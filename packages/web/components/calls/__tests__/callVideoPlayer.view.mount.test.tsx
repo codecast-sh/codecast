@@ -70,3 +70,31 @@ test("by identity too, and a moment no screen covers stays on the room", () => {
   expect(srcs()).toEqual(["https://b/c1.mp4"]);
   React.act(() => root.unmount());
 });
+
+test("a phone refusing the room's sound under a screen asks for a tap, and the tap plays it", async () => {
+  const proto = (globalThis as any).HTMLVideoElement.prototype;
+  const realPlay = proto.play;
+  let refuse = true;
+  const played: string[] = [];
+  proto.play = function (this: HTMLVideoElement) {
+    played.push(this.getAttribute("src") ?? "");
+    if (refuse) return Promise.reject(Object.assign(new Error("needs a gesture"), { name: "NotAllowedError" }));
+    return Promise.resolve();
+  };
+  try {
+    const { root, handleRef } = mount();
+    await React.act(async () => void handleRef.current.seek(150_000, { play: true, view: { screen: true } }));
+    const chip = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Tap for sound"));
+    expect(chip()).toBeTruthy();
+    refuse = false;
+    played.length = 0;
+    await React.act(async () => chip()!.click());
+    expect(played).toEqual(["https://b/c1.mp4"]);
+    // The room's file playing is what clears it.
+    await React.act(async () => void document.querySelector("video")!.dispatchEvent(new (globalThis as any).Event("playing")));
+    expect(chip()).toBeUndefined();
+    React.act(() => root.unmount());
+  } finally {
+    proto.play = realPlay;
+  }
+});

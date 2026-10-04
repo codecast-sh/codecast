@@ -855,9 +855,17 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
       reason: unattributable ? unkept.map((k) => `the ${k} batch ran uncommitted edits and kept no patch; nothing recorded can replay them`).join("; ") : null,
     };
   } else answer = { kind: "noise", separation: gb && bb ? fixtureSeparate(scoredOf(rowsIn(st, gb)).map((r) => r.score as number), scoredOf(badRows).map((r) => r.score as number)) : { kind: "too-few" } };
-  const firstFlip = flipped[0];
-  const ra = firstFlip ? st.byId.get(firstFlip.before[0]) : undefined;
-  const rb = firstFlip ? st.byId.get(firstFlip.after[0]) : undefined;
+  // The rendered prompt whatever the answer, as attribution.ts takes it: per focus freeze (the flips, else the
+  // largest drops), the good side's newest graded rep against the bad side's first.
+  const graded = (b: Batch | null) => (b ? rowsIn(st, b).filter((r) => r.status !== "crash" && r.status !== "dry") : []);
+  const gs = graded(gb);
+  const bs = graded(bb);
+  const focusIds = flipped.length ? flipped.map((f) => f.freezeId) : largestDrops(gs, bs);
+  const promptDiffs = focusIds.flatMap((f) => {
+    const ra = gs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? 1 : -1))[0];
+    const rb = bs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? -1 : 1))[0];
+    return ra && rb ? promptPair(st, ra, rb) : [];
+  });
   return {
     surface,
     good: good.endpoint,
@@ -866,7 +874,7 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
     flipped,
     checklist,
     answer,
-    promptDiffs: ra && rb ? promptPair(st, ra, rb) : [],
+    promptDiffs,
     examples: examplesOf(st, flipped),
   };
 }

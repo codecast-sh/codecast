@@ -1,0 +1,87 @@
+/* The app's button face (components/ui/button.tsx); the marketing site uses
+ * the same component.
+ *
+ * Filled buttons take their theme colour with some of its chroma drawn out
+ * (oklch, so lightness and hue stay where the theme put them), then a light
+ * along the top edge, a hairline that darkens whatever fill is under it, and
+ * a short soft shadow. Hover drifts the fill toward its label colour, which
+ * lightens a dark fill and deepens a light one; a press sinks half a pixel and
+ * turns the shadow inward.
+ *
+ * Every rule weighs two elements (html body, then the classes inside
+ * :where()): enough to beat Tailwind's reset, which clears a button's
+ * background with an element selector, and less than any one utility class,
+ * so a call site that passes its own bg-, text- or hover: class still wins. The face is also
+ * published as custom properties (--btn-fill, --btn-fill-hover, --btn-sheen,
+ * --btn-face, --btn-face-pressed) for surfaces that draw their own button and
+ * want the same one, such as the toast action (sonner.css).
+ */
+
+html body :where(.cc-btn) {
+  transition: background-color 150ms, box-shadow 150ms, color 150ms, transform 80ms;
+}
+html body :where(.cc-btn:active:not(:disabled)) {
+  transform: translateY(0.5px);
+}
+
+/* Colours per filled variant (cyan is the fixed Solarized accent, as its
+   fixed dark label needs): the tint before it is toned, and the ink
+   (label colour) that hover leans toward. */
+html body :where(.cc-btn-primary) {
+  --btn-tint: hsl(var(--primary));
+  --btn-ink: hsl(var(--primary-foreground));
+}
+html body :where(.cc-btn-destructive) {
+  --btn-tint: hsl(var(--destructive));
+  --btn-ink: hsl(var(--destructive-foreground));
+}
+html body :where(.cc-btn-cyan) {
+  --btn-tint: #2aa198;
+  --btn-ink: #002b36;
+}
+
+html body :where(.cc-btn-fill) {
+  --btn-fill: var(--btn-tint);
+  --btn-fill-hover: color-mix(in oklab, var(--btn-fill) 88%, var(--btn-ink));
+  --btn-sheen: linear-gradient(to bottom, rgb(255 255 255 / 0.09), rgb(255 255 255 / 0) 60%);
+  --btn-face:
+    inset 0 1px 0 rgb(255 255 255 / 0.16),
+    inset 0 0 0 1px rgb(0 0 0 / 0.1),
+    0 1px 2px rgb(0 0 0 / 0.14),
+    0 3px 8px -4px rgb(0 0 0 / 0.22);
+  --btn-face-pressed:
+    inset 0 1px 2px rgb(0 0 0 / 0.2),
+    inset 0 0 0 1px rgb(0 0 0 / 0.12);
+  background-color: var(--btn-fill);
+  background-image: var(--btn-sheen);
+  box-shadow: var(--btn-face);
+}
+@supports (color: oklch(from red l c h)) {
+  html body :where(.cc-btn-fill) {
+    --btn-fill: oklch(from var(--btn-tint) l calc(c * 0.74) h);
+  }
+}
+html body :where(.cc-btn-fill:hover) {
+  background-color: var(--btn-fill-hover);
+}
+html body :where(.cc-btn-fill:active:not(:disabled)) {
+  background-image: none;
+  box-shadow: var(--btn-face-pressed);
+}
+
+/* Quiet faces: the same top light, and a lift of a pixel. Secondary has no
+   border of its own, so it gets a hairline in its label colour. */
+html body :where(.cc-btn-secondary) {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.08),
+    inset 0 0 0 1px color-mix(in srgb, currentColor 9%, transparent),
+    0 1px 1px rgb(0 0 0 / 0.05);
+}
+html body :where(.cc-btn-outline) {
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.07),
+    0 1px 2px rgb(0 0 0 / 0.06);
+}
+html body :where(.cc-btn-secondary:active:not(:disabled), .cc-btn-outline:active:not(:disabled)) {
+  box-shadow: inset 0 1px 2px rgb(0 0 0 / 0.08);
+}

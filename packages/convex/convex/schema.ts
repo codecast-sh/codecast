@@ -12,7 +12,7 @@ import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValida
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
-import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
+import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -5600,6 +5600,9 @@ export default defineSchema({
     // Set when pulled from the provider or once a pushed comment gets its id
     // back. docs/architecture/issue-sync.md S1.2, S4.
     external: v.optional(taskCommentExternalValidator),
+    // A person's comment reached the session that owns the task while it was
+    // working (tasks.ts deliverCommentToOwner): the thread says so under it.
+    delivered_to_conversation_id: v.optional(v.id("conversations")),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"])
@@ -6221,7 +6224,15 @@ export default defineSchema({
     creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
+    // Every link the room ever had, for the questions about any of them
+    // (lib/callGuestAdmission.roomHasGuestLinks: a guest admitted on a link
+    // since expired can still be inside).
     .index("by_room", ["room_key"])
+    // The room's links still open by the clock, and only those: the stage's
+    // invite panel (callGuests.listGuestLinks) subscribes to this range, so a
+    // long-lived room's past links neither grow its read nor re-run it when
+    // one of them is written.
+    .index("by_room_expires", ["room_key", "expires_at"])
     // The creator's latest push across all their links, in one read
     // (callGuests.tellCreatorIfAlone).
     .index("by_creator_told", ["created_by", "creator_told_at"])
@@ -6524,8 +6535,11 @@ export default defineSchema({
     // restart cooldown and the stuck-save timeout both count from here.
     stop_requested_at: v.optional(v.number()),
     // Why it failed, in plain words (lib/callRecordingRuns plainEgressError;
-    // LiveKit's own text goes to the logs).
+    // LiveKit's own text goes to the logs), and the kind of failure those
+    // words describe. Decisions (may a screen file be asked for again?) read
+    // the kind, so editing the words never changes what the loop does.
     error: v.optional(v.string()),
+    error_kind: v.optional(callRecordingErrorKindValidator),
     // How many times this file has been asked of LiveKit (absent: once). A
     // refusal that passes (no capacity this minute, a timeout) is asked again
     // up to START_RETRY_LIMIT times on the same row. `retry_after` is when a

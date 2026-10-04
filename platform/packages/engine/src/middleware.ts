@@ -127,6 +127,29 @@ type PublicCommandReceipt = {
   rejection?: { code: string; message: string; correction?: unknown };
 };
 
+// Outside effects an action body asks for (a message to sibling windows, a
+// sound). A body runs on a draft that may never commit: an undo engine's vet
+// can throw a redo's draft away after the body ran. So an effect asked for
+// while a body runs waits for that body's commit and is dropped with its
+// draft; one asked for outside any body runs at once.
+const commitEffectFrames: Array<Array<() => void>> = [];
+
+export function afterCommit(effect: () => void): void {
+  const frame = commitEffectFrames[commitEffectFrames.length - 1];
+  if (frame) frame.push(effect);
+  else effect();
+}
+
+function runCommitEffects(key: string, effects: Array<() => void>): void {
+  for (const effect of effects) {
+    try {
+      effect();
+    } catch (error) {
+      console.error(`[local-first] commit effect failed (action=${key})`, error);
+    }
+  }
+}
+
 export function action<T extends (...args: any[]) => any>(fn: T): T {
   (fn as any)[ACTION_FLAG] = true;
   return fn;
@@ -1722,13 +1745,21 @@ export function mutativeMiddleware(
       {
         const state = get();
         let returnValue: any;
-        const [nextState, patches] = mutativeCreate(
-          state,
-          (draft: any) => {
-            returnValue = recipe(draft);
-          },
-          { enablePatches: { pathAsArray: true } }
-        );
+        const effects: Array<() => void> = [];
+        commitEffectFrames.push(effects);
+        let nextState: any;
+        let patches: Patch[];
+        try {
+          [nextState, patches] = mutativeCreate(
+            state,
+            (draft: any) => {
+              returnValue = recipe(draft);
+            },
+            { enablePatches: { pathAsArray: true } }
+          );
+        } finally {
+          commitEffectFrames.pop();
+        }
         if (opts?.vet && !opts.vet({ state, nextState, patches })) return undefined;
 
         // Auto-generate pending entries for synced collections so local-first
@@ -1769,6 +1800,7 @@ export function mutativeMiddleware(
         }
 
         set(finalState, true);
+        runCommitEffects(key, effects);
 
         if (idbWriteFn && finalPatches.length > 0) {
           // Synchronous: the storage engine's bulk writes don't block the main

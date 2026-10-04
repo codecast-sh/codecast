@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { recordingEndHref, savedWords, stopNoticeVerdict, stoppedByItself, stoppedWords, unseenPressedFailure } from "../../../lib/calls/roomRecordingEnd";
+import { RECORDING_SHARED_WORDS, recordingEndHref, savedWords, startedWords, stopNoticeCard, stopNoticeVerdict, stoppedByItself, stoppedWords, unseenPressedFailure } from "../../../lib/calls/roomRecordingEnd";
 
 // What the room is told when a recording stops: "saving" only for a run that
 // was filming, a failure in its own words, and who stopped it by name.
@@ -10,6 +10,18 @@ const end = (over: Partial<Parameters<typeof stoppedWords>[0] & object>) => ({
   error: null,
   stopped_by: null,
   ...over,
+});
+
+// The consent line, said the same on the web and the phone: who pressed, and
+// whether the video reaches the public link.
+describe("startedWords", () => {
+  it("names the presser and says when the video is public", () => {
+    const live = { started_by: { id: "u2", name: "Ann Lee" }, video_shared: false };
+    expect(startedWords(live)).toBe("Ann started recording. Anyone in the call can stop it.");
+    expect(startedWords({ ...live, video_shared: true })).toBe(`Ann started recording. ${RECORDING_SHARED_WORDS} Anyone in the call can stop it.`);
+    // A server too old to name the run: what is kept, nothing it cannot know.
+    expect(startedWords(null)).toBe("Video and shared screens are kept with the call. Anyone in the call can stop it.");
+  });
 });
 
 describe("stoppedWords", () => {
@@ -120,5 +132,39 @@ describe("stoppedByItself", () => {
     expect(stoppedByItself(end({ status: "failed", stop_reason: "pressed" }))).toBe(false);
     expect(stoppedByItself(null)).toBe(false);
     expect(stoppedByItself(undefined)).toBe(false);
+  });
+});
+
+// One card for every surface (the web's banner, toast and system banner, the
+// phone's card): its words, where Open goes, and whether it stays until it is
+// dismissed. Sticky is stoppedByItself, for every reason a run can stop.
+describe("stopNoticeCard", () => {
+  it("stays up exactly when the run stopped by itself", () => {
+    const sticky: Record<string, boolean> = {
+      pressed: false,
+      huddle_ended: false,
+      room_empty: true,
+      share_ended: false,
+      limit: true,
+      ended: true,
+      failed: true,
+    };
+    for (const [stop_reason, want] of Object.entries(sticky)) {
+      expect({ stop_reason, sticky: stopNoticeCard("say", end({ stop_reason: stop_reason as any }), null).sticky }).toEqual({ stop_reason, sticky: want });
+    }
+    // A failure LiveKit gave no reason for, and an end that never arrived.
+    expect(stopNoticeCard("say", end({ status: "failed", stop_reason: null as any }), null).sticky).toBe(true);
+    expect(stopNoticeCard("say", null, null).sticky).toBe(false);
+  });
+  it("says the stop or the presser's saved line, with the notice's Open", () => {
+    const landed = end({ status: "ready", stopped_by: { id: "u1", name: "Me" }, transcript_id: "t1", short_id: "cl-117", at_ms: 132_400 });
+    expect(stopNoticeCard("saved", landed, "u1")).toEqual({
+      title: savedWords(landed),
+      body: "",
+      failed: false,
+      sticky: false,
+      href: "/calls/t1?t=132",
+    });
+    expect(stopNoticeCard("say", landed, "u2")).toEqual({ ...stoppedWords(landed, "u2"), sticky: false, href: recordingEndHref(landed) });
   });
 });

@@ -1,3 +1,4 @@
+import { optionalNative } from "./optionalNative";
 /**
  * Copy a string to the system clipboard.
  *
@@ -23,5 +24,16 @@ export function copyToClipboard(value: string): Promise<void> {
       // no clipboard backend available — swallow rather than crash the screen
     }
     return Promise.resolve();
+  }
+}
+
+/** The clipboard's text, or null when the binary has no clipboard module or it is empty. */
+export async function readClipboard(): Promise<string | null> {
+  const ExpoClipboard = optionalNative('ExpoClipboard', () => require('expo-clipboard'));
+  try {
+    const text = ExpoClipboard ? await ExpoClipboard.getStringAsync() : null;
+    return text ? String(text) : null;
+  } catch {
+    return null;
   }
 }
