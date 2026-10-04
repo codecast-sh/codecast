@@ -238,7 +238,20 @@ export function ingestTaskDetail(d: any, opts?: { partialComments?: boolean }): 
       }
     }
   }
-  useInboxStore.getState().syncRecord("tasks", String(row._id), row);
+  const { subtasks, ...rest } = row as any;
+  useInboxStore.getState().syncRecord("tasks", String(rest._id), rest);
+  // The detail ships the task's direct children (taskMining.directSubtasks)
+  // so a surface without the list feeder draws the same checklist. Each joins
+  // the one tasks collection, merged over any row the list already holds so
+  // its enriched fields survive.
+  if (Array.isArray(subtasks)) {
+    const tasks = useInboxStore.getState().tasks as Record<string, any>;
+    for (const child of subtasks) {
+      if (!child || !collectionRowValidator("tasks")!(child)) continue;
+      const prev = tasks[String(child._id)];
+      useInboxStore.getState().syncRecord("tasks", String(child._id), prev ? { ...prev, ...child } : child);
+    }
+  }
 }
 
 export function useSyncTaskDetail(id?: string) {

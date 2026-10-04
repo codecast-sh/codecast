@@ -1,0 +1,75 @@
+/*
+ * Motion for /features/decisions. Every element's resting style is its final
+ * state; animations only play the way in. `[data-static]` on the root (set by
+ * ?static) and prefers-reduced-motion skip them, so a page whose timers never
+ * run still reads complete.
+ *
+ * The hero timeline: --d is the first answer (T1), --d2 the second (T2).
+ */
+
+@keyframes dq-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes dq-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes dq-out { from { opacity: 1; } to { opacity: 0; visibility: hidden; } }
+@keyframes dq-inx { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes dq-blip-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes dq-blip-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes dq-grow-x { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+
+/* Sheet positions in the stack: front, one back, two back. */
+@keyframes dq-leave {
+  from { opacity: 1; transform: none; }
+  to { opacity: 0; transform: translate(-46px, -8px) rotate(-2.5deg); visibility: hidden; }
+}
+@keyframes dq-back1-front { from { transform: translateY(14px) scale(.965); } to { transform: none; } }
+@keyframes dq-back2-back1 { from { transform: translateY(28px) scale(.93); } to { transform: translateY(14px) scale(.965); } }
+@keyframes dq-pick {
+  0% { background-color: transparent; }
+  35% { background-color: rgba(181, 137, 0, .16); border-color: #b58900; }
+  100% { background-color: rgba(133, 153, 0, .09); border-color: rgba(133, 153, 0, .6); }
+}
+
+.dq-in { animation: dq-rise .6s cubic-bezier(.2, .7, .2, 1) var(--d, 0s) both; }
+.dq-pulse { animation: dq-pulse 1.6s ease-in-out infinite; }
+.dq-grow { transform-origin: left; animation: dq-grow-x 1s cubic-bezier(.2, .7, .2, 1) .3s both; }
+
+.dq-sheet1, .dq-sheet2, .dq-sheet3 { transform-origin: 50% 100%; }
+/* Resting: the first two are answered and gone; the third is on top. */
+.dq-sheet1 { opacity: 0; visibility: hidden; animation: dq-leave .55s cubic-bezier(.5, 0, .75, 0) var(--d) both; }
+.dq-sheet2 {
+  opacity: 0; visibility: hidden;
+  animation: dq-back1-front .45s cubic-bezier(.2, .7, .2, 1) calc(var(--d) + .15s) both,
+             dq-leave .55s cubic-bezier(.5, 0, .75, 0) var(--d2) forwards;
+}
+.dq-sheet3 {
+  animation: dq-back2-back1 .45s cubic-bezier(.2, .7, .2, 1) calc(var(--d) + .15s) both,
+             dq-back1-front .45s cubic-bezier(.2, .7, .2, 1) calc(var(--d2) + .15s) forwards;
+}
+/* A back card is shaded so its peeking edge reads as depth, not as content. */
+.dq-sheet2 > *, .dq-sheet3 > * { transition: filter .3s; }
+
+.dq-pick { animation: dq-pick .7s ease-out calc(var(--d) - .8s) both; }
+.dq-sheet2 .dq-pick { animation-delay: calc(var(--d2) - .8s); }
+
+/* The session rows on the left: the waiting line hands over to the answer. */
+.dq-swap-out { opacity: 0; visibility: hidden; animation: dq-out .3s ease var(--d) both; }
+.dq-swap-in { animation: dq-inx .4s ease calc(var(--d) + .2s) both; }
+.dq-gone-at { opacity: 0; animation: dq-out .2s ease var(--d) both; }
+.dq-blip { opacity: 0; animation: dq-blip-in .2s ease var(--d) both, dq-blip-out .2s ease var(--d2) forwards; }
+
+/* Anatomy: the flag under the pointer lights the part of the card it fills. */
+.dq-part { transition: box-shadow .18s ease, background-color .18s ease; border-radius: 10px; }
+.dq-part[data-on="true"] { box-shadow: 0 0 0 2px #b58900, 0 0 0 6px rgba(181, 137, 0, .14); background-color: rgba(181, 137, 0, .05); }
+.dq-flag { transition: background-color .15s ease, color .15s ease; }
+.dq-flag[data-on="true"] { background-color: rgba(181, 137, 0, .22); }
+
+/* A row a reader can hover in the reference table. */
+.dq-ref-row { transition: background-color .15s ease; }
+.dq-ref-row:hover { background-color: rgba(181, 137, 0, .06); }
+
+/* The illustrative afternoon: bars grow in once, in reading order. */
+.dq-bar { transform-origin: left; animation: dq-grow-x .7s cubic-bezier(.2, .7, .2, 1) var(--d, 0s) both; }
+
+.dq-root[data-static] *, .dq-root[data-static] *::before, .dq-root[data-static] *::after { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  .dq-root *, .dq-root *::before, .dq-root *::after { animation: none !important; transition: none !important; }
+}

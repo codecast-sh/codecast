@@ -179,6 +179,27 @@ export async function supersedeCloudSpawns(ctx: Ctx, userId: Id<"users">, conver
   return n;
 }
 
+/** The placement fields an un-park clears: the row stops waiting on the host. */
+export const CLOUD_UNPARK_PATCH = {
+  cloud_placement: undefined,
+  cloud_placement_token: undefined,
+  cloud_placement_failed_at: undefined,
+} as const;
+
+/**
+ * A parked row moving onto a machine that is not a wake-on-use host stops
+ * waiting for the host: its live cloud_spawn is retired and the returned
+ * fields (spread into the move's own patch) clear the park. Without this the
+ * row keeps `cloud_placement: "pending"` under its new owner, and no daemon
+ * ever delivers its messages (canDaemonSeePendingMessage). Every device move
+ * goes through here; a move onto the host itself leaves the park alone.
+ */
+export async function unparkForMove(ctx: Ctx, conv: any, target: any): Promise<Partial<typeof CLOUD_UNPARK_PATCH>> {
+  if (conv.cloud_placement !== "pending" || !target || deviceWakesOnUse(target)) return {};
+  await supersedeCloudSpawns(ctx, conv.user_id, conv._id);
+  return { ...CLOUD_UNPARK_PATCH };
+}
+
 const byRecency = (a: any, b: any) => b.last_seen - a.last_seen;
 
 /**

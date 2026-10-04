@@ -8,6 +8,14 @@
  * machine". Pure data in, verdict out; no runtime imports.
  */
 
+/**
+ * The most files a "leave these out and start" answer may name. The list rides
+ * a Convex argument (arrays cap at 8192) and a button the human reads; a
+ * context that needs more left out than this is a project the mirror walks
+ * wrongly, reported as plain error text, never as an offer.
+ */
+export const CLOUD_LEAVE_OUT_MAX = 200;
+
 export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
   return d.is_remote === true && /^(linux|darwin|macos)$/i.test(d.platform ?? "");
 }

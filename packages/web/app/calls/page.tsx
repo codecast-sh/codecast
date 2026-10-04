@@ -28,7 +28,7 @@ import { useCallDetail, useCallList } from "../../hooks/useSyncCalls";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError, isRecRoomKey, parseCallAnchor, parseCallMomentParam, parseCallViewParam } from "@codecast/shared/contracts";
+import { humanizeConvexError, isRecRoomKey, lineFrameMs, parseCallAnchor, parseCallMomentParam, parseCallViewParam } from "@codecast/shared/contracts";
 import { callRefId } from "@codecast/shared/entities";
 import { joinCall } from "../../lib/calls/callManager";
 import { callTitle } from "../../lib/calls/roomLabels";
@@ -68,7 +68,8 @@ import {
   type FeedTarget,
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
-import { firstName, fmtCallLength, fmtClock, speakerColor } from "../../components/calls/speakers";
+import { firstName, fmtCallLength, speakerColor } from "../../components/calls/speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { CallSessionChips } from "../../components/calls/CallSessionChips";
 import { useMutation } from "convex/react";
 import {
@@ -103,7 +104,7 @@ import "../../components/calls/callMedia.css";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
-import { seekCallMedia, showCallLine, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
+import { callLineEl, seekCallMedia, showCallLine, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
 import { RecordingMark } from "../../components/calls/RecordingMark";
 import { RecorderMic } from "../../components/calls/RecorderMic";
 import { fmtClock as fmtWhen } from "../../components/triggerCadence";
@@ -475,10 +476,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   // back taken, follows again.
   // The i-th turn's element, or the line `seq` inside it: the line being
   // said is what follows the picture, since one turn can run for minutes.
-  const lineEl = (i: number, seq: number | null = null) => {
-    const turn = detailRef.current?.querySelector<HTMLElement>(`[data-turn="${i}"]`) ?? null;
-    return (seq !== null ? turn?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? turn;
-  };
+  const lineEl = (i: number, seq: number | null = null) => callLineEl(detailRef.current, i, seq);
   const [following, setFollowing] = useState(true);
   const playingIndex = seekable && mediaAt?.playing ? turnIndexAt(turns, mediaAt.ms) : null;
   const playingSeq = playingIndex === null ? null : lineSeqAt(turns[playingIndex], mediaAt!.ms);
@@ -570,7 +568,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
     const ms = shownMomentNear(videoFiles, callRecs.call_started_at, at - callRecs.call_started_at);
     if (ms === null) return null;
     return {
-      label: fmtClock(ms),
+      label: formatCallTime(ms),
       onSeek: () => {
         setFollowing(true);
         seekTo(ms);
@@ -908,8 +906,9 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
                 copyCallLink(
                   String(call._id),
                   turnsAnchor(turns.slice(selLo!, (selHi as number) + 1)),
-                  // With video the link also waits at the first line's moment.
-                  hasVideo ? turns[selLo!]?.t0 : undefined,
+                  // With video the link also waits at the first line's moment,
+                  // the second `cast call snap` frames for that line.
+                  hasVideo && turns[selLo!]?.segments[0] ? lineFrameMs(turns[selLo!].segments[0]) : undefined,
                 )
               }
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium text-sol-text-muted transition-colors hover:bg-sol-bg/60 hover:text-sol-text"

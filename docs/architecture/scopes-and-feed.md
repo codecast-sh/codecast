@@ -9,8 +9,9 @@ Large: several projects. The root anchor's scope is the workspace.
 - `org_roles.scope = { project_ids, plan_ids }`. A task is in scope when its
   `project_id` is in the set, or its `plan_id` is in the set, or its plan's
   project is in the set. A session is in scope when it is bound to a task or
-  plan in scope, or its `project_path` equals a scope project's `project_path`,
-  or it carries `org_role_id` for the role.
+  plan in scope (`active_task_id`, `active_plan_id` or `plan_ids`), or it
+  carries `org_role_id` for the role. A scope project's folder puts nothing in
+  scope (org-staffing.md S35; `sessionsInScope` in convex/org.ts).
 - Containment: a child's scope must be inside its parent's scope unless the
   parent is the root. Sibling overlap is allowed and shown as a warning on the
   org page and the scope page (two roles watch the same project).
@@ -21,21 +22,28 @@ Large: several projects. The root anchor's scope is the workspace.
 
 ## F2. Query `org.scopeFeed`
 
+![The scope resolves to projects, plans, tasks and sessions; nine sources read newest first and merge by updated_at into one page with a per-source cursor](../diagrams/scope-feed.svg)
+
 ```
 org.scopeFeed({ role_id } | { scope: { project_ids, plan_ids } }, cursor?, limit? = 40, kinds?)
 → { rows: FeedRow[]; next_cursor? }
-FeedRow = { kind: "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit",
+FeedRow = { kind: "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run",
             id, short_id?, title, state?: string, actor?: { name, image?, is_bot? },
             updated_at, href, preview?: string, image_url?: string }
 ```
 
 Sources, each read newest first with its own cursor and merged by
-`updated_at`: conversations in scope (rule above; `by_team_user_updated` per
-member with a 30 day cutoff), tasks (`by_project`/`by_plan` indexes; add if
-missing), plans (`by_project`), docs (`by_project`, `by_plan`), artifacts
-(published pages whose owning conversation is in scope), session_decisions
-(`by_task` for tasks in scope), project_updates (`by_project_created`),
-commits (`commits` table by repo in scope, last 7 days). Images: an artifact
+`updated_at` (`computeScopeFeed`, convex/org.ts): sessions in scope (rule
+above, over the org scan `collectOrgSessions`), tasks and plans as
+`resolveScope` read them (`by_project_id`, `by_plan_id`), docs (each member's
+`by_user_updated`, kept when filed under a scope project or plan), artifacts
+(each member's newest 100 pages, kept when the owning session is in scope or
+the page is attached to a scope task), session_decisions (each member's
+`by_user_status_created`, pending and answered, kept when on a scope task or
+an open ask from a scope session), project_updates (`by_project_created`),
+commits (`by_repository_timestamp` for the repos of the sessions in scope,
+last 7 days), and runs (the workspace's newest 200 workflow runs, kept when
+bound to a scope task or plan). Images: an artifact
 row of image kind, or a message image in a session in scope, gives
 `image_url` so the feed can show a thumbnail row.
 

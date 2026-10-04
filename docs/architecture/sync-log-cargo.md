@@ -9,6 +9,8 @@ acks, retention, or the doorbell + one shot read topology.
 
 ## Why
 
+![A tracked write appends one coalesced sync_actions row per access scope carrying the merge patch and an access stamp; the browser's getHeads doorbell triggers a getRange read projected per caller, and applyLogPage writes the patch onto the held row or falls back to byIds](../diagrams/sync-log-cargo.svg)
+
 Convex's subscription protocol has one primitive: re-run the query and push its complete
 result (`QueryUpdated` carries the full value; verified against the client source and
 Convex's own architecture writeup). Every efficient design on top of it keeps the
@@ -114,8 +116,9 @@ per caller: owner, grant, or held key → the row with cargo; a row with no stam
 (`cargo: true`), so deployed bundles keep thin rows.
 
 **One predicate.** `accessStampFor` / `accessStampFromDoc` and `authorizedFor` live in
-`lib/access.ts`, and `canAccessTask/Doc/Plan/Project` are DEFINED as evaluating that stamp,
-so the log and the byIds queries cannot disagree by construction; a property test pins the
+`lib/accessKeys.ts` (re-exported by `lib/access.ts`), and
+`canAccessTask/Doc/Plan/Project` are DEFINED as evaluating that stamp, so the log and
+the byIds queries cannot disagree by construction; a property test pins the
 pure evaluator to the ctx bound one. The team list bootstrap queries (`webList`,
 `webListPaginated`) filter their routing index reads through the same rule
 (`visibleInTeamList`), closing a pre existing hole where a private inside a team task
@@ -274,7 +277,7 @@ below the floor forever and trip the retention alarm).
 - Client unit: patch onto base with a pending lock (lock wins, ack retires it); full row
   path; no base → byIds; partial → refetch; fact strip; unset; delete → authorized absence.
 - Guard tests (syncLog.test.ts): `access_key` appears only in syncLog.ts, schema.ts,
-  changeLog.ts and lib/access.ts (the builder); lib/access.ts never mentions `scope_key` or
+  changeLog.ts and lib/accessKeys.ts (the builder); lib/access.ts never mentions `scope_key` or
   `sync_actions`; every task_comments insert goes through insertTaskComment; the log's
   fan-out and `visibleInTeamList` agree with the stamp predicate over generated documents.
 - Shadow comparator v2 (dev flag): after a direct patch apply, fetch the row via `byIds` and

@@ -107,6 +107,7 @@ const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everythi
 const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
+const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -232,6 +233,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 // Settings
@@ -282,6 +284,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/agents-that-talk-to-each-other", component: cast(BlogAgentsTalk), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-pull-request-that-knows-its-sessions", component: cast(BlogPullRequests), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -467,6 +470,11 @@ export const ROUTES: RouteEntry[] = [
   //    for the same reason: a ring must reach somebody who is in another app
   //    entirely, which a card inside an app window cannot do. --
   { path: "call-ring", component: cast(CallRing), layout: "palette" },
+
+  // -- The agent dock (TransparentWindowLayout): the pill on the screen's
+  //    edge with a dot per live agent and the card beside it. Opt-in per
+  //    machine. --
+  { path: "agent-dock", component: cast(AgentDock), layout: "palette" },
 
   // -- The share cursors glass (TransparentWindowLayout): teammates' pointers
   //    drawn on the sharer's own screen, over what the share captures. --

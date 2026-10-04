@@ -1,6 +1,7 @@
 import { LocalParticipant, Room, Track, type Participant } from "livekit-client";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import { callParticipantKind } from "@codecast/shared/contracts";
+import { isMediaDenial } from "./mediaDenial";
 
 // ── track fan-out to React ────────────────────────────────────────────────
 // One tile per VIDEO TRACK, not per participant: a person can have a camera
@@ -50,11 +51,7 @@ export function participantTiles(room: Room): ParticipantTile[] {
   return out;
 }
 
-/** Did the browser refuse the device, as opposed to not having one? A
- *  SecurityError (an insecure origin, a permissions policy) is a refusal too:
- *  the device exists and nothing on this page can open it. */
-export const isMediaDenial = (err: any): boolean =>
-  err?.name === "NotAllowedError" || err?.name === "SecurityError";
+export { isMediaDenial };
 
 // Why did capture fail? livekit resolves null (no throw) when getUserMedia
 // yields nothing, and the OS permission state tells the cases apart: a

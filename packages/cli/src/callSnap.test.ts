@@ -13,7 +13,6 @@ import {
   ffmpegFailure,
   formatSnapResult,
   lineAt,
-  lineFrameMs,
   nearestRecordedMs,
   outputPaths,
   parseSceneScores,
@@ -34,6 +33,7 @@ import {
   SnapError,
   uncoveredParts,
   parseCrop,
+  CROP_FORMS,
   parseTiles,
   cropRect,
   tileRects,
@@ -111,22 +111,6 @@ describe("parseSnapTarget", () => {
 });
 
 describe("time and names", () => {
-  test("a line's frame is a whole second just inside it", () => {
-    expect(lineFrameMs({ t0: 70_000, t1: 74_000 })).toBe(71_000);
-    expect(lineFrameMs({ t0: 70_100, t1: 74_000 })).toBe(71_000);
-    expect(lineFrameMs({ t0: 70_800, t1: 74_000 })).toBe(72_000);
-    // Too short to reach the nudged second: the whole second it still spans,
-    // so the citation (whole seconds) names the frame taken.
-    expect(lineFrameMs({ t0: 70_800, t1: 71_200 })).toBe(71_000);
-    expect(lineFrameMs({ t0: 70_900, t1: 71_200 })).toBe(71_000);
-    // A line that spans no whole second: the next one, never a second
-    // before its first word, which would show the line before it (cl-117's
-    // line 8, 2:41.501-2:41.808, was framed at 2:41 and labelled line 7).
-    expect(lineFrameMs({ t0: 70_100, t1: 70_400 })).toBe(71_000);
-    expect(lineFrameMs({ t0: 161_501, t1: 161_808 })).toBe(162_000);
-    expect(lineFrameMs({ t0: 70_000, t1: 70_100 })).toBe(70_000);
-  });
-
   test("file clocks and names", () => {
     expect(clockForName(7_000)).toBe("0m07s");
     // A moment between two seconds keeps its part of a second.
@@ -965,6 +949,24 @@ describe("snapCall", () => {
   });
 });
 
+/** An object store answering ranges the way R2 does (`bytes=a-b`, the
+ *  open-ended `bytes=a-`, or none), logging every request it sees. */
+async function rangeStore(body: Buffer) {
+  const seen: string[] = [];
+  const server = http.createServer((req, res) => {
+    const range = req.headers.range ?? "";
+    seen.push(range);
+    const m = /^bytes=(\d+)-(\d*)$/.exec(range);
+    if (!m) return void res.writeHead(200, { "content-length": String(body.length), "content-type": "video/mp4" }).end(body);
+    const a = Number(m[1]);
+    const b = m[2] ? Math.min(Number(m[2]), body.length - 1) : body.length - 1;
+    res.writeHead(206, { "content-range": `bytes ${a}-${b}/${body.length}`, "content-length": String(b - a + 1), "accept-ranges": "bytes", "content-type": "video/mp4", etag: '"e1"' });
+    res.end(body.subarray(a, b + 1));
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+  return { seen, url: `http://127.0.0.1:${(server.address() as any).port}/rec.mp4`, close: () => server.close() };
+}
+
 describe("signed links", () => {
   const recsAt = (url: string, now: number): SnapRecordings => ({
     ...recordings({ server_now: now }, [{ ...recordings().recordings[1], url, url_expires_at: now + min(10) }]),
@@ -1017,6 +1019,38 @@ describe("signed links", () => {
       upstream.close();
     }
   });
+
+  test("a file's tail is fetched once per command and answered from memory after", async () => {
+    const body = Buffer.from("0123456789abcdefghij");
+    const store = await rangeStore(body);
+    const recs = recsAt(store.url, T);
+    const live = { ...recs, recordings: recs.recordings.map((r) => ({ ...r, live_frame_url: store.url })) };
+    const proxy = await serveSources(new SignedSources(live, async () => live));
+    try {
+      const url = proxy.urlFor("s1", false);
+      for (let i = 0; i < 3; i++) {
+        const res = await fetch(url, { headers: { range: "bytes=14-" } });
+        expect(res.status).toBe(206);
+        expect(res.headers.get("content-range")).toBe("bytes 14-19/20");
+        expect(res.headers.get("content-length")).toBe("6");
+        expect(res.headers.get("etag")).toBe('"e1"');
+        expect(await res.text()).toBe("efghij");
+      }
+      expect(store.seen.filter((r) => r === "bytes=14-")).toHaveLength(1);
+      // A bounded range and a different start are not the kept tail.
+      expect(await (await fetch(url, { headers: { range: "bytes=2-4" } })).text()).toBe("234");
+      expect(await (await fetch(url, { headers: { range: "bytes=16-" } })).text()).toBe("ghij");
+      expect(store.seen).toEqual(["bytes=14-", "bytes=2-4", "bytes=16-"]);
+      // A live frame is rewritten as the call goes on: always asked for.
+      const liveUrl = proxy.urlFor("s1", true);
+      await (await fetch(liveUrl, { headers: { range: "bytes=14-" } })).text();
+      await (await fetch(liveUrl, { headers: { range: "bytes=14-" } })).text();
+      expect(store.seen.filter((r) => r === "bytes=14-")).toHaveLength(3);
+    } finally {
+      await proxy.close();
+      store.close();
+    }
+  });
 });
 
 // A real ffmpeg on a file like a screen share's: frames at 0 to 1.93 s, then
@@ -1024,6 +1058,43 @@ describe("signed links", () => {
 // the future; the snap must return the one on screen at 5 s.
 const realFfmpeg = findFfmpeg();
 describe.skipIf(!realFfmpeg)("against a real ffmpeg", () => {
+  test("every ffmpeg a snap starts reads the recording's index (written last, as LiveKit does) over the network once", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snap-moov-"));
+    const file = path.join(dir, "room.mp4");
+    const run = ffmpegRunner(realFfmpeg!);
+    // No +faststart: the moov follows the picture data, like an egress file.
+    // Noise keeps the picture data past what one read takes in, so each
+    // process has to jump to the end for the index.
+    const made = await run(
+      ["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=15:duration=6",
+        "-vf", "noise=alls=60:allf=t", "-g", "15", "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", file],
+      { timeoutMs: 60_000 },
+    );
+    expect(made.code).toBe(0);
+    const bytes = fs.readFileSync(file);
+    expect(bytes.indexOf("moov")).toBeGreaterThan(bytes.indexOf("mdat"));
+    const store = await rangeStore(bytes);
+    const [, screen] = recordings().recordings;
+    const h = harness(recordings({}, [{ ...screen, duration_ms: s(6), url: store.url }]));
+    let processes = 0;
+    const counted: FfmpegRunner = (args, opts) => (processes++, run(args, opts));
+    try {
+      const res = await snapCall("cl-42@2:03", {}, { ...h.deps, ffmpeg: counted, serveSources });
+      expect(res.frames[0].offset_ms).toBe(3000);
+      expect(fs.statSync(res.frames[0].path).size).toBeGreaterThan(0);
+      expect(processes).toBeGreaterThan(1);
+      // The index's box starts 4 bytes before its name. ffmpeg's other
+      // open-ended reads (the picture data from its start, and from the
+      // frame's keyframe) are hung up on part way, so they are never kept.
+      const moov = `bytes=${bytes.indexOf("moov") - 4}-`;
+      expect(store.seen.filter((r) => r === moov)).toHaveLength(1);
+    } finally {
+      store.close();
+      h.cleanup();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
+
   test("a moment in a gap is the last picture before it, the one a <video> shows there", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "snap-gap-"));
     const file = path.join(dir, "gap.mp4");
@@ -1488,6 +1559,8 @@ describe("part of a frame", () => {
     const out = formatSnapResult(res);
     expect(out).toContain("2880x1800");
     expect(out).toContain("Text small? cast call snap cl-42:2 --crop top-left");
+    // The forms are --crop's own, as its error says them.
+    expect(out).toContain(`--crop takes ${CROP_FORMS}`);
     expect(out).not.toContain("No new picture");
     h.cleanup();
   });

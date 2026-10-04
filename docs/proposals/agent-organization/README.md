@@ -1,5 +1,8 @@
 # Agent Organization proposal
 
+> **Status (2026-10-04):** Superseded by `docs/proposals/org/index.html` (plan pl-622, done), whose contracts live in `docs/architecture/org-roles.md`, `org-roles-standing.md` and `org-staffing.md`. The roadmap pl-529 never ran (draft, 0/16). Its core idea, scoped leads as widened anchors, shipped in another form: roles are anchor rows in `org_roles` (`packages/convex/convex/orgRoles.ts`).
+> The control plane specified here (per session role credentials, reservations, receipts, the decision ladder) was not built; escalation was removed on 2026-09-29 (e56bf1797).
+
 Published page: https://codecast.sh/a/d0vFfz4flyqj
 
 Proposal plan: pl-519. Draft implementation roadmap: pl-529.
