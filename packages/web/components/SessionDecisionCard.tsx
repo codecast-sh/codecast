@@ -2,11 +2,9 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
-import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
-import { isUsageLimitDialog } from "@codecast/shared/contracts";
-import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
+import { PermissionStack } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
-import { openQuestionFromMessages, lastAssistantText, visibleOptions, type DecisionStepper } from "../hooks/useDecisionQueue";
+import { type DecisionStepper } from "../hooks/useDecisionQueue";
 import { keysOwnedElsewhere, queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
@@ -17,7 +15,6 @@ import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
 import { useCoarseNow } from "../hooks/useCoarseNow";
-import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { hasOpenModal } from "../shortcuts";
@@ -74,6 +71,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
     answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
   } = useDecisionAnswer(item);
+  const answerDecision = useInboxStore((s) => s.answerDecision);
   const openSessionRoute = useOpenSession();
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
