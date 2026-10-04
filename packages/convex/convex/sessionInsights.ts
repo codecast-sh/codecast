@@ -188,13 +188,13 @@ export function insightRequest(context: InsightRequestContext, source: string): 
 
   const prompt = `You are writing a session narrative for a developer activity feed.
 
-A teammate reads it to learn where the work stands and what to do next, so it is a record of what the excerpt shows happened. Work the agent announces, starts, or is waiting on when the excerpt ends (a click, a test, a typecheck, a deploy, a verification) has not happened yet: report it as underway, never as done or passed.
+A teammate reads it to learn where the work stands and what to do next, so it is a record of what the excerpt shows happened, and the excerpt's last message is the session's present. A step is done only when the excerpt shows its result. A step the agent is doing or waiting on when the excerpt ends (a click it is making now, a test, typecheck or deploy still running, a check whose result has not appeared) has not finished: report it as underway, never as done, passed or verified. A step the agent says it will do next has not started: leave it out of did, and name it in the summary as what comes next.
 
 Return ONLY valid JSON with this exact shape:
 {
-  "headline": "string (one sentence, max 80 chars, what was accomplished)",
+  "headline": "string (one sentence, max 80 chars, what the excerpt shows done or where the work stands)",
   "turns": [
-    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what the excerpt shows done in response (2-4 bullet points, specific); a step still underway where the excerpt ends is named as underway"] }
+    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what the excerpt shows finished in response (2-4 bullet points, specific); a step still underway where the excerpt ends is named as underway"] }
   ],
   "summary": "string (2-3 sentences, narrative context)",
   "outcome_type": "shipped|progress|blocked|unknown",
@@ -207,8 +207,8 @@ Rules:
   Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Ran the render benchmark: peak memory fell from 9 GB to 2 GB"] }
   Good: { "ask": "Map the React Native architecture across the monorepo", "did": ["Documented Router file-base routing in app/, layout.tsx", "Identified Tamagui config and component library structure", "Wrote comprehensive report covering all three backend layers"] }
   Bad: { "ask": "Worked on stuff", "did": ["Made changes"] }
-- headline: Lead with the verb. Max 80 characters.
-- summary: Brief narrative context, 2-3 sentences.
+- headline: Lead with the verb, and claim only what the excerpt shows finished. Max 80 characters.
+- summary: Brief narrative context, 2-3 sentences, ending on what is in progress or next.
 - outcome_type: shipped = the excerpt shows the work deployed, merged or complete. progress = still working, including when its last step has not been shown finishing. blocked = stuck.
 - themes: 2-4 short tags, lowercase.
 - No markdown, no commentary, just JSON.
