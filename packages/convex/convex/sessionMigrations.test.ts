@@ -9,6 +9,7 @@ import {
   performEnqueueQuiesce,
   performFailSession,
   performFinishSession,
+  performCheckoutHolder,
   performReapStale,
   performRetryFailed,
   planMigration,
@@ -370,6 +371,42 @@ describe("finishSession — the flip", () => {
     expect(canDaemonSeePendingMessage(msg as any, c, ME as any, LAPTOP)).toBe(false);
   });
 
+  test("siblings from one laptop folder share the host checkout; anyone else holding it refuses the handoff without throwing", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1", "c2"]);
+    const root = "/home/ubuntu/work/repo";
+    const source = "/Users/me/src/repo/.codecast/worktrees/a";
+    for (const r of rows) {
+      await performBeginSession({ db }, ME as any, { migration_id: r.migration_id as any, device_id: LAPTOP }, NOW);
+      const fin = await performFinishSession({ db }, ME as any, { migration_id: r.migration_id as any, project_path: root, source_path: source }, NOW + 5);
+      expect(fin.ok).toBe(true);
+    }
+    expect([conv(db, "c1").owner_device_id, conv(db, "c2").owner_device_id]).toEqual([BOX, BOX]);
+
+    const other = fixtures();
+    conv(other, "c3").project_path = root;
+    const { rows: one } = await startedBatch(other, ["c1"]);
+    await performBeginSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, device_id: LAPTOP }, NOW);
+    const refused = await performFinishSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, project_path: root, source_path: source }, NOW + 5);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.reason).toContain("is in use by session c3short");
+    expect(conv(other, "c1").owner_device_id).toBe(LAPTOP);
+  });
+
+  test("before the push: a session outside the batch holding the host checkout is named; batch siblings never are", async () => {
+    const root = "/home/ubuntu/work/repo";
+    const db = fixtures();
+    conv(db, "c3").project_path = root;
+    const { rows } = await startedBatch(db, ["c1", "c2"]);
+    const holder = await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: root });
+    expect(holder).toMatchObject({ conversation_id: "c3", short_id: "c3short" });
+    expect(await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: `${root}-mv-abc` })).toBeNull();
+    conv(db, "c2").owner_device_id = BOX;
+    conv(db, "c2").project_path = root;
+    conv(db, "c3").project_path = "/elsewhere";
+    expect(await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: root })).toBeNull();
+  });
+
   test("refuses a row that is not in flight", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db, ["c1"]);
@@ -380,6 +417,18 @@ describe("finishSession — the flip", () => {
 });
 
 describe("failSession / cancel / retry", () => {
+  test("restore: a session stopped for a move that failed is resumed on its own machine", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1"]);
+    const id = rows[0].migration_id as any;
+    await performBeginSession({ db }, ME as any, { migration_id: id, device_id: LAPTOP }, NOW);
+    const before = commands(db).length;
+    await performFailSession({ db }, ME as any, { migration_id: id, error: "push refused", restore: true }, NOW);
+    const added = commands(db).slice(before);
+    expect(added.map((c) => [c.command, c.target_device_id])).toEqual([["resume_session", LAPTOP]]);
+    expect(JSON.parse(added[0].args)).toMatchObject({ session_id: "s1", conversation_id: "c1" });
+  });
+
   test("a failure lifts only its own fence and leaves the session where it was", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db);

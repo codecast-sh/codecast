@@ -1,0 +1,116 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="t d">
+  <title id="t">Local development setup</title>
+  <desc id="d">./dev.sh starts two processes: Vite, which serves the web app on port 3200 plus the instance number, and the gated Convex pusher, which pushes the convex directory only after 3 seconds of quiet, a tree that is not behind origin/main and a green typecheck. nginx, installed by setup-hosts.sh, maps local.codecast.sh to Vite. The browser loads the app from Vite and runs live queries against the Convex deployment named in packages/convex/.env.local. The cast daemon, started separately with cast start, syncs agent history to the same deployment and receives messages from it. With the team's values that deployment is production.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="540" rx="12"/>
+
+  <!-- Machine zone -->
+  <rect class="zone" x="24" y="48" width="600" height="410" rx="12"/>
+  <text class="k" x="40" y="70">YOUR MACHINE</text>
+
+  <!-- Browser -->
+  <rect class="card" x="48" y="80" width="250" height="52" rx="8"/>
+  <text class="l" x="62" y="101">browser</text>
+  <text class="n" x="62" y="119">https://local.codecast.sh</text>
+
+  <!-- nginx -->
+  <rect class="card" x="48" y="160" width="250" height="60" rx="8"/>
+  <text class="l" x="62" y="182">nginx</text>
+  <text class="n" x="62" y="200">local.*.codecast.sh to :3200+N</text>
+  <text class="n" x="62" y="214">from sudo ./setup-hosts.sh</text>
+
+  <!-- Daemon -->
+  <rect class="agent" x="330" y="160" width="262" height="72" rx="8"/>
+  <text class="l" x="344" y="182">cast daemon</text>
+  <text class="n" x="344" y="200">started by cast start, not dev.sh</text>
+  <text class="n" x="344" y="216">syncs agent history</text>
+
+  <!-- dev.sh group -->
+  <rect class="inset" x="40" y="246" width="568" height="198" rx="10"/>
+  <text class="k" x="56" y="266">STARTED BY ./dev.sh</text>
+
+  <rect class="card" x="56" y="278" width="234" height="66" rx="8"/>
+  <text class="l" x="70" y="300">Vite</text>
+  <text class="n" x="70" y="318">packages/web</text>
+  <text class="n" x="70" y="334">port 3200+N</text>
+
+  <rect class="core" x="330" y="278" width="262" height="152" rx="8"/>
+  <text class="l" x="344" y="300">gated Convex pusher</text>
+  <text class="n" x="344" y="318">scripts/gated-push.ts</text>
+  <text class="n" x="344" y="342">1. 3s of quiet in convex/</text>
+  <text class="n" x="344" y="360">2. tree not behind origin/main</text>
+  <text class="n" x="344" y="378">3. typecheck green</text>
+  <text class="n" x="344" y="396">4. push once</text>
+  <text class="n" x="344" y="418">otherwise: wait, refuse, retry</text>
+
+  <!-- Vite -> nginx -> browser -->
+  <path class="data" d="M250 278 V224" marker-end="url(#aData)"/>
+  <path class="data" d="M250 160 V136" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="258" y="256">app bundle</text>
+
+  <!-- Convex -->
+  <rect class="core" x="690" y="90" width="246" height="300" rx="10"/>
+  <text class="h" x="708" y="118">Convex</text>
+  <text class="n" x="708" y="140">the deployment named by</text>
+  <text class="n" x="708" y="156">CONVEX_SELF_HOSTED_URL in</text>
+  <text class="n" x="708" y="172">packages/convex/.env.local</text>
+  <rect class="inset" x="708" y="190" width="210" height="24" rx="5"/>
+  <text class="n" x="718" y="206">functions</text>
+  <rect class="inset" x="708" y="220" width="210" height="24" rx="5"/>
+  <text class="n" x="718" y="236">tables, live queries</text>
+  <text class="n" x="708" y="366">team values: production</text>
+
+  <!-- browser -> convex -->
+  <path class="data" d="M298 104 H686" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="320" y="96">live queries</text>
+
+  <!-- daemon <-> convex -->
+  <path class="data" d="M592 186 H686" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="632" y="178">sync</text>
+  <path class="cmd" d="M686 218 H596" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="632" y="236">sends</text>
+
+  <!-- pusher -> convex -->
+  <path class="cmd" d="M592 340 H686" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="632" y="332">push</text>
+
+  <!-- Legend -->
+  <path class="data" d="M40 492 H80" marker-end="url(#aData)"/><text class="n" x="90" y="496">data: bundles, rows, live queries</text>
+  <path class="cmd" d="M40 518 H80" marker-end="url(#aCmd)"/><text class="n" x="90" y="522">commands: function pushes, messages</text>
+</svg>

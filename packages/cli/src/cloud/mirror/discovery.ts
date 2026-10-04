@@ -134,6 +134,11 @@ export const DEFAULT_EXCLUDES: readonly string[] = [
   // plugins stay: they are the human's choice and their assets are context.
   "**/.trash/**", "**/*.tmp.*", ".codex/plugins/.remote-plugin-install-staging/**",
   ".grok/marketplace-cache/**", ".grok/bundled/**", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json",
+  // Caches and install manifests each machine's agent rewrites for itself: the
+  // host edits them too, so mirroring them only ever ends in a conflict that
+  // holds back the whole push.
+  ".claude/plugins/plugin-directory-cache*.json", ".claude/mcp-needs-auth-cache.json",
+  ".config/opencode/package.json", ".config/opencode/package-lock.json", ".opencode/package.json", ".opencode/package-lock.json",
 ];
 
 const globCache = new Map<string, RegExp>();
@@ -175,6 +180,15 @@ export function isDeniedPath(rel: string, isDir = false): boolean {
 
 export function isDefaultExcluded(rel: string): boolean {
   return isAgentRuntimePath(rel) || DEFAULT_EXCLUDES.some((p) => globToRegExp(p).test(rel) || globToRegExp(p).test(`${rel}/`));
+}
+
+/**
+ * Only files, directories and links can be context. A socket, fifo or device
+ * never is, and Bun's realpath refuses a socket (EOPNOTSUPP), so every walker
+ * checks this on the lstat before resolving anything.
+ */
+export function isContextEntry(stat: fs.Stats): boolean {
+  return stat.isFile() || stat.isDirectory() || stat.isSymbolicLink();
 }
 
 export function isAccountDataPath(rel: string): boolean {
@@ -425,7 +439,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     // active config that requires a file there, or an explicit include, enters it.
     if ((!includeAll || optionalReference) && projectPath && /(?:^|\/)(?:dist(?:-[^/]+)?|build|target)(?:\/|$)/.test(projectPath) && !/(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(projectPath)) return;
     const stat: fs.Stats | undefined = yield { op: "lstat", path: logical };
-    if (!stat || denied(logical, stat.isDirectory())) return;
+    if (!stat || !isContextEntry(stat) || denied(logical, stat.isDirectory())) return;
     if (stat.isFile() && !includeAll && !isContextFile(homeRelative(logical, root) ?? homeRelative(logical, home)!)) return;
     let real: string;
     try { real = yield { op: "realpath", path: logical }; } catch (err) {
@@ -445,6 +459,10 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       scannedDirs.add(logical);
       const chain = new Set(ancestors).add(real);
       const names: string[] = yield { op: "readdir", path: real };
+      // A nested checkout (a worktree or another repo inside this one) is its
+      // own project, never this one's context: union-mobile's agent worktrees
+      // under .agents/ walked 3.6 GiB of repo copies (2026-10-04).
+      if (ancestors.size > 0 && projectPath && names.includes(".git")) { result.skipped.push({ path: logical, reason: "nested git checkout" }); return; }
       for (const name of names.sort()) yield* visit(path.join(logical, name), chain, includeAll, optionalReference);
       return;
     }
@@ -459,7 +477,9 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     // Past the cap a file that could be left out is only sized, never read,
     // so the walk can still name what to leave out; a required one fails here.
     const droppable = !includeAll || optionalReference;
-    if (actual.size + result.totalBytes + overflowBytes > cap) {
+    // Only what ships counts against the cap; a file read just for its references does not.
+    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
+    if (emit && actual.size + result.totalBytes + overflowBytes > cap) {
       if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
       scanned.add(logical);
       overflowBytes += actual.size;
@@ -474,7 +494,6 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     result.warnings.push(...hooks.warnings);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
-    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
     if (emit) {
       files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
       result.totalBytes += bytes.length;

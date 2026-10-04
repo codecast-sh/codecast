@@ -136,12 +136,12 @@ function FlagDots({ flags }: { flags?: HealthFlag[] }) {
  *  is its title. A change whose handle nothing answers to is a warning chip.
  *  A click focuses the change (the pane shows its rationale, the card its
  *  actions). */
-export function GhostChips({ chips, focusChangeId, onFocusChange }: { chips?: OrgGhostChip[]; focusChangeId?: string | null; onFocusChange?: (id: string) => void }) {
+export function GhostChips({ chips, focusChangeId, onFocusChange, wide }: { chips?: OrgGhostChip[]; focusChangeId?: string | null; onFocusChange?: (id: string) => void; /** A goal card: a metric and its target read whole. */ wide?: boolean }) {
   if (!chips?.length) return null;
   const shown = chips.slice(0, 3);
   const rest = chips.slice(3);
   // One or two chips have the row to themselves; three share it.
-  const cap = chips.length <= 1 ? "max-w-[200px]" : chips.length === 2 ? "max-w-[100px]" : "max-w-[66px]";
+  const cap = chips.length <= 1 ? (wide ? "max-w-[280px]" : "max-w-[200px]") : chips.length === 2 ? (wide ? "max-w-[138px]" : "max-w-[100px]") : (wide ? "max-w-[90px]" : "max-w-[66px]");
   return (
     <div className="mt-1.5 flex items-center gap-1 min-w-0 overflow-hidden" data-ghost-chips={chips.length}>
       {shown.map((c) => {
@@ -191,7 +191,8 @@ const STRIP_H = 28;
  *  is scaled by the inverse of the canvas zoom (up to a limit) so its hit
  *  size does not shrink with the tree. Accepted and applied changes show
  *  their word instead; a failed one keeps its actions (it stays decidable). */
-function GhostActions({ meta, word, data }: { meta: OrgGhostMeta; word: string; data: CardData }) {
+export type GhostActionHandlers = Pick<CardData, "chips" | "onDecideChange" | "onEditChange">;
+export function GhostActions({ meta, word, data, below: belowProp }: { meta: OrgGhostMeta; word: string; data: GhostActionHandlers; /** Fully under the card (the goals lens reserves the row); default: only past a chips row. */ below?: boolean }) {
   const decided = meta.status === "accepted" || meta.status === "applied";
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   // The canvas zoom; only strips subscribe, so a zoom tick re-renders the one
@@ -201,7 +202,7 @@ function GhostActions({ meta, word, data }: { meta: OrgGhostMeta; word: string; 
   const btn = "nodrag inline-flex items-center gap-1 h-full px-2 text-[10.5px] font-semibold transition-colors hover:brightness-110";
   // Straddling the bottom edge on a plain card; fully below one that ends in
   // a chips row, so the strip never covers the chips (the level gap is 56px).
-  const below = !!data.chips?.length;
+  const below = belowProp ?? !!data.chips?.length;
   return (
     <div
       className="absolute left-1/2 flex items-center rounded-full border overflow-hidden shadow-sm h-[28px] [@media(pointer:coarse)]:h-[44px]"
@@ -252,7 +253,7 @@ function actionOf(data: CardData): { meta: OrgGhostMeta; word: string } | null {
   return chip ? { meta: chip, word: CHANGE_KIND_WORD[chip.kind] ?? String(chip.kind) } : null;
 }
 
-function Ports() {
+export function Ports() {
   // Edges need handles; the cards hide them so the tree reads as plain lines.
   const hidden = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1, border: 0, background: "transparent", pointerEvents: "none" as const };
   return (
@@ -263,7 +264,7 @@ function Ports() {
   );
 }
 
-function Frame({
+export function Frame({
   children, selected, dropTarget, dragging, className, style, accent, kind,
 }: {
   children: ReactNode; selected?: boolean; dropTarget?: boolean; dragging?: boolean; className?: string; style?: React.CSSProperties;

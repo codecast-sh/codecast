@@ -40,6 +40,7 @@ export const APP_SURFACES: AppSurface[] = [
   dash("notifications", "notification list"),
   dash("questions", "agent questions waiting for an answer"),
   dash("line", "the line: signals, causes, runs, cards, watch and closed, as one flow"),
+  dash("line/settings", "one project's line: its finders, principles, check commands and limits, editable in its file"),
   dash("decisions/stacks", "decision stacks: open first with progress and due, done ones folded"),
   dash("threads", "thread list"),
   dash("docs", "documents index"),

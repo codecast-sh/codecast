@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { _resetUndoStacks, getUndoHistory, performRedo, performUndo } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
 import { NO_CLEAR, UNDO_WIRE_TABLES, UNDO_WRITERS } from "../undo/writers";
-import { closeTaskWithGuard, resolveTaskCloseGuard, setTaskParent } from "../../lib/taskActions";
+import { closeTaskWithGuard, resolveTaskCloseGuard, setTaskParent, updateTasksAsOne } from "../../lib/taskActions";
 
 // The writer contract, generated over UNDO_WRITERS and their wire tables. For
 // every field a writer carries, in both directions that can happen (a prior
@@ -32,6 +32,8 @@ const INITIATIVE = "i".repeat(32);
 const DOC = "d".repeat(32);
 const CONV = "c".repeat(32);
 const ASSIGNMENT = "a".repeat(32);
+const WORKFLOW = "w".repeat(32);
+const WF_SLUG = "line-pj-1";
 
 type Fixture = {
   id: string;
@@ -184,6 +186,19 @@ const FIXTURES: Record<string, Fixture> = {
     forward: (_field, value) => s().assignSessionToBucket(CONV, value),
     expected: (_field, restored) => ["assignSessionToBucket", [CONV, restored ?? null]],
   },
+  workflows: {
+    id: WORKFLOW,
+    seed: () => ({ _id: WORKFLOW, slug: WF_SLUG, name: "Line", source: "digraph line {}", edges: [], updated_at: 1 }),
+    samples: {
+      nodes: [
+        [{ id: "ground", label: "Ground", shape: "box", type: "agent", prompt: "shipped" }],
+        [{ id: "ground", label: "Ground", shape: "box", type: "agent", prompt: "edited" }],
+      ],
+    },
+    forward: (_field, value) => s().saveLineWorkflow({ slug: WF_SLUG, name: "Line", source: "digraph line {}", edges: [], nodes: value }),
+    expected: (_field, restored) => ["saveLineWorkflow", [{ slug: WF_SLUG, name: "Line", source: "digraph line {}", edges: [], nodes: restored }]],
+    syncOpts: { isDelta: true },
+  },
 };
 
 function clearWire(store: string, field: string): unknown {
@@ -238,6 +253,12 @@ beforeEach(() => {
   calls = [];
 });
 
+/** An undo that writes back less than its forward sent (a field of a row the
+ *  forward added, one of several fields) waits for that send to settle. */
+async function sent(): Promise<void> {
+  for (let i = 0; i < 100 && calls.length === 0; i++) await Bun.sleep(2);
+}
+
 describe("every writer has a fixture for every wire field", () => {
   it("fixtures cover UNDO_WRITERS and their wire tables", () => {
     expect(Object.keys(FIXTURES).sort()).toEqual(Object.keys(UNDO_WRITERS).sort());
@@ -254,7 +275,7 @@ for (const [store, fixture] of Object.entries(FIXTURES)) {
         const uncaptured = fixture.uncaptured?.[field];
         const blocked = !!uncaptured || (from === ABSENT && UNDO_WIRE_TABLES[store]?.[field] === NO_CLEAR && !(field in (UNDO_WRITERS[store]?.clears ?? {})));
         const name = `${field}: ${from === ABSENT ? "unset" : "set"} → forward → undo`;
-        it(blocked ? `${name} is not recorded (${uncaptured ?? "the server cannot clear it"})` : name, () => {
+        it(blocked ? `${name} is not recorded (${uncaptured ?? "the server cannot clear it"})` : name, async () => {
           const seeded = seedRow(store, field, from);
           fixture.forward(field, next);
           expect(rowOf(store)[field]).toEqual(next);
@@ -271,6 +292,7 @@ for (const [store, fixture] of Object.entries(FIXTURES)) {
           calls = [];
           expect(performUndo()).toBe(true);
           expect(rowOf(store)[field]).toEqual(restored);
+          await sent();
           expect(calls.at(-1)).toEqual(fixture.expected(field, restored));
 
           // A push still carrying the forward value does not re-apply it.
@@ -380,12 +402,45 @@ describe("task writer specifics", () => {
   });
 });
 
+describe("a bulk close over several guarded parents", () => {
+  it("asks once for every parent, and the answer closes them all as one entry", () => {
+    const P1 = "1".repeat(32);
+    const P2 = "2".repeat(32);
+    const K1 = "3".repeat(32);
+    const K2 = "4".repeat(32);
+    const P5 = "5".repeat(32);
+    useInboxStore.setState({
+      tasks: {
+        [P1]: { _id: P1, short_id: "ct-1", title: "One", status: "todo", priority: "medium", updated_at: 1 },
+        [K1]: { _id: K1, short_id: "ct-11", title: "Kid one", status: "todo", priority: "medium", parent_id: P1, updated_at: 1 },
+        [P2]: { _id: P2, short_id: "ct-2", title: "Two", status: "todo", priority: "medium", updated_at: 1 },
+        [K2]: { _id: K2, short_id: "ct-21", title: "Kid two", status: "todo", priority: "medium", parent_id: P2, updated_at: 1 },
+        [P5]: { _id: P5, short_id: "ct-5", title: "Five", status: "todo", priority: "medium", updated_at: 1 },
+      },
+      pending: {},
+    } as any);
+
+    expect(updateTasksAsOne(["ct-1", "ct-2", "ct-5"], { status: "done" }).needsConfirm).toBe(true);
+    expect((s().taskCloseGuard.parents as Array<{ shortId: string }>).map((p) => p.shortId)).toEqual(["ct-1", "ct-2"]);
+    expect(getUndoHistory().items.map((i) => i.label)).toEqual(["Moved ct-5 to Done"]);
+
+    resolveTaskCloseGuard("cascade");
+    expect(s().taskCloseGuard).toBeNull();
+    expect([P1, K1, P2, K2].map((id) => s().tasks[id].status)).toEqual(["done", "done", "done", "done"]);
+    expect(getUndoHistory().items).toHaveLength(2);
+    expect(getUndoHistory().items[0]!.label).toMatch(/^Moved 2 tasks/);
+    performUndo();
+    expect([P1, K1, P2, K2, P5].map((id) => s().tasks[id].status)).toEqual(["todo", "todo", "todo", "todo", "done"]);
+  });
+});
+
 describe("bucket assignment writer", () => {
-  it("a filing that created the assignment row is undone as an unfile", () => {
+  it("a filing that created the assignment row is undone as an unfile", async () => {
     useInboxStore.setState({ bucketAssignments: {}, pending: {} } as any);
     s().assignSessionToBucket(CONV, "bkt_a");
     calls = [];
     performUndo();
+    await sent();
     expect(calls).toEqual([["assignSessionToBucket", [CONV, null]]]);
     // The row stays, unfiled, as it does on the server.
     expect(Object.values(s().bucketAssignments).filter((r: any) => r.conversation_id === CONV && r.bucket_id)).toEqual([]);
@@ -395,7 +450,7 @@ describe("bucket assignment writer", () => {
   // The server never deletes an assignment row: an unfile keeps it with
   // bucket_id unset and the next filing reuses it. An undo that removed the
   // row would exclude that id, and every later push of it would be skipped.
-  it("after the echo, an undone first filing keeps the server row, and a later filing of it shows", () => {
+  it("after the echo, an undone first filing keeps the server row, and a later filing of it shows", async () => {
     const SRV = ASSIGNMENT;
     const assignments = () => Object.keys(s().pending).filter((k) => k.startsWith("bucketAssignments:"));
     useInboxStore.setState({ bucketAssignments: {}, pending: {} } as any);
@@ -406,6 +461,7 @@ describe("bucket assignment writer", () => {
 
     calls = [];
     expect(performUndo()).toBe(true);
+    await sent();
     expect(calls).toEqual([["assignSessionToBucket", [CONV, null]]]);
     expect(s().bucketAssignments[SRV]).toMatchObject({ conversation_id: CONV });
     expect(s().bucketAssignments[SRV].bucket_id).toBeUndefined();
@@ -424,12 +480,15 @@ describe("bucket assignment writer", () => {
     expect(assignments().filter((k) => s().pending[k].type === "exclude")).toEqual([]);
   });
 
-  it("an undone first filing can be redone", () => {
+  it("an undone first filing can be redone", async () => {
     useInboxStore.setState({ bucketAssignments: {}, pending: {} } as any);
     s().assignSessionToBucket(CONV, "bkt_a");
+    calls = [];
     performUndo();
+    await sent();
     calls = [];
     performRedo();
+    await sent();
     expect(calls).toEqual([["assignSessionToBucket", [CONV, "bkt_a"]]]);
     expect(Object.values(s().bucketAssignments).map((r: any) => r.bucket_id)).toEqual(["bkt_a"]);
   });

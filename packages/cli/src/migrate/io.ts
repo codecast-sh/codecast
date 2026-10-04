@@ -26,6 +26,7 @@ import {
   ensureRemoteClaudeReady,
   gitEnv,
   gitSshUrl,
+  hostCheckoutDirty,
   isWorktree,
   pullSession,
   pushSession,
@@ -171,8 +172,8 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     confirm: async (migrationId, ok, detail) => {
       await client.mutation(api.sessionMigrations.confirmSession, { api_token: token, migration_id: migrationId, ok, ...(detail ?? {}) });
     },
-    fail: async (migrationId, error, cancelled) => {
-      await client.mutation(api.sessionMigrations.failSession, { api_token: token, migration_id: migrationId, error, ...(cancelled ? { cancelled: true } : {}) });
+    fail: async (migrationId, error, cancelled, restore) => {
+      await client.mutation(api.sessionMigrations.failSession, { api_token: token, migration_id: migrationId, error, ...(cancelled ? { cancelled: true } : {}), ...(restore ? { restore: true } : {}) });
     },
     sendNotice: (conversationId, text) => sendMoveNotice(client, api, token, conversationId, text),
     deviceOnline: async (deviceId) => {
@@ -184,7 +185,32 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
 
     transferToCloud: async (facts: Facts, o) => {
       const { host } = await prepareHost(facts.to_device_id);
-      const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree });
+      // The push resets the host checkout it lands in, so a checkout another
+      // session already works in is never the landing: this move takes its own
+      // clone beside it (shared by the batch's siblings from the same folder).
+      const move = await pushSession(facts.session_id, host, {
+        skipTree: o.skipTree,
+        pushedHead: o.pushedHead,
+        landing: async (main) => {
+          const own = `${main}-mv-${o.batchId.replace(/^mg-/, "").slice(0, 8)}`;
+          const holder = await client.query(api.sessionMigrations.checkoutHolder, { api_token: token, migration_id: o.migrationId, project_path: main });
+          if (holder) {
+            log(`  ${main} on the host is in use by ${holder.short_id ?? holder.conversation_id} (${holder.title ?? "untitled"}); landing in ${own}`);
+            return own;
+          }
+          // Edits nobody is moving here (an earlier session's, left behind) refuse the push and are not ours to discard.
+          if (!o.skipTree && hostCheckoutDirty(host, main)) {
+            log(`  ${main} on the host has uncommitted changes no session holds; landing in ${own}`);
+            return own;
+          }
+          return main;
+        },
+      });
+      // Resuming on a tree that is not this session's (a stale checkout, a push
+      // that never landed) hands over the conversation without its work.
+      if (move.verification && !move.verification.headsMatch) {
+        throw new Error(`the host checkout ${move.remoteCwd} is at ${move.verification.remoteHead?.slice(0, 8) ?? "an unknown commit"}, not this session's ${move.verification.localHead.slice(0, 8)}; nothing was handed over`);
+      }
       ensureRemoteClaudeReady(host, move.remoteCwd);
       if (!credentialRefreshed.has(facts.to_device_id)) {
         refreshRemoteCredential(host);
@@ -194,6 +220,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       moves[facts.session_id] = move;
       writeMoves(moves);
       return {
+        pushedHead: move.pushedHead,
         destinationPath: move.remoteCwd,
         gitRoot: isWorktree(move.localCwd) ? move.remoteCwd : undefined,
         sourcePath: `${move.localCwd}`,

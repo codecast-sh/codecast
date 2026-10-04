@@ -86,6 +86,8 @@ export interface CheckoutMatch {
   repoBasename?: string;
   /** The row being claimed or placed: it never occupies against itself. */
   excludeId?: string;
+  /** Rows that share the checkout with the claimer by design (siblings moved together from one laptop folder). */
+  sharedWith?: readonly string[];
 }
 
 /** The last path segment (trailing slashes ignored): the repo name a checkout is keyed by. */
@@ -113,6 +115,7 @@ export function sharedCheckoutOccupant(
 ): CheckoutOccupantRow | null {
   for (const row of rows) {
     if (match.excludeId && row.conversation_id === match.excludeId) continue;
+    if (match.sharedWith?.includes(row.conversation_id)) continue;
     if (row.inbox_killed_at || row.status === "completed") continue;
     if (row.cloud_workspace === "shared") {
       const held = row.cloud_checkout_path ?? row.project_path ?? null;

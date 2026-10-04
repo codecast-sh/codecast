@@ -1347,3 +1347,96 @@ the caller, the target and the anchors and builds the roster; a landing is
 `route@<team>:<ct-N>` and `route@fixture:<case>`; gates `parse`, `no-misfile`,
 `owner-known`).
 
+
+## S36. Goals on the chart, and the chart beside a conversation
+
+Written 2026-10-04. The chart drew who reports to whom. It now also draws
+what the company is trying to reach and who answers for each part of it.
+
+### Two lenses, one canvas
+
+The chart has two lenses, switched by a toggle in its toolbar and by
+`?lens=goals` in the URL: **People** (the reporting tree, as before) and
+**Goals**.
+
+The Goals lens is an outline on the left and a column of owners on the right:
+
+- The company is the root. There is no purpose row in the data, and none is
+  added: the top level goals (initiatives with no parent) are the purpose, in
+  the same sense the proposal card uses ("purpose first, then what feeds it").
+- Under the company, each top level goal; under a goal, the goals that feed
+  it (one level, `parent_initiative_id`), then the projects that carry it
+  (`project_ids`, in the owner's order). A project carried by two goals is
+  drawn under each.
+- On the right, one card for every person or role that owns a goal or leads a
+  project, placed level with what it owns. An edge runs from each goal to its
+  owner (`initiative.owner`) and from each project to its lead
+  (`projectLeadOf`, the one rule the project page uses).
+
+Why a toggle and not goals as a band above the roles: a band keeps both trees
+on screen, so every owner edge has to cross the reporting tree to reach its
+role, and a company with five goals and fifteen projects draws twenty edges
+over the cards. In the outline the edges run through empty space between two
+columns, so none crosses a card, and the picture answers one question: who
+owns what. The reporting line is one click away in the other lens, and an
+owner card opens its seat there. The outline is also tall and narrow, which
+is the shape of a pane beside a conversation.
+
+Edges are quiet at rest and lit for the selected card: selecting an owner
+lights everything it owns, selecting a goal or a project lights its owner.
+
+### Goal ghosts
+
+The lens draws the goal tree **as it will be** once the open proposal is
+accepted, with every changed thing in the ghost chrome role ghosts wear
+(dashed violet, the small tag). This is the same reading the proposal card
+gives, because both come from one resolver: `proposalChangeRows`
+(`proposalTree.ts`) names each goal change's goal, parent, owner and former
+parent, one row per change. The card joins and nests those rows
+(`proposalTreeRows`); `goalsPlan` (`goalsLayout.ts`) places them. Nothing
+resolves a goal ref, an owner ref or a parent a second time, and a tag reads
+the same word in both places.
+
+| Change | Drawn as |
+|---|---|
+| `initiative` | A ghost goal under its parent (or under the company), tag "new", its projects as ghost rows beneath it, a dashed edge to its owner, a dashed chip for its metrics |
+| `initiative_shape` with a parent | The goal under its new parent, tag "moves here" (or "to the top"), with a line "was under X" |
+| `initiative_shape` with metrics | A dashed chip on the goal: the metrics and their targets |
+| `initiative_projects` | Ghost project rows under the goal, tag "added" |
+| `initiative_owner` | A dashed edge from the goal to the named owner, tag "owner"; the old edge fades |
+
+A proposed change is a ghost, an accepted one is drawn solid until the store
+carries it, an applied or skipped one draws nothing. An owner nothing answers
+to is a warning tag on the goal, never a dropped change. A click on a ghost
+focuses its change, the way a role ghost's does.
+
+### The chart beside a conversation
+
+`/org?view=chart` is the chart alone: no page header, no staffing pane, the
+lens toggle and the proposal's name in one slim bar. It is an ordinary route,
+so the stage hosts it as a pane beside a conversation (`openBeside`, the one
+reused target pane, opened unfocused so the conversation stays primary). It
+opens from a proposal card ("Chart") and from the session header (a chip that
+appears when the thread holds a proposal). On a dev build `preview=1` draws
+the fixture org, as it does on the org page.
+
+Its address is its whole state: `proposal=op-N` draws that proposal's ghosts,
+`focus=` pans to one thing (a change by its number in the proposal, a goal by
+`in-N`, a role by `@handle`), `lens=` picks the lens (absent, the lens the
+focus or the proposal's changes call for), and `s=<conversation>` names the
+conversation it follows.
+
+**How the agent drives it.** The pane follows the thread it was opened from:
+it reads that conversation's messages from the store and points itself at the
+newest pointer in them. A pointer is something the agent already writes:
+
+- `op-N` on its own line (the proposal card): the pane shows that proposal.
+- A link to the chart, `/org?proposal=op-N&focus=3`: the pane shows that
+  proposal and pans to that change. The agent writes this when it wants the
+  person to look at one thing while it talks about it.
+
+No server state, no new message type and no new channel: the pointer is
+message text, the pane's state is its URL, and the follow is a read of the
+local store. The person keeps control: the pane only moves when a newer
+pointer arrives, anything they click or toggle in it holds until then, and
+"Following" in its bar turns the follow off.

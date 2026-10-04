@@ -1051,3 +1051,21 @@ test("a file sent under a linked directory and its real path is written once, at
   expect(fs.lstatSync(path.join(home, root, "convex")).isSymbolicLink()).toBe(true);
   expect(readStamp(home)?.files[`${root}/convex/allowlist.txt`]?.satisfied_alias?.target).toBe(`${root}/packages/convex/convex/allowlist.txt`);
 });
+
+test("an instruction alias into a subdirectory of its own project writes through; one leaving the project is refused", async () => {
+  const root = "work/union";
+  write(`${root}/outreach/CLAUDE.md`, "# outreach\n", 0o600);
+  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "AGENTS.md"));
+  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "CLAUDE.md"));
+  const bundle = (paths: string[]) => parseMirrorBundle(buildMirrorBundle(paths.map((p) => ({ path: p, kind: p.endsWith("AGENTS.md") ? "agents-md" as const : "claude-md" as const, mode: "0600" as const, bytes: Buffer.from("# outreach\n") })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  const applied = await apply(await bundle([`${root}/AGENTS.md`, `${root}/CLAUDE.md`, `${root}/outreach/CLAUDE.md`]));
+  expect(applied.errors).toEqual([]);
+  expect(fs.readlinkSync(path.join(home, root, "AGENTS.md"))).toBe("outreach/CLAUDE.md");
+  expect(read(`${root}/outreach/CLAUDE.md`)).toContain("# outreach");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+
+  write("work/other/CLAUDE.md", "# other\n", 0o600);
+  fs.symlinkSync("../other/CLAUDE.md", path.join(home, root, "GEMINI.md"));
+  const escaped = await apply(await bundle([`${root}/GEMINI.md`]));
+  expect(escaped.errors.map((e) => e.error)).toEqual(["instruction alias leaves its directory"]);
+});

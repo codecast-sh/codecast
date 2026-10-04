@@ -523,14 +523,14 @@ export function epochView(rows: RunRow[], surface: string, n: number): EpochResp
 }
 
 /** Tier 0 attribution, kept per index version: it reads only records, and its flip examples read every flipped rep's folder. */
-export const attributionView = (rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits = false): Promise<Attribution> =>
-  onRows(rows, `attribution|${surface}|${good ?? ''}|${bad ?? ''}|${allCommits ? 'all' : 'declared'}`, () => buildAttribution(rows, surface, good, bad, allCommits));
+export const attributionView = (rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits = false, freeze?: string): Promise<Attribution> =>
+  onRows(rows, `attribution|${surface}|${good ?? ''}|${bad ?? ''}|${allCommits ? 'all' : 'declared'}|${freeze ?? ''}`, () => buildAttribution(rows, surface, good, bad, allCommits, freeze));
 
-async function buildAttribution(rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits: boolean): Promise<Attribution> {
+async function buildAttribution(rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits: boolean, freeze: string | undefined): Promise<Attribution> {
   metaOf(surface);
   let a: Attribution;
   try {
-    a = attribute({ surface, rows: rowsOf(rows, surface), good: good || undefined, bad: bad || undefined, allCommits });
+    a = attribute({ surface, rows: rowsOf(rows, surface), good: good || undefined, bad: bad || undefined, allCommits, ...(freeze ? { freezes: [freeze] } : {}) });
   } catch (e) {
     throw new BadRequest(e instanceof Error ? e.message : String(e));
   }

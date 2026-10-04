@@ -25,6 +25,9 @@ describe('evalSignals', () => {
       expect(s.detail).toContain('title  pass 5/5');
     }
     expect(evalSignals({ ...held, regression: true })[0].fingerprint).toBe(out[0].fingerprint);
+    // The text names a failing freeze by its prefix only; the full id stays in the fingerprint, the dedupe key.
+    expect(out[3].detail).toContain('freeze abcdef12 failed');
+    expect(out[3].detail).not.toContain('abcdef1234567890');
   });
 
   test('no evidence url leaves the flag off', () => {

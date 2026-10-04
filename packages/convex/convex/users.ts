@@ -9,7 +9,7 @@ import { peopleOf } from "@codecast/shared/team/memberKind";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
@@ -4419,22 +4419,48 @@ export const sendConfigCommand = mutation({
       v.literal("config_read"),
       v.literal("config_write"),
       v.literal("config_create"),
-      v.literal("config_delete")
+      v.literal("config_delete"),
+      v.literal("line_profile_edit")
     ),
     args_json: v.optional(v.string()),
+    // The one machine that should answer (a project's file lives on the
+    // device that published its profile). Unset broadcasts, as before.
+    target_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: args.command,
-      args: args.args_json,
-      created_at: Date.now(),
-    });
-    return { command_id: commandId };
+    return { command_id: await enqueueConfigCommand(ctx, userId, args.command, args.args_json, args.target_device_id) };
   },
 });
+
+/**
+ * A config command for the viewer's own daemon. A target names one of the
+ * viewer's machines (the only daemons that run their commands); unset
+ * broadcasts. Shared by sendConfigCommand and dispatch's editLineProfile.
+ */
+export async function enqueueConfigCommand(
+  ctx: Pick<MutationCtx, "db">,
+  userId: Id<"users">,
+  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit",
+  argsJson: string | undefined,
+  targetDeviceId?: string,
+): Promise<Id<"daemon_commands">> {
+  if (targetDeviceId) {
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", targetDeviceId))
+      .first();
+    if (!device) throw new Error("Unknown device");
+  }
+  return await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command,
+    args: argsJson,
+    created_at: Date.now(),
+    ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
+  });
+}
 
 export const getCommandResult = query({
   args: {

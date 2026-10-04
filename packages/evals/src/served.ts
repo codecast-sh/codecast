@@ -76,6 +76,38 @@ export function recordSentence(frozen: string[]): string {
   return `Reads under ${list} answer from a record saved when the turn was captured, and one the record does not hold fails; other reads are live, and ${writes}`;
 }
 
+/**
+ * The moment a served dir's world stands at: the guard `git`
+ * (packages/cli/scripts/prompt-dry-run-bin/git) answers every git call in a
+ * repository from the history as of `at`, each root in `pins` at its pinned
+ * commit and any other at its default branch's last commit before `at`.
+ */
+export interface Cut {
+  at: string;
+  pins: Record<string, string>;
+}
+
+/** Files the cut where the guard `git` reads it: `at`, `epoch` and one tab-separated `git <root> <sha>` line per pin. */
+export function writeCut(dir: string, cut: Cut): void {
+  const epoch = Math.floor(Date.parse(cut.at) / 1000);
+  if (!Number.isFinite(epoch)) throw new Error(`a cut needs a capture time, not "${cut.at}"`);
+  const pins = Object.entries(cut.pins).map(([root, sha]) => `git\t${root}\t${sha}`);
+  writeFileSync(join(dir, 'cut'), `${[`at ${cut.at}`, `epoch ${epoch}`, ...pins].join('\n')}\n`);
+}
+
+/** What writeCut filed in a served dir; null for a dir captured before cuts existed. */
+export function readCut(dir: string): Cut | null {
+  const path = join(dir, 'cut');
+  if (!existsSync(path)) return null;
+  const cut: Cut = { at: '', pins: {} };
+  for (const line of readFileSync(path, 'utf8').split('\n')) {
+    if (line.startsWith('at ')) cut.at = line.slice(3);
+    const [kind, root, sha] = line.split('\t');
+    if (kind === 'git' && root && sha) cut.pins[root] = sha;
+  }
+  return cut;
+}
+
 /** What writeFrozenVerbs filed in a served dir. */
 export function readFrozenVerbs(dir: string): string[] {
   const path = join(dir, 'frozen');

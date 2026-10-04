@@ -73,6 +73,7 @@ import {
   FOREIGN_TEXT_CAPS,
   callLinkHow,
   callAnchorHref,
+  callPathRef,
   segmentAt,
   cliErrorMessage,
   normalizeGuestName,
@@ -5045,41 +5046,12 @@ program
   .action(showStatus);
 
 program
-  .command("attach")
-  .description("Open live tmux session TUI and attach/switch quickly")
-  .option("--plain", "Use plain list mode (no TUI)")
-  .option("--gc", "Kill sessions idle for more than 1 hour, then open TUI")
-  .option("--gc-mins <minutes>", "Idle threshold in minutes (default: 60)")
+  .command("herd")
+  .description("Open your live agent sessions in herdr: a tab per session, grouped by project, with codecast's live state")
+  .option("--no-open", "Fill the herd without opening it")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-
-    if (options.gc) {
-      const mins = Number.parseInt(options.gcMins || "60", 10) || 60;
-      const { gcStaleSessions } = await import("./attachTui.js");
-      const { killed } = gcStaleSessions(mins * 60);
-      if (killed.length > 0) {
-        console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-      } else {
-        console.log("No stale sessions to clean up.");
-      }
-    }
-
-    if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
-      await selectAndAttachFromLiveSessions(config, { tmuxOnly: true });
-      return;
-    }
-
-    const { runAttachTui } = await import("./attachTui.js");
-    await runAttachTui({
-      authToken: config.auth_token,
-      convexUrl: config.convex_url,
-    });
+    const { runHerdCommand } = await import("./herdCommand.js");
+    await runHerdCommand(readConfig(), { open: options.open });
   });
 
 program
@@ -5088,33 +5060,8 @@ program
   .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
   .option("--dry-run", "Show what would be killed without actually killing")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const mins = Number.parseInt(options.mins || "60", 10) || 60;
-    const { gcStaleSessions, discoverWithIdleTimes } = await import("./attachTui.js");
-
-    if (options.dryRun) {
-      const sessions = discoverWithIdleTimes();
-      const nowSec = Math.floor(Date.now() / 1000);
-      const stale = sessions.filter((s) => s.idleSec >= mins * 60);
-      if (stale.length === 0) {
-        console.log(`No sessions idle for >${mins}m.`);
-        return;
-      }
-      console.log(`Would kill ${stale.length} session${stale.length === 1 ? "" : "s"}:`);
-      for (const s of stale) {
-        const idleMins = Math.floor(s.idleSec / 60);
-        console.log(`  ${s.tmuxSession}  (idle ${idleMins}m)`);
-      }
-      return;
-    }
-
-    const { killed } = gcStaleSessions(mins * 60);
-    if (killed.length > 0) {
-      console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-    } else {
-      console.log(`No sessions idle for >${mins}m.`);
-    }
+    const { runGcCommand } = await import("./herdCommand.js");
+    runGcCommand(options);
   });
 
 program
@@ -7336,11 +7283,6 @@ interface LiveProcess {
   uptime: string;
 }
 
-interface LiveProcessDiscoveryOptions {
-  tmuxOnly?: boolean;
-  fastSessionLookup?: boolean;
-}
-
 function normalizePsTty(tty: string): string {
   if (tty.startsWith("/dev/")) return tty;
   if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
@@ -7373,9 +7315,7 @@ function loadSessionRegistryLookups(): { byPid: Map<number, string>; byTty: Map<
   return { byPid, byTty };
 }
 
-function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveProcess[] {
-  const tmuxOnly = !!options.tmuxOnly;
-  const fastSessionLookup = !!options.fastSessionLookup;
+function discoverLiveProcesses(): LiveProcess[] {
   const procs: LiveProcess[] = [];
   const seen = new Set<number>();
   const seenTty = new Set<string>();
@@ -7403,7 +7343,6 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
   const addProcess = (pid: number, tty: string, sessionId: string, agentType: "claude_code" | "codex") => {
     const normalTty = normalizePsTty(tty);
     const tmuxSession = tmuxPanes[normalTty] || null;
-    if (tmuxOnly && !tmuxSession) return;
     if (seen.has(pid) || seenTty.has(normalTty)) return;
     seen.add(pid);
     seenTty.add(normalTty);
@@ -7496,11 +7435,10 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const args = parts.slice(10).join(" ");
       const resumeMatch = args.match(/--resume\s+([0-9a-f-]{36})/i);
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || (fastSessionLookup ? null : findSessionByCwd(pid));
+      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || findSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-${pid}`, "claude_code");
     }
   } catch {}
@@ -7516,9 +7454,8 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = sidFromRegistry || (fastSessionLookup ? null : findCodexSessionByCwd(pid));
+      const sid = sidFromRegistry || findCodexSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-codex-${pid}`, "codex");
     }
   } catch {}
@@ -7528,22 +7465,14 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
 async function selectAndAttachFromLiveSessions(
   config: Config,
-  options: { cliOverrideArgs?: string; tmuxOnly?: boolean } = {},
+  options: { cliOverrideArgs?: string } = {},
 ): Promise<void> {
-  const rawProcs = discoverLiveProcesses({
-    tmuxOnly: options.tmuxOnly,
-    fastSessionLookup: !!options.tmuxOnly,
-  });
+  const rawProcs = discoverLiveProcesses();
 
   if (rawProcs.length === 0) {
-    if (options.tmuxOnly) {
-      console.log(`${c.dim}No live tmux sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  cast attach`);
-    } else {
-      console.log(`${c.dim}No live sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
-      console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
-    }
+    console.log(`${c.dim}No live sessions found${c.reset}`);
+    console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
+    console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
     return;
   }
 
@@ -7617,8 +7546,7 @@ async function selectAndAttachFromLiveSessions(
     return { name: `${c.bold}${displayTitle}${c.reset}`, value: String(idx), description: desc };
   });
 
-  const liveLabel = options.tmuxOnly ? "tmux sessions" : "sessions";
-  console.log(`\n${c.dim}${sessions.length} live ${liveLabel}${c.reset}\n`);
+  console.log(`\n${c.dim}${sessions.length} live sessions${c.reset}\n`);
 
   const selected = await select({
     message: "Attach to session",
@@ -10112,7 +10040,7 @@ program
     const rows = (options.video ? all.filter((r) => r.video) : all).slice(0, limit);
     if (options.json) {
       // Each row with the link and the reference `cast call --json` gives.
-      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(String(r._id))}`, ...r })), null, 2));
+      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(r))}`, ...r })), null, 2));
       return;
     }
     if (rows.length === 0) {
@@ -10156,11 +10084,12 @@ const CALL_SNAP_ABOUT =
   "refusal gives its code and a `try` list of the commands that will work. `cast call <id>`\n" +
   "says what was recorded and marks each filmed line with ▸. Each frame prints its size: a\n" +
   "wide one is shrunk before a model reads it, so for small text on a shared screen take\n" +
-  "part of it (--crop) or all of it in quarters (--tiles 2x2). Times may carry a fraction\n" +
-  "(cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
-  "outside codecast; deleting the recording deletes them. The stretch still being\n" +
-  "recorded has only its live picture, for people in the call, until Record is stopped;\n" +
-  "stretches already saved can be snapped at once. Needs ffmpeg.";
+  "part of it (--crop) or all of it in overlapping tiles (--tiles 2x1). Times may carry a\n" +
+  "fraction (cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
+  "outside codecast, and only by whoever recorded the call, a team admin, or the person\n" +
+  "whose screen it shows; the room is told, and deleting the recording deletes them.\n" +
+  "The stretch still being recorded has only its live picture, for people in the call,\n" +
+  "until Record is stopped; stretches already saved can be snapped at once. Needs ffmpeg.";
 const SNAP_OPTION_PREFIX = "With `snap`";
 /** Options that mean something to snap: its own, --json and help. */
 const snapOption = (o: Option) => o.description.startsWith(SNAP_OPTION_PREFIX) || o.long === "--json" || o.long === "--help";
@@ -10217,8 +10146,8 @@ program
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
   .option("--crop <region>", "With `snap`: only part of each frame, at full resolution: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right, center, or x,y,w,h in pixels or percent (its own file, named by the part, beside any whole frame)")
-  .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br)")
-  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
+  .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br), each reaching a little past its neighbours so a line on a seam is whole in one")
+  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast, and only by whoever recorded the call, a team admin, or the person whose screen it shows (cite cl-42@12:34 for everyone else)")
   .configureHelp({
     formatHelp: (cmd, helper) => (cmd.args[0] === "snap" ? snapHelp(cmd, helper) : Help.prototype.formatHelp.call(helper, cmd, helper)),
   })
@@ -10238,8 +10167,7 @@ program
         process.exit(1);
       }
       const { runCallSnap } = await import("./callSnap.js");
-      const { uploadOne } = await import("./imageCommand.js");
-      const deps = { getCliEndpoint, detectCurrentSessionId };
+      const { shareCallFrame } = await import("./imageCommand.js");
       // `snap cl-42 15`: the moment as its own word. A colon pair there
       // (`snap cl-42 12:34`) is refused as ambiguous, lines or a time.
       const extra = command.args.slice(2).join(" ") || undefined;
@@ -10250,7 +10178,7 @@ program
           post: (route, body) => cliPost(route, body, { throwOnError: true }),
           resolveCallId: (r) => findCallId(r, { throwOnError: true }),
           baseUrl: CODECAST_BASE_URL,
-          upload: (file, alt) => uploadOne(deps, file, alt),
+          share: (file, recordingId, alt, atMs) => shareCallFrame((route, body) => cliPost(route, body, { throwOnError: true }), file, recordingId, alt, atMs),
         },
         extra,
       );
@@ -10388,15 +10316,28 @@ program
             toMs: Math.max(...segs.map((s: any) => Math.max(s.t0, s.t1))),
           })
         : null;
+      const one = turns.from_seq === turns.to_seq;
+      // Unfilmed, the same words the moment view prints below: still saving,
+      // the nearest recorded moment, or no video at all.
+      const missing =
+        snap || !segs.length
+          ? null
+          : snapLib.noPictureNote(handle, video, knowsVideo, {
+              fromMs: segs[0].t0,
+              toMs: Math.max(...segs.map((s: any) => Math.max(s.t0, s.t1))),
+              stretch: one ? "line" : "lines",
+              ref: callRefId(handle, turns),
+            });
       if (options.json) {
-        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs.map(segJson), snap }, null, 2));
+        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs.map(segJson), snap, ...(missing?.nearest ? { nearest: missing.nearest } : {}) }, null, 2));
         return;
       }
-      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}${one ? `line ${turns.from_seq}` : `lines ${turns.from_seq}-${turns.to_seq}`}${c.reset}`);
       printLines(segs);
       if (segs.length === 0) console.log(`${c.dim}(no lines in that range; this call runs 1-${call.last_seq})${c.reset}`);
-      console.log(`\n${c.dim}Embed these words in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
-      if (snap) console.log(`${c.dim}Frames across these lines: ${c.reset}${snap}`);
+      console.log(`\n${c.dim}Embed ${one ? "this line" : "these words"} in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
+      if (snap) console.log(`${c.dim}${one ? "The picture when it was said" : "Frames across these lines"}: ${c.reset}${snap}`);
+      else if (missing) console.log(`${c.dim}${missing.note}${c.reset}${missing.command ?? ""}`);
       return;
     }
     if (asRef?.at_ms != null) {
@@ -10404,34 +10345,63 @@ program
       // around it, with the line being said marked, and the way to its frame
       // when one was filmed.
       const at = asRef.at_ms;
+      // The window printed is centered on the last line before the moment,
+      // however long ago. What the moment is said to be on is snap's rule
+      // (lineAt: a line is "the last said" only for a little while after
+      // it), so this view, `cast call snap` and a `cl-42@m:ss` card name the
+      // same line.
       const hit = segmentAt(allSegs, at, { holdMs: Infinity });
+      const said = snapLib.lineAt(allSegs, at);
       const center = hit?.index ?? 0;
       const near = allSegs.slice(Math.max(0, center - 2), center + 3);
       const momentRef = callRefId(handle, null, at);
       const snap = snapLib.snapHint(handle, video, { atMs: at });
-      const saving = !snap && video.some((s) => s.pending && s.fromMs <= at && at < s.toMs);
-      const nearest = snap || saving ? null : snapLib.nearestRecordedMs(video, at);
+      const missing = snap ? null : snapLib.noPictureNote(handle, video, knowsVideo, { fromMs: at, toMs: at, stretch: "moment", ref: momentRef });
+      // Beside the nearest recorded second, the nearest filmed line: an
+      // agent reading a transcript steps by line.
+      const nearLine = missing?.nearest ? snapLib.nearestFilmedLine(video, allSegs, at) : null;
+      const nearLineRef = nearLine ? callRefId(handle, { from_seq: nearLine.seq, to_seq: nearLine.seq }) : null;
+      // In a silence, the lines either side, as snap places a silent frame.
+      const around = said ? null : snapLib.linesAround(allSegs, at);
+      const placed = (s: any) => s && { ref: callRefId(handle, { from_seq: s.seq, to_seq: s.seq }), at: formatCallTime(s.t0) };
       if (options.json) {
-        const under = hit ? allSegs[hit.index] : null;
         console.log(
           JSON.stringify(
-            { ref: momentRef, at: formatCallTime(at), at_ms: at, title: call.title, line: under?.seq ?? null, during: hit?.during ?? false, segments: near.map(segJson), snap, ...(nearest !== null ? { nearest: callRefId(handle, null, nearest) } : {}) },
+            {
+              ref: momentRef,
+              at: formatCallTime(at),
+              at_ms: at,
+              title: call.title,
+              line: said?.seg.seq ?? null,
+              during: said?.during ?? false,
+              ...(around && (around.before || around.after) ? { between: { before: placed(around.before), after: placed(around.after) } } : {}),
+              segments: near.map(segJson),
+              snap,
+              ...(missing?.nearest ? { nearest: missing.nearest } : {}),
+              ...(nearLineRef ? { nearest_line: nearLineRef } : {}),
+            },
             null,
             2,
           ),
         );
         return;
       }
-      const said = hit ? `line ${allSegs[hit.index].seq} ${hit.during ? "was being said" : "was the last said"}` : allSegs.length ? "before the first line" : "no transcript";
-      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}at ${snapLib.preciseCallTime(at)} (${said})${c.reset}`);
-      printLines(near, hit ? allSegs[hit.index] : null);
+      const last = hit && !hit.during ? allSegs[hit.index] : null;
+      const words = said
+        ? `line ${said.seg.seq} ${said.during ? "was being said" : `was ${snapLib.saidBefore(said.seg, at, "this moment")}`}`
+        : last
+          ? `nothing said; line ${last.seq} was ${snapLib.saidBefore(last, at, "this moment")}`
+          : allSegs.length ? "before the first line" : "no transcript";
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}at ${snapLib.preciseCallTime(at)} (${words})${c.reset}`);
+      printLines(near, said ? said.seg : null);
       if (snap) console.log(`\n${c.dim}The picture at that moment: ${c.reset}${snap}`);
-      else if (saving) console.log(`\n${c.dim}That moment was recorded and is still saving; cast call snap ${momentRef} works once Record is stopped and the file lands.${c.reset}`);
-      else if (nearest !== null) console.log(`\n${c.dim}Not recorded at that moment. Nearest recorded: ${c.reset}cast call snap ${callRefId(handle, null, nearest)}`);
-      else if (knowsVideo && video.length === 0) console.log(`\n${c.dim}This call has no video.${c.reset}`);
+      else if (missing) {
+        console.log(`\n${c.dim}${missing.note}${c.reset}${missing.command ?? ""}`);
+        if (nearLineRef) console.log(`${c.dim}Nearest filmed line: ${c.reset}cast call snap ${nearLineRef}`);
+      }
       return;
     }
-    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
+    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(call), anchor)}`;
     if (options.json) {
       // The share link's token is the whole secret of the public page, and
       // this output lands in a session transcript that can be read more
@@ -10439,6 +10409,7 @@ program
       // to open it (a server from before `shared` still sends the token).
       const { share_token, ...rest } = call;
       const lines = snapLib.spanLines(video, allSegs);
+      const snaps = snapLib.spanSnaps(handle, video, allSegs);
       console.log(
         JSON.stringify(
           {
@@ -10446,7 +10417,7 @@ program
             ...rest,
             segments: allSegs.map(segJson),
             shared: rest.shared ?? !!share_token,
-            video: snapLib.spanDetails(video).map((d, i) => ({ ...d, lines: lines[i] })),
+            video: snapLib.spanDetails(video).map((d, i) => ({ ...d, lines: lines[i], snap: snaps[i] })),
           },
           null,
           2,
@@ -10471,7 +10442,13 @@ program
       const firstLine = snapLib.firstFilmedLine(video, allSegs);
       const first = snapLib.nearestRecordedMs(video, video[0].fromMs);
       const example = firstLine ? callRefId(handle, { from_seq: firstLine.seq, to_seq: firstLine.seq }) : first !== null ? callRefId(handle, null, first) : null;
-      const hint = example ? ` ${c.dim}(a frame: cast call snap ${example})${c.reset}` : "";
+      // "What was shown?" is the first question about a recorded call, and
+      // a range snap over a filmed stretch answers it: the stretch holding
+      // the most lines, a shared screen's first.
+      const range = snapLib.bestSpanSnap(handle, video, allSegs);
+      const hint = range && example
+        ? ` ${c.dim}(frames: ${range}, or one line: cast call snap ${example})${c.reset}`
+        : example ? ` ${c.dim}(a frame: cast call snap ${example})${c.reset}` : "";
       console.log(`${c.dim}video:${c.reset} ${snapLib.describeSpansByLine(video, allSegs)}${hint}`);
     }
     if (call.summary) {

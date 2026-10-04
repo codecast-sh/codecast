@@ -1,0 +1,25 @@
+/* The dock floats over whatever is on the screen, so its surfaces carry their
+   own ground: a dark glass that reads on a white page and on a wallpaper. A
+   transparent window cannot blur the desktop behind it (backdrop-filter only
+   sees the page), so the glass is mostly opaque and the depth comes from the
+   rim light and the shadow. */
+.dock-glass {
+  background: color-mix(in srgb, #15171c 90%, transparent);
+  border: 1px solid rgb(255 255 255 / 0.09);
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.06),
+    0 8px 24px -8px rgb(0 0 0 / 0.55);
+}
+.dock-card {
+  animation: dock-card-in 120ms cubic-bezier(0.2, 0.9, 0.3, 1);
+  transform-origin: right center;
+}
+@keyframes dock-card-in {
+  from { opacity: 0; transform: translateX(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dock-card { animation: none; }
+}
+.dock-said :where(p) { margin: 0 0 0.4em; }
+.dock-said :where(p:last-child) { margin-bottom: 0; }

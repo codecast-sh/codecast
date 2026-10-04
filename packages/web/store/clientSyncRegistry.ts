@@ -595,11 +595,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["agentTasks.webListRuns"],
   },
-  // Workflow definitions. webList is a 50-newest window, so delta.
+  // Workflow definitions. webList is a 50-newest window, so delta. A
+  // project's customized line is written here (saveLineWorkflow): a fork
+  // paints a stub that the server row supersedes by slug, unique per user.
   workflows: {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true },
+    localFirst: true,
+    sync: { isDelta: true, altKey: "slug" },
+    // The server's clock; a client cannot predict it.
+    unprotectedFields: ["created_at", "updated_at"],
     feeds: ["workflows.webList", "workflows.webGet"],
   },
   // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
@@ -829,6 +834,9 @@ export const CLIENT_SYNC_REGISTRY = {
     // client_id it was created with; the server row carrying the same
     // client_id supersedes the stub when listForPR echoes it back.
     sync: { isDelta: true, altKey: "client_id" },
+    // Resolve, reopen, edit and delete paint here first (resolveCodeCommentThread,
+    // editCodeComment, deleteCodeComment) and are held until the echo.
+    localFirst: true,
     indexes: "_id, pull_request_id, repository, file_path, created_at",
     feeds: ["codeComments.listForPR", "codeComments.listForRef", "codeComments.listForFile"],
   },
@@ -1027,12 +1035,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // pressed, the clock's time 0, whether a press could work and why not, when
   // a saving run was stopped, whether its video goes to the public link): the room's
   // recording has this one home, and every mark, the Record button and the
-  // notice read it. All the server's, none locked.
+  // notice read it. All the server's, none locked, like `words_public` (the
+  // live record's public link is on: the words go out as they are written).
   callRooms: {
     sync: {},
     localFirst: true,
     unprotectedFields: [
       "transcribe_off_at",
+      "words_public",
       "recording",
       "recording_status",
       "recording_run_id",
@@ -1108,6 +1118,19 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, preserveFields: ["deleted_here_at"] },
     localFirst: true,
     unprotectedFields: ["deleted_here_at"],
+    feeds: ["callRecordings.webCallRecordings"],
+  },
+  // The pictures of a call on public links (`cast call snap --share`), one row
+  // per picture keyed by its share id, each carrying its transcript_id: the
+  // call page lists them under its share control. Fed by the same answer as
+  // the call's files (webCallRecordings `frame_shares`), the call's complete
+  // set each time, so a delta pruned to the call. localFirst: taking one down
+  // (store deleteCallFrameShare) drops the row on the draft, and its exclude
+  // tombstone holds it out of a push computed before the delete committed.
+  // Never persisted, like the files beside it.
+  callFrameShares: {
+    sync: { isDelta: true },
+    localFirst: true,
     feeds: ["callRecordings.webCallRecordings"],
   },
   // The viewer's calls and recordings (transcripts.webListCalls, the newest
@@ -1562,6 +1585,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Per-view, like guestLinks: fed by the window showing the call.
   callRecordings: "local",
   callRecordingCalls: "local",
+  callFrameShares: "local",
   callList: "shared",
   callDetails: "shared",
   clientState: "shared",

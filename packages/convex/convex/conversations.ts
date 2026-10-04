@@ -3,9 +3,9 @@ import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
-import { parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns } from "./cloudPlacement";
+import { CLOUD_UNPARK_PATCH, parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns, unparkForMove } from "./cloudPlacement";
 import { cloudSeedArg, cloudStartFromArg, effectiveStartFrom, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
-import { cloudPlacementFor, deviceWakesOnUse,
+import { cloudPlacementFor,
   checkoutInUseMessage,
   posixRepoBasename,
 } from "@codecast/shared/contracts";
@@ -11379,6 +11379,10 @@ export const markSessionCompleted = mutation({
     // standing member that goes dormant is never flipped to "completed"; it is
     // retired only by decommissionAnchor, which clears `persistent` first.
     if (conv.persistent) return;
+    // A move in flight stopped this agent itself (the runner's quiesce): the
+    // session is moving, not ending. Completing it here left every session
+    // whose move then failed marked ended on its own machine.
+    if (conv.migration) return;
     if (conv.status === "active") {
       if (conv.has_pending_messages) {
         return;
@@ -12300,21 +12304,16 @@ export const reconfigureSession = mutation({
     // un-park to the host (a plain start there), else → re-park.
     let unpark = false;
     let hostTarget: any = null;
+    const patch: Record<string, any> = { updated_at: Date.now() };
     if (!args.cloud_device_id && conv.cloud_placement === "pending" && args.target_device_id) {
       const target = await ctx.db
         .query("devices")
         .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", args.target_device_id))
         .first();
-      if (target && !deviceWakesOnUse(target)) unpark = true;
+      const unparkFields = await unparkForMove(ctx, conv, target);
+      unpark = Object.keys(unparkFields).length > 0;
+      if (unpark) Object.assign(patch, unparkFields, { owner_device_id: undefined, session_error: undefined });
       else if (target && target.device_id === conv.owner_device_id) hostTarget = target;
-    }
-
-    const patch: Record<string, any> = { updated_at: Date.now() };
-    if (unpark) {
-      patch.cloud_placement = undefined;
-      patch.cloud_placement_token = undefined;
-      patch.owner_device_id = undefined;
-      patch.session_error = undefined;
     }
     if (args.agent_type) patch.agent_type = args.agent_type;
     // An agent flip invalidates the previous agent's model/effort stamps
@@ -12370,11 +12369,7 @@ export const reconfigureSession = mutation({
       const locals = devices.filter((d: any) => !d.is_remote);
       const paths = [patch.git_root ?? conv.git_root, patch.project_path ?? conv.project_path];
       unparkToHost = cloudPlacementFor({ target: hostTarget, locals, paths }) === "native";
-      if (unparkToHost) {
-        patch.cloud_placement = undefined;
-        patch.cloud_placement_token = undefined;
-        patch.session_error = undefined;
-      }
+      if (unparkToHost) Object.assign(patch, CLOUD_UNPARK_PATCH, { session_error: undefined });
     }
 
     await ctx.db.patch(args.conversation_id, patch);
@@ -12387,7 +12382,7 @@ export const reconfigureSession = mutation({
       await advanceCommentsAccessRevision(ctx, conv);
     }
 
-    if (unpark || unparkToHost) await supersedeCloudSpawns(ctx, conv.user_id, args.conversation_id);
+    if (unparkToHost) await supersedeCloudSpawns(ctx, conv.user_id, args.conversation_id);
     // The folder moved under a park: the cloud_spawn a laptop may already be
     // running was chosen for (and would place) the OLD repo — supersede it and
     // ask again with a fresh token.

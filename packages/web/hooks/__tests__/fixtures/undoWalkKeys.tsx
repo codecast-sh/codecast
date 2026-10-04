@@ -260,3 +260,86 @@ test("a chord the field declines reaches the app once the field's history is spe
   chord();
   expect(undone).toBe(2);
 });
+
+// A rich editor (TipTap over ProseMirror) keeps its own history and edits its
+// DOM itself: select-all+Backspace runs in its keymap and fires no input
+// event, and neither does its own undo. The editor hangs off its DOM as
+// `.editor` (TipTap sets it), with `on("update")` and `can().undo()`.
+function richEditor(opts: { undoable: boolean }) {
+  const el = document.body.appendChild(document.createElement("div"));
+  el.className = "ProseMirror";
+  el.tabIndex = 0;
+  Object.defineProperty(el, "isContentEditable", { value: true });
+  const updates = new Set<() => void>();
+  const done: string[] = [];
+  const editor = {
+    on: (ev: string, fn: () => void) => { if (ev === "update") updates.add(fn); return editor; },
+    can: () => ({ undo: () => done.length > 0, redo: () => false }),
+  };
+  (el as any).editor = editor;
+  const change = (text: string, record: boolean) => {
+    if (record) done.push(el.textContent ?? "");
+    el.textContent = text;
+    for (const fn of [...updates]) fn();
+  };
+  // Its keymap: the chord the app leaves alone is the editor's undo, and a
+  // key press applies the edit the test queued (typing, select-all+Backspace).
+  let queued: string | null = null;
+  el.addEventListener("keydown", (e) => {
+    if (queued !== null) {
+      e.preventDefault();
+      change(queued, opts.undoable);
+      queued = null;
+      return;
+    }
+    if (e.key !== "z" || !e.ctrlKey || e.defaultPrevented || !done.length) return;
+    e.preventDefault();
+    change(done.pop()!, false);
+  });
+  el.focus();
+  const keydown = (key: string, ctrlKey = false) => act(() => { el.dispatchEvent(new KeyboardEvent("keydown", { key, code: /^[a-z]$/.test(key) ? `Key${key.toUpperCase()}` : key, ctrlKey, bubbles: true, cancelable: true })); });
+  return {
+    el,
+    /** The user edits, through a key the editor's keymap handles. */
+    type: (text: string) => { queued = text; keydown("Backspace"); },
+    /** A change no key made: a draft seeded from the store, a collaborator's edit. */
+    remote: (text: string) => change(text, opts.undoable),
+    chord: () => keydown("z", true),
+  };
+}
+
+test("a rich editor cleared after the app's entry gets its draft back on the first chord", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: true });
+  ed.type("abc");
+  ed.type("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(ed.el.textContent).toBe("abc");
+  expect(undone).toBe(0);
+});
+
+test("a rich editor with nothing of its own to take back hands the chord to the app", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: false });
+  ed.type("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(undone).toBe(1);
+});
+
+test("a change no key made in a rich editor is not the user's edit: the chord stays the app's", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: true });
+  ed.remote("seeded");
+  ed.remote("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(undone).toBe(1);
+});

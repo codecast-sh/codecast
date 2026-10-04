@@ -2,6 +2,7 @@ import { Check, Info, TriangleAlert, X } from "lucide-react";
 import { Toaster as Sonner, toast } from "sonner";
 import { useTheme } from "../ThemeProvider";
 import { persistentToast } from "../../lib/persistentToast";
+import "./button.css";
 import "./sonner.css";
 
 // An error stays until the person closes it: it is often the only word that
@@ -29,6 +30,7 @@ const Toaster = (props: ToasterProps) => {
       theme={theme}
       className="cc-toaster"
       closeButton
+      toastOptions={{ classNames: { actionButton: "cc-btn cc-btn-fill cc-btn-cyan" } }}
       icons={{
         success: <Check {...GLYPH} />,
         error: <X {...GLYPH} />,

@@ -1206,6 +1206,8 @@ export interface AttributionQuery {
   bad: string;
   /** Search every commit in the range, not only those touching declared sources (--all-commits). */
   allCommits?: boolean;
+  /** Weigh only this freeze (an id or an id prefix), as `bisect plan --freeze` does, so the free answer and the plan read the same freezes. */
+  freeze?: string;
 }
 
 export interface CommitQuery {

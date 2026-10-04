@@ -18,7 +18,7 @@ import { batchLabel, whenLabel } from "./format";
 import "./evals.css";
 
 export const shortSha = (sha: string | null | undefined, n = 8) => (sha ? sha.slice(0, n) : "none");
-export const usd = (v: number) => (v >= 10 ? `$${v.toFixed(0)}` : v >= 0.1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(3)}` : "$0");
+export const usd = (v: number) => (v >= 10 ? `$${Math.round(v).toLocaleString("en-US")}` :v >= 0.1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(3)}` : "$0");
 export { batchLabel, whenLabel };
 
 /** A count with its noun: "1 class", "3 classes". */

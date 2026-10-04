@@ -79,6 +79,9 @@ let refreshTarget: UndoEntry | null = null;
 let groupDepth = 0;
 let groupChildren: UndoEntry[] | null = null;
 let groupToast = false;
+// External entries recorded inside the open group: one gesture over several
+// rows the record owns becomes one history row, named by the group's label.
+let groupExternals: UndoEntry[] | null = null;
 let idCounter = 0;
 
 /** Tune the limits; the middleware calls it with PlatformConfig.undo. */
@@ -261,19 +264,29 @@ export function undoGroup<T>(label: string | ((entries: UndoEntry[]) => string),
   }
   groupDepth = 1;
   groupChildren = [];
+  groupExternals = [];
   groupToast = false;
   try {
     return fn();
   } finally {
     const children = groupChildren;
+    const externals = groupExternals;
     const toast = groupToast;
     groupDepth = 0;
     groupChildren = null;
+    groupExternals = null;
     groupToast = false;
     if (children.length > 0) {
       const group = makeGroupEntry(typeof label === "function" ? label(children) : label, children);
       pushEntry(group);
       if (toast) announceRecorded(group);
+    }
+    if (externals.length === 1) {
+      addToHistory(externals[0]!);
+      changed();
+    } else if (externals.length > 1) {
+      addToHistory({ ...externals[0]!, id: newUndoEntryId(), label: typeof label === "function" ? label(externals) : label });
+      changed();
     }
   }
 }
@@ -477,6 +490,10 @@ function announceRecorded(entry: UndoEntry): void {
  */
 export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coalesce?: boolean }): void {
   if (entry.status === "external") {
+    if (groupExternals) {
+      groupExternals.push(entry);
+      return;
+    }
     addToHistory(entry);
     changed();
     return;
@@ -934,6 +951,43 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
   if (touched) changed();
 }
 
+const resetListeners = new Set<() => void>();
+
+/**
+ * Called when the history is reset: anything outside the stacks that holds a
+ * reset history's state (a controller's send order, a toast, an open card)
+ * drops it here. Returns the unsubscribe.
+ */
+export function onUndoReset(fn: () => void): () => void {
+  resetListeners.add(fn);
+  return () => {
+    resetListeners.delete(fn);
+  };
+}
+
+/**
+ * Forget every entry, as at an account boundary: the history belongs to the
+ * principal that made it, and replaying it under another would write the old
+ * account's rows into the new one's store and send them as the new one. A
+ * group or suppression already running keeps its own bookkeeping; only what
+ * it recorded so far goes.
+ */
+export function resetUndoHistory(): void {
+  undoStack = [];
+  redoStack = [];
+  history = [];
+  if (groupChildren) groupChildren = [];
+  if (groupExternals) groupExternals = [];
+  for (const fn of [...resetListeners]) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("[undo] reset listener failed", error);
+    }
+  }
+  changed();
+}
+
 /** Test hook: the stacks live at module scope and would leak across tests. */
 export function _resetUndoStacks(): void {
   undoStack = [];
@@ -943,6 +997,7 @@ export function _resetUndoStacks(): void {
   refreshTarget = null;
   groupDepth = 0;
   groupChildren = null;
+  groupExternals = null;
   groupToast = false;
   changed();
 }
