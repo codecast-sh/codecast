@@ -457,3 +457,96 @@ describe("setupErrorToasts", () => {
     expect(count(sentryCalls, "captureException")).toBe(0);
   });
 });
+
+describe("codecast reporting (initAnalytics codecastIngestKey)", () => {
+  type Handler = (e: any) => void;
+  let handlers: Record<string, Handler>;
+  const withKey = { ...base, codecastIngestKey: "cc_ing_test", codecastEndpoint: "https://ingest.test/cli/ingest", release: "9.9.9" };
+
+  beforeEach(() => {
+    handlers = {};
+    (globalThis as any).window = {
+      addEventListener: (type: string, fn: Handler) => {
+        handlers[type] = fn;
+      },
+      removeEventListener: () => {},
+    };
+  });
+
+  afterEach(() => {
+    web._resetForTests();
+    delete (globalThis as any).window;
+  });
+
+  const heard = () => {
+    const items: any[] = [];
+    web.getCodecastSink()!.onError((item: any) => items.push(item));
+    return items;
+  };
+
+  it("creates no sink without a key or in development", () => {
+    web.initAnalytics(base);
+    expect(web.getCodecastSink()).toBeNull();
+    web._resetForTests();
+    web.initAnalytics({ ...withKey, environment: "development" });
+    expect(web.getCodecastSink()).toBeNull();
+    expect(handlers.error).toBeUndefined();
+  });
+
+  it("captureError reaches Sentry and codecast together", () => {
+    web.initAnalytics(withKey);
+    const items = heard();
+    web.captureError(new Error("boom"), { where: "test" });
+    expect(count(sentryCalls, "captureException")).toBe(1);
+    expect(items.length).toBe(1);
+    expect(items[0].message).toBe("boom");
+    expect(items[0].context).toEqual({ where: "test" });
+  });
+
+  it("reports uncaught errors to codecast alone when the app wires no toasts", () => {
+    web.initAnalytics(withKey);
+    const items = heard();
+    handlers.error({ error: new Error("uncaught"), message: "uncaught", preventDefault: () => {} });
+    handlers.unhandledrejection({ reason: new Error("rejected"), preventDefault: () => {} });
+    expect(items.map((i) => i.message)).toEqual(["uncaught", "rejected"]);
+    // Sentry has its own global handler; this listener must not add a second report.
+    expect(count(sentryCalls, "captureException")).toBe(0);
+  });
+
+  it("one listener pair: with toasts wired, an error reports once to each backend", () => {
+    const added: string[] = [];
+    (globalThis as any).window.addEventListener = (type: string, fn: Handler) => {
+      added.push(type);
+      handlers[type] = fn;
+    };
+    web.initAnalytics(withKey);
+    const toasts: string[] = [];
+    web.setupErrorToasts({ showErrorToast: (title) => toasts.push(title) });
+    const items = heard();
+    handlers.error({ error: new Error("once"), message: "once", preventDefault: () => {} });
+    expect(added.sort()).toEqual(["error", "pagehide", "unhandledrejection", "visibilitychange"]);
+    expect(toasts).toEqual(["Uncaught: once"]);
+    expect(items.length).toBe(1);
+    expect(count(sentryCalls, "captureException")).toBe(1);
+  });
+
+  it("drops the errors Sentry drops", () => {
+    web.initAnalytics({ ...withKey, extraIgnoreErrors: [/benign thing/] });
+    const items = heard();
+    web.captureError(new Error("Unable to preload CSS for /assets/x.css"));
+    web.captureError(new Error("a benign thing happened"));
+    web.captureError(new Error("real"));
+    expect(items.map((i) => i.message)).toEqual(["real"]);
+  });
+
+  it("identify and reset reach the sink's user", () => {
+    web.initAnalytics(withKey);
+    const items = heard();
+    web.identifyUser("u1", { email: "a@b.c", plan: "pro" });
+    web.captureError(new Error("one"));
+    web.resetUser();
+    web.captureError(new Error("two"));
+    expect(items[0].user).toEqual({ id: "u1", email: "a@b.c" });
+    expect(items[1].user).toBeUndefined();
+  });
+});

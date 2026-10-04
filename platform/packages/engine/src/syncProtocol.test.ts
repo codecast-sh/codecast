@@ -159,12 +159,14 @@ describe("pending protection", () => {
     expect(echoed.pending["items:a:label_ids"]).toBeUndefined();
   });
 
-  it("returns the pending map untouched when nothing mutates it", () => {
+  it("records a hidden server value once, then leaves the pending map untouched", () => {
     const pending: Record<string, PendingEntry> = { "items:a:title": { type: "field", value: "local" } };
     const { pending: next } = applySyncTable("items", [row("a", { title: "server" })], pending, {
       a: row("a"),
     });
-    expect(next).toBe(pending);
+    expect(next["items:a:title"]).toEqual({ type: "field", value: "local", seen: ["server"] });
+    const again = applySyncTable("items", [row("a", { title: "server" })], next, { a: row("a") });
+    expect(again.pending).toBe(next);
   });
 });
 
@@ -264,7 +266,7 @@ describe("delta vs snapshot semantics", () => {
     const result = applySyncTable("items", [incoming], pending, prev, { isDelta: true, preserveFields: ["live"] });
     expect(result.table.a).toEqual({ ...incoming, title: "local", live: "on" });
     expect(result.table.b).toBe(prev.b);
-    expect(result.pending).toBe(pending);
+    expect(result.pending["items:a:title"]).toEqual({ type: "field", value: "local", ts: 1, seen: ["server"] });
     expect(prev.a.updated_at).toBeUndefined();
   });
 

@@ -34,6 +34,19 @@ function fieldEchoesPending(
   return false;
 }
 
+const SEEN_LIMIT = 8;
+
+/**
+ * The lock `entry` after it hid the server value `incoming`: the same entry
+ * when that value is already its newest record, so a push that repeats itself
+ * leaves the pending map untouched.
+ */
+export function lockSaw(entry: PendingEntry, incoming: unknown): PendingEntry {
+  const seen = entry.seen ?? [];
+  if (seen.length > 0 && sameShape(seen[seen.length - 1], incoming)) return entry;
+  return { ...entry, seen: [...seen.filter((v) => !sameShape(v, incoming)), incoming].slice(-SEEN_LIMIT) };
+}
+
 /** Deep value equality that ignores object key order: a server rebuilds an
  *  object in its own key order, and a lock on it must still retire. */
 export function sameShape(a: unknown, b: unknown): boolean {
@@ -207,6 +220,8 @@ export function applySyncTable<T extends { _id: string }>(
       if (fieldEchoesPending(field, (record as any)[field], entry.value, optionalClearFields)) {
         delete mutPending()[key];
       } else {
+        const saw = lockSaw(entry, (record as any)[field]);
+        if (saw !== entry) mutPending()[key] = saw;
         if (merged === record) merged = { ...record };
         (merged as any)[field] = entry.value;
       }
@@ -395,6 +410,11 @@ export function applySyncPatch(
     }
     // Lock wins: the local value stays, the server's write for this field is
     // ignored until it echoes.
+    const saw = lockSaw(entry, incoming);
+    if (saw !== entry) {
+      if (newPending === pending) newPending = { ...pending };
+      newPending[key] = saw;
+    }
     if (isUnset) return false;
     fields[field] = entry.value;
     return true;
@@ -429,6 +449,7 @@ export function applySyncRecord(
     if (fieldEchoesPending(field, incoming[field], entry.value, optionalClearFields)) {
       delete newPending[key];
     } else {
+      newPending[key] = lockSaw(entry, incoming[field]);
       if (merged === incoming) merged = { ...incoming };
       merged[field] = entry.value;
     }
@@ -467,7 +488,7 @@ export function applyShapeLocks(
   if (kind === "singleton") {
     if (Array.isArray(incoming)) return { value: incoming, pending };
     const merged = applySyncRecord(tableName, "", incoming, pending, optionalClearFields);
-    return { value: merged.record, pending: sameKeys(merged.pending, pending) ? pending : merged.pending };
+    return { value: merged.record, pending: sameEntries(merged.pending, pending) ? pending : merged.pending };
   }
   if (!Array.isArray(incoming)) return { value: incoming, pending };
   const rowKey = opts?.rowKey ?? "_id";
@@ -506,10 +527,34 @@ export function applyShapeLocks(
     if (listed.has(id) || at === -1) delete next[key];
     else kept.splice(Math.min(at, kept.length), 0, onScreen[at]);
   }
-  return { value: kept, pending: sameKeys(next, pending) ? pending : next };
+  return { value: kept, pending: sameEntries(next, pending) ? pending : next };
 }
 
-function sameKeys(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+function sameEntries(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
   const ka = Object.keys(a);
-  return ka.length === Object.keys(b).length && ka.every((k) => k in b);
+  return ka.length === Object.keys(b).length && ka.every((k) => k in b && a[k] === b[k]);
+}
+
+// Lock ids: unique within this page (counter) and across reloads and windows
+// (random prefix), since planted locks persist and replicate.
+const LOCK_ID_PREFIX = Math.random().toString(36).slice(2, 10);
+let lockIdCounter = 0;
+export function newLockId(): string {
+  lockIdCounter += 1;
+  return `${LOCK_ID_PREFIX}.${lockIdCounter.toString(36)}`;
+}
+
+/**
+ * Whether `entry` is the very lock `planted` describes. Locks that carry an
+ * id compare by it; older locks (persisted before ids, or planted outside the
+ * middleware) fall back to type, ts and value.
+ */
+export function sameLock(
+  entry: PendingEntry | undefined,
+  planted: { type?: PendingEntry["type"]; membership?: "include" | "exclude"; ts?: number; value?: unknown; lock?: string },
+): boolean {
+  if (!entry) return false;
+  if (entry.lock !== undefined || planted.lock !== undefined) return entry.lock === planted.lock;
+  const type = planted.membership ?? planted.type ?? "field";
+  return entry.type === type && (entry.ts ?? 0) === (planted.ts ?? 0) && (type !== "field" || sameShape(entry.value, planted.value));
 }
