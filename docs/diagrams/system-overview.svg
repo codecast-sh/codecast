@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="t d">
+  <title id="t">How codecast fits together</title>
+  <desc id="d">Coding agents write history files on a laptop or cloud host. The cast daemon watches those files, redacts secrets and syncs every session to the Convex backend. The web app, desktop app, mobile app and editor extension read live from Convex. Messages a person sends from any client travel back through Convex to the daemon, which types them into the agent's terminal. Integrations with GitHub, Linear, Slack and LiveKit attach to the backend, and the Chrome extension lets agents drive the person's own browser through the daemon.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="560" rx="12"/>
+
+  <!-- Machine zone -->
+  <rect class="zone" x="24" y="48" width="400" height="400" rx="12"/>
+  <text class="k" x="40" y="70">YOUR LAPTOP OR CLOUD HOST</text>
+
+  <!-- Agents -->
+  <text class="h" x="40" y="100">Agents</text>
+  <g class="l">
+    <rect class="agent" x="40" y="114" width="150" height="30" rx="8"/><text x="54" y="134">Claude Code</text>
+    <rect class="agent" x="40" y="152" width="150" height="30" rx="8"/><text x="54" y="172">Codex</text>
+    <rect class="agent" x="40" y="190" width="150" height="30" rx="8"/><text x="54" y="210">Cursor</text>
+    <rect class="agent" x="40" y="228" width="150" height="30" rx="8"/><text x="54" y="248">Gemini</text>
+    <rect class="agent" x="40" y="266" width="150" height="30" rx="8"/><text x="54" y="286">OpenCode</text>
+    <rect class="agent" x="40" y="304" width="150" height="30" rx="8"/><text x="54" y="324">pi</text>
+  </g>
+  <text class="n" x="40" y="354">each writes its own</text>
+  <text class="n" x="40" y="368">history files (jsonl, sqlite)</text>
+
+  <!-- Daemon -->
+  <rect class="core" x="240" y="150" width="168" height="150" rx="10"/>
+  <text class="h" x="256" y="176">cast daemon</text>
+  <text class="n" x="256" y="200">watches history</text>
+  <text class="n" x="256" y="216">redacts secrets</text>
+  <text class="n" x="256" y="232">syncs sessions live</text>
+  <text class="n" x="256" y="248">types messages into</text>
+  <text class="n" x="256" y="264">the agent's tmux pane</text>
+  <text class="n" x="256" y="280">runs triggers</text>
+
+  <!-- agents -> daemon -->
+  <path class="data" d="M190 210 H236" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="196" y="200">watch</text>
+  <path class="cmd" d="M236 262 H194" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="196" y="280">type</text>
+
+  <!-- Chrome extension -->
+  <rect class="card" x="240" y="360" width="168" height="66" rx="8"/>
+  <text class="l" x="256" y="384">Chrome extension</text>
+  <text class="n" x="256" y="402">cast browser drives</text>
+  <text class="n" x="256" y="416">your signed-in Chrome</text>
+  <path class="cmd" d="M324 304 V356" marker-end="url(#aCmd)"/>
+
+  <!-- Convex -->
+  <rect class="core" x="470" y="140" width="200" height="170" rx="10"/>
+  <text class="h" x="488" y="168">Convex backend</text>
+  <rect class="inset" x="488" y="182" width="164" height="22" rx="5"/>
+  <text class="n" x="498" y="197">sessions, messages</text>
+  <rect class="inset" x="488" y="210" width="164" height="22" rx="5"/>
+  <text class="n" x="498" y="225">tasks, plans, docs</text>
+  <rect class="inset" x="488" y="238" width="164" height="22" rx="5"/>
+  <text class="n" x="498" y="253">chat, calls, decisions</text>
+  <rect class="inset" x="488" y="266" width="164" height="22" rx="5"/>
+  <text class="n" x="498" y="281">sync log, access keys</text>
+
+  <!-- daemon <-> convex -->
+  <path class="data" d="M408 196 H466" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="414" y="186">sync</text>
+  <path class="cmd" d="M466 260 H412" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="414" y="278">sends</text>
+
+  <!-- Clients -->
+  <text class="h" x="728" y="100">Clients</text>
+  <g class="l">
+    <rect class="card" x="728" y="114" width="208" height="44" rx="8"/><text x="742" y="134">Web</text><text class="n" x="742" y="150">codecast.sh, local store</text>
+    <rect class="card" x="728" y="166" width="208" height="44" rx="8"/><text x="742" y="186">Desktop</text><text class="n" x="742" y="202">Electron, notifications</text>
+    <rect class="card" x="728" y="218" width="208" height="44" rx="8"/><text x="742" y="238">Mobile</text><text class="n" x="742" y="254">iOS, push, approvals</text>
+    <rect class="card" x="728" y="270" width="208" height="44" rx="8"/><text x="742" y="290">Editor</text><text class="n" x="742" y="306">VS Code blame gutter</text>
+    <rect class="card" x="728" y="322" width="208" height="44" rx="8"/><text x="742" y="342">cast CLI</text><text class="n" x="742" y="358">agents and terminals</text>
+  </g>
+  <path class="data" d="M670 200 H724" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="676" y="190">live</text>
+  <path class="cmd" d="M724 262 H674" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="676" y="280">act</text>
+
+  <!-- The person -->
+  <circle class="person" cx="832" cy="414" r="9"/>
+  <path class="person" d="M816 446 a16 14 0 0 1 32 0 z"/>
+  <text class="l" x="860" y="420">you</text>
+  <text class="n" x="860" y="436">steer from</text>
+  <text class="n" x="860" y="450">any client</text>
+
+  <!-- Integrations -->
+  <text class="k" x="470" y="350">INTEGRATIONS</text>
+  <g class="l">
+    <rect class="card" x="470" y="362" width="96" height="30" rx="8"/><text x="484" y="382">GitHub</text>
+    <rect class="card" x="574" y="362" width="96" height="30" rx="8"/><text x="588" y="382">Linear</text>
+    <rect class="card" x="470" y="400" width="96" height="30" rx="8"/><text x="484" y="420">Slack</text>
+    <rect class="card" x="574" y="400" width="96" height="30" rx="8"/><text x="588" y="420">LiveKit</text>
+  </g>
+  <path class="data" d="M570 358 V314" marker-end="url(#aData)"/>
+
+  <!-- Legend -->
+  <path class="data" d="M40 500 H80" marker-end="url(#aData)"/><text class="n" x="90" y="504">data: transcripts, rows, live queries</text>
+  <path class="cmd" d="M40 526 H80" marker-end="url(#aCmd)"/><text class="n" x="90" y="530">commands: messages, launches, browser actions</text>
+</svg>

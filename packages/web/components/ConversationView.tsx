@@ -160,6 +160,7 @@ import { useToolResultMaps } from "../hooks/useToolResultMaps";
 import { useBrowserAndWakeRows } from "../hooks/useBrowserAndWakeRows";
 import { useSessionImages } from "../hooks/useSessionImages";
 import { useConversationTaskMaps } from "../hooks/useConversationTaskMaps";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 const api = _typedApi as any;
 
 const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
@@ -767,8 +768,7 @@ const ConversationViewInner = (
     if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.shiftKey) return;
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (keyBelongsElsewhere(e.target)) return;
       if (hasOpenModal()) return;
       e.preventDefault();
       handleCycleMode();

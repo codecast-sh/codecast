@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { _resetUndoStacks, getUndoHistory, performRedo, performUndo, undoEntry } from "@platform/engine";
+import { targetDayStamp } from "@codecast/shared/time";
 import { useInboxStore } from "../inboxStore";
 
 // Each work spec with an inverse names its server half explicitly. These
@@ -318,6 +319,31 @@ describe("initiatives owned by a role", () => {
     // A person as owner has no scope to widen.
     seed({ project_ids: ["proj_1"] }, null);
     expect(undoOf(() => s().updateInitiative(INIT, { owner: { kind: "user", user_id: SAM } }))).toEqual([["updateInitiative", [INIT, { owner: null }]]]);
+  });
+});
+
+// The target date is a bare <input type="date">: typing a year fires one
+// change per digit (0002, 0020, 0202, 2028). Those are one gesture, one entry,
+// undone by one press back to the date it had.
+describe("an initiative's target date typed in", () => {
+  const INIT = "in_1";
+  const day = (d: string) => targetDayStamp(d)!;
+  it("coalesces the per-keystroke writes into one named entry", () => {
+    const T0 = day("2027-01-01");
+    useInboxStore.setState({
+      initiatives: { [INIT]: { _id: INIT, short_id: "in-1", title: "Win", status: "active", project_ids: [], updated_at: 1, target_date: T0 } },
+      orgTree: null,
+      orgIntents: [],
+    } as any);
+    for (const d of ["0002-01-01", "0020-01-01", "0202-01-01", "2028-01-01"]) s().updateInitiative(INIT, { target_date: day(d) });
+    const items = getUndoHistory().items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.label).toBe("Set the target of “Win” to 2028-01-01");
+    calls = [];
+    expect(performUndo()).toBe(true);
+    expect(calls).toEqual([["updateInitiative", [INIT, { target_date: T0 }]]]);
+    s().updateInitiative(INIT, { target_date: null });
+    expect(label()).toBe("Cleared the target of “Win”");
   });
 });
 

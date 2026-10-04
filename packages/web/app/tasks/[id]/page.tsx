@@ -72,6 +72,7 @@ import {
 import { closeTaskWithGuard, setTaskParent } from "../../../lib/taskActions";
 import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { DocDates } from "../../../components/DocDates";
+import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -543,8 +544,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     if (!paneActive || paletteOpen) return;
     if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (keyBelongsElsewhere(e.target)) return;
 
       const stop = () => { e.preventDefault(); };
 

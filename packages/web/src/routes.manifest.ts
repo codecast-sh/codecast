@@ -232,6 +232,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 // Settings
@@ -467,6 +468,11 @@ export const ROUTES: RouteEntry[] = [
   //    for the same reason: a ring must reach somebody who is in another app
   //    entirely, which a card inside an app window cannot do. --
   { path: "call-ring", component: cast(CallRing), layout: "palette" },
+
+  // -- The agent dock (TransparentWindowLayout): the pill on the screen's
+  //    edge with a dot per live agent and the card beside it. Opt-in per
+  //    machine. --
+  { path: "agent-dock", component: cast(AgentDock), layout: "palette" },
 
   // -- The share cursors glass (TransparentWindowLayout): teammates' pointers
   //    drawn on the sharer's own screen, over what the share captures. --

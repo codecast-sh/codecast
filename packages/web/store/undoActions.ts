@@ -7,13 +7,12 @@ import { askRetireInstead } from "../lib/seatKill";
 import { soundDormant } from "../lib/sounds";
 import { useInboxStore, type InboxSession } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
-import { undoGroup, type UndoEntry } from "./undoStack";
 import { registerUndoRevert } from "./undo/onRevert";
 import { USER_REST_LABEL } from "./undo/policies/sessions";
-import { counted } from "./undo/labels";
+import { counted, undoAsOne } from "./undo/labels";
 import { toast } from "sonner";
 
-export { USER_REST_LABEL };
+export { USER_REST_LABEL, undoAsOne };
 
 // How long a restored row may take to mount before its entrance is dropped.
 const ENTER_WAIT_MS = 1000;
@@ -81,15 +80,6 @@ function animateSessionExit(id: string, then: (leaving: Element | null) => void)
   };
   wrapper.addEventListener('animationend', finish, { once: true });
   setTimeout(finish, 250);
-}
-
-/** Fold every undoable write `fn` makes into one undo. One write keeps its own
- *  label; several take `summary`. */
-export function undoAsOne<T>(summary: string | ((entries: UndoEntry[]) => string), fn: () => T): T {
-  return undoGroup(
-    (entries: UndoEntry[]) => (entries.length === 1 ? entries[0]!.label : typeof summary === "function" ? summary(entries) : summary),
-    fn,
-  );
 }
 
 const exitFinished = (id: string) => new Promise<Element | null>((resolve) => animateSessionExit(id, resolve));

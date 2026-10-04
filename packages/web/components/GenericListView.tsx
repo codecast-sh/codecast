@@ -6,7 +6,7 @@ import { useRouter, usePathname } from "next/navigation";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
 import { formatShortcutLabel, useShortcutAction } from "../shortcuts";
-import { OWNS_KEYS_SELECTOR } from "../shortcuts/keyOwnership";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { FilterDropdown, FilterOptionList, type FilterOption } from "./FilterDropdown";
 import { groupsWithItems, visibleGroups } from "../lib/listGroups";
 import { ContextMenu, useContextMenu } from "./ui/context-menu";
@@ -901,11 +901,11 @@ export function GenericListView<T>({
     if (!paneActive) return;
     const handler = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
-      // A focused region that owns its keys (the undo timeline card, the
-      // branch map) keeps them all, by the same rule the shortcut dispatcher
-      // follows: its Enter, Space, Home, End and Esc are not the list's.
-      if (target.closest?.(OWNS_KEYS_SELECTOR)) return;
+      // A text field, or a focused region that owns its keys (the undo
+      // timeline card, the branch map), keeps them all, by the same rule the
+      // shortcut dispatcher follows: its Enter, Space, Home, End and Esc are
+      // not the list's.
+      if (keyBelongsElsewhere(target)) return;
       // Arrows belong to an open menu or listbox (filter dropdowns, pickers).
       if (e.key.startsWith("Arrow") && target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
 

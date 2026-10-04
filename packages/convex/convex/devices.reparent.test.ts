@@ -409,3 +409,38 @@ describe("resume command carries the agent client", () => {
     expect(agentTypeOf(db)).toBe("cursor");
   });
 });
+
+// A row parked for the cloud host (cloud_placement "pending") is invisible to
+// every daemon until the host places it (canDaemonSeePendingMessage). Moving it
+// onto a plain machine must un-park it, or its messages wait forever on a
+// laptop that already owns it (jx7801n, 2026-10-04).
+describe("moving a parked row off the cloud host un-parks it", () => {
+  const parked = { user_id: ME, owner_device_id: "host", cloud_placement: "pending", cloud_placement_token: "tok", cloud_placement_failed_at: 1 };
+  const withHost = (db: any) => {
+    db._tables.devices.push({ _id: "d9", user_id: ME, device_id: "host", label: "Cloud", is_remote: true, platform: "linux" });
+    db._tables.daemon_commands = [{ _id: "cs1", user_id: ME, command: "cloud_spawn", args: JSON.stringify({ conversation_id: "conv1" }), created_at: Date.now() }];
+    return db;
+  };
+
+  test("reassign onto a laptop clears the park and supersedes the spawn", async () => {
+    const db = withHost(fixtures(parked));
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "mydev" });
+    expect(conv(db).owner_device_id).toBe("mydev");
+    expect(conv(db).cloud_placement).toBeUndefined();
+    expect(conv(db).cloud_placement_token).toBeUndefined();
+    expect(conv(db).cloud_placement_failed_at).toBeUndefined();
+    expect(db._tables.daemon_commands.find((c: any) => c._id === "cs1").error).toBe("superseded");
+  });
+
+  test("reparent onto a laptop clears the park", async () => {
+    const db = withHost(fixtures(parked));
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    expect(conv(db).cloud_placement).toBeUndefined();
+  });
+
+  test("reassign onto the host itself keeps the park", async () => {
+    const db = withHost(fixtures(parked));
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: "host" });
+    expect(conv(db).cloud_placement).toBe("pending");
+  });
+});

@@ -55,6 +55,8 @@ const NON_TAB_EXACT = new Set([
   // The share cursors glass: teammates' pointers over the sharer's screen.
   // Same rule again; the tab shell would rewrite the glass window's URL.
   "/share-cursors",
+  // The agent dock: the pill and its card on the screen's edge. Same rule.
+  "/agent-dock",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.
