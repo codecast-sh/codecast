@@ -7,7 +7,7 @@
 // UndoTimelineHost mounts beside RecentSwitcherHost and renders nothing until
 // a doorway opens the card (lib/undoTimelineOpen): the palette row, the chord,
 // the "Undid" toast's History action, the held peek.
-import { useCallback, useMemo, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { redoTo, undoTo } from "../../store/undoStack";
@@ -23,14 +23,14 @@ import { UndoTimelineView, type UndoTimelineViewProps } from "./UndoTimelineView
 import type { ResolvedVisit } from "../../lib/recentVisits";
 
 /** The chords that keep working while focus is inside the card. The card
- *  owns its plain keys (data-owns-keys), so these are handed on by name. */
+ *  claims its keys ahead of the dispatcher, so these are handed on by name. */
 const CARD_CHORDS: ShortcutAction[] = ["ui.undo", "ui.redo", "ui.undoHistory"];
 
-function useCardChords(): (e: ReactKeyboardEvent) => boolean {
+function useCardChords(): (e: KeyboardEvent) => boolean {
   const { dispatchAction } = useShortcuts();
-  return useCallback((e: ReactKeyboardEvent) => {
+  return useCallback((e: KeyboardEvent) => {
     for (const action of CARD_CHORDS) {
-      const def = getShortcutsForAction(action).find((d) => matchShortcut(e.nativeEvent, d));
+      const def = getShortcutsForAction(action).find((d) => matchShortcut(e, d));
       if (!def) continue;
       e.preventDefault();
       if (!(def.noRepeat && e.repeat)) dispatchAction(action);

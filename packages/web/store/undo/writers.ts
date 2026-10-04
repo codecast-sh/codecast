@@ -233,7 +233,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "Written by resolveCommentThread and editComment, whose specs carry an inverse with the prior value; adds, deletes and agent asks are never undoable.",
   sessionReads: "Read state; never undoable.",
   agentTasks:
-    "Owned triggers. triggerAction pause/resume and setTriggerInterval carry an inverse naming the opposite verb or prior interval; run now, cancel, reactivate and delete are never undoable.",
+    "Owned triggers. triggerAction pause/resume, setTriggerInterval and editTrigger carry an inverse naming the opposite verb, the prior interval or the prior prompt and schedule; run now, cancel, reactivate and delete are never undoable.",
   foreignTriggers: "Triggers the viewer manages but does not own; the same verbs and inverses as agentTasks.",
   agentDefinitions: "Written only by deletes, which are never undoable.",
   agentChains: "Written only by deletes, which are never undoable.",

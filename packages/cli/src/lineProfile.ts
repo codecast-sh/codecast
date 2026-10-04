@@ -9,6 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import type { LineFinder, LineProfile, LineValueSource } from "@codecast/shared/contracts/lineProfile";
 
 export const LINE_PROFILE_REL_PATH = ".codecast/line.toml";
 /** codecast's prompting standard, for a repo that names none (LP2). The repo is public. */
@@ -26,28 +27,7 @@ export function principlesProse(paths: string[]): string {
   return paths.length ? `${shared} and ${paths.join(", ")} (this project's own)` : shared;
 }
 
-export interface LineFinder {
-  id: string;
-  source: string;
-  /** The kinds it files, or "any" for a finder that types each signal itself (a person). */
-  kind: SignalKind[] | "any";
-  fingerprint: string;
-  runs?: string;
-  /** The project its signals go to, when not the profile's. */
-  project?: string;
-}
-
-export interface LineProfile {
-  team: string | null;
-  project: string | null;
-  principles: string[];
-  prompting: string;
-  size_budget: number;
-  watch_days: number;
-  commands: { check: string; prove: string | null; eval: string | null; ship: string | null };
-  caps: { cards: number };
-  finders: LineFinder[];
-}
+export type { LineFinder, LineProfile };
 
 export const LINE_PROFILE_DEFAULTS: LineProfile = {
   team: null,
@@ -61,7 +41,7 @@ export const LINE_PROFILE_DEFAULTS: LineProfile = {
   finders: [],
 };
 
-export type ValueSource = "file" | "default";
+export type ValueSource = LineValueSource;
 
 export interface ResolvedLineProfile {
   /** The directory holding `.codecast/line.toml`, else the repository root, else null. */
@@ -90,10 +70,10 @@ export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K]
   caps?: { cards?: number };
 };
 
-const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "finders"] as const;
-const COMMAND_KEYS = ["check", "prove", "eval", "ship"] as const;
-const CAPS_KEYS = ["cards"] as const;
-const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "project"] as const;
+export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "finders"] as const;
+export const COMMAND_KEYS = ["check", "prove", "eval", "ship"] as const;
+export const CAPS_KEYS = ["cards"] as const;
+export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "project"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
 

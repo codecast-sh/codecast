@@ -4,6 +4,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { usePendingPermissions } from "./useSyncPendingPermissions";
 import { openQuestionFromMessages, lastAssistantText, visibleOptions } from "./useDecisionQueue";
 import { buildSingleAnswerPayload, buildFreeTextPayload } from "../lib/pollPayload";
+import { sendToSession } from "../lib/sendToSession";
 import { PERMISSION_SKIP_TOOLS } from "../components/PermissionCard";
 import type { QueueItem } from "../lib/decisionQueue";
 
@@ -19,8 +20,6 @@ import type { QueueItem } from "../lib/decisionQueue";
 // PermissionStack's own Approve/Deny.
 export function useDecisionAnswer(item: QueueItem | null) {
   const answerDecision = useInboxStore((s) => s.answerDecision);
-  const addOptimisticMessage = useInboxStore((s) => s.addOptimisticMessage);
-  const sendMessage = useInboxStore((s) => s.sendMessage);
   const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
 
   const conversationId = item?.conversationId ?? null;
@@ -55,11 +54,9 @@ export function useDecisionAnswer(item: QueueItem | null) {
     if (item.source === "decide" && item.decisionId) {
       answerDecision(item.decisionId, { index });
     } else if (poll) {
-      const content = buildSingleAnswerPayload(poll.question, index);
-      const clientId = addOptimisticMessage(item.conversationId, content);
-      sendMessage(item.conversationId, content, undefined, clientId);
+      sendToSession(item.conversationId, buildSingleAnswerPayload(poll.question, index));
     }
-  }, [item, poll, answerDecision, addOptimisticMessage, sendMessage]);
+  }, [item, poll, answerDecision]);
 
   const answerFreeText = useCallback((text: string) => {
     const trimmed = text.trim();
@@ -70,11 +67,9 @@ export function useDecisionAnswer(item: QueueItem | null) {
       // No parsed poll needed: the free-text payload is the decline-then-type
       // form, which the daemon can drive at any AskUserQuestion menu — this is
       // how a buffered question (present in no transcript yet) gets answered.
-      const content = buildFreeTextPayload(trimmed);
-      const clientId = addOptimisticMessage(item.conversationId, content);
-      sendMessage(item.conversationId, content, undefined, clientId);
+      sendToSession(item.conversationId, buildFreeTextPayload(trimmed));
     }
-  }, [item, answerDecision, addOptimisticMessage, sendMessage]);
+  }, [item, answerDecision]);
 
   // "I am not going to answer this." A `cast decide` row resolves as dismissed
   // (the agent is not told); a poll/permission card is marked resolved in the

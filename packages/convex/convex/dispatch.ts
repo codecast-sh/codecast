@@ -1800,6 +1800,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setTriggerInterval: async (ctx, userId, [taskId, intervalMs]: [string, number]) => {
     return await (ctx as any).runMutation(api.agentTasks.webUpdate, { task_id: taskId, interval_ms: intervalMs });
   },
+  // The triggers page's edit form, and its undo with the prior values. A
+  // trigger that ran or ended in the meantime refuses the edit; throwing makes
+  // the refusal permanent, so the client takes its optimistic edit back.
+  editTrigger: async (ctx, userId, [taskId, fields]: [string, Record<string, unknown>]) => {
+    const ok = await (ctx as any).runMutation(api.agentTasks.webUpdate, { ...fields, task_id: taskId });
+    if (ok === false) throw new Error("This trigger can no longer be edited: it is running or finished");
+    return ok;
+  },
 
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
     return await (ctx as any).runMutation(api.notifications.markAsRead, { notificationId: id });

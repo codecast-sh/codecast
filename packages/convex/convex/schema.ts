@@ -12,7 +12,8 @@ import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValida
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
-import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
+import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
+import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -4862,23 +4863,14 @@ export default defineSchema({
     // with an end); a bounded project is what a program role ends with
     // (org-staffing.md S10).
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"))),
-    // The finders a repo's line profile declares for this project
-    // (line-profile.md LP3), published by `cast line profile --publish`. The
-    // repo holds the truth; this copy is what /line reads to name each
-    // finder and say when one is silent. root: the checkout that published;
-    // default: this is that profile's `[line] project`.
-    line_profile: v.optional(v.object({
-      finders: v.array(v.object({
-        id: v.string(),
-        source: v.string(),
-        kind: v.union(v.literal("any"), v.array(v.string())),
-        fingerprint: v.string(),
-        runs: v.optional(v.string()),
-      })),
-      root: v.optional(v.string()),
-      default: v.optional(v.boolean()),
-      changed_at: v.number(),
-    })),
+    // The repo's resolved line profile (line-profile.md LP3), published by
+    // `cast line profile --publish` onto every project its finders file
+    // into: the finders for this project, every other value with where it
+    // came from, the loader's notes and warnings, and the checkout and device
+    // that published it. The repo holds the truth; this copy is what the app
+    // reads. default: this is that profile's `[line] project`. Shape:
+    // @codecast/shared/contracts/lineProfile.
+    line_profile: v.optional(publishedLineProfileValidator),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -5600,6 +5592,9 @@ export default defineSchema({
     // Set when pulled from the provider or once a pushed comment gets its id
     // back. docs/architecture/issue-sync.md S1.2, S4.
     external: v.optional(taskCommentExternalValidator),
+    // A person's comment reached the session that owns the task while it was
+    // working (tasks.ts deliverCommentToOwner): the thread says so under it.
+    delivered_to_conversation_id: v.optional(v.id("conversations")),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"])
@@ -6221,7 +6216,15 @@ export default defineSchema({
     creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
+    // Every link the room ever had, for the questions about any of them
+    // (lib/callGuestAdmission.roomHasGuestLinks: a guest admitted on a link
+    // since expired can still be inside).
     .index("by_room", ["room_key"])
+    // The room's links still open by the clock, and only those: the stage's
+    // invite panel (callGuests.listGuestLinks) subscribes to this range, so a
+    // long-lived room's past links neither grow its read nor re-run it when
+    // one of them is written.
+    .index("by_room_expires", ["room_key", "expires_at"])
     // The creator's latest push across all their links, in one read
     // (callGuests.tellCreatorIfAlone).
     .index("by_creator_told", ["created_by", "creator_told_at"])
@@ -6524,8 +6527,11 @@ export default defineSchema({
     // restart cooldown and the stuck-save timeout both count from here.
     stop_requested_at: v.optional(v.number()),
     // Why it failed, in plain words (lib/callRecordingRuns plainEgressError;
-    // LiveKit's own text goes to the logs).
+    // LiveKit's own text goes to the logs), and the kind of failure those
+    // words describe. Decisions (may a screen file be asked for again?) read
+    // the kind, so editing the words never changes what the loop does.
     error: v.optional(v.string()),
+    error_kind: v.optional(callRecordingErrorKindValidator),
     // How many times this file has been asked of LiveKit (absent: once). A
     // refusal that passes (no capacity this minute, a timeout) is asked again
     // up to START_RETRY_LIMIT times on the same row. `retry_after` is when a

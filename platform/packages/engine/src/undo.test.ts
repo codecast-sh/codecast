@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { action, actionKind, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
+import { action, actionKind, afterCommit, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
 import { createSyncEngine } from "./syncEngine";
 import { captureCells } from "./undo";
 import {
@@ -48,7 +48,7 @@ const REGISTRY: PlatformConfig["registry"] = {
 
 type Calls = {
   beforeReplay: Array<[string, string]>;
-  afterReplay: Array<[string, string, number]>;
+  afterReplay: Array<[string, string, number, string]>;
   restoreView: Array<[string, unknown]>;
 };
 
@@ -65,7 +65,7 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
       },
     },
     beforeReplay: (entry, dir) => calls.beforeReplay.push([entry.label, dir]),
-    afterReplay: (entry, dir, applied) => calls.afterReplay.push([entry.label, dir, applied.length]),
+    afterReplay: (entry, dir, applied, how) => calls.afterReplay.push([entry.label, dir, applied.length, how]),
     restoreView: (_draft, field, value) => calls.restoreView.push([field, value]),
     specs: {
       rename: { label: (ctx) => `Renamed to ${ctx.args[1]}` },
@@ -535,7 +535,7 @@ describe("replay mechanics", () => {
     expect(replay.args).toEqual([]);
     expect(replay.patches).toEqual({ item_rows: { [A]: { deferred_at: null, snoozed_until: SNOOZE } } });
     expect(h.calls.beforeReplay).toEqual([["Deferred", "undo"]]);
-    expect(h.calls.afterReplay).toEqual([["Deferred", "undo", 2]]);
+    expect(h.calls.afterReplay).toEqual([["Deferred", "undo", 2, "replay"]]);
     expect(notices).toEqual(["Undid: Deferred"]);
   });
 
@@ -1575,6 +1575,55 @@ describe("redo checks every captured cell", () => {
     expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
     await sleep(5);
     expect(h.dispatched.slice(before).some((d) => d.action === "setTwo")).toBe(false);
+  });
+
+  // The binding announces values to sibling windows only for a replay the
+  // engine wrote itself: a re-invoked action announces its own effects.
+  it("tells afterReplay whether the redo re-ran the action or restored fields", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "old", color: "red" });
+    h.wrapped.setTwo(A, "new", "red");
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "blue" } } });
+    performRedo();
+    expect(h.calls.afterReplay.map(([, dir, , how]) => [dir, how])).toEqual([["undo", "replay"], ["redo", "replay"]]);
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "red" } } });
+    h.wrapped.rename(A, "plain");
+    performUndo();
+    performRedo();
+    expect(h.calls.afterReplay.at(-1)?.[3]).toBe("reinvoke");
+  });
+
+  // A vetoed re-invoke has run the action body on a draft that is thrown away,
+  // so the outside effects it asked for (a sibling-window broadcast, a sound)
+  // must be thrown away with it.
+  it("a vetoed redo runs none of the action body's commit effects", () => {
+    const effects: string[] = [];
+    const h = makeStore({
+      undo: withSpecs({ setTwoLoud: { label: () => "Set two loud" } }),
+      extra: {
+        setTwoLoud: action(function (this: any, id: string, title: string, color: string) {
+          this.items[id].title = title;
+          this.items[id].color = color;
+          afterCommit(() => effects.push(`${id}:${title}`));
+        }),
+      },
+    });
+    h.wrapped.seed(A, { title: "old", color: "red" });
+    h.wrapped.setTwoLoud(A, "new", "red");
+    expect(effects).toEqual([`${A}:new`]);
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "blue" } } });
+    performRedo();
+    expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
+    expect(effects).toEqual([`${A}:new`]);
+  });
+
+  it("an effect asked for outside any action runs at once", () => {
+    const effects: number[] = [];
+    afterCommit(() => effects.push(1));
+    expect(effects).toEqual([1]);
   });
 
   it("a row the forward wrote unchanged is not redone over a change made since the undo", () => {

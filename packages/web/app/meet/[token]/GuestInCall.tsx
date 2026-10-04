@@ -15,7 +15,7 @@ import {
 import { DeviceSelect, NoticePills } from "./MeetChrome";
 import { LogoMark } from "../../../components/Logo";
 import { RecordingMark, RecordingStopControl } from "../../../components/calls/RecordingMark";
-import { guestNoticeLines, humanizeConvexError, type GuestNotice } from "@codecast/shared/contracts";
+import { guestNoticeLines, humanizeConvexError, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
@@ -123,8 +123,8 @@ export function GuestInCall({
     );
     if (!recording) setAskStop(false);
   }, [recording, transcribed, videoPublic]);
-  const recordingNews = recording && (!told.recording || (videoPublic && !told.video_public));
-  const fresh = guestNoticeLines({ recording: recordingNews, transcribed: transcribed && !told.transcribed, video_public: videoPublic }, "short");
+  const news = noticeNews(told, { recording, transcribed, video_public: videoPublic });
+  const fresh = guestNoticeLines({ recording: news.rec, transcribed: news.words, video_public: videoPublic }, "short");
   const dismiss = (key: "rec" | "words") =>
     setTold((t) => (key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true }));
   // Stop is for everyone, so it is asked once more, from the mark in the bar

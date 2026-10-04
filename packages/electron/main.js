@@ -147,7 +147,14 @@ const editUndo = createEditUndo({
   focusedContents: () => webContents.getFocusedWebContents() ?? BrowserWindow.getFocusedWindow()?.webContents,
   isShell: (contents) => trustedShellUrl(contents.getURL(), [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean)),
 });
+// Every Codecast window is built here. A see-through one (the palette, the
+// rings, the dock) says so to its page, which then paints nothing while it
+// loads: a boot screen or a loader there is an opaque card over somebody's work.
 function createShellWindow(options) {
+  if (options.transparent) {
+    const prefs = options.webPreferences ?? {};
+    options = { ...options, webPreferences: { ...prefs, additionalArguments: [...(prefs.additionalArguments ?? []), "--transparent-window"] } };
+  }
   return shellAuthority.register(new BrowserWindow(options));
 }
 
@@ -2610,20 +2617,30 @@ registerSeeThroughIpc("agentDock", senderIsAgentDock, {
 });
 
 shellIpc.handle("app:agentDock.get", () => ({ ...loadAgentDock(), supported: true }));
-shellIpc.handle("app:agentDock.set", (_e, patch) => {
+// Every change to the setting comes through here: Settings → Desktop, the
+// tray's toggle, and the dock's own minimize. The window, the shortcut, the
+// tray's checkmark and the page's layout all follow from the one write.
+function saveAgentDock(patch) {
   const next = mergeAgentDock({ ...loadAgentDock(), ...(patch && typeof patch === "object" ? patch : {}) });
   updateSettings({ agentDock: next });
   syncAgentDock();
   registerShortcuts();
+  setTrayMenu();
   if (agentDockWindow && !agentDockWindow.isDestroyed()) {
     const [w, h] = agentDockWindow.getSize();
     const area = screen.getDisplayMatching(agentDockWindow.getBounds()).workArea;
     agentDockWindow.setResizable(true);
     agentDockWindow.setBounds(placeAgentDock(area, { width: w, height: h }, next));
     agentDockWindow.setResizable(false);
+    // The page lays the card out on the side away from the edge; a window
+    // moved to the other edge with the page still on the old side opens its
+    // card off the screen.
+    agentDockWindow.webContents.send("app:agentDock.config", next);
   }
   return next;
-});
+}
+
+shellIpc.handle("app:agentDock.set", (_e, patch) => saveAgentDock(patch));
 
 // The card takes the keyboard while it is open (a panel, so Codecast is not
 // activated) and gives it back when it closes.
@@ -2642,6 +2659,20 @@ shellIpc.handle("app:agentDock.open", (e, navPath) => {
   if (!clean) return false;
   routeToWindow(clean, null);
   app.focus({ steal: true });
+  return true;
+});
+
+// "+": the floating quick compose, the same popup the newSession shortcut
+// opens, so a new agent from the dock is the new agent from anywhere else.
+//
+// The dock lets go of the keyboard first and the popup opens a beat later:
+// the press that asked for it would otherwise hand focus straight back to the
+// dock, and the popup hides itself the moment it loses focus.
+shellIpc.handle("app:agentDock.compose", (e) => {
+  const win = senderIsAgentDock(e);
+  if (!win) return false;
+  win.blur();
+  setTimeout(showCompose, 120);
   return true;
 });
 
@@ -2789,6 +2820,14 @@ function createTray() {
   icon.setTemplateImage(initial.template);
   trayIconFile = initial.file;
   tray = new Tray(icon);
+  setTrayMenu();
+  tray.setToolTip(initial.tooltip);
+}
+
+// Rebuilt whenever a checkmark in it changes (the agent dock's).
+function setTrayMenu() {
+  if (!tray) return;
+  const dock = loadAgentDock();
   const menu = Menu.buildFromTemplate([
     { label: "Show Codecast", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: "separator" },
@@ -2801,13 +2840,15 @@ function createTray() {
     { label: "Chat", click: () => routeToWindow("/chat") },
     { label: "Tasks", click: () => routeToWindow("/tasks") },
     { type: "separator" },
+    { label: "Agent Dock", type: "checkbox", checked: dock.enabled, click: () => saveAgentDock({ enabled: !dock.enabled }) },
+    { label: "Minimize Agent Dock", type: "checkbox", checked: dock.minimized, enabled: dock.enabled, click: () => saveAgentDock({ minimized: !dock.minimized }) },
+    { type: "separator" },
     { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
     { label: `Version ${app.getVersion()}`, enabled: false },
     { type: "separator" },
     { label: "Quit Codecast", click: () => app.quit() },
   ]);
   tray.setContextMenu(menu);
-  tray.setToolTip(initial.tooltip);
 }
 
 function buildAppMenu() {

@@ -40,6 +40,7 @@ const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider } = await import("../../../shortcuts");
 const { SurfaceWallView, wallOrder, newestWorsePair, attributeHref, rowHref, wallWindowFrom, wallAxisTicks, WALL_AXIS_LABEL_GAP, WALL_CADENCES, DEFAULT_WALL_CADENCE } = await import("../SurfaceWallView");
 const { movedLine } = await import("../WhatMoved");
+const { endpointLabel } = await import("../bisectModel");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -244,6 +245,11 @@ describe("the wall", () => {
     // The open bisect rides the foot as a ribbon; the finished one does not.
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-1003"]')).not.toBeNull();
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-0927"]')).toBeNull();
+    // Its ends read as every bisect page writes them: a batch as its local time, never a sliced UTC name.
+    const open = data.bisects.find((b) => b.id === "b-settle-1003")!;
+    const range = m.container.querySelector('[data-ev-bisect-ribbon="b-settle-1003"] .ev-wall-ribbon-range')!.textContent;
+    expect(range).toBe(`${endpointLabel(open.good)} to ${endpointLabel(open.bad)}`);
+    expect(range).not.toMatch(/\d{4}-\d{2}-(\s|$)/);
     expect(m.container.querySelector("[data-ev-sim-line]")).not.toBeNull();
     await m.unmount();
   });
@@ -255,5 +261,20 @@ describe("the wall", () => {
     expect(m.container.textContent).toContain("No bisect is running.");
     expect(m.container.textContent).toContain("No Multiplayer sim session on this machine yet.");
     await m.unmount();
+  });
+
+  it("marks a Multiplayer sim session that exited non-zero as broken, never as a pass", async () => {
+    // A real session: `killUndo --sweep 25` exited 1 after 10 s with no run recorded.
+    const base = data.sim!;
+    const broke = { ...base, exit: 1, runs: 0, failed: 0, scenarios: 0, failing: [], finishedAt: base.finishedAt ?? base.startedAt };
+    const m = await mount({ ...data, sim: broke });
+    const line = m.container.querySelector("[data-ev-sim-line]")!;
+    expect(line.textContent).toContain("exited 1 before any run");
+    expect(line.textContent).not.toContain("none failed");
+    expect(line.querySelector("[data-ev-verdict]")!.getAttribute("data-ev-verdict")).toBe("crash");
+    await m.unmount();
+    const ok = await mount({ ...data, sim: { ...base, exit: 0, failed: 0, failing: [], runs: Math.max(1, base.runs) } });
+    expect(ok.container.querySelector("[data-ev-sim-line] [data-ev-verdict]")!.getAttribute("data-ev-verdict")).toBe("pass");
+    await ok.unmount();
   });
 });

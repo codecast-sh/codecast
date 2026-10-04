@@ -434,6 +434,12 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     const wide = await ok<any>('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, allCommits: '1' });
     expect(wide.answer).toMatchObject({ kind: 'source', confidence: 'pinned', noDeclaredSourceMoved: false, rangeCommits: 1 });
     expect((await call('GET', '/attribution', { surface: 'echo', good: '$(rm -rf ~)', bad: batch.b })).status).toBe(400);
+    // A freeze limit rides the query too (the launcher's "Attribute this freeze"), so the free answer weighs what the plan will.
+    const limited = await ok<any>('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, freeze: F.slice(0, 8) });
+    expect(limited.flipped.map((f: any) => f.freezeId)).toEqual([F]);
+    expect(limited.answer).toMatchObject({ kind: 'source', confidence: 'pinned' });
+    // A freeze the surface never graded (G is another surface's) is refused, never weighed as "nothing flipped".
+    expect((await call('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, freeze: G.slice(0, 8) })).status).toBe(404);
   });
 
   test('/commit/:sha: the commit, its files and diff; a bad sha is refused before git sees it', async () => {

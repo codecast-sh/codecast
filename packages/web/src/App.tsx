@@ -33,6 +33,8 @@ const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everythi
 const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
+const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -145,6 +147,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 const Settings = lazy(() => import("@/app/settings/page"));
@@ -180,7 +183,7 @@ export function App() {
     <Suspense fallback={<BootFallback />}>
     <Providers>
       <ErrorBoundary name="App" level="panel">
-        <Suspense fallback={<RouteFallback />}>
+        <Suspense fallback={<RouteFallback screen />}>
           <Routes>
             {/* Marketing - light mode layout */}
             <Route element={<MarketingLayout />}>
@@ -206,6 +209,8 @@ export function App() {
               <Route path="blog/agents-that-talk-to-each-other" element={<E name="BlogAgentsTalk"><BlogAgentsTalk /></E>} />
               <Route path="blog/the-pull-request-that-knows-its-sessions" element={<E name="BlogPullRequests"><BlogPullRequests /></E>} />
               <Route path="blog/what-your-team-sees" element={<E name="BlogTeamSees"><BlogTeamSees /></E>} />
+              <Route path="blog/one-repository-twenty-checkouts" element={<E name="BlogWorktrees"><BlogWorktrees /></E>} />
+              <Route path="blog/fewer-bigger-jumps" element={<E name="BlogJumps"><BlogJumps /></E>} />
               <Route path="compare" element={<E name="CompareIndex"><CompareIndex /></E>} />
               <Route path="compare/:slug" element={<E name="Compare"><Compare /></E>} />
             </Route>
@@ -393,6 +398,7 @@ export function App() {
               <Route path="call-panel" element={<E name="CallPanel"><CallPanel /></E>} />
               <Route path="meeting-offer" element={<E name="MeetingOffer"><MeetingOffer /></E>} />
               <Route path="call-ring" element={<E name="CallRing"><CallRing /></E>} />
+              <Route path="agent-dock" element={<E name="AgentDock"><AgentDock /></E>} />
               <Route path="share-cursors" element={<E name="ShareCursors"><ShareCursors /></E>} />
             </Route>
 

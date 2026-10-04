@@ -178,3 +178,31 @@ export function createFieldUndoGuard(opts: { now: () => number; defer: (fn: () =
     },
   };
 }
+
+/**
+ * A rich editor (TipTap over ProseMirror) that keeps its own history and
+ * edits its DOM itself: select-all+Backspace runs in its keymap and fires no
+ * input event, and its own undo fires none either. TipTap hangs the editor
+ * off its contenteditable as `.editor`. The field guard dates such a field
+ * from the editor's `update` and asks the editor, not the browser, whether
+ * it has a step left.
+ */
+export type RichEditor = {
+  on(event: "update", fn: () => void): unknown;
+  can(): { undo?: () => boolean; redo?: () => boolean };
+};
+
+export function richEditorOf(el: unknown): RichEditor | null {
+  const ed = (el as { editor?: Partial<RichEditor> } | null)?.editor;
+  return ed && typeof ed.on === "function" && typeof ed.can === "function" ? (ed as RichEditor) : null;
+}
+
+/** The editor's own answer to "is there a step left", when it gives one. */
+export function richEditorCanStep(ed: RichEditor, dir: "undo" | "redo"): boolean | undefined {
+  try {
+    const can = ed.can()[dir];
+    return typeof can === "function" ? !!can() : undefined;
+  } catch {
+    return undefined;
+  }
+}

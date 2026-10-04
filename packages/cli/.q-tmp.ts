@@ -1,0 +1,12 @@
+import { ConvexHttpClient } from "convex/browser";
+import { decryptToken, isEncryptedToken } from "/Users/ashot/src/codecast/packages/cli/src/tokenEncryption.ts";
+import { readFileSync } from "fs";
+const cfg = JSON.parse(readFileSync(`${process.env.HOME}/.codecast/config.json`, "utf8"));
+const token = isEncryptedToken(cfg.auth_token) ? decryptToken(cfg.auth_token) : cfg.auth_token;
+const c = new ConvexHttpClient("https://convex.codecast.sh");
+const [fn, argsJson] = process.argv.slice(2);
+const args = { api_token: token, ...JSON.parse(argsJson || "{}") };
+const kind = fn.startsWith("m:") ? "mutation" : "query";
+const name = fn.replace(/^m:/, "");
+const r = kind === "mutation" ? await (c as any).mutation(name, args) : await (c as any).query(name, args);
+console.log(JSON.stringify(r, null, 1));

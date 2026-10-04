@@ -5,6 +5,8 @@
 import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { MAX_TASK_DEPTH, isCountableSubtask, taskDepth, wouldCreateTaskCycle } from "@codecast/shared/tasks";
 import { undoGroup } from "@platform/engine";
+import { counted, undoAsOne } from "../store/undo/labels";
+import { taskEditLabel } from "../store/undo/policies/work";
 
 // This module is shared by web AND mobile (which has no sonner), so it can't
 // import a toast lib. Surfaces that want a toast on a create refusal pass a
@@ -50,6 +52,29 @@ export function closeTaskWithGuard(
   }
   s.updateTask(shortId, { status, ...(statusId !== undefined ? { status_id: statusId } : {}), subtask_resolution: resolution });
   return { needsConfirm: false };
+}
+
+/**
+ * Write the same fields to several tasks as one undo, named for what changed
+ * ("Moved 3 tasks to Done", "Assigned 3 tasks to Sam"): the context menu and
+ * the palette both land here. A terminal status goes through the close
+ * gateway; returns whether any close waits on its dialog.
+ */
+export function updateTasksAsOne(shortIds: string[], fields: Record<string, any>): { needsConfirm: boolean } {
+  const closing = fields.status === "done" || fields.status === "dropped";
+  const label = (entries: unknown[]) => {
+    const s = useInboxStore.getState();
+    const first = (Object.values(s.tasks) as TaskItem[]).find((t) => t.short_id === shortIds[0]);
+    return taskEditLabel(s, first, counted(entries.length, "task"), fields);
+  };
+  return undoAsOne(label, () => {
+    let needsConfirm = false;
+    for (const id of shortIds) {
+      if (closing) needsConfirm = closeTaskWithGuard(id, fields.status, undefined, fields.status_id).needsConfirm || needsConfirm;
+      else useInboxStore.getState().updateTask(id, fields);
+    }
+    return { needsConfirm };
+  });
 }
 
 /**

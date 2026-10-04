@@ -10,6 +10,8 @@ only after a server round trip.
 
 ## Design
 
+![The host window holds the Web Lock, mounts the global feeders, writes every patch to IndexedDB and broadcasts rows to follower windows over a BroadcastChannel; followers send hello and mut back and dispatch their own writes to Convex](../diagrams/sync-host.svg)
+
 Exactly one window per origin is the **sync host**. Every other window is a
 **follower**. Both run the same store, the same components, the same actions.
 
@@ -20,9 +22,11 @@ The host:
 - broadcasts every change to replicated keys over a `BroadcastChannel`.
 
 A follower:
-- skips every global feeder (gated at `useQueryNoThrow` via `REGISTERED_FEEDS`
-  plus the replication classification, see below);
-- does not wire `_setIDBWrite` (the host is the single state writer);
+- skips every global feeder (they mount inside `HostFeeders` in
+  `DashboardLayout`, or gate on `useIsSyncHost()`, both reading `syncRole`);
+- wires `_setIDBWrite` to persist only its per-window `local` keys
+  (`followerPersistencePatches`); the host is the single writer of the
+  shared state tables;
 - applies the host's broadcasts through `syncTable`, so its own pending
   protection and no-op bails behave exactly as if the rows came from Convex.
   The one difference is the overlay facts on a sessions row: a follower
@@ -49,10 +53,11 @@ ephemeral by house rule.
 
 ## What replicates
 
-The classification lives in `clientSyncRegistry.ts` as a per-entry
-`replication` field with a derived default:
+The classification lives in `clientSyncRegistry.ts` as
+`REPLICATION_CLASSIFICATION`, a `Record` over every registry key whose value
+is `"shared"` or `"local"`:
 
-- **replicated** (server-backed keys): everything with `feeds`, a
+- **shared** (server-backed keys): everything with `feeds`, a
   `dispatchTable`/`dispatchFieldTable`, or a `sync` entry, plus explicitly
   marked server-fed keys without registered feeds (`currentUser`, `teams`, …).
 - **local** (per-window state that only rides IDB for boot): `pending`,
@@ -60,8 +65,9 @@ The classification lives in `clientSyncRegistry.ts` as a per-entry
   it is the record of THIS window's unacknowledged writes.
 
 Everything not in the registry (component state, `messages`, view pointers) was
-never shared and stays per-window. A snapshot guard test pins the
-classification so a new key is classified consciously.
+never shared and stays per-window. The `Record` type makes an unclassified
+new key a compile error, and `syncReplication.test.ts` pins the classified set
+to the registry, so every key is classified consciously.
 
 ## Protocol
 
@@ -125,7 +131,10 @@ host, release on window death promotes the next in line. Web Locks and
 BroadcastChannel are both per-origin and shared across Electron windows of one
 session partition, so desktop and multi-tab web use the same mechanism.
 Windows that do not mount the full shell (palette, people) never request the
-lock; they are followers only. Where the Locks API is missing (React Native,
+lock: they follow a living host, and run solo (feeders on, own write-through)
+when no host has answered for 8 seconds (`SOLO_FALLBACK_MS`), as any follower
+does. Every window boots as host and demotes only when a host's snapshot
+lands. Where the Locks API is missing (React Native,
 SSR, old engines) the window is host with no transport, which is today's behavior.
 
 Both names carry the account the window acts for (the principal the stored
@@ -185,7 +194,7 @@ follower's optimistic write appears in other windows before the echo.
 3. `pending` never crosses the wire.
 4. Replicated updates enter a follower only through `syncTable`/row apply, so
    local pending protection always wins until the value echoes.
-5. The classification snapshot test fails on any unclassified registry key.
+5. An unclassified registry key fails to compile and fails `syncReplication.test.ts`.
 6. No window renders, persists or dispatches for an account after the stored
    JWT stopped naming it; no row of one account is ever served to another.
 

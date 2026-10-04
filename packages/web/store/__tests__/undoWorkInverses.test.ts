@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { _resetUndoStacks, getUndoHistory, performRedo, performUndo, undoEntry } from "@platform/engine";
+import { targetDayStamp } from "@codecast/shared/time";
 import { useInboxStore } from "../inboxStore";
 
 // Each work spec with an inverse names its server half explicitly. These
@@ -321,6 +322,31 @@ describe("initiatives owned by a role", () => {
   });
 });
 
+// The target date is a bare <input type="date">: typing a year fires one
+// change per digit (0002, 0020, 0202, 2028). Those are one gesture, one entry,
+// undone by one press back to the date it had.
+describe("an initiative's target date typed in", () => {
+  const INIT = "in_1";
+  const day = (d: string) => targetDayStamp(d)!;
+  it("coalesces the per-keystroke writes into one named entry", () => {
+    const T0 = day("2027-01-01");
+    useInboxStore.setState({
+      initiatives: { [INIT]: { _id: INIT, short_id: "in-1", title: "Win", status: "active", project_ids: [], updated_at: 1, target_date: T0 } },
+      orgTree: null,
+      orgIntents: [],
+    } as any);
+    for (const d of ["0002-01-01", "0020-01-01", "0202-01-01", "2028-01-01"]) s().updateInitiative(INIT, { target_date: day(d) });
+    const items = getUndoHistory().items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.label).toBe("Set the target of “Win” to 2028-01-01");
+    calls = [];
+    expect(performUndo()).toBe(true);
+    expect(calls).toEqual([["updateInitiative", [INIT, { target_date: T0 }]]]);
+    s().updateInitiative(INIT, { target_date: null });
+    expect(label()).toBe("Cleared the target of “Win”");
+  });
+});
+
 describe("bookmarks, saved views, comments", () => {
   it("toggleBookmark is undone by the same toggle", () => {
     useInboxStore.setState({ bookmarks: [] } as any);
@@ -448,6 +474,39 @@ describe("triggers", () => {
     expect(undoOf(() => s().setTriggerInterval(TR, 7_200_000))).toEqual([["setTriggerInterval", [TR, 3_600_000]]]);
     expect(label()).toBe("Set “Nightly digest” to every 2h");
     expect(s().agentTasks[TR].interval_ms).toBe(3_600_000);
+  });
+
+  // The triggers page's edit form: one gesture over prompt, title and
+  // schedule, undone by sending the prior values back through the same verb.
+  it("editTrigger goes back to the prior prompt, title and cadence", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Nightly digest", prompt: "digest", mode: "propose", agent_type: "claude", status: "scheduled", schedule_type: "recurring", interval_ms: 3_600_000, run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    const undo = undoOf(() => s().editTrigger(TR, { prompt: "digest v2", title: "Digest", mode: "propose", agent_type: "claude", project_path: "", schedule_type: "recurring", interval_ms: 7_200_000, run_at: 99 }));
+    expect(undo).toEqual([["editTrigger", [TR, { prompt: "digest", title: "Nightly digest", mode: "propose", agent_type: "claude", project_path: "", schedule_type: "recurring", interval_ms: 3_600_000 }]]]);
+    expect(label()).toBe("Edited “Nightly digest”");
+    expect(s().agentTasks[TR]).toMatchObject({ prompt: "digest", title: "Nightly digest", interval_ms: 3_600_000 });
+  });
+
+  it("editTrigger from recurring to an event goes back to the cadence", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Watch", prompt: "p", status: "paused", schedule_type: "recurring", interval_ms: 3_600_000, run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    const undo = undoOf(() => s().editTrigger(TR, { schedule_type: "event", event_filter: { event: "push" } }));
+    expect(undo).toEqual([["editTrigger", [TR, { schedule_type: "recurring", interval_ms: 3_600_000 }]]]);
+    expect(s().agentTasks[TR].schedule_type).toBe("recurring");
+  });
+
+  it("editTrigger on a trigger that already ran is refused before any write", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Once", prompt: "p", status: "completed", schedule_type: "once", run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    expect(s().editTrigger(TR, { prompt: "q" })).toBe(false);
+    expect(s().agentTasks[TR].prompt).toBe("p");
+    expect(getUndoHistory().items).toHaveLength(0);
   });
 });
 

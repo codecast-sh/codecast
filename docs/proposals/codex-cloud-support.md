@@ -1,5 +1,8 @@
 # Full Codex Cloud support in codecast
 
+> **Status (2026-10-04):** Shipped under pl-798, except OpenAI's new VM environments (ct-56164). Code in `packages/cli/src/cloudAgents/` (`codex.ts`, `openaiAgents.ts`, shared core with `cursor.ts`).
+> What landed and how it was verified is in `docs/proposals/codex-cloud-implementation-report.md`.
+
 *Proposal, 2026-09-29. Research: OpenAI docs and changelog, the `openai/codex` source at `94d642d8b40e` (release `rust-v0.159.1`), the chatgpt.com web client, community clients, and live read-only calls on Ashot's Pro account.*
 
 ## The short version

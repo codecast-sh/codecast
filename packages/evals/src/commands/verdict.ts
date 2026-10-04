@@ -154,11 +154,17 @@ export function pooledRuns<R extends VerdictRun>(history: R[], batch: string, ca
 export function verdictFlips(current: VerdictRun[], previous: VerdictRun[]): VerdictFlip[] {
   const now = majority(current);
   const before = majority(previous);
-  const ids = (runs: VerdictRun[], freezeId: string) => runs.filter((r) => (r.freezeId ?? '') === freezeId).map((r) => r.id);
+  // The reps that agree with their side's verdict come first, so a page that
+  // shows one rep per side (the flip's links, its prompt diff) shows the flip
+  // itself, never the dissenting rep of a 2-to-1 majority.
+  const ids = (runs: VerdictRun[], freezeId: string, passes: boolean) => {
+    const mine = runs.filter((r) => (r.freezeId ?? '') === freezeId);
+    return [...mine.filter((r) => repPassed(r) === passes), ...mine.filter((r) => repPassed(r) !== passes)].map((r) => r.id);
+  };
   return [...now].flatMap(([freezeId, passes]) => {
     if (!before.has(freezeId) || before.get(freezeId) === passes) return [];
     const rep = current.find((r) => (r.freezeId ?? '') === freezeId);
-    return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction: passes ? 'fixed' : 'broke', before: ids(previous, freezeId), after: ids(current, freezeId) } satisfies VerdictFlip];
+    return [{ freezeId, name: rep?.freezeName ?? freezeId, visibility: rep?.visibility ?? 'private', direction: passes ? 'fixed' : 'broke', before: ids(previous, freezeId, !passes), after: ids(current, freezeId, passes) } satisfies VerdictFlip];
   });
 }
 
