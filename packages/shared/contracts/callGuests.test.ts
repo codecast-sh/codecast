@@ -8,6 +8,10 @@ import {
   isRoomMachineryKind,
   guestNoticeLines,
   guestNoticeSentence,
+  noticeNews,
+  noticeWidened,
+  participantMark,
+  PARTICIPANT_MARKS,
   callSpeakerName,
   guestDisplayName,
   guestIdFromIdentity,
@@ -147,6 +151,41 @@ describe("the notice a guest's consent rests on", () => {
     expect(guestNoticeSentence({ recording: true, transcribed: true })).toBe("This call is recorded and transcribed.");
     expect(guestNoticeSentence({ recording: false, transcribed: true })).toBe("This call is transcribed.");
     expect(guestNoticeSentence({ recording: false, transcribed: false })).toBe("");
+  });
+});
+
+describe("what the room keeps beyond what a guest agreed to", () => {
+  const none = { recording: false, transcribed: false };
+  test("nothing is news before they agreed to anything", () => {
+    expect(noticeNews(null, { recording: true, transcribed: true })).toEqual({ rec: false, words: false });
+    expect(noticeWidened(undefined, { recording: true, transcribed: true, video_public: true })).toBe(false);
+  });
+
+  test("a recording or a transcript started since is news, row by row", () => {
+    expect(noticeNews(none, { recording: true, transcribed: false })).toEqual({ rec: true, words: false });
+    expect(noticeNews(none, { recording: false, transcribed: true })).toEqual({ rec: false, words: true });
+    expect(noticeWidened({ recording: true, transcribed: true }, { recording: true, transcribed: true })).toBe(false);
+    // Something that stopped is less, never more.
+    expect(noticeWidened({ recording: true, transcribed: true }, none)).toBe(false);
+  });
+
+  test("a recording going to the public link is news even to someone told of the recording", () => {
+    const told = { recording: true, transcribed: false };
+    expect(noticeNews(told, { recording: true, transcribed: false, video_public: true })).toEqual({ rec: true, words: false });
+    expect(noticeWidened({ ...told, video_public: true }, { recording: true, transcribed: false, video_public: true })).toBe(false);
+    // Public with nothing recording keeps nothing.
+    expect(noticeWidened(none, { recording: false, transcribed: false, video_public: true })).toBe(false);
+  });
+});
+
+describe("the mark a participant wears", () => {
+  test("agents by identity, guests by identity or a stored line's name, teammates none", () => {
+    expect(participantMark(agentFaceIdentity("conv1"), "Fig")).toBe(PARTICIPANT_MARKS.agent);
+    expect(participantMark(guestIdentity("g1"), "Riley")).toBe(PARTICIPANT_MARKS.guest);
+    expect(participantMark(null, "Riley Harness (guest)")).toBe(PARTICIPANT_MARKS.guest);
+    expect(participantMark("user123", "Ashot")).toBeNull();
+    // A guest who typed an agent's name is still a guest.
+    expect(participantMark(guestIdentity("g2"), "Fig")?.word).toBe("guest");
   });
 });
 

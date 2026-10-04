@@ -126,6 +126,17 @@ describe("the notice before joining", () => {
     expect(notice(true, true)).toContain("being recorded, video and screen shares included");
     expect(notice(false, false)).toContain("not being transcribed or recorded");
   });
+
+  test("a recording whose video goes to the public link says so, and marks it new to someone told only of the recording", () => {
+    const pub = (since?: { recording: boolean; transcribed: boolean; video_public?: boolean }) =>
+      text(renderToStaticMarkup(<CallNotice transcribed={false} recording videoPublic since={since} />));
+    expect(pub()).toContain("anyone with that link can watch it");
+    expect(pub({ recording: true, transcribed: false })).toContain("Now shared by public link.");
+    expect(pub({ recording: false, transcribed: false })).toContain("Started while you waited.");
+    expect(pub({ recording: true, transcribed: false, video_public: true })).not.toContain("Now shared");
+    // Public says nothing while nothing is recorded.
+    expect(text(renderToStaticMarkup(<CallNotice transcribed recording={false} videoPublic />))).not.toContain("public link");
+  });
 });
 
 describe("the lobby and the door", () => {
@@ -160,6 +171,7 @@ describe("the lobby and the door", () => {
         live
         transcribed
         recording={false}
+        videoPublic={false}
         name="Ada"
         onName={() => {}}
         onAsk={() => {}}
@@ -284,6 +296,21 @@ describe("the lobby and the door", () => {
     expect(r).toContain("Join, recorded");
     expect(r).toContain("Leave");
     expect(r).not.toContain("Don't join");
+  });
+
+  test("the lobby says the video goes to the public link, and a link made public since widens the join", () => {
+    expect(text(lobby("ask", { recording: true, videoPublic: true }))).toContain("anyone with that link can watch it");
+    const r = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true } }));
+    expect(r).toContain("Now shared by public link.");
+    expect(r).toContain("Join, recorded");
+    const same = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true, video_public: true } }));
+    expect(same).toContain("Join the call");
+  });
+
+  test("on a phone the press sits under the notice whenever there is something to agree to", () => {
+    expect(lobby("ask")).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { recording: true, accepted: { recording: false, transcribed: true } })).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { accepted: { recording: false, transcribed: true } })).toContain("max-sm:sticky");
   });
 
   test("a signed-in browser is pointed at the app, to join as themselves", () => {

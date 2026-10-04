@@ -9,6 +9,8 @@ numbered sections below (C1, C2, ...).
 
 ## The model
 
+![One shared module, inboxProjection.ts, runs on the server inside sessionsLiveness and on the replica inside placeInboxRows at the same epoch; inboxDigestCompare checks the replica's placement against the server's stamps and digest, and persistent drift spends a bounded heal through getInboxSessionsByIds or an overlay probe](../diagrams/sync-convergence.svg)
+
 Every client with a replica (web, desktop, mobile) is a local first database. The server
 database is canonical; each client's store holds a replicated subset. Bucket counts and
 lists are VIEWS computed locally, on the client, from the replica. Convergence needs
@@ -210,7 +212,7 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
   the fold differently are diverged, and the digest must say so. A property test
   asserts a fold flip with unchanged buckets changes the digest.
 - `computeBucketStale`: the time flip stamp (C2).
-- `INBOX_PROJECTION_VERSION = 3`, carried as `v` in every projection envelope. Golden
+- `INBOX_PROJECTION_VERSION` (17 on 2026-10-04), carried as `v` in every projection envelope. Golden
   fixtures (input rows to expected buckets, fold, and digest) are pinned in the shared
   package tests, and a second assertion ties the fixture hash to the version constant:
   a behavior change fails the fixtures, and updating the fixtures without bumping the

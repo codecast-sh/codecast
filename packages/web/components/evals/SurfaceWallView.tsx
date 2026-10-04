@@ -21,7 +21,7 @@ import { DAY_MS, dayList, dayStart, linear } from "./charts/scale";
 import { ScoreStrip } from "./charts/ScoreStrip";
 import { evalsHref } from "./evalsPaths";
 import { WhatMoved } from "./WhatMoved";
-import { bisectStatusWord, isBisectLive, isBisectStalled } from "./bisectModel";
+import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
 import { EvalsLink, SeparationMark, VerdictGlyph, baselineWords, newestBaseline, pLabel, plural, separationTitle, shortModel, shortSha, usd } from "./parts";
 import "./wall.css";
@@ -308,7 +308,7 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
         <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(b.startedAt), now).replace(" ago", "")}</span>
       </span>
       <span className="ev-wall-ribbon-range ev-mono">
-        {shortSha(b.good)} .. {shortSha(b.bad)}
+        {endpointLabel(b.good)} to {endpointLabel(b.bad)}
       </span>
       <span className="ev-wall-ribbon-budget" title={`${usd(b.spentUsd)} of a ${usd(b.budgetUsd)} budget`}>
         <span className="ev-wall-ribbon-track">

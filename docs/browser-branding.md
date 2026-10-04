@@ -12,7 +12,7 @@ Copies live under `~/.codecast/browser/applications`, or the corresponding direc
 
 The copied application passes full code signature validation and macOS launch assessment before use. Preparation or assessment failure falls back to installed Chrome with an explanation. Cast does not disable Gatekeeper, remove quarantine or change Google's signed resources.
 
-Agent launches disable Chrome's updater scheduler; the installed Chrome remains responsible for updates. Cast registers the original application after its copy to preserve normal Chrome routing. Existing agent sessions continue running until their usual restart.
+Launches of the branded copy disable Chrome's updater scheduler; the installed Chrome remains responsible for updates. Cast registers the original application after its copy to preserve normal Chrome routing. Existing agent sessions continue running until their usual restart.
 
 Headless launches, explicit `CODECAST_CHROMIUM` overrides, other Chrome channels, Linux and Windows keep their existing appearance and launch behavior.
 

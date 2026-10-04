@@ -3,6 +3,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../lib/mentionItem";
 import { memberHandle } from "@codecast/shared/chat";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
@@ -161,9 +162,11 @@ export function channelMentionItems(s: {
 
 // The one predicate every mention surface filters by: a query hits an item
 // through its label, its sublabel (handle, path, project), its short id, or a
-// session's idle summary. Empty query matches everything.
+// session's idle summary. Empty query matches everything but closed tasks.
 export function mentionItemMatches(m: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
+  // A closed task is history: it answers only to its short id.
+  if (m.type === "task" && isTerminalTaskStatus(m.status)) return !!q && !!m.shortId && m.shortId.toLowerCase().includes(q);
   if (!q) return true;
   // A personified session answers to its NAME as well as its title: the
   // dropdown shows "Dune", so typing "dune" has to find it (session-characters

@@ -9,6 +9,8 @@ import { sessionPanePath, stageNavigateLeaf } from "./stage";
 import { leavesOf } from "../store/stageSplit";
 import { useInboxStore } from "../store/inboxStore";
 import { useTabContext } from "./tabParams";
+import { sessionLiveAt } from "./liveness";
+import { useCoarseNow } from "../hooks/useCoarseNow";
 
 export function taskFacePath(task: { _id: string; short_id?: string | null }): string {
   return `/tasks/${task.short_id || task._id}`;
@@ -35,4 +37,24 @@ export function useLeafShowing(path: string): string | null {
 /** Is the session's own page a pane of this tab's stage. */
 export function useSessionOnScreen(sessionId: string): boolean {
   return useLeafShowing(sessionPanePath(sessionId)) !== null;
+}
+
+// How recently a session must have moved to count as working when its daemon
+// is not heartbeating: the server's own rule (convex lib/taskOwner.ts
+// isSessionWorking), so the composer's promise and the relay agree.
+const RECENT_ACTIVITY_MS = 15 * 60 * 1000;
+
+/** The task's owning session when it is working, so a comment composer can
+ *  say the comment will reach it (convex tasks.ts deliverCommentToOwner
+ *  relays a person's comment). Wakes on whether it works and on its
+ *  identity, never on heartbeat churn. Null otherwise. */
+export function useWorkingOwner(ownerSessionId: string | null | undefined): Record<string, any> | null {
+  const now = useCoarseNow(30_000);
+  const sig = useInboxStore((s) => {
+    const r: any = ownerSessionId ? s.sessions[ownerSessionId] : null;
+    if (!r || r.status === "completed" || r.inbox_killed_at) return "";
+    const working = sessionLiveAt(r, now) || now - (r.updated_at ?? 0) < RECENT_ACTIVITY_MS;
+    return working ? `${r.title}|${r.character_name}|${r.character_avatar}|${r.agent_type}` : "";
+  });
+  return sig && ownerSessionId ? (useInboxStore.getState().sessions[ownerSessionId] as any) : null;
 }

@@ -2088,7 +2088,10 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch {}
+    } catch (err) {
+      // Unrecorded, the row stays "preparing" and the heartbeat re-issues the spawn forever.
+      throw new Error(`placement failure not recorded: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

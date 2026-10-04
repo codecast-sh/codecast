@@ -26,6 +26,7 @@ import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import "./changeCard.css";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The change card (docs/architecture/the-line-end-to-end.md LE10, LE11) drawn
 // natively, one component for every surface that shows a decision about a
@@ -652,7 +653,8 @@ export function cardAnswerIndexes(decision: Pick<SessionDecisionItem, "card" | "
 }
 
 /**
- * Whether a window key may reach answer controls: no modifier, no modal, and,
+ * Whether a window key may reach answer controls: no modifier, no modal, no
+ * focus in another region that owns its keys, and,
  * when the surface scoped its keys, focus inside that surface. A card that
  * shares a window with a transcript answers only while it is the thing in
  * focus, so a digit typed anywhere else never answers it.
@@ -662,8 +664,11 @@ export function answerKeyAllowed(e: KeyboardEvent, scope?: RefObject<HTMLElement
   // Shift and a digit belongs to the page (the line jumps stations with it),
   // even on a layout where that chord still reports a bare digit.
   if (e.shiftKey && /^(Digit|Numpad)\d$/.test(e.code)) return false;
+  // A focused region that owns its keys (the undo timeline) keeps them, scoped
+  // surface or not: its Enter, digits and x are never an answer.
+  const root = scope?.current ?? null;
+  if (keysOwnedElsewhere(e.target, root)) return false;
   if (!scope) return true;
-  const root = scope.current;
   return !!root && root.contains(document.activeElement);
 }
 

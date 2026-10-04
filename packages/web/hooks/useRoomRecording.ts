@@ -11,11 +11,11 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useNowWhen } from "./useCoarseNow";
 import { subscribeWalkie, walkieCallState } from "../lib/calls/walkie";
 import { syncTransaction } from "../store/syncTransaction";
-import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
-import { abandonRecordingPress } from "../lib/calls/recordingPress";
+import { isRefusedDispatchError } from "../store/mutativeMiddleware";
+import { pressRoomRecording, recordingMarkStatus, useRoomRecordingPress } from "../lib/calls/recordingPress";
 import { roomRecordingLive, roomRecordingOn, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
+import { keepCallFrames } from "../lib/calls/momentFrames";
 export { roomRecordingFields, roomRecordingLive, roomRecordingOn, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
-export { useRoomRecordingEnded, type RoomRecordingEnd } from "../lib/calls/roomRecordingEnd";
 
 // A huddle's video recording, as the room's people see it (convex
 // callRecordings).
@@ -93,115 +93,12 @@ export function useRoomRecordingMark(roomKey: string | null | undefined): {
 }
 
 // ── Pressing ─────────────────────────────────────────────────────────────
-//
-// The row's recording fields are the server's, not the presser's: a run can
-// start and end between two pushes (LiveKit refuses it, somebody stops it a
-// moment later), so the store paints the press at once and takes the server's
-// word on every push (callRooms.unprotectedFields; a field lock would wait
-// forever for a value the server may never send). What carries the press
-// across the round trip is the press itself, in flight: this window's own
-// Record or Stop, from the tap until the server has answered it. It is the
-// dispatch's own state, not a copy of the row, and never outlives the
-// dispatch.
 
-type Press = { on: boolean; at: number };
-const presses = new Map<string, Press>();
-const pressListeners = new Set<() => void>();
-const notePress = (roomKey: string, press: Press | null) => {
-  if (press === null) presses.delete(roomKey);
-  else presses.set(roomKey, press);
-  pressListeners.forEach((fn) => fn());
-};
-const subscribePresses = (fn: () => void) => {
-  pressListeners.add(fn);
-  return () => void pressListeners.delete(fn);
-};
-
-// The run this window's last Record press made in each room (the press's
-// answer, startRecording's recording_id). A run LiveKit refuses can begin and
-// fail between two pushes, so the room's row may never show it live; the
-// presser is still told why, by matching the room's end to this run
-// (useRecordingNotices).
-const pressedRuns = new Map<string, string>();
-
-/** The run this window's last Record press in the room made, if any. */
-export function pressedRunOf(roomKey: string): string | null {
-  return pressedRuns.get(roomKey) ?? null;
-}
-
-/** Note the run a press made (exported for the hook's test). */
-export function notePressedRun(roomKey: string, runId: string): void {
-  pressedRuns.set(roomKey, runId);
-}
-
-/** This window's press on the room still in flight: true for Record, false
- *  for Stop, null when there is none. */
-export function useRoomRecordingPress(roomKey: string | null | undefined): boolean | null {
-  const read = () => (roomKey ? (presses.get(roomKey)?.on ?? null) : null);
-  return useSyncExternalStore(subscribePresses, read, read);
-}
-
-/** Press Record or Stop for the whole room. The mark moves at once (store
- *  setRoomRecording) and holds while the press is in flight. A press that
- *  does not land is undone and said, whatever stopped it: the server refused
- *  it (with its reason), or it could not be reached (the queued copy is then
- *  abandoned, so it cannot start filming the room after the person was told
- *  it had not). Only a press parked for the next dispatch binding (boot, a
- *  hot reload) is left standing: it goes out in a moment, and is refused as
- *  stale if it does not (lib/calls/recordingPress).
- *
- *  One press per room at a time: a second press while the first is in flight
- *  is dropped, from whichever surface it came (the button, the mark, the
- *  notice), so two answers can never cross. */
+/** Press Record or Stop for the whole room, from any web surface (the
+ *  shared press, lib/calls/recordingPress): a press that does not land is
+ *  said in a toast. */
 export function setRoomRecording(roomKey: string, on: boolean): Promise<void> {
-  if (presses.has(roomKey)) return Promise.resolve();
-  const press: Press = { on, at: Date.now() };
-  notePress(roomKey, press);
-  return useInboxStore
-    .getState()
-    .setRoomRecording(roomKey, on, press.at)
-    .then(
-      (res: unknown) => {
-        const made = on && res && typeof res === "object" ? (res as { recording_id?: unknown; existing?: unknown }) : null;
-        if (made && typeof made.recording_id === "string" && !made.existing) notePressedRun(roomKey, made.recording_id);
-      },
-      (err: unknown) => {
-        if (isParkedDispatchError(err)) return;
-        const refused = isRefusedDispatchError(err);
-        if (!refused) abandonRecordingPress(press.at);
-        useInboxStore.getState().undoRoomRecordingPress(roomKey, on);
-        toast.error(
-          refused
-            ? humanizeConvexError(err)
-            : on
-              ? "Could not reach the server. Recording did not start."
-              : "Could not reach the server. The recording is still running.",
-        );
-      },
-    )
-    .finally(() => {
-      // Only the press this call made: never one made since.
-      if (presses.get(roomKey) === press) notePress(roomKey, null);
-    });
-}
-
-/**
- * What the red mark says, from what a window knows: its own press in flight,
- * and the room's row (the flag, and the run behind it when the server sends
- * one). A press in flight decides; then the run, whenever the row carries
- * it; and the flag alone only on a server too old to send the run. Null: no
- * mark.
- */
-export function recordingMarkStatus(input: {
-  press: boolean | null;
-  flag: boolean;
-  live: RoomRecordingLive | null | undefined;
-}): RoomRecordingLive["status"] | null {
-  const { press, flag, live } = input;
-  if (press === true) return live?.status === "recording" ? "recording" : "starting";
-  if (press === false) return live ? "stopping" : null;
-  if (live !== undefined) return live?.status ?? null;
-  return flag ? "recording" : null;
+  return pressRoomRecording(roomKey, on, (message) => toast.error(message));
 }
 
 // ── The first-press confirmation ─────────────────────────────────────────
@@ -371,6 +268,8 @@ function applyCallRecordings(data: CallRecordings | null | undefined): void {
   const st = useInboxStore.getState() as any;
   const rows = data.recordings.map((r) => ({ ...r, transcript_id: data.transcript_id }));
   const present = rows.map((r) => r._id);
+  // A file gone from the call (a run deleted) takes its kept frames with it.
+  keepCallFrames(data.transcript_id, new Set(present));
   const released = releasedRecordingTombstones(st.pending ?? {}, data.transcript_id, present, seenFiles);
   const seen = seenFiles.get(data.transcript_id) ?? new Set<string>();
   for (const id of present) seen.add(id);
@@ -397,6 +296,9 @@ function applyCallRecordings(data: CallRecordings | null | undefined): void {
  *  Keyed by the full id every caller asks under, the id the facts row and
  *  the files' transcript_id carry. */
 export function forgetCallRecordings(call: string): void {
+  // The pictures kept of its moments go too (lib/calls/momentFrames), even
+  // when the store held nothing of the call.
+  keepCallFrames(call);
   const st = useInboxStore.getState() as any;
   if (!callFactsOf(st, call) && !Object.values(st.callRecordings ?? {}).some((r: any) => r.transcript_id === call)) return;
   seenFiles.delete(call);

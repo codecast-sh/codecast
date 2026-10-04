@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
-import { codePasteSignInUrl, pairDeliveryAcks } from "@codecast/shared/contracts";
+import { codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
@@ -359,7 +360,7 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
+import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
@@ -3863,13 +3864,32 @@ async function startUtilityPane(name: string, command: string): Promise<void> {
  * machine with no browser of its own (a cloud host) cannot finish that sign-in,
  * so the dialog says how to sign in there instead.
  */
-async function runCloudAgentLogin({ argv, headlessArgv, missing }: CloudAgentLoginCommand): Promise<void> {
+async function runCloudAgentLogin({ argv, headlessArgv, missing, deviceCode }: CloudAgentLoginCommand): Promise<CloudAgentDeviceCode | void> {
   // A CLI that is not there would die in the pane, and the dialog would wait out its whole sign-in for nothing.
   if (!whichBin(argv[0], agentSpawnPath())) throw new Error(missing);
+  const pane = `${argv[0]}-login-flow`;
+  // The person is on another device, or this machine has no browser: the
+  // headless sign-in prints a page and a code that finish it anywhere.
+  if (headlessArgv && (deviceCode || isRemoteDevice())) {
+    await startUtilityPane(pane, agentLoginPaneCommand(headlessArgv.map(shellEscapeForSh).join(" ")));
+    log(`[LOGIN-FLOW] started \`${headlessArgv.join(" ")}\` (tmux ${pane})`);
+    const deadline = Date.now() + 30_000;
+    let text = "";
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        text = (await tmuxExec(["capture-pane", "-p", "-J", "-t", pane], { timeout: 3000 })).stdout;
+      } catch {
+        break;
+      }
+      const prompt = deviceCodePrompt(text);
+      if (prompt) return prompt;
+    }
+    throw new Error(summarizeLoginPaneTail(text) ?? `${headlessArgv.join(" ")} printed no sign-in code`);
+  }
   if (isRemoteDevice()) {
     throw new Error(`${deviceLabel()} has no browser to finish the sign-in. In a terminal there, run this, then open the link it prints on any device: ${(headlessArgv ?? argv).join(" ")}`);
   }
-  const pane = `${argv[0]}-login-flow`;
   await startUtilityPane(pane, agentLoginPaneCommand(argv.map(shellEscapeForSh).join(" ")));
   log(`[LOGIN-FLOW] started \`${argv.join(" ")}\` (tmux ${pane})`);
 }
@@ -8036,7 +8056,7 @@ async function executeRemoteCommand(
           // A context over the cap names what would have to stay behind; the
           // banner asks the human whether to leave it out.
           const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
-          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
+          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch((err) => log(`[CLOUD] ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`, "warn"));
         }
         break;
       }
@@ -8256,11 +8276,12 @@ async function executeRemoteCommand(
         // provider whose it is; "start" runs the provider's own sign-in in a
         // utility pane (it opens the browser here) and returns at once, and
         // the dialog checks until it lands. No token leaves the machine.
-        const { provider, op } = (commandArgs ? JSON.parse(commandArgs) : {}) as { provider?: string; op?: string };
+        const { provider, op, device_code } = (commandArgs ? JSON.parse(commandArgs) : {}) as { provider?: string; op?: string; device_code?: boolean };
         if (!provider || (op !== "check" && op !== "start")) { error = "cloud_agent_login needs a provider and op check|start"; break; }
         if (op === "start") {
-          await cloudAgents.startLogin(provider);
-          result = JSON.stringify({ state: "started" });
+          // A device-code start answers the page (url) and the code (detail) to finish it on any device.
+          const prompt = await cloudAgents.startLogin(provider, { deviceCode: device_code === true });
+          result = JSON.stringify({ state: "started", ...(prompt ? { url: prompt.url, detail: prompt.code } : {}) });
         } else {
           result = JSON.stringify(await cloudAgents.checkLogin(provider));
         }
@@ -17634,7 +17655,7 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
+type TmuxInjectionOptions = { readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -17739,10 +17760,32 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // -p` only emits the markers for a program that asked for the mode) — see
   // prepareInjectedContent and the bracketedPaste capability.
   const sanitized = prepareInjectedContent(content, { bracketed });
+  const receiptJournal = opts?.delivery ? opts.journal ?? tmuxDeliveryJournal() : null;
+  const receipt = opts?.delivery ? receiptJournal!.get(opts.delivery.messageId) : null;
+  if (receipt && receipt.phase !== "paste" && receiptSettled(receipt, opts?.receiptSettleMs)) {
+    let transcript: string;
+    try {
+      if (opts?.readTranscript) transcript = await opts.readTranscript();
+      else {
+        const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{@codecast_session_id}"]);
+        const file = stdout.trim() ? await awaitRecentSessionFile(stdout.trim()) : null;
+        if (!file) throw new Error("local transcript not found");
+        transcript = await fs.promises.readFile(file.path, "utf8");
+      }
+    } catch (error) {
+      throw new TmuxDeliveryUncertainError(`cannot reconcile the earlier submit: ${String(error)}`);
+    }
+    if (transcriptContainsDelivery(transcript, agentType ?? "claude", sanitized, receipt.pasteAt)) {
+      receiptJournal!.begin(opts!.delivery!, receipt.generation, sanitized);
+      receiptJournal!.advance(receipt.messageId, "verified");
+      if (syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: receipt.messageId, status: "delivered", deliveredAt: Date.now() });
+      return;
+    }
+  }
   const delivery = opts?.delivery ? await prepareTmuxDelivery(
     target, opts.delivery, tmuxExec,
     async id => syncServiceRef ? pendingMessageFinished(syncServiceRef, id) : false,
-    opts.journal,
+    receiptJournal!,
     { settleMs: opts.receiptSettleMs },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
@@ -19127,6 +19170,7 @@ export function isSupersededAppServerSession(
   live: ReadonlyMap<string, string> = appServerConversations,
   persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
   cache: Record<string, string> | null | undefined = conversationCacheRef,
+  reverse?: Readonly<Record<string, string>>,
 ): boolean {
   if (!conversationId) return false;
   const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
@@ -19135,8 +19179,18 @@ export function isSupersededAppServerSession(
   // conversation cache still aliases the old thread. A different live binding
   // means this id is leftover — its output must not land on the new agent.
   if (!cache) return false;
-  const liveId = findCachedSessionIdForConversation(cache, conversationId);
+  const liveId = reverse ? reverse[conversationId] : findCachedSessionIdForConversation(cache, conversationId);
   return !!liveId && liveId !== sessionId;
+}
+
+export function currentHeartbeatSessions(
+  sessions: Iterable<string> = managedHeartbeatSessions,
+  cache: ConversationCache | null = conversationCacheRef,
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): string[] {
+  const reverse = cache ? buildReverseConversationCache(cache) : {};
+  return [...sessions].filter(id => !isSupersededAppServerSession(id, cache?.[id], live, persisted, cache, reverse));
 }
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
@@ -20265,7 +20319,7 @@ export async function runHeartbeatFlush(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
   retryHibernationStamps();
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = currentHeartbeatSessions();
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -20305,7 +20359,7 @@ export async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = currentHeartbeatSessions();
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition

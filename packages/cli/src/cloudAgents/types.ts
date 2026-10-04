@@ -204,7 +204,10 @@ export interface CloudAgentApplyPlan {
  * cloud host: the person opens the link it prints on any device), `missing`
  * when its CLI is not installed.
  */
-export interface CloudAgentLoginCommand { argv: string[]; headlessArgv?: string[]; missing: string }
+export interface CloudAgentLoginCommand { argv: string[]; headlessArgv?: string[]; missing: string; deviceCode?: boolean }
+
+/** A device-code sign-in in progress: the page to open on any device and the code to enter there. */
+export interface CloudAgentDeviceCode { url: string; code: string }
 
 /** Where a machine's sign-in stands, checked live with the provider (the registry's checkLogin). */
 export interface CloudAgentLoginState {
@@ -229,8 +232,12 @@ export interface CloudAgentLogin<C = unknown> {
   whoami(client: C): Promise<{ account?: string; plan?: string }>;
   /** The account the sign-in on disk names, known without asking the provider. */
   localAccount?(): string | undefined;
-  /** Start the sign-in (it opens the browser on this machine) and return; the check tells when it lands. */
-  start(): Promise<void>;
+  /**
+   * Start the sign-in and return; the check tells when it lands. It opens the
+   * browser on this machine, or with `deviceCode` (the person is on another
+   * device) answers the page and code to finish it anywhere.
+   */
+  start(opts?: { deviceCode?: boolean }): Promise<CloudAgentDeviceCode | void>;
 }
 
 export type AnyCloudAgentAdapter = CloudAgentAdapter<any, any, any>;

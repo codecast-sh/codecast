@@ -45,7 +45,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { CALL_RECORDING_URL_WINDOW_MS, type CallRecordingStopReason, callSpeakerName, guestIdFromIdentity, guestIdentity, isGuestPresent, isRecordingActive, shareIncludesVideo } from "@codecast/shared/contracts";
+import { CALL_RECORDING_URL_WINDOW_MS, type CallRecordingStopReason, callSpeakerName, guestIdFromIdentity, guestIdentity, isGuestPresent, isRecordingActive, isRecordingFilming, shareIncludesVideo } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { authorizeRoom, liveMembers, liveSeat, readRoomState } from "./callRooms";
 import { liveTranscriptFor, postEvent } from "./callChat";
@@ -60,13 +60,12 @@ import {
   callRecordingManifestKey,
   callRecordingsBucketFromEnv,
   CALL_RECORDINGS_ROOT,
+  callRecordingSigner,
   liveFrameKey,
-  PRIVATE_OBJECT_GET_PARAMS,
-  r2FreshGetUrl,
   r2ListKeys,
   r2ListObjects,
   r2Presign,
-  r2StableGetUrl,
+  type CallRecordingSigner,
   type R2Bucket,
 } from "./lib/r2";
 import {
@@ -92,7 +91,10 @@ import {
   deleteFrameShares,
   egressPatch,
   EGRESS_ACCEPT_TIMEOUT_MS,
+  ACTIVE_STATUSES,
   EGRESS_BEGIN_TIMEOUT_MS,
+  EGRESS_BUSY_MESSAGE,
+  type RecordingFailure,
   huddleKeepers,
   LIVE_FRAME_INTERVAL_S,
   liveRoomRun,
@@ -132,7 +134,7 @@ import {
   stopRoomRecording,
   teammateName,
 } from "./lib/callRecordingRuns";
-import { callRecordingStopReasonValidator } from "./lib/callValidators";
+import { callRecordingErrorKindValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 
 type RecordingRow = Doc<"call_recordings">;
 
@@ -352,7 +354,8 @@ export const getRoomRecording = query({
 
 // ── A call's files ────────────────────────────────────────────────────────
 
-type Signer = (key: string) => Promise<{ url: string; expiresAt: number }>;
+/** The object keys a `keys: true` caller is handed beside each file. */
+type FileKeys = { r2_key: string; live_frame_key: string | null };
 
 /** Every file of a call, in the order they were pressed for, with what a
  *  reader needs to align them: the call's own started_at (transcript lines
@@ -363,11 +366,11 @@ type Signer = (key: string) => Promise<{ url: string; expiresAt: number }>;
  *  it ends, so a file still being written has no URL. The caller has already
  *  passed canReadCall. `liveWatch` (with `keys`) says whether the caller may
  *  also have the live frame's key (mayWatchLive). */
-export async function callRecordingsCore(
+export async function callRecordingsCore<K extends boolean = false>(
   ctx: any,
   call: Doc<"transcripts">,
   userId: Id<"users">,
-  opts: { sign?: Signer | null; keys?: boolean; liveWatch?: boolean },
+  opts: { sign?: CallRecordingSigner | null; keys?: K; liveWatch?: boolean },
 ) {
   const rows = await callRows(ctx, call._id);
   const byRun = new Map<string, RecordingRow[]>();
@@ -378,7 +381,7 @@ export async function callRecordingsCore(
   const recordings = [];
   for (const r of rows) {
     const signed = r.status === "ready" && opts.sign ? await opts.sign(r.r2_key) : null;
-    recordings.push({
+    const view = {
       _id: String(r._id),
       run_id: runIdOf(r),
       kind: r.kind,
@@ -398,8 +401,11 @@ export async function callRecordingsCore(
       url_expires_at: signed?.expiresAt ?? null,
       // The button and the mutation ask the same question of the same rows.
       can_delete: mayDeleteRun(String(userId), byRun.get(runIdOf(r)) ?? [r], admin).ok,
-      ...(opts.keys ? { r2_key: r.r2_key, live_frame_key: (opts.liveWatch && r.live_frame_key) || null } : {}),
-    });
+    };
+    // The keys ride only with `keys: true`, and the type says so: a caller
+    // that asked for them reads them without a cast, any other cannot.
+    const keys: FileKeys | null = opts.keys ? { r2_key: r.r2_key, live_frame_key: (opts.liveWatch && r.live_frame_key) || null } : null;
+    recordings.push((keys ? { ...view, ...keys } : view) as typeof view & (K extends true ? FileKeys : unknown));
   }
   return {
     transcript_id: String(call._id),
@@ -477,9 +483,8 @@ export const webCallRecordings = query({
     if (!userId) return null;
     const t = await resolveCallRef(ctx, userId, args.call);
     if (!t) return null;
-    const bucket = callRecordingsBucketFromEnv();
     const at = signingMoment(args.url_window, Date.now());
-    return callRecordingsCore(ctx, t, userId, { sign: bucket ? (key) => r2StableGetUrl(bucket, key, at, CALL_RECORDING_URL_WINDOW_MS, PRIVATE_OBJECT_GET_PARAMS) : null });
+    return callRecordingsCore(ctx, t, userId, { sign: callRecordingSigner({ stable: { at, windowMs: CALL_RECORDING_URL_WINDOW_MS } }) });
   },
 });
 
@@ -505,14 +510,14 @@ export const cliCallRecordings = internalQuery({
  *  watch it live (mayWatchLive; `live_watch` says which). `server_now` lets a
  *  caller on a skewed clock tell "now" from "a moment ago". Keys never leave
  *  the server. */
-export async function signForCli(res: Awaited<ReturnType<typeof callRecordingsCore>>) {
-  const bucket = callRecordingsBucketFromEnv();
+export async function signForCli(res: Awaited<ReturnType<typeof callRecordingsCore<true>>>) {
+  const sign = callRecordingSigner("fresh");
   const now = Date.now();
   const recordings = [];
   for (const r of res.recordings) {
-    const { r2_key, live_frame_key, ...rest } = r as typeof r & { r2_key?: string; live_frame_key?: string | null };
-    const file = bucket && r.status === "ready" && r2_key ? await r2FreshGetUrl(bucket, r2_key, now, PRIVATE_OBJECT_GET_PARAMS) : null;
-    const frame = bucket && r.status === "recording" && live_frame_key ? await r2FreshGetUrl(bucket, live_frame_key, now, PRIVATE_OBJECT_GET_PARAMS) : null;
+    const { r2_key, live_frame_key, ...rest } = r;
+    const file = sign && r.status === "ready" && r2_key ? await sign(r2_key) : null;
+    const frame = sign && r.status === "recording" && live_frame_key ? await sign(live_frame_key) : null;
     recordings.push({
       ...rest,
       url: file?.url ?? null,
@@ -859,20 +864,19 @@ export const applyEgress = internalMutation({
       // LiveKit ended a running file because the plan ran out of minutes:
       // every press from now on would meet the same refusal, so it is
       // remembered exactly as a refused start is.
-      if (isMinutesSpentText(raw)) await noteRecordingOutage(ctx, RECORDING_MINUTES_SPENT_MESSAGE);
+      if (patch.error_kind === "minutes_spent") await noteRecordingOutage(ctx, patch.error);
     }
     const ended = isRecordingActive(row.status) && !isRecordingActive(status);
-    const filming = (s: string) => s === "starting" || s === "recording";
     if (ended) Object.assign(patch, await retireLiveFrame(ctx, row));
     if (Object.keys(patch).length) await ctx.db.patch(row._id, { ...patch, updated_at: Date.now() });
     // The room stops being filmed on LiveKit's say, not ours (a stop we sent
     // moved the row to "stopping" first, and was told then).
-    if (row.kind === "composite" && filming(row.status) && !filming(status)) {
+    if (row.kind === "composite" && isRecordingFilming(row.status) && !isRecordingFilming(status)) {
       const reason =
         patch.stop_reason ?? row.stop_reason ?? (egress.status === "limit_reached" ? "limit" : status === "failed" ? "failed" : "ended");
       await announceRecordEnd(ctx, row, { reason, detail: status === "failed" ? (patch.error ?? row.error) : undefined });
     }
-    return { stop: !!args.attach && !filming(status), status };
+    return { stop: !!args.attach && !isRecordingFilming(status), status };
   },
 });
 
@@ -917,11 +921,13 @@ async function dropUnrecorded(ctx: any, row: RecordingRow): Promise<void> {
  *  egress LiveKit may still be running for it is told to stop, and a run
  *  whose room video failed while it was filming tells the room why. */
 export const failRecording = internalMutation({
-  // `outage`: LiveKit refused for spent minutes, which every later press
-  // would meet too: remembered, so they are refused before the room hears.
-  args: { id: v.id("call_recordings"), error: v.string(), outage: v.optional(v.boolean()) },
+  // A "minutes_spent" failure is one every later press would meet too: it is
+  // remembered, so they are refused before the room hears. `outage` says the
+  // same for an action still running code from before error_kind.
+  args: { id: v.id("call_recordings"), error: v.string(), error_kind: v.optional(callRecordingErrorKindValidator), outage: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
-    if (args.outage) await noteRecordingOutage(ctx, args.error);
+    const kind = args.error_kind ?? (args.outage ? "minutes_spent" : undefined);
+    if (kind === "minutes_spent") await noteRecordingOutage(ctx, args.error);
     const row = await ctx.db.get(args.id);
     if (!row || !isRecordingActive(row.status)) return;
     if (row.egress_id) await ctx.scheduler.runAfter(0, internal.callRecordings.stopEgresses, { ids: [], egress_ids: [row.egress_id] });
@@ -933,6 +939,7 @@ export const failRecording = internalMutation({
     await ctx.db.patch(row._id, {
       status: "failed",
       error: args.error,
+      error_kind: kind,
       stop_reason: row.stop_reason ?? "failed",
       ended_at: row.ended_at ?? (row.started_at !== undefined ? now : undefined),
       ...(await retireLiveFrame(ctx, row)),
@@ -984,7 +991,7 @@ export const claimScreen = internalMutation({
   args: { run_id: v.id("call_recordings"), track_sid: v.string(), identity: v.string(), name: v.string() },
   handler: async (ctx, args): Promise<{ id: Id<"call_recordings">; r2_key: string } | null> => {
     const run = await ctx.db.get(args.run_id);
-    if (!run || (run.status !== "starting" && run.status !== "recording")) return null;
+    if (!run || !isRecordingFilming(run.status)) return null;
     const taken = await ctx.db
       .query("call_recordings")
       .withIndex("by_transcript", (q) => q.eq("transcript_id", run.transcript_id))
@@ -1089,21 +1096,19 @@ export const stopRun = internalMutation({
 // billing period ("egress minutes exceeded"). The first passes on its own; the
 // second fails every press until someone raises the plan, so "try again in a
 // minute" would send the room round in circles.
-export function startErrorMessage(err: unknown): string {
+export function startFailure(err: unknown): Required<RecordingFailure> {
   if (err instanceof LivekitApiError) {
-    if (err.status === 401 || err.status === 403) return "LiveKit refused this server's credentials, so the recording could not start.";
-    if (egressMinutesSpent(err)) return RECORDING_MINUTES_SPENT_MESSAGE;
-    if (egressCapacityBusy(err)) return EGRESS_BUSY_MESSAGE;
-    return `LiveKit could not start the recording (${err.code ?? err.status}).`;
+    if (err.status === 401 || err.status === 403) return { error: "LiveKit refused this server's credentials, so the recording could not start.", kind: "credentials" };
+    if (egressMinutesSpent(err)) return { error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" };
+    if (egressCapacityBusy(err)) return { error: EGRESS_BUSY_MESSAGE, kind: "busy" };
+    return { error: `LiveKit could not start the recording (${err.code ?? err.status}).`, kind: "livekit" };
   }
-  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) return "LiveKit did not answer the request to start recording.";
+  if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) return { error: "LiveKit did not answer the request to start recording.", kind: "livekit" };
   // Anything else is this server's own fault, and its text (a stack's
   // message, a URL) is for the logs, not the room.
   console.warn("[callRecordings] recording start failed:", err);
-  return "The recording could not start because of an error on this server.";
+  return { error: "The recording could not start because of an error on this server.", kind: "server" };
 }
-
-const EGRESS_BUSY_MESSAGE = "LiveKit has no recording capacity free right now. Try again in a minute.";
 
 /** Is this LiveKit's "egress minutes used up for the billing period"? The
  *  refusal worth remembering (lib/callRecordingRuns recordingOutage): it
@@ -1146,8 +1151,7 @@ async function adoptOrFail(
   cfg: LivekitServerConfig,
   row: RecordingRow,
   running: LivekitEgress[] | null,
-  error: string,
-  opts: { outage?: boolean } = {},
+  failure: RecordingFailure,
 ): Promise<void> {
   const egress = running?.find((e) => e.paths.includes(row.r2_key));
   if (egress) {
@@ -1155,7 +1159,7 @@ async function adoptOrFail(
     if (applied.stop) await stopEgress(cfg, egress.egressId).catch((err) => console.warn(`[callRecordings] stop failed for ${egress.egressId}:`, err));
     return;
   }
-  await ctx.runMutation(internal.callRecordings.failRecording, { id: row._id, error, ...(opts.outage ? { outage: true } : {}) });
+  await ctx.runMutation(internal.callRecordings.failRecording, { id: row._id, error: failure.error, ...(failure.kind ? { error_kind: failure.kind } : {}) });
 }
 
 /** Ask LiveKit for a file for every screen in the room that has none in this
@@ -1193,7 +1197,7 @@ async function recordNewShares(
       if (applied.stop) await stopEgress(cfg, egress.egressId);
     } catch (err) {
       const row: RecordingRow | null = await ctx.runQuery(internal.callRecordings.getRow, { id: claim.id });
-      if (row) await adoptOrFail(ctx, cfg, row, await roomEgresses(cfg, run.room_key), startErrorMessage(err), { outage: egressMinutesSpent(err) });
+      if (row) await adoptOrFail(ctx, cfg, row, await roomEgresses(cfg, run.room_key), startFailure(err));
     }
   }
 }
@@ -1228,7 +1232,7 @@ export const startRun = internalAction({
       // again shortly (deferStart), so the room hears one "recording" and no
       // failure in between. Spent minutes, or retries used up, fail it.
       if (egressCapacityBusy(err) && (await ctx.runMutation(internal.callRecordings.deferStart, { id: run._id }))) return;
-      await adoptOrFail(ctx, cfg, run, await roomEgresses(cfg, run.room_key), startErrorMessage(err), { outage: egressMinutesSpent(err) });
+      await adoptOrFail(ctx, cfg, run, await roomEgresses(cfg, run.room_key), startFailure(err));
       return;
     }
     try {
@@ -1329,7 +1333,13 @@ export const reconcileRun = internalAction({
         } else if (now - row.requested_at > EGRESS_ACCEPT_TIMEOUT_MS && running) {
           wrote = true;
           // Retried and never taken: LiveKit had no capacity all along.
-          await adoptOrFail(ctx, cfg, row, running, row.start_attempts ? EGRESS_BUSY_MESSAGE : "LiveKit never started this recording.");
+          await adoptOrFail(
+            ctx,
+            cfg,
+            row,
+            running,
+            row.start_attempts ? { error: EGRESS_BUSY_MESSAGE, kind: "busy" } : { error: "LiveKit never started this recording.", kind: "livekit" },
+          );
         } else if (now - row.requested_at > EGRESS_UNREACHABLE_FAIL_MS) {
           wrote = true;
           // LiveKit cannot even be asked, for long enough that the room must
@@ -1393,7 +1403,7 @@ export const reconcileRun = internalAction({
       ctx.runMutation(internal.callRecordings.stopRun, { room_key: run.room_key, run_id: String(run._id), reason });
     let emptySince: number | undefined;
     let stopped = false;
-    if (run.status === "starting" || run.status === "recording") {
+    if (isRecordingFilming(run.status)) {
       try {
         const participants = await listParticipants(cfg, run.room_key);
         // Empty on both clocks (RECORDING_EMPTY_ROOM_STOP_MS): no teammate in
@@ -1416,7 +1426,7 @@ export const reconcileRun = internalAction({
       } catch (err) {
         console.warn(`[callRecordings] room look failed for ${run.room_key}:`, err);
       }
-    } else if (!isRecordingActive(run.status) && rows.some((r) => r.kind === "screen" && (r.status === "starting" || r.status === "recording"))) {
+    } else if (!isRecordingActive(run.status) && rows.some((r) => r.kind === "screen" && isRecordingFilming(r.status))) {
       // The room's video ended on its own (LiveKit's limit, a failure): its
       // screen files end with it.
       await stop(run.stop_reason ?? "failed");
@@ -1478,7 +1488,7 @@ export const restartStaleLoops = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
     const runs = new Map<string, number>();
-    for (const status of ["starting", "recording", "stopping"] as const) {
+    for (const status of ACTIVE_STATUSES) {
       const rows = await ctx.db
         .query("call_recordings")
         .withIndex("by_status", (q) => q.eq("status", status))
@@ -1513,7 +1523,7 @@ export const trackedEgresses = internalQuery({
   handler: async (ctx) => {
     const egressIds: string[] = [];
     const paths: string[] = [];
-    for (const status of ["starting", "recording", "stopping"] as const) {
+    for (const status of ACTIVE_STATUSES) {
       for (const r of await ctx.db
         .query("call_recordings")
         .withIndex("by_status", (q) => q.eq("status", status))
@@ -1574,23 +1584,55 @@ export const sweepRecordings = internalAction({
  *  was taken must not lose its object. */
 export const ORPHAN_OBJECT_GRACE_MS = 6 * 60 * 60 * 1000;
 
-/** What the rows account for in the bucket: every row's file and live frame,
- *  and every run prefix that still has a row (a run's other objects, a file
- *  LiveKit renamed). */
+/** Rows read per page of the walk below. call_recordings is never pruned
+ *  (a run is a composite plus up to MAX_SCREEN_FILES_PER_RUN screen files),
+ *  so one query over the whole table would one day pass Convex's read limits
+ *  and the sweep would throw every night from then on. */
+export const ACCOUNTED_PAGE_ROWS = 1000;
+
+type AccountedPage = { keys: string[]; prefixes: string[]; continueCursor: string; isDone: boolean };
+
+/** What one page of rows accounts for in the bucket: every row's file and
+ *  live frame, and every run prefix that still has a row (a run's other
+ *  objects, a file LiveKit renamed). walkAccountedRecordingObjects reads
+ *  every page. */
 export const accountedRecordingObjects = internalQuery({
-  args: {},
-  handler: async (ctx): Promise<{ keys: string[]; prefixes: string[] }> => {
+  args: { cursor: v.union(v.string(), v.null()), numItems: v.number() },
+  handler: async (ctx, args): Promise<AccountedPage> => {
+    const page = await ctx.db.query("call_recordings").paginate({ cursor: args.cursor, numItems: args.numItems });
     const keys = new Set<string>();
     const prefixes = new Set<string>();
-    for (const r of await ctx.db.query("call_recordings").collect()) {
+    for (const r of page.page) {
       keys.add(r.r2_key);
       if (r.live_frame_key) keys.add(r.live_frame_key);
       const prefix = callRecordingRunPrefixOfKey(r.r2_key);
       if (prefix) prefixes.add(prefix);
     }
-    return { keys: [...keys], prefixes: [...prefixes] };
+    return { keys: [...keys], prefixes: [...prefixes], continueCursor: page.continueCursor, isDone: page.isDone };
   },
 });
+
+/** Every page of accountedRecordingObjects, merged. A row inserted while the
+ *  walk is under way can only make the sweep keep more (the listing was
+ *  taken first), and ORPHAN_OBJECT_GRACE_MS covers an object whose row lands
+ *  after the walk passed its place. `page` runs the query (ctx.runQuery in
+ *  the sweep, the test backend in tests). */
+export async function walkAccountedRecordingObjects(
+  page: (args: { cursor: string | null; numItems: number }) => Promise<AccountedPage>,
+  numItems: number = ACCOUNTED_PAGE_ROWS,
+): Promise<{ keys: string[]; prefixes: string[] }> {
+  const keys = new Set<string>();
+  const prefixes = new Set<string>();
+  let cursor: string | null = null;
+  for (;;) {
+    const p: AccountedPage = await page({ cursor, numItems });
+    for (const k of p.keys) keys.add(k);
+    for (const x of p.prefixes) prefixes.add(x);
+    if (p.isDone) break;
+    cursor = p.continueCursor;
+  }
+  return { keys: [...keys], prefixes: [...prefixes] };
+}
 
 /** The objects to delete from a listing: anything past the grace that no row
  *  accounts for, and every LiveKit manifest past it (a JSON naming the room
@@ -1609,8 +1651,8 @@ export function orphanedRecordingObjects(
     .map((o) => o.key);
 }
 
-/** The daily cron (crons.ts): list the recordings bucket, then read the rows,
- *  and delete what the rows do not account for. Listing first means a row
+/** The daily cron (crons.ts): list the recordings bucket, then read the rows
+ *  page by page, and delete what the rows do not account for. Listing first means a row
  *  written after the listing can only make the sweep keep more, and the
  *  grace covers an object whose row is about to be written. Also the one way
  *  to clear what runs deleted before manifests were turned off left behind:
@@ -1621,7 +1663,7 @@ export const sweepRecordingObjects = internalAction({
     const bucket = callRecordingsBucketFromEnv();
     if (!bucket) return { listed: 0, deleted: 0 };
     const objects = await r2ListObjects(bucket, CALL_RECORDINGS_ROOT, 100_000);
-    const accounted: { keys: string[]; prefixes: string[] } = await ctx.runQuery(internal.callRecordings.accountedRecordingObjects, {});
+    const accounted = await walkAccountedRecordingObjects((args) => ctx.runQuery(internal.callRecordings.accountedRecordingObjects, args));
     const orphans = orphanedRecordingObjects(objects, accounted, Date.now());
     if (orphans.length) {
       console.warn(`[callRecordings] deleting ${orphans.length} orphaned recording object(s)`);

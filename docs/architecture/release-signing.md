@@ -50,8 +50,8 @@ Policy, per client build:
 
 | policy | no `.sig` | signed by a pinned key | pinned key, bad signature | signed only by unknown keys |
 |---|---|---|---|---|
-| no keys pinned (today) | accept, no request made | n/a | n/a | n/a |
-| keys pinned, `required: false` | accept | accept, verified | refuse | accept |
+| no keys pinned | accept, no request made | n/a | n/a | n/a |
+| keys pinned, `required: false` (today) | accept | accept, verified | refuse | accept |
 | keys pinned, `required: true` | refuse | accept, verified | refuse | refuse |
 
 A bad signature by a pinned key is refused under every policy: it is evidence
@@ -59,9 +59,9 @@ the manifest changed after signing, never "unsigned".
 
 Anti-rollback: a client records the `released` stamp of the newest manifest a
 pinned key vouched for and refuses a later verified manifest with an older
-stamp. The finalize workflow stamps every publish, including a recovery to an
-older version, with a fresh `released`, so legitimate recovery is never
-refused. Unsigned manifests carry no such promise and are not checked.
+stamp. The finalize workflow only publishes the next version over the one it
+replaces and stamps it with a fresh `released` (a re-run of the same version
+keeps its stamp), so a recovery ships as a new version and is never refused. Unsigned manifests carry no such promise and are not checked.
 
 ## Rollout order
 
@@ -69,8 +69,10 @@ The invariant: a client is never asked to verify something the publisher does
 not yet produce, and the publisher never stops producing what a client in the
 field still accepts.
 
-1. **Ship the verification code with no key pinned.** This is the state of
-   the tree today. Behaviour is byte for byte what the fleet does now: no
+Steps 1 to 3 are done: the key is pinned with `required: false` since
+2026-09-24. Step 4 is where the rollout stands.
+
+1. **Ship the verification code with no key pinned.** Behaviour is byte for byte what the fleet does now: no
    signature request, no new refusal. Old clients keep updating.
 2. **Create the key** (a product decision, see below). Store the private PEM
    as the repository secret `RELEASE_MANIFEST_SIGNING_KEY` and the key id as
@@ -109,18 +111,19 @@ the pattern the Apple signing certificate follows.
 - Key id `cli-release-2026`, Ed25519. Public key (base64 raw), the value to pin:
   `4f1kzY89/uJGGB+hvoONtVag56qy1gOkVxhMzLdEc5M=`
 - The private PEM is the repository secret `RELEASE_MANIFEST_SIGNING_KEY`; the
-  key id is `RELEASE_MANIFEST_KEY_ID`. Step 2 is therefore live: the next
-  finalize run signs `latest.json`.
+  key id is `RELEASE_MANIFEST_KEY_ID`. Step 2 is live: every finalize run signs
+  `latest.json`.
 - The escrow copy is in the founder's login Keychain, generic password,
   account `codecast-release`, service
   `codecast release manifest signing key cli-release-2026`. `security -w`
   returns it hex encoded, so read it with
   `security find-generic-password -a codecast-release -s '<service>' -w | xxd -r -p`.
-- Step 3 (pinning) waits until a real finalize run has published a
-  `latest.json.sig` that `sign-manifest.ts --verify` accepts with this key, so
-  a pipeline fault can never meet a pinned client.
+- Step 3 (pinning) waited until a real finalize run had published a
+  `latest.json.sig` that `sign-manifest.ts --verify` accepted with this key, so
+  a pipeline fault could never meet a pinned client. It shipped 2026-09-24.
 
-Whichever is chosen, the release signing key must never sit on a laptop
-release path: `deploy.sh` publishes unsigned, and stays a step 3 compatible
+The release signing key must never sit on a laptop release path: `deploy.sh`
+publishes unsigned and deletes any `latest.json.sig` left from a CI release (a
+stale signature would no longer match, and a pinned client refuses that). It stays a step 3 compatible
 path until step 5, after which laptop publishes of `latest.json` stop working
 by design (CI is already the release path for binaries).

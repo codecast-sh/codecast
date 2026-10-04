@@ -22,7 +22,7 @@ import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { CallVideoPlayer, type CallVideoHandle } from "../../../../components/calls/CallVideoPlayer";
 import { filmedSpans, lineSeqAt, turnIndexAt, videoStretches, type CallVideoFile } from "../../../../lib/calls/callVideo";
 import { useMediaMoment } from "../../../../hooks/useMediaMoment";
-import { seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../../../hooks/useCallMomentLanding";
+import { callLineEl, seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../../../hooks/useCallMomentLanding";
 import { scrollIntoContainer } from "../../../../lib/scrollWithin";
 
 type SharedCall = NonNullable<FunctionReturnType<typeof api.publicShare.getSharedCall>>;
@@ -115,10 +115,7 @@ function SharedCallBody({
     turns,
     ready: true,
     target,
-    lineEl: (i, seq) => {
-      const turn = threadRef.current?.querySelector<HTMLElement>(`[data-turn="${turns[i]?.index}"]`) ?? null;
-      return (seq !== null ? turn?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? turn;
-    },
+    lineEl: (i, seq) => callLineEl(threadRef.current, turns[i]?.index, seq),
   });
 
   return (

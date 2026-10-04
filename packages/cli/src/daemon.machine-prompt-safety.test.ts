@@ -219,7 +219,7 @@ function fixture(transport = "tmux", cached = true) {
       "parsePollMessage", "pollDeclineText", "pollMenuSteps", "extractTmuxLiveRegion", "newestPaintedFrame", "isCodexTrustDialog", "isCodexUpdateDialog", "isClaudeBypassWarning",
       "spendLimitDialogBanner", "usageLimitMenuBanner", "limitDialogOnPane",
       "classifyTmuxLiveState", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
-      "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
+      "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
@@ -302,6 +302,23 @@ describe("machine prompt delivery safety", () => {
     await expect(f.deliver("preserve the queued question")).resolves.toBe(true);
     expect(f.events[0]).toBe("Escape");
     expect(f.bodies).toEqual(["preserve the queued question"]);
+  });
+
+  // The seven panes of 2026-10-04: an armed automatic continue under a live
+  // composer. A recovery "continue" must cancel the wait with one Escape and
+  // then land, never press a second Escape (that opens Rewind).
+  test("cancels Claude Code's armed limit wait with one Escape, then delivers", async () => {
+    const f = fixture();
+    f.state.menu = `${box()}\n  ⚠ Usage limit reached · limit resets Oct 5 at 3pm\n    Continuing automatically at Oct 5 at 3pm · esc to cancel · /usage-credits to continue now`;
+    f.hooks.input = (event: string) => {
+      if (event === "Escape") {
+        expect(f.state.menu).not.toBeNull();
+        f.state.menu = null;
+      }
+    };
+    await expect(f.deliver("continue")).resolves.toBe(true);
+    expect(f.events.filter((e: string) => e === "Escape")).toEqual(["Escape"]);
+    expect(f.bodies).toEqual(["continue"]);
   });
 
   test("a timed-out waiter does not steal the active terminal writer's lock", async () => {
