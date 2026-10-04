@@ -481,6 +481,9 @@ export const ccLoginFlowValidator = v.object({
   // (Settings "sign in again"); absent for the machine-login sign-in.
   profile: v.optional(v.string()),
   reason: v.optional(v.string()), // rejected: why (timeout, CLI error tail)
+  // pending: the code-paste sign-in URL, which finishes on any device; the
+  // code it ends on goes back through submitLoginCode.
+  url: v.optional(v.string()),
   started_at: v.number(),
   finished_at: v.optional(v.number()),
   // confirmed: how many auth-blocked sessions the server kicked off.

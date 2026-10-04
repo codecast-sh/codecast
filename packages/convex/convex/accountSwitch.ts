@@ -66,7 +66,7 @@ import {
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
-import { withSafetyBlock, describeDecision, peggedWindowLabel } from "@codecast/shared/contracts";
+import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode } from "@codecast/shared/contracts";
 
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
@@ -812,6 +812,9 @@ export const requestLoginFlow = mutation({
     // Sign into ONE saved profile again (its login expired): the credential
     // lands in that profile's own store and the machine's login is untouched.
     profile: v.optional(v.string()),
+    // False when the person is on another device (the phone): the machine
+    // opens no browser, and the flow finishes through its code-paste URL.
+    open_browser: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -856,11 +859,60 @@ export const requestLoginFlow = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "start_login" as const,
-      args: JSON.stringify({ email, ...(profile ? { profile } : {}), ...(args.force ? { force: true } : {}) }),
+      args: JSON.stringify({
+        email,
+        ...(profile ? { profile } : {}),
+        ...(args.force ? { force: true } : {}),
+        ...(args.open_browser === false ? { open_browser: false } : {}),
+      }),
       created_at: now,
       target_device_id: target.device_id,
     });
     return { command_id: commandId, device_id: target.device_id, email, profile };
+  },
+});
+
+// The daemon's report of the pending flow's code-paste URL. It refines the
+// pending stamp requestLoginFlow wrote and never restarts its clock.
+export const reportLoginFlowUrl = mutation({
+  args: { api_token: v.optional(v.string()), device_id: v.string(), url: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    const flow = device?.cc_login_flow;
+    if (!device || flow?.status !== "pending" || !/^https:\/\//.test(args.url)) return;
+    await ctx.db.patch(device._id, { cc_login_flow: { ...flow, url: args.url.slice(0, 4096) } });
+  },
+});
+
+// The approval code the code-paste page showed, typed into the machine's
+// waiting `claude auth login`. It travels in the clear: exchanging it needs
+// the PKCE verifier, which never leaves that CLI process.
+export const submitLoginCode = mutation({
+  args: { device_id: v.string(), started_at: v.number(), code: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx);
+    if (!userId) throw new Error("Authentication required");
+    const now = Date.now();
+    const { online } = await listOnlineDevices(ctx, userId, now);
+    const device = online.find((d) => d.device_id === args.device_id);
+    if (!device) throw new Error("That device's daemon is offline");
+    const flow = device.cc_login_flow;
+    if (flow?.status !== "pending" || flow.started_at !== args.started_at || now - flow.started_at >= LOGIN_FLOW_STALE_MS) {
+      throw new Error("This sign-in has ended. Start again.");
+    }
+    const code = oauthApprovalCode(args.code);
+    return await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command: "start_login" as const,
+      args: JSON.stringify({ login_code: code }),
+      created_at: now,
+      target_device_id: device.device_id,
+    });
   },
 });
 

@@ -466,7 +466,7 @@ export const createFromCli = mutation({
       if (match) workflowDocId = match._id;
     }
 
-    const { run_id } = await createRunCore(ctx, userId, {
+    const { run_id, primary_conversation_id } = await createRunCore(ctx, userId, {
       workflow_name: args.workflow_name,
       workflow_goal: args.workflow_goal,
       workflow_id: workflowDocId || undefined,
@@ -477,7 +477,7 @@ export const createFromCli = mutation({
       spawner_conversation_id: spawner?._id,
       now,
     });
-    return { run_id };
+    return { run_id, primary_conversation_id };
   },
 });
 

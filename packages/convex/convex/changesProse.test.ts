@@ -136,10 +136,11 @@ describe("parseStoryReply", () => {
       risk_lines: { schema: "Watch the migration.", skew: "not ours" },
     }) + "\n```";
     const prose = parseStoryReply(reply, input, fallback)!;
-    // Within the slack a headline stays whole; past it, one with no clause to stop at is clipped.
+    // Within the slack a headline stays whole; past it, one with no clause or word to stop at is cut at the slack.
     expect(prose.headline).toBe("x".repeat(120));
-    expect(parseStoryReply(JSON.stringify({ headline: "x".repeat(121), why_source: "commit" }), input, fallback)!.headline.length).toBeLessThanOrEqual(90);
-    expect(prose.dek.length).toBeLessThanOrEqual(160);
+    expect(parseStoryReply(JSON.stringify({ headline: "x".repeat(121), why_source: "commit" }), input, fallback)!.headline).toBe("x".repeat(120));
+    expect(prose.dek.length).toBeLessThanOrEqual(200);
+    expect(prose.dek).not.toContain("…");
     expect(prose.body).toBe("One. Two. Three.");
     expect(prose.kind).toBe("fix");
     expect(prose.importance).toBe(2);
@@ -158,6 +159,12 @@ describe("parseStoryReply", () => {
     expect(`${first} ${second}`.length).toBeGreaterThan(320);
     // Both sentences do not fit, so the line ends on the first, whole.
     expect(parseStoryReply(reply({ risk_lines: { schema: `${first} ${second}` } }), input, fallback)!.risk_lines).toEqual({ schema: first });
+    // A dek past its slack ends on its last whole clause, as a headline does.
+    const dek = "The tip engine now ranks job seekers with five signals instead of two, weighting recent replies over profile completeness, and keeps the old score only as a tiebreak for accounts that have never replied to a single message";
+    expect(dek.length).toBeGreaterThanOrEqual(200);
+    const fitted = parseStoryReply(reply({ dek }), input, fallback)!.dek;
+    expect(fitted).toBe("The tip engine now ranks job seekers with five signals instead of two, weighting recent replies over profile completeness");
+    expect(fitted).not.toContain("…");
     // A single sentence too long to keep whole is dropped; the risk shows by its code.
     expect(parseStoryReply(reply({ risk_lines: { schema: `${"word ".repeat(80)}end.` } }), input, fallback)!.risk_lines).toBeUndefined();
   });
