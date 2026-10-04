@@ -67,9 +67,9 @@ export default function SettingsScreen() {
   const inboxImageThumbs = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
 
-  // Canonical pointer only (unset = personal). The team's row paints from the
+  // The workspace mirror (unset = personal). The team's row paints from the
   // store's teams list; its invite code from the persisted settings cache.
-  const activeTeamId = currentUser?.active_team_id as Id<"teams"> | undefined;
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? undefined) as Id<"teams"> | undefined;
   const teamRow = useInboxStore((s) => (activeTeamId ? (s.teams as any[]).find((t) => t && String(t._id) === String(activeTeamId)) : undefined));
   const teamRecord = useSettingsData("team", activeTeamId ?? null).data as any;
   const activeTeam = teamRow || teamRecord ? { ...teamRow, ...teamRecord } : undefined;

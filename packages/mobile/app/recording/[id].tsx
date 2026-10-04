@@ -5,6 +5,13 @@
 // that a huddle transcript cannot — the audio and the words came out of the
 // same file, so the timestamps are exact — and it is what makes a transcript
 // worth scrolling instead of just reading the summary.
+//
+// Any call opens here, a huddle as well as a recording: a `cl-42` pill, a
+// `cl-42@2:30` frame reference and a pasted call link all land on this
+// screen, by short id or full id. A moment (`?t=150`) or lines (`?turns=5-9`)
+// open scrolled to that line and marked, found by the rule the web page
+// lights its line by (segmentAt). A huddle's video plays on the web only for
+// now, and the screen says so with the way there.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -16,10 +23,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useQuery } from 'convex/react';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { api } from '@codecast/convex/convex/_generated/api';
-import type { Id } from '@codecast/convex/convex/_generated/dataModel';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useCallDetail } from '@codecast/web/hooks/useSyncCalls';
+import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
+import { api as _api } from '@codecast/convex/convex/_generated/api';
+import { parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
+import { buildEntityUrl, callRefId, formatCallTime, isConvexId } from '@codecast/shared/entities';
+import { openWebPage } from '@/lib/links';
 import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
@@ -58,14 +69,27 @@ const WAITING_COPY: Record<string, { title: string; detail: string }> = {
   },
 };
 
+const api = _api as any;
+
 export default function RecordingDetailScreen() {
   const Theme = useTheme();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const call = useQuery(
-    api.transcripts.webGetCall,
-    id ? { transcript_id: id as Id<'transcripts'> } : 'skip',
-  );
+  const params = useLocalSearchParams<{ id: string; t?: string; turns?: string }>();
+  const ref = params.id;
+  // A short id (`cl-42`, what a pill carries) is resolved to the call's full
+  // id, which the store keeps its detail under.
+  const byShortId = !!ref && !isConvexId(ref);
+  const resolved = useQueryNoThrow(api.transcripts.webGetCallRef, byShortId ? { ref } : 'skip').data;
+  const id: string | undefined = byShortId ? (resolved?._id ? String(resolved._id) : undefined) : ref;
+  // Off the store's persisted call detail; the list row the person tapped
+  // names the page while a never-opened recording's detail is on its way.
+  const detail = useCallDetail(id);
+  const call = byShortId && resolved === null ? null : detail;
+  const listRow = useInboxStore((s: any) => (id ? s.callList?.[id] : undefined));
+  // The place the link named: a moment of the call, or a run of lines.
+  const read = { get: (k: string) => ((params as any)[k] ?? null) as string | null };
+  const atMs = parseCallMomentParam(read);
+  const anchor = parseCallAnchor(read);
 
   const player = useRef<any>(null);
   const [playing, setPlaying] = useState(false);
@@ -122,6 +146,39 @@ export default function RecordingDetailScreen() {
   const waiting = state && state !== 'ready' ? WAITING_COPY[state] : null;
   const segments = call?.segments ?? [];
 
+  // The line the link named, marked until the person plays or taps.
+  const focusIndex = (() => {
+    if (!segments.length) return null;
+    if (anchor?.kind === 'turns') {
+      const i = segments.findIndex((s: any) => s.seq >= anchor.from_seq);
+      return i >= 0 ? i : null;
+    }
+    return atMs !== null ? segmentAt(segments, atMs, { holdMs: Infinity })?.index ?? 0 : null;
+  })();
+  const focusSeq = focusIndex !== null ? segments[focusIndex]?.seq : null;
+  const [marked, setMarked] = useState(true);
+  const list = useRef<FlatList<any>>(null);
+  const landed = useRef(false);
+  useEffect(() => {
+    if (landed.current || focusIndex === null) return;
+    landed.current = true;
+    // After the first layout, so the header above the lines has a height.
+    requestAnimationFrame(() => list.current?.scrollToIndex({ index: focusIndex, viewPosition: 0.3, animated: false }));
+  }, [focusIndex]);
+  // The audio waits at the moment, not playing until asked.
+  const seeked = useRef(false);
+  useEffect(() => {
+    const p = player.current;
+    if (seeked.current || !p || atMs === null) return;
+    seeked.current = true;
+    try {
+      p.seekTo(atMs / 1000);
+      setPosition(atMs);
+    } catch {}
+  }, [url, atMs]);
+  // Where the call's video plays: the web page, at the same moment.
+  const videoUrl = call?.filmed ? buildEntityUrl('call', atMs !== null ? callRefId(String(call._id), null, atMs) : String(call._id)) : null;
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       <RNView style={styles.header}>
@@ -133,7 +190,7 @@ export default function RecordingDetailScreen() {
           <FontAwesome name="angle-left" size={24} color={Theme.textMuted} />
         </TouchableOpacity>
         <RNText style={styles.headerTitle} numberOfLines={1}>
-          {call?.title || 'Recording'}
+          {call?.title || listRow?.title || 'Recording'}
         </RNText>
       </RNView>
 
@@ -147,7 +204,13 @@ export default function RecordingDetailScreen() {
         </RNView>
       ) : (
         <FlatList
+          ref={list}
           data={segments}
+          onScrollToIndexFailed={(info) => {
+            // Lines not measured yet: land near, then exactly once they are.
+            list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
+            setTimeout(() => list.current?.scrollToIndex({ index: info.index, viewPosition: 0.3, animated: false }), 60);
+          }}
           keyExtractor={(s: any) => String(s.seq)}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
@@ -163,13 +226,29 @@ export default function RecordingDetailScreen() {
 
               {url ? (
                 <RNView style={styles.player}>
-                  <TouchableOpacity onPress={toggle} style={styles.playBtn} activeOpacity={0.7}>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setMarked(false);
+                      toggle();
+                    }}
+                    style={styles.playBtn} activeOpacity={0.7}>
                     <FontAwesome name={playing ? 'pause' : 'play'} size={16} color="#fff" />
                   </TouchableOpacity>
                   <RNText style={styles.playerTime}>{fmtClock(position)}</RNText>
                   <RNText style={styles.playerHint} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                     Tap any line to jump there
                   </RNText>
+                </RNView>
+              ) : null}
+
+              {videoUrl ? (
+                <RNView style={styles.videoNote}>
+                  <RNText style={[styles.hint, styles.videoText]}>
+                    {atMs !== null ? `This call has video. It plays on the web for now, at ${formatCallTime(atMs)}.` : 'This call has video. It plays on the web for now.'}
+                  </RNText>
+                  <TouchableOpacity onPress={() => void openWebPage(videoUrl)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <RNText style={styles.videoLink}>Open video</RNText>
+                  </TouchableOpacity>
                 </RNView>
               ) : null}
 
@@ -205,11 +284,14 @@ export default function RecordingDetailScreen() {
             </RNView>
           }
           renderItem={({ item }: { item: any }) => {
-            const here = position >= item.t0 && position < item.t1;
+            const here = (position >= item.t0 && position < item.t1) || (marked && !playing && item.seq === focusSeq);
             return (
               <TouchableOpacity
                 style={[styles.line, here && styles.lineHere]}
-                onPress={() => seekTo(item.t0)}
+                onPress={() => {
+                  setMarked(false);
+                  seekTo(item.t0);
+                }}
                 activeOpacity={0.6}
                 disabled={!url}
               >
@@ -270,6 +352,16 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   waitingTitle: { fontSize: FontSize.sm, fontWeight: '600', color: Theme.text },
   hint: { fontSize: FontSize.sm, color: Theme.textMuted, lineHeight: 18 },
+  videoNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.md,
+    backgroundColor: Theme.bgInset,
+    borderRadius: BorderRadius.md,
+    padding: Spacing.md,
+  },
+  videoText: { flex: 1 },
+  videoLink: { fontSize: FontSize.sm, fontWeight: '600', color: Theme.blue },
 
   block: { gap: Spacing.sm },
   blockLabel: { fontSize: FontSize.xs, color: Theme.textMuted0, letterSpacing: 1 },
