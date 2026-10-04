@@ -63,6 +63,7 @@ export type RoomEventKind =
   | "record_on"
   | "record_off"
   | "record_deleted"
+  | "frame_shared"
   | "guest_admitted"
   | "guest_removed";
 
@@ -97,6 +98,12 @@ export type ThreadRow = {
   /** The guest who pressed Stop, when a guest did: the row is owned by the
    *  presser then, and `user_name` already carries this name. */
   event_guest_name?: string | null;
+  /** The recording run a record_on / record_off / record_deleted line is
+   *  about; absent on lines written before runs were named. */
+  event_run_id?: string | null;
+  /** record_deleted: what the deleted run had filmed, in ms on the call's
+   *  clock. */
+  event_span?: { from_ms: number; to_ms: number } | null;
   /** The huddle the line was said in (callChat.insertRoomRow); absent while
    *  it is still sending, or for a line typed with no huddle running. */
   transcript_id?: string | null;

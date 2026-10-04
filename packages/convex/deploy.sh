@@ -8,6 +8,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT="$(git rev-parse --show-toplevel)"
 
+# Run as an Interactive launchd job on macOS. Started from an agent shell, a
+# deploy inherits the utility QoS clamp and spends most of an hour in its
+# typecheck under load, holding the lock below that every other deploy waits
+# on (2026-10-02, 2026-10-04). The job reruns this script with
+# CAST_LAUNCHD_LABEL set, which skips this step.
+if [ "$(uname)" = "Darwin" ] && [ -z "${CAST_LAUNCHD_LABEL:-}" ] && [ -z "${DEPLOY_NO_INTERACTIVE:-}" ]; then
+    exec bun "$ROOT/packages/cli/scripts/run-interactive.ts" -- "$PWD/deploy.sh" "$@"
+fi
+
 # One deploy at a time per checkout. A push ships the tree as it was bundled,
 # and under load a run spends most of an hour typechecking, so two overlapping
 # runs can finish out of order and the older snapshot reverts the newer one.

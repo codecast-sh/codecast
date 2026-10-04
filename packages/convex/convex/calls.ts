@@ -38,7 +38,7 @@ import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
 import { huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
-import { noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, recordingOutage, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
+import { liveRoomRun, noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, recordingOutage, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
 import { endGuestAdmissions } from "./lib/callGuestAdmission";
@@ -316,6 +316,12 @@ async function holdPrewarmSeat(
   // outranks the call they are in. The client refuses this too — the answer is
   // here as well because the cost of getting it wrong is somebody's live call.
   if (liveMembers(mine, now).length > 0) return { room_key: roomKey, prewarm: false };
+  // A RECORDED ROOM TAKES NO GUESSES. Everyone in a recorded room is told, and
+  // a prewarm is a muted, unseated connection nobody sees on the stage, which
+  // the composite could still draw as a name tile. The client skips recorded
+  // rooms itself (roomPrewarm); the refusal lives here too so an older bundle
+  // or another client cannot slip a silent participant into a recording.
+  if (await liveRoomRun(ctx, roomKey)) return { room_key: roomKey, prewarm: false };
   // One at a time: a second face, a second DM, and the last one is dropped.
   for (const m of mine) {
     if (m.room_key !== roomKey) await ctx.db.delete(m._id);
@@ -1214,6 +1220,10 @@ export const getLiveRooms = query({
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
         transcribe_off_at: state?.transcribe_off ? state.transcribe_off_at ?? state.updated_at : null,
+        // The live record's public link is on: its transcript reaches anyone
+        // holding the link as it is written. Said beside "transcribed" on the
+        // stage, as the guests' notice says it (callGuests.roomNotice).
+        words_public: !state?.transcribe_off && !!state?.words_public,
         // Somebody pressed Record and it has not been stopped: what everyone
         // who can see the room, inside it or about to walk in, is told.
         // Byte-stable: it flips on a press and a stop, never with the clock.

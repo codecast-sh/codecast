@@ -781,17 +781,19 @@ function endpointOf(st: FixtureState, surface: string, ref: string): { endpoint:
   return { batch: null, endpoint: { batch: null, sha: c.sha, mainSha: c.mainSha, dirty: false, treePatch: null, footing: { model: surfaceDef(st, surface).model, ruler: `${JUDGE_MODEL}#r2` }, at: c.at } };
 }
 
-function attribution(st: FixtureState, surface: string, goodRef: string, badRef: string, allCommits = false): Attribution {
+function attribution(st: FixtureState, surface: string, goodRef: string, badRef: string, allCommits = false, freeze?: string): Attribution {
   const good = endpointOf(st, surface, goodRef);
   const bad = endpointOf(st, surface, badRef);
   const gb = good.batch;
   const bb = bad.batch;
-  const flipped = gb && bb && sameFooting(gb, bb) ? flipsOf(st, gb, bb).filter((f) => f.direction === "broke") : [];
+  // A freeze limit (`?freeze=`) narrows every class to that freeze, as attribution.ts's `freezes` does.
+  const only = (f: string) => !freeze || f.startsWith(freeze);
+  const flipped = gb && bb && sameFooting(gb, bb) ? flipsOf(st, gb, bb).filter((f) => f.direction === "broke" && only(f.freezeId)) : [];
   const footingDiffers = good.endpoint.footing.model !== bad.endpoint.footing.model || good.endpoint.footing.ruler !== bad.endpoint.footing.ruler;
   const freezeShas = (b: Batch | null) => new Set(b ? rowsIn(st, b).map((r) => `${r.freezeId}:${r.freezeSha}`) : []);
   const fa = freezeShas(gb);
-  const changedFreezes = bb ? [...new Set(rowsIn(st, bb).filter((r) => !fa.has(`${r.freezeId}:${r.freezeSha}`) && gb && rowsIn(st, gb).some((g) => g.freezeId === r.freezeId)).map((r) => r.freezeId))] : [];
-  const badRows = bb ? rowsIn(st, bb) : [];
+  const changedFreezes = bb ? [...new Set(rowsIn(st, bb).filter((r) => only(r.freezeId) && !fa.has(`${r.freezeId}:${r.freezeSha}`) && gb && rowsIn(st, gb).some((g) => g.freezeId === r.freezeId)).map((r) => r.freezeId))] : [];
+  const badRows = bb ? rowsIn(st, bb).filter((r) => only(r.freezeId)) : [];
   const live = badRows.filter((r) => r.liveReads > 0);
   const sourceDiffers = good.endpoint.sha !== bad.endpoint.sha || (gb && bb ? gb.epoch !== bb.epoch : false);
   const checklist: Attribution["checklist"] = [
@@ -854,10 +856,18 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
       rangeCommits: inRange.length,
       reason: unattributable ? unkept.map((k) => `the ${k} batch ran uncommitted edits and kept no patch; nothing recorded can replay them`).join("; ") : null,
     };
-  } else answer = { kind: "noise", separation: gb && bb ? fixtureSeparate(scoredOf(rowsIn(st, gb)).map((r) => r.score as number), scoredOf(badRows).map((r) => r.score as number)) : { kind: "too-few" } };
-  const firstFlip = flipped[0];
-  const ra = firstFlip ? st.byId.get(firstFlip.before[0]) : undefined;
-  const rb = firstFlip ? st.byId.get(firstFlip.after[0]) : undefined;
+  } else answer = { kind: "noise", separation: gb && bb ? fixtureSeparate(scoredOf(rowsIn(st, gb).filter((r) => only(r.freezeId))).map((r) => r.score as number), scoredOf(badRows).map((r) => r.score as number)) : { kind: "too-few" } };
+  // The rendered prompt whatever the answer, as attribution.ts takes it: per focus freeze (the flips, else the
+  // largest drops), the good side's newest graded rep against the bad side's first.
+  const graded = (b: Batch | null) => (b ? rowsIn(st, b).filter((r) => r.status !== "crash" && r.status !== "dry") : []);
+  const gs = graded(gb);
+  const bs = graded(bb);
+  const focusIds = flipped.length ? flipped.map((f) => f.freezeId) : largestDrops(gs, bs);
+  const promptDiffs = focusIds.flatMap((f) => {
+    const ra = gs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? 1 : -1))[0];
+    const rb = bs.filter((r) => r.freezeId === f).sort((x, y) => (x.stamp < y.stamp ? -1 : 1))[0];
+    return ra && rb ? promptPair(st, ra, rb) : [];
+  });
   return {
     surface,
     good: good.endpoint,
@@ -866,7 +876,7 @@ function attribution(st: FixtureState, surface: string, goodRef: string, badRef:
     flipped,
     checklist,
     answer,
-    promptDiffs: ra && rb ? promptPair(st, ra, rb) : [],
+    promptDiffs,
     examples: examplesOf(st, flipped),
   };
 }
@@ -1343,7 +1353,7 @@ export function evalsFixtureWorld(opts: { now?: number; seed?: number } = {}): E
       case "GET /epoch":
         return epoch(st, q.surface, Number(q.n));
       case "GET /attribution":
-        return attribution(st, q.surface, q.good, q.bad, q.allCommits === "1");
+        return attribution(st, q.surface, q.good, q.bad, q.allCommits === "1", q.freeze || undefined);
       case "GET /commit/:sha":
         return commit(st, p.sha, q.whole === "1");
       case "GET /patch/:sha":

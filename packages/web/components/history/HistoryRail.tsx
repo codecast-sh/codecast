@@ -43,11 +43,12 @@ export function HistoryRailDot({ children, color, ring, className }: { children:
 }
 
 /** The fold toggle under an entry: a chevron that turns, and its words. */
-export function HistoryFold({ open, onClick, children, className, ...data }: { open: boolean; onClick: () => void; children: ReactNode; className?: string } & Record<`data-${string}`, string | boolean | undefined>) {
+export function HistoryFold({ open, onClick, children, className, tabIndex, ...data }: { open: boolean; onClick: () => void; children: ReactNode; className?: string; tabIndex?: number } & Record<`data-${string}`, string | boolean | undefined>) {
   return (
     <button
       type="button"
       onClick={onClick}
+      tabIndex={tabIndex}
       aria-expanded={open}
       className={cn("inline-flex items-center gap-1 h-6 -ml-1 px-1 rounded text-[11.5px] transition-colors hover:bg-sol-bg-highlight/70", className)}
       style={{ color: "var(--sol-text-muted)" }}

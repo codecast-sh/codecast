@@ -12,6 +12,7 @@ import {
   humanizeConvexError,
   type CallGuestView,
   type GuestLinkRefusal,
+  noticeWidened,
   type GuestNotice,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -105,6 +106,8 @@ type Describe =
       recording: boolean;
       /** The recording's video will be on the call's public link. */
       video_public?: boolean;
+      /** The transcript is on the call's public link as it is written. */
+      words_public?: boolean;
     }
   | { ok: false; reason: GuestLinkRefusal };
 
@@ -125,6 +128,7 @@ type GuestState = {
     transcribed: boolean;
     recording: boolean;
     video_public?: boolean;
+    words_public?: boolean;
   };
 };
 
@@ -300,11 +304,11 @@ export default function GuestMeetPage() {
   const transcribed = !!info?.transcribed;
   const recording = !!info?.recording;
   const videoPublic = recording && !!info?.video_public;
-  const notice: GuestNotice = { recording, transcribed, video_public: videoPublic };
+  const wordsPublic = transcribed && !!info?.words_public;
+  const notice: GuestNotice = { recording, transcribed, video_public: videoPublic, words_public: wordsPublic };
   // The room keeps more than the guest agreed to when they asked: a
-  // recording, a transcript, or a recording whose video goes to a public link.
-  const widened =
-    !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed) || (videoPublic && !accepted.video_public));
+  // recording, a transcript, or either of them going to a public link.
+  const widened = noticeWidened(accepted, notice);
 
   // The lease. See the header: worker-timed, at once when the tab comes back
   // to the front, and for an admitted guest out of the media only while
@@ -455,7 +459,9 @@ export default function GuestMeetPage() {
       // since this one loaded, and one person is one row at the door.
       const known = readCreds(token) ?? creds;
       if (known && known.guest_id !== creds?.guest_id) setCreds(known);
-      const res = await requestJoin({ token, name, accept_notice: true, ...(known ?? {}) });
+      // The notice on the screen is what the server keeps as their consent,
+      // and it refuses one that says less than the room keeps by now.
+      const res = await requestJoin({ token, name, accept_notice: notice, ...(known ?? {}) });
       writeName(name);
       setAccepted(notice);
       setKnockedView(res.status);
@@ -483,7 +489,10 @@ export default function GuestMeetPage() {
     setBusy(true);
     setError(null);
     try {
-      await requestJoin({ token, name: state.name, accept_notice: true, ...creds });
+      // Walking back into a place still held keeps the consent the row has.
+      // Should the place have gone meanwhile this is a knock, made under the
+      // notice agreed to this visit (or the one the waiting lobby shows next).
+      await requestJoin({ token, name: state.name, accept_notice: accepted ?? notice, ...creds });
     } catch (err) {
       setError(humanizeConvexError(err, "Could not rejoin the call"));
       // A try that failed (the network was not back yet) is not the one
@@ -560,7 +569,10 @@ export default function GuestMeetPage() {
     const next = new GuestCall(choice, { mic: !!tracks.audio, camera: !!tracks.video }, tracks);
     setCall(next);
     try {
-      const minted = await mintToken(creds);
+      // A press carries the notice it was made under, which the server keeps
+      // as their consent; the page walking them in carries none and is held
+      // to what they agreed to (a room that keeps more is refused).
+      const minted = await mintToken({ ...creds, ...(pressed ? { accept_notice: notice } : {}) });
       await next.connect(minted);
     } catch (err) {
       await next.leave();
@@ -637,12 +649,22 @@ export default function GuestMeetPage() {
       setCall(next);
       await next.reconnectWith(minted);
       setReopenTries(0);
-    } catch {
+    } catch (err) {
       await next.leave();
+      // The room keeps more now than they agreed to (a recording started, a
+      // public link turned on while they were inside): a new connection is
+      // theirs to choose, so the page goes back to the lobby, which shows the
+      // wider notice and its Join.
+      if (guestJoinRefusalOf(err) === "notice_changed" && !moved()) {
+        await old.leave();
+        setCall((cur) => (cur === old || cur === next ? null : cur));
+        return;
+      }
       setCall((cur) => (cur === next ? old : cur));
       setReopenTries((n) => n + 1);
-      // Whatever the server refused (removed, ended, no longer admitted), its
-      // view moves the page to that ending, which says it better than a line.
+      // Whatever else the server refused (removed, ended, no longer
+      // admitted), its view moves the page to that ending, which says it
+      // better than a line.
     } finally {
       setReopening(false);
     }
@@ -712,6 +734,7 @@ export default function GuestMeetPage() {
         transcribed={transcribed}
         recording={recording}
         videoPublic={videoPublic}
+        wordsPublic={wordsPublic}
         accepted={accepted}
         reconnecting={reopening}
         ended={ended}
@@ -783,6 +806,8 @@ export default function GuestMeetPage() {
         live={!!info?.live}
         transcribed={transcribed}
         recording={recording}
+        videoPublic={videoPublic}
+        wordsPublic={wordsPublic}
         accepted={accepted}
         creatorTold={!!state?.creator_told}
         doorFull={doorFull}

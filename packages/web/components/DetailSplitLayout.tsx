@@ -6,6 +6,7 @@ import { hasOpenModal } from "../shortcuts/registry";
 import { useTabActive } from "../hooks/usePagePresence";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 // List, then detail — each taking the full stage:
 //   click/enter → the detail covers the list
 //   Esc / ✕     → back to the list
@@ -38,8 +39,7 @@ export function DetailSplitLayout({
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || hasOpenModal()) return;
       if (useInboxStore.getState().shortcutsPanelOpen) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (keyBelongsElsewhere(e.target)) return;
       e.preventDefault();
       router.push(closeHref);
     };

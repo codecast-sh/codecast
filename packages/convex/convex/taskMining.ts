@@ -1162,6 +1162,18 @@ export const webGetDocDetail = query({
   },
 });
 
+/** A task's direct children the viewer may read, oldest first, capped: a
+ *  checklist, never a crawl. */
+async function directSubtasks(ctx: any, userId: Id<"users">, taskId: Id<"tasks">): Promise<Doc<"tasks">[]> {
+  const rows: Doc<"tasks">[] = await ctx.db
+    .query("tasks")
+    .withIndex("by_parent_id", (q: any) => q.eq("parent_id", taskId))
+    .take(100);
+  const out: Doc<"tasks">[] = [];
+  for (const r of rows) if (await canAccessTask(ctx, userId, r)) out.push(r);
+  return out.sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+}
+
 export const webGetTaskDetail = query({
   args: {
     id: v.string(),
@@ -1389,6 +1401,10 @@ export const webGetTaskDetail = query({
       assignee_info,
       comments: enrichedComments,
       linked_conversations: linkedConversations,
+      // The task's direct children, so a surface that never mounted the task
+      // list (a session's task chip) draws the same subtask checklist and
+      // progress. The client files each into the one tasks collection.
+      subtasks: await directSubtasks(ctx, userId, task._id),
       related_docs: relatedDocs,
       source_insight: insight,
       creator,

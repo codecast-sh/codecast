@@ -1,10 +1,10 @@
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage } from "../../lib/conversationProcessor";
-import { isPollResponsePayload } from "@codecast/shared/contracts";
+import { isBootstrapPrompt, isPollResponsePayload } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
 import { stripMentionContext, stripPastedContent } from "@codecast/shared/contracts";
-import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
+import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, parseProposalMessage, parseTaskCommentMessage, isTeammateFramingOnly, isSpawnedTaskPrompt, parseSpawnedTaskPrompt, parseChatWakePrompt, parseHuddleSummaryTag, isToolResultCarrier } from "../sessionMessage";
 import { parseCastCommandString, stripCdPrefix, isDecideCastCommand, type ParsedCastCommand, type DecideArgs } from "../castCommand";
 import { hasRichMarkdown } from "../../lib/conversationMarkdown";
 import { parseSessionHandoff } from "../../lib/sessionHandoff";
@@ -276,9 +276,10 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // The user rows fold mode keeps: what a person said to the agent, a chat
 // line that woke it, and a trigger run (a role's routine or a session under it
 // needing input: what woke the agent and why, so its reply never reads as
-// unprompted). Everything else on the user rail was sent by a machine (a poll
+// unprompted), and a role's brief, folded, because it is the context every
+// reply after it answers to. Everything else on the user rail was sent by a machine (a poll
 // answer, an interrupt, a notice, a session's report).
-export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff', 'scheduled_task']);
+export const FOLD_KEPT_USER_KINDS = new Set<UserMessageKind["kind"]>(['normal', 'direct_user', 'decision_answer', 'plan', 'chat_wake', 'session_handoff', 'scheduled_task', 'role_brief']);
 
 // Dedup key for matching a still-pending message against its eventual JSONL echo.
 // The daemon collapses newlines to spaces on inject (injectViaTmux) and a few control
@@ -322,6 +323,9 @@ export function classifyUserMessage(
   const handoff = parseSessionHandoff(tNoReminders);
   if (handoff) return { kind: 'session_handoff', handoff };
   if (tNoReminders.startsWith('<scheduled-task')) return { kind: 'scheduled_task' };
+  // The brief that seats or re-seats a standing agent: the session's context,
+  // written by a machine, so it folds to one row that opens it.
+  if (isBootstrapPrompt(tNoReminders)) return { kind: 'role_brief' };
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
@@ -332,6 +336,10 @@ export function classifyUserMessage(
   // note the wrapper carries for the agent stays out of the bubble.
   const proposalMsg = parseProposalMessage(t);
   if (proposalMsg) return { kind: 'direct_user', from: proposalMsg.from, body: proposalMsg.about ? `> ${proposalMsg.about}\n\n${proposalMsg.body}` : proposalMsg.body };
+  // A person's comment on the task this session owns, delivered while it
+  // works: their words under a quote naming the task, the same as above.
+  const taskComment = parseTaskCommentMessage(t);
+  if (taskComment) return { kind: 'direct_user', from: taskComment.from, body: taskComment.about ? `> ${taskComment.about}\n\n${taskComment.body}` : taskComment.body };
   if (isSessionEscalationMessage(tNoReminders)) {
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };

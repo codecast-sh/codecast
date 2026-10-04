@@ -9,16 +9,20 @@ import {
   RECORDING_EMPTY_ROOM_STOP_MS,
   RECORDING_LEFT_ROOM_HOLD_MS,
   RECORDING_MINUTES_SPENT_MESSAGE,
+  EGRESS_BUSY_MESSAGE,
   SCREEN_RETRY_GAP_MS,
   screenStartRetryable,
   START_RETRY_LIMIT,
   mayDeleteRun,
+  mayShareFrame,
   mayShareVideo,
   sharedVideoRuns,
   nextPollDelayMs,
   huddleKeepers,
   peopleInRoom,
   plainEgressError,
+  plainStoredError,
+  filmedSpan,
   RECORDING_POLL_FAST_MS,
   RECORDING_POLL_MS,
   runIdOf,
@@ -78,6 +82,7 @@ describe("screen files", () => {
       started_at: undefined,
       stop_reason: "failed" as const,
       error: "LiveKit has no recording capacity free right now. Try again in a minute.",
+      error_kind: "busy" as const,
       updated_at: now - SCREEN_RETRY_GAP_MS,
     };
     expect(screenStartRetryable(failed, now)).toBe(true);
@@ -85,7 +90,11 @@ describe("screen files", () => {
     // Not before its gap, not for spent minutes, not once it wrote frames,
     // not after a stop, and not past the limit.
     expect(screenStartRetryable({ ...failed, updated_at: now - 1_000 }, now)).toBe(false);
-    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE, error_kind: "minutes_spent" as const }, now)).toBe(false);
+    // The kind decides, never the words: copy edits to either message leave
+    // the retry rule where it was.
+    expect(screenStartRetryable({ ...failed, error: "Reworded: no minutes left.", error_kind: "minutes_spent" as const }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE, error_kind: "busy" as const }, now)).toBe(true);
     expect(screenStartRetryable({ ...failed, started_at: now - 60_000 }, now)).toBe(false);
     expect(screenStartRetryable({ ...failed, stop_reason: "pressed" as const }, now)).toBe(false);
     expect(screenStartRetryable({ ...failed, start_attempts: START_RETRY_LIMIT }, now)).toBe(false);
@@ -221,22 +230,32 @@ describe("LiveKit's view onto a row", () => {
   });
 
   test("LiveKit's errors are said in plain words, never quoted", () => {
-    expect(plainEgressError(undefined)).toBe("LiveKit stopped the recording without saying why.");
-    expect(plainEgressError("track not found")).toBe("LiveKit stopped the recording unexpectedly.");
-    expect(plainEgressError("egress minutes exceeded")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
-    expect(plainEgressError("project quota reached")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
-    expect(plainEgressError("max duration limit reached")).toBe("The recording stopped at LiveKit's time limit.");
+    expect(plainEgressError(undefined).error).toBe("LiveKit stopped the recording without saying why.");
+    expect(plainEgressError("track not found").error).toBe("LiveKit stopped the recording unexpectedly.");
+    expect(plainEgressError("egress minutes exceeded")).toEqual({ error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" });
+    expect(plainEgressError("project quota reached")).toEqual({ error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" });
+    expect(plainEgressError("max duration limit reached").error).toBe("The recording stopped at LiveKit's time limit.");
     const s3 =
       "failed to upload: AccessDenied: Access Denied status code: 403, request id: 7f2a, host id: https://0123abcd.r2.cloudflarestorage.com/codecast-call-recordings/calls/k57x/1700-composite.mp4";
-    expect(plainEgressError(s3)).toBe("The video could not be saved to storage.");
-    expect(plainEgressError("PutObject: RequestTimeout")).toBe("The video could not be saved to storage.");
+    expect(plainEgressError(s3)).toEqual({ error: "The video could not be saved to storage.", kind: "server" });
+    expect(plainEgressError("PutObject: RequestTimeout").error).toBe("The video could not be saved to storage.");
     // Whatever LiveKit says, a reader never sees the bucket or a URL.
     for (const raw of [s3, "https://lk.example/twirp failed", "track not found", "upload to s3 failed"]) {
-      expect(plainEgressError(raw)).not.toContain("cloudflarestorage");
-      expect(plainEgressError(raw)).not.toContain("https://");
+      expect(plainEgressError(raw).error).not.toContain("cloudflarestorage");
+      expect(plainEgressError(raw).error).not.toContain("https://");
     }
     expect(isMinutesSpentText("egress minutes exceeded")).toBe(true);
     expect(isMinutesSpentText("no egress workers available")).toBe(false);
+  });
+
+  test("a stored error from before the plain words is said plainly on the way out; plain words pass as they are", () => {
+    const s3 = "LiveKit: failed to upload: AccessDenied, host id: https://0123abcd.r2.cloudflarestorage.com/codecast-call-recordings/calls/k57x/a.mp4";
+    expect(plainStoredError(s3)).toBe("The video could not be saved to storage.");
+    expect(plainStoredError("LiveKit: track not found")).toBe("LiveKit stopped the recording unexpectedly.");
+    expect(plainStoredError("see https://lk.example/x")).not.toContain("https://");
+    expect(plainStoredError(EGRESS_BUSY_MESSAGE)).toBe(EGRESS_BUSY_MESSAGE);
+    expect(plainStoredError(RECORDING_MINUTES_SPENT_MESSAGE)).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
+    expect(plainStoredError(undefined)).toBeNull();
   });
 });
 
@@ -280,6 +299,26 @@ describe("the video on a public link", () => {
     // Somebody else pressed one of them: that one is not Ana's to publish.
     expect(mayShareVideo("ana", [...runs, { started_by: "ben" }], false)).toBe(false);
   });
+  test("a picture from a file takes the run's presser or an admin, or the screen being the caller's own", () => {
+    const run = [
+      { kind: "composite", started_by: "ana" },
+      { kind: "screen", started_by: "ana" },
+    ];
+    const room = { kind: "composite", participant_identity: null };
+    const bensScreen = { kind: "screen", participant_identity: "ben" };
+    expect(mayShareFrame("ana", room, run, false)).toBe(true);
+    expect(mayShareFrame("ben", room, run, false)).toBe(false);
+    expect(mayShareFrame("ben", room, run, true)).toBe(true);
+    // Ben may publish a picture of his own screen, never of Cat's.
+    expect(mayShareFrame("ben", bensScreen, run, false)).toBe(true);
+    expect(mayShareFrame("ben", { kind: "screen", participant_identity: "cat" }, run, false)).toBe(false);
+    // A guest's identity never matches a teammate's id.
+    expect(mayShareFrame("ben", { kind: "screen", participant_identity: "guest:ben" }, run, false)).toBe(false);
+    // A run with no room file is judged by the rows it has, never waved
+    // through by an empty list.
+    expect(mayShareFrame("ben", { kind: "screen", participant_identity: "cat" }, [{ kind: "screen", started_by: "ana" }], false)).toBe(false);
+    expect(mayShareFrame("ben", { kind: "screen", participant_identity: "cat" }, [], false)).toBe(false);
+  });
 
   test("the link shows the finished room videos pressed for before the choice, and counts the later ones", () => {
     const row = (requested_at: number, extra: Record<string, unknown> = {}) => ({ kind: "composite", status: "ready", started_at: requested_at + 500, requested_at, ...extra });
@@ -293,5 +332,17 @@ describe("the video on a public link", () => {
     expect(at(200)).toEqual([[100], [200, 300]]);
     // A link shared before the cutoff existed keeps showing every room video.
     expect(at(null)).toEqual([[100, 200, 300], []]);
+  });
+});
+
+describe("filmedSpan", () => {
+  test("a deleted run's stretch is the room video's, on the call's clock; screens stand in only without one", () => {
+    const call = 1_000_000;
+    const comp = { kind: "composite" as const, started_at: call + 132_000, ended_at: call + 375_000, duration_ms: 243_000 };
+    const scr = { kind: "screen" as const, started_at: call + 120_000, ended_at: call + 400_000, duration_ms: 280_000 };
+    expect(filmedSpan([comp, scr], call)).toEqual({ from_ms: 132_000, to_ms: 375_000 });
+    expect(filmedSpan([{ ...comp, started_at: undefined }, scr], call)).toEqual({ from_ms: 120_000, to_ms: 400_000 });
+    expect(filmedSpan([{ kind: "composite" as const, started_at: call + 5_000, ended_at: undefined, duration_ms: 9_000 }], call)).toEqual({ from_ms: 5_000, to_ms: 14_000 });
+    expect(filmedSpan([{ ...comp, started_at: undefined }], call)).toBeNull();
   });
 });

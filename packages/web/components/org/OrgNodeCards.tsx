@@ -252,7 +252,7 @@ function actionOf(data: CardData): { meta: OrgGhostMeta; word: string } | null {
   return chip ? { meta: chip, word: CHANGE_KIND_WORD[chip.kind] ?? String(chip.kind) } : null;
 }
 
-function Ports() {
+export function Ports() {
   // Edges need handles; the cards hide them so the tree reads as plain lines.
   const hidden = { opacity: 0, width: 1, height: 1, minWidth: 1, minHeight: 1, border: 0, background: "transparent", pointerEvents: "none" as const };
   return (
@@ -263,7 +263,7 @@ function Ports() {
   );
 }
 
-function Frame({
+export function Frame({
   children, selected, dropTarget, dragging, className, style, accent, kind,
 }: {
   children: ReactNode; selected?: boolean; dropTarget?: boolean; dragging?: boolean; className?: string; style?: React.CSSProperties;

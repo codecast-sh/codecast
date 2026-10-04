@@ -197,7 +197,9 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     const surface = need(query, 'surface');
     const all = await rows();
     const ref = (k: 'good' | 'bad') => (query[k] ? endpointRef(all, surface, query[k], k) : undefined);
-    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits));
+    const freeze = query.freeze || undefined;
+    if (freeze && !all.some((r) => r.surface === surface && r.freezeId.startsWith(freeze))) throw new NotFound(`no ${surface} freeze ${freeze}`);
+    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits), freeze);
   },
   'GET /commit/:sha': ({ params, query }) => {
     if (query.surface && !surfaceMeta(query.surface)) throw new NotFound(`no surface ${query.surface}`);
@@ -247,10 +249,10 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     if (!r) throw new NotFound(`no sim run ${params.run} in session ${params.session}`);
     return r;
   },
-  'POST /sim/shrink': ({ body }) => {
+  'POST /sim/shrink': async ({ body }) => {
     const b = (body ?? {}) as { session?: unknown; run?: unknown };
     if (typeof b.session !== 'string' || typeof b.run !== 'string') throw new BadRequest('a shrink names a session and a run');
-    return { job: startShrink(b.session, b.run).id };
+    return { job: (await startShrink(b.session, b.run)).id };
   },
   'POST /sim/sweep': async ({ body }) => {
     const b = (body ?? {}) as { filter?: unknown; seeds?: unknown };

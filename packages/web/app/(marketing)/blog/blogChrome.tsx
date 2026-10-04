@@ -97,17 +97,27 @@ export function Code({ children }: { children: ReactNode }) {
   );
 }
 
-/** A framed screenshot with a mono caption; images live under public/blog/<slug>/. */
-export function Screenshot({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+/** A framed figure with a mono caption. `wide` lets it break out of the text
+ *  column on desktop, for illustrations that need the room. */
+export function Figure({ caption, wide = false, children }: { caption: ReactNode; wide?: boolean; children: ReactNode }) {
   return (
-    <figure className="my-8">
+    <figure className={`my-8${wide ? " md:-mx-20" : ""}`}>
       <div className="rounded-xl border shadow-xl overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className="w-full block" loading="lazy" />
+        {children}
       </div>
       <figcaption className="mt-3 text-sm font-mono text-center" style={{ color: SOL.base1 }}>
         {caption}
       </figcaption>
     </figure>
+  );
+}
+
+/** A framed screenshot with a mono caption; images live under public/blog/<slug>/. */
+export function Screenshot({ src, alt, caption }: { src: string; alt: string; caption: string }) {
+  return (
+    <Figure caption={caption}>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src={src} alt={alt} className="w-full block" loading="lazy" />
+    </Figure>
   );
 }

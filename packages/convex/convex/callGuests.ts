@@ -102,6 +102,7 @@ import { sha256Hex } from "./lib/hash";
 import { requireUser } from "./lib/requireUser";
 import { newSlug } from "./lib/slug";
 import { roomRecordingState } from "./lib/callRecordingRuns";
+import { guestNoticeValidator } from "./lib/callValidators";
 import { personImage, publicPersonLabel, teammateLabel } from "./lib/personLabel";
 import {
   GUEST_ROSTER_TAIL_MS,
@@ -139,9 +140,11 @@ import {
   isGuestIdentity,
   isGuestPresent,
   normalizeGuestName,
+  noticeWidened,
   type CallGuestView,
   type GuestJoinRefusal,
   type GuestLinkRefusal,
+  type GuestNotice,
 } from "@codecast/shared/contracts";
 
 // The link token is the whole secret of a link, and the guest secret the
@@ -375,21 +378,44 @@ export function projectGuest(g: Doc<"call_guests">) {
 }
 
 /** What a guest is told before joining and while inside: is this call being
- *  transcribed, is it being recorded, and will that video be on the call's
+ *  transcribed, is it being recorded, and does either go out by the call's
  *  public link. Every huddle transcribes unless the room switched it off
  *  (calls.setRoomTranscribeOff); recording is a composite run in progress
- *  (call_recordings), which is what puts their face on file; and a run whose
+ *  (call_recordings), which is what puts their face on file; a run whose
  *  call shares its video by link (roomRecordingState.video_shared) puts it
- *  in front of anyone with that link. */
-async function roomNotice(ctx: any, roomKey: string): Promise<{ transcribed: boolean; recording: boolean; video_public: boolean }> {
+ *  in front of anyone with that link; and a record whose link is on shows
+ *  its transcript to anyone with it as it is written (the room's stamp,
+ *  callRooms.stampRoomWordsPublic, so the record itself is never read). */
+export async function roomNotice(ctx: any, roomKey: string): Promise<Required<GuestNotice>> {
   const run = await roomRecordingState(ctx, roomKey);
+  const state = await readRoomState(ctx, roomKey);
   const recording = !!run && run.status !== "stopping";
+  const transcribed = !state?.transcribe_off;
   return {
-    transcribed: !(await readRoomState(ctx, roomKey))?.transcribe_off,
+    transcribed,
     recording,
     video_public: recording && !!run?.video_shared,
+    words_public: transcribed && !!state?.words_public,
   };
 }
+
+/** The notice a guest agreed to, checked against the room's: the notice
+ *  their page showed (`shown`), or for a page from before pages said which
+ *  (`true`), the room's as it is. A page showing less than the room keeps
+ *  (a recording that started as they pressed) is refused; the guest reads
+ *  the wider notice the page now shows and presses again. */
+function agreedNotice(shown: GuestNotice | true, now: GuestNotice): GuestNotice {
+  if (shown === true) return now;
+  if (noticeWidened(shown, now)) throw new Error(NOTICE_CHANGED_ON_KNOCK);
+  return {
+    recording: shown.recording,
+    transcribed: shown.transcribed,
+    video_public: !!shown.video_public,
+    words_public: !!shown.words_public,
+  };
+}
+
+const NOTICE_CHANGED_ON_KNOCK = "The call changed while you were reading: it keeps more than the notice you saw. Read it again, then ask to join.";
 
 /** The name the guest's page gives the meeting, which also travels in every
  *  unfurl of the link (bot-meta caches it). A channel the whole team can see
@@ -488,7 +514,7 @@ export const createGuestLink = mutation({
     const mine = (
       await ctx.db
         .query("call_guest_links")
-        .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+        .withIndex("by_room_expires", (q) => q.eq("room_key", args.room_key).gt("expires_at", now))
         .collect()
     ).filter((l) => String(l.created_by) === String(userId) && linkOpen(l, now));
     if (!args.fresh && args.ttl_ms === undefined && mine.length > 0) {
@@ -529,7 +555,7 @@ export const listGuestLinks = query({
     const links = (
       await ctx.db
         .query("call_guest_links")
-        .withIndex("by_room", (q) => q.eq("room_key", args.room_key))
+        .withIndex("by_room_expires", (q) => q.eq("room_key", args.room_key).gt("expires_at", now))
         .collect()
     ).filter((l) => linkOpen(l, now));
     // Counts of the guests present now, from the room's own lease-bounded
@@ -879,7 +905,9 @@ export const requestJoin = mutation({
   args: {
     token: v.string(),
     name: v.string(),
-    accept_notice: v.literal(true),
+    // The notice the page showed when Ask was pressed (GuestNotice), or
+    // `true` from a page that predates saying which.
+    accept_notice: v.union(v.literal(true), guestNoticeValidator),
     guest_id: v.optional(v.string()),
     secret: v.optional(v.string()),
   },
@@ -917,6 +945,7 @@ export const requestJoin = mutation({
       if (mine.status === "denied" && now - (mine.decided_at ?? 0) < GUEST_DENY_COOLDOWN_MS) {
         throw new Error("The room said not now. You can ask again in a minute.");
       }
+      const agreed = agreedNotice(args.accept_notice, await roomNotice(ctx, link.room_key));
       const atDoor = waiting.some((w) => String(w.guest._id) === String(mine._id));
       if (!atDoor && !doorHasRoom(waiting, link._id, mine._id)) throw new Error(DOOR_FULL_TEXT);
       // A knock the room is already showing is refreshed at most every few
@@ -931,6 +960,7 @@ export const requestJoin = mutation({
         knocked_at: freshKnock ? now : mine.knocked_at,
         last_seen: now,
         notice_accepted_at: now,
+        notice_accepted: agreed,
         decided_by: undefined,
         decided_at: undefined,
         left_reason: undefined,
@@ -961,6 +991,7 @@ export const requestJoin = mutation({
       throw new Error("Too many people are joining from this link right now. Try again in a minute.");
     }
     if (!doorHasRoom(waiting, link._id)) throw new Error(DOOR_FULL_TEXT);
+    const agreed = agreedNotice(args.accept_notice, await roomNotice(ctx, link.room_key));
     const secret = newSlug(GUEST_SECRET_LENGTH);
     const told = await tellCreatorIfAlone(ctx, link, { name }, now);
     const guestId = await ctx.db.insert("call_guests", {
@@ -974,6 +1005,7 @@ export const requestJoin = mutation({
       knocked_at: now,
       last_seen: now,
       notice_accepted_at: now,
+      notice_accepted: agreed,
       ...(told ? { creator_told_at: told } : {}),
     });
     return { guest_id: String(guestId), secret, status: "waiting" as const };
@@ -1128,17 +1160,32 @@ export const leaveCall = mutation({
 // ── Media ──────────────────────────────────────────────────────────────────
 
 /** Who the media token is for, or why not (a GuestJoinRefusal the page acts
- *  on). A query so the hash, the status and the huddle are read at one
- *  instant. */
-export const authForGuestToken = internalQuery({
-  args: { guest_id: v.string(), secret: v.string() },
+ *  on). One transaction, so the hash, the status, the huddle and the notice
+ *  are read at one instant.
+ *
+ *  Consent is checked here, not only on the page: a room that keeps more
+ *  than the guest agreed to (a recording started, a link turned on) is
+ *  refused as `notice_changed`, whatever page asks, so an old bundle or a
+ *  client that skips the lobby's widened notice cannot carry them into it.
+ *  A Join pressed under the wider notice sends it (`accept_notice`), which
+ *  is checked the same way and kept as what they agreed to. A row from
+ *  before notices were kept (no notice_accepted) is not held to one. */
+export const authForGuestToken = internalMutation({
+  args: { guest_id: v.string(), secret: v.string(), accept_notice: v.optional(guestNoticeValidator) },
   handler: async (ctx, args) => {
     const refuse = (reason: GuestJoinRefusal) => ({ ok: false as const, reason });
     const guest = await guestBySecret(ctx, args.guest_id, args.secret);
     if (!guest) return refuse("not_a_guest");
     if (guest.status !== "admitted") return refuse(guest.status === "removed" ? "removed" : "not_admitted");
-    if (!(await huddleAlive(ctx, guest.room_key, Date.now()))) return refuse("ended");
+    const now = Date.now();
+    if (!(await huddleAlive(ctx, guest.room_key, now))) return refuse("ended");
     if (!(await teamHasFeature(ctx, guest.team_id, "calls"))) return refuse("unavailable");
+    const notice = await roomNotice(ctx, guest.room_key);
+    const agreed = args.accept_notice ?? guest.notice_accepted;
+    if (agreed && noticeWidened(agreed, notice)) return refuse("notice_changed");
+    if (args.accept_notice) {
+      await ctx.db.patch(guest._id, { notice_accepted: agreedNotice(args.accept_notice, notice), notice_accepted_at: now });
+    }
     return { ok: true as const, room_key: guest.room_key, identity: guestIdentity(String(guest._id)), name: guest.name };
   },
 });
@@ -1166,11 +1213,14 @@ export const authForGuestToken = internalQuery({
  *  (firstName drops the mark), and normalizeGuestName strips it, so it never
  *  doubles. The page gets the plain name back for its own "you". */
 export const mintGuestToken = action({
-  args: { guest_id: v.string(), secret: v.string() },
+  // `accept_notice`: the notice on the screen a Join was pressed from. A
+  // connect the page makes by itself (walking in once let in, a reconnect)
+  // sends none and is held to what the guest last agreed to.
+  args: { guest_id: v.string(), secret: v.string(), accept_notice: v.optional(guestNoticeValidator) },
   handler: async (ctx, args): Promise<{ url: string; token: string; identity: string; name: string }> => {
     const cfg = livekitConfigFromEnv();
     if (!cfg) throw new Error("Calling is not configured");
-    const auth = await ctx.runQuery(internal.callGuests.authForGuestToken, args);
+    const auth = await ctx.runMutation(internal.callGuests.authForGuestToken, args);
     if (!auth.ok) throw new ConvexError({ code: auth.reason, message: GUEST_JOIN_REFUSAL_TEXT[auth.reason] });
     const token = await signLivekitJwt({
       apiKey: cfg.apiKey,

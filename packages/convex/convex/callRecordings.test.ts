@@ -14,7 +14,7 @@ import { CALL_RECORDING_URL_WINDOW_MS, callRecordingUrlWindow, dmRoomKey, guestI
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { sha256Hex } from "./lib/hash";
-import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startErrorMessage } from "./callRecordings";
+import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, walkAccountedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startFailure } from "./callRecordings";
 import { LivekitApiError } from "./lib/livekitServer";
 import { stableSigningWindow } from "./lib/r2";
 import { claimShareToken } from "./publicShare";
@@ -957,13 +957,21 @@ describe("who may watch and delete", () => {
     await settle(t);
     expect(world.objects.size).toBe(0);
     expect(world.deletes).toEqual(expect.arrayContaining([comp.r2_key, scr.r2_key, stray]));
-    const deleted = (await eventRows(t)).find((r: any) => r.event === "record_deleted");
+    const events = await eventRows(t);
+    const deleted = events.find((r: any) => r.event === "record_deleted");
     expect(deleted).toMatchObject({ transcript_id: call });
     expect(String(deleted.user_id)).toBe(String(ben));
+    // The delete names the run, as its start and stop did, and what it had
+    // filmed on the call's clock, so the thread can say which one went.
+    expect(deleted.event_run_id).toBe(String(recording_id));
+    expect(events.filter((r: any) => r.event === "record_on" || r.event === "record_off").map((r: any) => r.event_run_id)).toEqual(
+      expect.arrayContaining([String(recording_id)]),
+    );
+    expect(deleted.event_span.to_ms).toBeGreaterThanOrEqual(deleted.event_span.from_ms);
   });
 
-  test("frames shared from a recording as public images are deleted with it", async () => {
-    const { t, ana, cat, room, as } = await seed();
+  test("a picture of a recording goes public only by whoever may publish it, the room is told, and it comes down with it", async () => {
+    const { t, ana, ben, cat, room, as } = await seed();
     world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
     const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
     await settle(t);
@@ -971,19 +979,65 @@ describe("who may watch and delete", () => {
     await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
     world.complete("EG_1", (await rows(t))[0].r2_key, Date.now(), 1_000);
     await look(t, recording_id);
-    const image = await t.run(async (ctx: any) => ctx.storage.store(new Blob(["png"], { type: "image/png" })));
-    const note = (storage_id: string) => t.mutation(internal.callRecordings.cliNoteFrameShare, { api_token: TOKEN, recording_id, storage_id });
-    // Ben (the token) may read the call; the same image noted twice is one row.
-    await note(String(image));
-    await note(String(image));
-    expect(await t.run(async (ctx: any) => (await ctx.db.query("call_frame_shares").collect()).length)).toBe(1);
-    // Someone who cannot read the call cannot tie images to it.
+    // Someone else's object (an attachment, an avatar, a session's image)
+    // that a client might name: sharing never takes a storage id, so it
+    // survives the recording's delete.
+    const theirs = await t.run(async (ctx: any) => ctx.storage.store(new Blob(["someone else's"], { type: "image/png" })));
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).toString("base64");
+    const share = (api_token: string, image_base64: string, extra: Record<string, unknown> = {}) =>
+      t.action(internal.callRecordings.cliShareFrame, { api_token, recording_id, image_base64, ...extra } as any);
+    // The stop's scheduled work runs first: convex-test holds one
+    // transaction at a time, and the share's store must not land inside it.
+    await settle(t);
+    // Ana pressed Record, so a picture of it is hers to publish; Ben (the
+    // other token) may read the call but not put it on a public link, and
+    // nothing is stored when he tries.
+    const ANA = "a".repeat(64);
+    await t.run(async (ctx: any) => ctx.db.insert("api_tokens", { user_id: ana, token_hash: await hashToken(ANA), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any));
+    const stored = () => t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length);
+    const unshared = await stored();
+    await expect(share(TOKEN, png)).rejects.toThrow(/whoever recorded this call, a team admin, or the person whose screen/);
+    expect(await stored()).toBe(unshared);
+    await expect(share(ANA, png, { storage_id: String(theirs) })).rejects.toThrow();
+    // The same picture shared twice is one object, one link and one row, and
+    // the row names the object it stored and the moment it shows.
+    const first = await share(ANA, png, { at_ms: 150_400 });
+    const again = await share(ANA, png, { at_ms: 150_400 });
+    expect(again).toEqual(first);
+    const shares = await t.run(async (ctx: any) => ctx.db.query("call_frame_shares").collect());
+    expect(shares).toHaveLength(1);
+    expect(String(shares[0].storage_id)).toBe(first.storage_id);
+    expect(String(shares[0].storage_id)).not.toBe(String(theirs));
+    expect(shares[0].at_ms).toBe(150_400);
+    // The room's thread says a picture went public, once, with the moment.
+    const told = (await eventRows(t)).filter((r: any) => r.event === "frame_shared");
+    expect(told).toHaveLength(1);
+    expect(String(told[0].user_id)).toBe(String(ana));
+    expect(told[0].text).toMatch(/^cl-\d+@2:30$/);
+    // The call page lists it for every reader, with what it shows and its link.
+    const page = await as(String(ben)).query(api.callRecordings.webCallRecordings, { call: String(shares[0].transcript_id), url_window: callRecordingUrlWindow() });
+    expect(page?.frame_shares).toHaveLength(1);
+    expect(page?.frame_shares[0]).toMatchObject({ _id: String(shares[0]._id), kind: "composite", at_ms: 150_400, shared_by: String(ana), url: expect.any(String) });
+    // Only pictures: anything else would be served publicly under its type.
+    await expect(share(ANA, Buffer.from("<html>").toString("base64"))).rejects.toThrow(/PNG or JPEG/);
+    // Someone who cannot read the call cannot share from it, and nothing is stored.
     const CAT = "c".repeat(64);
     await t.run(async (ctx: any) => ctx.db.insert("api_tokens", { user_id: cat, token_hash: await hashToken(CAT), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any));
-    await expect(t.mutation(internal.callRecordings.cliNoteFrameShare, { api_token: CAT, recording_id, storage_id: String(image) })).rejects.toThrow(/Recording not found/);
+    const before = await t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length);
+    await expect(share(CAT, Buffer.from([0xff, 0xd8, 0xff, 9]).toString("base64"))).rejects.toThrow(/Recording not found/);
+    expect(await t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length)).toBe(before);
+    // Taking a picture down is any reader's, as taking the video off the link
+    // is; Cat, who cannot read the call, changes nothing. Gone twice is fine.
+    expect(await as(String(cat)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: false });
+    expect(await as(String(ben)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: true });
+    expect(await as(String(ben)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: false });
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(first.storage_id))).toBeNull();
+    // Shared again, it goes with the recording.
+    const second = await share(ANA, png, { at_ms: 150_400 });
 
     expect(await as(String(ana)).mutation(api.callRecordings.deleteRecording, { recording_id })).toEqual({ deleted: 1 });
-    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(image))).toBeNull();
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(second.storage_id))).toBeNull();
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(theirs))).not.toBeNull();
     expect(await t.run(async (ctx: any) => (await ctx.db.query("call_frame_shares").collect()).length)).toBe(0);
   });
 
@@ -1463,6 +1517,29 @@ describe("a deleted team", () => {
 // egress minutes are spent (seen on prod 2026-10-03); only the first is worth
 // another press, so the room is told which one it hit.
 describe("orphaned objects", () => {
+  test("the rows are read page by page, and every page counts", async () => {
+    const { t, room, team, ana } = await seed();
+    await t.run(async (ctx: any) => {
+      const call = await ctx.db.insert("transcripts", { room_key: room, team_id: team, started_by: ana, status: "ended", started_at: Date.now(), routes: [], last_seq: 0 } as any);
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert("call_recordings", {
+          transcript_id: call, room_key: room, team_id: team, kind: "composite", status: "ready",
+          r2_key: `calls/t${i}/${i}00-composite.mp4`, ...(i === 4 ? { live_frame_key: "calls/t4/400-composite-live.jpeg" } : {}),
+          started_by: ana, requested_at: Date.now(), updated_at: Date.now(),
+        } as any);
+      }
+    });
+    const pages: number[] = [];
+    const accounted = await walkAccountedRecordingObjects(async (args) => {
+      const page = await t.query(internal.callRecordings.accountedRecordingObjects, args);
+      pages.push(page.keys.length);
+      return page;
+    }, 2);
+    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(accounted.keys.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-composite.mp4`).concat("calls/t4/400-composite-live.jpeg").sort());
+    expect(accounted.prefixes.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-`));
+  });
+
   test("what no row accounts for goes once it is old enough, and every LiveKit manifest goes", () => {
     const now = 10 * ORPHAN_OBJECT_GRACE_MS;
     const old = now - ORPHAN_OBJECT_GRACE_MS - 1;
@@ -1484,8 +1561,10 @@ describe("why a start failed", () => {
   const exhausted = (msg: string) =>
     new LivekitApiError("Egress/StartRoomCompositeEgress", 429, "resource_exhausted", JSON.stringify({ code: "resource_exhausted", msg }));
   test("spent minutes are not a busy minute", () => {
-    expect(startErrorMessage(exhausted("egress minutes exceeded"))).toMatch(/used its recording minutes/);
-    expect(startErrorMessage(exhausted("no egress workers available"))).toMatch(/Try again in a minute/);
+    expect(startFailure(exhausted("egress minutes exceeded"))).toMatchObject({ kind: "minutes_spent", error: expect.stringMatching(/used its recording minutes/) });
+    expect(startFailure(exhausted("no egress workers available"))).toMatchObject({ kind: "busy", error: expect.stringMatching(/Try again in a minute/) });
+    expect(startFailure(new LivekitApiError("Egress/StartRoomCompositeEgress", 401, "unauthenticated", "")).kind).toBe("credentials");
+    expect(startFailure(new Error("boom")).kind).toBe("server");
   });
 });
 

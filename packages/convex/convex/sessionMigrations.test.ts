@@ -370,6 +370,28 @@ describe("finishSession — the flip", () => {
     expect(canDaemonSeePendingMessage(msg as any, c, ME as any, LAPTOP)).toBe(false);
   });
 
+  test("siblings from one laptop folder share the host checkout; anyone else holding it refuses the handoff without throwing", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1", "c2"]);
+    const root = "/home/ubuntu/work/repo";
+    const source = "/Users/me/src/repo/.codecast/worktrees/a";
+    for (const r of rows) {
+      await performBeginSession({ db }, ME as any, { migration_id: r.migration_id as any, device_id: LAPTOP }, NOW);
+      const fin = await performFinishSession({ db }, ME as any, { migration_id: r.migration_id as any, project_path: root, source_path: source }, NOW + 5);
+      expect(fin.ok).toBe(true);
+    }
+    expect([conv(db, "c1").owner_device_id, conv(db, "c2").owner_device_id]).toEqual([BOX, BOX]);
+
+    const other = fixtures();
+    conv(other, "c3").project_path = root;
+    const { rows: one } = await startedBatch(other, ["c1"]);
+    await performBeginSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, device_id: LAPTOP }, NOW);
+    const refused = await performFinishSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, project_path: root, source_path: source }, NOW + 5);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.reason).toContain("is in use by session c3short");
+    expect(conv(other, "c1").owner_device_id).toBe(LAPTOP);
+  });
+
   test("refuses a row that is not in flight", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db, ["c1"]);

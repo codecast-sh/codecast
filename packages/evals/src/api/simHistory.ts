@@ -249,14 +249,18 @@ function startJob(kind: SimJob['kind'], args: string[], o: { session: string | n
 
 export class SimRequestError extends Error {}
 
-/** Starts `bun run sim --shrink <artifact folder>` on a failing run. */
-export function startShrink(sessionId: string, run: string): StoredJob {
+/** Starts `bun run sim --shrink <artifact folder>` on a failing run of a scenario the suite still holds. */
+export async function startShrink(sessionId: string, run: string): Promise<StoredJob> {
   if (sessionId === UNSESSIONED) throw new SimRequestError('a legacy unsessioned run is read-only; rerun it with bun run sim to shrink it');
   if (!safe(sessionId) || !safe(run)) throw new SimRequestError('session and run name folders, not paths');
   const dir = join(sessionsDir(), sessionId, run);
   const result = readJsonFile<SimResult>(join(dir, 'result.json'));
   if (!result) throw new SimRequestError(`no run ${run} in session ${sessionId}`);
   if (result.passed) throw new SimRequestError(`${run} passed; only a failure shrinks`);
+  // sim.ts --shrink replays the scenario by name and exits at once when the suite no longer holds it,
+  // so refuse here, where the reason can still reach the page.
+  const { scenarios } = await staticCatalog();
+  if (!scenarios.some((x) => x.name === result.scenario)) throw new SimRequestError(`${result.scenario} is no longer in the suite, so nothing can replay ${run} to shrink it`);
   return startJob('shrink', ['--shrink', dir], { session: sessionId, run, dir, total: null });
 }
 

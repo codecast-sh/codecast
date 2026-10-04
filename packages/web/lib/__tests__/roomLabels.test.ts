@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { callTitle, describeRoom, describeRoomLive } from "../calls/roomLabels";
+import { callNeedsPlace, callTitle, describeRoom, describeRoomLive } from "../calls/roomLabels";
 import { chatViewRoomKey } from "../chatViews";
 
 // One room, one name, everywhere: the dock pill, the stage header, the ring
@@ -148,9 +148,33 @@ describe("callTitle", () => {
     expect(callTitle({ title: "Launch review", room_key: "dm:ann:me" }, store as any)).toBe("Launch review");
     expect(callTitle({ room_key: "session:unknown" }, store as any)).toBe("Untitled huddle");
     expect(callTitle({ room_key: "channel:nope" }, store as any)).toBe("Untitled huddle");
-    expect(callTitle({ room_key: "rec:1fad0bfc-aaaa" }, store as any)).toBe("Untitled recording");
+    expect(callTitle({ room_key: "rec:1fad0bfc-aaaa" }, store as any)).toBe("Untitled voice note");
     expect(callTitle({ room_key: "session:unknown" }, store as any, { untitled: "Typed huddle, nothing said" })).toBe(
       "Typed huddle, nothing said",
     );
+  });
+  test("a session the store never loaded takes the server's place before the guest", () => {
+    // Two huddles with Pat in two different sessions read "A call with Pat"
+    // twice when only the store was asked; `cast calls` already named them.
+    const call = {
+      room_key: "session:unknown",
+      participants: [{ id: "guest:g1", name: "Pat" }],
+      place: { session_title: "Computer performance troubleshooting" },
+    };
+    expect(callTitle(call, store as any)).toBe("Huddle in Computer performance troubleshooting");
+    expect(callTitle({ ...call, place: null }, store as any)).toBe(callTitle({ room_key: "session:unknown", participants: call.participants }, store as any));
+    expect(callTitle({ room_key: "channel:nope", place: { channel_name: "ops" } }, store as any)).toBe("Huddle in #ops");
+    // The store still wins where it knows the room: it renames live.
+    expect(callTitle({ room_key: "session:sess1", place: { session_title: "stale" } }, store as any)).toBe(
+      "Huddle in Fix the auth race",
+    );
+  });
+  test("only an untitled session or channel the store cannot name is asked of the server", () => {
+    expect(callNeedsPlace({ room_key: "session:unknown" }, store as any)).toBe(true);
+    expect(callNeedsPlace({ room_key: "channel:nope" }, store as any)).toBe(true);
+    expect(callNeedsPlace({ room_key: "session:sess1" }, store as any)).toBe(false);
+    expect(callNeedsPlace({ title: "Launch", room_key: "session:unknown" }, store as any)).toBe(false);
+    expect(callNeedsPlace({ room_key: "dm:ann:me" }, store as any)).toBe(false);
+    expect(callNeedsPlace({ room_key: "rec:1fad0bfc-aaaa" }, store as any)).toBe(false);
   });
 });

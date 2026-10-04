@@ -287,3 +287,34 @@ describe("changes.editionStats", () => {
     expect(editionStats([by("a", "", "one@x.example"), by("b", " ", "two@x.example")], {}, [], "main", new Set(), 0).people).toBe(2);
   });
 });
+
+describe("authors", () => {
+  test("a commit's story names the visible session that edited its files before it, beside the committer, and never a private one", async () => {
+    const { t, ids, build, byShas } = await setup();
+    const author = await t.run(async (ctx) => {
+      const author = await ctx.db.insert("conversations", {
+        user_id: ids.ana, team_id: ids.team, agent_type: "claude_code", session_id: "s-jx7cccc", short_id: "jx7cccc", title: "author",
+        started_at: at("07:00"), updated_at: at("08:40"), message_count: 9, is_private: false, status: "active", git_root: "/repo",
+      } as any);
+      await ctx.db.insert("session_insights", {
+        conversation_id: author, team_id: ids.team, actor_user_id: ids.ana, source: "idle", generated_at: at("08:45"),
+        summary: "Built line pages", headline: "Built line pages", outcome_type: "shipped", themes: [],
+      } as any);
+      const edit = async (conv: any, key: string, time: string) => {
+        const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: key, role: "assistant", content: "edit", timestamp: at(time) } as any);
+        await ctx.db.insert("file_changes", { conversation_id: conv, change_key: key, message_id: message, seq: 0, file_path: "/repo/packages/web/line.tsx", change_type: "edit", timestamp: at(time) } as any);
+      };
+      await edit(author, "e-author", "08:30");
+      // The private session edited the same file: it never names a story.
+      await edit(ids.priv, "e-priv", "08:35");
+      // An edit after the commit wrote nothing in it.
+      await edit(author, "e-late", "11:00");
+      return author;
+    });
+    await build();
+    const story = await byShas("a1");
+    expect(story.conversation_ids.map(String)).toEqual([String(ids.vis), String(author)]);
+    expect(story.conversation_ids.map(String)).not.toContain(String(ids.priv));
+  });
+});
+

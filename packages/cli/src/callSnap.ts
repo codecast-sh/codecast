@@ -47,8 +47,12 @@ import {
   CALL_FRAME_PREFER,
   callFrameHref,
   coveredSpans,
+  describeClockSpan,
+  describeSpan,
   describeSpans,
-  lineMomentMs,
+  lineFilmed,
+  lineFrameMs,
+  isRecordingFilming,
   locateCallMoment,
   nearestRecordedMs,
   parseCallViewParam,
@@ -56,7 +60,9 @@ import {
   recordingSubject,
   recordingWindow,
   sampleCallMoments,
-  segmentAt,
+  CALL_JUST_SAID_MS,
+  FRAME_SHARE_REFUSED_WORDS,
+  lineSaidAt,
   wholeSecond,
   type CallCoveredSpan,
   type CallMomentPrefer,
@@ -67,6 +73,7 @@ import {
 import { callRefId, formatCallTime, parseCallRef, parseCallTime, parseEntityUrl } from "@codecast/shared/entities";
 import { spawn, whichBin, TOOL_PATH, installCommandFor, installHintFor } from "./proc.js";
 import { agentTempPath, secureTempFile } from "./tempFiles.js";
+import { rememberCallFrames } from "./callFrameRefs.js";
 import { fmt, icons } from "./colors.js";
 
 // ── Limits ────────────────────────────────────────────────────────────────
@@ -131,8 +138,6 @@ const RW_TIMEOUT_US = "30000000";
 function netArgs(source: string): string[] {
   return /^https?:/i.test(source) ? ["-rw_timeout", RW_TIMEOUT_US, "-reconnect", "1", "-reconnect_delay_max", "5"] : [];
 }
-/** How far back a line is still "what was being said" at a silent moment. */
-const LAST_SAID_WINDOW_MS = 20_000;
 /** A signed link is renewed this long before it lapses. */
 const RESIGN_MARGIN_MS = 60_000;
 /** How long the server signs a CLI link for, when it does not say. */
@@ -348,26 +353,6 @@ export function isServerCallRef(call: string): boolean {
 
 // ── Time ─────────────────────────────────────────────────────────────────
 
-/**
- * The moment a line's frame is taken: the first whole second a little after
- * its first word. A little after, because a line's t0 is where the recognizer
- * heard speech begin and the speaker is still finishing the gesture that goes
- * with it; a whole second, because the citation printed beside the frame is
- * `cl-42@12:34` and a whole second is what it can name, so the frame an
- * agent cites is the frame it saw. A line too short to reach that second
- * takes the first whole second at or after its start, even when that is a
- * moment past its last word: never a second before it began, which shows
- * what was on screen during the line before it (a quarter of the lines of a
- * real call span no whole second), and at most a second late, still the
- * picture being pointed at.
- */
-export function lineFrameMs(seg: { t0: number; t1: number }): number {
-  const start = lineMomentMs(seg);
-  const end = Math.max(start, seg.t1);
-  const nudged = Math.ceil((start + 250) / 1000) * 1000;
-  return nudged <= end ? nudged : Math.ceil(start / 1000) * 1000;
-}
-
 /** The part of a second past the whole one, as written after a clock's
  *  seconds (`.5`, `.25`), or "" on a whole second. */
 function fraction(ms: number): string {
@@ -410,10 +395,11 @@ export function frameFileName(handle: string, atMs: number, kind: CallRecordingK
 
 // ── What was recorded ────────────────────────────────────────────────────
 
-// describeSpans and nearestRecordedMs live in the shared contract (the call
-// page says the same spans and offers the same nearest moment); re-exported
-// for this module's callers.
-export { describeSpans, nearestRecordedMs };
+// describeSpans, nearestRecordedMs and the line rule (lineFrameMs,
+// lineFilmed) live in the shared contract (the call page says the same
+// spans, offers the same nearest moment and marks the same lines filmed);
+// re-exported for this module's callers.
+export { describeSpans, nearestRecordedMs, lineFrameMs, lineFilmed };
 
 /** The first whole second in [fromMs, toMs) that a finished span covers, or
  *  null: where a line that began before the press was first on camera. */
@@ -447,13 +433,6 @@ export function callVideoSpans(recs: Pick<SnapRecordings, "recordings" | "call_s
   return coveredSpans(rows(recs), recs.call_started_at, recs.server_now);
 }
 
-/** Whether a line was on camera: some span covers the moment its frame is
- *  taken (lineFrameMs), the moment `cast call snap cl-42:<line>` shows. */
-export function lineFilmed(spans: readonly CallCoveredSpan[], seg: { t0: number; t1: number }): boolean {
-  const at = lineFrameMs(seg);
-  return spans.some((s) => s.fromMs <= at && at < s.toMs);
-}
-
 /** The first line a finished span filmed (lineFilmed), or null: the line a
  *  hint names as the way to a frame, so the command it offers is one that
  *  answers with a picture. A line said before Record was pressed is
@@ -483,9 +462,7 @@ export function describeSpansByLine(spans: readonly CallCoveredSpan[], segments:
   return spans
     .map((s, i) => {
       const l = lines[i];
-      const clock = `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)}`;
-      const head = l ? `${l.from === l.to ? `line ${l.from}` : `lines ${l.from}-${l.to}`} (${clock})` : clock;
-      return `${head} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`;
+      return l ? describeSpan(s, `${l.from === l.to ? `line ${l.from}` : `lines ${l.from}-${l.to}`} (${describeClockSpan(s)})`) : describeSpan(s);
     })
     .join(", ");
 }
@@ -512,11 +489,11 @@ export function snapHint(
 // ── What was said ────────────────────────────────────────────────────────
 
 /** The line being spoken at `atMs`, or the last one said shortly before it,
- *  so a frame arrives with its context: the shared segmentAt, the rule the
+ *  so a frame arrives with its context: the shared lineSaidAt, the rule the
  *  call page highlights a line by. Null in a long silence. */
 export function lineAt(segments: readonly SnapSegment[] | undefined, atMs: number): { seg: SnapSegment; during: boolean } | null {
   const lines = segments ?? [];
-  const hit = segmentAt(lines, atMs, { holdMs: LAST_SAID_WINDOW_MS });
+  const hit = lineSaidAt(lines, atMs);
   return hit ? { seg: lines[hit.index], during: hit.during } : null;
 }
 
@@ -1068,15 +1045,46 @@ export type SourceServer = { urlFor(id: string, live: boolean): string; close():
 
 const FORWARDED_HEADERS = ["content-type", "content-length", "content-range", "accept-ranges", "last-modified", "etag"];
 
+/** The largest tail of a file the proxy keeps for the rest of a command:
+ *  a recording's index (its moov) runs about 2.4 MB an hour of room video,
+ *  about 14 MB at the longest run a recording can be. */
+export const TAIL_CACHE_MAX_BYTES = 32 * 1024 * 1024;
+
+/** The start of an open-ended range (`bytes=45147540-`), or null. */
+function openRangeStart(range: string | undefined): number | null {
+  const m = /^bytes=(\d+)-$/.exec(range ?? "");
+  return m ? Number(m[1]) : null;
+}
+
+/** The bytes a 206 holds from `start` to the end of the file, read from its
+ *  Content-Range (`bytes 45147540-45148212/45148213`), or null when the
+ *  answer is not that tail. */
+function tailLength(contentRange: string | null, start: number): number | null {
+  const m = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange ?? "");
+  if (!m || Number(m[1]) !== start || Number(m[2]) !== Number(m[3]) - 1) return null;
+  return Number(m[3]) - start;
+}
+
 /**
  * A loopback HTTP server that hands ffmpeg the recordings without handing it
  * the signed links: each request (ranges included, which is how ffmpeg
  * seeks) is forwarded to the current link, signed again and retried once if
  * storage answers 403. Bound to 127.0.0.1 on a free port, behind a random
  * path, for the life of one command.
+ *
+ * It also keeps a file's tail. LiveKit writes its MP4s with the index (the
+ * moov) after the picture data, so every ffmpeg process a snap starts (one
+ * to four probes and one or two grabs a frame, eight frames for a range)
+ * opens with the same open-ended request for the end of the file: 136 KB
+ * for a 4-minute room, megabytes for an hour, each time over the network.
+ * The first answer to an open-ended range short enough to hold
+ * (TAIL_CACHE_MAX_BYTES) is kept whole and the rest are answered from
+ * memory with the same headers. Files only: a live frame is rewritten as
+ * the call goes on, so it is always asked for fresh.
  */
 export async function serveSources(sources: SignedSources): Promise<SourceServer> {
   const token = randomBytes(16).toString("hex");
+  const tails = new Map<string, { headers: Record<string, string>; body: Buffer }>();
   const server = http.createServer(async (req, res) => {
     const m = new RegExp(`^/${token}/([^/]+)/(file|live)$`).exec((req.url ?? "").split("?")[0]);
     if (!m || (req.method !== "GET" && req.method !== "HEAD")) {
@@ -1093,6 +1101,14 @@ export async function serveSources(sources: SignedSources): Promise<SourceServer
         headers: req.headers.range ? { range: req.headers.range } : {},
         signal: abort.signal,
       });
+    const tailStart = live ? null : openRangeStart(req.headers.range);
+    const tailKey = tailStart === null ? null : `${id}|${tailStart}`;
+    const kept = tailKey === null ? undefined : tails.get(tailKey);
+    if (kept) {
+      res.writeHead(206, kept.headers);
+      res.end(req.method === "HEAD" ? undefined : kept.body);
+      return;
+    }
     try {
       let url = await sources.url(id, live);
       if (!url) {
@@ -1115,9 +1131,23 @@ export async function serveSources(sources: SignedSources): Promise<SourceServer
         res.end();
         return;
       }
-      Readable.fromWeb(upstream.body as any)
-        .on("error", () => res.destroy())
-        .pipe(res);
+      const body = Readable.fromWeb(upstream.body as any);
+      // Kept only once the whole tail has arrived: ffmpeg often hangs up
+      // part way through a long open-ended read, and a partial body must
+      // never answer the next process.
+      const want = tailKey !== null && upstream.status === 206 ? tailLength(upstream.headers.get("content-range"), tailStart!) : null;
+      if (want !== null && want <= TAIL_CACHE_MAX_BYTES) {
+        const chunks: Buffer[] = [];
+        let got = 0;
+        body.on("data", (chunk: Buffer) => {
+          chunks.push(chunk);
+          got += chunk.length;
+        });
+        body.on("end", () => {
+          if (got === want) tails.set(tailKey!, { headers, body: Buffer.concat(chunks, got) });
+        });
+      }
+      body.on("error", () => res.destroy()).pipe(res);
     } catch {
       if (!res.headersSent) res.writeHead(502).end();
       else res.destroy();
@@ -1549,7 +1579,7 @@ export async function planSnap(input: PlanInput): Promise<SnapPlan> {
     const live = liveFrame(input, all);
     // Filming, but the live picture is not this caller's to see: watching
     // from outside would be unseen by the room (callRecordings.mayWatchLive).
-    if (!live && recs.live_watch === false && all.some((r) => r.status === "starting" || r.status === "recording")) {
+    if (!live && recs.live_watch === false && all.some((r) => isRecordingFilming(r.status))) {
       throw new SnapError(
         "not_live",
         `${handle} is being recorded right now, and only someone in the call sees it as it is now. Join the call to see it live; the video can be snapped here once the recording stops.`,
@@ -1728,8 +1758,10 @@ export type SnapDeps = {
   post: (route: string, body: Record<string, unknown>) => Promise<any>;
   resolveCallId: (ref: string) => Promise<string>;
   baseUrl: string;
-  /** Uploads a written frame (`cast image`'s pipeline). */
-  upload?: (file: string, alt: string) => Promise<{ url: string; markdown: string; storageId?: string }>;
+  /** Shares a written frame as a public image tied to the recording file it
+   *  came from (imageCommand.shareCallFrame), so deleting the recording
+   *  deletes the image. */
+  share?: (file: string, recordingId: string, alt: string, atMs: number) => Promise<{ url: string; markdown: string }>;
   /** Tests hand in a fake; otherwise the machine's ffmpeg is found. */
   ffmpeg?: FfmpegRunner;
   /** Tests hand in a directory; otherwise the scratch directory. */
@@ -2081,6 +2113,8 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
     // turns out to stand for several moments, and `stoodFor` those moments.
     // `swapped` is why a --composite frame is a screen, when it is one.
     const made: Array<{ result: SnapFrameResult; subject: string; held: string | null; stoodFor: number[]; swapped: "saving" | "unfilmed" | null }> = [];
+    // --share refused by the server: why, said once for every frame after.
+    let shareRefused: string | null = null;
     const byPicture = new Map<string, (typeof made)[number]>();
     for (const [i, f] of plan.frames.entries()) {
       if (plan.frames.length > 1) deps.progress?.(`Frame ${i + 1}/${plan.frames.length} at ${formatCallTime(f.atMs)}`);
@@ -2168,7 +2202,7 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
         citation_shows: citedRec ? recordingSubject(citedRec) : null,
         // On the picture this frame is: a screen's file opens that sharer's
         // screen, the room's opens the room.
-        call_url: `${deps.baseUrl}${callFrameHref(recs.transcript_id, f.atMs, f.recording)}`,
+        call_url: `${deps.baseUrl}${callFrameHref(handle, f.atMs, f.recording)}`,
         line: said
           ? {
               ref: callRefId(handle, { from_seq: said.seg.seq, to_seq: said.seg.seq }),
@@ -2181,25 +2215,31 @@ export async function snapCall(targetRaw: string | undefined, options: SnapOptio
             }
           : null,
       };
-      if (options.share && deps.upload) {
+      if (options.share && deps.share && shareRefused) {
+        // Refused once is refused for the rest: the same call, the same rule.
+        result.image_error = shareRefused;
+      } else if (options.share && deps.share) {
         // The image is public to whoever holds its link, and its alt text
         // travels with it: the moment and the view, never the call's title.
+        // The server stores it and ties it to the file it came from in one
+        // step, so deleting the recording deletes the public image too, and
+        // tells the room a picture of it went public (with the moment).
         try {
-          const image = await deps.upload(out, `${ref}, ${subject}${f.live ? ", live" : ""}`);
+          const image = await deps.share(out, f.recording.id, `${ref}, ${subject}${f.live ? ", live" : ""}`, f.atMs);
           result.image = { url: image.url, markdown: image.markdown };
-          // Tied to the file it came from, so deleting the recording
-          // deletes the public image too. A server that cannot tie it
-          // leaves an image that outlives the recording: say so.
-          const tied = image.storageId
-            ? await deps.post("/cli/calls/frame-share", { recording_id: f.recording.id, storage_id: image.storageId }).then(
-                () => true,
-                () => false,
-              )
-            : false;
-          if (!tied) own.push(`${path.basename(out)} is shared, but deleting the recording will not remove it: ${image.url}`);
         } catch (err) {
-          result.image_error = err instanceof Error ? err.message : String(err);
-          own.push(`Could not upload ${path.basename(out)}: ${result.image_error}. The frame is still at ${out}.`);
+          const message = err instanceof Error ? err.message : String(err);
+          if (message.includes(FRAME_SHARE_REFUSED_WORDS)) {
+            // Not this caller's to publish (the server's mayShareFrame). The
+            // reference is the way that is: it renders as this frame for
+            // whoever may read the call, and for nobody else.
+            shareRefused = `${FRAME_SHARE_REFUSED_WORDS} To show this moment, cite ${ref} in a message instead: it renders as the frame for whoever may read the call.`;
+            result.image_error = shareRefused;
+            own.push(`Not shared by link. ${shareRefused} The frame is still at ${out}.`);
+          } else {
+            result.image_error = message;
+            own.push(`Could not upload ${path.basename(out)}: ${result.image_error}. The frame is still at ${out}.`);
+          }
         }
       }
       const entry = { result, subject: Subject, held, stoodFor: [] as number[], swapped };
@@ -2303,7 +2343,7 @@ export function formatSnapResult(res: SnapResult): string {
   // part of the frame. Offered once, only where it can help.
   const wide = res.frames.find((f) => f.kind === "screen" && !f.crop && !f.tiles && (f.width ?? 0) > SMALL_TEXT_WIDTH);
   if (wide && !res.crop && !res.tiles) {
-    out.push(fmt.muted(`Text small? cast call snap ${res.target} --crop top-left (any of ${Object.keys(CROP_REGIONS).join(", ")}, or x,y,w,h), or --tiles 2x2 for all four quarters at full size`));
+    out.push(fmt.muted(`Text small? cast call snap ${res.target} --crop top-left, or --tiles 2x2 for all four quarters at full size. --crop takes ${CROP_FORMS}.`));
   }
   return out.join("\n");
 }
@@ -2318,7 +2358,7 @@ function lastSaid(f: SnapFrameResult): string {
   const ended = formatCallTime(f.line.ended_ms);
   const said = ended === f.line.at ? `said at ${f.line.at}` : `said ${f.line.at}-${ended}`;
   const gap = f.at_ms - f.line.ended_ms;
-  return fmt.muted(gap < 3000 ? ` (${said}, just before)` : ` (${said}, ${Math.round(gap / 1000)}s before this frame)`);
+  return fmt.muted(gap < CALL_JUST_SAID_MS ? ` (${said}, just before)` : ` (${said}, ${Math.round(gap / 1000)}s before this frame)`);
 }
 
 /**
@@ -2369,6 +2409,15 @@ export async function runCallSnap(target: string | undefined, options: SnapOptio
   const progress = options.json ? undefined : deps.progress ?? ((line: string) => process.stderr.write(`${fmt.muted(line)}\n`));
   try {
     const res = await snapCall(target, options, { ...deps, progress }, extra);
+    // Each frame is remembered with the reference it cites, so the picture
+    // an agent Reads syncs as that reference and never as the image
+    // (callFrameRefs.ts): a frame of a private call stays as private as the
+    // call. Best effort: a frame not remembered still prints.
+    try {
+      rememberCallFrames(res.frames);
+    } catch {
+      // The snap itself succeeded; say nothing a script would misread.
+    }
     console.log(options.json ? JSON.stringify(res, null, 2) : formatSnapResult(res));
     // Frames asked to be shared that were not: the frames are written, but a
     // script that asked for markdown has none to paste.

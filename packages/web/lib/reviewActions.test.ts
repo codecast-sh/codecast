@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach } from "bun:test";
 import { useInboxStore } from "../store/inboxStore";
-import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImageStorageIds } from "./reviewActions";
+import { takeReviewBatch, attachReviewToMessage, createReviewComment, addImagePin, quotedImages } from "./reviewActions";
 import { formatPlanFeedback, formatDocFeedback, formatPendingComments, sortPendingComments, type PendingComment } from "./quoteFormat";
 
 const CONV = "conv-test";
@@ -156,7 +156,7 @@ describe("image quotes from the gallery", () => {
     expect(useInboxStore.getState().reviewEditingId).toBe(id);
   });
 
-  test("each pin names its picture's attachment number and the point in pixels; a picture pinned twice attaches once", () => {
+  test("each pin names its picture's attachment number and its marker drawn on it; a picture pinned twice attaches once", () => {
     const a = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.25, y: 0.5 });
     const b = addImagePin(CONV, { ...shot, width: 1600, height: 900 }, { x: 0.9, y: 0.1 });
     const c = addImagePin(CONV, remote, { x: 0.5, y: 0.5 });
@@ -164,12 +164,12 @@ describe("image quotes from the gallery", () => {
     s.commitReviewComment(CONV, a, "this button is misaligned");
     s.commitReviewComment(CONV, b, "and this badge overlaps");
     s.commitReviewComment(CONV, c, "wrong color");
-    expect(quotedImageStorageIds(CONV)).toEqual(["s1"]);
+    expect(quotedImages(CONV)).toEqual([{ storageId: "s1", src: shot.src, markers: [{ x: 0.25, y: 0.5, number: 1 }, { x: 0.9, y: 0.1, number: 2 }] }]);
     const text = attachReviewToMessage(CONV, "fix these", 3);
     const blocks = text.split("\n\n");
-    expect(blocks[0]).toBe("> [Image 3] at x=400, y=450 of 1600×900 px (25% from the left, 50% from the top)\n> " + blocks[0].split("\n> ")[1]);
+    expect(blocks[0]).toBe("> [Image 3] at marker 1\n> " + blocks[0].split("\n> ")[1]);
     expect(blocks[1]).toBe("this button is misaligned");
-    expect(blocks[2]).toStartWith("> [Image 3] at x=1440, y=90 of 1600×900 px");
+    expect(blocks[2]).toStartWith("> [Image 3] at marker 2\n");
     expect(blocks[3]).toBe("and this badge overlaps");
     expect(blocks[4]).toMatch(/^> !\[image\]\(https:\/\/example\.com\/a\.png\) at 50% from the left, 50% from the top\n> Image returned by your Read call at .*: `\/tmp\/shot\.png`$/);
     expect(blocks[5]).toBe("wrong color");

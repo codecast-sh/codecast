@@ -147,6 +147,7 @@ function SeedStrip({ row, all }: { row: RunRow; all: RunRow[] }) {
       </span>
       <div className="ev-seeds-plot ev-bench">
         <svg width={W} height={H} role="group" aria-label="Reps of this freeze in this batch">
+          <line x1={x(0)} x2={x(1)} y1={H / 2} y2={H / 2} className="ev-seeds-track" />
           <line x1={x(mark)} x2={x(mark)} y1={2} y2={H - 2} className="ev-strip-mark" />
           {all.map((r, i) => {
             const cx = r.score === null ? x(0) : x(r.score);

@@ -18,6 +18,8 @@ sources, `stale` that its sources changed at HEAD since its last run, `dirty`
 that they are edited in the checkout (`check --stale` waits for a commit), and
 `blocked` that it crashed twice on these sources.
 
+![The evals loop: a prod moment is frozen with ./evals freeze create into one of two data homes, ./evals check replays every freeze through prompt-dry-run.ts, the replies are graded by gates and the judge, each rep is compared with the previous run set in stats.ts, and the person edits the prompt and checks again](../diagrams/evals-loop.svg)
+
 ## Surfaces
 
 A surface is one production prompt with one call site. Each is a directory
@@ -651,7 +653,13 @@ all stale at once; a 5-rep pass over every call surface estimated $5.94 on
 defers the rest to later firings. Measured on 2026-10-02 at load 400 to 800, a rep takes about 40
 seconds whether it runs alone or beside five others, so `--parallel 6` runs
 the 3-rep nightly (174 reps) in about 23 minutes where one at a time took over
-two hours.
+two hours. Agent reps share that pool only because each runs with private
+scratch: the harness runs the agent under `sandbox-exec` with `/tmp` and
+`/var/tmp` closed and `TMPDIR` in its own run dir, since agents write fixed
+paths like `/tmp/org_inputs.json` and two in flight once graded each other's
+inputs (ct-56832). Where that sandbox cannot apply (`prompt-dry-run.ts
+--isolation-check` says why), agent reps run one at a time in a lane beside
+the call reps, and the time estimate counts them that way.
 
 Two spawned triggers keep it current. Both are `--spawn` (not `--safe`) and
 `--model sonnet`:

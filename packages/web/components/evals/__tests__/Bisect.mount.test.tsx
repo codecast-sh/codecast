@@ -34,7 +34,7 @@ const { matchEvalsRoute } = await import("@codecast/shared/contracts/evalsApi");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { evalsFixtureWorld } = await import("../__fixtures__/world");
 const { attributionPairs, fixtureBisect } = await import("../__fixtures__/bisect");
-const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally } = await import("../bisectModel");
+const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally, rangeWords } = await import("../bisectModel");
 const { AttributionView } = await import("../AttributionView");
 const { BisectView, isStalled } = await import("../BisectView");
 const { BisectListView } = await import("../BisectListView");
@@ -179,8 +179,8 @@ describe("the free answer", () => {
       expect(lines[at][0]).toBe(kind);
       expect(lines.slice(0, at).every(([, s]) => s === "same")).toBe(true);
       expect(container.querySelector(`[data-evb-answer="${kind}"]`)).toBeTruthy();
-      // The rendered prompt change is always shown.
-      expect(container.querySelector("[data-evb-prompt-diffs]")).toBeTruthy();
+      // The rendered prompt change is always shown: per focus freeze, the flips or in score mode the largest drops.
+      expect(Number(container.querySelector("[data-evb-prompt-diffs]")?.getAttribute("data-evb-prompt-diffs"))).toBeGreaterThan(0);
       if (k === "unattributable") expect(container.querySelector('[data-evb-confidence="unattributable"]')).toBeTruthy();
       if (k === "narrowed") expect(container.querySelectorAll("[data-evb-candidate]").length).toBeGreaterThan(1);
       await unmount();
@@ -429,6 +429,11 @@ describe("one bisect", () => {
     const { container, unmount } = await mount(<BisectView data={data} steps={data.steps} now={NOW} onStop={() => {}} stopping={false} />);
     expect(container.querySelector('[data-evb-result="range"] [data-evb-candidates]')).toBeTruthy();
     expect(container.querySelector(".evb-span")).toBeTruthy();
+    // The headline names why it is a range, counts candidates (the edits are not a commit), and a finished run offers no tmux to attach to.
+    const ans = data.state.answer as Extract<NonNullable<typeof data.state.answer>, { kind: "range" }>;
+    expect(container.querySelector('[data-evb-result="range"] .evb-answer-say')!.textContent).toBe(rangeWords(ans));
+    expect(container.querySelector('[data-evb-result="range"] .evb-answer-num')!.textContent).toMatch(/candidates?$/);
+    expect(container.textContent).not.toContain("tmux attach");
     // Each candidate opens its diff in place: a commit its CommitPanel, the uncommitted edits their patch.
     const row = container.querySelector<HTMLElement>('[data-evb-result="range"] [data-evb-candidate]')!;
     expect(row.getAttribute("aria-expanded")).toBe("false");
@@ -436,6 +441,13 @@ describe("one bisect", () => {
     expect(row.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("[data-evb-commit], [data-evb-patch]")).toBeTruthy();
     await unmount();
+  });
+
+  it("says why a bisect ended on a range, for each way the runner ends on one", () => {
+    const base = { kind: "range" as const, candidates: [], tier: 2 as const };
+    expect(rangeWords({ ...base, separation: null })).toContain("do not load");
+    expect(rangeWords({ ...base, separation: { kind: "worse", p: 0.01 } })).toContain("uncommitted edits");
+    expect(rangeWords({ ...base, separation: { kind: "not-separated", p: 0.4 } })).toContain("did not separate");
   });
 
   it("answers an unknown id with a not-found state", async () => {

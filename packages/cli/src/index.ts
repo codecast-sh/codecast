@@ -73,6 +73,7 @@ import {
   FOREIGN_TEXT_CAPS,
   callLinkHow,
   callAnchorHref,
+  callPathRef,
   segmentAt,
   cliErrorMessage,
   normalizeGuestName,
@@ -5045,41 +5046,12 @@ program
   .action(showStatus);
 
 program
-  .command("attach")
-  .description("Open live tmux session TUI and attach/switch quickly")
-  .option("--plain", "Use plain list mode (no TUI)")
-  .option("--gc", "Kill sessions idle for more than 1 hour, then open TUI")
-  .option("--gc-mins <minutes>", "Idle threshold in minutes (default: 60)")
+  .command("herd")
+  .description("Open your live agent sessions in herdr: a tab per session, grouped by project, with codecast's live state")
+  .option("--no-open", "Fill the herd without opening it")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-
-    if (options.gc) {
-      const mins = Number.parseInt(options.gcMins || "60", 10) || 60;
-      const { gcStaleSessions } = await import("./attachTui.js");
-      const { killed } = gcStaleSessions(mins * 60);
-      if (killed.length > 0) {
-        console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-      } else {
-        console.log("No stale sessions to clean up.");
-      }
-    }
-
-    if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
-      await selectAndAttachFromLiveSessions(config, { tmuxOnly: true });
-      return;
-    }
-
-    const { runAttachTui } = await import("./attachTui.js");
-    await runAttachTui({
-      authToken: config.auth_token,
-      convexUrl: config.convex_url,
-    });
+    const { runHerdCommand } = await import("./herdCommand.js");
+    await runHerdCommand(readConfig(), { open: options.open });
   });
 
 program
@@ -5088,33 +5060,8 @@ program
   .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
   .option("--dry-run", "Show what would be killed without actually killing")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const mins = Number.parseInt(options.mins || "60", 10) || 60;
-    const { gcStaleSessions, discoverWithIdleTimes } = await import("./attachTui.js");
-
-    if (options.dryRun) {
-      const sessions = discoverWithIdleTimes();
-      const nowSec = Math.floor(Date.now() / 1000);
-      const stale = sessions.filter((s) => s.idleSec >= mins * 60);
-      if (stale.length === 0) {
-        console.log(`No sessions idle for >${mins}m.`);
-        return;
-      }
-      console.log(`Would kill ${stale.length} session${stale.length === 1 ? "" : "s"}:`);
-      for (const s of stale) {
-        const idleMins = Math.floor(s.idleSec / 60);
-        console.log(`  ${s.tmuxSession}  (idle ${idleMins}m)`);
-      }
-      return;
-    }
-
-    const { killed } = gcStaleSessions(mins * 60);
-    if (killed.length > 0) {
-      console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-    } else {
-      console.log(`No sessions idle for >${mins}m.`);
-    }
+    const { runGcCommand } = await import("./herdCommand.js");
+    runGcCommand(options);
   });
 
 program
@@ -7336,11 +7283,6 @@ interface LiveProcess {
   uptime: string;
 }
 
-interface LiveProcessDiscoveryOptions {
-  tmuxOnly?: boolean;
-  fastSessionLookup?: boolean;
-}
-
 function normalizePsTty(tty: string): string {
   if (tty.startsWith("/dev/")) return tty;
   if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
@@ -7373,9 +7315,7 @@ function loadSessionRegistryLookups(): { byPid: Map<number, string>; byTty: Map<
   return { byPid, byTty };
 }
 
-function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveProcess[] {
-  const tmuxOnly = !!options.tmuxOnly;
-  const fastSessionLookup = !!options.fastSessionLookup;
+function discoverLiveProcesses(): LiveProcess[] {
   const procs: LiveProcess[] = [];
   const seen = new Set<number>();
   const seenTty = new Set<string>();
@@ -7403,7 +7343,6 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
   const addProcess = (pid: number, tty: string, sessionId: string, agentType: "claude_code" | "codex") => {
     const normalTty = normalizePsTty(tty);
     const tmuxSession = tmuxPanes[normalTty] || null;
-    if (tmuxOnly && !tmuxSession) return;
     if (seen.has(pid) || seenTty.has(normalTty)) return;
     seen.add(pid);
     seenTty.add(normalTty);
@@ -7496,11 +7435,10 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const args = parts.slice(10).join(" ");
       const resumeMatch = args.match(/--resume\s+([0-9a-f-]{36})/i);
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || (fastSessionLookup ? null : findSessionByCwd(pid));
+      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || findSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-${pid}`, "claude_code");
     }
   } catch {}
@@ -7516,9 +7454,8 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = sidFromRegistry || (fastSessionLookup ? null : findCodexSessionByCwd(pid));
+      const sid = sidFromRegistry || findCodexSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-codex-${pid}`, "codex");
     }
   } catch {}
@@ -7528,22 +7465,14 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
 async function selectAndAttachFromLiveSessions(
   config: Config,
-  options: { cliOverrideArgs?: string; tmuxOnly?: boolean } = {},
+  options: { cliOverrideArgs?: string } = {},
 ): Promise<void> {
-  const rawProcs = discoverLiveProcesses({
-    tmuxOnly: options.tmuxOnly,
-    fastSessionLookup: !!options.tmuxOnly,
-  });
+  const rawProcs = discoverLiveProcesses();
 
   if (rawProcs.length === 0) {
-    if (options.tmuxOnly) {
-      console.log(`${c.dim}No live tmux sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  cast attach`);
-    } else {
-      console.log(`${c.dim}No live sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
-      console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
-    }
+    console.log(`${c.dim}No live sessions found${c.reset}`);
+    console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
+    console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
     return;
   }
 
@@ -7617,8 +7546,7 @@ async function selectAndAttachFromLiveSessions(
     return { name: `${c.bold}${displayTitle}${c.reset}`, value: String(idx), description: desc };
   });
 
-  const liveLabel = options.tmuxOnly ? "tmux sessions" : "sessions";
-  console.log(`\n${c.dim}${sessions.length} live ${liveLabel}${c.reset}\n`);
+  console.log(`\n${c.dim}${sessions.length} live sessions${c.reset}\n`);
 
   const selected = await select({
     message: "Attach to session",
@@ -10112,7 +10040,7 @@ program
     const rows = (options.video ? all.filter((r) => r.video) : all).slice(0, limit);
     if (options.json) {
       // Each row with the link and the reference `cast call --json` gives.
-      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(String(r._id))}`, ...r })), null, 2));
+      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(r))}`, ...r })), null, 2));
       return;
     }
     if (rows.length === 0) {
@@ -10158,9 +10086,10 @@ const CALL_SNAP_ABOUT =
   "wide one is shrunk before a model reads it, so for small text on a shared screen take\n" +
   "part of it (--crop) or all of it in quarters (--tiles 2x2). Times may carry a fraction\n" +
   "(cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
-  "outside codecast; deleting the recording deletes them. The stretch still being\n" +
-  "recorded has only its live picture, for people in the call, until Record is stopped;\n" +
-  "stretches already saved can be snapped at once. Needs ffmpeg.";
+  "outside codecast, and only by whoever recorded the call, a team admin, or the person\n" +
+  "whose screen it shows; the room is told, and deleting the recording deletes them.\n" +
+  "The stretch still being recorded has only its live picture, for people in the call,\n" +
+  "until Record is stopped; stretches already saved can be snapped at once. Needs ffmpeg.";
 const SNAP_OPTION_PREFIX = "With `snap`";
 /** Options that mean something to snap: its own, --json and help. */
 const snapOption = (o: Option) => o.description.startsWith(SNAP_OPTION_PREFIX) || o.long === "--json" || o.long === "--help";
@@ -10218,7 +10147,7 @@ program
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
   .option("--crop <region>", "With `snap`: only part of each frame, at full resolution: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right, center, or x,y,w,h in pixels or percent (its own file, named by the part, beside any whole frame)")
   .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br)")
-  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
+  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast, and only by whoever recorded the call, a team admin, or the person whose screen it shows (cite cl-42@12:34 for everyone else)")
   .configureHelp({
     formatHelp: (cmd, helper) => (cmd.args[0] === "snap" ? snapHelp(cmd, helper) : Help.prototype.formatHelp.call(helper, cmd, helper)),
   })
@@ -10238,8 +10167,7 @@ program
         process.exit(1);
       }
       const { runCallSnap } = await import("./callSnap.js");
-      const { uploadOne } = await import("./imageCommand.js");
-      const deps = { getCliEndpoint, detectCurrentSessionId };
+      const { shareCallFrame } = await import("./imageCommand.js");
       // `snap cl-42 15`: the moment as its own word. A colon pair there
       // (`snap cl-42 12:34`) is refused as ambiguous, lines or a time.
       const extra = command.args.slice(2).join(" ") || undefined;
@@ -10250,7 +10178,7 @@ program
           post: (route, body) => cliPost(route, body, { throwOnError: true }),
           resolveCallId: (r) => findCallId(r, { throwOnError: true }),
           baseUrl: CODECAST_BASE_URL,
-          upload: (file, alt) => uploadOne(deps, file, alt),
+          share: (file, recordingId, alt, atMs) => shareCallFrame((route, body) => cliPost(route, body, { throwOnError: true }), file, recordingId, alt, atMs),
         },
         extra,
       );
@@ -10431,7 +10359,7 @@ program
       else if (knowsVideo && video.length === 0) console.log(`\n${c.dim}This call has no video.${c.reset}`);
       return;
     }
-    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
+    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(call), anchor)}`;
     if (options.json) {
       // The share link's token is the whole secret of the public page, and
       // this output lands in a session transcript that can be read more
