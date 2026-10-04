@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" role="img" aria-labelledby="t d">
+  <title id="t">cast exec, spawn --subagent, spawn and fork</title>
+  <desc id="d">Four ways to start agent work. cast exec runs a prompt in this process, prints the result to stdout and exits, with no inbox card. cast spawn --subagent starts a fresh worker session nested under this one; you read its result and report it. Plain cast spawn starts a fresh independent session with its own inbox card for the human to steer. cast fork branches this conversation: each branch keeps the history up to the fork point and gets its own inbox card, and this thread takes the first direction.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="520" rx="12"/>
+  <!-- panel 1 -->
+  <rect class="card" x="24" y="24" width="216" height="472" rx="10"/>
+  <text class="h" x="40" y="52">cast exec</text>
+  <text class="n" x="40" y="70">run now, print, exit</text>
+  <rect class="agent" x="40" y="88" width="184" height="34" rx="8"/>
+  <text class="l" x="54" y="110">this session</text>
+  <rect class="core" x="40" y="178" width="184" height="46" rx="8"/>
+  <text class="l" x="54" y="198">one-shot process</text>
+  <text class="n" x="54" y="214">this process is it</text>
+  <path class="cmd" d="M80 122 V174" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="88" y="154">prompt</text>
+  <path class="data" d="M174 178 V126" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="182" y="154">stdout</text>
+  <text class="k" x="40" y="260">CONTEXT</text>
+  <text class="n" x="40" y="277">the prompt and stdin</text>
+  <text class="k" x="40" y="308">RESULT LANDS</text>
+  <text class="n" x="40" y="325">stdout here; the exit</text>
+  <text class="n" x="40" y="340">code is the agent's</text>
+  <text class="k" x="40" y="371">INBOX CARD</text>
+  <text class="n" x="40" y="388">none</text>
+  <text class="k" x="40" y="419">USE FOR</text>
+  <text class="n" x="40" y="436">scripts, quick answers,</text>
+  <text class="n" x="40" y="451">fan-out with -j N</text>
+  <!-- panel 2 -->
+  <rect class="card" x="256" y="24" width="216" height="472" rx="10"/>
+  <text class="h" x="272" y="52">cast spawn</text>
+  <text class="n" x="272" y="70">--subagent: a worker</text>
+  <rect class="agent" x="272" y="88" width="184" height="34" rx="8"/>
+  <text class="l" x="286" y="110">this session</text>
+  <rect class="agent" x="272" y="178" width="184" height="46" rx="8"/>
+  <text class="l" x="286" y="198">worker session</text>
+  <text class="n" x="286" y="214">nested under you</text>
+  <path class="cmd" d="M312 122 V174" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="320" y="154">brief</text>
+  <path class="data" d="M406 178 V126" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="414" y="154">result</text>
+  <text class="k" x="272" y="260">CONTEXT</text>
+  <text class="n" x="272" y="277">fresh: only the brief</text>
+  <text class="k" x="272" y="308">RESULT LANDS</text>
+  <text class="n" x="272" y="325">cast read &lt;id&gt;; you</text>
+  <text class="n" x="272" y="340">report the outcome</text>
+  <text class="k" x="272" y="371">INBOX CARD</text>
+  <text class="n" x="272" y="388">none; it nests under</text>
+  <text class="n" x="272" y="403">this session</text>
+  <text class="k" x="272" y="434">USE FOR</text>
+  <text class="n" x="272" y="451">delegated work you</text>
+  <text class="n" x="272" y="466">manage across turns</text>
+  <!-- panel 3 -->
+  <rect class="card" x="488" y="24" width="216" height="472" rx="10"/>
+  <text class="h" x="504" y="52">cast spawn</text>
+  <text class="n" x="504" y="70">an independent thread</text>
+  <rect class="agent" x="504" y="88" width="184" height="34" rx="8"/>
+  <text class="l" x="518" y="110">this session</text>
+  <rect class="agent" x="504" y="178" width="184" height="46" rx="8"/>
+  <text class="l" x="518" y="198">new session</text>
+  <text class="n" x="518" y="214">its own inbox card</text>
+  <path class="cmd" d="M544 122 V174" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="552" y="154">prompt</text>
+  <text class="k" x="504" y="260">CONTEXT</text>
+  <text class="n" x="504" y="277">fresh: only the prompt</text>
+  <text class="k" x="504" y="308">RESULT LANDS</text>
+  <text class="n" x="504" y="325">in its own thread;</text>
+  <text class="n" x="504" y="340">the human steers it</text>
+  <text class="k" x="504" y="371">INBOX CARD</text>
+  <text class="n" x="504" y="388">yes, its own</text>
+  <text class="k" x="504" y="419">USE FOR</text>
+  <text class="n" x="504" y="436">a handoff the human</text>
+  <text class="n" x="504" y="451">asked for</text>
+  <!-- panel 4 -->
+  <rect class="card" x="720" y="24" width="216" height="472" rx="10"/>
+  <text class="h" x="736" y="52">cast fork</text>
+  <text class="n" x="736" y="70">branch this conversation</text>
+  <rect class="agent" x="736" y="88" width="184" height="34" rx="8"/>
+  <text class="l" x="750" y="110">this session</text>
+  <rect class="agent" x="736" y="178" width="184" height="46" rx="8"/>
+  <text class="l" x="750" y="198">branch</text>
+  <text class="n" x="750" y="214">history to fork point</text>
+  <path class="data" d="M776 122 V174" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="784" y="154">history</text>
+  <text class="k" x="736" y="260">CONTEXT</text>
+  <text class="n" x="736" y="277">this conversation up to</text>
+  <text class="n" x="736" y="292">the fork point</text>
+  <text class="k" x="736" y="323">RESULT LANDS</text>
+  <text class="n" x="736" y="340">in the branch; this</text>
+  <text class="n" x="736" y="355">thread takes direction 1</text>
+  <text class="k" x="736" y="386">INBOX CARD</text>
+  <text class="n" x="736" y="403">yes, one per branch</text>
+  <text class="k" x="736" y="434">USE FOR</text>
+  <text class="n" x="736" y="451">directions the human</text>
+  <text class="n" x="736" y="466">asked to try in parallel</text>
+</svg>

@@ -78,7 +78,7 @@ export function evalSignals(v: SurfaceVerdict, evidenceUrl?: string): EvalSignal
       kind: 'prompt_miss',
       fingerprint: evalsSignalFingerprint(v.surface, freeze),
       title: `${v.surface} misses frozen moment ${freeze.slice(0, 8)}`,
-      detail: detail(`Most reps of freeze ${freeze} failed. Read them: ./evals freeze results ${freeze.slice(0, 8)}`),
+      detail: detail(`Most reps of freeze ${freeze.slice(0, 8)} failed. Read them: ./evals freeze results ${freeze.slice(0, 8)}`),
     });
   }
   return out;

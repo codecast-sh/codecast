@@ -1213,10 +1213,11 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
   // what was deleted. A `by_user` scan that also matches the membership row and
   // a transcript sweep that also matches a seat both read as the mutation
   // deleting things it never touched.
-  function prewarmCtx(rows: any[]) {
+  function prewarmCtx(rows: any[], recordings: any[] = []) {
     const tables: Record<string, any[]> = {
       team_memberships: [{ _id: "m1", user_id: "u1", team_id: "t1" }],
       call_members: rows,
+      call_recordings: recordings,
     };
     const deleted: string[] = [];
     const patches: any[] = [];
@@ -1288,6 +1289,31 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
     expect(res).toEqual({ room_key: "channel:ch1", prewarm: false });
     expect(deleted).toEqual([]);
     expect(inserted).toEqual([]);
+  });
+
+  test("a recorded room refuses it: everyone in a recording is told, and a prewarm is nobody", async () => {
+    // The client skips recorded rooms on its own; this is the server's half,
+    // so an older bundle cannot drop a muted, unseated tile into the composite.
+    for (const status of ["starting", "recording"]) {
+      const { ctx, inserted, deleted } = prewarmCtx([], [
+        { _id: `rec-${status}`, room_key: "channel:ch1", kind: "composite", status },
+      ]);
+      const res = await join(ctx, { prewarm: true });
+      expect(res).toEqual({ room_key: "channel:ch1", prewarm: false });
+      expect(inserted).toEqual([]);
+      expect(deleted).toEqual([]);
+    }
+  });
+
+  test("a room whose recording ended, or another room recording, still takes it", async () => {
+    const { ctx, inserted } = prewarmCtx([], [
+      { _id: "recDone", room_key: "channel:ch1", kind: "composite", status: "ready" },
+      { _id: "recStop", room_key: "channel:ch1", kind: "composite", status: "stopping" },
+      { _id: "recElse", room_key: "channel:ch2", kind: "composite", status: "recording" },
+    ]);
+    const res = await join(ctx, { prewarm: true });
+    expect(res).toEqual({ room_key: "channel:ch1", prewarm: true });
+    expect(inserted).toHaveLength(1);
   });
 
   test("one at a time: a second room drops the first", async () => {

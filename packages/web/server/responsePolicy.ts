@@ -75,9 +75,13 @@ export interface ResponsePolicyOptions {
 
 const HOUR_MS = 60 * 60 * 1000;
 
-/** Pages no search engine should list: guest meeting links (/meet/<token>). */
+/** Pages no search engine should list: guest meeting links (/meet/<token>)
+ *  and a call's public page (/share/call/<token>). A shared doc or plan is
+ *  its team's own writing; a call is mostly other people's speech, guests'
+ *  included, and a guest never chose to publish it, so its link travels as a
+ *  card and never as a search result carrying their names and words. */
 export function isUnindexedPath(pathname: string): boolean {
-  return /^\/meet(\/|$)/.test(pathname);
+  return /^\/(meet|share\/call)(\/|$)/.test(pathname);
 }
 
 export function createResponsePolicy(options: ResponsePolicyOptions = {}): MiddlewareHandler {
@@ -104,8 +108,9 @@ export function createResponsePolicy(options: ResponsePolicyOptions = {}): Middl
     c.header("Referrer-Policy", "strict-origin-when-cross-origin");
     c.header("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(self), clipboard-read=(self), clipboard-write=(self)");
     c.header("Strict-Transport-Security", HSTS);
-    // A guest link is a door into a live meeting, and one pasted somewhere
-    // public must not become a search result. A header, not a robots.txt
+    // A guest link is a door into a live meeting, and a call's public page
+    // is its people's words: one pasted somewhere public must not become a
+    // search result. A header, not a robots.txt
     // Disallow: unfurl bots honor robots.txt too, and the card is how the
     // link is meant to travel.
     if (isUnindexedPath(new URL(c.req.url).pathname)) c.header("X-Robots-Tag", "noindex, nofollow");

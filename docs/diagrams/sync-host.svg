@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" role="img" aria-labelledby="t d">
+  <title id="t">One window syncs, the rest replicate</title>
+  <desc id="d">The elected host window holds the Web Lock codecast-sync-host for its account, mounts the global feeders against Convex, persists every store patch to IndexedDB and broadcasts the replicated rows over the BroadcastChannel codecast-replication-v1 for the same account. Follower windows mount no global feeders: they ask for a snapshot with hello, apply snapshotChunk and update messages through syncTable, and offer their own optimistic writes back as mut. Every window dispatches its writes to Convex directly and keeps its per-view queries. Followers persist only their per-window local keys.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    .waitBox { fill: #ffffff; stroke: #b58900; stroke-width: 1.25; stroke-dasharray: 5 4 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .waitLbl { fill: #b58900 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core, .waitBox { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+      .waitLbl { fill: #b58900 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="580" rx="12"/>
+
+  <!-- Convex -->
+  <rect class="card" x="24" y="24" width="912" height="56" rx="8"/>
+  <text class="h" x="40" y="48">Convex backend</text>
+  <text class="n" x="40" y="68">live queries, syncLog, api.dispatch.dispatch</text>
+
+  <!-- Convex <-> host -->
+  <path class="data" d="M120 80 V140" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="128" y="116">global feeders</text>
+  <path class="cmd" d="M330 140 V84" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="338" y="116">dispatch</text>
+
+  <!-- Convex <-> follower -->
+  <path class="data" d="M660 80 V140" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="668" y="116">per-view queries</text>
+  <path class="cmd" d="M860 140 V84" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="868" y="116">dispatch</text>
+
+  <!-- Host window -->
+  <rect class="core" x="24" y="144" width="372" height="264" rx="10"/>
+  <text class="h" x="40" y="170">Host window</text>
+  <text class="k" x="164" y="170">ELECTED, ONE PER ACCOUNT</text>
+  <rect class="inset" x="40" y="184" width="340" height="24" rx="5"/>
+  <text class="n" x="50" y="200">Web Lock codecast-sync-host:&lt;principal&gt;</text>
+  <rect class="inset" x="40" y="214" width="340" height="24" rx="5"/>
+  <text class="n" x="50" y="230">HostFeeders: useSyncCore, chat, anchors</text>
+  <rect class="inset" x="40" y="244" width="340" height="24" rx="5"/>
+  <text class="n" x="50" y="260">store: every write yields mutative patches</text>
+  <rect class="inset" x="40" y="274" width="340" height="24" rx="5"/>
+  <text class="n" x="50" y="290">_setIDBWrite tee: persist, then broadcast</text>
+  <text class="n" x="40" y="324">Every window boots as host and demotes</text>
+  <text class="n" x="40" y="340">only when a living host's snapshot lands.</text>
+  <text class="n" x="40" y="364">Closing or crashing the host releases the</text>
+  <text class="n" x="40" y="380">lock; the next queued window is promoted</text>
+  <text class="n" x="40" y="396">and resumes from the replicated syncMeta.</text>
+
+  <!-- Channel -->
+  <rect class="inset" x="428" y="144" width="160" height="264" rx="8"/>
+  <text class="l" x="440" y="168">BroadcastChannel</text>
+  <text class="n" x="440" y="186">codecast-replication</text>
+  <text class="n" x="440" y="200">-v1:&lt;principal&gt;</text>
+  <text class="k" x="440" y="232">HOST TO FOLLOWERS</text>
+  <text class="l dataLbl" x="440" y="252">snapshotChunk</text>
+  <text class="l dataLbl" x="440" y="270">update</text>
+  <text class="k" x="440" y="306">FOLLOWERS TO HOST</text>
+  <text class="l dataLbl" x="440" y="326">hello</text>
+  <text class="l dataLbl" x="440" y="344">mut</text>
+  <text class="n" x="440" y="376">pending never</text>
+  <text class="n" x="440" y="392">crosses the wire</text>
+
+  <path class="data" d="M400 220 H424" marker-start="url(#aData)" marker-end="url(#aData)"/>
+  <path class="data" d="M592 210 H616" marker-start="url(#aData)" marker-end="url(#aData)"/>
+  <path class="data" d="M592 340 H616" marker-start="url(#aData)" marker-end="url(#aData)"/>
+
+  <!-- Follower: full shell window, queued on the lock -->
+  <rect class="card" x="620" y="144" width="316" height="128" rx="8"/>
+  <text class="h" x="636" y="170">Follower: another tab</text>
+  <text class="n" x="636" y="192">no global feeders mounted</text>
+  <text class="n" x="636" y="208">applies host rows through syncTable</text>
+  <text class="n" x="636" y="224">own dispatch, outbox, per-view queries</text>
+  <text class="l waitLbl" x="636" y="254">queued on the lock</text>
+
+  <!-- Follower: ineligible window -->
+  <rect class="waitBox" x="620" y="284" width="316" height="124" rx="8"/>
+  <text class="h" x="636" y="310">Follower: palette, people</text>
+  <text class="n" x="636" y="332">never requests the lock</text>
+  <text class="n" x="636" y="348">same follower runtime as above</text>
+  <text class="l waitLbl" x="636" y="376">no host for 8s: runs solo,</text>
+  <text class="l waitLbl" x="636" y="394">feeders on, until one answers</text>
+
+  <!-- IndexedDB -->
+  <rect class="card" x="24" y="448" width="912" height="56" rx="8"/>
+  <text class="h" x="40" y="472">IndexedDB</text>
+  <text class="n" x="40" y="492">codecast-store: the boot cache for every window on the origin</text>
+  <path class="data" d="M214 408 V444" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="222" y="432">every patch</text>
+  <path class="data" d="M740 408 V444" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="748" y="432">per-window keys only</text>
+
+  <!-- Legend -->
+  <path class="data" d="M40 532 H80" marker-end="url(#aData)"/><text class="n" x="90" y="536">data: subscriptions, replicated rows, writes to disk</text>
+  <path class="cmd" d="M40 556 H80" marker-end="url(#aCmd)"/><text class="n" x="90" y="560">commands: each window's own writes to the server</text>
+  <rect class="waitBox" x="560" y="525" width="40" height="14" rx="4"/><text class="n" x="610" y="536">waiting for a host</text>
+</svg>

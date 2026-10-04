@@ -23,10 +23,13 @@
 import type { Doc, Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
 import {
+  CALL_RECORDING_STATUSES,
   callParticipantKind,
   isRecordingActive,
+  isRecordingFilming,
   RECORDING_RESTART_COOLDOWN_MS,
   shareIncludesVideo,
+  type CallRecordingErrorKind,
   type CallRecordingStatus,
   type CallRecordingStopReason,
 } from "@codecast/shared/contracts";
@@ -210,7 +213,7 @@ type ScreenRowView = {
   status?: CallRecordingStatus;
   started_at?: number | null;
   stop_reason?: CallRecordingStopReason | null;
-  error?: string | null;
+  error_kind?: CallRecordingErrorKind | null;
   start_attempts?: number | null;
   updated_at?: number;
 };
@@ -226,7 +229,7 @@ export function screenStartRetryable(row: ScreenRowView, now: number): boolean {
     row.status === "failed" &&
     row.started_at == null &&
     row.stop_reason === "failed" &&
-    row.error !== RECORDING_MINUTES_SPENT_MESSAGE &&
+    row.error_kind !== "minutes_spent" &&
     (row.start_attempts ?? 1) < START_RETRY_LIMIT &&
     now - (row.updated_at ?? now) >= SCREEN_RETRY_GAP_MS
   );
@@ -298,10 +301,19 @@ export function screenEncoding(
 
 // ── LiveKit's view onto a row ─────────────────────────────────────────────
 
+/** A failure as a row stores it: the words people read, and the kind the
+ *  loop decides by (CALL_RECORDING_ERROR_KINDS). Every writer of a row's
+ *  `error` that classifies one hands both. */
+export type RecordingFailure = { error: string; kind?: CallRecordingErrorKind };
+
 /** What the room reads when LiveKit refuses or ends a recording because the
  *  project's recording minutes for the billing period are spent. */
 export const RECORDING_MINUTES_SPENT_MESSAGE =
   "Recording is unavailable: the LiveKit plan behind this server has used its recording minutes for the month.";
+
+/** What a file refused for want of egress capacity reads once its retries are
+ *  used up. Its sibling above is the refusal that does not pass. */
+export const EGRESS_BUSY_MESSAGE = "LiveKit has no recording capacity free right now. Try again in a minute.";
 
 /** Is this LiveKit's "recording minutes used up" in its own words? One test
  *  for both places LiveKit says it: a refused start (the Twirp error's
@@ -317,14 +329,26 @@ export function isMinutesSpentText(text: string | null | undefined): boolean {
  *  S3 client, with the bucket's endpoint, the object's path and request ids
  *  in it, which is infrastructure detail and not copy. The caller logs the
  *  raw text beside the row it belongs to (applyEgress). */
-export function plainEgressError(raw: string | undefined | null): string {
+export function plainEgressError(raw: string | undefined | null): Required<RecordingFailure> {
   const text = (raw ?? "").trim();
-  if (/start signal not received/i.test(text)) return "The recording never began: nobody in the room was sending audio or video yet.";
-  if (!text) return "LiveKit stopped the recording without saying why.";
-  if (isMinutesSpentText(text)) return RECORDING_MINUTES_SPENT_MESSAGE;
-  if (/upload|s3|PutObject|AccessDenied|cloudflarestorage|bucket/i.test(text)) return "The video could not be saved to storage.";
-  if (/limit|max(imum)? duration/i.test(text)) return "The recording stopped at LiveKit's time limit.";
-  return "LiveKit stopped the recording unexpectedly.";
+  const livekit = (error: string) => ({ error, kind: "livekit" as const });
+  if (/start signal not received/i.test(text)) return livekit("The recording never began: nobody in the room was sending audio or video yet.");
+  if (!text) return livekit("LiveKit stopped the recording without saying why.");
+  if (isMinutesSpentText(text)) return { error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" };
+  if (/upload|s3|PutObject|AccessDenied|cloudflarestorage|bucket/i.test(text)) return { error: "The video could not be saved to storage.", kind: "server" };
+  if (/limit|max(imum)? duration/i.test(text)) return livekit("The recording stopped at LiveKit's time limit.");
+  return livekit("LiveKit stopped the recording unexpectedly.");
+}
+
+/** A row's error as a reader sees it. Rows written before plainEgressError
+ *  existed can still hold LiveKit's own text ("LiveKit: " and the S3
+ *  client's message, with the bucket's endpoint and request ids), so any
+ *  stored text that quotes LiveKit or carries a URL is said again in plain
+ *  words on the way out, and no endpoint ever reaches a page or the CLI. */
+export function plainStoredError(stored: string | undefined | null): string | null {
+  if (!stored) return null;
+  if (!/^LiveKit:\s|cloudflarestorage|https?:\/\//i.test(stored)) return stored;
+  return plainEgressError(stored.replace(/^LiveKit:\s*/i, "")).error;
 }
 
 /** What to write to a row given LiveKit's latest view of its egress.
@@ -362,7 +386,7 @@ export function egressPatch(
     return { drop: true };
   }
   const status: CallRecordingStatus =
-    row.status === "stopping" && (f.status === "starting" || f.status === "recording") ? "stopping" : f.status;
+    row.status === "stopping" && isRecordingFilming(f.status) ? "stopping" : f.status;
   set("status", status);
   set("r2_key", f.r2_key);
   set("started_at", f.started_at);
@@ -370,7 +394,9 @@ export function egressPatch(
   set("duration_ms", f.duration_ms);
   set("size_bytes", f.size_bytes);
   if (status === "failed") {
-    set("error", plainEgressError(f.error ?? egress.error));
+    const failure = plainEgressError(f.error ?? egress.error);
+    set("error", failure.error);
+    set("error_kind", failure.kind);
     if (!row.stop_reason) set("stop_reason", "failed");
   } else if (status === "ready" && !row.stop_reason) {
     // Finished without anyone asking: LiveKit's ceiling, a share that
@@ -435,6 +461,26 @@ export function mayShareVideo(userId: string, composites: ReadonlyArray<{ starte
   return isTeamAdmin || composites.every((c) => String(c.started_by) === String(userId));
 }
 
+/** May this person put one picture from this file on a public link (`cast
+ *  call snap --share`)? A picture of a face or a screen reaches as far as the
+ *  video on the link does, so it takes the same authority over the file's run
+ *  (mayShareVideo: its presser, or a team admin), with one more door: a
+ *  screen's own sharer may publish a picture of their own screen. Every
+ *  other reader of the call cites the moment instead, which only the call's
+ *  readers can open. A run with no room file (none was ever made) is judged
+ *  by the rows it has, never by an empty list, which every() would pass. */
+export function mayShareFrame(
+  userId: string,
+  file: { kind: string; participant_identity?: string | null },
+  runRows: ReadonlyArray<{ kind: string; started_by: string }>,
+  isTeamAdmin: boolean,
+): boolean {
+  if (file.kind === "screen" && !!file.participant_identity && String(file.participant_identity) === String(userId)) return true;
+  const heads = runRows.filter((r) => r.kind === "composite");
+  const judged = heads.length ? heads : runRows;
+  return judged.length > 0 && mayShareVideo(userId, judged, isTeamAdmin);
+}
+
 /** The room videos a call's public link shows: every finished one pressed for
  *  before the moment somebody chose to include the video
  *  (`share_video_through`). A run recorded after that choice is a new
@@ -453,12 +499,15 @@ export function sharedVideoRuns<R extends { kind: string; status: string; starte
 
 // ── Database helpers ──────────────────────────────────────────────────────
 
-const ACTIVE: CallRecordingStatus[] = ["starting", "recording", "stopping"];
+// The statuses as index keys: a status is read row by row through by_status
+// and by_room_status, so the shared predicates pick which ones to walk.
+export const ACTIVE_STATUSES: CallRecordingStatus[] = CALL_RECORDING_STATUSES.filter(isRecordingActive);
+export const FILMING_STATUSES: CallRecordingStatus[] = CALL_RECORDING_STATUSES.filter(isRecordingFilming);
 
 /** Every file of the room LiveKit is still working on. */
 export async function activeRoomRecordings(ctx: any, roomKey: string): Promise<RecordingRow[]> {
   const out: RecordingRow[] = [];
-  for (const status of ACTIVE) {
+  for (const status of ACTIVE_STATUSES) {
     out.push(
       ...(await ctx.db
         .query("call_recordings")
@@ -472,7 +521,9 @@ export async function activeRoomRecordings(ctx: any, roomKey: string): Promise<R
 /** The run the room is recording right now: its composite, still starting or
  *  recording. A run being stopped is no longer "recording" to the room. */
 export async function liveRoomRun(ctx: any, roomKey: string): Promise<RecordingRow | null> {
-  for (const status of ["recording", "starting"] as const) {
+  // The further along first: a run already recording wins over a stray
+  // press still starting.
+  for (const status of [...FILMING_STATUSES].reverse()) {
     // A room has a handful of rows in any one status; read them, keep the run.
     const rows: RecordingRow[] = await ctx.db
       .query("call_recordings")
@@ -681,7 +732,7 @@ export async function stopRoomRecording(
  *  of rows LiveKit is still working on anywhere. */
 export async function stopTeamRecordings(ctx: any, teamId: Id<"teams">): Promise<number> {
   const rooms = new Set<string>();
-  for (const status of ["starting", "recording"] as const) {
+  for (const status of FILMING_STATUSES) {
     const rows: RecordingRow[] = await ctx.db
       .query("call_recordings")
       .withIndex("by_status", (q: any) => q.eq("status", status))
@@ -693,6 +744,21 @@ export async function stopTeamRecordings(ctx: any, teamId: Id<"teams">): Promise
   return stopped;
 }
 
+/** What a run filmed, on its call's clock: from the first file's time 0 to
+ *  the last file's end. The room's video when it has a start (what a reader
+ *  watched), else every file. Null when nothing began filming. */
+export function filmedSpan(
+  runRows: ReadonlyArray<Pick<RecordingRow, "kind" | "started_at" | "ended_at" | "duration_ms">>,
+  callStartedAt: number,
+): { from_ms: number; to_ms: number } | null {
+  const begun = runRows.filter((r) => r.started_at != null);
+  const pick = begun.some((r) => r.kind === "composite") ? begun.filter((r) => r.kind === "composite") : begun;
+  if (!pick.length) return null;
+  const from = Math.min(...pick.map((r) => r.started_at!));
+  const to = Math.max(...pick.map((r) => r.ended_at ?? r.started_at! + (r.duration_ms ?? 0)));
+  return { from_ms: Math.max(0, from - callStartedAt), to_ms: Math.max(0, to - callStartedAt) };
+}
+
 /** Tell the room a run is no longer filming it, once, at the moment its
  *  composite leaves "starting"/"recording" however that happens: a press
  *  (by a teammate, `by`, or a guest, `guestName`), the room emptying, the
@@ -702,7 +768,7 @@ export async function stopTeamRecordings(ctx: any, teamId: Id<"teams">): Promise
  *  `detail` is a failure's plain words. */
 export async function announceRecordEnd(
   ctx: any,
-  run: Pick<RecordingRow, "room_key" | "team_id" | "started_by" | "transcript_id">,
+  run: Pick<RecordingRow, "_id" | "run_id" | "room_key" | "team_id" | "started_by" | "transcript_id">,
   opts: { reason: CallRecordingStopReason; by?: Id<"users">; guestName?: string; detail?: string },
 ): Promise<void> {
   await postEvent(ctx, {
@@ -711,6 +777,7 @@ export async function announceRecordEnd(
     user_id: opts.by ?? run.started_by,
     event: "record_off",
     transcript_id: run.transcript_id,
+    run_id: runIdOf(run),
     reason: opts.reason,
     ...(opts.guestName ? { guest_name: opts.guestName } : {}),
     ...(opts.detail ? { detail: opts.detail } : {}),
@@ -789,10 +856,13 @@ export async function deleteFrameShares(ctx: any, recordingId: Id<"call_recordin
     .query("call_frame_shares")
     .withIndex("by_recording", (q: any) => q.eq("recording_id", recordingId))
     .collect();
-  for (const share of shares) {
-    await ctx.storage.delete(share.storage_id).catch(() => {});
-    await ctx.db.delete(share._id);
-  }
+  for (const share of shares) await deleteFrameShare(ctx, share);
+}
+
+/** One shared picture gone: its public object, then its row. */
+export async function deleteFrameShare(ctx: any, share: { _id: Id<"call_frame_shares">; storage_id: Id<"_storage"> }): Promise<void> {
+  await ctx.storage.delete(share.storage_id).catch(() => {});
+  await ctx.db.delete(share._id);
 }
 
 /** A run's loop bookkeeping (call_recording_loops), kept off the rows every

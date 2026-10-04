@@ -265,17 +265,20 @@ export const SHORTCUTS: ShortcutDef[] = [
   // as ',' or '<' depending on browser/layout — register both spellings.
   { key: 'ctrl+shift+,', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
   { key: 'ctrl+shift+<', mac: 'meta+,', action: 'ui.openSettings', skipInputCheck: true, worksInModal: true, description: 'Open settings' },
-  // A field with text keeps its own undo: inputs, the composer and the doc
-  // editor. An empty one hands the chord to app undo ('whenEmpty'), because
-  // the triage chords fire from an empty composer and leave focus in one; the
-  // handler (hooks/useUndoWalk) still declines when the field was edited after
-  // the entry it would reach, so a cleared draft comes back. noRepeat: a held
-  // chord is one undo, not the whole stack at key-repeat speed. The second
-  // ui.undo row keeps ⌃Z working on mac (off mac it is the same chord).
-  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Undo' },
-  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Undo' },
-  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Redo' },
-  { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, skipInputCheck: 'whenEmpty', description: 'Redo' },
+  // The chords reach the handler from any field, and the handler
+  // (hooks/useUndoWalk) gives each field its own undo while it has one: an
+  // empty field the user edited after the entry the press would reach (a
+  // cleared draft comes back), a field with text it or its editor can still
+  // step. Otherwise the press is app undo: the triage chords fire from an
+  // empty composer and leave focus in one, and a triage step can land on a
+  // session whose composer holds a draft nobody typed here. A declined press
+  // goes on to the field. noRepeat: a held chord is one undo, not the whole
+  // stack at key-repeat speed. The second ui.undo row keeps ⌃Z working on mac
+  // (off mac it is the same chord).
+  { key: 'ctrl+z', mac: 'meta+z', action: 'ui.undo', noRepeat: true, skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+z', mac: 'ctrl+z', action: 'ui.undo', noRepeat: true, skipInputCheck: true, description: 'Undo' },
+  { key: 'ctrl+shift+z', mac: 'meta+shift+z', action: 'ui.redo', noRepeat: true, skipInputCheck: true, description: 'Redo' },
+  { key: 'ctrl+y', action: 'ui.redo', noRepeat: true, skipInputCheck: true, description: 'Redo' },
   // ⌘⌥Z means nothing to a text field, so on mac the history chord opens the
   // card from the composer too (the second row; it is autofocused on every
   // conversation page). Off mac Ctrl+Alt is AltGr, and AltGr+Z types a letter

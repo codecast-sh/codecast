@@ -244,3 +244,17 @@ export function bisectsOverRange(list: readonly BisectSummary[], a: Pick<Attribu
     })
     .sort((x, y) => Number(isBisectLive(y.status)) - Number(isBisectLive(x.status)) || Date.parse(y.startedAt) - Date.parse(x.startedAt));
 }
+
+/**
+ * Why a bisect ended on a range rather than one commit, read from the answer
+ * as runner.ts writes it: no confirmation ran when the classes left between
+ * the last good and bad reads did not load; a confirmation that separated
+ * worse names the uncommitted edits (a culprit names a commit); any other
+ * confirmation did not separate the culprit class from the one before it.
+ */
+export function rangeWords(ans: Extract<BisectAnswer, { kind: "range" }>): string {
+  if (!ans.separation) return "the classes between the last good and bad reads do not load under today's tool, so no replay can narrow them.";
+  if (ans.separation.kind === "worse") return "the uncommitted edits, confirmed worse than the commit they sit on.";
+  return "the confirmation did not separate the culprit class from the one before it, so the answer is this range.";
+}
+

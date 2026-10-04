@@ -17,6 +17,7 @@ import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, can
 import { canReadCall } from "./transcripts";
 import { sharedCallVideoKey, sharedCallVideos } from "./callRecordings";
 import { restampRunShare } from "./lib/callRecordingRuns";
+import { stampRoomWordsPublic } from "./callRooms";
 import { assigneeNamesFor } from "./tasks";
 import { userMayRead } from "./sessionDecisions";
 import { canReadStack } from "./decisionStacks";
@@ -65,11 +66,16 @@ export async function claimShareToken(
 
 /** A call's running recordings carry whether their video goes out with the
  *  link (the room's live notice reads it there): a link cleared or re-aimed
- *  has just dropped the video, so they are told. */
+ *  has just dropped the video, so they are told. The room carries whether
+ *  its words do (getSharedCall shows a live record's transcript as it is
+ *  written), so a link turned on in the middle of a call is news to
+ *  everyone in it, guests first. */
 async function restampCallRuns(ctx: Pick<MutationCtx, "db">, table: ShareTable, row: { _id: Id<ShareTable> }): Promise<void> {
   if (table !== "transcripts") return;
   const call = await ctx.db.get(row._id as Id<"transcripts">);
-  if (call) await restampRunShare(ctx, call);
+  if (!call) return;
+  await restampRunShare(ctx, call);
+  await stampRoomWordsPublic(ctx, call);
 }
 
 // Who may turn a kind's link on or off: whoever may read the object. Docs,

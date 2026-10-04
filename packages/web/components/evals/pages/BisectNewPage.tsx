@@ -176,7 +176,7 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
   const surfaces = useMemo(() => overview.data?.surfaces.map((s) => s.id) ?? (view.surface ? [view.surface] : []), [overview.data, view.surface]);
   const batches = useMemo(() => overview.data?.surfaces.find((s) => s.id === view.surface)?.strip ?? [], [overview.data, view.surface]);
   const ready = !!(view.surface && view.good && view.bad);
-  const attr = useEvalsResource("GET /attribution", ready ? { query: { surface: view.surface!, good: view.good!, bad: view.bad!, ...(allCommits ? { allCommits: true } : {}) } } : null);
+  const attr = useEvalsResource("GET /attribution", ready ? { query: { surface: view.surface!, good: view.good!, bad: view.bad!, ...(allCommits ? { allCommits: true } : {}), ...(view.freeze ? { freeze: view.freeze } : {}) } } : null);
   const a = attr.data;
   // The engine's own rule: a plan is offered whenever a bisect would have work, an unattributable range included.
   const searchable = !!a && attributionSearchable(a);

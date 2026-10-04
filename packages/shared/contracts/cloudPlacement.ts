@@ -8,6 +8,23 @@
  * machine". Pure data in, verdict out; no runtime imports.
  */
 
+/**
+ * The most files a "leave these out and start" answer may name. The list rides
+ * a Convex argument (arrays cap at 8192) and a button the human reads; a
+ * context that needs more left out than this is a project the mirror walks
+ * wrongly, reported as plain error text, never as an offer.
+ */
+export const CLOUD_LEAVE_OUT_MAX = 200;
+
+/**
+ * How long one `cast cloud start` may run: a cold EC2 boot, a clone, an
+ * install and the home mirror, on a laptop that may be heavily loaded. The
+ * daemon kills its child past this, the server keeps a claimed cloud_spawn
+ * live this long, and a placement waits this long for another push to the
+ * same host to release the mirror lock.
+ */
+export const CLOUD_START_RUN_MS = 25 * 60 * 1000;
+
 export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }): boolean {
   return d.is_remote === true && /^(linux|darwin|macos)$/i.test(d.platform ?? "");
 }

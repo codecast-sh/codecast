@@ -843,12 +843,28 @@ export async function performFinishSession(
   if (!IN_FLIGHT_STATUSES.has(row.status)) return { ok: false, reason: `row is ${row.status}` };
   const conv = await ctx.db.get(row.conversation_id);
   if (!conv) return { ok: false, reason: "the session no longer exists" };
-  const moved = await performMoveSessionToDevice(ctx, userId, {
-    conversation_id: row.conversation_id,
-    owner_device_id: row.to_device_id,
-    project_path: args.project_path,
-    resume: true,
-  });
+  // Sessions moved together from one laptop folder had one tree pushed for all
+  // of them (the runner's ledger), so they share the host checkout as they
+  // shared the folder; anyone else still holds it exclusively.
+  const batchRows = args.source_path === undefined ? [] : await ctx.db
+    .query("session_migrations")
+    .withIndex("by_batch", (q: any) => q.eq("batch_id", row.batch_id))
+    .collect();
+  const sharedWith = batchRows
+    .filter((r: any) => r._id.toString() !== row._id.toString() && r.to_device_id === row.to_device_id && r.source_path === args.source_path)
+    .map((r: any) => r.conversation_id.toString());
+  let moved: Awaited<ReturnType<typeof performMoveSessionToDevice>>;
+  try {
+    moved = await performMoveSessionToDevice(ctx, userId, {
+      conversation_id: row.conversation_id,
+      owner_device_id: row.to_device_id,
+      project_path: args.project_path,
+      resume: true,
+      shared_with: sharedWith,
+    });
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
   await ctx.db.patch(row.conversation_id, {
     migration: undefined,
     session_error: undefined,

@@ -30,6 +30,7 @@ import { copyText } from "../lib/copyText";
 import { useTrackedStore } from "../store/inboxStore";
 import { findCommonPrefix, shortenPrefix, stripCommonPrefix, treeOrder } from "../lib/diffFileTree";
 import { FileSidebar } from "./FileDiffSidebar";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 
 export interface DiffFile {
   filename: string;
@@ -684,7 +685,7 @@ function FlowDiffView({
     if (!rootRef.current?.offsetParent) return;
     const el = e.target as HTMLElement | null;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     const order = files.map(pathOf);
     const at = Math.max(0, order.indexOf(active ?? flow.selected?.file ?? order[0]));
     if (e.key === "j" || e.key === "]") {
@@ -968,10 +969,7 @@ export function FileDiffLayout({
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    const isInput =
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.isContentEditable;
+    const isInput = keyBelongsElsewhere(target);
 
     if (isInput) return;
     // The page form walks its files itself (FlowDiffView).

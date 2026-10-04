@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
-import { buildLoginFlowCommand, buildMintFlowCommand, summarizeLoginPaneTail } from "./daemon.js";
+import { buildLoginFlowCommand, buildMintFlowCommand, loginPaneSucceeded, summarizeLoginPaneTail } from "./daemon.js";
 
 const daemonSource = readFileSync(new URL("./daemon.ts", import.meta.url), "utf8");
 
@@ -122,5 +122,20 @@ describe("minting is never automatic", () => {
     // The definition and the one call in the command handler.
     expect(calls).toHaveLength(2);
     expect(daemonSource).toMatch(/parsed\.mint[\s\S]{0,200}startMintFlow\(parsed\.mint/);
+  });
+});
+
+describe("loginPaneSucceeded", () => {
+  test("only the CLI's own success line confirms a sign-in", () => {
+    expect(loginPaneSucceeded("Opening browser to sign in…\nPaste code here if prompted >")).toBe(false);
+    expect(loginPaneSucceeded("Paste code here if prompted > abc#def\nLogin successful.")).toBe(true);
+  });
+});
+
+describe("summarizeLoginPaneTail on the code prompt", () => {
+  test("the error on the prompt's line is kept, a refused code is explained", () => {
+    expect(summarizeLoginPaneTail("visit: https://x\nPaste code here if prompted > Login failed: Request failed with status code 400\n")).toMatch(/refused that code/);
+    expect(summarizeLoginPaneTail("Paste code here if prompted > Login failed: network down")).toBe("Login failed: network down");
+    expect(summarizeLoginPaneTail("Paste code here if prompted >")).toBeNull();
   });
 });

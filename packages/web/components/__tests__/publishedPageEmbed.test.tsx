@@ -136,3 +136,59 @@ describe("ClaudeArtifactEmbed publish suggestion", () => {
     }
   });
 });
+
+// A page framed in a conversation the viewer can reply in takes notes into
+// that conversation's quote batch: the frame reports a pin, the batch gains a
+// page note quoting the spot, and the frame is sent the notes to draw.
+describe("PublishedPageEmbed notes", () => {
+  test("a pin from the frame joins the quote batch and is mirrored back", async () => {
+    const { ImageGalleryProvider, GalleryMessageScope } = await import("../ImageGallery");
+    const container = dom.window.document.createElement("div");
+    dom.window.document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <ConvexProvider client={client}>
+          <ImageGalleryProvider conversationId="conv-1" quotable>
+            <GalleryMessageScope messageId="msg-1">
+              <PublishedPageEmbed slug="notes-page" />
+            </GalleryMessageScope>
+          </ImageGalleryProvider>
+        </ConvexProvider>,
+      ),
+    );
+    try {
+      const frame = container.querySelector("iframe") as HTMLIFrameElement;
+      const sent: any[] = [];
+      frame.contentWindow!.postMessage = ((m: unknown) => { sent.push(m); }) as any;
+      const toggle = container.querySelector('[aria-pressed]') as HTMLButtonElement;
+      expect(toggle.textContent).toContain("Comment");
+      await act(() => toggle.click());
+      expect(sent.at(-1)).toMatchObject({ type: "codecast:notes", pinMode: true, notes: [] });
+
+      const fromFrame = (data: unknown, source: unknown = frame.contentWindow) =>
+        act(() => { dom.window.dispatchEvent(new dom.window.MessageEvent("message", { data, source: source as any })); });
+      // Another window cannot write into the batch.
+      await fromFrame({ type: "codecast:note-add", point: { x: 0.5, y: 0.5 } }, dom.window);
+      expect(useInboxStore.getState().getReviewComments("conv-1")).toEqual([]);
+
+      await fromFrame({ type: "codecast:note-add", point: { x: 0.25, y: 0.4 }, snippet: "Needs you now" });
+      const [note] = useInboxStore.getState().getReviewComments("conv-1");
+      expect(note).toMatchObject({ messageId: "msg-1", page: { slug: "notes-page", point: { x: 0.25, y: 0.4 }, snippet: "Needs you now" } });
+      expect(note.quote).toBe('Published page "Published page" (https://codecast.sh/a/notes-page), at "Needs you now"');
+      expect(sent.at(-1)).toMatchObject({ editing: note.id, notes: [{ id: note.id, n: 1, x: 0.25, y: 0.4, body: "" }] });
+
+      await fromFrame({ type: "codecast:note-body", id: note.id, body: " fix this first " });
+      expect(useInboxStore.getState().getReviewComments("conv-1")[0].body).toBe("fix this first");
+      expect(container.querySelector('[aria-pressed]')!.textContent).toContain("1 note");
+
+      await fromFrame({ type: "codecast:note-remove", id: note.id });
+      expect(useInboxStore.getState().getReviewComments("conv-1")).toEqual([]);
+      expect(sent.at(-1)).toMatchObject({ notes: [], editing: null });
+    } finally {
+      useInboxStore.getState().clearReviewComments("conv-1");
+      await act(() => root.unmount());
+      container.remove();
+    }
+  });
+});

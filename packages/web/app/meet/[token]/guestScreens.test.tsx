@@ -126,6 +126,29 @@ describe("the notice before joining", () => {
     expect(notice(true, true)).toContain("being recorded, video and screen shares included");
     expect(notice(false, false)).toContain("not being transcribed or recorded");
   });
+
+  test("a recording whose video goes to the public link says so, and marks it new to someone told only of the recording", () => {
+    const pub = (since?: { recording: boolean; transcribed: boolean; video_public?: boolean }) =>
+      text(renderToStaticMarkup(<CallNotice transcribed={false} recording videoPublic since={since} />));
+    expect(pub()).toContain("anyone with that link can watch it");
+    expect(pub({ recording: true, transcribed: false })).toContain("Now shared by public link.");
+    expect(pub({ recording: false, transcribed: false })).toContain("Started while you waited.");
+    expect(pub({ recording: true, transcribed: false, video_public: true })).not.toContain("Now shared");
+    // Public says nothing while nothing is recorded.
+    expect(text(renderToStaticMarkup(<CallNotice transcribed recording={false} videoPublic />))).not.toContain("public link");
+  });
+
+  test("a transcript on the public link says so, and a link turned on mid-call is news to someone told only of the transcript", () => {
+    const pub = (since?: { recording: boolean; transcribed: boolean; words_public?: boolean }) =>
+      text(renderToStaticMarkup(<CallNotice transcribed recording={false} wordsPublic since={since} />));
+    expect(pub()).toContain("anyone with that link can read along");
+    expect(pub()).not.toContain("written down for the team, and the AI agents they work with can read it");
+    expect(pub({ recording: false, transcribed: true })).toContain("Now shared by public link.");
+    expect(pub({ recording: false, transcribed: false })).toContain("Turned on while you waited.");
+    expect(pub({ recording: false, transcribed: true, words_public: true })).not.toContain("Now shared");
+    // Public says nothing while nothing is written down.
+    expect(text(renderToStaticMarkup(<CallNotice transcribed={false} recording={false} wordsPublic />))).not.toContain("public link");
+  });
 });
 
 describe("the lobby and the door", () => {
@@ -160,6 +183,7 @@ describe("the lobby and the door", () => {
         live
         transcribed
         recording={false}
+        videoPublic={false}
         name="Ada"
         onName={() => {}}
         onAsk={() => {}}
@@ -231,6 +255,35 @@ describe("the lobby and the door", () => {
     expect(lobby("ask")).toContain("bg-sol-red/85");
   });
 
+  test("let in, then the transcript went public: the Join names what changed", () => {
+    const told = { recording: false, transcribed: true };
+    const t = text(lobby("rejoin", { accepted: told, wordsPublic: true }));
+    expect(t).toContain("Join, transcript public");
+    expect(t).toContain("Now shared by public link.");
+    expect(t).toContain("Leave");
+    expect(text(lobby("rejoin", { accepted: told, recording: true, wordsPublic: true }))).toContain("Join, recorded");
+    expect(text(lobby("rejoin", { accepted: { ...told, words_public: true }, wordsPublic: true }))).toContain("Join the call");
+  });
+
+  test("a machine with no camera says so the way its picker does, and the camera switch rests", () => {
+    const listed = (camera: unknown[]) => ({
+      ...preview,
+      getSnapshot: () => ({ ...preview.getSnapshot(), devicesListed: true, devices: { mic: [], camera, speaker: [] } }),
+    });
+    const none = lobby("ask", { preview: listed([]) });
+    expect(text(none)).not.toContain("Your camera is off");
+    // The picture and the picker under it: one fact, one wording.
+    expect(text(none).split("No camera found").length - 1).toBe(2);
+    expect(none).toContain('title="No camera was found on this device. Plug one in and it shows up here."');
+    expect(none).toMatch(/disabled="" class="[^"]*bg-white\/10 text-white\/50[^"]*" title="No camera was found/);
+    // A camera that is there and switched off is still off, and still a switch.
+    const off = lobby("ask", { preview: listed([{ deviceId: "cam1", label: "FaceTime HD", kind: "videoinput" }]) });
+    expect(text(off)).toContain("Your camera is off");
+    expect(off).toContain('title="Turn your camera on"');
+    // Before the browser has listed anything, an empty list is not "none".
+    expect(text(lobby("ask"))).toContain("Your camera is off");
+  });
+
   test("a blocked device is fixed where this browser keeps it, not where desktop Chrome does", () => {
     const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
     expect(devicePermissionHint(iphone, false)).toContain("Tap aA in the address bar, then Website Settings");
@@ -284,6 +337,21 @@ describe("the lobby and the door", () => {
     expect(r).toContain("Join, recorded");
     expect(r).toContain("Leave");
     expect(r).not.toContain("Don't join");
+  });
+
+  test("the lobby says the video goes to the public link, and a link made public since widens the join", () => {
+    expect(text(lobby("ask", { recording: true, videoPublic: true }))).toContain("anyone with that link can watch it");
+    const r = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true } }));
+    expect(r).toContain("Now shared by public link.");
+    expect(r).toContain("Join, recorded");
+    const same = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true, video_public: true } }));
+    expect(same).toContain("Join the call");
+  });
+
+  test("on a phone the press sits under the notice whenever there is something to agree to", () => {
+    expect(lobby("ask")).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { recording: true, accepted: { recording: false, transcribed: true } })).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { accepted: { recording: false, transcribed: true } })).toContain("max-sm:sticky");
   });
 
   test("a signed-in browser is pointed at the app, to join as themselves", () => {

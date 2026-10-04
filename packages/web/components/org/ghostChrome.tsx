@@ -15,10 +15,10 @@ import type { OrgTree } from "./orgTypes";
 
 
 /** A small dashed tag: "proposed", "retire", "this session", "accepted". */
-export function GhostTag({ label, status = "proposed", tone, className }: { label: string; status?: OrgChangeStatus; /** A colour of its own (a retire reads red, not the proposal violet). */ tone?: string; className?: string }) {
+export function GhostTag({ label, status = "proposed", tone, quiet, className }: { label: string; status?: OrgChangeStatus; /** A colour of its own (a retire reads red, not the proposal violet). */ tone?: string; /** The word alone, no frame: for rows that would otherwise be all dashes. */ quiet?: boolean; className?: string }) {
   const m = tone && status === "proposed" ? { border: `1.5px dashed color-mix(in srgb, ${tone} 70%, transparent)`, color: tone } : CHIP_STATUS[status];
   return (
-    <span className={cn("inline-flex items-center h-[16px] px-1 rounded-sm text-[9.5px] font-medium uppercase tracking-[0.06em] whitespace-nowrap", className)} style={{ border: m.border, color: m.color }} data-ghost-tag={label}>
+    <span className={cn("inline-flex items-center h-[16px] whitespace-nowrap font-medium", quiet ? "text-[10.5px]" : "px-1 rounded-sm text-[9.5px] uppercase tracking-[0.06em]", className)} style={{ border: quiet ? undefined : m.border, color: m.color }} data-ghost-tag={label}>
       {label}
     </span>
   );

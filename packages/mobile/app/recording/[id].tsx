@@ -31,7 +31,6 @@ import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
 import { buildEntityUrl, callRefId, formatCallTime, isConvexId } from '@codecast/shared/entities';
 import { openWebPage } from '@/lib/links';
-import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
@@ -221,7 +220,7 @@ export default function RecordingDetailScreen() {
                   dateStyle: 'medium',
                   timeStyle: 'short',
                 })}
-                {call.ended_at ? `  ·  ${fmtClock(call.ended_at - call.started_at)}` : ''}
+                {call.ended_at ? `  ·  ${formatCallTime(call.ended_at - call.started_at)}` : ''}
               </RNText>
 
               {url ? (
@@ -234,7 +233,7 @@ export default function RecordingDetailScreen() {
                     style={styles.playBtn} activeOpacity={0.7}>
                     <FontAwesome name={playing ? 'pause' : 'play'} size={16} color="#fff" />
                   </TouchableOpacity>
-                  <RNText style={styles.playerTime}>{fmtClock(position)}</RNText>
+                  <RNText style={styles.playerTime}>{formatCallTime(position)}</RNText>
                   <RNText style={styles.playerHint} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                     Tap any line to jump there
                   </RNText>
@@ -295,7 +294,7 @@ export default function RecordingDetailScreen() {
                 activeOpacity={0.6}
                 disabled={!url}
               >
-                <RNText style={styles.lineTime}>{fmtClock(item.t0)}</RNText>
+                <RNText style={styles.lineTime}>{formatCallTime(item.t0)}</RNText>
                 <RNText style={styles.lineText}>{item.text}</RNText>
               </TouchableOpacity>
             );

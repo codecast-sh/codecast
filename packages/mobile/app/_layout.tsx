@@ -242,7 +242,9 @@ function RootLayoutNav() {
               <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
               <AnalyticsIdentify />
               <AuthGate>
-                <Stack>
+                {/* Back is a bare chevron: the tab group has no title, so a labeled
+                    back button read "(tabs)" on every pushed screen. */}
+                <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
                   <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />

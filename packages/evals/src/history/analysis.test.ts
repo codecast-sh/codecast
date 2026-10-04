@@ -239,6 +239,20 @@ describe('flipsBetween', () => {
     expect(r.ok && r.flips.map((f) => [f.freezeId, f.name, f.direction, f.after.length])).toEqual([[A, 'demo a1a1', 'broke', 3]]);
   });
 
+  test("leads each side with a rep that agrees with its side's verdict", () => {
+    // Real title jx7btyt:100 on 2026-10-04: two of three reps failed, and seed 1 (listed first) passed.
+    const good = batchOf('g', day(1), { [A]: {} }).map((r) => (r.seed === 1 ? { ...r, score: 0.2, status: 'fail' as const } : r));
+    const bad = batchOf('b', day(2), { [A]: { score: 0.1, status: 'fail' } }).map((r) => (r.seed === 1 ? { ...r, score: 0.7, status: 'pass' as const } : r));
+    const r = flipsBetween([...good, ...bad], 'g', 'b');
+    if (!r.ok) throw new Error(r.reason);
+    const [f] = r.flips;
+    expect(f.direction).toBe('broke');
+    expect(f.after).toHaveLength(3);
+    expect(f.before).toHaveLength(3);
+    expect(bad.find((x) => x.id === f.after[0])!.status).toBe('fail');
+    expect(good.find((x) => x.id === f.before[0])!.status).toBe('pass');
+  });
+
   test('refuses across a model or a judge ruler, and on a batch that graded nothing', () => {
     const g = batchOf('g', day(1), { [A]: {} });
     expect(flipsBetween([...g, ...batchOf('b', day(2), { [A]: { model: 'm2', score: 0.1 } })], 'g', 'b')).toEqual({ ok: false, reason: 'another model: m1 in g, m2 in b', a: { model: 'm1', ruler: 'r1' }, b: { model: 'm2', ruler: 'r1' } });

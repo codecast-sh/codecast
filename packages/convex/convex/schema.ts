@@ -12,7 +12,8 @@ import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValida
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
-import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
+import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
+import { callGuestLeftReasonValidator, callGuestStatusValidator, guestNoticeValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
@@ -4862,23 +4863,14 @@ export default defineSchema({
     // with an end); a bounded project is what a program role ends with
     // (org-staffing.md S10).
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"))),
-    // The finders a repo's line profile declares for this project
-    // (line-profile.md LP3), published by `cast line profile --publish`. The
-    // repo holds the truth; this copy is what /line reads to name each
-    // finder and say when one is silent. root: the checkout that published;
-    // default: this is that profile's `[line] project`.
-    line_profile: v.optional(v.object({
-      finders: v.array(v.object({
-        id: v.string(),
-        source: v.string(),
-        kind: v.union(v.literal("any"), v.array(v.string())),
-        fingerprint: v.string(),
-        runs: v.optional(v.string()),
-      })),
-      root: v.optional(v.string()),
-      default: v.optional(v.boolean()),
-      changed_at: v.number(),
-    })),
+    // The repo's resolved line profile (line-profile.md LP3), published by
+    // `cast line profile --publish` onto every project its finders file
+    // into: the finders for this project, every other value with where it
+    // came from, the loader's notes and warnings, and the checkout and device
+    // that published it. The repo holds the truth; this copy is what the app
+    // reads. default: this is that profile's `[line] project`. Shape:
+    // @codecast/shared/contracts/lineProfile.
+    line_profile: v.optional(publishedLineProfileValidator),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -5600,6 +5592,9 @@ export default defineSchema({
     // Set when pulled from the provider or once a pushed comment gets its id
     // back. docs/architecture/issue-sync.md S1.2, S4.
     external: v.optional(taskCommentExternalValidator),
+    // A person's comment reached the session that owns the task while it was
+    // working (tasks.ts deliverCommentToOwner): the thread says so under it.
+    delivered_to_conversation_id: v.optional(v.id("conversations")),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"])
@@ -6169,6 +6164,12 @@ export default defineSchema({
     // its guests, whether or not anything was transcribing it
     // (transcripts.withinHuddleGrace). Dies with the row like the rest.
     emptied_at: v.optional(v.number()),
+    // The huddle's live call record has its public link on, which shows the
+    // transcript to anyone holding it as it is written. Stamped by
+    // callRooms.stampRoomWordsPublic when the link or the record changes,
+    // so the notice everyone in the room reads (and every guest's) never
+    // has to read the record itself, which every transcript line moves.
+    words_public: v.optional(v.boolean()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -6221,7 +6222,15 @@ export default defineSchema({
     creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
+    // Every link the room ever had, for the questions about any of them
+    // (lib/callGuestAdmission.roomHasGuestLinks: a guest admitted on a link
+    // since expired can still be inside).
     .index("by_room", ["room_key"])
+    // The room's links still open by the clock, and only those: the stage's
+    // invite panel (callGuests.listGuestLinks) subscribes to this range, so a
+    // long-lived room's past links neither grow its read nor re-run it when
+    // one of them is written.
+    .index("by_room_expires", ["room_key", "expires_at"])
     // The creator's latest push across all their links, in one read
     // (callGuests.tellCreatorIfAlone).
     .index("by_creator_told", ["created_by", "creator_told_at"])
@@ -6264,6 +6273,13 @@ export default defineSchema({
     // recorded, and went ahead. Joining requires it; the notice keeps
     // showing in the call whatever this says.
     notice_accepted_at: v.optional(v.number()),
+    // WHAT they were shown when they went ahead (GuestNotice): the knock's
+    // notice, then each Join pressed under a wider one. A media token is
+    // refused while the room keeps more than this (authForGuestToken), so a
+    // page that skips the lobby's widened notice cannot walk them into it,
+    // and the row says afterwards what the guest agreed to. Absent on rows
+    // from before it existed, which are held to the room as it is.
+    notice_accepted: v.optional(guestNoticeValidator),
     // Why a `left` row left: they walked out, or the huddle they were let
     // into ended (an admission is for one huddle). CallGuestLeftReason.
     left_reason: v.optional(callGuestLeftReasonValidator),
@@ -6524,8 +6540,11 @@ export default defineSchema({
     // restart cooldown and the stuck-save timeout both count from here.
     stop_requested_at: v.optional(v.number()),
     // Why it failed, in plain words (lib/callRecordingRuns plainEgressError;
-    // LiveKit's own text goes to the logs).
+    // LiveKit's own text goes to the logs), and the kind of failure those
+    // words describe. Decisions (may a screen file be asked for again?) read
+    // the kind, so editing the words never changes what the loop does.
     error: v.optional(v.string()),
+    error_kind: v.optional(callRecordingErrorKindValidator),
     // How many times this file has been asked of LiveKit (absent: once). A
     // refusal that passes (no capacity this minute, a timeout) is asked again
     // up to START_RETRY_LIMIT times on the same row. `retry_after` is when a
@@ -6567,9 +6586,18 @@ export default defineSchema({
     recording_id: v.id("call_recordings"),
     transcript_id: v.id("transcripts"),
     storage_id: v.id("_storage"),
+    // The picture's content hash, so the same frame shared twice from one
+    // file is one object and one link (callRecordings.cliShareFrame).
+    sha256: v.optional(v.string()),
     user_id: v.id("users"),
     created_at: v.number(),
-  }).index("by_recording", ["recording_id"]),
+    // The moment the picture shows, in ms on the call's clock: what the call
+    // page's list of shared pictures and the room's thread line name.
+    at_ms: v.optional(v.number()),
+  })
+    .index("by_recording", ["recording_id"])
+    // The call page lists every picture of the call on a public link.
+    .index("by_transcript", ["transcript_id"]),
 
   // One row per recording run: its reconcile loop's bookkeeping, kept apart
   // from call_recordings because every room and call page subscribes to
@@ -6611,12 +6639,14 @@ export default defineSchema({
     // Set when this row is something the room SAW rather than something
     // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
     // "transcribe_off" | "record_on" | "record_off" | "record_deleted" |
-    // "guest_admitted" | "guest_removed".
+    // "frame_shared" | "guest_admitted" | "guest_removed".
     // `user_id` is who did it (the person who added or removed the agent,
     // pressed the transcription or recording switch, or let a guest in or
     // put one out, the guest named by event_guest_name); an agent event
     // also carries `agent_conversation_id`. `text` is empty, except a
-    // recording that failed, which carries the failure in plain words.
+    // recording that failed, which carries the failure in plain words, and
+    // a frame_shared line (`cast call snap --share` put a picture of the call
+    // on a public link), which carries the moment's reference (`cl-42@12:34`).
     // Written only by callChat.postEvent; never relayed to the fed sessions.
     event: v.optional(v.string()),
     // Why a record_off happened (a CallRecordingStopReason: "pressed",
@@ -6629,6 +6659,15 @@ export default defineSchema({
     // as the guest's. On guest_admitted / guest_removed it is the guest the
     // doorkeeper (user_id) let in or put out.
     event_guest_name: v.optional(v.string()),
+    // The recording run a record_on / record_off / record_deleted line is
+    // about (callRecordingRuns.runIdOf), so the thread can tell which run a
+    // delete removed and mark that run's start and stop as gone. Absent on
+    // lines written before it existed.
+    event_run_id: v.optional(v.string()),
+    // record_deleted: the stretch of the call the deleted run had filmed, in
+    // ms on the call's clock (transcript started_at), so the line can say
+    // which recording went. Absent when the run never began filming.
+    event_span: v.optional(v.object({ from_ms: v.number(), to_ms: v.number() })),
     // The huddle this line was said in: the room's live transcript when it
     // was written (callChat.insertRoomRow), or the one a line typed before
     // the record existed was claimed by when it started. Absent on a line

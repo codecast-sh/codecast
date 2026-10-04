@@ -18,6 +18,7 @@
 // rows to one project before buildLineFlow, and lineRollup counts every
 // project's line for the "all projects" view. A project's declared finders
 // (LP3, published onto the project row) join Sense, so a silent one shows.
+import type { LineFinderDecl, PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
@@ -92,12 +93,12 @@ export type LineDecision = {
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
 /** A finder a project's line profile declares (LP3). */
-export type LineFinderDecl = { id: string; source: string; kind: "any" | string[]; runs?: string };
+export type { LineFinderDecl };
 /** A project row as the line reads it: its goal fields and its published profile. */
 export type LineProject = GoalRow & {
   _id: string;
   project_path?: string;
-  line_profile?: { finders: LineFinderDecl[]; root?: string; default?: boolean; changed_at: number } | null;
+  line_profile?: PublishedLineProfile | null;
 };
 
 /** idle: nothing has reached the station yet, or nothing waits for it, which

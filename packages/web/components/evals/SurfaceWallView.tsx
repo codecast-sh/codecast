@@ -21,9 +21,9 @@ import { DAY_MS, dayList, dayStart, linear } from "./charts/scale";
 import { ScoreStrip } from "./charts/ScoreStrip";
 import { evalsHref } from "./evalsPaths";
 import { WhatMoved } from "./WhatMoved";
-import { bisectStatusWord, isBisectLive, isBisectStalled } from "./bisectModel";
+import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { EvalsLink, SeparationMark, VerdictGlyph, baselineWords, newestBaseline, pLabel, plural, separationTitle, shortModel, shortSha, usd } from "./parts";
+import { EvalsLink, SeparationMark, VerdictGlyph, type VerdictState, baselineWords, newestBaseline, pLabel, plural, separationTitle, shortModel, shortSha, usd } from "./parts";
 import "./wall.css";
 
 /** All first: the agent surfaces and most call batches carry no cadence, so a nightly default would hide them. */
@@ -308,7 +308,7 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
         <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(b.startedAt), now).replace(" ago", "")}</span>
       </span>
       <span className="ev-wall-ribbon-range ev-mono">
-        {shortSha(b.good)} .. {shortSha(b.bad)}
+        {endpointLabel(b.good)} to {endpointLabel(b.bad)}
       </span>
       <span className="ev-wall-ribbon-budget" title={`${usd(b.spentUsd)} of a ${usd(b.budgetUsd)} budget`}>
         <span className="ev-wall-ribbon-track">
@@ -322,17 +322,31 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
   );
 }
 
+/** A session that exited non-zero with no failed run broke before or around its runs (a filter that matched nothing, a load error). */
+const simExitedBad = (sim: SimSessionSummary) => !sim.unsessioned && sim.finishedAt != null && sim.exit != null && sim.exit !== 0;
+
+export function simLineState(sim: SimSessionSummary): VerdictState {
+  if (sim.failed) return "fail";
+  if (simExitedBad(sim)) return "crash";
+  return sim.runs ? "pass" : "unscored";
+}
+
+export function simOutcomeWords(sim: SimSessionSummary): string {
+  if (sim.failed) return `${sim.failed} failed`;
+  if (simExitedBad(sim)) return sim.runs ? `none failed, but it exited ${sim.exit}` : `exited ${sim.exit} before any run`;
+  if (!sim.unsessioned && sim.finishedAt == null) return "still running";
+  return "none failed";
+}
+
 function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
   if (!sim) return <div className="ev-wall-foot-empty">No Multiplayer sim session on this machine yet.</div>;
   return (
     <EvalsLink href={evalsHref.sim()} className="ev-wall-simline" data-ev-sim-line={sim.id}>
-      <svg width={12} height={12} viewBox="-7 -7 14 14" aria-hidden className={sim.failed ? "ev-fail" : "ev-pass"}>
-        {sim.failed ? <circle r={4.9} fill="none" stroke="currentColor" strokeWidth={1.6} /> : <circle r={5.5} fill="currentColor" />}
-      </svg>
+      <VerdictGlyph state={simLineState(sim)} />
       <span className="ev-wall-simline-text" title={`${plural(sim.runs, "run")} across ${plural(sim.scenarios, "scenario")}`}>
         {sim.unsessioned ? "An unsessioned run" : plural(sim.scenarios, "scenario")}
         {", "}
-        <span className={sim.failed ? "ev-fail" : undefined}>{sim.failed ? `${sim.failed} failed` : "none failed"}</span>
+        <span className={sim.failed || simExitedBad(sim) ? "ev-fail" : undefined}>{simOutcomeWords(sim)}</span>
       </span>
       <span className="flex-1" />
       <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(sim.startedAt), now).replace(" ago", "")}</span>

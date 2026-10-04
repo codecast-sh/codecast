@@ -14,7 +14,7 @@ import { BisectRuler } from "./BisectRuler";
 import { CommitPanel } from "./CommitPanel";
 import { CopyCommand, EvalsLink, SeparationMark, VerdictGlyph, batchLabel, plural, shortSha, usd, type VerdictState } from "./parts";
 import { splitBatchNames } from "./format";
-import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled, rulerModel, tierWord, type RulerModel } from "./bisectModel";
+import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled, rangeWords, rulerModel, tierWord, type RulerModel } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
 
@@ -72,7 +72,8 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
         <dt>Tier</dt>
         <dd>{tierWord(state.tier)}</dd>
       </dl>
-      {state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : live ? <span className="text-[11.5px] ev-quiet">Running detached; it writes log.txt in its bisect folder.</span> : null}
+      {/* The tmux session ends with the run, so the attach line is offered only while there is something to attach to. */}
+      {live && (state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : <span className="text-[11.5px] ev-quiet">Running detached; it writes log.txt in its bisect folder.</span>)}
       {live && (
         <button type="button" className="evb-btn evb-btn--stop self-start" onClick={onStop} disabled={stopping} data-evb-stop>
           {stopping ? "Stopping between reps..." : "Stop"}
@@ -81,8 +82,9 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
       {logTail.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <span className="text-[11px] ev-quiet">Log tail</span>
+          {/* A column-reverse scroller opens at its end and stays there as lines land, so the newest line is the one in view. */}
           <pre className="evb-log" data-evb-log>
-            {logTail.join("\n")}
+            <span>{logTail.join("\n")}</span>
           </pre>
         </div>
       )}
@@ -151,8 +153,8 @@ export function BisectResult({ state, now }: { state: BisectState; now: number }
     <section className="ev-card evb-result" data-evb-result={ans.kind}>
       <div className="evb-result-head">
         <VerdictGlyph state={ans.kind === "culprit" ? "fail" : "mixed"} size={16} />
-        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "commit")}</span>
-        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : "render alike or would not separate: the answer is this range."}</span>
+        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "candidate")}</span>
+        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : rangeWords(ans)}</span>
       </div>
       <div className="flex items-center gap-3 flex-wrap text-[12px]">
         <span className="ev-quiet">Confirmation</span>

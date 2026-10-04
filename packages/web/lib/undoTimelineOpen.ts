@@ -21,16 +21,20 @@ function set(next: UndoTimelineSnapshot): void {
 }
 
 // Focus goes back where it was when the card opened, on every close (Esc,
-// the chord again, an act), not only Esc. An overlay that opened the card
-// (the palette, whose input still holds focus as it closes; a toast, whose
-// History button leaves with it) is not a place to return to, so the target
-// is the last focus outside any overlay.
+// the chord again, an act, the peek fading), not only Esc. The page body
+// (nothing focused) is such a place: the card leaves focus there rather than
+// in a field that had it earlier, where the next single-key shortcut would
+// type. An overlay that opened the card (the palette, whose input still
+// holds focus as it closes; a toast, whose History button leaves with it) is
+// not a place to return to, so the target is the last focus outside any
+// overlay, or the body when focus left that for the body before.
 const OVERLAY = '[role="dialog"], [cmdk-root], [data-radix-popper-content-wrapper], [data-sonner-toaster]';
 let lastSteadyFocus: HTMLElement | null = null;
 let returnTo: HTMLElement | null = null;
 
 const steady = (el: Element | null): el is HTMLElement =>
   !!el && el instanceof HTMLElement && el !== document.body && !el.closest(OVERLAY);
+const inOverlay = (el: Element | null): boolean => !!el && el !== document.body && !!el.closest?.(OVERLAY);
 
 // Installed by the first subscriber (UndoTimelineHost mounts with the app),
 // against whatever document is live then.
@@ -45,6 +49,15 @@ function trackFocus(): void {
     },
     true,
   );
+  // Focus left for nothing (a blur to the body, not a move to another
+  // element or a switch to another window, which keeps activeElement).
+  document.addEventListener(
+    "focusout",
+    (e) => {
+      if (!(e as FocusEvent).relatedTarget && steady(e.target as Element | null) && document.activeElement !== e.target) lastSteadyFocus = null;
+    },
+    true,
+  );
 }
 
 const cardEl = () => (typeof document !== "undefined" ? document.querySelector("[data-undo-timeline]") : null);
@@ -52,7 +65,7 @@ const cardEl = () => (typeof document !== "undefined" ? document.querySelector("
 export function open(mode: UndoTimelineMode = "interactive"): void {
   if (!snapshot.open && typeof document !== "undefined") {
     const active = document.activeElement;
-    returnTo = steady(active) ? active : lastSteadyFocus;
+    returnTo = steady(active) ? active : inOverlay(active) ? lastSteadyFocus : null;
   }
   set({ open: true, mode });
 }
@@ -67,7 +80,9 @@ export function close(): void {
   const card = cardEl();
   const lost = !active || active === document.body || (!!card && card.contains(active));
   set({ open: false, mode: snapshot.mode });
-  if (lost && target?.isConnected) target.focus({ preventScroll: true });
+  if (!lost) return;
+  if (target?.isConnected) target.focus({ preventScroll: true });
+  else if (active instanceof HTMLElement && active !== document.body) active.blur();
 }
 
 /** Close when open; otherwise open in `mode`. */

@@ -2,23 +2,21 @@
 
 ## What You're Setting Up
 
-A CLI daemon watches AI coding sessions (Claude Code, Codex, Cursor, Gemini) and syncs them to a Convex backend. A React dashboard displays everything in real time.
+A CLI daemon watches the history files coding agents write (Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok, Muse Spark) and syncs them to a Convex backend. The web, desktop and mobile apps read from Convex live, and messages sent from them travel back through the daemon into the agent's terminal.
 
-```
-~/.claude/projects/**/*.jsonl ──┐
-~/.codex/history/**/*.jsonl ────┤
-~/.cursor/ ─────────────────────┼──▶ CLI Daemon ──▶ Convex Backend ──▶ Web Dashboard
-~/.gemini/ ─────────────────────┘   (packages/cli)  (packages/convex)  (packages/web)
-```
+![Local development: dev.sh runs Vite and the gated Convex pusher, cast start runs the daemon, and both talk to the Convex deployment named in packages/convex/.env.local](diagrams/dev-setup.svg)
 
 | Package | What it does |
 |---------|-------------|
-| `packages/cli` | CLI daemon — watches sessions, syncs to Convex |
-| `packages/convex` | Backend — schema, queries, mutations, auth |
-| `packages/web` | React + Vite dashboard |
-| `packages/shared` | Shared crypto utilities |
-| `packages/electron` | Desktop app (Electron wrapper) |
+| `packages/cli` | `cast` CLI and daemon: watches sessions, syncs to Convex, injects messages |
+| `packages/convex` | Backend: schema, queries, mutations, auth, HTTP routes |
+| `packages/web` | React + Vite web app |
+| `packages/shared` | Contracts and utilities shared by every package (agent registry, render, diff) |
+| `packages/electron` | Desktop app (Electron wrapper around the web app) |
 | `packages/mobile` | iOS app (Expo / React Native) |
+| `packages/browser-extension` | Chrome extension behind `cast browser` |
+| `packages/vscode-extension` | VS Code / Cursor extension for `cast blame` |
+| `packages/evals` | Prompt evals against frozen moments (`./evals`) |
 
 ---
 
@@ -42,16 +40,7 @@ bun install
 
 ## 3. Create Environment Files
 
-Run these commands from the repo root to create all env files:
-
-### Root `.env.local`
-
-```bash
-cat > .env.local << 'EOF'
-CONVEX_URL=https://convex.codecast.sh
-NEXT_PUBLIC_CONVEX_URL=https://convex.codecast.sh
-EOF
-```
+Run these commands from the repo root. Each package also has a `.env.example` listing every variable it reads. No repo-root `.env.local` is needed; if a Convex CLI run leaves one with `CONVEX_DEPLOYMENT=anonymous`, `dev.sh` and `deploy.sh` both work around it.
 
 ### `packages/convex/.env.local`
 
@@ -63,6 +52,8 @@ CONVEX_URL=https://convex.codecast.sh
 CONVEX_SITE_URL=https://convex.codecast.sh
 EOF
 ```
+
+These values point at the production deployment. With them, `./dev.sh` pushes every Convex change you save to production through the gated pusher (step 5). To experiment without touching prod, point them at your own deployment (see [Self-Hosting](SELF-HOSTING.md)).
 
 ### `packages/web/.env.local`
 
@@ -117,9 +108,9 @@ This adds `local.codecast.sh` (and `local.1.codecast.sh`, `local.2.codecast.sh`)
 ./dev.sh
 ```
 
-This starts Convex + Vite with a watchdog that auto-restarts crashed processes. Open **https://local.codecast.sh** (http redirects to https) or `http://localhost:3200`.
+This starts Vite on port 3200 and the Convex pusher (`packages/convex/scripts/gated-push.ts`), with a watchdog that restarts either if it crashes. The pusher waits for 3 seconds of quiet in `packages/convex/convex/`, runs the whole-program typecheck, then pushes once. It refuses to start while the tree is behind origin/main, because a push from a stale tree deletes newer functions from the deployment; `dev.sh` prints the pull instruction and starts the pusher once you pull. Open **https://local.codecast.sh** (http redirects to https) or `http://localhost:3200`.
 
-`Ctrl+C` to stop. Just run `./dev.sh` again to restart — it self-cleans.
+`Ctrl+C` to stop. Run `./dev.sh` again to restart; it cleans up its own leftovers.
 
 ### Multi-instance
 
@@ -132,14 +123,15 @@ This starts Convex + Vite with a watchdog that auto-restarts crashed processes. 
 ### Running packages separately
 
 ```bash
-cd packages/convex && bun run dev    # Convex backend (hot-reloads functions)
-cd packages/web && bun run dev       # Vite dev server (HMR)
-cd packages/cli && bun run dev       # CLI daemon (optional)
+cd packages/web && bun run dev       # Vite dev server (HMR) on vite's default port
+cd packages/cli && bun run dev       # the cast CLI from source (pass a command, e.g. `bun run dev status`)
 ```
+
+Leave the Convex pusher to `dev.sh`, which checks the tree is fresh before starting it. To ship Convex changes without `dev.sh`, run `packages/convex/deploy.sh`; never a raw `npx convex deploy` or `convex dev`.
 
 ## 6. Convex Application Env Vars
 
-The `.env.local` file from step 3 handles deployment credentials. The application env vars below are already set on the production Convex deployment. You only need to run these if you're setting up a new instance — for the shared dev environment, these are already configured:
+The `.env.local` file from step 3 handles deployment credentials. The application env vars below are already set on the production Convex deployment. You only need to run these when setting up a new instance; [Self-Hosting](SELF-HOSTING.md) lists every variable:
 
 ```bash
 cd packages/convex
@@ -159,14 +151,13 @@ npx convex env set GITHUB_APP_CLIENT_SECRET "<get-from-team-lead>"
 npx convex env set GITHUB_WEBHOOK_SECRET "<get-from-team-lead>"
 ```
 
-The Convex dashboard for the self-hosted instance is at:
-the dashboard on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union` then open `http://localhost:6791`
+The Convex dashboard for the self-hosted instance runs on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union`, then open `http://localhost:6791`.
 
 (`npx convex dashboard` does not work with self-hosted Convex.)
 
 ## 7. CLI Setup
 
-Build and install the CLI if you need `cast` commands:
+The quickest route is the released binary (`curl -fsSL codecast.sh/install | sh`). To work on the daemon, run it from your checkout instead; the README's "Run the daemon from source" section has the steps. To build a binary yourself:
 
 ```bash
 cd packages/cli
@@ -174,9 +165,11 @@ bun run build:binary               # produces ./codecast
 cp codecast ~/.local/bin/codecast
 ln -sf ~/.local/bin/codecast ~/.local/bin/cast
 
-cast setup                          # configure server URLs
+cast config convex_url https://convex.codecast.sh   # only for a backend other than codecast.sh's
+cast config web_url https://codecast.sh
 cast auth                           # authenticate via browser
 cast start                          # start the daemon
+cast setup                          # start it on login (launchd, systemd, or Task Scheduler under WSL)
 ```
 
 The CLI config lives at `~/.codecast/config.json`:
@@ -193,7 +186,7 @@ The CLI config lives at `~/.codecast/config.json`:
 
 ### Unit and integration tests
 
-Every package runs `bun test`. `bun run test` at the root fans out through turbo. CI runs the web, convex, and cli suites plus the cli messaging e2e (real tmux) on every push to `main`.
+Every package runs `bun test`. Run the test file you changed (`bun test <file>`) rather than a whole suite; whole-suite runs are the load a busy machine cannot absorb. CI (`.github/workflows/ci.yml`) runs typecheck, lint and the convex, web, cli, shared, platform, mobile and electron suites, plus the cli messaging e2e against a real tmux, on every pull request and every push to `main`.
 
 ### End-to-end proof
 
@@ -237,13 +230,14 @@ Some test scripts hit the Convex API directly. Get a token from `cast auth` or t
 CONVEX_API_TOKEN=your-token bun packages/convex/test-pending-messages.ts
 ```
 
-### Unit tests
+### Typecheck
 
 ```bash
-cd packages/web && bun test
-cd packages/cli && bun test
-bun run typecheck                   # all packages
+cast check                          # cli, web and convex (listed in .codecast/check.toml)
+cast check web                      # one program
 ```
+
+`cast check` keeps one `tsc --watch` per program and answers in seconds after the first pass. Don't run `tsc --noEmit` yourself: each fresh run rebuilds the whole program, and many at once push the machine into swap.
 
 ---
 
@@ -260,7 +254,7 @@ Use `cast status --no-network` for local diagnostics without live probes, or
 `cast status --json` for machine-readable output. Neither mode prints the saved auth token.
 `cast doctor` runs the fuller sync self-test.
 
-These aren't in `.env` files — set them in your shell when needed:
+These aren't in `.env` files; set them in your shell when needed:
 
 ```bash
 # Debugging
@@ -286,6 +280,8 @@ NO_COLOR=1 cast status
 AGENT_RESOURCE_INDEX=1 ./init.sh    # Web 3100, Convex 3101
 ```
 
+For parallel work in isolated worktrees, `cast ws acquire <name>` is the better tool: it copies env files and allocates ports from `.codecast/workspace.toml`.
+
 These are set automatically by coding agents (don't set manually):
 
 ```bash
@@ -308,9 +304,7 @@ TMUX / TMUX_PANE                    # tmux session/pane detection
 
 ## CLI Binary Distribution
 
-Only needed if distributing pre-built CLI binaries (not for local dev):
-
-Create `packages/cli/.env.deploy`:
+Releases are cut from CI (next section). The laptop path, `packages/cli/scripts/deploy.sh`, is only needed to publish the npm package and Homebrew tap mirrors. It reads R2 credentials from `packages/cli/.env.deploy`:
 
 ```bash
 AWS_ACCESS_KEY_ID=<s3-access-key>
@@ -351,7 +345,7 @@ secrets.
 These appear in code but are set by the Convex runtime or Railway infrastructure, not by you:
 
 ```bash
-CONVEX_SITE_URL        # auth.config.ts — auth provider domain, set by Convex
+CONVEX_SITE_URL        # auth.config.ts: auth provider domain, set by Convex
 CONVEX_CLOUD_ORIGIN    # Railway env var on convex-backend service
 CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 ```
@@ -362,25 +356,26 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 
 | Script | What it does |
 |--------|-------------|
-| `./dev.sh` | Start Convex + Vite with watchdog |
+| `./dev.sh` | Start Vite and the gated Convex pusher, with a watchdog |
 | `./dev.sh N` | Multi-instance (port 3200+N) |
 | `./init.sh` | First-time setup (install, env files, smoke test) |
 | `sudo ./setup-hosts.sh` | Add local domains to `/etc/hosts`, install nginx |
-| `./check.sh` | Health check |
-| `./scripts/deploy.sh` | Bump version, build, and deploy CLI binaries |
-| `./scripts/deploy-all.sh` | Full deployment (Convex + web + CLI) |
+| `./check.sh` | Quick environment health check |
+| `packages/convex/deploy.sh` | The only way to deploy Convex: refuses a tree behind origin/main |
+| `./scripts/deploy-all.sh` | Full release in order: Convex, push (Railway builds web), CLI cut in CI, mobile OTA, desktop when `packages/electron` changed, then waits for Railway |
+| `scripts/vendor-platform.sh` | Refresh the `platform/packages/` mirror of `~/src/platform` (`--check` reports drift) |
 | `./scripts/backup-convex.sh` | Backup Convex data (set `BACKUP_DIR`, `RETENTION_DAYS` to override defaults) |
 
 ## Troubleshooting
 
-**`dev.sh` says hostname not in `/etc/hosts`** — Run `sudo ./setup-hosts.sh`.
+**`dev.sh` says hostname not in `/etc/hosts`.** Run `sudo ./setup-hosts.sh`.
 
-**Convex functions not updating** — Make sure `convex dev` is running. Restart `./dev.sh`.
+**Convex functions not updating.** Check the `dev.sh` log. The pusher refuses a tree behind origin/main (pull with `git pull --rebase`) and skips a push while the typecheck fails, so a save that lands during a failing pass can be skipped. `packages/convex/deploy.sh` pushes explicitly.
 
-**Port already in use** — `dev.sh` self-cleans, just run it again. Or: `lsof -ti :3200 | xargs kill`.
+**Port already in use.** `dev.sh` cleans up after itself, so run it again. Or: `lsof -ti :3200 | xargs kill`.
 
-**CLI can't connect** — Check `~/.codecast/config.json`, try `curl https://convex.codecast.sh`, re-auth with `cast auth`.
+**CLI can't connect.** Check `~/.codecast/config.json`, try `curl https://convex.codecast.sh`, re-auth with `cast auth`.
 
-**Auth callback fails** — `SITE_URL` on the Convex deployment must match your web app URL exactly (with protocol, no trailing slash).
+**Auth callback fails.** `SITE_URL` on the Convex deployment must match your web app URL exactly (with protocol, no trailing slash).
 
-**`npx convex dashboard` doesn't work** — Use the dashboard on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union` then open `http://localhost:6791` directly. Self-hosted Convex doesn't support the CLI dashboard command.
+**`npx convex dashboard` doesn't work.** Use the dashboard on the Convex host: `ssh -N -L 6791:127.0.0.1:6791 pg-union` then open `http://localhost:6791` directly. Self-hosted Convex doesn't support the CLI dashboard command.
