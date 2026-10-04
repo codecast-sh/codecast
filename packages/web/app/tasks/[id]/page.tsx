@@ -42,6 +42,7 @@ import { AssigneeFace } from "../../../components/identity/AssigneeFace";
 import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
+import { PropertyDropdown, TaskStatusPicker } from "../../../components/tasks/TaskStatusPicker";
 import { SubtasksSection } from "../../../components/tasks/SubtasksSection";
 import { TaskSessionEmpty, TaskSessionSection } from "../../../components/work/TaskSessionSection";
 import { WatchButton } from "../../../components/WatchButton";
@@ -62,7 +63,6 @@ import {
   FileText,
   Clock,
   Zap,
-  ChevronDown,
   ListChecks,
   ShieldCheck,
   X,
@@ -70,8 +70,9 @@ import {
   CornerDownRight,
 } from "lucide-react";
 import { closeTaskWithGuard, setTaskParent } from "../../../lib/taskActions";
-import { statusByKey, statusEntityOptions, statusVisual, statusWriteFields, taskStatusKey, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
+import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { DocDates } from "../../../components/DocDates";
+import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -117,79 +118,6 @@ function ConfidenceBar({ value }: { value: number }) {
     </div>
   );
 }
-
-type DropdownOption = { key: string; icon: any; label: string; color: string };
-
-function Dropdown({
-  value,
-  options,
-  onChange,
-  shortcutHint,
-}: {
-  value: string;
-  options: readonly DropdownOption[];
-  onChange: (key: string) => void;
-  shortcutHint?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const current = options.find((o) => o.key === value) || options[0];
-  const Icon = current.icon;
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { setOpen(false); return; }
-      const idx = options.findIndex((o) => o.label.toLowerCase().startsWith(e.key.toLowerCase()));
-      if (idx >= 0) { onChange(options[idx].key); setOpen(false); }
-    };
-    document.addEventListener("keydown", handler);
-    return () => document.removeEventListener("keydown", handler);
-  }, [open, options, onChange]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors"
-        title={shortcutHint}
-      >
-        <Icon className={`w-3.5 h-3.5 ${current.color}`} />
-        <span className="text-sol-text-muted">{current.label}</span>
-        <ChevronDown className="w-3 h-3 text-sol-text-dim" />
-      </button>
-      {open && (
-        <div className="absolute top-full left-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-50 py-1 overflow-hidden">
-          {options.map((opt) => {
-            const OptIcon = opt.icon;
-            return (
-              <button
-                key={opt.key}
-                onClick={() => { onChange(opt.key); setOpen(false); }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-sol-bg-alt transition-colors ${
-                  opt.key === value ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted"
-                }`}
-              >
-                <OptIcon className={`w-3.5 h-3.5 ${opt.color}`} />
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 // Header ⋯ menu for secondary actions that don't earn a slot in the narrow
 // header row (watch state lives here). Clicking an item closes the menu.
@@ -365,7 +293,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const blockedOnDecision = useTaskIsBlocked(data?._id ?? "");
   // The task's team status vocabulary (per-team custom statuses).
   const taskStatuses = useTeamTaskStatusList(taskTeamId);
-  const statusOptions = useMemo(() => statusEntityOptions(taskStatuses), [taskStatuses]);
   // The id may be a conversation's (legacy phantom-task cache rows, malformed
   // /tasks/<conversationId> links). When the server says "not a task" and the
   // id is a session we know, land in the conversation instead of a dead-end.
@@ -482,18 +409,6 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   const requestClose = useCallback((shortId: string, status: "done" | "dropped") => {
     closeTaskWithGuard(shortId, status);
   }, []);
-  const handleStatusChange = useCallback((v: string) => {
-    if (!data?.short_id) return;
-    // v is a team status id (dropdown options come from statusEntityOptions).
-    const picked = statusByKey(taskStatuses, v);
-    if (!picked) return;
-    const fields = statusWriteFields(picked);
-    if (fields.status === "done" || fields.status === "dropped") {
-      closeTaskWithGuard(data.short_id, fields.status, undefined, fields.status_id);
-    } else {
-      handleUpdate(fields);
-    }
-  }, [data?.short_id, taskStatuses, handleUpdate]);
 
   // Parent breadcrumb + set-parent state. The parent row resolves live from
   // the store so a re-parent elsewhere updates the chip instantly.
@@ -543,8 +458,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
     if (!paneActive || paletteOpen) return;
     if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (keyBelongsElsewhere(e.target)) return;
 
       const stop = () => { e.preventDefault(); };
 
@@ -721,8 +635,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Primary properties — inline, editable (the card look) */}
           <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
-            <Dropdown value={taskStatusKey(data as any, taskStatuses)} options={statusOptions} onChange={handleStatusChange} shortcutHint="s to cycle" />
-            <Dropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
+            <TaskStatusPicker task={data as any} shortcutHint="s to cycle" />
+            <PropertyDropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
             <button
               onClick={() => openCmd("assign")}
               className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-sol-bg-alt transition-colors text-left"
@@ -1007,7 +921,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           <TaskTimeline task={data as any} sessions={linkedConversations} externalEvents={externalEvents} openLinkedSession={openLinkedSession} />
 
           {/* Comment input */}
-          <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} />
+          <TaskCommentComposer shortId={data.short_id} dropFilesRef={commentDropRef} owner={ownerSession ? { sessionId: ownerSession._id } : null} />
 
         </div>
         {!isInline && (

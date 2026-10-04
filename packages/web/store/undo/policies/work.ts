@@ -17,6 +17,7 @@
 // why at its site.
 import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine";
 import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses } from "@codecast/shared/tasks";
+import { targetDayOf } from "@codecast/shared/time";
 import { assigneeLabelOf, resolveAssigneeInfo } from "../../../lib/liveEntities";
 import type { UndoPolicy } from "../policy";
 import { counted, quoted, sessionTitle } from "../labels";
@@ -53,27 +54,37 @@ function assigneeName(state: any, assignee: string): string {
   return assigneeLabelOf(assignee, info);
 }
 
-/** "Moved ct-123 to Done", "Assigned ct-123 to Sam", and "and N subtasks" for a cascade. */
+/**
+ * What a task write did, said of `subject` (a short id, or "3 tasks" for a
+ * bulk edit): "Moved ct-123 to Done", "Assigned 3 tasks to Sam". A status move
+ * says `moved`, which names a cascade's subtasks too. `task` is a row the
+ * write touched, for its team's status names.
+ */
+export function taskEditLabel(state: any, task: any, subject: string, fields: Record<string, unknown>, moved = subject): string {
+  if (fields.status !== undefined) return `Moved ${moved} to ${statusName(state, task, fields)}`;
+  if (fields.duplicate_of !== undefined) {
+    return fields.duplicate_of ? `Marked ${subject} as a duplicate of ${fields.duplicate_of}` : `Unmarked ${subject} as a duplicate`;
+  }
+  // A refinement rides along with its category; any other pair is an edit.
+  if (Object.keys(fields).filter((k) => k !== "subtask_resolution" && k !== "status_id").length > 1) return `Edited ${subject}`;
+  if (fields.assignee !== undefined) {
+    return fields.assignee ? `Assigned ${subject} to ${assigneeName(state, String(fields.assignee))}` : `Unassigned ${subject}`;
+  }
+  if (fields.parent !== undefined) return fields.parent ? `Moved ${subject} under ${fields.parent}` : `Moved ${subject} to the top level`;
+  if (fields.title !== undefined) return `Renamed ${subject}`;
+  if (fields.priority !== undefined) return `Set ${subject} to ${fields.priority} priority`;
+  if (fields.labels !== undefined) return `Changed the labels of ${subject}`;
+  if (fields.sort_order !== undefined) return `Reordered ${subject}`;
+  return `Edited ${subject}`;
+}
+
+/** One task's write, with "and N subtasks" when a status move cascaded. */
 function taskLabel(ctx: UndoCtx, shortId: string, fields: Record<string, unknown>): string {
   const ownRows = Object.values(ctx.before?.tasks ?? {}).filter((t: any) => t?.short_id === shortId) as any[];
   const own = new Set(ownRows.map((t) => String(t._id)));
   const subtasks = rowIds(cellsOf(ctx, "tasks")).filter((id) => !own.has(id)).length;
-  const who = subtasks > 0 ? `${shortId} and ${counted(subtasks, "subtask")}` : shortId;
-  if (fields.status !== undefined) return `Moved ${who} to ${statusName(ctx.after, ownRows[0], fields)}`;
-  if (fields.duplicate_of !== undefined) {
-    return fields.duplicate_of ? `Marked ${shortId} as a duplicate of ${fields.duplicate_of}` : `Unmarked ${shortId} as a duplicate`;
-  }
-  // A refinement rides along with its category; any other pair is an edit.
-  if (Object.keys(fields).filter((k) => k !== "subtask_resolution" && k !== "status_id").length > 1) return `Edited ${shortId}`;
-  if (fields.assignee !== undefined) {
-    return fields.assignee ? `Assigned ${shortId} to ${assigneeName(ctx.after, String(fields.assignee))}` : `Unassigned ${shortId}`;
-  }
-  if (fields.parent !== undefined) return fields.parent ? `Moved ${shortId} under ${fields.parent}` : `Moved ${shortId} to the top level`;
-  if (fields.title !== undefined) return `Renamed ${shortId}`;
-  if (fields.priority !== undefined) return `Set ${shortId} to ${fields.priority} priority`;
-  if (fields.labels !== undefined) return `Changed the labels of ${shortId}`;
-  if (fields.sort_order !== undefined) return `Reordered ${shortId}`;
-  return `Edited ${shortId}`;
+  const moved = subtasks > 0 ? `${shortId} and ${counted(subtasks, "subtask")}` : shortId;
+  return taskEditLabel(ctx.after, ownRows[0], shortId, fields, moved);
 }
 
 // closed_at and the attempt stamps are the server's to set: a reopen leaves
@@ -90,6 +101,10 @@ function editLabel(row: any, fields: Record<string, unknown>, noun: string): str
   const name = quoted(row?.title, noun);
   if (fields.title !== undefined && fields.title !== row?.title) return `Renamed ${name} to ${quoted(String(fields.title), noun)}`;
   if (fields.status !== undefined) return `Marked ${name} ${String(fields.status).replace(/_/g, " ")}`;
+  if (Object.keys(fields).length === 1 && "target_date" in fields) {
+    const day = targetDayOf(fields.target_date as number | null);
+    return day ? `Set the target of ${name} to ${day}` : `Cleared the target of ${name}`;
+  }
   return `Edited ${name}`;
 }
 
@@ -118,7 +133,8 @@ function widenedRoleScope(ctx: UndoCtx): boolean {
   const sameOwner = was?.owner?.kind === "role" && was.owner.role_id === now.owner.role_id;
   return !sameOwner || now.project_ids.some((p: string) => !(was?.project_ids ?? []).includes(p));
 }
-const viaInitiativeWriter = (label: (ctx: UndoCtx) => string): Spec => viaWriter((ctx) => (widenedRoleScope(ctx) ? null : label(ctx)));
+const viaInitiativeWriter = (label: (ctx: UndoCtx) => string, extra?: Partial<UndoSpec>): Spec =>
+  viaWriter((ctx) => (widenedRoleScope(ctx) ? null : label(ctx)), extra);
 
 const docTitle = (state: any, id: string) => quoted(state?.docs?.[id]?.title ?? state?.docDetails?.[id]?.title, "doc");
 
@@ -277,6 +293,22 @@ function triggerInverse(verb: TriggerVerb, prior: unknown): string[] | null {
 const priorStatus = (ctx: UndoCtx, id: string) =>
   ctx.changes.find((c) => c.id === id && c.field === "status" && (TRIGGER_STORES as readonly string[]).includes(c.store))?.before;
 
+const TRIGGER_TEXT_FIELDS = ["prompt", "title", "mode", "agent_type"] as const;
+
+/** A trigger's prior values for the fields an edit named (TriggerEdit). */
+function priorTriggerFields(prior: any, edited: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of TRIGGER_TEXT_FIELDS) if (k in edited && prior[k] != null) out[k] = prior[k];
+  if ("project_path" in edited) out.project_path = prior.project_path ?? "";
+  if ("schedule_type" in edited || "interval_ms" in edited || "run_at" in edited) {
+    out.schedule_type = prior.schedule_type;
+    if (prior.schedule_type === "recurring") out.interval_ms = prior.interval_ms;
+    if (prior.schedule_type === "event") out.event_filter = prior.event_filter;
+    if (prior.schedule_type !== "event" && typeof prior.run_at === "number" && prior.run_at > Date.now()) out.run_at = prior.run_at;
+  }
+  return out;
+}
+
 function formatInterval(ms: number): string {
   const units: Array<[number, string]> = [[86_400_000, "d"], [3_600_000, "h"], [60_000, "m"]];
   for (const [size, unit] of units) if (ms >= size && ms % size === 0) return `${ms / size}${unit}`;
@@ -317,8 +349,11 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   }),
   // Not recorded when the gesture widened the owner role's scope (see
   // widenedRoleScope); removing a project never does.
-  updateInitiative: viaInitiativeWriter((ctx) =>
-    editLabel(ctx.before?.initiatives?.[ctx.args[0] as string], (ctx.args[1] ?? {}) as Record<string, unknown>, "initiative"),
+  // The target date picker writes once per input event (a typed year is four
+  // writes), so rapid edits of one field merge as they do for plans.
+  updateInitiative: viaInitiativeWriter(
+    (ctx) => editLabel(ctx.before?.initiatives?.[ctx.args[0] as string], (ctx.args[1] ?? {}) as Record<string, unknown>, "initiative"),
+    { coalesce: true },
   ),
   addInitiativeProject: viaInitiativeWriter(
     (ctx) => `Added ${quoted(projectOf(ctx.before, ctx.args[1] as string)?.title, "project")} to ${quoted(ctx.before?.initiatives?.[ctx.args[0] as string]?.title, "initiative")}`,
@@ -456,6 +491,28 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       },
     },
   },
+  // A code review thread: the flag flips both ways, and the server's call
+  // settles the whole thread, so the undo names the rows that flipped and is
+  // refused whole if one of them changed since.
+  resolveCodeCommentThread: {
+    spec: {
+      label: (ctx) => (ctx.args[1] ? "Resolved a review thread" : "Reopened a review thread"),
+      inverse: (ctx) => {
+        const [ids, resolved] = ctx.args as [string[], boolean];
+        const flipped = ids.filter((id) => ctx.before?.codeComments?.[id]?.resolved !== ctx.after?.codeComments?.[id]?.resolved);
+        const changed = new Set(rowIds(cellsOf(ctx, "codeComments", "resolved")));
+        if (changed.size === 0 || flipped.some((id) => !changed.has(id))) return null;
+        return [call("resolveCodeCommentThread", ids.filter((id) => changed.has(id)), !resolved)];
+      },
+    },
+  },
+  editCodeComment: {
+    spec: {
+      label: () => "Edited a review comment",
+      inverse: (ctx) =>
+        cellsOf(ctx, "codeComments", "content").map((c) => call("editCodeComment", c.id, typeof c.before === "string" ? c.before : "")),
+    },
+  },
   editComment: {
     spec: {
       label: () => "Edited a comment",
@@ -528,6 +585,23 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
       label: (ctx) => `Set ${triggerTitle(ctx.before, ctx.args[0] as string)} to every ${formatInterval(ctx.args[1] as number)}`,
       inverse: (ctx) =>
         cellsOf(ctx, TRIGGER_STORES, "interval_ms").map((c) => ({ action: "setTriggerInterval", args: [c.id, c.before] })),
+      ignoreFields: ["run_at"],
+    },
+  },
+  // The inverse sends the prior value of every field the edit named. A
+  // schedule goes back whole: its type with the cadence or event it ran on.
+  // A past run_at is left to the server (an interval from now), like the
+  // interval verb above.
+  editTrigger: {
+    spec: {
+      label: (ctx) => `Edited ${triggerTitle(ctx.before, ctx.args[0] as string)}`,
+      inverse: (ctx) => {
+        const [id, fields] = ctx.args as [string, Record<string, unknown>];
+        if (!ctx.changes.some((c) => c.id === id && (TRIGGER_STORES as readonly string[]).includes(c.store))) return [];
+        const prior = triggerRow(ctx.before, id);
+        if (!prior) return [];
+        return [{ action: "editTrigger", args: [id, priorTriggerFields(prior, fields)] }];
+      },
       ignoreFields: ["run_at"],
     },
   },
@@ -612,6 +686,13 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   createOrgRole: org((ctx) => `Created the role ${quoted((ctx.args[0] as { name?: string })?.name, "role")}`),
   updateOrgRole: org((ctx) => `Edited ${roleName(ctx.before, ctx.args[0] as string)}`),
   setRoleLine: org((ctx) => `Changed the line of ${roleName(ctx.before, ctx.args[0] as string)}`),
+  // A project's customized line (writer: workflows). The fork mints the row,
+  // a create, so it is not recorded; each later save undoes to the prior graph.
+  saveLineWorkflow: viaWriter((ctx) => {
+    const wf = ctx.args[0] as { slug?: string; name?: string } | undefined;
+    const before = Object.values((ctx.before?.workflows ?? {}) as Record<string, any>).some((w) => w?.slug === wf?.slug);
+    return before ? `Edited the stations of ${quoted(wf?.name, "the line")}` : null;
+  }),
   followOrgChannel: org((ctx) => `${ctx.args[2] ? "Followed" : "Unfollowed"} a channel for a role`),
   staffHeadOfPeople: org(() => "Staffed the Head of People"),
   hireExecutiveAssistant: org(() => "Hired an executive assistant"),

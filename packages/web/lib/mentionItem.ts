@@ -37,6 +37,9 @@ export type MentionItem = {
   channelKind?: string;
   unread?: number;
   idleSummary?: string;
+  /** A session another session spawned. Found by name like ⌘K finds it, but
+   *  never offered as a bare recent. */
+  worker?: boolean;
   /** A session's identity row (session-characters.md S1): the character and
    *  role fields, handed whole to `sessionIdentity` so the dropdown row wears
    *  the face and name the inbox card wears. Nothing else reads them. */

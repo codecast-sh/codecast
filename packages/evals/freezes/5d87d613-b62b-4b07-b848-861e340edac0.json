@@ -1,0 +1,26 @@
+{
+  "name": "changes-story one-fix-with-risk",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:one-fix-with-risk"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:one-fix-with-risk",
+    "title": "changes-story one-fix-with-risk"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/one-fix-with-risk.json"
+  },
+  "judge": "The body tells the one change (a paused reminder series stays paused; a new reminder starts its own series) and why (230 patients got reminders for cancelled appointments), as plain paragraphs: no template section headings such as 'What changed', 'Why' or 'Also in this change', since a single change needs none. It does not restate the risk about the new database column, which the page shows on its own line under the body.",
+  "notes": null,
+  "tags": [],
+  "id": "5d87d613-b62b-4b07-b848-861e340edac0",
+  "createdAt": "2026-10-05T01:04:46.386Z"
+}

@@ -19,6 +19,11 @@ export function parseOrder(s: string): Channel[] {
 
 const SHELL_SAFE = /^[\w:/.@%+=,-][\w:/.@%+=,#-]*$/;
 const shellWord = (s: string) => (SHELL_SAFE.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
+// Inside double quotes the shell still expands `$`, backticks and `\`, so the
+// order (read back from result.json, never trusted) keeps its double-quoted
+// form only when it holds none of them; otherwise the whole word is single-quoted.
+const DQ_SAFE = /^[^$`"\\!\n]*$/;
+const orderWord = (order: string) => (DQ_SAFE.test(order) ? `--order="${order}"` : shellWord(`--order=${order}`));
 
 /**
  * The lines that replay a failure, from plain facts as result.json holds
@@ -29,8 +34,8 @@ const shellWord = (s: string) => (SHELL_SAFE.test(s) ? s : `'${s.replace(/'/g, `
  * order (a failure before any delivery, or a shrink to nothing) would not replay.
  */
 export function replayCommands(scenario: string, seed: number, order: readonly Channel[], traceLabel: string | null, minimal?: readonly Channel[]): string[] {
-  const base = `bun run sim ${shellWord(scenario)} --seed ${seed}`;
-  const orderLine = (o: readonly Channel[]) => `${base} --order="${formatOrder(o)}"`;
+  const base = `bun run sim ${shellWord(scenario)} --seed ${shellWord(String(seed))}`;
+  const orderLine = (o: readonly Channel[]) => `${base} ${orderWord(formatOrder(o))}`;
   const lines = [`${base} --trace${traceLabel ? ` ${shellWord(traceLabel)}` : ""}`, orderLine(order)];
   return minimal ? [...lines, orderLine(minimal)] : lines;
 }

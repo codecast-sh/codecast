@@ -25,6 +25,8 @@ import { toggleBrowserWatch, useBrowserWatchOpen } from "../../browser/BrowserWa
 import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 import { isMarkdownFile, isPlanFile } from "../../../lib/markdownFiles";
 import { EntityIdPill } from "../../EntityIdPill";
+import { EntityObjectCard } from "../../EntityObjectCard";
+import { callFrameSeenRef } from "@codecast/shared/contracts";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE } from "../../messageMarkdown";
 import { FilePathLink } from "../../FilePathLink";
@@ -697,6 +699,10 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
     return null;
   };
 
+  // A frame of a call the agent looked at syncs as the moment's reference,
+  // never the picture (cli callFrameRefs.ts), and renders here as that frame
+  // under the call's own access rule, where an image would have been.
+  const seenFrame = callFrameSeenRef(result?.content);
   const getResultSummary = () => {
     if (!result) return null;
     if (result.is_error) return "(error)";
@@ -706,6 +712,8 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
       return result.content.includes("has been updated") ? "(ok)" : "";
     }
     if (isRead) {
+      // A frame of a call reads as the frame below, not as a file's lines.
+      if (seenFrame) return null;
       const lines = result.content.split("\n").length;
       return `(${lines} lines)`;
     }
@@ -873,7 +881,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
         // stacked they read as a sequence. Each keeps its own lightbox click.
         let toolImages = images?.filter(img => img.tool_use_id === tool.id) ?? [];
         if (!toolImages.length) toolImages = globalImageMap?.[tool.id] ?? [];
-        if (!toolImages.length) return null;
+        if (!toolImages.length) return seenFrame ? <EntityObjectCard refId={seenFrame} count={1} /> : null;
         if (toolImages.length === 1) return <ImageBlock image={toolImages[0]} />;
         return (
           <div className="flex gap-2 items-start">

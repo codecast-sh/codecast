@@ -18,6 +18,7 @@ import {
   DESKTOP_SHORTCUTS,
 } from "../../../lib/desktop";
 import { MeetingDetectSection } from "../../../components/settings/MeetingDetectSection";
+import { AgentDockSection } from "../../../components/settings/AgentDockSection";
 import { useDesktopSettings, refreshDesktopSettings } from "../../../hooks/useDesktopSettings";
 import { Button } from "../../../components/ui/button";
 import { KeyCap } from "../../../components/KeyboardShortcutsHelp";
@@ -219,6 +220,7 @@ export default function DesktopSettingsPage() {
       <PermissionsSection />
 
       <MeetingDetectSection />
+      <AgentDockSection />
 
       <SettingsSection
         title="Keyboard shortcuts"

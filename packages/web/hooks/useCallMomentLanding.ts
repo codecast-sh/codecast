@@ -22,6 +22,15 @@ export type CallMediaTarget = {
   setMissed: (ms: number | null) => void;
 };
 
+/** A line in a call's thread: the turn whose `data-turn` is `turn`, or the
+ *  line `seq` inside it when it is there, else the turn. One turn can run
+ *  for minutes, so a landing and the follow-while-playing scroll both aim at
+ *  the line; the call page and the share page find it through this. */
+export function callLineEl(root: ParentNode | null | undefined, turn: number | undefined, seq: number | null): HTMLElement | null {
+  const el = root?.querySelector<HTMLElement>(`[data-turn="${turn}"]`) ?? null;
+  return (seq !== null ? el?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? el;
+}
+
 /** The rows of a call's thread a landing's top edge falls between
  *  (scrollIntoContainer's `snap`): the thread's own rows, a passage's head,
  *  each turn and each line, so no row is left sliced in half under the

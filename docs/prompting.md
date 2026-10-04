@@ -3,7 +3,7 @@
 Every prompt this product ships, and every prompt a node on the line runs,
 follows this standard. A change to a prompt is a change to behavior, and it
 ships the way a code change does: proven broken, rewritten, proven fixed
-(the-line-end-to-end.md LE8). Sections are numbered P1 onward so a review can
+(docs/architecture/the-line-end-to-end.md LE8). Sections are numbered P1 onward so a review can
 cite them. The prompting principles in docs/principles.md (PR-prompt-1 to
 PR-prompt-3) are the source of the rules here, and P11 carries the rule on
 correcting a tendency toward balance; this file is how they apply to a prompt.
@@ -89,12 +89,12 @@ UI string will drift; render both from the same source.
    freezes, each with one judge sentence stating the behavior a correct reply
    shows. Add two or three moments where the prompt already behaves well, as
    regression guards.
-2. **Show it red.** Replay the freezes on the current prompt, five reps each.
-   The miss freezes must fail. If they pass, the bug is not in this prompt:
+2. **Show it red.** Replay the freezes on the current prompt, five reps each
+   on a call surface and eight on an agent surface. The miss freezes must fail. If they pass, the bug is not in this prompt:
    stop and find where it is.
 3. **Rewrite at the site** (P5), clean (P4).
-4. **Show it green.** Replay the same freezes on the new prompt, five reps
-   each. Ship only when the miss freezes pass, every guard still passes, no
+4. **Show it green.** Replay the same freezes on the new prompt, at the same
+   rep count. Ship only when the miss freezes pass, every guard still passes, no
    gate fails in any rep, and no surface is `separated: worse`.
 5. **Show the difference.** The card carries at most three before/after pairs:
    the input, the old reply, the new reply, and the judge's note.
@@ -105,9 +105,10 @@ Before calling one model worse than another at a job, tune the prompt for
 that model and read both models' outputs side by side; a prompt written for
 one model measures the prompt, not the other model.
 
-Claims of improvement need `separated: better` (an exact one sided
-Mann-Whitney at p ≤ 0.05 with five or more reps a side). "Looks better on two
-draws" is not evidence.
+Claims of improvement need `separated: better` from `./evals check` (a one
+sided Mann-Whitney at p <= 0.05, with five or more reps a side on a call
+surface and eight on an agent surface; docs/architecture/evals.md). "Looks
+better on two draws" is not evidence.
 
 ## P10. Context the reader can reason over
 

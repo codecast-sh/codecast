@@ -4,8 +4,8 @@
 // props in the mount test and in a static rig.
 
 import type { FootingMarker, FreezeResponse, LedgerCell, RunResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
-import { defaultFreezePair, type DefaultFreezePair } from "../FreezeView";
 import { evalsFixtureWorld } from "./world";
+import { defaultFreezePair, type DefaultFreezePair } from "../freezeModel";
 
 export interface FreezeFixture {
   freeze: FreezeResponse;

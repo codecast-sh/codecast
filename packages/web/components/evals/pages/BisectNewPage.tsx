@@ -16,11 +16,12 @@ import { useEvalsStore } from "../../../store/evalsStore";
 import { usePaneShortcutAction, useShortcutContext } from "../../../shortcuts";
 import { EmptyState } from "../../EmptyState";
 import { AttributionView, EndpointsBar, type EndpointsValue } from "../AttributionView";
-import { BisectPlanPanel, canStart, type PlanSettings } from "../BisectPlanPanel";
-import { bisectsOverRange, bisectSummaryWord, endpointLabel, isBisectLive } from "../bisectModel";
-import { EvalsLink, VerdictGlyph, usd } from "../parts";
+import { BisectPlanPanel, type PlanSettings } from "../BisectPlanPanel";
+import { bisectsOverRange, bisectSummaryWord, endpointLabel, isBisectLive, canStart } from "../bisectModel";
+import { EvalsLink, VerdictGlyph } from "../parts";
 import { evalsHref, type EvalsView } from "../evalsPaths";
 import "../bisect.css";
+import { usd } from "../format";
 
 const PRICE_DEBOUNCE_MS = 350;
 
@@ -175,9 +176,12 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
   const overview = useEvalsResource("GET /overview", {});
   const surfaces = useMemo(() => overview.data?.surfaces.map((s) => s.id) ?? (view.surface ? [view.surface] : []), [overview.data, view.surface]);
   const batches = useMemo(() => overview.data?.surfaces.find((s) => s.id === view.surface)?.strip ?? [], [overview.data, view.surface]);
-  const ready = !!(view.surface && view.good && view.bad);
-  const attr = useEvalsResource("GET /attribution", ready ? { query: { surface: view.surface!, good: view.good!, bad: view.bad!, ...(allCommits ? { allCommits: true } : {}) } } : null);
+  // A surface is enough: an end left out is found by Tier 0 from the records (the newest red batch, and its baseline).
+  const ready = !!view.surface;
+  const attr = useEvalsResource("GET /attribution", ready ? { query: { surface: view.surface!, ...(view.good ? { good: view.good } : {}), ...(view.bad ? { bad: view.bad } : {}), ...(allCommits ? { allCommits: true } : {}), ...(view.freeze ? { freeze: view.freeze } : {}) } } : null);
   const a = attr.data;
+  // The ends the plan prices and starts: the ones asked for, else the ones the records found.
+  const ends = a ? { good: view.good || a.good.batch || a.good.sha, bad: view.bad || a.bad.batch || a.bad.sha } : null;
   // The engine's own rule: a plan is offered whenever a bisect would have work, an unattributable range included.
   const searchable = !!a && attributionSearchable(a);
 
@@ -223,26 +227,26 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
         {a && <PriorBisects bisects={prior} now={now} />}
         {!ready ? (
           <div className="evb-note" data-evb-needs-endpoints>
-            Pick a surface and two endpoints. Each end is a batch name from the surface's chart or a commit sha; a sha stands for the newest clean batch that ran on it.
+            Pick a surface. Each end is a batch name from the surface's chart or a commit sha (a sha stands for the newest clean batch that ran on it); leave an end empty and the records find it: the newest red batch, and its baseline.
           </div>
         ) : a ? (
           searchable ? (
             <div className="evb-grid">
               {answer(a)}
               <aside>
-                <PlanSide key={`${view.surface}|${view.good}|${view.bad}|${view.freeze ?? ""}|${allCommits}`} surface={view.surface!} good={view.good!} bad={view.bad!} onlyFreeze={view.freeze} allCommits={allCommits} blockedBy={blockedBy} />
+                <PlanSide key={`${view.surface}|${ends!.good}|${ends!.bad}|${view.freeze ?? ""}|${allCommits}`} surface={view.surface!} good={ends!.good} bad={ends!.bad} onlyFreeze={view.freeze} allCommits={allCommits} blockedBy={blockedBy} />
               </aside>
             </div>
           ) : (
             answer(a)
           )
         ) : attr.status === 404 ? (
-          <EmptyState title="No such endpoint" description={attr.error ?? "One end names no batch or commit this surface knows."} />
+          <EmptyState title={view.good && view.bad ? "No such endpoint" : "Nothing to attribute"} description={attr.error ?? "One end names no batch or commit this surface knows."} />
         ) : attr.error ? (
           <EmptyState title="The records could not be read" description={attr.error} />
         ) : (
           <div className="text-[12px] ev-quiet" data-evals-loading>
-            Walking the records between the two ends...
+            {view.good && view.bad ? "Walking the records between the two ends..." : "Finding the red batch and its baseline in the records..."}
           </div>
         )}
       </div>

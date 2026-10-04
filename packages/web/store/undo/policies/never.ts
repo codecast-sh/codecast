@@ -139,6 +139,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
   denyGuestKnock: never("door: the guest was told no; they can ask again"),
   removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),
+  deleteCodeComment: DELETE,
   deleteComment: DELETE,
   deleteSavedView: DELETE,
   deleteSession: DELETE,
@@ -219,6 +220,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // Sharing
   setCallShareVideo: SHARING,
+  deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setTeamMembershipVisibility: SHARING,

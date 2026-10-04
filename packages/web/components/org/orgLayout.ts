@@ -48,8 +48,9 @@ export const EMPTY_GHOSTS: Readonly<Omit<OrgGhostPlan, "merged">> = { stubs: {},
 type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhostMove; chips?: OrgGhostChip[] };
 
 export type OrgLayoutNode =
-  | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
-  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
+  // `h` is the box the layout reserves (the close zoom level's card, orgZoom); `mid` the middle card's height inside it.
+  | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; mid: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
+  | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; mid: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
   | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
   | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
 
@@ -96,6 +97,11 @@ export const ORG_SIZES = {
    *  sentence wraps, so its row is sized from its length (seatRowHeight). */
   seatLine: 14,
   seatChars: 36,
+  /** Close zoom level rows (orgZoom), reserved in every card's box: a role's
+   *  charter (two lines) and up to three running sessions, one line each. */
+  charterRows: 32,
+  runningRow: 15,
+  runningMax: 3,
   siblingGap: 40,
   levelGap: 56,
   stackGap: 8,
@@ -128,11 +134,18 @@ export function parentRefOfNodeId(id: string): OrgParentRef | null {
 
 // ---------------------------------------------------------------- hierarchy
 
+/** The sessions a close card lists: the ones working now, newest first, three at most. */
+export const runningSessions = (holder: { sessions: OrgSession[] }): OrgSession[] => holder.sessions.filter((x) => x.state === "working").slice(0, ORG_SIZES.runningMax);
+const runningRows = (holder: { sessions: OrgSession[] }) => runningSessions(holder).length * ORG_SIZES.runningRow;
+/** What the close card adds under a role's middle card: its charter and its running sessions. */
+const roleCloseExtra = (r: OrgRole) => (r.charter?.trim() ? ORG_SIZES.charterRows : 0) + runningRows(r);
+
 type Branch = {
   id: string;
   kind: "person" | "role";
   w: number;
   h: number;
+  mid: number;
   person?: OrgPerson;
   role?: OrgRole;
   /** A program seat's tenure chip (S10), resolved HERE because this is where
@@ -251,8 +264,9 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // Resolved once, with the whole tree in hand; the row's height already
     // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
+    const mid = view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, mid, h: mid + (view.structureOnly ? 0 : roleCloseExtra(r)), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed || view.structureOnly ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
@@ -268,7 +282,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     const b: Branch = {
-      id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id), person: p,
+      id, kind: "person", w: ORG_SIZES.person.w, mid: ORG_SIZES.person.h + chipRow(id), h: ORG_SIZES.person.h + chipRow(id) + (view.structureOnly ? 0 : runningRows(p)), person: p,
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed || view.structureOnly ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
@@ -301,8 +315,8 @@ function measure(b: Branch, stubs: Stubs): void {
 function place(b: Branch, left: number, top: number, out: OrgLayoutNode[], edges: OrgLayoutEdge[], stubs: Stubs): void {
   const x = left + (b.width - b.w) / 2;
   const y = top;
-  if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
-  else out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
+  if (b.kind === "person") out.push({ id: b.id, kind: "person", x, y, w: b.w, h: b.h, mid: b.mid, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+  else out.push({ id: b.id, kind: "role", x, y, w: b.w, h: b.h, mid: b.mid, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
 
   const parts: number[] = b.children.map((c) => c.width);
   if (b.stack) parts.push(ORG_SIZES.session.w);
@@ -376,8 +390,8 @@ function layoutOrgColumns(roots: Branch[]): OrgLayout {
   let height = 0;
   const stack = (b: Branch, left: number, top: number, depth: number): { bottom: number; right: number } => {
     const nx = left + depth * ORG_SIZES.columnIndent;
-    if (b.kind === "person") nodes.push({ id: b.id, kind: "person", x: nx, y: top, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
-    else nodes.push({ id: b.id, kind: "role", x: nx, y: top, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
+    if (b.kind === "person") nodes.push({ id: b.id, kind: "person", x: nx, y: top, w: b.w, h: b.h, mid: b.mid, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+    else nodes.push({ id: b.id, kind: "role", x: nx, y: top, w: b.w, h: b.h, mid: b.mid, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
     let y = top + b.h + ORG_SIZES.columnGap;
     let right = nx + b.w;
     for (const c of b.children) {

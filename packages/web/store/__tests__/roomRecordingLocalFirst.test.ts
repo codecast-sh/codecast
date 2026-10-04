@@ -13,15 +13,17 @@ describe("room recording local-first", () => {
   const owner = {};
   let calls: Array<{ action: string; args: any[] }>;
   let refuse: string | null;
+  let answer: unknown;
 
   beforeEach(() => {
     calls = [];
     refuse = null;
+    answer = null;
     useInboxStore.setState({ callRooms: {}, pending: {} } as any);
     useInboxStore.getState()._setDispatch(async (action: string, args: any[]) => {
       calls.push({ action, args });
       if (refuse) throw new Error(refuse);
-      return null;
+      return answer;
     }, { owner });
     useInboxStore.getState().syncTable("callRooms", [flags(false)]);
   });
@@ -56,6 +58,23 @@ describe("room recording local-first", () => {
     const { setRoomRecording } = await import("../../hooks/useRoomRecording");
     await setRoomRecording(ROOM, true);
     expect(mark()).toBe(false);
+  });
+
+  // The web and the phone press through one function (lib/calls/
+  // recordingPress); only how a refusal is said is theirs.
+  it("the shared press says a refusal in the caller's own way, and notes the run a press made", async () => {
+    const { pressRoomRecording, pressedRunOf } = await import("../../lib/calls/recordingPress");
+    refuse = "[CONVEX M(callRecordings:startRecording)] Uncaught Error: Recording is not set up on this server";
+    const said: string[] = [];
+    await pressRoomRecording(ROOM, true, (message) => said.push(message));
+    expect(mark()).toBe(false);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("Recording is not set up on this server");
+    refuse = null;
+    answer = { recording_id: "run9", existing: false };
+    await pressRoomRecording(ROOM, true, (message) => said.push(message));
+    expect(said).toHaveLength(1);
+    expect(pressedRunOf(ROOM)).toBe("run9");
   });
 
   // A press is a moment (shared recordingPressStale): the dispatch binding

@@ -7,7 +7,8 @@ import { useMemo, useState } from "react";
 import { EmptyState } from "../../EmptyState";
 import { useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import { FreezeView, defaultFreezePair, type FreezePair } from "../FreezeView";
+import { FreezeView } from "../FreezeView";
+import { defaultFreezePair, type FreezePair } from "../freezeModel";
 
 function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: string | null; given: FreezePair | null }) {
   const freeze = useEvalsResource("GET /freeze/:id", { params: { id: freezeId } });

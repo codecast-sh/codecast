@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useMutation } from "convex/react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { Link as LinkIcon, Link2, ArrowUpRight, ChevronsUpDown, Columns2 } from "lucide-react";
+import { Link as LinkIcon, Link2, ArrowUpRight, ChevronsUpDown, Columns2, MessageSquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
 import { useFrameTheme } from "../hooks/useFrameTheme";
+import { usePageNotes } from "../hooks/usePageNotes";
 import { useNativeBrowserPane } from "../hooks/useNativeBrowserPane";
 import { copyToClipboard } from "../lib/utils";
 import { isDesktop } from "../lib/desktop";
@@ -169,15 +170,31 @@ function usePageMeta(slug: string) {
     | undefined;
 }
 
-/** A published page card's header verbs: copy the share link, expand the
- *  frame, open it in a pane. */
-export function PublishedPageActions({ slug, expanded, onToggleExpand }: {
+/** A published page card's header verbs: comment on the page (where the
+ *  viewer can reply in this thread), copy the share link, expand the frame,
+ *  open it in a pane. */
+export function PublishedPageActions({ slug, expanded, onToggleExpand, notes }: {
   slug: string;
   expanded: boolean;
   onToggleExpand: () => void;
+  notes?: ReturnType<typeof usePageNotes>;
 }) {
   return (
     <>
+      {notes && (
+        <button
+          type="button"
+          onClick={() => notes.setPinMode(!notes.pinMode)}
+          className={`${HEADER_ACTION} rounded px-1 ${notes.pinMode ? "bg-sol-yellow/15 !text-sol-yellow" : ""}`}
+          title={notes.pinMode ? "Stop pinning notes (Esc)" : "Pin notes on the page for the agent, or select text on it"}
+          aria-pressed={notes.pinMode}
+        >
+          <MessageSquarePlus className="h-3 w-3" />
+          {notes.count > 0
+            ? <span className="font-mono tabular-nums text-sol-yellow">{notes.count} {notes.count === 1 ? "note" : "notes"}</span>
+            : "Comment"}
+        </button>
+      )}
       {/* Copy the public share URL, not the serving origin the iframe uses. */}
       <CopyLinkButton url={pageShareUrl(slug)} title="Copy link to published page" className={HEADER_ACTION} />
       <button
@@ -225,7 +242,12 @@ export function PublishedPageEmbed({ slug, caption, height }: {
     setExpanded(false);
   }, []);
   const frameRef = useRef<HTMLIFrameElement>(null);
-  const { theme, onLoad } = useFrameTheme(frameRef);
+  const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef);
+  const notes = usePageNotes(frameRef, slug, meta?.title || "Published page");
+  const onLoad = useCallback(() => {
+    onThemeLoad();
+    notes?.onLoad();
+  }, [onThemeLoad, notes?.onLoad]); // eslint-disable-line react-hooks/exhaustive-deps
   // The theme at mount rides the address so the first paint already matches;
   // later changes arrive as messages, because a new src would reload the page.
   const [mountTheme] = useState(theme);
@@ -256,7 +278,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
       title={title}
       href={pageShareUrl(slug)}
       caption={caption}
-      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={() => setExpanded((v) => !v)} />}
+      actions={<PublishedPageActions slug={slug} expanded={expanded} onToggleExpand={() => setExpanded((v) => !v)} notes={notes} />}
     >
       <iframe
         ref={frameRef}

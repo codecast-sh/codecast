@@ -13,6 +13,8 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { linkedSessionsFor } from "./tasks";
+import { sessionImages, storageUrl, type SessionImage } from "./lib/sessionMedia";
+
 
 type Ctx = { db: any; storage?: any };
 
@@ -99,8 +101,6 @@ export function evidencePatch(binding: EvidenceBinding): { task_id?: Id<"tasks">
   return out;
 }
 
-const storageUrl = async (ctx: Ctx, storageId: any): Promise<string | undefined> =>
-  storageId && ctx.storage?.getUrl ? (await ctx.storage.getUrl(storageId)) ?? undefined : undefined;
 
 export type EvidencePage = {
   id: string;
@@ -211,26 +211,15 @@ export async function computeTaskEvidence(ctx: Ctx, viewerId: Id<"users">, task:
     firstCommentAt.set(key, Math.min(firstCommentAt.get(key) ?? Infinity, c.created_at));
   }
   const taskStart = task.created_at ?? task._creationTime;
-  const imagesRaw: any[] = [];
+  const found: SessionImage[] = [];
   for (const cid of linkedConversationIds) {
     const since = listed.has(String(cid)) ? taskStart : Math.max(taskStart, firstCommentAt.get(String(cid)) ?? taskStart);
-    let kept = 0;
-    for await (const row of ctx.db.query("conversation_images").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", cid)).order("desc")) {
-      // A row is never inserted before its message, so once rows were created
-      // before the floor every older row is out of the window too.
-      if (row._creationTime < since) break;
-      if (row.timestamp < since) continue;
-      imagesRaw.push(row);
-      if (++kept >= IMAGES_MAX) break;
-    }
+    found.push(...(await sessionImages(ctx, cid, { since, max: IMAGES_MAX })));
   }
-  imagesRaw.sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
-  const images: TaskEvidence["images"] = [];
-  for (const img of imagesRaw.slice(0, IMAGES_MAX)) {
-    const url = (await storageUrl(ctx, img.storage_id)) ?? img.src;
-    if (!url) continue;
-    images.push({ url, conversation_id: String(img.conversation_id), message_id: String(img.message_id), timestamp: img.timestamp });
-  }
+  found.sort((a, b) => b.timestamp - a.timestamp || b.seq - a.seq);
+  const images: TaskEvidence["images"] = found.slice(0, IMAGES_MAX).map((img) => ({
+    url: img.url, conversation_id: String(img.conversation_id), message_id: String(img.message_id), timestamp: img.timestamp,
+  }));
 
   return {
     task: { id: String(task._id), short_id: task.short_id, station: stationOf(task) },

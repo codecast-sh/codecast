@@ -12,10 +12,12 @@ import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { ExamplePair } from "../decisions/ChangeCardView";
 import { CommitMarks, CommitPanel, PatchPanel } from "./CommitPanel";
-import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph, flipFreezeHref, plural, score2, shortSha } from "./parts";
+import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { candidateKey, endpointLabel, orderCandidates } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
+import { plural, score2, shortSha } from "./format";
+import { flipFreezeHref } from "./verdictModel";
 
 const CLASS_NAMES: Record<AttributionClass, string> = { footing: "Footing", freeze: "Freeze", "live-reads": "Live reads", source: "Source", noise: "Noise" };
 
@@ -54,7 +56,8 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
     e.preventDefault();
     onSubmit({ surface: draft.surface.trim(), good: draft.good.trim(), bad: draft.bad.trim() });
   };
-  const ready = draft.surface && draft.good && draft.bad;
+  // A surface is enough; an end left empty is found from the records.
+  const ready = !!draft.surface;
   const changed = draft.surface !== value.surface || draft.good !== value.good || draft.bad !== value.bad;
   return (
     <form className="ev-card evb-ends" onSubmit={submit} data-evb-ends>
@@ -71,7 +74,7 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
       </div>
       <div className="evb-field evb-end evb-end--good">
         <label htmlFor="evb-good">Good: a batch or a sha</label>
-        <input id="evb-good" className="evb-input" list="evb-batches" value={draft.good} spellCheck={false} placeholder="2026-09-24T08:41:00.000Z" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
+        <input id="evb-good" className="evb-input" list="evb-batches" value={draft.good} spellCheck={false} placeholder="its baseline, from the records" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
         {resolved && !changed && <EndpointChips end={resolved.good} />}
       </div>
       <div className="evb-ends-arrow" aria-hidden>
@@ -440,12 +443,20 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
       <section className="evb-section" data-evb-prompt-diffs={a.promptDiffs.length}>
         <h2>What the model saw at each end</h2>
         {a.promptDiffs.length ? (
-          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => (
-            <div key={f} data-evb-prompt-freeze={f}>
-              <div className="evb-note">{a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}</div>
-              <ChangedPrompts pairs={a.promptDiffs.filter((d) => d.freezeId === f)} />
-            </div>
-          ))
+          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => {
+            const pairs = a.promptDiffs.filter((d) => d.freezeId === f);
+            return (
+              <div key={f} data-evb-prompt-freeze={f}>
+                <div className="evb-note">
+                  {/* The freeze opened on the two reps diffed here. */}
+                  <EvalsLink className="evb-link" href={evalsHref.freeze(f, { a: pairs[0].a.runId, b: pairs[0].b.runId })}>
+                    {a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}
+                  </EvalsLink>
+                </div>
+                <ChangedPrompts pairs={pairs} />
+              </div>
+            );
+          })
         ) : (
           <div className="evb-note">The two ends share no rep on the same freeze, so there is no rendered prompt to compare.</div>
         )}

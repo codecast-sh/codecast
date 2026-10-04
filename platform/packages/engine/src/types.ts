@@ -367,7 +367,10 @@ export type UndoConfig = {
   tombstone?: (store: string, row: unknown) => boolean;
   ignoreKeys?: ReadonlySet<string>; // never captured (clientState, tabs, pagination, ...)
   beforeReplay?: (entry: UndoEntry, dir: "undo" | "redo") => void;
-  afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[]) => void;
+  // `how` says who wrote the values: "replay" when the engine wrote the
+  // applied cells itself (an undo, a redo restoring fields), "reinvoke" when
+  // a redo re-ran the original action, whose body announces its own effects.
+  afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[], how: "replay" | "reinvoke") => void;
   restoreView?: (draft: any, field: string, value: unknown) => void;
   keyboardWindowMs?: number; // default 300_000
   stackLimit?: number; // default 100

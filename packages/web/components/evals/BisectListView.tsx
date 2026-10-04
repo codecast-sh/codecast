@@ -7,11 +7,13 @@ import type { BisectSummary } from "@codecast/shared/contracts/evalsApi";
 import { formatDuration } from "../../lib/conversationFormat";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { EmptyState } from "../EmptyState";
-import { EvalsLink, VerdictGlyph, shortSha, usd, type VerdictState } from "./parts";
+import { EvalsLink, StallChip, VerdictGlyph } from "./parts";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
+import { bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled, sortBisects } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
+import { shortSha, usd } from "./format";
+import type { VerdictState } from "./verdictModel";
 
 function glyphOf(b: BisectSummary): VerdictState {
   if (isBisectLive(b.status)) return "unscored";
@@ -19,11 +21,6 @@ function glyphOf(b: BisectSummary): VerdictState {
   if (b.outcome === "range") return "mixed";
   if (b.status === "failed") return "crash";
   return "dry";
-}
-
-/** Running first, then newest first. */
-export function sortBisects(list: readonly BisectSummary[]): BisectSummary[] {
-  return [...list].sort((a, b) => Number(isBisectLive(b.status)) - Number(isBisectLive(a.status)) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
 }
 
 export function BisectListView({ bisects, now }: { bisects: readonly BisectSummary[]; now: number }) {
@@ -76,9 +73,7 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
                     <td>
                       {b.culprit ? <span className="ev-mono">culprit {shortSha(b.culprit)}</span> : bisectSummaryWord(b)}
                       {stalled && (
-                        <span className="evb-stall-chip" title={`No new step since ${new Date(b.updatedAt).toLocaleTimeString()}: check its tmux session or log`} data-evb-stalled>
-                          stalled?
-                        </span>
+                        <StallChip since={b.updatedAt} data-evb-stalled />
                       )}
                     </td>
                     <td className="evb-num">

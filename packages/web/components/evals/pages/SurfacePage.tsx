@@ -9,9 +9,10 @@ import type { SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { EmptyState } from "../../EmptyState";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useTabActive } from "../../../hooks/usePagePresence";
-import { DEFAULT_SURFACE_FILTERS, SurfaceView, orderedPair, type SurfaceFilters } from "../SurfaceView";
-import { surfaceColumns } from "../Seismograph";
+import { SurfaceView } from "../SurfaceView";
 import { evalsHref, type EvalsView } from "../evalsPaths";
+import { surfaceColumns } from "../seismographModel";
+import { DEFAULT_SURFACE_FILTERS, orderedPair, type SurfaceFilters } from "../surfaceModel";
 
 /** A batch whose newest rep landed this recently is still landing: follow /changes for it. */
 const LANDING_MS = 15 * 60_000;

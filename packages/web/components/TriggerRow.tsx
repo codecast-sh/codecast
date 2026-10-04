@@ -46,6 +46,7 @@ import { copyToClipboard } from "../lib/utils";
 import { fmtClock, fmtDuration, describeTaskCadence, isTaskOverdue, taskStateLabel } from "./triggerCadence";
 import { taskDisplayTitle, taskGist, lastRunHeadline, type TriggerRow, type TriggerHomeGroup, type TaskRow } from "./triggerTasks";
 import { TriggerRunList, useTriggerRuns, type TriggerRun } from "./TriggerRunHistory";
+import { isTriggerEditable } from "../lib/triggerEditable";
 
 const SCHED_ACCENT: Record<SchedAccent, string> = {
   running: "border-l-sol-green",
@@ -205,7 +206,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   };
   const paused = task.status === "paused";
   const terminal = task.status === "completed" || task.status === "failed";
-  const editable = !isPseudo && !!onEdit && (task.status === "scheduled" || task.status === "paused");
+  const editable = !isPseudo && !!onEdit && isTriggerEditable(task.status);
   const isActive = !!row.openId && row.openId === activeSessionId;
   const accent = schedAccent(task);
   const title = taskDisplayTitle(task);

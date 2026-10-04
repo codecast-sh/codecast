@@ -26,6 +26,7 @@ import {
   ensureRemoteClaudeReady,
   gitEnv,
   gitSshUrl,
+  hostCheckoutDirty,
   isWorktree,
   pullSession,
   pushSession,
@@ -33,7 +34,6 @@ import {
   remoteHome,
   shq,
   ssh,
-  verifyRemoteSync,
   type MoveResult,
   type RemoteHost,
 } from "../remote/session-move.js";
@@ -152,6 +152,21 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     return entry;
   };
 
+  // Every runner write lands on rows the user's message traffic also writes
+  // (the per-user sync head), and under a busy fleet Convex gives up on the
+  // conflict. A conflicted write rolled back whole, so trying it again is safe;
+  // failing the move for it left a transferred session stranded.
+  const mutate = async (ref: any, args: Record<string, unknown>): Promise<any> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await client.mutation(ref, args);
+      } catch (err) {
+        if (attempt >= 5 || !isWriteConflict(err)) throw err;
+        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+      }
+    }
+  };
+
   const io: RunnerIo & { ready(): Promise<void> } = {
     ready,
     now: () => Date.now(),
@@ -160,19 +175,19 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     deviceId: () => myDeviceId,
 
     loadBatch: () => client.query(api.sessionMigrations.runnerBatch, { api_token: token, batch_id: batchId, device_id: myDeviceId }),
-    begin: (migrationId) => client.mutation(api.sessionMigrations.beginSession, { api_token: token, migration_id: migrationId, device_id: myDeviceId }),
+    begin: (migrationId) => mutate(api.sessionMigrations.beginSession, { api_token: token, migration_id: migrationId, device_id: myDeviceId }),
     facts: (migrationId) => client.query(api.sessionMigrations.sessionFacts, { api_token: token, migration_id: migrationId }),
     report: async (migrationId, patch) => {
-      await client.mutation(api.sessionMigrations.reportSession, { api_token: token, migration_id: migrationId, ...patch });
+      await mutate(api.sessionMigrations.reportSession, { api_token: token, migration_id: migrationId, ...patch });
     },
-    enqueueQuiesce: (migrationId, mode) => client.mutation(api.sessionMigrations.enqueueQuiesce, { api_token: token, migration_id: migrationId, mode }),
+    enqueueQuiesce: (migrationId, mode) => mutate(api.sessionMigrations.enqueueQuiesce, { api_token: token, migration_id: migrationId, mode }),
     commandStatus: (commandId) => client.query(api.sessionMigrations.commandStatus, { api_token: token, command_id: commandId }),
-    finish: (migrationId, args) => client.mutation(api.sessionMigrations.finishSession, { api_token: token, migration_id: migrationId, ...args }),
+    finish: (migrationId, args) => mutate(api.sessionMigrations.finishSession, { api_token: token, migration_id: migrationId, ...args }),
     confirm: async (migrationId, ok, detail) => {
-      await client.mutation(api.sessionMigrations.confirmSession, { api_token: token, migration_id: migrationId, ok, ...(detail ?? {}) });
+      await mutate(api.sessionMigrations.confirmSession, { api_token: token, migration_id: migrationId, ok, ...(detail ?? {}) });
     },
-    fail: async (migrationId, error, cancelled) => {
-      await client.mutation(api.sessionMigrations.failSession, { api_token: token, migration_id: migrationId, error, ...(cancelled ? { cancelled: true } : {}) });
+    fail: async (migrationId, error, cancelled, restore) => {
+      await mutate(api.sessionMigrations.failSession, { api_token: token, migration_id: migrationId, error, ...(cancelled ? { cancelled: true } : {}), ...(restore ? { restore: true } : {}) });
     },
     sendNotice: (conversationId, text) => sendMoveNotice(client, api, token, conversationId, text),
     deviceOnline: async (deviceId) => {
@@ -184,7 +199,32 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
 
     transferToCloud: async (facts: Facts, o) => {
       const { host } = await prepareHost(facts.to_device_id);
-      const move = await pushSession(facts.session_id, host, { skipTree: o.skipTree });
+      // The push resets the host checkout it lands in, so a checkout another
+      // session already works in is never the landing: this move takes its own
+      // clone beside it (shared by the batch's siblings from the same folder).
+      const move = await pushSession(facts.session_id, host, {
+        skipTree: o.skipTree,
+        pushedHead: o.pushedHead,
+        landing: async (main) => {
+          const own = `${main}-mv-${o.batchId.replace(/^mg-/, "").slice(0, 8)}`;
+          const holder = await client.query(api.sessionMigrations.checkoutHolder, { api_token: token, migration_id: o.migrationId, project_path: main });
+          if (holder) {
+            log(`  ${main} on the host is in use by ${holder.short_id ?? holder.conversation_id} (${holder.title ?? "untitled"}); landing in ${own}`);
+            return own;
+          }
+          // Edits nobody is moving here (an earlier session's, left behind) refuse the push and are not ours to discard.
+          if (!o.skipTree && hostCheckoutDirty(host, main)) {
+            log(`  ${main} on the host has uncommitted changes no session holds; landing in ${own}`);
+            return own;
+          }
+          return main;
+        },
+      });
+      // Resuming on a tree that is not this session's (a stale checkout, a push
+      // that never landed) hands over the conversation without its work.
+      if (move.verification && !move.verification.headsMatch) {
+        throw new Error(`the host checkout ${move.remoteCwd} is at ${move.verification.remoteHead?.slice(0, 8) ?? "an unknown commit"}, not this session's ${move.verification.localHead.slice(0, 8)}; nothing was handed over`);
+      }
       ensureRemoteClaudeReady(host, move.remoteCwd);
       if (!credentialRefreshed.has(facts.to_device_id)) {
         refreshRemoteCredential(host);
@@ -194,6 +234,7 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       moves[facts.session_id] = move;
       writeMoves(moves);
       return {
+        pushedHead: move.pushedHead,
         destinationPath: move.remoteCwd,
         gitRoot: isWorktree(move.localCwd) ? move.remoteCwd : undefined,
         sourcePath: `${move.localCwd}`,
@@ -245,13 +286,13 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
           execFileSync("git", ["-C", dest.createIn, "worktree", "add", "--detach", dest.localCwd, ref], { stdio: "pipe" });
         }
       }
-      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteProjectDir };
+      const move: MoveResult = { sessionId: facts.session_id, localCwd: dest.localCwd, remoteCwd, remoteProjectDir, pushedHead: readMoves()[facts.session_id]?.pushedHead };
       const pulled = await pullSession(facts.session_id, host, move);
       if (!pulled.ff) throw new Error(`CONFLICT: ${pulled.reason}`);
       let verification = "synced via rsync (non-git directory)";
       let gitRoot: string | undefined;
       if (isWorktree(dest.localCwd)) {
-        verification = describeBackSync(verifyRemoteSync(host, dest.localCwd, remoteCwd), pulled.backupRef);
+        verification = describeBackSync(pulled);
         try { gitRoot = execFileSync("git", ["-C", dest.localCwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: "pipe" }).trim() || undefined; } catch { /* leave unset */ }
       }
       return { destinationPath: dest.localCwd, gitRoot, sourcePath: remoteCwd, verification };
@@ -269,4 +310,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     },
   };
   return io;
+}
+
+/** A Convex write that lost an optimistic-concurrency race: nothing was applied, so it can be sent again. */
+export function isWriteConflict(err: unknown): boolean {
+  return /OptimisticConcurrencyControlFailure/.test(err instanceof Error ? err.message : String(err));
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { recordingMarkStatus, type RoomRecordingLive } from "../useRoomRecording";
+import { recordingMarkStatus } from "../../lib/calls/recordingPress";
+import type { RoomRecordingLive } from "../../lib/calls/roomRecordingFields";
 
 // The red mark from what a window knows: its own press in flight, and the
 // room's row in the store (the flag, and the run behind it when the server

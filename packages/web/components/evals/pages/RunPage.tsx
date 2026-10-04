@@ -14,7 +14,8 @@ import { useShortcutAction, useShortcutContext } from "../../../shortcuts";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useEvalsStore } from "../../../store/evalsStore";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import { RunView, runTabs, seedNeighbours, tabOfHash, type RunTab } from "../RunView";
+import { RunView } from "../RunView";
+import { runTabs, seedNeighbours, tabOfHash, type RunTab } from "../runModel";
 
 /** Sticky chrome above a gate or check when the page lands on it: the tab bar. */
 const LAND_MARGIN = 52;

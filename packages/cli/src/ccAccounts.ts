@@ -623,6 +623,31 @@ function assertNotAnotherProfilesCredential(name: string, credentialJson: string
   }
 }
 
+/** Overwriting a saved login with a different grant needs proof of whose the
+ *  new grant is. Unverified, the only name it has is ~/.claude.json's label,
+ *  which lags a fresh login: on 2026-10-04 jordanbelman357's new login was
+ *  saved as "claude" four seconds after it appeared, so claude's meter read
+ *  jordanbelman357's 7% while claude@ sat at 106%, and auto-switch kept
+ *  moving the fleet onto it. A continuation of the stored grant (same refresh
+ *  token) and a first save need no proof; the daemon verifies the active login
+ *  every usage tick, so a refused overwrite lands on a later pass. */
+function assertProvenOrSameGrant(name: string, credentialJson: string): void {
+  if (verifiedIdentityFor(oauthOf(credentialJson)?.accessToken)) return;
+  const incoming = tokenField(oauthOf(credentialJson)?.refreshToken);
+  let stored: string | undefined;
+  try {
+    const raw = readProfileSecret(name);
+    stored = raw ? tokenField(JSON.parse(raw)?.credentials?.claudeAiOauth?.refreshToken) : undefined;
+  } catch {
+    return;
+  }
+  if (!stored || !incoming || stored === incoming) return;
+  throw new CcAccountError(
+    `Refusing to save "${name}": this machine's login is a different grant than the one saved, and nothing has ` +
+      `proved it is ${name}'s account (the account server has not answered for it yet). Try again in a minute.`,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Identity matched read back
 // ---------------------------------------------------------------------------
@@ -812,6 +837,7 @@ function saveProfileSnapshot(name: string, cred: string, oauthAccount: Record<st
     );
   }
   assertNotAnotherProfilesCredential(name, cred);
+  assertProvenOrSameGrant(name, cred);
   const profile = buildProfile(cred, oauthAccount, Date.now());
   writeProfileSecret(name, JSON.stringify(profile));
   const meta = profileMeta(profile);
@@ -2348,6 +2374,8 @@ export async function resnapshotIfActiveFresher(
   const raw = await readActiveCredentialAsync();
   const activeOauth = oauthOf(raw);
   if (!raw || !activeOauth) return null;
+  // Name the profile from the credential's proved identity, not the label.
+  await verifyActiveIdentity();
   const oauthAccount = activeOauthAccountForSave(raw);
   const identity: CredentialIdentity = {
     ...identityOfOauthAccount(oauthAccount),
@@ -2415,7 +2443,9 @@ export interface ProfileAudit {
   verdict: "ok" | "mislabeled" | "duplicate" | "unverifiable";
   reason?: string;
   /** Set by repairProfileIdentities: what it did about a bad verdict. */
-  repair?: "dropped-credential" | "relabelled";
+  repair?: "dropped-credential" | "relabelled" | "moved";
+  /** With repair "moved": the profile of the account the login belongs to. */
+  moved_to?: string;
 }
 
 /** Probe every saved profile's stored credential and say whose it actually is.
@@ -2483,11 +2513,32 @@ export async function repairProfileIdentities(
   for (const row of audit) {
     if (row.verdict === "duplicate") {
       deleteProfileSecret(row.name);
+      deleteProfileStore(row.name);
       row.repair = "dropped-credential";
       dirty = true;
     } else if (row.verdict === "mislabeled") {
       const raw = await readProfileSecretAsync(row.name);
       const parsed = raw ? safeParse(raw) : null;
+      // The account it holds has a profile of its own whose login is dead:
+      // that is where this login belongs. Relabelling instead would leave the
+      // profile's real account with no profile, while its setup token and
+      // live sessions still carry the old name.
+      const home = audit.find((r) => r !== row && r.labelled_uuid === row.actual_uuid && r.verdict === "unverifiable");
+      if (parsed && home) {
+        parsed.oauthAccount = { accountUuid: row.actual_uuid, emailAddress: row.actual_email };
+        writeProfileSecret(home.name, JSON.stringify(parsed));
+        writeProfileStoreCredentials(home.name, JSON.stringify(parsed.credentials));
+        const { login_expired_at: _revived, ...homeMeta } = index.profiles[home.name];
+        index.profiles[home.name] = { ...homeMeta, ...profileMeta(parseProfile(JSON.stringify(parsed))) };
+        // The wrong account must never launch under this profile's name.
+        deleteProfileSecret(row.name);
+        deleteProfileStore(row.name);
+        index.profiles[row.name] = { ...index.profiles[row.name], login_expired_at: Date.now() };
+        row.repair = "moved";
+        row.moved_to = home.name;
+        dirty = true;
+        continue;
+      }
       if (parsed) {
         parsed.oauthAccount = { accountUuid: row.actual_uuid, emailAddress: row.actual_email };
         writeProfileSecret(row.name, JSON.stringify(parsed));

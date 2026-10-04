@@ -4,8 +4,13 @@
 // and the words for a status or an outcome. Pure, so the ruler, the list, the
 // fixtures and the tests read one model.
 
-import type { Attribution, BisectAnswer, BisectProbe, BisectRep, BisectState, BisectStatus, BisectSummary, Candidate, ProbeVerdict, RenderClass } from "@codecast/shared/contracts/evalsApi";
-import { batchLabel } from "./format";
+import { EVALS_SHA_RE, type Attribution, type BisectAnswer, type BisectProbe, type BisectRep, type BisectState, type BisectStatus, type BisectSummary, type Candidate, type ProbeVerdict, type RenderClass, type BisectPlan, type BisectResponse, type CommitRef, type SimJob } from "@codecast/shared/contracts/evalsApi";
+import { batchLabel, shortSha } from "./format";
+import { formatShortcutParts, getShortcutsForAction } from "../../shortcuts/index";
+import type { BisectPlanPanelProps } from "./BisectPlanPanel";
+import { EVALS_STALL_MS } from "../../lib/evals/hooks";
+import type { VerdictState } from "./verdictModel";
+import { SESSION_TRAILER_KEY, extractSessionTrailer } from "@codecast/shared/blame";
 
 /** The sha a candidate replays at: a commit, or the head a patch sits on. */
 export const candidateSha = (c: Candidate) => (c.kind === "commit" ? c.commit.sha : c.base);
@@ -45,9 +50,15 @@ export const BISECT_LIVE: ReadonlySet<BisectStatus> = new Set(["planning", "cont
 export const isBisectLive = (status: BisectStatus) => BISECT_LIVE.has(status);
 
 /** Stalled: the server says so, or a live bisect has written nothing for `stallMs`. The bisect page, the list and the wall's ribbon all ask this. */
+/** No new step for the stall window (section 3.6): any live job, a bisect, a shrink or a sweep, then reads "stalled?". */
+export const quietTooLong = (updatedAt: string, now: number, stallMs = EVALS_STALL_MS) => now - Date.parse(updatedAt) > stallMs;
+
 export function isBisectStalled(b: { status: BisectStatus; updatedAt: string; stalled?: boolean }, now: number, stallMs: number): boolean {
-  return isBisectLive(b.status) && (!!b.stalled || now - Date.parse(b.updatedAt) > stallMs);
+  return isBisectLive(b.status) && (!!b.stalled || quietTooLong(b.updatedAt, now, stallMs));
 }
+
+/** A Multiplayer sim shrink or sweep, by the bisect's own rule. */
+export const isJobStalled = (job: Pick<SimJob, "status" | "updatedAt">, now: number) => job.status === "running" && quietTooLong(job.updatedAt, now);
 
 export interface RulerTile {
   key: string;
@@ -203,14 +214,10 @@ const TIER_WORDS = { 0: "Tier 0, from records (free)", 1: "Tier 1, dry renders (
 export const tierWord = (t: 0 | 1 | 2) => TIER_WORDS[t];
 
 /** A batch name or a sha, short enough for a chip; a batch reads as every page writes it (format.ts batchLabel). */
-export function endpointLabel(ref: string): string {
-  if (/^[0-9a-f]{7,40}$/.test(ref)) return ref.slice(0, 8);
-  return batchLabel(ref);
-}
+export const endpointLabel = (ref: string): string => (EVALS_SHA_RE.test(ref) ? shortSha(ref) : batchLabel(ref));
 
 // ── Bisects over a range ────────────────────────────────────────────────────
 
-const SHA = /^[0-9a-f]{7,40}$/;
 const BATCH_TIME = /^\d{4}-\d\d-\d\dT/;
 
 /**
@@ -221,7 +228,7 @@ const BATCH_TIME = /^\d{4}-\d\d-\d\dT/;
  */
 function endAt(ref: string, a: Pick<Attribution, "good" | "bad">): number | null {
   for (const e of [a.good, a.bad]) {
-    if (ref === e.batch || (SHA.test(ref) && (e.sha.startsWith(ref) || !!e.mainSha?.startsWith(ref)))) return e.at ? Date.parse(e.at) : null;
+    if (ref === e.batch || (EVALS_SHA_RE.test(ref) && (e.sha.startsWith(ref) || !!e.mainSha?.startsWith(ref)))) return e.at ? Date.parse(e.at) : null;
   }
   return BATCH_TIME.test(ref) && Number.isFinite(Date.parse(ref)) ? Date.parse(ref) : null;
 }
@@ -243,4 +250,62 @@ export function bisectsOverRange(list: readonly BisectSummary[], a: Pick<Attribu
       return [{ ...b, same: g === lo && d === hi }];
     })
     .sort((x, y) => Number(isBisectLive(y.status)) - Number(isBisectLive(x.status)) || Date.parse(y.startedAt) - Date.parse(x.startedAt));
+}
+
+/**
+ * Why a bisect ended on a range rather than one commit, read from the answer
+ * as runner.ts writes it: no confirmation ran when the classes left between
+ * the last good and bad reads did not load; a confirmation that separated
+ * worse names the uncommitted edits (a culprit names a commit); any other
+ * confirmation did not separate the culprit class from the one before it.
+ */
+export function rangeWords(ans: Extract<BisectAnswer, { kind: "range" }>): string {
+  if (!ans.separation) return "the classes between the last good and bad reads do not load under today's tool, so no replay can narrow them.";
+  if (ans.separation.kind === "worse") return "the uncommitted edits, confirmed worse than the commit they sit on.";
+  return "the confirmation did not separate the culprit class from the one before it, so the answer is this range.";
+}
+
+/** Running first, then newest first. */
+export function sortBisects(list: readonly BisectSummary[]): BisectSummary[] {
+  return [...list].sort((a, b) => Number(isBisectLive(b.status)) - Number(isBisectLive(a.status)) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
+}
+
+export const PLAN_REPS = [3, 4, 5, 6, 7] as const;
+
+/** Over budget: `check --budget` refuses a plan whose bound is above it. */
+export const planOverBudget = (plan: BisectPlan, budgetUsd: number | null) => (budgetUsd ?? plan.budgetUsd) < plan.bound.maxUsd;
+
+/** The keys Start answers to, as the shortcut registry names them. */
+export function startKeys(): string[] {
+  const defs = getShortcutsForAction("list.open");
+  return defs.length ? formatShortcutParts(defs[0]) : [];
+}
+
+/** Whether Start can go: a priced plan for these settings, within budget, confirmed where it must be. */
+export function canStart(p: Pick<BisectPlanPanelProps, "plan" | "pending" | "starting" | "confirm" | "settings" | "blockedBy">): boolean {
+  if (!p.plan || p.pending || p.starting || p.blockedBy || !p.settings.freezes.length) return false;
+  if (p.plan.needsConfirm && !p.confirm) return false;
+  return !planOverBudget(p.plan, p.settings.budgetUsd);
+}
+
+export function bisectGlyph(state: Pick<BisectState, "status" | "answer">): VerdictState {
+  if (isBisectLive(state.status)) return "unscored";
+  if (state.answer?.kind === "culprit") return "fail";
+  if (state.answer?.kind === "range") return "mixed";
+  if (state.status === "failed") return "crash";
+  return "dry";
+}
+
+/** Stalled: the server says so, or a live bisect has written no step for five minutes. */
+export function isStalled(data: Pick<BisectResponse, "state" | "stalled">, now: number): boolean {
+  return isBisectStalled({ ...data.state, stalled: data.stalled }, now, EVALS_STALL_MS);
+}
+
+/**
+ * The session a commit's Codecast-Session trailer names, read the way blame
+ * reads it: the value is the session link as written (`git log` hands it over
+ * raw), and anything but a full conversation id names nothing.
+ */
+export function commitSessionId(commit: Pick<CommitRef, "session">): string | null {
+  return commit.session ? extractSessionTrailer(`${SESSION_TRAILER_KEY}: ${commit.session}`) : null;
 }

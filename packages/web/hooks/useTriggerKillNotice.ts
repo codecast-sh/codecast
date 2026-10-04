@@ -1,8 +1,6 @@
 import { useCallback, useRef } from "react";
-import { useMutation } from "convex/react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { animatedHideSessions } from "../store/undoActions";
 import { useInboxStore } from "../store/inboxStore";
@@ -32,7 +30,6 @@ export function useTriggerKillNotice() {
   const tasks = useQueryNoThrow(api.agentTasks.webList, {}).data as TaskRow[] | undefined;
   const tasksRef = useRef(tasks);
   tasksRef.current = tasks;
-  const reactivateTask = useMutation(api.agentTasks.webReactivate);
 
   // Toast the cancellation with a "Keep trigger" escape hatch (re-arm WITHOUT
   // restoring the session). The undo of the kill itself needs no client hook:
@@ -41,7 +38,8 @@ export function useTriggerKillNotice() {
   const noticeCanceled = useCallback((armed: TaskRow[]) => {
     if (!armed.length) return;
     const revive = () => {
-      for (const t of armed) reactivateTask({ task_id: t._id as Id<"agent_tasks"> }).catch(() => {});
+      const { triggerAction } = useInboxStore.getState();
+      for (const t of armed) triggerAction(t._id, "reactivate");
     };
     toast(
       armed.length === 1
@@ -63,7 +61,7 @@ export function useTriggerKillNotice() {
         },
       },
     );
-  }, [reactivateTask]);
+  }, []);
 
   // Bulk kill (a selection, the stashed bucket's "Kill all"): every card
   // collapses out, the kill is one undo, and the notice is one aggregate.

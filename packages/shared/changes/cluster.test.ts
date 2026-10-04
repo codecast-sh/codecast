@@ -54,7 +54,8 @@ describe("the 2026-10-02 codecast day", () => {
     expect(web.commit_shas).toEqual(["0de614861"]);
     expect(web.area).toBe("web");
     expect(web.headline).toBe("Line pages, share pages, org staffing and app updates");
-    expect(web.conversation_ids).toEqual([COMMITTER]);
+    // The committer landed other sessions' work: edits name the authors, not the trailer.
+    expect(web.conversation_ids).toEqual([]);
     expect(holding(r.stories, "926be8efb")[0].commit_shas).toEqual(["926be8efb"]);
   });
 
@@ -159,7 +160,7 @@ describe("rules (a) to (c) in isolation", () => {
     expect(r.stories[0].task_ids).toEqual(["ct1"]);
   });
 
-  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that still name it", () => {
+  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that leave it to edits to name", () => {
     const areas = ["web", "cli", "convex", "mobile"];
     const cs = areas.map((a, i) => commit({ sha: `w${i}`, subject: `feat(${a}): step ${i}`, conversation_id: "s9", timestamp: T0 + i * 20 * MIN, paths: { [`packages/${a}/x.ts`]: 10 } }));
     const visible = [{ conversation_id: "s9" }];
@@ -170,7 +171,10 @@ describe("rules (a) to (c) in isolation", () => {
     expect(evening.stories.map((s) => s.anchor)).not.toContain("s9");
     expect(evening.stories.map((s) => s.story_key)).not.toContain(morning.stories[0].story_key);
     expect(evening.stories).toHaveLength(areas.length);
-    for (const s of evening.stories) expect(s.conversation_ids).toEqual(["s9"]);
+    for (const s of evening.stories) {
+      expect(s.conversation_ids).toEqual([]);
+      expect(s.private_conversation_count).toBe(0);
+    }
   });
 
   test("a batch commit's thin areas ride with its largest slice and never stand as a story of their own", () => {

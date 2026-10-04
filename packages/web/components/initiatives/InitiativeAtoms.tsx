@@ -33,13 +33,13 @@ const shortDate = (ts: number, now: number) =>
   new Date(ts).toLocaleDateString("en-US", new Date(ts).getFullYear() === new Date(now).getFullYear() ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
 
 /** Health is whatever the owner said last, with the date it was said. */
-export function HealthChip({ health, at, now, className }: { health: InitiativeHealth; at?: number; now: number; className?: string }) {
+export function HealthChip({ health, at, now, bare, className }: { health: InitiativeHealth; at?: number; now: number; /** The dot alone, its word as the title (a far card on the org chart). */ bare?: boolean; className?: string }) {
   const color = HEALTH_COLOR[health];
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", className)} style={{ color: health === "none" ? color : "var(--sol-text-secondary)" }} data-initiative-health={health}>
+    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", className)} style={{ color: health === "none" ? color : "var(--sol-text-secondary)" }} title={bare ? INITIATIVE_HEALTH_LABEL[health] : undefined} data-initiative-health={health}>
       <span className="w-[7px] h-[7px] rounded-full shrink-0" style={health === "none" ? { border: `1px solid ${color}` } : { background: color }} aria-hidden />
-      {INITIATIVE_HEALTH_LABEL[health]}
-      {health !== "none" && at ? <span style={{ color: "var(--sol-text-dim)" }}>{shortDate(at, now)}</span> : null}
+      {!bare && INITIATIVE_HEALTH_LABEL[health]}
+      {!bare && health !== "none" && at ? <span style={{ color: "var(--sol-text-dim)" }}>{shortDate(at, now)}</span> : null}
     </span>
   );
 }

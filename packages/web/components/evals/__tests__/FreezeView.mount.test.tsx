@@ -157,8 +157,8 @@ describe("the view", () => {
     const shown = fx.freeze.runs.filter(shownRep);
     expect(container.querySelectorAll("[data-ev-rep]").length).toBe(shown.length);
     expect(container.querySelectorAll('[data-ev-strip-flip="broke"]').length).toBe(Object.values(fx.cells).filter((c) => c.flip === "broke").length);
-    expect(container.querySelector(`[data-ev-rep="${fx.pick.a}"] [data-ev-rep-selected]`)?.textContent).toBe("A");
-    expect(container.querySelector(`[data-ev-rep="${fx.pick.b}"] [data-ev-rep-selected]`)?.textContent).toBe("B");
+    expect(container.querySelector(`[data-ev-selected-rep="${fx.pick.a}"]`)?.textContent).toBe("A");
+    expect(container.querySelector(`[data-ev-selected-rep="${fx.pick.b}"]`)?.textContent).toBe("B");
     expect(container.querySelectorAll("[data-ev-epoch-band]").length).toBe(fx.freeze.epochs.length);
     await unmount();
   });

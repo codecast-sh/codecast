@@ -19,6 +19,10 @@ describe("normalizeCloudWorkspace", () => {
 });
 
 describe("sharedCheckoutOccupant", () => {
+  test("a sibling moved from the same laptop folder shares the checkout instead of holding it", () => {
+    expect(sharedCheckoutOccupant([row()], { projectPath: ROOT, sharedWith: ["conv_a"] })).toBeNull();
+    expect(sharedCheckoutOccupant([row()], { projectPath: ROOT, sharedWith: ["conv_other"] })?.conversation_id).toBe("conv_a");
+  });
   test("a placed shared row holds its checkout; killed or completed rows do not", () => {
     expect(sharedCheckoutOccupant([row()], { projectPath: ROOT })?.conversation_id).toBe("conv_a");
     expect(sharedCheckoutOccupant([row({ inbox_killed_at: 5 })], { projectPath: ROOT })).toBeNull();
