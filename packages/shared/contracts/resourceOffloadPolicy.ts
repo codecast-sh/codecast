@@ -13,7 +13,7 @@ export interface OffloadRequirements {
 
 export function evaluateOffloadRequirements(input: OffloadRequirements) {
   const { processes, readiness, targetSample, now } = input;
-  const blockers: string[] = [], pending: string[] = [], passed: string[] = [];
+  const blockers: string[] = [], pending: string[] = [], passed: string[] = [], notes: string[] = [];
   const requiresMac = processes.some(p => p.kind === "simulator" || /xcodebuild|simctl|codesign/i.test(p.name));
   if (requiresMac && input.targetPlatform !== "darwin") blockers.push("Observed Apple build or simulator tooling requires a Mac");
   if (!input.targetOnline && !input.targetWakeable) blockers.push("The destination is offline");
@@ -23,7 +23,9 @@ export function evaluateOffloadRequirements(input: OffloadRequirements) {
     if (readiness.setup?.ok === false) blockers.push(`Host setup failed: ${readiness.setup.error ?? readiness.setup.step ?? "unknown step"}`);
     else if (!readiness.setup) pending.push("Verify the project's packages and services on this host");
     else passed.push("The host reports its setup completed");
-    if (readiness.tools?.missing.length) blockers.push(`Missing tools: ${readiness.tools.missing.map(t => t.tool).join(", ")}`);
+    // The inventory covers helpers the laptop's own hooks and skills call (sounds, OS notifications), not
+    // what a session needs to run: a hook whose helper is absent fails on its own, so it never stops a move.
+    if (readiness.tools?.missing.length) notes.push(`Hooks call tools this host lacks: ${readiness.tools.missing.map(t => t.tool).join(", ")}`);
     else if (!readiness.tools) pending.push("Verify required command-line tools");
     else passed.push("The host reports no missing tools in its inventory");
     if (!readiness.mirror?.complete) pending.push("Verify configuration and credential transfer");
@@ -36,7 +38,7 @@ export function evaluateOffloadRequirements(input: OffloadRequirements) {
   pending.push("Verify this project's OS/architecture, secrets, services and network access");
   pending.push("Confirm the session does not depend on this laptop's browser login or attached devices");
   return {
-    blockers, pending, passed,
+    blockers, pending, passed, notes,
     fit: requiresMac ? "Apple build tooling was observed; this work needs a Mac" : "No Apple-only tooling was observed; Linux remains provisional until project requirements are checked",
     requiresMac: requiresMac ? "Apple build or simulator tooling observed in the process tree" : undefined,
   };

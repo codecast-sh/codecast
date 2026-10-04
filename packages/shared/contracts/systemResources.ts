@@ -69,7 +69,7 @@ export function sustainedResourcePressure(points: ResourcePoint[], now: number):
     if (p.pressure === "elevated") return "The operating system reports elevated memory pressure";
     if (!p.memoryAvailableIsEstimate && p.memoryTotal > 0 && p.memoryAvailable / p.memoryTotal < 0.1) return "Available memory has stayed below 10%";
     if ((p.cpuPercent ?? 0) >= 90) return "CPU use has stayed above 90%";
-    if (p.load1 / Math.max(p.logicalCpus, 1) >= 3) return "System load has stayed high; load alone does not establish CPU saturation";
+    if (p.load1 / Math.max(p.logicalCpus, 1) >= 3) return "System load has stayed high";
     return null;
   };
   let incident: ResourceIncident | null = null;

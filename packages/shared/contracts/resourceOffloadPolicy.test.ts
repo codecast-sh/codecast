@@ -35,3 +35,11 @@ test("an elevated or backed-up destination is not treated as available capacity"
   args.targetSample.load1 = 50;
   expect(evaluateOffloadRequirements(args).blockers).toContain("The destination is already under heavy pressure");
 });
+
+test("tools missing from the laptop's hook inventory are a note, never a blocker", () => {
+  const args = input();
+  args.readiness = { at: args.now, setup: { ok: true }, tools: { ok: 3, installed: 0, missing: [{ tool: "afplay" }, { tool: "powershell.exe" }] } };
+  const check = evaluateOffloadRequirements(args);
+  expect(check.blockers).toEqual([]);
+  expect(check.notes).toEqual(["Hooks call tools this host lacks: afplay, powershell.exe"]);
+});

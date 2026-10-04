@@ -27,17 +27,17 @@
       {
         "name": "title · opener is a greeting",
         "ok": false,
-        "detail": "fails on origin/main"
+        "detail": "fails before the change"
       },
       {
         "name": "title · pasted stack trace",
         "ok": false,
-        "detail": "fails on origin/main"
+        "detail": "fails before the change"
       },
       {
         "name": "title · long opener with a plan",
         "ok": false,
-        "detail": "fails on origin/main"
+        "detail": "fails before the change"
       }
     ],
     "after": [
@@ -49,17 +49,17 @@
       {
         "name": "title · opener is a greeting",
         "ok": true,
-        "detail": "passes on the branch"
+        "detail": "passes after the change"
       },
       {
         "name": "title · pasted stack trace",
         "ok": true,
-        "detail": "passes on the branch"
+        "detail": "passes after the change"
       },
       {
         "name": "title · long opener with a plan",
         "ok": true,
-        "detail": "passes on the branch"
+        "detail": "passes after the change"
       }
     ]
   },

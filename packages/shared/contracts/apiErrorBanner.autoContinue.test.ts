@@ -23,6 +23,17 @@ describe("Claude Code auto-continue limit wait", () => {
     expect(claudeAutoContinueBanner(footer)).toBeNull();
   });
 
+  it("reads the 'esc or type to cancel' wording as the same wait", () => {
+    // Synced from jx7csbd's panes: the same wait on builds where typing also
+    // cancels it. Unmatched, its system line recorded no park at all.
+    const line = "Usage limit reached · continuing automatically at 5pm · esc or type to cancel";
+    expect(isClaudeAutoContinueLine(line)).toBe(true);
+    const banner = claudeAutoContinueBanner(line);
+    expect(banner).not.toContain("cancel");
+    expect(classifyApiErrorBanner(banner)).toBe("limit");
+    expect(isClaudeAutoContinueLine("Continuing automatically at Oct 5 at 3pm · esc or type to cancel · /usage-credits to continue now")).toBe(true);
+  });
+
   it("leaves other lines alone", () => {
     expect(claudeAutoContinueBanner("Automatic continue cancelled · /rate-limit-options to re-arm")).toBeNull();
     expect(claudeAutoContinueBanner("Usage limit reached · limit resets 6:10pm · clau.de/wrap-up")).toBeNull();

@@ -236,7 +236,8 @@ export function limitBannerContent(shownAs: string | null | undefined): string {
 // /usage-credits to continue now". Read as nothing, the park never reached the
 // recovery loop: on 2026-09-30 ten sessions on a spent account sat for hours
 // while the machine had accounts with headroom.
-const CLAUDE_AUTO_CONTINUE_RE = /^(?:[⏺●]\s*)?(?:usage limit reached(?: again)?\s*·\s*)?continuing automatically\b[^\n]*·\s*esc to cancel\b/i;
+// Builds where typing also cancels the wait say "esc or type to cancel".
+const CLAUDE_AUTO_CONTINUE_RE = /^(?:[⏺●]\s*)?(?:usage limit reached(?: again)?\s*·\s*)?continuing automatically\b[^\n]*·\s*esc (?:or type )?to cancel\b/i;
 
 /** Is this line Claude Code's armed automatic continue (the system line or
  *  the pane footer)? Its "esc to cancel" belongs to the wait, not to a
@@ -251,7 +252,7 @@ export function isClaudeAutoContinueLine(line: string | null | undefined): boole
 export function claudeAutoContinueBanner(text: string | null | undefined): string | null {
   const line = (text ?? "").trim();
   if (!/^usage limit reached/i.test(line) || !isClaudeAutoContinueLine(line)) return null;
-  return limitBannerContent(line.replace(/\s*·\s*esc to cancel\b.*$/i, ""));
+  return limitBannerContent(line.replace(/\s*·\s*esc (?:or type )?to cancel\b.*$/i, ""));
 }
 
 // The context-overflow park. Claude Code writes it when a request is rejected
@@ -504,4 +505,16 @@ export function isRecoveryContinueClientId(clientId: string | null | undefined):
 export const NO_RESPONSE_STUB = "No response requested.";
 export function isNoResponseStub(content: string | null | undefined): boolean {
   return (content ?? "").trim() === NO_RESPONSE_STUB;
+}
+
+// The user-role rows Claude Code writes for a slash command it runs itself
+// (/model, /rate-limit-options, ...): the invocation and its output. They
+// never reach the model, so they say nothing about whether a park lifted.
+// Choosing "Wait here, then continue automatically" on the limit menu is one:
+// read as a turn, it cleared the park and recovery never saw the session
+// (2026-10-04). A command that does prompt the model is followed by the
+// model's reply, and that reply is the turn.
+const LOCAL_COMMAND_RE = /^<(?:command-name|command-message|local-command-stdout|local-command-stderr|local-command-caveat)>/;
+export function isLocalCommandLine(content: string | null | undefined): boolean {
+  return LOCAL_COMMAND_RE.test((content ?? "").trimStart());
 }
