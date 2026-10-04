@@ -28,7 +28,7 @@ import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineS
 import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
-import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
+import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 
@@ -533,6 +533,7 @@ export async function performMoveSessionToDevice(
     project_path: args.project_path,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, dest)),
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -775,6 +776,7 @@ export async function performReassignToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -961,6 +963,7 @@ export async function performReparentSessionToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   };
   if (crossUser) {
     // Account follows device: the caller now runs + bills it. Pin the author
