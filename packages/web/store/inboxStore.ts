@@ -96,6 +96,7 @@ import {
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
   isSessionUnread,
+  guestIdentity,
   type SessionActivityFacts,
   type InboxBucket,
   type InboxTally,
@@ -9901,7 +9902,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resumeSession: (convId: string) => get().convCommand(convId, "resumeSession"),
 
-  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession"),
+  // The press time rides along so the daemon can tell an Escape aimed at the
+  // previous turn from one for the turn a queued message started after it.
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now() }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -13261,7 +13264,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // back through restoreCallGuest (lib/calls/guestDoorActions).
   removeCallGuest: asyncAction(function (this: Draft, roomKey: string, guestId: string, revokeLink?: boolean) {
     dropGuestKnock(this, guestId);
-    const identity = `guest:${guestId}`;
+    const identity = guestIdentity(guestId);
     const room = ((this.liveRooms ?? []) as any[]).find((r) => r?.room_key === roomKey);
     if (room?.guests?.some((g: any) => g.identity === identity)) room.guests = room.guests.filter((g: any) => g.identity !== identity);
     return { roomKey, guestId, revokeLink: !!revokeLink };

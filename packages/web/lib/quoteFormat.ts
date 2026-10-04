@@ -73,15 +73,31 @@ export function formatQuotedReply(quote: string, body?: string): string {
   return bq || reply;
 }
 
-// What an image note's blockquote says: the image (the `[Image N]` token the
-// composer uses for attachments when it rides along on the send, its address
-// as a markdown image otherwise) and the point the note is pinned to, then
-// where the image came from.
-export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number): string {
+// What an image note's blockquote says: the image and the point the note is
+// pinned to, then where the image came from. An image that rides along on the
+// send is named by its `[Image N]` attachment token and carries its pins drawn
+// on it as numbered markers, so the point is that marker's number. Otherwise
+// the image is its address as a markdown image and the point is described.
+export function imageQuoteText(c: Pick<PendingComment, "quote" | "image">, attachmentNumber?: number, marker?: number): string {
   if (!c.image) return c.quote;
   const head = attachmentNumber ? `[Image ${attachmentNumber}]` : c.image.href ? `![image](${c.image.href})` : "[image]";
-  const at = c.image.point ? ` ${describePoint(c.image)}` : "";
+  const at = !c.image.point ? "" : attachmentNumber && marker ? ` at marker ${marker}` : ` ${describePoint(c.image)}`;
   return c.quote ? `${head}${at}\n${c.quote}` : `${head}${at}`;
+}
+
+// Each pinned note's number on its picture, counted per picture in the order
+// given. The gallery's dots and the markers drawn on a sent picture both read
+// it, so a note is the same number everywhere.
+export function pinNumbers(comments: readonly Pick<PendingComment, "id" | "image">[]): Map<string, number> {
+  const perSrc = new Map<string, number>();
+  const numbers = new Map<string, number>();
+  for (const c of comments) {
+    if (!c.image?.point) continue;
+    const n = (perSrc.get(c.image.src) ?? 0) + 1;
+    perSrc.set(c.image.src, n);
+    numbers.set(c.id, n);
+  }
+  return numbers;
 }
 
 // "at x=412, y=230 of 1600×900 px (26% from the left, 26% from the top)", or
@@ -96,13 +112,14 @@ export function describePoint({ point, width, height }: QuotedImage): string {
 // A batch of inline comments, in the order given, separated by blank lines.
 // Comments with no body still emit their quote (treated as a plain quote).
 // `attachmentNumbers` maps an image comment's id to its position among the
-// send's attached images.
+// send's attached images, and `markers` to its marker number on that image.
 export function formatPendingComments(
   comments: (Pick<PendingComment, "quote" | "body" | "image"> & { id?: string })[],
   attachmentNumbers?: ReadonlyMap<string, number>,
+  markers?: ReadonlyMap<string, number>,
 ): string {
   return comments
-    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined), c.body))
+    .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined, c.id ? markers?.get(c.id) : undefined), c.body))
     .filter(Boolean)
     .join("\n\n");
 }

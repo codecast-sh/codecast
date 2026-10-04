@@ -47,9 +47,21 @@ export type CallRecordingKind = (typeof CALL_RECORDING_KINDS)[number];
 export const CALL_RECORDING_STATUSES = ["starting", "recording", "stopping", "ready", "failed"] as const;
 export type CallRecordingStatus = (typeof CALL_RECORDING_STATUSES)[number];
 
-/** A run is live while any of its files is still being written. */
+/** A run is live while any of its files is still being written. Active
+ *  includes "stopping": LiveKit is still finishing and uploading the file, so
+ *  the run holds its place (no second press, the loop keeps looking). */
 export function isRecordingActive(status: CallRecordingStatus): boolean {
   return status === "starting" || status === "recording" || status === "stopping";
+}
+
+/** Is this file filming the room right now? Unlike isRecordingActive, a
+ *  "stopping" file is not: somebody has already pressed stop, so what happens
+ *  in the room from here is not being kept. Every surface that tells people
+ *  they are on camera (the REC mark, a live frame, the CLI's "filming" note)
+ *  asks this, so a new status lands on all of them at once. No status (no
+ *  run) is not filming. */
+export function isRecordingFilming(status: CallRecordingStatus | null | undefined): boolean {
+  return status === "starting" || status === "recording";
 }
 
 // Why a file stopped. "pressed" is somebody in the room (a guest included);
@@ -60,6 +72,15 @@ export function isRecordingActive(status: CallRecordingStatus): boolean {
 // LiveKit's); "ended" is LiveKit finishing a file without saying why.
 export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "room_empty", "share_ended", "limit", "ended", "failed"] as const;
 export type CallRecordingStopReason = (typeof CALL_RECORDING_STOP_REASONS)[number];
+
+// What kind of failure a failed file's `error` words describe, kept beside the
+// words so decisions never read copy: "minutes_spent" is the plan out of
+// recording minutes (no retry can succeed until someone raises it); "busy" is
+// no egress capacity this minute (passes on its own); "credentials" is LiveKit
+// refusing this server's keys; "server" is this server's own fault (storage,
+// configuration, an exception); "livekit" is anything else LiveKit did.
+export const CALL_RECORDING_ERROR_KINDS = ["minutes_spent", "busy", "credentials", "server", "livekit"] as const;
+export type CallRecordingErrorKind = (typeof CALL_RECORDING_ERROR_KINDS)[number];
 
 /** The fields of a recording row that alignment reads. Ids are strings so the
  *  web, the CLI and Convex all hand their own row shapes straight in. */
@@ -226,12 +247,23 @@ export function wholeSecond(ms: number, limit = Infinity): number {
   return up <= limit ? up : Math.floor(ms / 1000) * 1000;
 }
 
+/** A stretch of a call as a clock pair: `2:12-6:15`. The one way every
+ *  surface writes a range of call time (the CLI, the call page's header). */
+export function describeClockSpan(span: { fromMs: number; toMs: number }): string {
+  return `${formatCallTime(span.fromMs)}-${formatCallTime(span.toMs)}`;
+}
+
+/** One recorded span in words: `1:02-3:30 Ana's screen (still saving)`.
+ *  `lead` replaces the clock pair when a caller has more to say before the
+ *  subject (`cast call`'s `lines 6-41 (2:12-6:15)`). */
+export function describeSpan(span: CallCoveredSpan, lead: string = describeClockSpan(span)): string {
+  return `${lead} ${recordingSubject(span)}${span.pending ? " (still saving)" : ""}`;
+}
+
 /** The recorded spans as one line: `0:00-4:10 the room, 1:02-3:30 Ana's
  *  screen`. What `cast call` prints and what the call page's header says. */
 export function describeSpans(spans: readonly CallCoveredSpan[]): string {
-  return spans
-    .map((s) => `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`)
-    .join(", ");
+  return spans.map((s) => describeSpan(s)).join(", ");
 }
 
 /** The recorded moment nearest `atMs`, for a "try this instead" hint (the
@@ -359,9 +391,35 @@ export function sampleCallMoments(fromMs: number, toMs: number, count: number, m
   return Array.from({ length: n }, (_, i) => Math.round(a + (span * i) / (n - 1)));
 }
 
-/** The moment a transcript line points at: where its first word was said. */
-export function lineMomentMs(segment: { t0: number }): number {
-  return Math.max(0, segment.t0);
+/**
+ * The moment a transcript line points at, and the moment its frame is taken:
+ * the first whole second a little after its first word. One rule for every
+ * surface (`cast call snap cl-42:<line>`, `cast call`'s [video] marks, the
+ * call page's filmed rail and its links), so a line reads as filmed in one
+ * place exactly when it does in the others, and a link to it lands on the
+ * second the CLI cites. A little after, because a line's t0 is where the
+ * recognizer heard speech begin and the speaker is still finishing the
+ * gesture that goes with it; a whole second, because the citation printed
+ * beside the frame is `cl-42@12:34` and a whole second is what it can name,
+ * so the frame an agent cites is the frame it saw. A line too short to reach
+ * that second takes the first whole second at or after its start, even when
+ * that is a moment past its last word: never a second before it began, which
+ * shows what was on screen during the line before it (a quarter of the lines
+ * of a real call span no whole second), and at most a second late, still the
+ * picture being pointed at.
+ */
+export function lineFrameMs(seg: { t0: number; t1?: number }): number {
+  const start = Math.max(0, seg.t0);
+  const end = Math.max(start, seg.t1 ?? start);
+  const nudged = Math.ceil((start + 250) / 1000) * 1000;
+  return nudged <= end ? nudged : Math.ceil(start / 1000) * 1000;
+}
+
+/** Whether a line was on camera: some stretch covers the moment its frame is
+ *  taken (lineFrameMs), the moment `cast call snap cl-42:<line>` shows. */
+export function lineFilmed(spans: ReadonlyArray<{ fromMs: number; toMs: number }>, seg: { t0: number; t1?: number }): boolean {
+  const at = lineFrameMs(seg);
+  return spans.some((s) => s.fromMs <= at && at < s.toMs);
 }
 
 // The call page reads a recording through a presigned URL that stays
@@ -402,6 +460,14 @@ export const RECORDING_PRESS_FRESH_MS = 30_000;
  *  same rule on both ends: the server refuses inside it (convex
  *  callRecordings.startRecording) and the Record button waits it out. */
 export const RECORDING_RESTART_COOLDOWN_MS = 5_000;
+
+/** Is a room's Record press still waiting out that cooldown? Its run is
+ *  stopping and the stop was asked for less than the cooldown ago (or when,
+ *  is not known yet). The Record button on every platform asks this, so the
+ *  web's and the phone's "saving" agree with what the server would refuse. */
+export function recordingCooling(status: CallRecordingStatus | null | undefined, stopRequestedAt: number | null | undefined, now: number): boolean {
+  return status === "stopping" && (stopRequestedAt == null || now - stopRequestedAt < RECORDING_RESTART_COOLDOWN_MS);
+}
 
 /** Is a press made at `pressedAt` too old to act on at `now`? A press with no
  *  stamp (a client older than the rule) is taken as made now. */

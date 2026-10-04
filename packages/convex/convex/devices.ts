@@ -28,7 +28,7 @@ import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineS
 import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
-import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
+import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 
@@ -533,6 +533,7 @@ export async function performMoveSessionToDevice(
     project_path: args.project_path,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, dest)),
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -775,6 +776,7 @@ export async function performReassignToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -961,6 +963,7 @@ export async function performReparentSessionToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   };
   if (crossUser) {
     // Account follows device: the caller now runs + bills it. Pin the author
@@ -1793,13 +1796,16 @@ export const enqueueCloudAgentLoginCommand = mutation({
     device_id: v.string(),
     provider: v.string(),
     op: v.union(v.literal("check"), v.literal("start")),
+    // Start a sign-in that finishes on another device: the daemon answers the
+    // page (url) and one-time code (detail) instead of opening its browser.
+    device_code: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id);
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "cloud_agent_login" as const,
-      args: JSON.stringify({ provider: args.provider, op: args.op }),
+      args: JSON.stringify({ provider: args.provider, op: args.op, ...(args.device_code ? { device_code: true } : {}) }),
       created_at: Date.now(),
       target_device_id: args.device_id,
     });
@@ -1890,9 +1896,14 @@ export const claimConversation = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id.toString() !== userId.toString()) return;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
     await ctx.db.patch(convId, {
       owner_device_id: args.device_id,
       session_error: undefined,
+      ...(await unparkForMove(ctx, conv, device)),
     });
     return { ok: true };
   },
@@ -1972,7 +1983,16 @@ export const setConversationOwner = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) throw new Error("conversation not found");
     if (conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
-    await ctx.db.patch(args.conversation_id, { owner_device_id: args.owner_device_id });
+    const device = args.owner_device_id
+      ? await ctx.db
+          .query("devices")
+          .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.owner_device_id))
+          .first()
+      : null;
+    await ctx.db.patch(args.conversation_id, {
+      owner_device_id: args.owner_device_id,
+      ...(await unparkForMove(ctx, conv, device)),
+    });
     return { ok: true, owner_device_id: args.owner_device_id ?? null };
   },
 });

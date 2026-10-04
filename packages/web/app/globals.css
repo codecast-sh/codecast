@@ -2102,14 +2102,14 @@ pre[class*="language-"] {
 /* A child row's badge (a trigger's countdown, "running") reads as quiet text
    beside the line's time, not a colored box. The red states keep their color:
    a failed or overdue trigger is the one badge the person must see. */
-.inbox-compact [data-sv-rail] [data-sv-wake-badge] {
+:is(.inbox-compact, .minimal-style) [data-sv-rail] [data-sv-wake-badge] {
   min-width: 0;
   padding: 0;
   border-color: transparent;
   background: none;
   font-weight: 400;
 }
-.inbox-compact [data-sv-rail] [data-sv-wake-badge]:not([data-sv-wake-badge="alert"]) {
+:is(.inbox-compact, .minimal-style) [data-sv-rail] [data-sv-wake-badge]:not([data-sv-wake-badge="alert"]) {
   color: var(--sol-text-dim);
 }
 /* The thumbnail is taller than the line. */
@@ -2703,13 +2703,15 @@ pre[class*="language-"] {
    single tinted BAND that bleeds to the composer's edges (negative margins mirror
    the composer's px-4/py-2 padding; top radius hugs its rounded-2xl corners) — a
    zone of the same block, not a box inside a box. Quotes are plain rail-indented
-   lines on the band; the input sits below on the untinted composer surface. */
+   lines on the band; the input sits below on the untinted composer surface.
+   A style that repads the box declares --cc-field-* so the band still bleeds
+   exactly to its edges. */
 .cc-review-tray {
-  margin: -0.5rem -1rem 0.55rem;
-  padding: 0.4rem 1rem 0.6rem;
+  margin: calc(-1 * var(--cc-field-pt, 0.5rem)) calc(-1 * var(--cc-field-px, 1rem)) 0.55rem;
+  padding: 0.4rem var(--cc-field-px, 1rem) 0.6rem;
   background: color-mix(in srgb, var(--sol-cyan) 5%, var(--sol-bg));
   border-bottom: 1px solid color-mix(in srgb, var(--sol-cyan) 22%, var(--sol-border) 60%);
-  border-radius: calc(1rem - 1px) calc(1rem - 1px) 0 0;
+  border-radius: calc(var(--cc-field-r, 1rem) - 1px) calc(var(--cc-field-r, 1rem) - 1px) 0 0;
   font-size: 0.78rem;
 }
 .cc-review-tray-head {
@@ -4361,10 +4363,13 @@ pre[class*="language-"] {
 }
 
 .minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
+  --cc-field-pt: 9px;
+  --cc-field-px: 12px;
+  --cc-field-r: 14px;
   min-height: 52px;
-  padding: 9px 12px 8px;
+  padding: var(--cc-field-pt) var(--cc-field-px) 8px;
   border-color: var(--sol-border);
-  border-radius: 18px;
+  border-radius: var(--cc-field-r);
   background: var(--sol-card);
   box-shadow: none;
 }
@@ -4607,14 +4612,6 @@ pre[class*="language-"] {
 .minimal-style [data-sv-rail] [data-sv-meta] .text-\[9px\] {
   font-size: 11px;
   line-height: 1.35;
-}
-
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\] {
-  font-size: 12px;
-}
-
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[10px\] {
-  font-size: 11px;
 }
 
 .minimal-style [data-sv-rail] [data-sv-controls] {
@@ -5135,16 +5132,50 @@ pre[class*="language-"] {
   font-size: var(--t-mark);
 }
 .minimal-style [data-sv-rail] :is([data-schedrow], [data-schedstrip]) {
-  margin-inline: 8px;
-  padding-inline: 8px;
-  border-radius: 8px;
+  margin: 0;
+  padding-inline: 22px;
+  border-radius: 0;
   background: transparent !important;
   color: var(--sol-text-dim);
+  font-family: var(--font-ui);
   font-size: var(--t-sub);
 }
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\],
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[10px\] {
+/* The trigger line under a row is the row's last line, not a bar of its own:
+   it starts on the row's left edge, ends on its right, closes the row's
+   bottom padding, and shares the open row's fill. One glyph (the bolt) says
+   trigger; the child arrow and the accent colors stay in Classic. */
+.minimal-style [data-sv-rail] [data-session-id]:has(+ [data-schedstrip]) > [role="button"] {
+  padding-bottom: 3px;
+}
+.minimal-style [data-sv-rail] [data-schedstrip] {
+  gap: 6px;
+  padding-top: 0;
+  padding-bottom: 9px;
+}
+.minimal-style [data-sv-rail] [data-session-id][data-active="true"] + [data-schedstrip] {
+  background: var(--sv-card-active-bg) !important;
+}
+.minimal-style [data-sv-rail] [data-schedstrip] > [role="img"] {
+  display: none;
+}
+.minimal-style [data-sv-rail] [data-schedstrip] > svg {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-schedstrip] :is(.text-\[11px\], .text-\[10px\]) {
   font-size: var(--t-sub);
+  font-weight: 400;
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\] {
+  color: var(--sol-text-muted);
+}
+.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\]:has(+ .text-\[10px\]) {
+  flex-shrink: 0;
+}
+.minimal-style [data-sv-rail] :is([data-schedrow], [data-schedstrip]) [data-sv-wake-badge] {
+  font-family: var(--font-ui);
+  font-size: var(--t-sub);
+  font-weight: 400;
 }
 .minimal-style [data-sv-rail] [data-sv-hidden-head] {
   padding-inline: var(--cc-inset);
@@ -5230,8 +5261,7 @@ pre[class*="language-"] {
   font-size: var(--t-mark);
 }
 .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"],
-.minimal-style [data-cc-conversation] [data-sv-sticky],
-.minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
+.minimal-style [data-cc-conversation] [data-sv-sticky] {
   border-radius: 14px;
 }
 
@@ -5881,9 +5911,11 @@ pre[class*="language-"] {
   }
 
   .minimal-style [data-cc-conversation] [data-sv-composer] form:not(.w-full) > div {
+    --cc-field-pt: 8px;
+    --cc-field-px: 10px;
+    --cc-field-r: 16px;
     min-height: 50px;
-    padding: 8px 10px 7px;
-    border-radius: 16px;
+    padding-bottom: 7px;
   }
 
   .minimal-style [data-cc-conversation] [data-sv-feed] [data-cc-message="user"],
@@ -6652,11 +6684,11 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   position: relative;
   margin: 0.25rem 0 0.5rem;
   padding: 0.3rem 1.75rem 0.3rem 0.7rem;
-  border-left: 2px solid color-mix(in srgb, var(--sol-blue) 55%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--sol-blue) 35%, transparent);
   border-radius: 0 6px 6px 0;
-  background: color-mix(in srgb, var(--sol-blue) 6%, transparent);
-  color: var(--sol-text-muted);
-  font-size: 0.92em;
+  background: color-mix(in srgb, var(--sol-blue) 4%, transparent);
+  color: color-mix(in srgb, var(--sol-text-muted) 80%, transparent);
+  font-size: 0.88em;
   line-height: 1.5;
   font-style: normal;
   white-space: normal;
@@ -6671,7 +6703,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .cc-quote-body ul { list-style: disc; }
 .cc-quote-body ol { list-style: decimal; }
 .cc-quote-folds { cursor: pointer; transition: background-color 120ms ease; }
-.cc-quote-folds:hover { background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
+.cc-quote-folds:hover { background: color-mix(in srgb, var(--sol-blue) 8%, transparent); }
 .cc-quote-folded .cc-quote-body {
   overflow: hidden;
   -webkit-mask-image: linear-gradient(to bottom, #000 45%, transparent);

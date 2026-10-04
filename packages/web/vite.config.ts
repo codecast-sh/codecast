@@ -13,6 +13,9 @@ import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
+import { createTailwindWorker } from "./plugins/tailwindWorker";
+import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
+import autoprefixer from "autoprefixer";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
 
 /**
@@ -35,8 +38,15 @@ function buildIdentity(mode: string) {
   return { sha, builtAt: new Date().toISOString(), mode };
 }
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode, command }) => {
+  // Dev only: Tailwind builds in a worker so a slow rebuild never blocks the
+  // server's thread. Production builds read postcss.config.mjs as is.
+  const tailwindWorker = command === "serve" ? createTailwindWorker(path.resolve(__dirname, "tailwind.config.ts")) : null;
+  return {
   plugins: [
+    // Replaces the dev server with a fresh one if its main thread stops running.
+    stallWatchdogPlugin(),
+    ...(tailwindWorker ? [tailwindWorker.vitePlugin] : []),
     updatePromptVite({ releaseFile: path.resolve(__dirname, "release-prompt.json"), define: "__CODECAST_BUILD__", identity: buildIdentity }),
     // Before react(): gives hooks in plain .ts files a Fast Refresh signature,
     // so editing their hook list remounts consumers instead of crashing them.
@@ -119,7 +129,8 @@ export default defineConfig(({ mode }) => ({
     }),
   ],
   resolve: sharedResolve,
-  css: sharedCss,
+  // Same plugins as postcss.config.mjs, with Tailwind moved into the worker.
+  css: tailwindWorker ? { postcss: { plugins: [tailwindWorker.postcssPlugin(), autoprefixer()] } } : sharedCss,
   server: {
     port: 3000,
     host: true,
@@ -268,4 +279,5 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-}));
+};
+});

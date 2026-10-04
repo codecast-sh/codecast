@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="t d">
+  <title id="t">The evals loop: freeze a moment, replay it, compare</title>
+  <desc id="d">A production moment (a session line, a call, a trigger, a served snapshot or a committed fixture) is read through access checked routes and frozen with ./evals freeze create surface@ref: the inputs prod's selector read, passed through redactSecrets and named by their sha256. Synthetic freezes and fixtures live in packages/evals in git; every real freeze, snapshot, run and label lives in EVALS_HOME. ./evals check replays every freeze of a surface for n reps through packages/cli/scripts/prompt-dry-run.ts: --call with prod's request builder and pinned model for a call surface, --serve with a guard cast for an agent surface. Each reply is graded by gates decided in code and by checks, including the judge's criteria, which also runs through the dry run harness. Each rep is written to runs/. The surface's scores are compared with the previous run set by a one-sided Mann-Whitney U test in stats.ts, giving separated: better, separated: worse or not separated. The person edits the prompt and checks again, and claims a win only on separated: better.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    .human { fill: #ffffff; stroke: #cb4b16; stroke-width: 1.5 }
+    .ok { fill: #ffffff; stroke: #859900; stroke-width: 1.25 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core, .human, .ok { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="560" rx="12"/>
+  <text class="h" x="24" y="36">./evals: freeze a moment, replay it, compare against the last run</text>
+
+  <!-- ── Row 1: freeze ── -->
+  <text class="k" x="40" y="66">FREEZE</text>
+  <rect class="card" x="40" y="76" width="200" height="100" rx="8"/>
+  <text class="l" x="52" y="96">a prod moment</text>
+  <text class="n" x="52" y="114">session:line, call, tr-N,</text>
+  <text class="n" x="52" y="130">snapshot, or fixture:</text>
+  <text class="n" x="52" y="146">read access checked</text>
+  <text class="n" x="52" y="162">(/cli/read, evals convo)</text>
+
+  <rect class="card" x="272" y="76" width="230" height="100" rx="8"/>
+  <text class="l" x="284" y="96">./evals freeze create</text>
+  <text class="n" x="284" y="114">&lt;surface&gt;@&lt;ref&gt;</text>
+  <text class="n" x="284" y="130">snapshot: the inputs prod's</text>
+  <text class="n" x="284" y="146">selector read, redactSecrets,</text>
+  <text class="n" x="284" y="162">named by its sha256</text>
+
+  <rect class="core" x="534" y="76" width="386" height="100" rx="8"/>
+  <text class="l" x="548" y="96">two data homes</text>
+  <rect class="inset" x="548" y="104" width="358" height="22" rx="5"/>
+  <text class="n" x="556" y="119">packages/evals (git): synthetic freezes, fixtures</text>
+  <rect class="inset" x="548" y="130" width="358" height="22" rx="5"/>
+  <text class="n" x="556" y="145">EVALS_HOME: freezes/ snapshots/ runs/ labels/</text>
+  <text class="n" x="548" y="166">real moments never enter git</text>
+
+  <path class="data" d="M240 126 H268" marker-end="url(#aData)"/>
+  <path class="data" d="M502 126 H530" marker-end="url(#aData)"/>
+
+  <!-- ── Row 2: replay and grade ── -->
+  <text class="k" x="40" y="222">REPLAY AND GRADE</text>
+  <rect class="card" x="40" y="232" width="200" height="100" rx="8"/>
+  <text class="l" x="52" y="252">./evals check</text>
+  <text class="n" x="52" y="270">&lt;surface&gt; --reps n</text>
+  <text class="n" x="52" y="286">every freeze, n reps</text>
+  <text class="n" x="52" y="302">--model ablates the</text>
+  <text class="n" x="52" y="318">model under test</text>
+
+  <rect class="agent" x="272" y="232" width="300" height="100" rx="8"/>
+  <text class="l" x="284" y="252">prompt-dry-run.ts</text>
+  <text class="n" x="284" y="270">call surface: --call, prod's request</text>
+  <text class="n" x="284" y="286">builder, pinned model, prod max_tokens</text>
+  <text class="n" x="284" y="302">agent surface: --serve &lt;snapshot&gt;,</text>
+  <text class="n" x="284" y="318">a guard cast refuses every write</text>
+
+  <rect class="card" x="604" y="232" width="316" height="100" rx="8"/>
+  <text class="l" x="616" y="252">grade</text>
+  <text class="n" x="616" y="270">gates, in code: ok, model-as-pinned,</text>
+  <text class="n" x="616" y="286">prod-budget, frozen-reads, ...</text>
+  <text class="n" x="616" y="302">checks: the judge's criteria</text>
+  <text class="n" x="616" y="318">(JUDGE_MODEL, through the dry run)</text>
+
+  <path class="cmd" d="M240 282 H268" marker-end="url(#aCmd)"/>
+  <path class="data" d="M572 282 H600" marker-end="url(#aData)"/>
+  <path class="data" d="M553 176 V228" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="474" y="206">snapshot</text>
+  <path class="data" d="M880 232 V180" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="804" y="206">each rep</text>
+
+  <!-- ── Row 3: compare ── -->
+  <text class="k" x="40" y="378">COMPARE</text>
+  <rect class="human" x="40" y="388" width="200" height="98" rx="8"/>
+  <circle class="person" cx="218" cy="402" r="5"/>
+  <path class="person" d="M210 418 a8 7 0 0 1 16 0 z"/>
+  <text class="l" x="52" y="408">edit the prompt</text>
+  <text class="n" x="52" y="426">claim a win only on</text>
+  <text class="n" x="52" y="442">separated: better</text>
+
+  <rect class="card" x="272" y="388" width="300" height="98" rx="8"/>
+  <text class="l" x="284" y="408">the verdict</text>
+  <text class="n" x="284" y="426">separated: better | worse at</text>
+  <text class="n" x="284" y="442">p &lt;= 0.05, else not separated</text>
+  <text class="n" x="284" y="458">any failed gate fails the variant</text>
+  <text class="n" x="284" y="474">./evals freeze results &lt;id&gt;</text>
+
+  <rect class="card" x="604" y="388" width="316" height="98" rx="8"/>
+  <text class="l" x="616" y="408">compare (stats.ts)</text>
+  <text class="n" x="616" y="426">one-sided Mann-Whitney U per surface</text>
+  <text class="n" x="616" y="442">against the previous run set</text>
+  <text class="n" x="616" y="458">5+ reps a side (8 on agent surfaces)</text>
+
+  <path class="data" d="M762 332 V384" marker-end="url(#aData)"/>
+  <path class="data" d="M604 434 H576" marker-end="url(#aData)"/>
+  <path class="cmd" d="M272 434 H244" marker-end="url(#aCmd)"/>
+  <path class="cmd" d="M140 388 V336" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="148" y="366">check again</text>
+
+  <!-- legend -->
+  <path class="data" d="M40 512 H80" marker-end="url(#aData)"/><text class="n" x="90" y="516">data: snapshots, replies, scores</text>
+  <path class="cmd" d="M40 536 H80" marker-end="url(#aCmd)"/><text class="n" x="90" y="540">commands</text>
+  <rect class="agent" x="420" y="504" width="16" height="12" rx="3"/><text class="n" x="446" y="514">a model runs (claude -p, never bare)</text>
+  <rect class="human" x="420" y="528" width="16" height="12" rx="3"/><text class="n" x="446" y="538">the person</text>
+</svg>

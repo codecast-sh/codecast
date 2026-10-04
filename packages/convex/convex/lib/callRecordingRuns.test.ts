@@ -78,6 +78,7 @@ describe("screen files", () => {
       started_at: undefined,
       stop_reason: "failed" as const,
       error: "LiveKit has no recording capacity free right now. Try again in a minute.",
+      error_kind: "busy" as const,
       updated_at: now - SCREEN_RETRY_GAP_MS,
     };
     expect(screenStartRetryable(failed, now)).toBe(true);
@@ -85,7 +86,11 @@ describe("screen files", () => {
     // Not before its gap, not for spent minutes, not once it wrote frames,
     // not after a stop, and not past the limit.
     expect(screenStartRetryable({ ...failed, updated_at: now - 1_000 }, now)).toBe(false);
-    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE, error_kind: "minutes_spent" as const }, now)).toBe(false);
+    // The kind decides, never the words: copy edits to either message leave
+    // the retry rule where it was.
+    expect(screenStartRetryable({ ...failed, error: "Reworded: no minutes left.", error_kind: "minutes_spent" as const }, now)).toBe(false);
+    expect(screenStartRetryable({ ...failed, error: RECORDING_MINUTES_SPENT_MESSAGE, error_kind: "busy" as const }, now)).toBe(true);
     expect(screenStartRetryable({ ...failed, started_at: now - 60_000 }, now)).toBe(false);
     expect(screenStartRetryable({ ...failed, stop_reason: "pressed" as const }, now)).toBe(false);
     expect(screenStartRetryable({ ...failed, start_attempts: START_RETRY_LIMIT }, now)).toBe(false);
@@ -221,19 +226,19 @@ describe("LiveKit's view onto a row", () => {
   });
 
   test("LiveKit's errors are said in plain words, never quoted", () => {
-    expect(plainEgressError(undefined)).toBe("LiveKit stopped the recording without saying why.");
-    expect(plainEgressError("track not found")).toBe("LiveKit stopped the recording unexpectedly.");
-    expect(plainEgressError("egress minutes exceeded")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
-    expect(plainEgressError("project quota reached")).toBe(RECORDING_MINUTES_SPENT_MESSAGE);
-    expect(plainEgressError("max duration limit reached")).toBe("The recording stopped at LiveKit's time limit.");
+    expect(plainEgressError(undefined).error).toBe("LiveKit stopped the recording without saying why.");
+    expect(plainEgressError("track not found").error).toBe("LiveKit stopped the recording unexpectedly.");
+    expect(plainEgressError("egress minutes exceeded")).toEqual({ error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" });
+    expect(plainEgressError("project quota reached")).toEqual({ error: RECORDING_MINUTES_SPENT_MESSAGE, kind: "minutes_spent" });
+    expect(plainEgressError("max duration limit reached").error).toBe("The recording stopped at LiveKit's time limit.");
     const s3 =
       "failed to upload: AccessDenied: Access Denied status code: 403, request id: 7f2a, host id: https://0123abcd.r2.cloudflarestorage.com/codecast-call-recordings/calls/k57x/1700-composite.mp4";
-    expect(plainEgressError(s3)).toBe("The video could not be saved to storage.");
-    expect(plainEgressError("PutObject: RequestTimeout")).toBe("The video could not be saved to storage.");
+    expect(plainEgressError(s3)).toEqual({ error: "The video could not be saved to storage.", kind: "server" });
+    expect(plainEgressError("PutObject: RequestTimeout").error).toBe("The video could not be saved to storage.");
     // Whatever LiveKit says, a reader never sees the bucket or a URL.
     for (const raw of [s3, "https://lk.example/twirp failed", "track not found", "upload to s3 failed"]) {
-      expect(plainEgressError(raw)).not.toContain("cloudflarestorage");
-      expect(plainEgressError(raw)).not.toContain("https://");
+      expect(plainEgressError(raw).error).not.toContain("cloudflarestorage");
+      expect(plainEgressError(raw).error).not.toContain("https://");
     }
     expect(isMinutesSpentText("egress minutes exceeded")).toBe(true);
     expect(isMinutesSpentText("no egress workers available")).toBe(false);

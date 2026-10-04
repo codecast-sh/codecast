@@ -39,6 +39,7 @@ import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
 import type { FlowMap, RoleFlow } from "./orgFlow";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
 /** The health map's card size, which its spine edges are drawn against. */
 const SPINE = { w: ORG_SIZES.healthRole.w, h: ORG_SIZES.healthRole.h };
@@ -350,7 +351,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   useEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const el = document.activeElement as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     if (editing) { setEditing(null); return; }
     if (selectedId) onSelect(null);
   }, editing || selectedId ? window : null);

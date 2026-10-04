@@ -25,6 +25,7 @@
     "./contracts/evalsApi": "./contracts/evalsApi.ts",
     "./contracts/projectRef": "./contracts/projectRef.ts",
     "./contracts/signalFingerprint": "./contracts/signalFingerprint.ts",
+    "./contracts/lineProfile": "./contracts/lineProfile.ts",
     "./contracts/ingest": "./contracts/ingest.ts",
     "./contracts/replay": "./contracts/replay.ts",
     "./contracts/appConnector": "./contracts/appConnector.ts",

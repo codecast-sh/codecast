@@ -11,7 +11,7 @@ import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATHS, signForCli } from "./callRecordings";
-import { callRecordingsBucketFromEnv, PRIVATE_OBJECT_GET_PARAMS, r2FreshGetUrl } from "./lib/r2";
+import { callRecordingGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
@@ -5029,10 +5029,9 @@ const sharedCallVideo = httpAction(async (ctx, request) => {
   const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!token || !Number.isFinite(at)) return notFound();
   const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
-  const bucket = callRecordingsBucketFromEnv();
-  if (!key || !bucket) return notFound();
-  const { url } = await r2FreshGetUrl(bucket, key, Date.now(), PRIVATE_OBJECT_GET_PARAMS);
-  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  const signed = key ? await callRecordingGetUrl(key, "fresh") : null;
+  if (!signed) return notFound();
+  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
 for (const path of SHARED_CALL_VIDEO_PATHS) http.route({ path, method: "GET", handler: sharedCallVideo });
 

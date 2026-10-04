@@ -325,10 +325,10 @@ export function registerBisect(program: Command): void {
     });
   bisect
     .command('stop <id>')
-    .description('cancel a bisect between reps (resume goes on with it)')
+    .description('cancel a bisect between reps, or between probes for a Multiplayer sim bisect (resume goes on with it)')
     .action((id: string) => {
       if (!requestStop(id)) throw new Error(`no bisect ${id}`);
-      console.log(`asked ${id} to stop; it stops before its next rep`);
+      console.log(`asked ${id} to stop; it stops before its next ${readSimBisect(id) ? 'probe' : 'rep'}`);
     });
   bisect
     .command('ls')

@@ -7,7 +7,7 @@
 // A card in the toast corner, never modal: ⌘Z keeps stepping while it is
 // open, and the "now" rule slides with the head. Rows hang from the same rail
 // as the org record (components/history/HistoryRail).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { Ban, CornerDownLeft, History, Network, Redo2, Undo2 } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -17,6 +17,7 @@ import type { UndoTimelineFlash, UndoTimelineMode } from "../../lib/undoTimeline
 import { HISTORY_STRUCK, HistoryFold, HistoryRailDot, HistoryRailLine } from "../history/HistoryRail";
 import { RecentVisitGlyph } from "../RecentVisitRow";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { claimKeys } from "../../shortcuts/keyOwnership";
 
 /** How many rows a peek shows around the head. */
 const PEEK_ABOVE = 3;
@@ -32,7 +33,7 @@ export type UndoTimelineViewProps = {
   onClose: () => void;
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
-  onKey?: (e: ReactKeyboardEvent) => boolean;
+  onKey?: (e: KeyboardEvent) => boolean;
   /** A ⌘Z stopped at this row (its undo widens access): select and mark it. */
   flash?: UndoTimelineFlash | null;
 };
@@ -141,39 +142,42 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
     return next;
   });
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (onKey?.(e)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const row = rows.find((r) => r.id === selected);
-    switch (e.key) {
-      case "Escape":
-        e.preventDefault();
-        onClose();
-        return;
-      case "Enter":
-        e.preventDefault();
-        act(row);
-        return;
-      case "ArrowRight":
-      case " ":
-        e.preventDefault();
-        if (row?.fold) toggleFold(row.id);
-        return;
-      case "o":
-      case "O":
-        e.preventDefault();
-        open(row);
-        return;
-      case "Home":
-        e.preventDefault();
-        if (rows[0]) setSelected(rows[0].id);
-        return;
-      case "End":
-        e.preventDefault();
-        if (rows.length) setSelected(rows[rows.length - 1]!.id);
-        return;
-    }
+  const move = (by: number) => {
+    const at = rows.findIndex((r) => r.id === selected);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, at === -1 ? 0 : at + by))];
+    if (next) setSelected(next.id);
   };
+
+  // Every key the card handles, and every other plain key, is the card's
+  // alone while it holds focus: it claims them in the app's first key
+  // listener (claimKeys), so no shortcut, no page listener in any phase and
+  // no React handler behind the card ever sees one. Tab still moves focus
+  // (which closes the card); chords the card does not take pass on.
+  const onKeyRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
+  onKeyRef.current = (e) => {
+    if (onKey?.(e)) return true;
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    if (e.key === "Tab" || e.key === "Shift") return false;
+    const row = rows.find((r) => r.id === selected);
+    const handled = (fn: () => void) => { e.preventDefault(); fn(); return true; };
+    switch (e.key) {
+      case "Escape": return handled(onClose);
+      case "Enter": return handled(() => act(row));
+      case "ArrowDown": return handled(() => move(1));
+      case "ArrowUp": return handled(() => move(-1));
+      case "ArrowRight":
+      case " ": return handled(() => { if (row?.fold) toggleFold(row.id); });
+      case "o":
+      case "O": return handled(() => open(row));
+      case "Home": return handled(() => { if (rows[0]) setSelected(rows[0].id); });
+      case "End": return handled(() => { if (rows.length) setSelected(rows[rows.length - 1]!.id); });
+    }
+    return true;
+  };
+  useEffect(() => {
+    if (peek) return;
+    return claimKeys((e) => !!cardRef.current?.contains(e.target as Node | null) && onKeyRef.current(e));
+  }, [peek]);
 
   return (
     <div
@@ -197,7 +201,6 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
         shouldFilter={false}
         label="Undo history"
         tabIndex={-1}
-        onKeyDown={onKeyDown}
         data-owns-keys=""
         className="flex flex-col min-h-0 outline-none"
       >

@@ -4419,18 +4419,30 @@ export const sendConfigCommand = mutation({
       v.literal("config_read"),
       v.literal("config_write"),
       v.literal("config_create"),
-      v.literal("config_delete")
+      v.literal("config_delete"),
+      v.literal("line_profile_edit")
     ),
     args_json: v.optional(v.string()),
+    // The one machine that should answer (a project's file lives on the
+    // device that published its profile). Unset broadcasts, as before.
+    target_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
+    if (args.target_device_id) {
+      const device = await ctx.db
+        .query("devices")
+        .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.target_device_id!))
+        .first();
+      if (!device) throw new Error("Unknown device");
+    }
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: args.command,
       args: args.args_json,
       created_at: Date.now(),
+      ...(args.target_device_id ? { target_device_id: args.target_device_id } : {}),
     });
     return { command_id: commandId };
   },

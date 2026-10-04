@@ -246,17 +246,32 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
 }
 
 export function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: { content: string; timestamp: number; cmdName?: string; collapsed?: boolean }) {
-  const [expanded, setExpanded] = useState(false);
   const info = extractSkillInfo(content);
-  const skillName = cmdName || info?.name || "skill";
+  const body = content
+    .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
+    .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
+    .replace(/^Base directory for this skill:[^\n]*\n?/, "")
+    .replace(/<[^>]+>/g, "")
+    .trim();
+  return <FoldedPromptBlock label={`/${cmdName || info?.name || "skill"}`} preview={info?.preview} content={body} timestamp={timestamp} collapsed={collapsed} />;
+}
+
+/** A long prompt a machine wrote into the thread (a skill's expansion, a
+ *  role's brief), folded to one row that opens it. `collapsed` is the
+ *  condensed feed's label-only form. */
+export function FoldedPromptBlock({ label, preview, content, timestamp, collapsed }: { label: string; preview?: string; content: string; timestamp: number; collapsed?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const icon = (size: string) => (
+    <svg className={`${size} text-sol-cyan/70 shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+    </svg>
+  );
 
   if (collapsed) {
     return (
       <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
-        <svg className="w-3 h-3 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-        </svg>
-        <span className="font-mono text-sol-cyan/80 font-medium">/{skillName}</span>
+        {icon("w-3 h-3")}
+        <span className="font-mono text-sol-cyan/80 font-medium">{label}</span>
         <span className="text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
@@ -267,13 +282,12 @@ export function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: 
       <button
         onClick={() => setExpanded(e => !e)}
         className="group flex items-center gap-2 px-3 py-2 rounded-md bg-sol-bg-alt/40 border border-sol-border/30 hover:border-sol-cyan/30 transition-colors w-full text-left"
+        aria-expanded={expanded}
       >
-        <svg className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
-        </svg>
-        <span className="font-mono text-xs text-sol-cyan/80 font-medium">/{skillName}</span>
-        {info?.preview && !expanded && (
-          <span className="text-[11px] text-sol-text-dim truncate">{info.preview}</span>
+        {icon("w-3.5 h-3.5")}
+        <span className="font-mono text-xs text-sol-cyan/80 font-medium shrink-0">{label}</span>
+        {preview && !expanded && (
+          <span className="text-[11px] text-sol-text-dim truncate">{preview}</span>
         )}
         <span className="ml-auto text-sol-text-dim text-[10px] shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         <svg className={`w-3 h-3 text-sol-text-dim transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -286,12 +300,7 @@ export function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: 
             remarkPlugins={entityRemarkPlugins}
             rehypePlugins={MESSAGE_MD_REHYPE}
             components={MESSAGE_MD_COMPONENTS}
-          >{content
-            .replace(/<command-name>[^<]*<\/command-name>\s*/g, "")
-            .replace(/<command-message>[^<]*<\/command-message>\s*/g, "")
-            .replace(/^Base directory for this skill:[^\n]*\n?/, "")
-            .replace(/<[^>]+>/g, "")
-            .trim()}</ReactMarkdown>
+          >{content}</ReactMarkdown>
         </div>
       )}
     </div>
