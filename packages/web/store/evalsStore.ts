@@ -27,7 +27,7 @@ export interface EvalsResource<T = unknown> {
 /** Why the evals cannot answer, in words a person can act on. */
 export const EVALS_UNAVAILABLE_WORDS: Record<Exclude<EvalsUnavailableReason, "child-crashed">, string> = {
   "no-bun": "bun is not on the daemon's PATH, so it cannot start the evals process.",
-  "no-checkout": "No codecast checkout on this machine has run ./evals: EVALS_HOME/checkout.json is missing.",
+  "no-checkout": "EVALS_HOME/checkout.json is missing: ./evals writes it on every run.",
   "checkout-not-owned": "The checkout that EVALS_HOME/checkout.json names is not owned by this user.",
   "checkout-bad-header": "The checkout's ./evals script does not start with the known header.",
   "checkout-not-toplevel": "The checkout that EVALS_HOME/checkout.json names is not a git toplevel.",
@@ -51,7 +51,10 @@ export function classifyEvalsFailure(e: unknown): Pick<EvalsState, "connection" 
   const reason = e.body.reason;
   if (e.status === 502 || reason === "child-crashed") return { connection: "child-crashed", unreachableReason: "none", unreachableDetail: e.body.error, stderr: e.body.stderr ?? [] };
   if (reason && CHECKOUT_REASONS.has(reason)) {
-    return { connection: "no-checkout", unreachableReason: "none", unreachableDetail: EVALS_UNAVAILABLE_WORDS[reason as keyof typeof EVALS_UNAVAILABLE_WORDS], stderr: null };
+    // The daemon's own words name the checkout and what is wrong with it; the table covers a bare reason.
+    const said = e.body.error?.trim();
+    const detail = said ? `${said[0].toUpperCase()}${said.slice(1)}${/[.!?]$/.test(said) ? "" : "."}` : EVALS_UNAVAILABLE_WORDS[reason as keyof typeof EVALS_UNAVAILABLE_WORDS];
+    return { connection: "no-checkout", unreachableReason: "none", unreachableDetail: detail, stderr: null };
   }
   // A 404 the child wrote names a missing id; one with no reason is a daemon without /evals.
   if (e.status === 404 && !reason) return { connection: "no-daemon", unreachableReason: "old-daemon", unreachableDetail: e.body.error, stderr: null };

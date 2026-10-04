@@ -1,15 +1,14 @@
 import Link from "next/link";
 import { ShortId } from "../../ShortId";
-import { useInboxStore, type TaskDetail } from "../../../store/inboxStore";
-import { useSyncTaskDetail } from "../../../hooks/useSyncTasks";
+import { useInboxStore } from "../../../store/inboxStore";
 import { useTaskRow } from "../../../hooks/useThreadPreviews";
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { rowOf, taskIdOf } from "../../../lib/threadRows";
 import { TaskStatusBadge } from "../../TaskStatusBadge";
 import { Badge } from "../../ui/badge";
-import { Avatar, TaskCommentStream, TimeAgo } from "../../tasks/TaskCommentStream";
+import { Avatar, TimeAgo } from "../../tasks/TaskCommentStream";
+import { TaskInlineThread } from "../../tasks/TaskInlineThread";
 import { IssueLink } from "../../tasks/IssueLink";
-import { MarkdownRenderer } from "../../tools/MarkdownRenderer";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 // The task kind: the task's comment stream. The row is the short id, the
@@ -68,9 +67,7 @@ export function TaskMeta({ card }: { card: ThreadCardModel }) {
 export function TaskExpanded({ card, seen, frozenReadAt, focusComposer }: { card: ThreadCardModel; present: boolean; seen: boolean; frozenReadAt: number; focusComposer: boolean }) {
   const row = rowOf(card);
   const taskId = taskIdOf(card);
-  // The detail feeder fills tasks[id].comments with the full server set; the
-  // page's own query, so a reply here reconciles the same way it does there.
-  useSyncTaskDetail(taskId);
+  // TaskInlineThread mounts the detail feeder that fills tasks[id].comments.
   const task = useTaskRow(taskId);
 
   const commentCount = task?.comments?.length ?? 0;
@@ -86,23 +83,13 @@ export function TaskExpanded({ card, seen, frozenReadAt, focusComposer }: { card
     useInboxStore.getState().markThreadRead("task", row.root_key);
   }, [seen, row.root_key, row.last_activity_at, row.last_read_at, row.unread, commentCount]);
 
-  const comments = task?.comments ?? EMPTY_COMMENTS;
-
-  const desc = (task?.description ?? "").trim();
-
   return (
     <div className="th-card-open th-card-open-task">
-      {desc && (
-        <details className="th-task-desc">
-          <summary>Description</summary>
-          <MarkdownRenderer content={desc} className="text-sm text-sol-text prose-sm prose-invert max-w-none" />
-        </details>
-      )}
       {/* The input is always ready; the focus grab rides only the reader's
           own `r`, so opening a row never steals the keyboard from the walk. */}
-      <TaskCommentStream shortId={task?.short_id} comments={comments} composerAutoOpen composerAutoFocus={focusComposer} newSince={frozenReadAt} clampComments />
+      <TaskInlineThread taskId={taskId} newSince={frozenReadAt} focusComposer={focusComposer} />
     </div>
   );
 }
 
-const EMPTY_COMMENTS: NonNullable<TaskDetail["comments"]> = [];
+

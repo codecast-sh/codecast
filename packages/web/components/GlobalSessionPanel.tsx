@@ -15,6 +15,7 @@ import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
 import { SessionErrorBanner, SessionResumeBanner, sessionLooksAbandoned } from "./SessionErrorBanner";
 import { AppLoader } from "./AppLoader";
+import { LoginCodePaste } from "./LoginCodePaste";
 import type { ConversationData } from "./conversation/types";
 import { threadStateView } from "../lib/threadState";
 import { ORG_STATE_META } from "./org/orgMeta";
@@ -260,6 +261,7 @@ type LoginFlowState = {
   status: "pending" | "confirmed" | "rejected";
   email?: string;
   reason?: string;
+  url?: string;
   started_at: number;
   finished_at?: number;
   revived?: number;
@@ -347,6 +349,7 @@ export function SignInCta({
           >
             Page didn&apos;t open? Relaunch the sign-in
           </button>
+          {flow?.status === "pending" && <LoginCodePaste deviceId={device.device_id} flow={flow} />}
         </div>
       </div>
     );

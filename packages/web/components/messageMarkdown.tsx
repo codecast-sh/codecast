@@ -15,6 +15,7 @@ import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityC
 import { MarkdownImg, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
 import { CodeBlock } from "./CodeBlock";
+import { MarkdownReplyQuote } from "./ReplyQuote";
 import { tryRenderCastDiff } from "./InlineDiff";
 import { tryRenderCanvas } from "./HtmlSnippet";
 
@@ -54,6 +55,8 @@ export const MESSAGE_MD_COMPONENTS = {
   p: ImageRowParagraph,
   pre: ({ node, children, ...props }: any) => renderMarkdownPre(node, children, props),
 };
+// A user's blockquote is a quote they replied to (the quote tool writes one).
+export const USER_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, blockquote: MarkdownReplyQuote };
 
 // User messages are typed (or pasted) as plain text, not authored markdown: a
 // single newline is a real line break, and a literal <tag> is content, not

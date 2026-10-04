@@ -1,7 +1,7 @@
 import { useMemo, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { callRecordingUrlWindow, humanizeConvexError, type CallRecordingStopReason } from "@codecast/shared/contracts";
+import { callRecordingUrlWindow, humanizeConvexError } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useFeederError } from "./useSyncCollection";
 import { useConvexSync } from "./useConvexSync";
@@ -13,8 +13,9 @@ import { subscribeWalkie, walkieCallState } from "../lib/calls/walkie";
 import { syncTransaction } from "../store/syncTransaction";
 import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { abandonRecordingPress } from "../lib/calls/recordingPress";
-import { roomRecordingLive, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
-export { roomRecordingFields, roomRecordingLive, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
+import { roomRecordingLive, roomRecordingOn, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
+export { roomRecordingFields, roomRecordingLive, roomRecordingOn, type RoomRecordingFields, type RoomRecordingLive } from "../lib/calls/roomRecordingFields";
+export { useRoomRecordingEnded, type RoomRecordingEnd } from "../lib/calls/roomRecordingEnd";
 
 // A huddle's video recording, as the room's people see it (convex
 // callRecordings).
@@ -32,17 +33,6 @@ export { roomRecordingFields, roomRecordingLive, type RoomRecordingFields, type 
 // useRoomRecordingEnded, an enrichment query, so a server without it degrades
 // to "Recording stopped".
 
-/** How the room's last run ended (convex roomRecordingEnd): still being
- *  finished, finished, or failed, why, and who stopped it if somebody did.
- *  Absent on a server older than it. */
-export type RoomRecordingEnd = {
-  run_id: string;
-  status: "stopping" | "ready" | "failed";
-  stop_reason: CallRecordingStopReason | null;
-  error: string | null;
-  stopped_by: { id: string; name: string } | null;
-};
-
 const rowOf = (s: any, roomKey: string | null | undefined): RoomRecordingFields | undefined =>
   roomKey ? s.callRooms?.[roomKey] : undefined;
 
@@ -51,12 +41,12 @@ const rowOf = (s: any, roomKey: string | null | undefined): RoomRecordingFields 
 // lock or a transcription switch.
 const recordingSig = (row: RoomRecordingFields | undefined): string =>
   row
-    ? `${row.recording ? 1 : 0}|${row.recording_status}|${row.recording_run_id}|${row.recording_by_id}|${row.recording_by_name}|${row.recording_requested_at}|${row.recording_started_at}|${row.recording_configured}`
+    ? `${row.recording ? 1 : 0}|${row.recording_status}|${row.recording_run_id}|${row.recording_by_id}|${row.recording_by_name}|${row.recording_requested_at}|${row.recording_started_at}|${row.recording_configured}|${row.recording_unavailable}|${row.recording_stop_requested_at}|${row.recording_video_shared ? 1 : 0}`
     : "";
 
 /** Is the room being recorded right now (a run starting or filming)? */
 export function useRoomRecordingOn(roomKey: string | null | undefined): boolean {
-  return useInboxStore((s: any) => !!rowOf(s, roomKey)?.recording);
+  return useInboxStore((s: any) => roomRecordingOn(s, roomKey));
 }
 
 /** The room this person is seated in, from any window. On desktop the voice
@@ -76,21 +66,16 @@ function subscribeSeat(cb: () => void): () => void {
   return () => offs.forEach((off) => off());
 }
 
-/** How the room's last run ended, for the notice that says so: undefined
- *  while loading, null when it cannot be known here. */
-export function useRoomRecordingEnded(roomKey: string | null | undefined): RoomRecordingEnd | null | undefined {
-  const { data, error } = useQueryNoThrow(api.callRecordings.getRoomRecording, roomKey ? { room_key: roomKey } : "skip");
-  if (error || data === null) return null;
-  return data === undefined ? undefined : ((data as { ended?: RoomRecordingEnd | null }).ended ?? null);
-}
-
 /** The red mark for a room, as recordingMarkStatus settles it, with the run
- *  it was settled from (the clock, who pressed) and whether a press could
- *  work on this server (undefined until the room's row says). */
+ *  it was settled from (the clock, who pressed), whether a press could work
+ *  on this server (undefined until the room's row says), and why it cannot
+ *  right now when the server is set up but LiveKit is refusing (null when it
+ *  can). */
 export function useRoomRecordingMark(roomKey: string | null | undefined): {
   status: RoomRecordingLive["status"] | null;
   live: RoomRecordingLive | null;
   configured: boolean | undefined;
+  unavailable: string | null;
 } {
   const sig = useInboxStore((s: any) => recordingSig(rowOf(s, roomKey)));
   const press = useRoomRecordingPress(roomKey);
@@ -101,6 +86,7 @@ export function useRoomRecordingMark(roomKey: string | null | undefined): {
       status: recordingMarkStatus({ press, flag: !!row?.recording, live }),
       live: live ?? null,
       configured: row?.recording_configured ?? undefined,
+      unavailable: row?.recording_unavailable ?? null,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the row is read through its signature
   }, [roomKey, sig, press]);
@@ -131,14 +117,21 @@ const subscribePresses = (fn: () => void) => {
   return () => void pressListeners.delete(fn);
 };
 
-// When this window last pressed Stop on a room: the person who stopped a
-// recording is not told that it stopped.
-const stops = new Map<string, number>();
-const STOPPED_HERE_MS = 30_000;
+// The run this window's last Record press made in each room (the press's
+// answer, startRecording's recording_id). A run LiveKit refuses can begin and
+// fail between two pushes, so the room's row may never show it live; the
+// presser is still told why, by matching the room's end to this run
+// (useRecordingNotices).
+const pressedRuns = new Map<string, string>();
 
-/** Did this window stop the room's recording a moment ago? */
-export function stoppedHere(roomKey: string): boolean {
-  return Date.now() - (stops.get(roomKey) ?? 0) < STOPPED_HERE_MS;
+/** The run this window's last Record press in the room made, if any. */
+export function pressedRunOf(roomKey: string): string | null {
+  return pressedRuns.get(roomKey) ?? null;
+}
+
+/** Note the run a press made (exported for the hook's test). */
+export function notePressedRun(roomKey: string, runId: string): void {
+  pressedRuns.set(roomKey, runId);
 }
 
 /** This window's press on the room still in flight: true for Record, false
@@ -164,17 +157,18 @@ export function setRoomRecording(roomKey: string, on: boolean): Promise<void> {
   if (presses.has(roomKey)) return Promise.resolve();
   const press: Press = { on, at: Date.now() };
   notePress(roomKey, press);
-  if (!on) stops.set(roomKey, press.at);
   return useInboxStore
     .getState()
     .setRoomRecording(roomKey, on, press.at)
     .then(
-      () => undefined,
+      (res: unknown) => {
+        const made = on && res && typeof res === "object" ? (res as { recording_id?: unknown; existing?: unknown }) : null;
+        if (made && typeof made.recording_id === "string" && !made.existing) notePressedRun(roomKey, made.recording_id);
+      },
       (err: unknown) => {
         if (isParkedDispatchError(err)) return;
         const refused = isRefusedDispatchError(err);
         if (!refused) abandonRecordingPress(press.at);
-        if (!on) stops.delete(roomKey);
         useInboxStore.getState().undoRoomRecordingPress(roomKey, on);
         toast.error(
           refused
@@ -305,6 +299,12 @@ export type CallRecordings = {
   configured: boolean;
   share_link: boolean;
   video_shared: boolean;
+  /** Room videos finished after the video was put on the link, which the
+   *  link does not show until somebody includes them again. */
+  video_later?: number;
+  /** Whether this viewer may put the video on the link (the presser of every
+   *  room video, or a team admin); taking it off is anyone's. */
+  can_share_video?: boolean;
   /** This window deleted a run of the call, at this time (store
    *  deleteCallRecording); the thread's line says so for everyone else. */
   deleted_here_at?: number;
@@ -336,7 +336,7 @@ export function useCallRecordingUrlWindow(): number {
 // URLs are signed for a window, though, so an answer held past them is not
 // painted (useCallRecordings).
 
-const CALL_FACTS = ["short_id", "call_started_at", "call_ended_at", "configured", "share_link", "video_shared"] as const;
+const CALL_FACTS = ["short_id", "call_started_at", "call_ended_at", "configured", "share_link", "video_shared", "video_later", "can_share_video"] as const;
 type CallRecordingFacts = Omit<CallRecordings, "recordings" | "transcript_id"> & { _id: string };
 type StoredRecordingRow = CallRecordingRow & { transcript_id: string };
 
@@ -390,6 +390,22 @@ function applyCallRecordings(data: CallRecordings | null | undefined): void {
   });
 }
 
+/** The server answered null for a call the store may hold: the viewer can no
+ *  longer read it (removed from the team, the session made private, calls
+ *  switched off), or it is gone. Its files and facts leave the store at once,
+ *  so no player or frame embed keeps playing a signed URL until it lapses.
+ *  Keyed by the full id every caller asks under, the id the facts row and
+ *  the files' transcript_id carry. */
+export function forgetCallRecordings(call: string): void {
+  const st = useInboxStore.getState() as any;
+  if (!callFactsOf(st, call) && !Object.values(st.callRecordings ?? {}).some((r: any) => r.transcript_id === call)) return;
+  seenFiles.delete(call);
+  syncTransaction(() => {
+    st.syncTable("callRecordings", [], { isDelta: true, pruneAbsentScope: (r: any) => r.transcript_id === call });
+    st.syncTable("callRecordingCalls", [], { isDelta: true, pruneAbsentScope: (r: any) => r._id === call });
+  });
+}
+
 // Every field a reader paints: the player and the notices (status, clock,
 // URL, who started it, whose screen), the chips (grouped by identity) and
 // the sort (requested_at). The rest of a row never changes after insert.
@@ -428,7 +444,7 @@ export function useCallRecordings(call: string | null | undefined): CallRecordin
   const args = call && authSettled ? { call, url_window: urlWindow } : ("skip" as const);
   const { data, error } = useQueryNoThrow(api.callRecordings.webCallRecordings, args);
   useFeederError("callRecordings.webCallRecordings", error);
-  useConvexSync(data as CallRecordings | null | undefined, applyCallRecordings);
+  useConvexSync(data as CallRecordings | null | undefined, (answer) => (answer ? applyCallRecordings(answer) : call && forgetCallRecordings(call)));
 
   const factsSig = useMemo(
     () =>

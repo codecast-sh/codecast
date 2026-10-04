@@ -76,6 +76,8 @@ export type OffloadCandidate = {
      * attesting never marks them verified.
      */
     pending: string[];
+    /** Worth knowing, never a reason to stay (helpers the laptop's hooks call that the host lacks). */
+    notes?: string[];
     /** Why this destination fits or does not, from observed work (e.g. Xcode seen). */
     fit?: string;
   }>;

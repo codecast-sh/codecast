@@ -28,7 +28,7 @@ describe("Escape is forwarded on every press, stamped with the press time", () =
   const body = src.slice(start, dispatch);
 
   test("every composer sends Escape through the one hook", () => {
-    for (const rel of ["ConversationView.tsx", "threads/kinds/SessionKind.tsx"]) {
+    for (const rel of ["ConversationView.tsx", "conversation/SessionInlineThread.tsx"]) {
       const surface = read(rel);
       expect(surface, rel).toContain("useSessionEscape(");
       expect(surface, rel).not.toContain('"sendEscapeToSession"');

@@ -415,6 +415,9 @@ export const UNDO_IGNORE_KEYS: ReadonlySet<string> = new Set([
 
 const BRIDGED_FIELD_SET: ReadonlySet<string> = new Set(BRIDGED_FIELDS);
 
+// Set by beforeReplay, read by the afterReplay of the same synchronous replay.
+let replayBridgeTs = 0;
+
 const UNDO_CONFIG: UndoConfig = {
   specs: UNDO_SPECS,
   replayAction: "applyUndoPatches",
@@ -422,14 +425,25 @@ const UNDO_CONFIG: UndoConfig = {
   stampFields: new Set(["updated_at"]),
   // A created row's echo carries the server's own created_at (a bookmark).
   serverAssignedFields: new Set(["created_at"]),
+  // archiveDoc deletes the row here, but the server keeps it with archived_at
+  // set and the sync log delivers it that way (docs.webGetByIds), so an
+  // archived doc that synced back is still the archive the undo takes back.
+  tombstone: (store, row) => (store === "docs" || store === "docDetails") && (row as { archived_at?: unknown } | undefined)?.archived_at != null,
   ignoreKeys: UNDO_IGNORE_KEYS,
-  beforeReplay: () => declareViewNav("undo"),
+  beforeReplay: () => {
+    // The bridge stamp predates the replay's dispatch: a sibling's
+    // acknowledgement skips a lock newer than the send it acknowledges.
+    replayBridgeTs = Date.now();
+    declareViewNav("undo");
+  },
   restoreView: (draft, field, value) => undoStoreBinding?.restoreView(draft, field, value),
   afterReplay: (entry, dir, applied) => {
     if (dir !== "undo") return;
     // Tell sibling windows the exact restored values of the bridged fields,
-    // one message per row under one timestamp. A redo re-runs the original
-    // action, which announces its own gesture.
+    // one message per row under one timestamp. The message is exact: these
+    // are the values the replay dispatched, so a sibling locks only them and
+    // the replay's acknowledgement retires every one. A redo re-runs the
+    // original action, which announces its own gesture.
     const byId = new Map<string, Partial<Record<BridgedField, number | boolean | null>>>();
     for (const cell of applied) {
       if ((cell.store !== "sessions" && cell.store !== "conversations") || !cell.field) continue;
@@ -452,10 +466,10 @@ const UNDO_CONFIG: UndoConfig = {
       readded.set(cell.id, row);
     }
     if (byId.size > 0 || readded.size > 0) {
-      const ts = Date.now();
+      const ts = replayBridgeTs || Date.now();
       const userId = undoStoreBinding?.bridgeUserId() ?? null;
       if (readded.size > 0) broadcastGesture({ kind: "unforget", rows: [...readded.values()], ts }, userId);
-      for (const [id, fields] of byId) broadcastGesture({ kind: "fields", id, fields, ts }, userId);
+      for (const [id, fields] of byId) broadcastGesture({ kind: "fields", id, fields, exact: true, ts }, userId);
     }
     runUndoRevert(entry, applied);
   },

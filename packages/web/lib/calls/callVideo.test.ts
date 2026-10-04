@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { callMsOf, callVideoNotice, callVideoRuns, fileSecondsAt, screenChips, shownMomentNear, turnIndexAt, videoAt, type CallVideoFile } from "./callVideo";
+import {
+  callMsOf,
+  callVideoNotice,
+  callVideoRuns,
+  describeStretches,
+  fileSecondsAt,
+  filmedSpans,
+  noVideoWords,
+  screenChips,
+  shownMomentNear,
+  turnIndexAt,
+  videoAt,
+  videoStretches,
+  type CallVideoFile,
+} from "./callVideo";
 
 // A call that started at wall 1_000_000. One run pressed 65s in: the room's
 // file from 65s to 125s, Ann's screen from 80s to 110s. A second run from
@@ -33,6 +47,18 @@ describe("call video", () => {
     expect(videoAt([room, ann], T, 90_000, "screen")).toEqual({ file: ann, seconds: 10 });
     expect(videoAt([room, ann], T, 115_000, "screen")).toEqual({ file: room, seconds: 50 });
     expect(videoAt([room, ann, saving], T, 210_000)).toBeNull();
+  });
+
+  test("the page says which part of the call has video, and where the nearest is from a moment without", () => {
+    const later = file({ id: "run3", run_id: "run3", started_at: T + 300_000, duration_ms: 20_000 });
+    const spans = filmedSpans([room, ann, saving, later], T);
+    // A screen inside its run adds nothing; a run still saving plays nothing yet.
+    expect(videoStretches(spans)).toEqual([{ fromMs: 65_000, toMs: 125_000 }, { fromMs: 300_000, toMs: 320_000 }]);
+    expect(describeStretches(videoStretches(spans))).toBe("1:05–2:05, 5:00–5:20");
+    expect(noVideoWords(10_000, spans).jump).toEqual({ ms: 65_000, words: "The video starts at 1:05" });
+    expect(noVideoWords(280_000, spans).jump).toEqual({ ms: 300_000, words: "The video resumes at 5:00" });
+    expect(noVideoWords(400_000, spans).jump).toEqual({ ms: 319_000, words: "The nearest video is at 5:19" });
+    expect(noVideoWords(10_000).jump).toBeNull();
   });
 
   test("a ready file with no length covers nothing, as the shared rule has it", () => {

@@ -20,8 +20,10 @@ import { fmtCallLength } from "../../../../components/calls/speakers";
 import { Bullets, Callout, Pill, Prose, Section, ShareHead, SharedObjectPage } from "../../SharedObjectPage";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { CallVideoPlayer, type CallVideoHandle } from "../../../../components/calls/CallVideoPlayer";
-import { turnIndexAt, type CallVideoFile } from "../../../../lib/calls/callVideo";
+import { filmedSpans, lineSeqAt, turnIndexAt, videoStretches, type CallVideoFile } from "../../../../lib/calls/callVideo";
 import { useMediaMoment } from "../../../../hooks/useMediaMoment";
+import { seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../../../hooks/useCallMomentLanding";
+import { scrollIntoContainer } from "../../../../lib/scrollWithin";
 
 type SharedCall = NonNullable<FunctionReturnType<typeof api.publicShare.getSharedCall>>;
 
@@ -43,7 +45,7 @@ export default function SharedCallPage() {
       const el = first ? document.querySelector(`[data-turn="${first}"]`) : host;
       if (!el) return;
       clearInterval(timer);
-      el.scrollIntoView({ block: "center" });
+      scrollIntoContainer(el as HTMLElement, { block: "center" });
     }, 100);
     return () => clearInterval(timer);
   }, [anchorKey]);
@@ -95,28 +97,29 @@ function SharedCallBody({
   // A line clicked where no video shows says so where the video is (the
   // player's own line, as on the call page), until the next seek.
   const [missed, setMissed] = useState<number | null>(null);
-  const seekTo = (ms: number) => {
-    if (files.length > 0) return setMissed(playerRef.current?.seek(ms) === false ? ms : null);
-    const el = audioRef.current;
-    if (!el) return;
-    el.currentTime = Math.max(0, ms / 1000);
-    void el.play().catch(() => {});
-  };
+  const target: CallMediaTarget = { hasVideo: files.length > 0, player: playerRef, audio: audioRef, media, setMissed };
+  const seekTo = (ms: number) => seekCallMedia(target, ms);
   const activeIndex = hasMedia && mediaAt ? turnIndexAt(turns, mediaAt.ms, !mediaAt.playing) : null;
+  // The line being said inside that turn, and the stretches the shared video
+  // covers: the same rails the call page draws.
+  const activeSeq = activeIndex === null ? null : lineSeqAt(turns[activeIndex], mediaAt!.ms);
+  const stretches = useMemo(() => videoStretches(filmedSpans(files, call.started_at)), [files, call.started_at]);
 
-  // A link to a moment waits there, its line lit and in view. A call filmed
-  // with transcription off has video and no lines, and still lands, on the
-  // picture alone.
-  const landed = useRef(false);
-  useWatchEffect(() => {
-    if (momentMs === null || landed.current || (turns.length === 0 && files.length === 0)) return;
-    landed.current = true;
-    if (files.length > 0) setMissed(playerRef.current?.seek(momentMs, { play: false }) === false ? momentMs : null);
-    else if (audioRef.current) audioRef.current.currentTime = momentMs / 1000;
-    media.set({ ms: momentMs, playing: false });
-    const i = turnIndexAt(turns, momentMs, true);
-    if (i !== null) setTimeout(() => document.querySelector(`[data-turn="${turns[i].index}"]`)?.scrollIntoView({ block: "center" }), 80);
-  }, [momentMs, turns.length, files.length]);
+  // A link to a moment waits there, its line lit and in view, found inside
+  // this page's own transcript.
+  const threadRef = useRef<HTMLDivElement>(null);
+  useCallMomentLanding({
+    // The page holds one call per link; its start names it.
+    scope: String(call.started_at),
+    momentMs,
+    turns,
+    ready: true,
+    target,
+    lineEl: (i, seq) => {
+      const turn = threadRef.current?.querySelector<HTMLElement>(`[data-turn="${turns[i]?.index}"]`) ?? null;
+      return (seq !== null ? turn?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? turn;
+    },
+  });
 
   return (
     <>
@@ -166,6 +169,7 @@ function SharedCallBody({
             handleRef={playerRef}
             onTime={media.onTime}
             missedMs={missed}
+            onJump={seekTo}
           />
         </div>
       )}
@@ -183,6 +187,7 @@ function SharedCallBody({
       {turns.length > 0 && (
         <Section title="Transcript" count={turns.length}>
           <div
+            ref={threadRef}
             className="space-y-2"
             data-call-anchor={firstAnchored >= 0 ? anchorKey ?? undefined : undefined}
             data-first-turn={firstAnchored >= 0 ? turns[firstAnchored].index : undefined}
@@ -192,6 +197,7 @@ function SharedCallBody({
               compact={call.recording}
               isSelected={inAnchor}
               activeIndex={activeIndex}
+              {...(hasMedia ? { activeSeq, filmed: files.length > 0 ? stretches : undefined } : {})}
               onTurnClick={hasMedia ? (_i, _e, atMs) => seekTo(atMs) : undefined}
             />
           </div>

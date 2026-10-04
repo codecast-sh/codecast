@@ -88,6 +88,7 @@ const cast = <P>(c: LazyExoticComponent<ComponentType<P>>) =>
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
+const FeatureDeepDive = lazy(() => import("@/app/(marketing)/features/FeatureDeepDivePage"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
 const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
@@ -177,6 +178,7 @@ const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Memory = lazy(() => import("@/app/memory/page"));
 const Evals = lazy(() => import("@/app/evals/page"));
+const Ops = lazy(() => import("@/app/ops/page"));
 
 // Standalone shell pages (outside the shared shell — page-specific props / not tab-routable)
 const Explore = lazy(() => import("@/app/explore/page"));
@@ -261,6 +263,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "", component: cast(Landing), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "about", component: cast(About), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "features", component: cast(Features), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "features/:slug", component: cast(FeatureDeepDive), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "documentation", component: cast(Documentation), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "documentation/:slug", component: cast(DocumentationGuide), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "privacy", component: cast(Privacy), layout: "marketing", guestOk: true, guestKind: "public" },
@@ -367,6 +370,9 @@ export const ROUTES: RouteEntry[] = [
   // (components/evals/evalsPaths.ts), so a new view needs no route here.
   { path: "evals", component: cast(Evals), layout: "dashboardShell", tab: "/evals" },
   { path: "evals/*", component: cast(Evals), layout: "dashboardShell", tab: "/evals/*" },
+  // Ops the same way (components/ops/opsPaths.ts): tabs, issues and replays.
+  { path: "ops", component: cast(Ops), layout: "dashboardShell", tab: "/ops" },
+  { path: "ops/*", component: cast(Ops), layout: "dashboardShell", tab: "/ops/*" },
 
   // -- Standalone shell pages (outside the shared shell) --
   // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in

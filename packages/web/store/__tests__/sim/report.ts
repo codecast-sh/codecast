@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PAYLOAD_DENYLIST } from "@codecast/convex/convex/syncLog";
 import { canonical } from "@codecast/shared/contracts/orgChange";
-import { formatOrder, type Channel, type Delivery } from "./net";
+import type { Channel, Delivery } from "./net";
+import { formatOrder, replayCommands } from "./replay";
 import type { SimLabels } from "./labels";
 
 export type SimMode = "scripted" | "interleave" | "order";
@@ -73,9 +74,6 @@ export function fieldDiff(table: string, server: Row | null, replica: Row | null
   return out;
 }
 
-const SHELL_SAFE = /^[\w:/.@%+=,-][\w:/.@%+=,#-]*$/;
-const shellWord = (s: string) => (SHELL_SAFE.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`);
-
 /**
  * The lines that replay a failure: the trace, the full recorded order, and,
  * once a shrink has run, the minimal order (scripts/sim.ts --shrink).
@@ -84,18 +82,8 @@ export function replayLines(ctx: Pick<FailureContext, "scenario" | "seed" | "ord
   return replayCommands(ctx.scenario, ctx.seed, ctx.order, ctx.row ? ctx.labels.label(ctx.row.id) : null, minimal);
 }
 
-/**
- * replayLines from plain facts, as result.json holds them (the trace label is the row's).
- * The order rides in the flag's own word (`--order="..."`): `bun run` drops an
- * empty argument, so `--order ""` reaches sim.ts as a bare flag and an empty
- * order (a failure before any delivery, or a shrink to nothing) would not replay.
- */
-export function replayCommands(scenario: string, seed: number, order: readonly Channel[], traceLabel: string | null, minimal?: readonly Channel[]): string[] {
-  const base = `bun run sim ${shellWord(scenario)} --seed ${seed}`;
-  const orderLine = (o: readonly Channel[]) => `${base} --order="${formatOrder(o)}"`;
-  const lines = [`${base} --trace${traceLabel ? ` ${shellWord(traceLabel)}` : ""}`, orderLine(order)];
-  return minimal ? [...lines, orderLine(minimal)] : lines;
-}
+/** replayLines from plain facts, as result.json holds them; built in the dependency-free replay.ts. */
+export { replayCommands };
 
 type Env = Record<string, string | undefined>;
 

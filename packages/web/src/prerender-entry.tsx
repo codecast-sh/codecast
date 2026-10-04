@@ -44,6 +44,7 @@ import BlogPullRequests from "@/app/(marketing)/blog/the-pull-request-that-knows
 import BlogTeamSees from "@/app/(marketing)/blog/what-your-team-sees/page";
 import CompareIndex from "@/app/(marketing)/compare/page";
 import Compare from "@/app/(marketing)/compare/ComparePage";
+import FeatureDeepDive from "@/app/(marketing)/features/FeatureDeepDivePage";
 
 export { SEO_ROUTES, SITE_URL, seoFor, cardHeading, cardImagePath } from "@/lib/seoRoutes";
 export { buildBlogFeed, BLOG_FEED_PATH } from "@/lib/blogFeed";
@@ -79,6 +80,7 @@ export function render(path: string): string {
             <Route index element={<Landing />} />
             <Route path="about" element={<About />} />
             <Route path="features" element={<Features />} />
+            <Route path="features/:slug" element={<FeatureDeepDive />} />
             <Route path="documentation" element={<Documentation />} />
             <Route path="documentation/:slug" element={<DocumentationGuide />} />
             <Route path="privacy" element={<Privacy />} />

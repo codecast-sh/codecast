@@ -14,6 +14,7 @@ import { useMentionLinkNavigation } from "@/hooks/useMentionLinkNavigation";
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
+const FeatureDeepDive = lazy(() => import("@/app/(marketing)/features/FeatureDeepDivePage"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
 const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
@@ -134,6 +135,7 @@ const AdminDaemonLogs = lazy(() => import("@/app/admin/daemon-logs/page"));
 const ConfigPage = lazy(() => import("@/app/config/page"));
 const Memory = lazy(() => import("@/app/memory/page"));
 const Evals = lazy(() => import("@/app/evals/page"));
+const Ops = lazy(() => import("@/app/ops/page"));
 const Sessions = lazy(() => import("@/app/sessions/page"));
 const Resources = lazy(() => import("@/app/resources/page"));
 const Windows = lazy(() => import("@/app/windows/page"));
@@ -165,6 +167,8 @@ const SettingsDesktop = lazy(() => import("@/app/settings/desktop/page"));
 const SettingsApps = lazy(() => import("@/app/settings/apps/page"));
 // Registers the issue feed kinds with ExternalEventRow before any feed paints.
 import "@/lib/issueEventStyles";
+// And a product's transitions (external-data.md X10).
+import "@/lib/opsEventStyles";
 
 function E({ name, children }: { name: string; children: ReactNode }) {
   return <ErrorBoundary name={name} level="panel">{children}</ErrorBoundary>;
@@ -183,6 +187,7 @@ export function App() {
               <Route index element={<E name="Landing"><Landing /></E>} />
               <Route path="about" element={<E name="About"><About /></E>} />
               <Route path="features" element={<E name="Features"><Features /></E>} />
+              <Route path="features/:slug" element={<E name="FeatureDeepDive"><FeatureDeepDive /></E>} />
               <Route path="documentation" element={<E name="Documentation"><Documentation /></E>} />
               <Route path="documentation/:slug" element={<E name="DocumentationGuide"><DocumentationGuide /></E>} />
               <Route path="privacy" element={<E name="Privacy"><Privacy /></E>} />
@@ -291,6 +296,9 @@ export function App() {
               {/* One area: app/evals/page.tsx reads its sub-paths (components/evals/evalsPaths.ts). */}
               <Route path="evals" element={<E name="Evals"><Evals /></E>} />
               <Route path="evals/*" element={<E name="Evals"><Evals /></E>} />
+              {/* One area: app/ops/page.tsx reads its sub-paths (components/ops/opsPaths.ts). */}
+              <Route path="ops" element={<E name="Ops"><Ops /></E>} />
+              <Route path="ops/*" element={<E name="Ops"><Ops /></E>} />
             </Route>
 
             {/* Standalone shell pages — kept outside the shared shell because they

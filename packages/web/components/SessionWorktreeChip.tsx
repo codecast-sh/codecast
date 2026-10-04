@@ -33,6 +33,7 @@ export function SessionWorktreeChip({ name, branch, preparing, shared, moving, h
   const text = seed && !busy ? `${label} @${seed.base.slice(0, 7)}` : label;
   return (
     <span
+      data-worktree-chip
       className={`inline-flex min-w-0 text-[9px] font-mono max-w-[130px] ${busy ? "text-sol-violet animate-pulse" : "text-sol-cyan"}`}
       title={title}
     >

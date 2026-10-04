@@ -21,9 +21,9 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { ChangeCardCause, ChangeCardView, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
+import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
-import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
+import { chosenOptions, decisionWaitLabel, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { proposalRefInContext } from "../org/staffingModel";
@@ -106,8 +106,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         ? <>answered by {detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"} under a grant</>
         : <span className="inline-flex items-center gap-1.5">answered by <PersonChip userId={answeredBy.id} fallbackName={answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person")} fallbackImage={answeredPerson?.avatar_url} /></span>;
 
-  // A settled change card says what happened: the verdict alone in the header
-  // pill, and who gave it and when as the card's last line.
+  // A settled change card says what happened once: the verdict, who gave it
+  // and when, as the card's last line.
   const answererName = !answeredBy
     ? "a person"
     : answeredBy.kind === "policy"
@@ -126,13 +126,6 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   // change and its proof, so for one these facts follow the card.
   const meta = (
     <dl className="mt-4 decision-meta text-[12px]">
-      {/* A card's page leads with the change, so the asker's own words move here. */}
-      {decision.card && decision.question.trim() !== decision.card.change.trim() && (
-        <>
-          <dt>question</dt>
-          <dd>{decision.question}</dd>
-        </>
-      )}
       <dt>asked by</dt>
       <dd><AskingSession decision={decision} /></dd>
       {proposalRefInContext(decision.context_md) && (
@@ -145,8 +138,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         <>
           <dt>task</dt>
           <dd>
-            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
-              {detail.task?.short_id ?? "task"}<span className="text-sol-text truncate max-w-[20rem]">{detail.task?.title}</span>
+            <Link href={`/tasks/${detail.task?.short_id ?? decision.task_id}`} className="inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal]">
+              <span className="whitespace-nowrap shrink-0">{detail.task?.short_id ?? "task"}</span><span className="text-sol-text truncate min-w-0 max-w-[20rem]">{detail.task?.title}</span>
             </Link>
             {decision.station && <span className="text-sol-text-dim"> held at <span className="text-sol-text">{decision.station}</span></span>}
           </dd>
@@ -190,6 +183,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
+      {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
         <Link href="/questions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
           <ArrowLeft className="w-3 h-3" /> The queue
@@ -198,39 +192,45 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
         {/* ── Header ── */}
         <header className="mt-4">
           <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
-            <span className="font-mono px-1.5 py-0.5 rounded border border-sol-border/60">{decision.short_id ?? "decision"}</span>
-            {outcome ? (
-              <span className={`px-1.5 py-0.5 rounded cc-outcome-pill cc-tone-${outcome.tone}`} data-outcome-pill>{outcome.verdict}</span>
-            ) : (
-              <span className={`px-1.5 py-0.5 rounded border ${pending ? (decision.blocking ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-blue/30 text-sol-blue") : "border-sol-border text-sol-text-dim"}`}>
-                {pending ? (decision.blocking ? "blocking · the session is parked" : "advisory · the agent proceeded") : decision.status}
+            {/* The wait leads, as its consequence for the reader; a settled
+                card says its verdict once, as the card's last line with who
+                and when, so the header keeps only the age. */}
+            {!outcome && (
+              // Words in the wait's tone, not a box: the headline under it is the thing to read.
+              <span className={pending ? (decision.blocking ? "text-sol-yellow" : "text-sol-blue") : "text-sol-text-dim"}>
+                {decisionWaitLabel(decision)}
               </span>
             )}
-            <span>asked {formatTimeAgo(decision.created_at, now)}</span>
+            <span>{!outcome && "· "}asked {formatTimeAgo(decision.created_at, now)}</span>
             {decision.resolved_at && !outcome && <span>· resolved {formatTimeAgo(decision.resolved_at, now)}</span>}
             {/* A gate on the line (the-line.md L4): the run this question pauses. */}
             {decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
+            {/* The id is for citing, so it trails the line. */}
+            <span className="font-mono opacity-70">{decision.short_id ?? "decision"}</span>
             <ShareControl label="decision" path={`/decisions/${decision.short_id ?? decision._id}`} publicShare={{ kind: "decision", id: decision._id, token: (decision as any).share_token }} className="ml-auto" />
           </div>
           {/* A change card leads with what changed, and its cause and goal under
               it, so the first line says what and the second says why. */}
-          <h1 className="mt-3 decision-question text-sol-text">{decision.card?.change || decision.question}</h1>
-          {decision.card ? <ChangeCardCause card={decision.card} className="mt-3" /> : meta}
+          {decision.card ? <ChangeCardHeadline card={decision.card} question={decision.question} className="mt-3" /> : (
+            <>
+              <h1 className="mt-3 decision-question text-sol-text">{decision.question}</h1>
+              {meta}
+            </>
+          )}
         </header>
 
         {/* Sticky, so it is a sibling of the page's sections, not inside the header. */}
         {verdictBar && decision.card && (
-          <div className="cc-verdict-bar" data-verdict-bar>
-            <ChangeCardView card={decision.card} density="line" recommend={false} change={false} />
+          <ChangeCardVerdictBar card={decision.card}>
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={pending ? onDismiss : undefined} keys recommendation={rec} record={outcome?.pill} />
-          </div>
+          </ChangeCardVerdictBar>
         )}
 
         {/* ── The change card (LE11), drawn natively; its page stays on the task ── */}
         {/* The agent's own context reads right under the card, before the facts. */}
         {decision.card && (
           <section className="mt-6">
-            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} />
+            <ChangeCardView card={decision.card} density="full" change={false} recommend={!verdictBar} outcome={outcome?.line} summarized={verdictBar} />
             {body && <div className="mt-6">{body}</div>}
             {meta}
           </section>

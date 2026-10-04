@@ -14,6 +14,8 @@
 // Every press commits at once (the hook calls performUndo/performRedo before
 // it feeds the event); the walk only decides what the card shows.
 
+import { undoKeyboardSince } from "@platform/engine";
+
 export const PEEK_DELAY_MS = 350;
 export const FADE_MS = 600;
 /** A second undo inside this window fires the milestone tip that names the timeline. */
@@ -101,4 +103,78 @@ export function walkTimer(state: WalkState): { ms: number; event: WalkEvent } | 
   if (state.phase === "armed") return { ms: PEEK_DELAY_MS, event: { type: "peekTimer" } };
   if (state.phase === "fading") return { ms: FADE_MS, event: { type: "fadeTimer" } };
   return null;
+}
+
+/**
+ * Whether a press from an empty text field belongs to the field rather than
+ * the app. The undo chords fire app undo from an empty field (the triage
+ * chords act from an empty composer and leave focus there), but a field
+ * edited after the entry the press would reach was recorded (undo) or taken
+ * back (redo) holds the newer history: clearing a draft and pressing ⌘Z
+ * brings the draft back.
+ */
+type StepHistory = {
+  items: readonly { id: string; ts: number; undoneAt?: number; redoneAt?: number }[];
+  undoOrder: readonly string[];
+  redoOrder: readonly string[];
+};
+
+export function fieldOwnsStep(dir: "undo" | "redo", lastEditAt: number | undefined, history: StepHistory): boolean {
+  if (lastEditAt === undefined) return false;
+  const id = (dir === "undo" ? history.undoOrder : history.redoOrder)[0];
+  const entry = id ? history.items.find((i) => i.id === id) : undefined;
+  if (!entry) return true;
+  const since = dir === "undo" ? undoKeyboardSince(entry) : (entry.undoneAt ?? entry.ts);
+  return lastEditAt > since;
+}
+
+/**
+ * fieldOwnsStep over the fields' edit times, which it keeps. A declined press
+ * goes to the browser, and the browser may have nothing left to take back
+ * (the field's edits are all undone). Then the press is the app's after all,
+ * and the field's edit time is dropped so later presses go straight there.
+ *
+ * `nativeCan` is the browser's own answer when it has a reliable one
+ * (Chromium's queryCommandEnabled, which the desktop app needs: its declined
+ * key reaches the native undo through the main process, later than any
+ * timer). Without one, a native undo or redo always fires an input, so when
+ * none arrived by the next task the browser had nothing and `fallback` runs
+ * the app's step.
+ */
+export function createFieldUndoGuard(opts: { now: () => number; defer: (fn: () => void) => void }) {
+  const edits = new WeakMap<object, number>();
+  // Fields with a check already waiting: one key press can reach the step
+  // more than once (each binding it matches), and gets one fallback.
+  const checking = new WeakSet<object>();
+  let inputs = 0;
+  return {
+    edited(field: object): void {
+      inputs += 1;
+      edits.set(field, opts.now());
+    },
+    /** True when the press is the field's; `fallback` runs if the field turns out to have nothing. */
+    declines(
+      dir: "undo" | "redo",
+      field: object,
+      history: StepHistory,
+      fallback: () => void,
+      nativeCan?: boolean,
+    ): boolean {
+      if (!fieldOwnsStep(dir, edits.get(field), history)) return false;
+      if (nativeCan === false) {
+        edits.delete(field);
+        return false;
+      }
+      if (nativeCan === true || checking.has(field)) return true;
+      checking.add(field);
+      const seen = inputs;
+      opts.defer(() => {
+        checking.delete(field);
+        if (inputs !== seen) return;
+        edits.delete(field);
+        fallback();
+      });
+      return true;
+    },
+  };
 }

@@ -37,6 +37,17 @@ export function stepPath(points: ReadonlyArray<{ x: number; y: number }>, endX?:
 
 const r = (v: number) => Math.round(v * 10) / 10;
 
+/** The smallest 1, 2 or 5 times a power of ten at or above v, for an axis top that reads as a round number. */
+export function niceCeil(v: number): number {
+  if (!(v > 0)) return 0;
+  const p = 10 ** Math.floor(Math.log10(v));
+  const step = [1, 2, 5, 10].find((m) => m * p >= v * (1 - 1e-9))!;
+  return Number((step * p).toPrecision(1));
+}
+
+/** A dollar amount on an axis, at most five characters for niceCeil's values: $50, $2, $0.05, 0.5¢. */
+export const axisUsd = (v: number) => (v <= 0 ? "$0" : v < 0.01 ? `${Number((v * 100).toPrecision(2))}¢` : `$${Number(v.toPrecision(2))}`);
+
 /** A stable offset in [-spread, spread] for a key, so a rep keeps its place in its column across renders. */
 export function jitter(key: string, spread: number): number {
   let h = 2166136261;

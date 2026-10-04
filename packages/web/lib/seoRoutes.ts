@@ -1,6 +1,7 @@
 import { GUIDES, guideHref } from "../app/(marketing)/documentation/guides/guides";
 import { POSTS } from "../app/(marketing)/blog/posts";
 import { COMPARISONS, compareHref } from "../app/(marketing)/compare/comparisons";
+import { FEATURE_DEEP_DIVES, featureHref } from "../app/(marketing)/features/catalog";
 
 /**
  * seoRoutes — the single source of truth for every publicly indexable route.
@@ -118,6 +119,12 @@ export const SEO_ROUTES: SeoEntry[] = [
     title: `${c.title} — which coding agent tool fits?`,
     heading: c.title,
     description: c.dek,
+  })),
+  ...FEATURE_DEEP_DIVES.map((f) => ({
+    path: featureHref(f.slug),
+    title: `${f.title} — Codecast`,
+    heading: f.title,
+    description: f.dek,
   })),
   ...GUIDES.map((g) => ({
     path: guideHref(g.slug),

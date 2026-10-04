@@ -236,19 +236,22 @@ function hourLabel(h: number): string {
 
 // X-axis ticks for a continuous day series: weekly on short ranges, month
 // starts otherwise, suppressing labels that would crowd the previous one.
-export function timeAxisLabels(dates: string[], toX: (i: number) => number): { label: string; x: number }[] {
+/** `minGap` is the least distance between two labels' centres, in px: a caller whose labels are wider than the default's passes their width plus a gutter. */
+export function timeAxisLabels(dates: string[], toX: (i: number) => number, minGap = 28): { label: string; x: number }[] {
   const labels: { label: string; x: number }[] = [];
   const mn = MONTHS;
+  // Under ten days a Monday-only axis leaves one label or none, so every day ticks.
+  const daily = dates.length <= 10;
   const weekly = dates.length <= 45;
   let lastM = -1;
   let lastX = -Infinity;
   for (let i = 0; i < dates.length; i++) {
     const [y, m, d] = dates[i].split("-").map(Number);
-    const isTick = weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM;
+    const isTick = daily || (weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM);
     if (!isTick) continue;
     lastM = m - 1;
     const x = toX(i);
-    if (x - lastX < 28) continue;
+    if (x - lastX < minGap) continue;
     lastX = x;
     labels.push({ label: weekly ? `${mn[m - 1]} ${d}` : mn[m - 1], x });
   }

@@ -50,7 +50,7 @@ import { linkSendsOutbound } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackMirrorPill } from "../../components/chat/SlackMirrorPill";
 import { useChannelSlackLink } from "../../hooks/useChannelSlackLink";
 import { WalkiePttButton } from "../../components/calls/WalkiePtt";
-import { GuestInviteChip, HuddleButton, OccupancyChip } from "../../components/calls/OccupancyChip";
+import { HuddleWithGuest, OccupancyChip } from "../../components/calls/OccupancyChip";
 import { chatViewRoomKey } from "../../lib/chatViews";
 import { channelHuddleMemberIds } from "@codecast/shared/contracts";
 import { NewMessageModal } from "../../components/chat/NewMessageModal";
@@ -695,7 +695,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                 </>
               )}
               {activeChannel && activeChannel.kind !== "dm" && !community && (
-                <HuddleButton
+                <HuddleWithGuest
                   roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)}
                   anchorTitle={`#${activeChannel.name}`}
                   channelMemberCount={channelHuddleMemberIds(activeChannel.kind, activeChannel.memberIds, teamMembers)?.length}
@@ -703,9 +703,6 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                   // A phone header has no room for the word beside the icon.
                   compact={narrowViewport}
                 />
-              )}
-              {activeChannel && activeChannel.kind !== "dm" && !community && (
-                <GuestInviteChip roomKey={chatViewRoomKey(activeChannel, viewerId, teamMembers)} compact={narrowViewport} className="shrink-0" />
               )}
               {!community && <SearchPill onOpen={() => setSearchOpen(true)} />}
               {!community && (

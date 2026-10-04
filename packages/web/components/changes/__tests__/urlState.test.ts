@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { TabParamsCtx } from "../../../lib/tabParams";
-import { EMPTY_URL, changesHref, clearFilters, parseChangesUrl, serializeChangesUrl, stepView, useChangesUrlState, type ChangesUrl } from "../useChangesUrlState";
+import { EMPTY_URL, changesHref, clearFilters, parseChangesUrl, serializeChangesUrl, useChangesUrlState, type ChangesUrl } from "../useChangesUrlState";
 import { pageSources } from "./pageSources";
 
 // The whole view lives in the query string (changes-page.md 6.3), so a link
@@ -20,14 +20,10 @@ const roundTrip = (s: ChangesUrl) => read(serializeChangesUrl(s));
 // and the round trip then proves serialize knows it too.
 const FULL = {
   repo: "codecast-sh/codecast",
-  d: "2026-10-02",
-  w: "2026-W40",
   areas: ["cli", "convex", "web"],
   person: "jd7a1b2c3d4e5f6g7h8j9k0",
   branches: "all",
   risk: true,
-  waiting: true,
-  surface: "desktop",
   q: "fix sync",
   story: "s_9f3a1c0e7b2d",
 } satisfies Required<ChangesUrl>;
@@ -74,7 +70,7 @@ describe("the Changes URL round trip", () => {
   test("a messy pasted link normalizes once, then stays put", () => {
     const messy = "area=web,%20cli,,web&q=%20%20&person=&risk=yes&waiting=1&branches=feature&repo=%20codecast-sh/codecast%20&d=2026-02-30&story=abc";
     const first = read(messy);
-    expect(first).toEqual({ ...EMPTY_URL, repo: "codecast-sh/codecast", areas: ["cli", "web"], waiting: true, story: "abc" });
+    expect(first).toEqual({ ...EMPTY_URL, repo: "codecast-sh/codecast", areas: ["cli", "web"], story: "abc" });
     const once = serializeChangesUrl(first);
     expect(serializeChangesUrl(read(once))).toBe(once);
   });
@@ -118,65 +114,50 @@ const pushes = (args: string) => /,\s*["']push["']\s*$/.test(args);
 
 describe("the Changes URL in history", () => {
   test("the hook reads the pane's query and writes canonical links, replacing unless told to push", () => {
-    const h = mountUrlState("area=web&d=2026-10-02");
-    expect(h.url).toEqual({ ...EMPTY_URL, d: "2026-10-02", areas: ["web"] });
+    const h = mountUrlState("area=web&repo=a/b");
+    expect(h.url).toEqual({ ...EMPTY_URL, repo: "a/b", areas: ["web"] });
     h.setUrl({ risk: true });
     h.setUrl({ story: "s_1" });
     h.setUrl((s) => ({ ...s, areas: [...s.areas, "cli"] }));
-    h.setUrl({ d: "2026-10-01", story: undefined }, "push");
+    h.setUrl({ repo: "c/d", story: undefined }, "push");
     // Each write builds on the one before it, though the router has not committed any of them yet.
     expect(h.calls).toEqual([
-      ["/changes?d=2026-10-02&area=web&risk=1", "replace"],
-      ["/changes?d=2026-10-02&area=web&risk=1&story=s_1", "replace"],
-      ["/changes?d=2026-10-02&area=cli,web&risk=1&story=s_1", "replace"],
-      ["/changes?d=2026-10-01&area=cli,web&risk=1", "push"],
+      ["/changes?repo=a/b&area=web&risk=1", "replace"],
+      ["/changes?repo=a/b&area=web&risk=1&story=s_1", "replace"],
+      ["/changes?repo=a/b&area=cli,web&risk=1&story=s_1", "replace"],
+      ["/changes?repo=c/d&area=cli,web&risk=1", "push"],
     ]);
   });
 
-  test("rapid presses are not lost: two steps back end two days back, and two toggles both stick", () => {
-    const today = "2026-10-03";
-    const h = mountUrlState("d=2026-10-02");
-    expect(h.setUrl((s) => stepView(s, -1, today), "push")).toBe(true);
-    expect(h.setUrl((s) => stepView(s, -1, today), "push")).toBe(true);
-    expect(h.calls.at(-1)).toEqual(["/changes?d=2026-09-30", "push"]);
+  test("rapid presses are not lost: two toggles both stick, and the same key twice toggles back", () => {
+    const h = mountUrlState("repo=a/b");
     h.setUrl((s) => ({ ...s, risk: !s.risk }));
     h.setUrl((s) => ({ ...s, branches: s.branches === "all" ? "main" : "all" }));
-    expect(h.calls.at(-1)).toEqual(["/changes?d=2026-09-30&branches=all&risk=1", "replace"]);
-    // The same key twice is a toggle on and off, not two "on"s.
+    expect(h.calls.at(-1)).toEqual(["/changes?repo=a/b&branches=all&risk=1", "replace"]);
     h.setUrl((s) => ({ ...s, risk: !s.risk }));
-    expect(h.calls.at(-1)).toEqual(["/changes?d=2026-09-30&branches=all", "replace"]);
-    // Clearing filters keeps the day the earlier presses reached.
+    expect(h.calls.at(-1)).toEqual(["/changes?repo=a/b&branches=all", "replace"]);
+    // Clearing filters keeps the repository and returns to main.
     h.setUrl((s) => ({ ...s, q: "sync" }));
     h.setUrl(clearFilters);
-    expect(h.calls.at(-1)).toEqual(["/changes?d=2026-09-30&branches=all", "replace"]);
-  });
-
-  test("stepView: a day or a week at a time, never past today, closing the open story", () => {
-    const today = "2026-10-03";
-    expect(stepView({ ...EMPTY_URL, story: "s_1" }, -1, today)).toEqual({ ...EMPTY_URL, d: "2026-10-02" });
-    expect(stepView({ ...EMPTY_URL, d: "2026-10-02" }, 1, today)).toEqual(EMPTY_URL);
-    const atToday = { ...EMPTY_URL };
-    expect(changesHref(stepView(atToday, 1, today))).toBe(changesHref(atToday));
-    expect(stepView({ ...EMPTY_URL, w: "2026-W40", d: "2026-10-01" }, -1, today)).toEqual({ ...EMPTY_URL, w: "2026-W39", d: "2026-10-01" });
-    const thisWeek = { ...EMPTY_URL, w: "2026-W40" };
-    expect(stepView(thisWeek, 1, today)).toBe(thisWeek);
+    expect(h.calls.at(-1)).toEqual(["/changes?repo=a/b", "replace"]);
   });
 
   test("a write that changes nothing makes no history entry", () => {
-    const h = mountUrlState("d=2026-10-02&area=web,cli");
+    const h = mountUrlState("repo=a/b&area=web,cli");
     h.setUrl({ areas: ["web", "cli"] });
     h.setUrl((s) => ({ ...s, q: "  ".trim() || undefined }));
-    h.setUrl({ d: "2026-10-02" }, "push");
+    h.setUrl({ repo: "a/b" }, "push");
     expect(h.calls).toEqual([]);
   });
 
-  test("the page pushes exactly the writes that move to another day, week or repo", () => {
-    const calls = setUrlCalls();
-    const travels = (args: string) => setsKey(args, "d|w|repo") || /\bstepView\(/.test(args);
+  test("the page pushes exactly the writes that move to another repository", () => {
+    // Pinning the default repository into the URL names the repository already
+    // on screen: it moves nothing, so it replaces and Back never stops on it.
+    const calls = setUrlCalls().filter((c) => !/^\{ repo: defaultRepo \}/.test(c.args));
+    const travels = (args: string) => setsKey(args, "repo");
     const travel = calls.filter((c) => travels(c.args));
-    // The scan sees the page: day and week travel, the repo picker, and the story and filter writes.
-    expect(travel.length).toBeGreaterThanOrEqual(5);
-    expect(calls.length - travel.length).toBeGreaterThanOrEqual(8);
+    expect(travel.length).toBeGreaterThanOrEqual(1);
+    expect(calls.length - travel.length).toBeGreaterThanOrEqual(5);
     const wrong = calls
       .filter((c) => pushes(c.args) !== travels(c.args))
       .map((c) => `${c.file}: setUrl(${c.args})`);

@@ -15,6 +15,7 @@ import { formatAgo, formatCountdown, labeledUsageWindows } from "@codecast/share
 import { usageTone } from "../lib/usageTone";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { LoginCodePaste } from "./LoginCodePaste";
 
 export type { CcUsage };
 
@@ -175,6 +176,7 @@ export type ProfileLoginFlow = {
   email?: string;
   profile?: string;
   reason?: string;
+  url?: string;
   started_at: number;
   finished_at?: number;
 };
@@ -239,6 +241,7 @@ export function ProfileSignInButton({
           >
             relaunch
           </button>
+          {flow?.status === "pending" && <LoginCodePaste deviceId={device.device_id} flow={flow} />}
         </span>
       </span>
     );

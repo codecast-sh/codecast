@@ -1,17 +1,18 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useDecisionAnswer } from "../hooks/useDecisionAnswer";
 import { usePendingPermissions } from "../hooks/useSyncPendingPermissions";
 import { isUsageLimitDialog } from "@codecast/shared/contracts";
 import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { useInboxStore, getProjectName } from "../store/inboxStore";
 import { openQuestionFromMessages, lastAssistantText, visibleOptions, type DecisionStepper } from "../hooks/useDecisionQueue";
-import { queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
+import { keysOwnedElsewhere, queueTier, routeQueueKey, messagesSinceAsk, needsDocumentPage, optionPageSlugs, type QueueItem } from "../lib/decisionQueue";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
-import { ChangeCardView } from "./decisions/ChangeCardView";
+import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
 import { useJumpToDecisionAsk } from "../hooks/useJumpToDecisionAsk";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { formatTimeAgo } from "../lib/messageNavigator";
@@ -69,10 +70,10 @@ import { RoleFace } from "./org/RoleFace";
 type Size = "full" | "line";
 
 export function SessionDecisionCard({ item, stepper }: { item: QueueItem; stepper: DecisionStepper | null }) {
-  const answerDecision = useInboxStore((s) => s.answerDecision);
-  const addOptimisticMessage = useInboxStore((s) => s.addOptimisticMessage);
-  const sendMessage = useInboxStore((s) => s.sendMessage);
-  const resolveSessionQuestion = useInboxStore((s) => s.resolveSessionQuestion);
+  const {
+    messages, needsMessages, poll, recentText, question, options, permissions, isPermissionCard, isInfraDialog,
+    answer: answerItem, answerFreeText: answerItemFreeText, dismiss: dismissItem,
+  } = useDecisionAnswer(item);
   const openSessionRoute = useOpenSession();
 
   const [size, setSize] = useState<Size>(() => (item.blocking || stepper ? "full" : "line"));
@@ -103,24 +104,6 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     return () => { for (const el of siblings) (el as any).inert = false; };
   }, [full]);
 
-  // A poll card has no authored payload, so its question and options come from
-  // the conversation itself — already in the store (useConversationMessages).
-  const needsMessages = item.source !== "decide";
-  const messages = useInboxStore((s) => s.messages[item.conversationId]);
-
-  // A permission-blocked session carries a tool name and an argument preview,
-  // not a question with options: render the real Approve/Deny card, which owns
-  // its own mutation and y/n keys — approving a command must never be reachable
-  // from the digit that answered the card before it in the queue.
-  const permissionsRaw = usePendingPermissions(item.source === "permission" ? item.conversationId : null);
-  const permissions = useMemo(
-    () => (permissionsRaw ?? []).filter((p: any) => !PERMISSION_SKIP_TOOLS.has(p.tool_name)),
-    [permissionsRaw]
-  );
-  const isPermissionCard = item.source === "permission" && permissions.length > 0;
-
-  const poll = useMemo(() => (needsMessages ? openQuestionFromMessages(messages as any[]) : null), [needsMessages, messages]);
-  const recentText = useMemo(() => (needsMessages ? lastAssistantText(messages as any[]) : undefined), [needsMessages, messages]);
 
   // How far behind the ask is: wall clock and — the sharper signal — how many
   // messages the session has produced since. A blocking ask with traffic after
@@ -156,22 +139,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
     if (!stepper) setSize("line");
   }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
-  // The session title is WHO is asking, never WHAT. A poll-sourced card
-  // renders no question text until the poll payload is readable from the
-  // transcript — showing the title as the question and swapping it out a beat
-  // later is exactly the "question changed under me" report.
-  const question = poll?.question.question ?? (item.source === "decide" ? item.question : "");
-  const options = useMemo(() => {
-    if (item.source === "decide") return item.options.map((o, index) => ({ label: o.label, description: o.description, index }));
-    return poll ? visibleOptions(poll.question) : [];
-  }, [item, poll]);
   const defaultLabel = item.defaultOption !== undefined ? options.find((o) => o.index === item.defaultOption)?.label : undefined;
 
-  // A usage/billing interstitial is not a decision about the work, and its
-  // options commit real money — exactly what a queue that advances on a digit
-  // must never put under your finger. Rendered un-answerable (no digits, no
-  // option buttons); skip or dismiss it, or open the session to handle it.
-  const isInfraDialog = item.source !== "decide" && isUsageLimitDialog(options.map((o) => o.label));
 
   // The kinds beyond a single choice (the-line.md L10: multi, rank, form)
   // answer through DecisionAnswerControls on the live store row, which
@@ -184,46 +153,20 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   // controls, which hold the digits and the Revise note.
   const card = decisionRow?.card;
   const richControls = (kind !== "single" || !!card) && !!decisionRow;
+  // A card's Ship / Revise / Drop sit in the decision page's pinned bar, above
+  // the card, so the card takes the sheet's width and the call stays in view.
+  const cardBar = !!card && richControls;
   const pageSlugs = item.source === "decide" ? optionPageSlugs(item.options) : [];
   const documentHref = item.source === "decide" && item.decisionId && needsDocumentPage(item) ? decisionHref({ _id: item.decisionId, short_id: item.shortId }) : null;
 
   const onDone = stepper?.onDone;
-  const answer = useCallback((index: number) => {
-    if (item.source === "decide" && item.decisionId) {
-      answerDecision(item.decisionId, { index });
-    } else if (poll) {
-      const content = buildSingleAnswerPayload(poll.question, index);
-      const clientId = addOptimisticMessage(item.conversationId, content);
-      sendMessage(item.conversationId, content, undefined, clientId);
-    }
-    onDone?.();
-  }, [item, poll, answerDecision, addOptimisticMessage, sendMessage, onDone]);
-
+  const answer = useCallback((index: number) => { answerItem(index); onDone?.(); }, [answerItem, onDone]);
   const answerFreeText = useCallback((text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    if (item.source === "decide" && item.decisionId) {
-      answerDecision(item.decisionId, { text: trimmed });
-    } else {
-      // No parsed poll needed: the free-text payload is the decline-then-type
-      // form, which the daemon can drive at any AskUserQuestion menu — this is
-      // how a buffered question (present in no transcript yet) gets answered.
-      const content = buildFreeTextPayload(trimmed);
-      const clientId = addOptimisticMessage(item.conversationId, content);
-      sendMessage(item.conversationId, content, undefined, clientId);
-    }
+    if (!text.trim()) return;
+    answerItemFreeText(text);
     onDone?.();
-  }, [item, answerDecision, addOptimisticMessage, sendMessage, onDone]);
-
-  // "I am not going to answer this." A `cast decide` row resolves as dismissed
-  // (the agent is not told); a poll/permission card is marked resolved in the
-  // store — it leaves the queue AND the rail's QUESTIONS section together, and
-  // returns only if the agent speaks again (the session itself keeps waiting).
-  const dismiss = useCallback(() => {
-    if (item.source === "decide" && item.decisionId) answerDecision(item.decisionId, { dismiss: true });
-    else resolveSessionQuestion(item.conversationId);
-    onDone?.();
-  }, [item, answerDecision, resolveSessionQuestion, onDone]);
+  }, [answerItemFreeText, onDone]);
+  const dismiss = useCallback(() => { dismissItem(); onDone?.(); }, [dismissItem, onDone]);
 
   const onExit = stepper?.onExit;
   // Off the inbox (the /questions stepper) "open" must leave for the inbox;
@@ -261,6 +204,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
       const target = e.target as HTMLElement | null;
       const action = routeQueueKey(e, {
         modalOpen: hasOpenModal(),
+        ownedElsewhere: keysOwnedElsewhere(target, rootRef.current),
         editing: !!target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable),
         inOwnFreeTextBox: !!target && target === otherRef.current,
         isPermissionCard,
@@ -445,7 +389,8 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
   const showUnreadable = needsMessages && !poll && !isPermissionCard && !isInfraDialog;
   const contextBlock = (card || reasoning || showRecent || showThreadState || item.reportSlug || showUnreadable) ? (
     <div className="decision-sheet-context min-w-0 space-y-4" data-reveal-span>
-      {card && <ChangeCardView card={card} density="inline" recommend={!richControls} />}
+      {/* The headline above already says the change and its cause. */}
+      {card && <ChangeCardView card={card} density="inline" change={false} recommend={!richControls} summarized={cardBar} />}
       {reasoning && (
         <div className="decision-body text-sm text-sol-text-muted border-l-2 border-sol-border pl-4" data-decision-context>
           {reasoning}
@@ -532,7 +477,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           </div>
         </div>
       )}
-      {escapeHatch}
+      {!cardBar && escapeHatch}
     </div>
   );
 
@@ -547,6 +492,7 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
         // body's leading), so the sheet reads like the page it stands for.
         // decision-sheet: the container the two-column layout queries.
         className="decision-doc decision-sheet absolute inset-0 z-40 flex flex-col bg-sol-bg outline-none"
+        data-card={cardBar ? "true" : undefined}
         onWheel={(e) => {
           // Scrolling up at the top of the question hands the pane to the thread.
           if (e.deltaY < 0 && (bodyRef.current?.scrollTop ?? 0) <= 0) shrinkByScroll();
@@ -577,11 +523,22 @@ export function SessionDecisionCard({ item, stepper }: { item: QueueItem; steppe
           <div className="decision-sheet-col mx-auto w-full px-6 pt-4 pb-6">
             {(askedLine || documentLink) && <div className="mb-2 flex items-center gap-3 flex-wrap">{askedLine}{documentLink}</div>}
             <DecisionProposalOrigin contextMd={item.contextMd} className="mb-2 text-[12px]" size="md" />
-            {question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
-            <div className="decision-sheet-grid" data-split={contextBlock ? "true" : "false"}>
-              {contextBlock}
-              {answerBlock}
-            </div>
+            {/* A card leads with its change, the way its page does. */}
+            {card
+              ? <ChangeCardHeadline card={card} question={question} className="mb-2" />
+              : question && <h1 className="decision-question text-sol-text mb-5">{question}</h1>}
+            {cardBar ? (
+              <>
+                <ChangeCardVerdictBar card={card!}>{answerBlock}</ChangeCardVerdictBar>
+                <div className="mt-6">{contextBlock}</div>
+                {escapeHatch}
+              </>
+            ) : (
+              <div className="decision-sheet-grid" data-split={contextBlock ? "true" : "false"}>
+                {contextBlock}
+                {answerBlock}
+              </div>
+            )}
           </div>
         </div>
         {optionsBelow && options.length > 0 && (

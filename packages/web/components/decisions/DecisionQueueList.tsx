@@ -19,6 +19,8 @@ import { DecisionCompactCard } from "./DecisionCompactCard";
 import { decisionHref } from "../../lib/decisionLinks";
 import { isStackedAsk } from "../../lib/decisionQueue";
 import { StackChecklist } from "./StackChecklist";
+import { QueueEmpty, type LastClosed } from "./QueueEmpty";
+import { cardOutcome, settledAgo } from "./ChangeCardView";
 
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 const api = _api as any;
@@ -26,6 +28,8 @@ const api = _api as any;
 const pendingWhere = isStackedAsk;
 const pendingSig = (d: SessionDecisionItem) => `${d.blocking}:${d.created_at}:${d.updated_at ?? 0}:${d.stack_id ?? ""}:${d.holder_key ?? ""}:${d.task_id ?? ""}`;
 const handledSig = (d: HandledDecisionItem) => `${d.status}:${d.resolved_at ?? 0}`;
+const answeredWhere = (d: SessionDecisionItem) => d.status === "answered" && !!d.resolved_at;
+const answeredSig = (d: SessionDecisionItem) => `${d.resolved_at ?? 0}:${d.answer_index ?? ""}`;
 
 // The queue (D5): every pending decision the viewer holds, grouped by stack,
 // then by scope, with the rows a lead holds under a grant folded away, then
@@ -68,6 +72,15 @@ export function DecisionQueueList() {
   }, [title, selected, createStackWith, activeTeamId]);
 
   const empty = groups.length === 0 && terminal.length === 0;
+  // The last answer on record, for the empty state: a card says what
+  // happened to its change (cardOutcome), any other decision that it was answered.
+  const answered = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: answeredWhere, sig: answeredSig });
+  const last = useMemo<LastClosed | null>(() => {
+    const d = answered.reduce<SessionDecisionItem | null>((m, x) => ((x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
+    if (!d) return null;
+    const outcome = d.card ? cardOutcome(d, "you", now) : null;
+    return { verdict: outcome?.verdict ?? "Answered", title: d.card?.change ?? d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
+  }, [answered, now]);
   // "Waiting on you" counts what a person must answer. Rows a lead holds
   // under a grant stay pending in the inbox (a person may still answer first)
   // but they are the lead's to clear, so they count on their own group header.
@@ -117,12 +130,7 @@ export function DecisionQueueList() {
           </div>
         )}
 
-        {empty && (
-          <div className="flex flex-col items-center justify-center py-24 gap-3 text-center">
-            <div className="text-2xl text-sol-text">Nothing needs you.</div>
-            <div className="text-sm text-sol-text-muted max-w-md">Your agents are working. New decisions appear here the moment an agent asks.</div>
-          </div>
-        )}
+        {empty && <QueueEmpty last={last} />}
 
         <div className="space-y-7">
           {groups.map((g) => (

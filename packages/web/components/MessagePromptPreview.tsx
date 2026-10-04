@@ -4,9 +4,10 @@ import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { messagePreview, type PromptImage } from "../lib/messagePreview";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { ImageLightbox, useImageGallery } from "./ImageGallery";
+import { QuotedText } from "./ReplyQuote";
 
 export function MessagePromptPreview({
-  content, images, messageId, variant = "row", textClassName = "", textRef, onTextClick,
+  content, images, messageId, variant = "row", textClassName = "", textRef, onTextClick, compactQuotes,
 }: {
   content: string;
   images?: PromptImage[];
@@ -16,6 +17,8 @@ export function MessagePromptPreview({
   textClassName?: string;
   textRef?: Ref<HTMLDivElement>;
   onTextClick?: MouseEventHandler<HTMLDivElement>;
+  // Quotes as one line each, for a clamped preview (rows always are).
+  compactQuotes?: boolean;
 }) {
   const preview = useMemo(() => messagePreview(content, images, src => !isRemoteImageSrc(src)), [content, images]);
   const urls = useStorageImageUrls(preview.images.map(image => image.storage_id));
@@ -30,7 +33,7 @@ export function MessagePromptPreview({
     <div data-prompt-preview={variant} className={`min-w-0 ${variant === "preview" ? "flex flex-col gap-2.5" : "flex items-start gap-2.5"}`}>
       {(preview.text || visible.length === 0) && (
         <div ref={textRef} className={`min-w-0 flex-1 break-words ${textClassName}`} onClick={onTextClick}>
-          {preview.text}
+          <QuotedText text={preview.text} compact={compactQuotes ?? variant === "row"} />
         </div>
       )}
       {visible.length > 0 && (

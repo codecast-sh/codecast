@@ -18,3 +18,12 @@ export function sessionTitle(state: any, id: string): string {
 export function counted(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
+
+/** A label's trailing "(…)" is a note on the change, not its name: a toast
+ *  shows the name as its line and the note under it, sentence-cased.
+ *  "Killed “X” (agent stays stopped on undo)" → ["Killed “X”", "Agent stays stopped on undo"]. */
+export function splitLabelNote(label: string): [title: string, note: string | undefined] {
+  const m = /^(.*\S)\s+\(([^()]+)\)$/.exec(label);
+  if (!m) return [label, undefined];
+  return [m[1]!, m[2]!.charAt(0).toUpperCase() + m[2]!.slice(1)];
+}

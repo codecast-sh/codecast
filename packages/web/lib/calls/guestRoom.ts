@@ -13,9 +13,9 @@ import {
   type Participant,
   type RemoteTrack,
 } from "livekit-client";
-import { callParticipantKind, type CallParticipantKind } from "@codecast/shared/contracts";
+import { callParticipantKind, isRoomMachineryKind, type CallParticipantKind } from "@codecast/shared/contracts";
 import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_PUBLISH } from "./livekitMedia";
-import { listDevices, mediaFailureReason, participantFlags, participantImage, participantTiles, type ParticipantTile } from "./callMedia";
+import { isMediaDenial, listDevices, mediaFailureReason, participantFlags, participantImage, participantTiles, type ParticipantTile } from "./callMedia";
 import { bindCallCursors } from "./callCursors";
 import { createMicMeter, type MicMeter } from "./micMeter";
 
@@ -70,6 +70,25 @@ export function canPickSpeaker(): boolean {
   return typeof HTMLMediaElement !== "undefined" && "setSinkId" in HTMLMediaElement.prototype;
 }
 
+/** Where the guest turns the camera and microphone back on, in this
+ *  browser's own words. A guest usually opens the link from a text, so the
+ *  likeliest browser is a phone's, and desktop Chrome's "icon in the address
+ *  bar" is a control an iPhone does not have: Safari keeps it under aA, other
+ *  iOS browsers in the system's Settings, Android Chrome behind the icon left
+ *  of the address. iPadOS reports itself as a Mac with a touch screen. */
+export function devicePermissionHint(
+  ua: string = typeof navigator === "undefined" ? "" : navigator.userAgent,
+  touchMac: boolean = typeof navigator !== "undefined" && /Mac/.test(navigator.platform || "") && (navigator.maxTouchPoints ?? 0) > 1,
+): string {
+  if (/iPhone|iPad|iPod/.test(ua) || touchMac) {
+    return /CriOS|FxiOS|EdgiOS|OPiOS/.test(ua)
+      ? "Open Settings on this device, find this browser, and allow Camera and Microphone."
+      : "Tap aA in the address bar, then Website Settings, and allow Camera and Microphone.";
+  }
+  if (/Android/.test(ua)) return "Tap the icon left of the address, then Permissions, and allow Camera and Microphone.";
+  return "Allow them from the icon in the address bar.";
+}
+
 export type DeviceLists = { mic: MediaDeviceInfo[]; camera: MediaDeviceInfo[]; speaker: MediaDeviceInfo[] };
 const NO_DEVICES: DeviceLists = { mic: [], camera: [], speaker: [] };
 
@@ -120,8 +139,6 @@ async function deviceGranted(kind: "camera" | "microphone"): Promise<boolean | n
     return null;
   }
 }
-
-const isDenial = (err: any) => err?.name === "NotAllowedError" || err?.name === "SecurityError";
 
 // ── The lobby ────────────────────────────────────────────────────────────────
 
@@ -225,7 +242,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
         this.set({ audio, video, micError: null, cameraError: null, micDenied: false, cameraDenied: false });
         this.startMeter();
       } catch (err) {
-        if (isDenial(err)) {
+        if (isMediaDenial(err)) {
           const [mic, camera] = await Promise.all([deviceGranted("microphone"), deviceGranted("camera")]);
           single = { mic: mic === true, camera: camera === true };
           if (!this.disposed) {
@@ -317,7 +334,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
       this.set({ video, cameraError: null, cameraDenied: false });
     } catch (err) {
       if (this.disposed) return;
-      this.set({ video: null, cameraError: await mediaFailureReason("camera", err), cameraDenied: isDenial(err) });
+      this.set({ video: null, cameraError: await mediaFailureReason("camera", err), cameraDenied: isMediaDenial(err) });
     }
   }
 
@@ -337,7 +354,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
       this.startMeter();
     } catch (err) {
       if (this.disposed) return;
-      this.set({ audio: null, micError: await mediaFailureReason("microphone", err), micDenied: isDenial(err) });
+      this.set({ audio: null, micError: await mediaFailureReason("microphone", err), micDenied: isMediaDenial(err) });
     }
   }
 
@@ -393,6 +410,23 @@ export type CallSnapshot = {
   error: string | null;
   choice: DeviceChoice;
 };
+
+/**
+ * Why the media let go, as the page treats it once the server has had its
+ * say. The server's view of the guest is the truth and the media's reason is
+ * a hint: codecast never closes a LiveKit room itself (an ending puts each
+ * guest out by name, which reads "removed"), so a "room closed" that arrives
+ * while the server still has the guest admitted is LiveKit's own doing (a
+ * node draining, a room it judged empty while a teammate reloaded) and not
+ * the meeting ending. Telling a guest "The call has ended" then, with the
+ * people still inside, loses the one person the host cannot easily get
+ * back; it is treated as a dropped connection, which reconnects on its own.
+ * Should the server disagree, the new token is refused and its view moves
+ * the page to the real ending.
+ */
+export function guestMediaEnding(ended: CallSnapshot["ended"], serverView: string | null | undefined): CallSnapshot["ended"] {
+  return ended === "room_closed" && serverView === "admitted" ? "lost" : ended;
+}
 
 export type HandedTracks = { video: LocalVideoTrack | null; audio: LocalAudioTrack | null };
 const NO_TRACKS: HandedTracks = { video: null, audio: null };
@@ -632,7 +666,7 @@ export class GuestCall extends Emitter<CallSnapshot> {
     const r = this.room;
     const all: Participant[] = [r.localParticipant, ...r.remoteParticipants.values()];
     const people: GuestPerson[] = all
-      .filter((p) => !!p.identity)
+      .filter((p) => !!p.identity && !isRoomMachineryKind(p.kind))
       .map((p) => ({
         identity: p.identity,
         name: p.name || p.identity,

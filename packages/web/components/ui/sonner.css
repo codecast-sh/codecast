@@ -185,13 +185,18 @@
   transform: translateY(0.5px);
 }
 /* [data-button] twice over: sonner's dark theme rule for the cancel has the
-   same weight as this one and loads after it, which painted a grey fill. */
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button] {
+   same weight as this one and loads after it, which painted a grey fill.
+   A toast whose one action is a side door, not the answer (the "Undid"
+   toast's History), wears it the same quiet way: cc-toast-quiet-action. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button],
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button] {
   color: var(--sol-text-muted);
   background: transparent;
   border-color: color-mix(in srgb, var(--sol-border) 50%, transparent);
+  box-shadow: none;
 }
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover {
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-cancel][data-button]:hover,
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-quiet-action [data-action][data-button]:hover {
   color: var(--sol-text);
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
   border-color: color-mix(in srgb, var(--sol-border) 80%, transparent);
@@ -228,4 +233,31 @@
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+
+/* The countdown: a toast whose action only works while it shows (Undo,
+   `countdownToast` in lib/persistentToast.ts) drains a hairline along its foot
+   over its life, so how long the answer stays open is on the card. It is a
+   background layer, so the card's rounded corners clip it, and it holds while
+   the stack is expanded under the pointer, which is when sonner holds the
+   timer. Under reduced motion it does not show. */
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown {
+  background-image: linear-gradient(color-mix(in srgb, var(--sol-cyan) 70%, transparent), color-mix(in srgb, var(--sol-cyan) 70%, transparent));
+  background-repeat: no-repeat;
+  background-position: left bottom;
+  background-size: 0% 2px;
+  animation: cc-toast-drain var(--toast-life, 4000ms) linear forwards;
+}
+.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown[data-expanded="true"] {
+  animation-play-state: paused;
+}
+@keyframes cc-toast-drain {
+  from { background-size: 100% 2px; }
+  to { background-size: 0% 2px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown {
+    animation: none;
+    background-image: none;
+  }
 }

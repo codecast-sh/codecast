@@ -254,4 +254,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   currentUser: "Profile and preference settings; never undoable, and the undo binding ignores the key.",
   migrationBatches:
     "Written only by startResourceOffload and cancelResourceOffload, which start or cancel a migration batch on hosts; machine control is never undoable.",
+  opsSources:
+    "Written by createOpsSource, removeOpsSource and setOpsSourceStatus: a create, a delete and a setting, none of them undoable.",
+  opsGroups:
+    "Written only by setOpsGroupStatus, triage (resolve, ignore, reopen) on one status control; never undoable.",
 };

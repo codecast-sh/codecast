@@ -6,7 +6,8 @@ import { splitMarkdownBlocks } from "../../lib/markdownBlocks";
 import { RevealHost } from "../ObjectReveal";
 import { tryRenderHtmlMessage } from "../HtmlSnippet";
 import { entityRemarkPlugins } from "../../lib/remarkEntityIds";
-import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_REMARK, ASSISTANT_MD_REMARK } from "../messageMarkdown";
+import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK, ASSISTANT_MD_REMARK } from "../messageMarkdown";
+import { QuotedText } from "../ReplyQuote";
 import { HighlightContext } from "../HighlightContext";
 import { MD_COMPONENTS_NO_IMG } from "../../lib/conversationMarkdown";
 import { compactionProgressMessage } from "../../lib/compactionProgress";
@@ -115,7 +116,7 @@ function renderMessageMarkdownCached(content: string, userText?: boolean): React
     children: content,
     remarkPlugins: userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK,
     rehypePlugins: MESSAGE_MD_REHYPE,
-    components: MESSAGE_MD_COMPONENTS,
+    components: userText ? USER_MD_COMPONENTS : MESSAGE_MD_COMPONENTS,
   });
   return mdCachePut(key, el);
 }
@@ -141,11 +142,11 @@ export const MessageMarkdown = memo(function MessageMarkdown({ content, userText
   const html = tryRenderHtmlMessage(content);
   if (html) return html;
   if (userText && !query && content.length > USER_PLAIN_TEXT_THRESHOLD) {
-    return <div className="whitespace-pre-wrap break-words">{content}</div>;
+    return <div className="whitespace-pre-wrap break-words"><QuotedText text={content} /></div>;
   }
   if (query) {
     return (
-      <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
+      <ReactMarkdown remarkPlugins={userText ? USER_MD_REMARK : ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={userText ? USER_MD_COMPONENTS : MESSAGE_MD_COMPONENTS}>
         {content}
       </ReactMarkdown>
     );
