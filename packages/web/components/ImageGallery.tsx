@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
 import { useInboxStore } from "../store/inboxStore";
 import { addImagePin } from "../lib/reviewActions";
-import type { PendingComment } from "../lib/quoteFormat";
+import { pinNumbers, type PendingComment } from "../lib/quoteFormat";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { CommentEditor } from "./MessageReview";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -204,14 +204,15 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     if (!canPin) return "";
     return JSON.stringify((s.reviewComments[conversationId!] ?? []).filter((c) => c.image?.point).map((c) => [c.id, c.image!.src, c.image!.point, c.body]));
   });
-  const pinsBySrc = useMemo(() => {
+  const { pinsBySrc, pinNumber } = useMemo(() => {
     const by = new Map<string, PendingComment[]>();
-    if (!pinsSig) return by;
-    for (const c of useInboxStore.getState().reviewComments[conversationId!] ?? []) {
+    if (!pinsSig) return { pinsBySrc: by, pinNumber: new Map<string, number>() };
+    const comments = useInboxStore.getState().reviewComments[conversationId!] ?? [];
+    for (const c of comments) {
       if (!c.image?.point) continue;
       by.set(c.image.src, [...(by.get(c.image.src) ?? []), c]);
     }
-    return by;
+    return { pinsBySrc: by, pinNumber: pinNumbers(comments) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinsSig]);
   const pinCount = useMemo(() => [...pinsBySrc.values()].reduce((n, l) => n + l.length, 0), [pinsBySrc]);
@@ -363,12 +364,12 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                   canPin && !zoom.zoomed ? "cursor-crosshair" : ""}`}
                 onClick={pinAt}
               />
-              {currentPins.map((c, i) => (
+              {currentPins.map((c) => (
                 <ImagePin
                   key={c.id}
                   conversationId={conversationId!}
                   comment={c}
-                  number={i + 1}
+                  number={pinNumber.get(c.id) ?? 0}
                   scale={zoom.scale}
                   editing={editingId === c.id}
                   author={author}

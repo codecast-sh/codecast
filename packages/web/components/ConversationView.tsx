@@ -138,7 +138,7 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
@@ -160,6 +160,7 @@ import { useToolResultMaps } from "../hooks/useToolResultMaps";
 import { useBrowserAndWakeRows } from "../hooks/useBrowserAndWakeRows";
 import { useSessionImages } from "../hooks/useSessionImages";
 import { useConversationTaskMaps } from "../hooks/useConversationTaskMaps";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 const api = _typedApi as any;
 
 const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
@@ -767,8 +768,7 @@ const ConversationViewInner = (
     if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.shiftKey) return;
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (keyBelongsElsewhere(e.target)) return;
       if (hasOpenModal()) return;
       e.preventDefault();
       handleCycleMode();
@@ -1618,6 +1618,7 @@ const ConversationViewInner = (
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
+        case 'role_brief': return 44;
         case 'teammate_events': return 80;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
@@ -3420,6 +3421,8 @@ const ConversationViewInner = (
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+        case 'role_brief':
+          return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
         case 'session_message':
           return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
         case 'huddle_summary':

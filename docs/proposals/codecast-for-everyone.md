@@ -1,5 +1,7 @@
 # Codecast for people who don't code
 
+> **Status (2026-10-04):** Not built. No `@platform/agent` or `@platform/billing` package exists (`platform/packages/`), and the Averil decision in "Open questions" is still open.
+
 Status: proposal, 2026-10-02. Nothing here is built yet.
 
 ## The idea

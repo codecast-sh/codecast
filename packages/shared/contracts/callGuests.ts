@@ -54,6 +54,24 @@ export function callParticipantKind(identity: string): CallParticipantKind {
   return "person";
 }
 
+/** The word a marked participant wears beside their name, and what it means
+ *  when someone hovers or listens for it. A teammate wears none. */
+export const PARTICIPANT_MARKS = {
+  guest: { word: "guest", title: "A guest from outside the team" },
+  agent: { word: "agent", title: "An AI agent, not a person" },
+} as const;
+export type ParticipantMark = (typeof PARTICIPANT_MARKS)[keyof typeof PARTICIPANT_MARKS];
+
+/** Which mark this participant wears, or null for a teammate. The agent test
+ *  reads the identity alone; the guest test also reads a stored line's name
+ *  (isGuestParticipant), which is all a transcript line may carry. One
+ *  answer for the web's badge and the phone's "(guest)" and "(agent)", so a
+ *  surface never marks one and forgets the other. */
+export function participantMark(identity: string | null | undefined, name?: string | null): ParticipantMark | null {
+  if (identity && callParticipantKind(identity) === "agent") return PARTICIPANT_MARKS.agent;
+  return isGuestParticipant(identity, name) ? PARTICIPANT_MARKS.guest : null;
+}
+
 // LiveKit's own participant kinds (protocol ParticipantInfo.Kind), the two
 // that are the room's machinery rather than anybody in it: a recording's
 // egress, and the agent worker that dispatches agent faces (codecast-face).
@@ -265,10 +283,11 @@ export const GUEST_LINK_REFUSAL_TEXT = Object.fromEntries(
 ) as Record<GuestLinkRefusal, string>;
 
 /** Why an admitted guest's page may not join the media right now
- *  (callGuests.mintGuestToken). Carried as a ConvexError code, because a
- *  plain Error's words do not survive to a client in production, and the
- *  page acts on the code: the ones that end the visit move it to the
- *  matching ending instead of an error line under a Join button. */
+ *  (callGuests.mintGuestToken). Carried as a ConvexError code because the
+ *  page acts on the code, not on words: the ones that end the visit move it
+ *  to the matching ending instead of an error line under a Join button. The
+ *  other guest refusals (a knock, an admission) are only ever shown, so they
+ *  stay plain Errors whose words reach the page as they are. */
 export type GuestJoinRefusal = "not_a_guest" | "not_admitted" | "removed" | "ended" | "unavailable";
 
 export const GUEST_JOIN_REFUSAL_TEXT: Record<GuestJoinRefusal, string> = {
@@ -335,6 +354,26 @@ export function guestNoticeLines(
     });
   }
   return out;
+}
+
+/** What the room keeps now beyond the notice a guest agreed to (`since`),
+ *  row by row: `rec` a recording they were not told of, or one whose video
+ *  went to the public link since; `words` a transcript switched on. Nothing
+ *  is news before they agreed to anything. The one comparison behind the
+ *  lobby's "Join, recorded", the rows marked new and the line said inside
+ *  the call, so no two of them disagree about what changed. */
+export function noticeNews(since: GuestNotice | null | undefined, now: GuestNotice): { rec: boolean; words: boolean } {
+  if (!since) return { rec: false, words: false };
+  return {
+    rec: now.recording && (!since.recording || (!!now.video_public && !since.video_public)),
+    words: now.transcribed && !since.transcribed,
+  };
+}
+
+/** Does the room keep more than the guest agreed to? (noticeNews, any row) */
+export function noticeWidened(since: GuestNotice | null | undefined, now: GuestNotice): boolean {
+  const n = noticeNews(since, now);
+  return n.rec || n.words;
 }
 
 /** The notice as one sentence, for a link's card: "This call is recorded and

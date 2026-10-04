@@ -77,6 +77,7 @@ import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
 import { AgentReplyPeek } from "./AgentReplyPeek";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -267,7 +268,7 @@ export function CallStage({
     // key that closed the window would end a call by accident.
     if (panel) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || keysOwnedElsewhere(e.target)) return;
       // Typing in the thread composer: Esc leaves the field, not the stage.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return el.blur();

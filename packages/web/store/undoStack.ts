@@ -125,6 +125,24 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
 };
 setUndoNotifier(CODECAST_UNDO_NOTIFIER);
 
+/**
+ * Give a gesture exactly one toast. When `fn` records an undo entry the toast
+ * is that entry's own, with its Undo button, taken down once the entry is
+ * undone: a spec with `toast: true` has raised it already, and otherwise
+ * `message` raises it. A gesture that recorded nothing shows `message` plainly.
+ */
+export function gestureToast<T>(message: string, fn: () => T): T {
+  const before = getUndoHistory().head;
+  const out = fn();
+  const head = getUndoHistory().head;
+  if (head && head !== before) {
+    if (!liveEntryToasts.has(head)) CODECAST_UNDO_NOTIFIER.notifyWithUndo!(message, head);
+  } else {
+    toast.success(message);
+  }
+  return out;
+}
+
 export {
   pushUndo,
   performUndo,

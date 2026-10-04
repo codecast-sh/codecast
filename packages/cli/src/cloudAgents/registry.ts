@@ -12,7 +12,7 @@ import { CLIENT_ERROR_BANNER_PREFIX, CLOUD_AGENT_ACTION_SUBTYPE, CLOUD_AGENT_ACT
 import { doublingDelay, isCloudMirrorPlaceholder, repoOwnerName } from "./poll.js";
 import { applyInCheckout, CloudAgentSessions, cloudSetupErrorOf, judgeCloudFailure, type CloudAgentSessionsDeps } from "./sessions.js";
 import { CloudAgentWatcher, type CloudAgentTranscriptEvent, type CloudAgentWatcherOptions } from "./watcher.js";
-import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, CloudAgentUnsentError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
+import { CLOUD_AGENT_ACTION_METHODS, CloudAgentSetupError, CloudAgentUnsentError, errorText, logTag, type AnyCloudAgentAdapter, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginState } from "./types.js";
 import type { ProviderKeyVerdict } from "../providerKeyCrypto.js";
 
 export interface CloudAgentRuntime {
@@ -309,8 +309,8 @@ export class CloudAgentRegistry {
   }
 
   /** Start a sign-in based provider's own sign-in on this machine; checkLogin tells when it lands. */
-  async startLogin(providerId: string): Promise<void> {
-    await this.loginRuntime(providerId).adapter.login!.start();
+  async startLogin(providerId: string, opts?: { deviceCode?: boolean }): Promise<CloudAgentDeviceCode | void> {
+    return await this.loginRuntime(providerId).adapter.login!.start(opts);
   }
 
   private loginRuntime(providerId: string): CloudAgentRuntime {

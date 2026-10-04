@@ -278,8 +278,8 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
   };
   const projects: LineProject[] = [
     { _id: "pA", short_id: "pj-a", title: "Agent Quality", line_profile: { finders: [
-      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"] },
-      { id: "guards", source: "union.guard", kind: ["prompt_miss"], runs: "daily" },
+      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"], fingerprint: "union:cluster:<id>" },
+      { id: "guards", source: "union.guard", kind: ["prompt_miss"], fingerprint: "union:guard:<id>", runs: "daily" },
     ], root: "/src/union", default: true, changed_at: NOW } },
     { _id: "pB", short_id: "pj-b", title: "Infrastructure", project_path: "/src/infra" },
     { _id: "pC", short_id: "pj-c", title: "Quiet" },
@@ -302,7 +302,7 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
     expect(bySource.agentwatch).toMatchObject({ day: 2, silent: false, undeclared: false, finder: { id: "clusters" } });
     expect(bySource["union.guard"]).toMatchObject({ day: 0, week: 0, newest: null, silent: true, finder: { id: "guards" } });
     expect(f.sense.state.why).toBe("signals arriving, 1 of 2 finders silent");
-    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any" }] });
+    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any", fingerprint: "g" }] });
     expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(true);
   });
 

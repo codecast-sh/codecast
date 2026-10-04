@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Film, MonitorUp, Phone } from "lucide-react";
-import { CALL_FRAME_PREFER, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
+import { CALL_FRAME_PREFER, isRecordingFilming, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
 import { formatCallTime, parseCallRef } from "@codecast/shared/entities";
 import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import { useNearViewport } from "../../hooks/useNearViewport";
@@ -9,6 +9,7 @@ import { useStableMediaSrcs } from "../../hooks/useStableMediaSrcs";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ParticipantTag } from "./GuestTag";
 import { CALL_VIDEO_LOADING, playableFiles, videoAt } from "../../lib/calls/callVideo";
+import { keepMomentFrame, momentFrame, momentFrameKey } from "../../lib/calls/momentFrames";
 
 // A moment of a call, written in a message as `cl-42@12:34` on a line of its
 // own: the call as it looked then, a frame of its video, linking to the call
@@ -25,6 +26,11 @@ import { CALL_VIDEO_LOADING, playableFiles, videoAt } from "../../lib/calls/call
 // player opens on the room, and a frame of a shared screen must not open on a
 // different picture, so it carries `view=screen` and the page shows the
 // screen this frame shows, by the same rule (CALL_FRAME_PREFER).
+//
+// Once a frame has drawn it is kept as a picture in memory
+// (lib/calls/momentFrames), and the next mount of that moment (the card
+// scrolled back to, a hover card, a second citation) is an image: no
+// request, no decoder.
 
 export function CallMomentFrame({
   rawId,
@@ -108,7 +114,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
     // still being written is "not yet", not "never"; one still filming is
     // "now", not "saving").
     const miss = locateCallMoment({ callStartedAt: recs.call_started_at, atMs, recordings: files });
-    const filming = files.some((f) => (f.status === "starting" || f.status === "recording") && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
+    const filming = files.some((f) => isRecordingFilming(f.status) && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
     return {
       ok: false as const,
       reason: miss.ok ? ("outside" as const) : miss.reason,
@@ -123,12 +129,17 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
   // The browser took the video and drew nothing (see MomentVideo).
   const [blank, setBlank] = useState<string | null>(null);
   const undrawn = !!src && blank === src;
+  // This moment drawn before on this page: its kept picture, shown at once.
+  const frameKey = located?.ok ? momentFrameKey(located.file.id, located.seconds) : null;
+  const kept = frameKey ? momentFrame(frameKey) : null;
   return (
     <div ref={boxRef} className="relative aspect-video overflow-hidden bg-black">
       {/* Until a frame draws (and wherever none will), a faint grid under the
           pulse so the box reads as a picture on its way, not a dead screen. */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-[0.07]" style={GRID} />
-      {located?.ok && !dead && !undrawn ? (
+      {kept ? (
+        <img src={kept} alt={`The call at ${time}`} draggable={false} className="pointer-events-none relative h-full w-full bg-black object-contain" />
+      ) : located?.ok && !dead && !undrawn ? (
         src && close ? (
           <MomentVideo
             key={src}
@@ -138,6 +149,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
             onLoaded={() => media.loaded(located.file.id)}
             onRefused={() => media.refused(located.file.id)}
             onBlank={() => setBlank(src)}
+            onDrawn={(el) => void keepMomentFrame(frameKey!, { call: String(entity._id), recording: located.file.id }, el)}
           />
         ) : (
           <div className={CALL_VIDEO_LOADING} />
@@ -159,7 +171,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
       <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white">
         {time}
       </span>
-      {located?.ok && !dead && !undrawn && located.file.kind === "screen" && (
+      {located?.ok && (kept || (!dead && !undrawn)) && located.file.kind === "screen" && (
         <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10.5px] text-white/85">
           <MonitorUp className="h-3 w-3" /> {recordingSubject(located.file, "label")}
           <ParticipantTag identity={located.file.participant_identity} />
@@ -201,6 +213,7 @@ function MomentVideo({
   onLoaded,
   onRefused,
   onBlank,
+  onDrawn,
 }: {
   src: string;
   seconds: number;
@@ -208,6 +221,8 @@ function MomentVideo({
   onLoaded: () => void;
   onRefused: () => void;
   onBlank: () => void;
+  /** The frame at the position is on screen: the host keeps it. */
+  onDrawn: (el: HTMLVideoElement) => void;
 }) {
   const [step, setStep] = useState<"waiting" | "metadata" | "eager" | "drawn">("waiting");
   const blankRef = useRef(onBlank);
@@ -217,7 +232,13 @@ function MomentVideo({
     const timer = setTimeout(() => (step === "metadata" ? setStep("eager") : blankRef.current()), PAINT_WAIT_MS);
     return () => clearTimeout(timer);
   }, [step]);
-  const drawn = () => setStep("drawn");
+  const drawn = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    setStep("drawn");
+    // Kept only once the picture is the moment's own: a first frame that
+    // arrives before the seek lands is not.
+    const el = e.currentTarget;
+    if (Math.abs(el.currentTime - seconds) <= 0.5) onDrawn(el);
+  };
   // The frame fades in over the loading box once it has data at the position,
   // so it arrives rather than pops (and a browser that loads the metadata but
   // draws nothing never shows a black rectangle in place of the pulse).
@@ -226,6 +247,9 @@ function MomentVideo({
       {step !== "drawn" && <div className={CALL_VIDEO_LOADING} />}
       <video
         src={`${src}#t=${seconds.toFixed(2)}`}
+        // CORS (the recordings bucket allows the app's origins), so the drawn
+        // frame can be kept as a picture (lib/calls/momentFrames).
+        crossOrigin="anonymous"
         preload={step === "eager" ? "auto" : "metadata"}
         muted
         playsInline

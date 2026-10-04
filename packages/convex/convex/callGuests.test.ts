@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
+import schema from "./schema";
+import { makeFakeDb, schemaIndexes } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
   GUEST_CREATOR_NOTICE_ANY_LINK_MS,
@@ -52,7 +53,7 @@ const run = (fn: any) => fn._handler ?? fn.handler;
 
 // A team with calls on, two teammates in a people room, u1 seated in it, and
 // an outsider (u9) on no team. Everything a guest touches is in these tables.
-function world(extra: Record<string, any[]> = {}) {
+function world(extra: Record<string, any[]> = {}, opts: { indexes?: boolean } = {}) {
   const now = Date.now();
   const db = makeFakeDb({
     teams: [{ _id: "t1", name: "T", features: { calls: true } }],
@@ -80,7 +81,7 @@ function world(extra: Record<string, any[]> = {}) {
     conversations: [],
     chat_channels: [],
     ...extra,
-  }, { strictPatch: true });
+  }, { strictPatch: true, ...(opts.indexes ? { indexes: schemaIndexes(schema as any) } : {}) });
   const scheduled: any[] = [];
   const as = (userId: string | null) => ({
     db,
@@ -143,6 +144,44 @@ describe("links", () => {
     expect(w.db._tables.call_guest_links.find((l: any) => l.token === a.token).revoked_at).toBeNumber();
     const listed = await run(listGuestLinks)(w.as("u2"), { room_key: ROOM });
     expect(listed.map((l: any) => l.token)).toEqual([c.token]);
+  });
+
+  test("a room's past links are not read: only the ones still open by the clock", async () => {
+    // Read through the schema's real indexes, so a range the index cannot
+    // serve throws here as it would in convex, and the expired rows never
+    // reach the filter at all.
+    const t = Date.now();
+    const past = Array.from({ length: 30 }, (_, i) => ({
+      _id: `old${i}`, room_key: ROOM, team_id: "t1", token: `old-token-${i}`, created_by: "u1", created_at: t - 40 * 86_400_000, expires_at: t - 86_400_000 * (i + 1),
+    }));
+    const w = world({ call_guest_links: past }, { indexes: true });
+    // Every link row a collect() hands back, by index.
+    const linkRows: Record<string, number> = {};
+    const query = w.db.query.bind(w.db);
+    (w.db as any).query = (table: string) => {
+      const q = query(table);
+      if (table !== "call_guest_links") return q;
+      const withIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, range: any) => {
+        const r = withIndex(name, range);
+        const collect = r.collect.bind(r);
+        r.collect = async () => {
+          const rows = await collect();
+          linkRows[name] = (linkRows[name] ?? 0) + rows.length;
+          return rows;
+        };
+        return r;
+      };
+      return q;
+    };
+    // An expired link of their own is never handed out again.
+    const made = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    expect(made.reused).toBe(false);
+    const listed = await run(listGuestLinks)(w.as("u1"), { room_key: ROOM });
+    expect(listed.map((l: any) => l.token)).toEqual([made.token]);
+    // createGuestLink read none of the 30 past links, listGuestLinks only the new one.
+    expect(linkRows.by_room ?? 0).toBe(0);
+    expect(linkRows.by_room_expires).toBe(1);
   });
 
   test("nobody outside the room can make or list one", async () => {

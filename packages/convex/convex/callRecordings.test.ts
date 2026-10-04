@@ -14,7 +14,7 @@ import { CALL_RECORDING_URL_WINDOW_MS, callRecordingUrlWindow, dmRoomKey, guestI
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { sha256Hex } from "./lib/hash";
-import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startErrorMessage } from "./callRecordings";
+import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, walkAccountedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startFailure } from "./callRecordings";
 import { LivekitApiError } from "./lib/livekitServer";
 import { stableSigningWindow } from "./lib/r2";
 import { claimShareToken } from "./publicShare";
@@ -1463,6 +1463,29 @@ describe("a deleted team", () => {
 // egress minutes are spent (seen on prod 2026-10-03); only the first is worth
 // another press, so the room is told which one it hit.
 describe("orphaned objects", () => {
+  test("the rows are read page by page, and every page counts", async () => {
+    const { t, room, team, ana } = await seed();
+    await t.run(async (ctx: any) => {
+      const call = await ctx.db.insert("transcripts", { room_key: room, team_id: team, started_by: ana, status: "ended", started_at: Date.now(), routes: [], last_seq: 0 } as any);
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert("call_recordings", {
+          transcript_id: call, room_key: room, team_id: team, kind: "composite", status: "ready",
+          r2_key: `calls/t${i}/${i}00-composite.mp4`, ...(i === 4 ? { live_frame_key: "calls/t4/400-composite-live.jpeg" } : {}),
+          started_by: ana, requested_at: Date.now(), updated_at: Date.now(),
+        } as any);
+      }
+    });
+    const pages: number[] = [];
+    const accounted = await walkAccountedRecordingObjects(async (args) => {
+      const page = await t.query(internal.callRecordings.accountedRecordingObjects, args);
+      pages.push(page.keys.length);
+      return page;
+    }, 2);
+    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(accounted.keys.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-composite.mp4`).concat("calls/t4/400-composite-live.jpeg").sort());
+    expect(accounted.prefixes.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-`));
+  });
+
   test("what no row accounts for goes once it is old enough, and every LiveKit manifest goes", () => {
     const now = 10 * ORPHAN_OBJECT_GRACE_MS;
     const old = now - ORPHAN_OBJECT_GRACE_MS - 1;
@@ -1484,8 +1507,10 @@ describe("why a start failed", () => {
   const exhausted = (msg: string) =>
     new LivekitApiError("Egress/StartRoomCompositeEgress", 429, "resource_exhausted", JSON.stringify({ code: "resource_exhausted", msg }));
   test("spent minutes are not a busy minute", () => {
-    expect(startErrorMessage(exhausted("egress minutes exceeded"))).toMatch(/used its recording minutes/);
-    expect(startErrorMessage(exhausted("no egress workers available"))).toMatch(/Try again in a minute/);
+    expect(startFailure(exhausted("egress minutes exceeded"))).toMatchObject({ kind: "minutes_spent", error: expect.stringMatching(/used its recording minutes/) });
+    expect(startFailure(exhausted("no egress workers available"))).toMatchObject({ kind: "busy", error: expect.stringMatching(/Try again in a minute/) });
+    expect(startFailure(new LivekitApiError("Egress/StartRoomCompositeEgress", 401, "unauthenticated", "")).kind).toBe("credentials");
+    expect(startFailure(new Error("boom")).kind).toBe("server");
   });
 });
 
