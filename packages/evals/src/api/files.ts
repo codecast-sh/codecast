@@ -173,22 +173,25 @@ const GUARD_MARK = new RegExp(`^(${GUARD_STATUSES.join('|')})(?: (.*))?$`);
 
 /**
  * calls.log as entries: the guard logs each argv, then one marked line for
- * its outcome, and the harness writes `# turn N` before turn N's calls. An
- * argv with no mark after it (the guard died, or a write it never got to)
- * keeps a null status.
+ * its outcome, and the harness writes `# turn N` before turn N's calls.
+ * Parallel calls log every argv before any outcome, so a mark settles the
+ * oldest call in its turn still waiting with the same argv. An argv no mark
+ * settles (the guard died, or a write it never got to) keeps a null status.
  */
 export function guardEntriesOf(lines: string[]): GuardEntry[] {
   const out: GuardEntry[] = [];
   callsByTurn(lines).forEach((turnLines, i) => {
-    let open: GuardEntry | null = null;
+    const open = new Map<string, GuardEntry[]>();
     for (const line of turnLines) {
       const m = GUARD_MARK.exec(line);
-      if (m && open && open.status === null && (m[2] ?? '') === open.argv) {
-        open.status = m[1] as GuardStatus;
+      const waiting = m ? open.get(m[2] ?? '') : undefined;
+      if (m && waiting?.length) {
+        waiting.shift()!.status = m[1] as GuardStatus;
         continue;
       }
-      open = { seq: out.length + 1, turn: i + 1, argv: line, status: null };
-      out.push(open);
+      const entry: GuardEntry = { seq: out.length + 1, turn: i + 1, argv: line, status: null };
+      out.push(entry);
+      open.set(line, [...(open.get(line) ?? []), entry]);
     }
   });
   return out;
@@ -245,10 +248,26 @@ export function replyOf(dir: string): string | null {
   return text || null;
 }
 
+/**
+ * The last `n` lines of a log as plain text: terminal colour codes and the
+ * carriage returns a tmux pane writes are dropped, and so are blank lines.
+ * Empty when there is no log.
+ */
+export function tailLines(path: string, n = 20): string[] {
+  const text = readText(path);
+  if (!text) return [];
+  return text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\r/g, '')
+    .split('\n')
+    .filter((l) => l.trim())
+    .slice(-n);
+}
+
 /** The last lines of run.log, or null when the rep left none. */
 export function logTailOf(dir: string, lines = 40): string | null {
-  const text = readText(join(dir, 'run.log'));
-  return text ? text.split('\n').filter(Boolean).slice(-lines).join('\n') : null;
+  const tail = tailLines(join(dir, 'run.log'), lines);
+  return tail.length ? tail.join('\n') : null;
 }
 
 /** The folder's tree, depth first, at most `cap` entries; symlinks are listed, never followed. */

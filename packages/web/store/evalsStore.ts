@@ -102,7 +102,9 @@ export const useEvalsStore = create<EvalsState>()((set, get) => {
 
     connect: async (convex, opts) => {
       const fixture = evalsFixtureMode();
-      set({ connection: "discovering", fixture, ...(opts?.force ? { resources: {} } : {}) });
+      // A retry keeps the answers already read: a slow or restarted daemon does not make them wrong, and each page
+      // reloads its own. Only a switch between the fixture world and the disk drops them.
+      set({ connection: "discovering", fixture, ...(fixture !== get().fixture ? { resources: {} } : {}) });
       let t: EvalsTransport;
       if (fixture === "no-daemon") {
         set({ connection: "no-daemon", transport: null, unreachableReason: "no-devices", unreachableDetail: "EVALS_FIXTURE=no-daemon", stderr: null });

@@ -105,7 +105,24 @@ const characters = (ctx: UndoCtx) => {
 
 const LIVE_SWITCH = { never: "the switch is applied to the live agent or daemon, which a field restore cannot reverse" } as const;
 
+// The UI bag holds preferences, which are never undoable, and one edit: the
+// inbox's manual order, which a drag of cards writes in one call. Only a call
+// that writes nothing but that order is recorded; the rest stay settings.
+const MANUAL_ORDER = "inbox_manual_order";
+function manualOrderLabel(ctx: UndoCtx): string | null {
+  const partial = ctx.args[0] as Record<string, unknown> | undefined;
+  if (!partial || Object.keys(partial).some((k) => k !== MANUAL_ORDER)) return null;
+  const before = (ctx.before?.clientState?.ui?.[MANUAL_ORDER] ?? {}) as Record<string, number>;
+  const after = (partial[MANUAL_ORDER] ?? {}) as Record<string, number>;
+  if (Object.keys(after).length === 0) return Object.keys(before).length ? "Reset the inbox order" : null;
+  const moved = Object.keys(after).filter((id) => after[id] !== before[id]);
+  if (moved.length === 0) return null;
+  return moved.length === 1 ? `Moved ${sessionTitle(ctx.before, moved[0]!)}` : `Moved ${counted(moved.length, "session")}`;
+}
+
 export const SESSIONS_UNDO_POLICY: UndoPolicy = {
+  // clientState is ignored for every other spec; this one captures it.
+  updateClientUI: { spec: { label: manualOrderLabel, captureKeys: ["clientState"] } },
   deferSession: onSession("Deferred"),
   setSessionRest: {
     spec: {

@@ -21,12 +21,8 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { convexSiteUrl, webBaseUrl } from "./slack";
-import {
-  encryptRefreshToken,
-  decryptRefreshToken,
-  signStateWith,
-  verifyStateWith,
-} from "./googleOAuth";
+import { encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
+import { signStateWith, verifyStateWith } from "./lib/hmac";
 import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh } from "./lib/tokenRefresh";
 import { sha256Hex } from "./lib/hash";
 

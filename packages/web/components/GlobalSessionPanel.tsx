@@ -2779,11 +2779,14 @@ function SessionListPanelImpl({
     const targetIdx = rest.findIndex((sess) => sess._id === (targetParent ?? targetId));
     if (targetIdx < 0) return;
     let insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
+    // One write for the whole block, so the drag is one undo entry.
+    const keys: Record<string, number> = {};
     for (const sess of block) {
       const key = computeManualSortKey(restKeys, insertIndex);
-      useInboxStore.getState().setSessionManualOrder(sess._id, key);
+      keys[sess._id] = key;
       restKeys.splice(insertIndex++, 0, key);
     }
+    useInboxStore.getState().setSessionManualOrders(keys);
   }, [flatList, manualOrder]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);

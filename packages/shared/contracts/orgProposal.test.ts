@@ -261,9 +261,47 @@ describe("goal changes", () => {
     expect(changeLine(GOOD.initiative_shape)).toBe("Put the goal Win the private network under Reach 1k teams and measured by Brokers live (target 40)");
     expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: null })).toBe("Make the goal in-2 a top level goal");
     expect(changeLine({ kind: "initiative_shape", initiative: "in-2", metrics: [] })).toBe("Put the goal in-2 with no metric");
-    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2" })).toContain("needs a parent or metrics");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2" })).toContain("needs a parent, metrics, why");
     expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "A", target: "1" }, { name: "B", target: "2" }, { name: "C", target: "3" }] })).toContain("at most two");
     expect(orgChangeError({ ...GOOD.initiative, metrics: [{ name: "A" }] })).toContain("{ name, target }");
+  });
+  // The intent record (I5 "Proposals"): a goal change may carry why, done
+  // when, milestones and sources; a shape change may also add questions and
+  // decisions. The sentence stays short and the words are the effect's.
+  test("a goal change carries its record: validated, counted in the sentence, written out in the effect", async () => {
+    const { deriveAsks } = await import("./orgProposal");
+    const record = { why: "Brokers bring the sellers", done_when: "Three brokers trade through us.", milestones: [{ title: "Quiet onboarded", date: Date.UTC(new Date().getUTCFullYear(), 10, 1) }, { title: "Second broker live" }], sources: ["call:cl-42#14 our goal is three brokers", "jx7c6zk:142"] };
+    const set = { ...GOOD.initiative, ...record } as const;
+    expect(orgChangeError(set)).toBeNull();
+    expect(changeLine(set)).toBe("Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling, with 2 milestones");
+    expect(describeOrgChange(set)).toBe("create initiative Win the private network over Callers, Broker network owned by @calling why done_when +2 milestones +2 sources");
+    expect(deriveAsks([{ seq: 1, change: set }] as any)[0].effect).toBe("A new goal, Win the private network, appears on the initiatives page with the Callers and Broker network projects under it and calling as its owner. Quiet is onboarded and three brokers trade through us. Why it matters: Brokers bring the sellers. Done when: Three brokers trade through us. Milestones: Quiet onboarded (Nov 1); Second broker live. Its record says where it was stated (2 sources).");
+    const shape = { kind: "initiative_shape", initiative: "in-2", title: "Win the private network", ...record, questions: ["Do we price per seat?"], decisions: ["Ship to brokers first", "Quiet goes first."] } as const;
+    expect(orgChangeError(shape)).toBeNull();
+    expect(changeLine(shape)).toBe("Record on the goal Win the private network: why it matters, what done looks like, 2 milestones, an open question, 2 decisions and 2 places it was stated");
+    expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: "Reach 1k teams", milestones: [{ title: "Quiet onboarded" }], sources: ["ct-12"] })).toBe("Put the goal in-2 under Reach 1k teams, and record the milestone Quiet onboarded and where it was stated");
+    expect(describeOrgChange(shape)).toBe("initiative in-2 why done_when +2 milestones +1 questions +2 decisions +2 sources");
+    expect(deriveAsks([{ seq: 1, change: { kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "Brokers live", target: "40" }], questions: shape.questions, decisions: shape.decisions } }] as any)[0].effect).toBe("On track means against Brokers live (target 40); its owner reports the numbers. Still open: Do we price per seat? Decided: Ship to brokers first. Quiet goes first.");
+    // Each list adds, so an empty one changes nothing, and each is held to the row's own cap.
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", questions: [] })).toContain("what it changes about the goal");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", why: "It pays for the rest." })).toBeNull();
+    expect(orgChangeError({ ...GOOD.initiative, why: " " })).toContain("why is a string");
+    expect(orgChangeError({ ...GOOD.initiative, done_when: 3 })).toContain("done_when is a string");
+    expect(orgChangeError({ ...GOOD.initiative, milestones: [{ title: "A", date: "Nov 1" }] })).toContain("{ title, date? }");
+    expect(orgChangeError({ ...GOOD.initiative, milestones: Array.from({ length: 13 }, (_, i) => ({ title: `Step ${i}` })) })).toContain("at most 12");
+    expect(orgChangeError({ ...GOOD.initiative, sources: [""] })).toContain("sources is a list of at most 20 strings");
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", decisions: [7] })).toContain("decisions is a list of at most 40 strings");
+    // Two shape rows about one goal fold into one, and their lists join: each adds, so they cannot disagree. The words still can.
+    const { foldRepeatedSubjects } = await import("./orgProposal");
+    const two = foldRepeatedSubjects([
+      { change: { kind: "initiative_shape", initiative: "in-2", parent: "Reach 1k teams", questions: ["Do we price per seat?"] }, rationale: "a" },
+      { change: { kind: "initiative_shape", initiative: "in-2", questions: ["Do we price per seat?", "Who signs?"], decisions: ["Ship to brokers first"] }, rationale: "b" },
+    ]);
+    expect(two.errors).toEqual([]);
+    expect(two.changes.map((c) => c.change)).toEqual([{ kind: "initiative_shape", initiative: "in-2", parent: "Reach 1k teams", questions: ["Do we price per seat?", "Who signs?"], decisions: ["Ship to brokers first"] }]);
+    expect(foldRepeatedSubjects([{ change: { kind: "initiative_shape", initiative: "in-2", why: "a" } }, { change: { kind: "initiative_shape", initiative: "in-2", why: "b" } }]).errors[0]).toContain("with a different why");
+    // Questions and decisions belong to a goal that exists: the create does not read them.
+    expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", questions: Array.from({ length: 21 }, (_, i) => `Q${i}?`) })).toContain("questions is a list of at most 20 strings");
   });
   test("one subject per proposal, and the owner handle counts as a role the change names", async () => {
     const { orgChangeKey, orgChangeHandles } = await import("./orgProposal");

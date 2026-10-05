@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useInboxStore } from "../store/inboxStore";
 
 /** Dev builds only: a fixture set from the console stands in for the server
  *  (`window.__orgTemplateFixture = { catalog?: [...], instance?: {...} }`), so the
@@ -52,18 +53,17 @@ export function useInstanceLessons(instanceKey: string | undefined) {
 /** The person's writes: post the hire as a proposal, mark a setup item, activate a routine, run the host step, choose learning. */
 export function useTemplateActions() {
   const propose = useMutation(api.orgProposals.create);
-  const setup = useMutation(api.orgTemplates.setup);
-  const activate = useMutation(api.orgTemplates.activateRoutine);
-  const bind = useMutation(api.orgTemplates.requestBind);
-  const learning = useMutation(api.orgTemplateLearning.setLearning);
+  // The writes to a hired role go through the store's org verbs, so each is
+  // classified and listed in the org record like every other org gesture.
+  const store = useInboxStore.getState;
   return {
     propose: (args: { team_id?: string; title: string; summary_md: string; mode: string; changes: unknown[]; asks: unknown[] }) => propose({ ...args, team_id: args.team_id as Id<"teams"> | undefined }) as Promise<any>,
-    markSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => setup({ instance_key: instanceKey, id, status, from_agent: false }),
-    activate: (taskId: string) => activate({ task_id: taskId as Id<"agent_tasks"> }),
-    setLearning: (teamId: string | undefined, enabled: boolean) => learning({ ...(teamId ? { team_id: teamId as Id<"teams"> } : {}), enabled }) as Promise<any>,
+    markSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => store().markOrgTemplateSetup(instanceKey, id, status),
+    activate: (taskId: string) => store().activateOrgTemplateRoutine(taskId),
+    setLearning: (teamId: string | undefined, enabled: boolean) => store().setOrgTemplateLearning(teamId, enabled) as Promise<any>,
     /** The host step (H3): the daemon on the machine with the checkout runs bind. Secrets are sealed
      *  to that machine's key in the browser (sealSecret) before they reach here; never a plain value. */
-    requestBind: (instanceKey: string, secrets: { key: string; payload: { provider: string; epk: string; iv: string; ct: string } }[], deviceId?: string) => bind({ instance_key: instanceKey, secrets, ...(deviceId ? { device_id: deviceId } : {}) }) as Promise<{ command_id: string; device: { device_id: string; label: string }; already_pending: boolean }>,
+    requestBind: (instanceKey: string, secrets: { key: string; payload: { provider: string; epk: string; iv: string; ct: string } }[], deviceId?: string) => store().requestOrgTemplateBind(instanceKey, secrets, deviceId) as Promise<{ command_id: string; device: { device_id: string; label: string }; already_pending: boolean }>,
   };
 }
 

@@ -20,6 +20,7 @@ import {
   createReplicationFollower,
   createReplicationHost,
   extractReplicationUpdates,
+  type ActionTeeMeta,
   type ReplicationChannel,
   type ReplicationFollower,
   type ReplicationHost,
@@ -97,6 +98,8 @@ export type MutUpdate = ReplicationUpdate & {
   ts?: number;
   /** Rows the follower put back whole (an undo of a hide that forgot them): the host lifts the excludes its own forget planted. */
   readds?: string[];
+  /** A refused write rolled back on the follower: per row and field, the value the server refused. The host releases the lock it mirrored on that value and takes `fields` without locking them. */
+  release?: Record<string, Record<string, unknown>>;
 };
 
 export function buildMutUpdates(patches: readonly any[], state: any): MutUpdate[] {
@@ -174,8 +177,19 @@ const REPLICA_SESSIONS_OPTS = {
  * overlaying the host's fresher copy.
  */
 export function followerActionTee(channel: ReplicationChannel, selfId: string) {
-  return (_name: string, patches: any[], state: any): void => {
+  return (_name: string, patches: any[], state: any, meta?: ActionTeeMeta): void => {
     const updates = buildMutUpdates(patches, state);
+    if (meta?.refused) {
+      for (const u of updates) {
+        if (!u.fields) continue;
+        const release: Record<string, Record<string, unknown>> = {};
+        for (const l of meta.refused) {
+          if (l.storeKey !== u.key || !u.fields[l.recordId]) continue;
+          (release[l.recordId] ??= {})[l.field] = l.value;
+        }
+        if (Object.keys(release).length > 0) u.release = release;
+      }
+    }
     if (updates.length > 0) channel.post({ type: "mut", from: selfId, updates });
   };
 }
@@ -261,7 +275,7 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
     if (u.fields && opts?.optimistic) {
       // The sibling's field writes land as the gesture bridge lands a triage
       // gesture: the value, and a lock on it until the server echoes it.
-      useInboxStore.getState().applyReplicatedFields(u.key, u.fields, u.ts);
+      useInboxStore.getState().applyReplicatedFields(u.key, u.fields, u.ts, u.release);
     }
     if (u.hasValue) {
       if (u.value == null) continue;
@@ -301,12 +315,13 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
         // The host's scope cursors: rows through each position have already
         // arrived (the host tees in commit order, and it stamps the cursor
         // after the page's rows), so every lock acked at or below it retires
-        // now — the follower's own log applier event.
+        // now — the follower's own log applier event. Those rows landed under
+        // the locks, so each retired lock hands its row the value it hid.
         const meta = u.value as Record<string, { cursor?: number } | undefined>;
         for (const key in meta) {
           if (!key.startsWith(SYNCLOG_META_PREFIX)) continue;
           const cursor = meta[key]?.cursor;
-          if (typeof cursor === "number") useInboxStore.getState().retireAckedPending(key.slice(SYNCLOG_META_PREFIX.length), cursor);
+          if (typeof cursor === "number") useInboxStore.getState().retireAckedPending(key.slice(SYNCLOG_META_PREFIX.length), cursor, { restore: true });
         }
       }
       continue;

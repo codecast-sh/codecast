@@ -18,6 +18,8 @@ import {
   subscribeUndoHistory,
   undoEntry,
   undoTo,
+  suspendUndoRecording,
+  isUndoSuppressed,
 } from "./undoStack";
 import type { UndoEntry, UndoOutcome } from "./types";
 
@@ -352,5 +354,25 @@ describe("undoRowCount", () => {
   it("counts a row held by two stores once", () => {
     const objects = ["a", "b"].flatMap((id) => [{ store: "sessions", id }, { store: "conversations", id }]);
     expect([undoRowCount(objects), undoRowCount([{ store: "conversations", id: "b" }]), undoRowCount(undefined)]).toEqual([2, 1, 0]);
+  });
+});
+
+describe("suspendUndoRecording", () => {
+  it("a window holding it records nothing until every hold is released", () => {
+    _resetUndoStacks();
+    const entry = () => ({ label: "x", undo: () => ({ ok: true as const, applied: 1, skipped: 0 }), redo: () => ({ ok: true as const, applied: 1, skipped: 0 }) });
+    const a = suspendUndoRecording();
+    const b = suspendUndoRecording();
+    expect(isUndoSuppressed()).toBe(true);
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(0);
+    a();
+    a();
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(0);
+    b();
+    expect(isUndoSuppressed()).toBe(false);
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(1);
   });
 });

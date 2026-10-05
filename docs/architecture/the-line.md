@@ -182,6 +182,8 @@ run the daemon executes from the stored graph matches a local run.
 
 ## L9. The sweep starts the line
 
+The sweep's cron is off since 2026-10-02 (`crons.ts` keeps a note on how to
+turn it back on); runs start through `cast workflow run`. When registered,
 `orgLine.sweep` runs every two minutes. For each active role with trust
 `direct`: every task in its scope that is assigned to `agent:<handle>`, has
 status `open`, is not blocked and has no `workflow_run_id` gets a run when

@@ -6,22 +6,7 @@ This guide walks through setting up a complete self-hosted Codecast instance fro
 
 ## Architecture
 
-```
-                          ┌─────────────────┐
-                          │  Web Dashboard   │
-                          │  (Railway/VPS)   │
-                          └────────┬─────────┘
-                                   │
-┌────────────┐    ┌────────────────┴────────────────┐    ┌─────────────┐
-│  CLI Daemon │───▶│        Convex Backend           │◀───│  Mobile App  │
-│  (per-user) │    │                                 │    │  (optional)  │
-└────────────┘    │  ┌──────────┐  ┌─────────────┐  │    └─────────────┘
-                  │  │ Postgres │  │ Caddy Proxy  │  │
-                  │  └──────────┘  └─────────────┘  │    ┌─────────────┐
-                  │  ┌──────────┐  ┌─────────────┐  │◀───│ Desktop App  │
-                  │  │Dashboard │  │   Backend    │  │    │  (optional)  │
-                  └──┴──────────┴──┴─────────────┴──┘    └─────────────┘
-```
+![Self-hosted topology: a Railway project with Caddy, the Convex backend, its dashboard and Postgres; the web server on Railway; each user's cast daemon and the desktop and mobile apps all talk to Convex through the Caddy proxy](diagrams/self-hosting-topology.svg)
 
 | Component | Purpose | Required |
 |-----------|---------|----------|
@@ -33,7 +18,7 @@ This guide walks through setting up a complete self-hosted Codecast instance fro
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) v1.0+ (package manager and runtime)
+- [Bun](https://bun.sh) 1.3+ (package manager and runtime; the repo pins `bun@1.3.13`)
 - [Railway](https://railway.app) account (or another hosting platform)
 - A domain name (e.g., `codecast.yourdomain.com`)
 - [Resend](https://resend.com) account (for auth emails)
@@ -61,7 +46,7 @@ This creates a Railway project with four services:
 
 ### 1b. Replace the reverse proxy
 
-The default Caddy proxy only routes `/.well-known/*` and `/api/auth/*`. Codecast also needs `/api/github-app/*`, `/api/webhooks/*`, and `/cli/*` routed to HTTP actions.
+The default Caddy proxy only routes `/.well-known/*` and `/api/auth/*`. Codecast also needs `/api/github-app/*`, `/api/webhooks/*`, `/api/public/*` and `/cli/*` routed to HTTP actions.
 
 Build and push the custom proxy from the repo:
 
@@ -78,9 +63,13 @@ Then update the Railway Caddy service to use your image. The custom Caddyfile ro
 | `/.well-known/*` | HTTP actions (3211) | JWKS for JWT validation |
 | `/api/auth/*` | HTTP actions (3211) | OAuth callbacks |
 | `/api/github-app/*` | HTTP actions (3211) | GitHub App install/callback |
-| `/api/webhooks/*` | HTTP actions (3211) | GitHub webhooks |
-| `/cli/*` | HTTP actions (3211) | CLI token exchange |
-| Everything else | Backend (3210) | Queries, mutations, subscriptions |
+| `/api/webhooks/*` | HTTP actions (3211) | GitHub, Linear, Slack and Sentry webhooks; OAuth connector callbacks |
+| `/api/public/*` | HTTP actions (3211) | Public repository pages read without an account |
+| `/cli/*` | HTTP actions (3211) | Every CLI and daemon endpoint (auth exchange, sync, search, tasks) |
+| `/api/storage/*` | Backend (3210) | Stored files, served with a long-lived public `Cache-Control` |
+| Everything else | Backend (3210) | Queries, mutations, subscriptions, the deploy API |
+
+The proxy reads its two upstreams from `CONVEX_SITE_UPSTREAM` (port 3211) and `CONVEX_BACKEND_UPSTREAM` (port 3210); set both on the Caddy service.
 
 ### 1c. Get the admin key
 
@@ -90,7 +79,7 @@ After the first deployment, check the `convex-backend` deploy logs for a line li
 Admin key: codecast|0197af29e398027e9d7f...
 ```
 
-Copy this key -- you'll need it for all `npx convex` commands.
+Copy this key; every Convex CLI command needs it.
 
 ### 1d. Add a custom domain
 
@@ -123,8 +112,10 @@ CONVEX_SELF_HOSTED_ADMIN_KEY=codecast|your-admin-key-from-step-1c
 
 Deploy:
 ```bash
-npx convex deploy
+packages/convex/deploy.sh
 ```
+
+Always deploy through `deploy.sh`, never a raw `npx convex deploy`. A deploy pushes the whole `convex/` tree as one snapshot, so a push from a checkout that is behind your `origin/main` deletes every newer function from the deployment. `deploy.sh` fetches origin and refuses such a tree, serializes overlapping deploys, and moves a repo-root `.env.local` with a `CONVEX_DEPLOYMENT=` pointer aside so it cannot redirect the CLI.
 
 ### 1g. Set application environment variables
 
@@ -151,7 +142,7 @@ npx convex env set VOYAGE_API_KEY "voyage-..."
 # OR
 npx convex env set OPENAI_API_KEY "sk-..."
 
-# GitHub App for PR integration (optional, see Step 6)
+# GitHub App for PR integration (optional, see Step 7)
 npx convex env set GITHUB_APP_ID "123456"
 npx convex env set GITHUB_APP_PRIVATE_KEY "base64-encoded-pem"
 npx convex env set GITHUB_APP_WEBHOOK_SECRET "your-webhook-secret"
@@ -165,13 +156,13 @@ After creating your account, grant yourself admin:
 npx convex run migrations:setAdminRole '{"email": "you@yourdomain.com"}'
 ```
 
-This enables the admin dashboard (daemon logs, user management, system commands).
+This enables the admin dashboard (daemon logs, user management, system commands). `setAdminRole` is an internal mutation, so it runs only with the admin key in `packages/convex/.env.local`.
 
 ---
 
 ## Step 2: Deploy Web Dashboard
 
-The web app is a Vite + React SPA served by a Hono SSR server.
+The web app is a Vite + React SPA served by a small Hono server (`packages/web/server/index.ts`).
 
 ### 2a. Configure environment
 
@@ -202,7 +193,7 @@ Create a new Railway service from your repo. Railway will auto-detect the build:
 
 **Build command:**
 ```bash
-bun install && cd packages/convex && bun run build && cd ../web && bun run build
+bun install --frozen-lockfile && cd packages/convex && bun run build && cd ../web && bun run build
 ```
 
 **Start command:**
@@ -225,7 +216,7 @@ Visit `https://yourdomain.com`. You should see the login page. Create an account
 
 ## Step 3: Authentication Setup
 
-Codecast supports three auth providers. Email + password works out of the box with Resend. GitHub and Apple are optional.
+Codecast supports three auth providers. Email + password works out of the box with Resend. GitHub and Apple are optional. The provider setup is shared code in `@platform/auth/convex` (vendored under `platform/packages/`); `packages/convex/convex/auth.ts` holds only codecast's settings.
 
 ### Email + Password (with Resend)
 
@@ -234,11 +225,7 @@ Codecast supports three auth providers. Email + password works out of the box wi
 3. Create an API key
 4. Set `RESEND_API_KEY` on your Convex deployment
 
-**Important:** The password reset email is sent from `support@codecast.sh` (hardcoded in `packages/convex/convex/auth.ts` line 19). Change this to your own domain:
-
-```ts
-from: "YourApp <support@yourdomain.com>",
-```
+**Important:** Every email (sign-in codes, password reset, welcome) is sent from the codecast brand's sender address: `packages/convex/convex/emails/send.ts` builds it with `senderAddress(BRAND)` from `@platform/email`, with `BRAND` defined in `emails/render.ts`. Point that brand at a domain you have verified in Resend, or sends will fail.
 
 ### GitHub OAuth
 
@@ -271,23 +258,19 @@ from: "YourApp <support@yourdomain.com>",
 
 **Gotcha:** Apple Sign-In does not work on `localhost`. You must test against a deployed instance.
 
+The iOS app's native Apple sign-in is a separate path: its token is issued for the app's bundle id, set as `appleNative.audience` in `auth.ts` (`com.ashotp.codecast`). Change it to your own bundle id if you build the mobile app.
+
 ---
 
 ## Step 4: CLI Setup
 
 The CLI daemon watches local agent session files and syncs them to your Convex backend.
 
-### Build from source
+### Run from source
 
 ```bash
-cd packages/cli
 bun install
-bun run build
-```
-
-The CLI is now at `packages/cli/dist/index.js`. Test it:
-```bash
-bun packages/cli/dist/index.js --version
+bun run packages/cli/src/main.ts --version
 ```
 
 ### Build standalone binary
@@ -304,22 +287,16 @@ bun run build:binary
 cp packages/cli/codecast ~/.local/bin/codecast
 ln -sf ~/.local/bin/codecast ~/.local/bin/cast
 
-# Configure the CLI to point at your instance
-cast setup
-# Or manually create ~/.codecast/config.json:
-cat > ~/.codecast/config.json << 'EOF'
-{
-  "web_url": "https://yourdomain.com",
-  "convex_url": "https://convex.yourdomain.com"
-}
-EOF
+# Point the CLI at your instance (writes ~/.codecast/config.json)
+cast config convex_url https://convex.yourdomain.com
+cast config web_url https://yourdomain.com
 
-# Authenticate
+# Authenticate (opens the browser)
 cast auth
-# Opens browser for OAuth login
 
-# Start the daemon
+# Start the daemon, and start it on every login
 cast start
+cast setup
 ```
 
 ### Distribute to your team
@@ -339,18 +316,13 @@ To distribute pre-built binaries like the hosted version:
    ./scripts/deploy.sh
    ```
 
-This builds binaries for all 5 targets (macOS arm64/x64, Linux arm64/x64, Windows x64), uploads them to your bucket, and generates a `latest.json` manifest with SHA256 checksums.
+This builds binaries for all 5 targets (macOS arm64/x64, Linux arm64/x64, Windows x64), uploads them to your bucket, and generates a `latest.json` manifest with SHA256 checksums. Its R2 bucket name (`codecast`) is set in the script. The hosted version cuts releases from CI instead (`.github/workflows/cut-cli-release.yml`), which signs the macOS binaries with a Developer ID certificate held in repo secrets; adapt that workflow if you want signed binaries.
 
-4. Update the install script at `packages/web/public/install.sh` to point `DOWNLOAD_HOST` at your bucket's public URL.
+4. Point `DOWNLOAD_HOST` in `packages/web/public/install.sh` at your bucket's public URL. The Windows installer (`install.ps1`) installs inside WSL by fetching `https://codecast.sh/install`; change that URL to your web app's.
 
 ### Supported agents
 
-| Agent | History Location | Status |
-|-------|-----------------|--------|
-| Claude Code | `~/.claude/projects/**/*.jsonl` | Supported |
-| Codex CLI | `~/.codex/history/**/*.jsonl` | Supported |
-| Cursor | `~/.cursor/` | In progress |
-| Gemini | `~/.gemini/` | In progress |
+Claude Code, Codex, Cursor, Gemini, OpenCode, pi, Grok and Muse Spark all sync, plus the Cursor and Codex cloud agents. The [README's agent matrix](../README.md#supported-agents) lists each one's history location and what it supports.
 
 ---
 
@@ -371,11 +343,13 @@ npm run build:local
 npm run install:local
 ```
 
-The app loads whatever URL is in `CODECAST_URL` (defaults to `https://codecast.sh`). Override it:
+The app loads whatever URL is in `CODECAST_URL` (defaults to `https://codecast.sh`). The `dev` script pins it to `https://local.codecast.sh`, so run Electron directly to point it elsewhere:
 
 ```bash
-CODECAST_URL=https://yourdomain.com npm run dev
+CODECAST_URL=https://yourdomain.com npx electron .
 ```
+
+A packaged build takes the same variable at launch; to change its built-in default, edit `PROD_URL` in `packages/electron/main.js`.
 
 ### Build for distribution
 
@@ -389,12 +363,14 @@ For signed + notarized builds that you can distribute to others:
 
 Build:
 ```bash
-# With keychain profile
-NOTARIZE_KEYCHAIN_PROFILE=codecast npm run build
+# With a keychain profile named "codecast" (what `npm run build` sets)
+npm run build
 
-# With env vars
-APPLE_ID=you@example.com APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx APPLE_TEAM_ID=XXXXXXXXXX npm run build
+# With env vars (call electron-builder directly: the build script pins the keychain profile)
+APPLE_ID=you@example.com APPLE_PASSWORD=xxxx-xxxx-xxxx-xxxx APPLE_TEAM_ID=XXXXXXXXXX npx electron-builder -m
 ```
+
+The hosted app releases through `packages/electron/scripts/release.sh`, which builds, notarizes and publishes in one step.
 
 Output: `packages/electron/dist/Codecast-{version}-arm64.dmg`
 
@@ -432,9 +408,10 @@ Edit `.env.local`:
 EXPO_PUBLIC_CONVEX_URL=https://convex.yourdomain.com
 ```
 
-Or set via EAS secrets for cloud builds:
+Or set it as an EAS environment variable for cloud builds (`.env` files are gitignored, so EAS never sees them):
 ```bash
-npx eas secret:create --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --scope project
+npx eas env:create production --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --visibility plaintext
+npx eas env:create preview --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --visibility plaintext
 ```
 
 ### Build
@@ -443,21 +420,16 @@ npx eas secret:create --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.your
 # Development (iOS Simulator)
 bun run build:dev
 
-# Preview (internal TestFlight distribution)
+# Preview (internal ad hoc distribution to registered devices)
 bun run build:preview
 
-# Production (App Store)
+# Production (TestFlight and the App Store)
 bun run build:prod
 ```
 
 ### Submit to App Store
 
-1. Set Apple credentials as env vars or EAS secrets:
-   ```bash
-   export APPLE_ID=you@example.com
-   export ASC_APP_ID=1234567890       # App Store Connect app ID
-   export APPLE_TEAM_ID=XXXXXXXXXX
-   ```
+1. Create an App Store Connect API key and point `submit.production.ios` in `packages/mobile/eas.json` at it (`ascApiKeyPath`, `ascApiKeyId`, `ascApiKeyIssuerId`). [RELEASING-MOBILE.md](RELEASING-MOBILE.md) has the steps.
 
 2. Submit:
    ```bash
@@ -471,9 +443,11 @@ bun run build:prod
 Push JavaScript updates without a new App Store build:
 
 ```bash
-bun run update:preview       # TestFlight channel
-bun run update:production    # Production channel
+bun run update:preview       # preview channel (ad hoc builds)
+bun run update:production    # production channel (TestFlight and App Store builds)
 ```
+
+An OTA update runs new JavaScript on binaries built earlier, so it must not statically import a native module those binaries lack. See the mobile rules in the repo's `CLAUDE.md`.
 
 ### One-time App Store setup
 
@@ -488,7 +462,7 @@ See [docs/RELEASING-MOBILE.md](RELEASING-MOBILE.md) for the detailed release che
 
 ## Step 7: GitHub App Integration (Optional)
 
-The GitHub App enables automatic PR comment sync -- Codecast posts a link to the relevant conversation on new PRs, and syncs review comments bidirectionally.
+The GitHub App links pull requests and commits to the sessions that wrote them, wakes the session that owns a pull request when a review or check lands, and syncs review threads both ways.
 
 ### Create the GitHub App
 
@@ -579,6 +553,22 @@ EXPO_PUBLIC_POSTHOG_KEY=phc_...
 EXPO_PUBLIC_POSTHOG_HOST=https://us.i.posthog.com
 ```
 
+### Other integrations
+
+Each is off until its variables are set on the Convex deployment (`npx convex env set`).
+
+| Feature | Variables |
+|---------|-----------|
+| Calls (huddles, transcripts) | `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` |
+| Slack | `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET` (`SLACK_REDIRECT_BASE` defaults to `CONVEX_SITE_URL`) |
+| Linear | `LINEAR_OAUTH_CLIENT_ID`, `LINEAR_OAUTH_CLIENT_SECRET`, `LINEAR_WEBHOOK_SECRET` |
+| Gmail and other Google connectors | `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` |
+| Token-based connections (stored API tokens) | `CONNECTION_SECRETS_KEY` (rotating it orphans every stored token) |
+| iOS push notifications | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_AUTH_KEY`, `APNS_ENV` |
+| Media (images, published-page video) | `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_BUCKET`, `MEDIA_PUBLIC_BASE` |
+| Signed outbound requests | `CODECAST_SIGNING_KEY` (generate with `bun packages/convex/scripts/codecast-signing-key.ts`) |
+| Sentry issue webhooks | `SENTRY_WEBHOOK_SECRET` |
+
 ### Embeddings (Semantic Search)
 
 Codecast uses vector embeddings for semantic search across conversations. Set one of:
@@ -616,6 +606,9 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `GITHUB_APP_SLUG` | For PR integration | GitHub App install link |
 | `GITHUB_APP_CLIENT_ID` | For PR integration | Verifies who completes an install |
 | `GITHUB_APP_CLIENT_SECRET` | For PR integration | Verifies who completes an install |
+| `GITHUB_WEBHOOK_SECRET` | For repository webhooks | Verifies `/api/webhooks/github` deliveries |
+
+The integrations in Step 8 add their own variables.
 
 ### Convex Backend Service (Railway env vars)
 
@@ -624,6 +617,8 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `CONVEX_CLOUD_ORIGIN` | Backend's own public URL |
 | `CONVEX_SITE_ORIGIN` | Same as above |
 | `CONVEX_SELF_HOSTED_ADMIN_KEY` | Master admin credential |
+
+The Caddy service needs `CONVEX_SITE_UPSTREAM` and `CONVEX_BACKEND_UPSTREAM` (Step 1b).
 
 ### Web Dashboard (`packages/web/.env.local`)
 
@@ -646,6 +641,8 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `web_url` | Web dashboard URL |
 | `auth_token` | User auth token (set by `cast auth`) |
 
+`cast config` lists every key and sets one: `cast config <key> <value>`.
+
 ### CLI Deploy (`packages/cli/.env.deploy`)
 
 | Variable | Purpose |
@@ -661,6 +658,7 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `EXPO_PUBLIC_CONVEX_URL` | Convex backend URL |
 | `EXPO_PUBLIC_SENTRY_DSN` | Error tracking |
 | `EXPO_PUBLIC_POSTHOG_KEY` | Product analytics |
+| `EXPO_PUBLIC_POSTHOG_HOST` | PostHog ingest host |
 
 ### Desktop
 

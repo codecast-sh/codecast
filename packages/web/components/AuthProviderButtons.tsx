@@ -1,10 +1,14 @@
-import { useProviderSignIn, type OAuthProviderId } from "@platform/auth/web";
+import { DEFAULT_OAUTH_PROVIDERS, useProviderSignIn, type OAuthProviderId } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { bridge } from "../lib/desktop";
 import { markOAuthStarted } from "../lib/oauthReturn";
 import { slackProviderRedirect } from "../lib/slackReturn";
 
-// Apple + GitHub sign-in buttons, shared by /login and /signup.
+// Provider sign-in buttons, shared by /login and /signup: Apple and GitHub
+// always, Google when the deployment has its OAuth client (auth.signInProviders).
+// Until that answer arrives, or on a backend that predates it, Google stays
+// hidden rather than offering a button the server would refuse.
 //
 // In a browser they run the provider OAuth redirect directly, as always. In
 // the desktop app the embedded window has no provider sessions (issue #20),
@@ -20,10 +24,13 @@ import { slackProviderRedirect } from "../lib/slackReturn";
 // the Tailwind classes and the glyphs below are codecast's.
 
 const BUTTON_CLASS: Record<OAuthProviderId, string> = {
+  // Google's light button: white fill, gray stroke, near-black label.
+  google:
+    "w-full py-3 px-4 bg-white hover:bg-gray-50 disabled:bg-white/50 disabled:cursor-not-allowed text-[#1f1f1f] font-medium rounded-lg border border-[#747775] transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
   apple:
     "w-full py-3 px-4 bg-white hover:bg-gray-100 disabled:bg-white/50 disabled:cursor-not-allowed text-black font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
   github:
-    "w-full mt-3 py-3 px-4 bg-[#24292e] hover:bg-[#1a1e22] disabled:bg-[#24292e]/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
+    "w-full py-3 px-4 bg-[#24292e] hover:bg-[#1a1e22] disabled:bg-[#24292e]/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
 };
 
 const ICON_FILL_RULE: Partial<Record<OAuthProviderId, "evenodd">> = { github: "evenodd" };
@@ -36,6 +43,7 @@ export function AuthProviderButtons({
   redirectTo: string;
 }) {
   const openExternal = bridge("openExternal");
+  const offered = useQueryNoThrow(api.auth.signInProviders, {}).data;
   const { buttons, start, cancel, nonce, loading, error, desktopBrowserAuth } = useProviderSignIn({
     verb,
     redirectTo: slackProviderRedirect(redirectTo),
@@ -43,6 +51,7 @@ export function AuthProviderButtons({
     desktop: openExternal
       ? { openExternal, deviceName: "Codecast Desktop", origin: window.location.origin }
       : null,
+    providers: offered?.google ? ["google", ...DEFAULT_OAUTH_PROVIDERS] : DEFAULT_OAUTH_PROVIDERS,
   });
 
   if (nonce) {
@@ -67,23 +76,29 @@ export function AuthProviderButtons({
 
   return (
     <>
-      {buttons.map((p) => (
-        <button
-          key={p.id}
-          type="button"
-          onClick={() => {
-            markOAuthStarted();
-            void start(p.id, p.label);
-          }}
-          disabled={loading}
-          className={BUTTON_CLASS[p.id]}
-        >
-          <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-            <path d={p.iconPath} fillRule={ICON_FILL_RULE[p.id]} clipRule={ICON_FILL_RULE[p.id]} />
-          </svg>
-          Sign {verb} with {p.label}
-        </button>
-      ))}
+      <div className="flex flex-col gap-3">
+        {buttons.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => {
+              markOAuthStarted();
+              void start(p.id, p.label);
+            }}
+            disabled={loading}
+            className={BUTTON_CLASS[p.id]}
+          >
+            <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              {p.iconParts ? (
+                p.iconParts.map((part) => <path key={part.fill} d={part.d} fill={part.fill} />)
+              ) : (
+                <path d={p.iconPath} fillRule={ICON_FILL_RULE[p.id]} clipRule={ICON_FILL_RULE[p.id]} />
+              )}
+            </svg>
+            Sign {verb} with {p.label}
+          </button>
+        ))}
+      </div>
       {error && <p className="mt-3 text-sm text-red-400 text-center">{error}</p>}
       {desktopBrowserAuth && (
         <p className="mt-3 text-sm text-sol-text-dim text-center">

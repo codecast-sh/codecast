@@ -75,6 +75,7 @@ import { checkGuestRoster, endGuestAdmissions, roomHasGuestLinks } from "./lib/c
 // what only the server can: authorization.
 import {
   CALL_MEMBER_STALE_MS,
+  isRecRoomKey,
   parseRoomKey,
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
@@ -323,7 +324,7 @@ export async function upsertRoomState(
   ctx: any,
   roomKey: string,
   seat: { team_id: Id<"teams">; user_id: Id<"users"> },
-  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number; emptied_at?: number },
+  patch: { locked?: boolean; transcribe_off?: boolean; transcribe_off_at?: number; emptied_at?: number; words_public?: boolean },
   now: number,
 ): Promise<void> {
   const existing = await readRoomState(ctx, roomKey);
@@ -343,8 +344,29 @@ export async function upsertRoomState(
     transcribe_off: patch.transcribe_off,
     transcribe_off_at: patch.transcribe_off_at,
     emptied_at: patch.emptied_at,
+    words_public: patch.words_public,
     updated_at: now,
   });
+}
+
+/** Stamp on the room whether its live call record's words are on a public
+ *  link (call_room_state.words_public), from the record as it now stands:
+ *  its link turned on or off (publicShare.claimShareToken), a record begun
+ *  (transcripts.beginCallRecord: a new one has no link) or ended. Only the
+ *  record the room is keeping now speaks for it, so a link turned on for an
+ *  earlier call of the same room changes nothing here. Written only when the
+ *  answer moves; the row is created for it with the record's team and
+ *  scribe, the seat a state row bills to. */
+export async function stampRoomWordsPublic(
+  ctx: any,
+  call: Pick<Doc<"transcripts">, "room_key" | "team_id" | "started_by" | "status" | "share_token">,
+  opts: { ending?: boolean } = {},
+): Promise<void> {
+  if (isRecRoomKey(call.room_key)) return;
+  if (call.status !== "live" && !opts.ending) return;
+  const wordsPublic = call.status === "live" && !opts.ending && !!call.share_token;
+  if (!!(await readRoomState(ctx, call.room_key))?.words_public === wordsPublic) return;
+  await upsertRoomState(ctx, call.room_key, { team_id: call.team_id, user_id: call.started_by }, { words_public: wordsPublic }, Date.now());
 }
 
 // The open door: a live huddle admits any member of the team it bills to.

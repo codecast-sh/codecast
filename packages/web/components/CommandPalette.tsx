@@ -17,9 +17,10 @@ import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
 import { useTheme } from "./ThemeProvider";
 import { KeyCap, MenuKeyCaps } from "./KeyboardShortcutsHelp";
 import { useRouter, usePathname } from "next/navigation";
-import { useQuery, useMutation, useConvex } from "convex/react";
+import { useQuery, useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Command as CommandPrimitive } from "cmdk";
+import { ModPaletteGroup } from "./mods/ModPaletteGroup";
 import { CommandPaletteList } from "./CommandPaletteList";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { AvatarImg } from "../lib/avatarCache";
@@ -33,13 +34,14 @@ import { useBulkMoveSessions } from "../hooks/useBulkMoveSessions";
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
-import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary, isFavoriteInStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { resolveRecentVisits, visitTimeAgo, VISIT_OBJECT_LABEL, type ResolvedVisit } from "../lib/recentVisits";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 import { RecentVisitGlyph } from "./RecentVisitRow";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
+import { collapseSameTitle } from "../lib/mentionRanking";
 import { sessionMatchesQuery, sessionSearchHaystack, mergeSearchRows } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
@@ -99,7 +101,8 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { animatedSetSessionRest, undoAsOne } from "../store/undoActions";
+import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
+import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 import type { UserRest } from "@codecast/shared/contracts";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
@@ -181,7 +184,7 @@ import { BROWSER_ROUTE, displayHost } from "../lib/browserPane";
 import { typedAddress } from "../lib/browserPaneLinks";
 import { openBeside, openBrowserPane } from "../lib/stage";
 import { isTriageBarCompact } from "./triage/graduation";
-import { setTaskParent, closeTaskWithGuard } from "../lib/taskActions";
+import { setTaskParent, closeTaskWithGuard, updateTasksAsOne } from "../lib/taskActions";
 import { pickWhoRows, type PalettePickKind, type PalettePickTarget } from "../lib/palettePick";
 
 const api = _api as any;
@@ -263,6 +266,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Ops: replays", path: "/ops/replays", icon: "radar", keywords: "session replays recordings repro", secondary: true },
   { label: "Capabilities", path: "/capabilities", icon: "grid", keywords: "skills mcp plugins drift machines library apps connect" },
   { label: "Pages", path: "/pages", icon: "file", keywords: "published html artifacts share cast publish gallery" },
+  { label: "Mods", path: "/mods", icon: "grid", keywords: "mods plugins extensions customize panes commands blocks", secondary: true },
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
   { label: "Initiatives", path: "/initiatives", icon: "grid", keywords: "initiative goals objectives company strategy roadmap health progress owner" },
@@ -274,6 +278,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Settings", path: "/settings", icon: "settings", keywords: "preferences config profile general" },
   { label: "Workflows", path: "/routines", icon: "workflow", keywords: "orchestration runs graph dot gates routines", secondary: true },
   { label: "Line", path: "/line", icon: "workflow", keywords: "the line signals causes build cards watch shipped factory throughput", secondary: true },
+  { label: "Line settings", path: "/line/settings", icon: "settings", keywords: "line profile finders principles prompting commands check prove eval ship size budget watch days cards cap stations prompts customize line.toml", secondary: true },
   { label: "Live Sessions", path: "/sessions", icon: "session", keywords: "running machines devices liveness", secondary: true },
   { label: "Resources", path: "/resources", icon: "session", keywords: "cpu memory activity monitor load pressure processes offload cloud", secondary: true },
   { label: "Notifications", path: "/notifications", icon: "bell", keywords: "alerts updates", secondary: true },
@@ -497,7 +502,7 @@ export function ActionSubmenu({
   const [renameId, setRenameId] = useState<string | null>(null);
 
   const updatePlan = useInboxStore((s) => s.updatePlan);
-  const assignToAgent = useMutation(api.tasks.assignToAgent);
+  const assignToAgent = useInboxStore((s) => s.assignTaskToAgent);
   // The hand-off action runs through the client directly (an action, not a mutation).
   const convex = useConvex();
   const updateTask = useInboxStore((s) => s.updateTask);
@@ -1033,15 +1038,15 @@ export function ActionSubmenu({
       const applyBucket = (bucketId: string | null, bucketLabel?: string) => {
         const convIds = targets.map(resolveConvId).filter((id): id is string => !!id);
         const applied = convIds.length;
-        const sessions = counted(applied, "session");
-        undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
-          for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
-        });
         if (!applied) {
           toast.error("Session is no longer available");
           return;
         }
-        toast.success(bucketId ? `Labeled ${bucketLabel}` : "Label removed");
+        const sessions = counted(applied, "session");
+        gestureToast(bucketId ? `Labeled ${bucketLabel}` : "Label removed", () =>
+          undoAsOne(bucketId ? `Labeled ${sessions} ${bucketLabel ?? ""}`.trimEnd() : `Removed the label from ${sessions}`, () => {
+            for (const convId of convIds) store.assignSessionToBucket(convId, bucketId);
+          }));
       };
       if (item.key === "__remove__") {
         applyBucket(null);
@@ -1067,11 +1072,10 @@ export function ActionSubmenu({
     }
 
     if (targetType === "task") {
-      const applyTaskUpdate = (fields: Record<string, any>) => {
-        undoAsOne(`Changed ${counted(targets.length, "task")}`, () => {
-          for (const t of targets as TaskItem[]) updateTask(t.short_id, fields);
-        });
-      };
+      // One undo named for the change; terminal moves route through the
+      // single close gateway (a parent with open subtasks opens its dialog).
+      const applyTaskUpdate = (fields: Record<string, any>) =>
+        updateTasksAsOne((targets as TaskItem[]).map((t) => t.short_id), fields);
       const label = count === 1 ? (targets[0] as TaskItem).short_id : `${count} tasks`;
 
       if (mode === "status") {
@@ -1079,23 +1083,7 @@ export function ActionSubmenu({
         // what the terminal check and the server's side effects key on.
         const picked = statusByKey(taskStatuses, item.key);
         if (!picked) return;
-        const fields = statusWriteFields(picked);
-        // Terminal moves route through the single close gateway so a parent
-        // with open subtasks opens the shared dialog instead of writing Done
-        // and stranding a doomed local state the server refuses.
-        if (fields.status === "done" || fields.status === "dropped") {
-          let deferred = false;
-          const status = fields.status;
-          undoAsOne(`Moved ${counted(targets.length, "task")} to ${item.label}`, () => {
-            for (const t of targets as TaskItem[]) {
-              if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
-            }
-          });
-          if (!deferred) toast.success(`${label} \u2192 ${item.label}`);
-        } else {
-          applyTaskUpdate(fields);
-          toast.success(`${label} \u2192 ${item.label}`);
-        }
+        if (!applyTaskUpdate(statusWriteFields(picked)).needsConfirm) toast.success(`${label} \u2192 ${item.label}`);
       } else if (mode === "priority") {
         applyTaskUpdate({ priority: item.key });
         toast.success(`${label} priority \u2192 ${item.label}`);
@@ -1153,7 +1141,7 @@ export function ActionSubmenu({
       return;
     }
     Promise.allSettled(
-      runnable.map((t) => assignToAgent({ short_id: t.short_id, agent_type: agentType, initial_message: msg }))
+      runnable.map((t) => assignToAgent(t.short_id, agentType, msg))
     ).then((results) => {
       const failures = results.filter((r) => r.status === "rejected") as PromiseRejectedResult[];
       const ok = runnable.length - failures.length;
@@ -1561,16 +1549,7 @@ function matchEntities(
   // task list covers entire plan" task minted every run), which floods the
   // palette with apparent dupes. Sorted best-first, so the first occurrence per
   // title is the highest-ranked, most-recent representative.
-  const seen = new Set<string>();
-  const out: MentionRecord[] = [];
-  for (const { rec } of ranked) {
-    const key = (rec.title || "").trim().toLowerCase();
-    if (key && seen.has(key)) continue;
-    seen.add(key);
-    out.push(rec);
-    if (out.length >= cap) break;
-  }
-  return out;
+  return collapseSameTitle(ranked.map((r) => r.rec), (rec) => rec.title, cap);
 }
 
 // Memoized: this overlay is ALWAYS mounted inside DashboardLayout, which
@@ -2311,16 +2290,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (targetType === "session") {
       const session = target as InboxSession;
       // The palette's row can predate a toggle; the store says what the star shows now.
-      const sessionFavorite = isFavoriteInStore(state, session._id);
       if (actionKey === "session_parent") { navigate(`/conversation/${session.parent_conversation_id}`); return; }
       if (actionKey === "session_branch") { void copyToClipboard(session.git_branch || "").then(() => toast.success("Branch copied")); closePalette(); return; }
       if (actionKey === "session_files") { navigate(filesHref({ localPath: session.project_path || session.git_root })); return; }
       const each: Record<string, (id: string) => void> = {
         session_restore: (id) => state.restoreSession(id),
-        // Pin and favorite follow the first row's state, so a mixed selection
-        // ends all pinned (or all unpinned) instead of flipping each row.
-        session_pin: (id) => { if (!!state.sessions[id]?.is_pinned === !!session.is_pinned) state.pinSession(id); },
-        session_favorite: (id) => { if (isFavoriteInStore(state, id) === sessionFavorite) state.toggleFavorite(id); },
         // The teardown rides the hide transition server side (dispatch.applyPatches);
         // the notice hook names any schedules the kill cancels.
         session_kill: (id) => killWithNotice(id),
@@ -2335,18 +2309,16 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       if (rest) void animatedSetSessionRest(ids, rest);
       // Several kills are one bulk kill: one undo, one sound, one notice.
       else if (actionKey === "session_kill" && ids.length > 1) killManyWithNotice(ids);
+      else if (actionKey === "session_pin") toggleSessionsLikeFirst(ids, "pin");
+      else if (actionKey === "session_favorite") toggleSessionsLikeFirst(ids, "favorite");
       else {
         const run = each[actionKey];
         if (!run) return;
-        const verb = actionKey === "session_pin" ? (session.is_pinned ? "Unpinned" : "Pinned")
-          : actionKey === "session_favorite" ? (sessionFavorite ? "Unfavorited" : "Favorited")
-          : PALETTE_SESSION_VERB[actionKey] ?? "Changed";
+        const verb = PALETTE_SESSION_VERB[actionKey] ?? "Changed";
         undoAsOne(`${verb} ${counted(ids.length, "session")}`, () => {
           for (const id of ids) run(id);
         });
       }
-      if (actionKey === "session_pin") toast.success(`${session.is_pinned ? "Unpinned" : "Pinned"}${targets.length > 1 ? ` ${targets.length} sessions` : ""}`);
-      if (actionKey === "session_favorite") toast.success(sessionFavorite ? "Removed from favorites" : "Added to favorites");
       if (targets.length > 1) useInboxSelection.getState().clear();
       closePalette();
       return;
@@ -3315,6 +3287,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           ))}
         </CommandPrimitive.Group>
         )}
+
+        {!picking && <ModPaletteGroup groupClass={groupClass} itemClass={itemClass} navigate={navigate} close={closePalette} query={query} />}
 
         {!picking && vaultReady && (
           <CommandPrimitive.Group heading="Files" className={groupClass}>

@@ -1,0 +1,123 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a session seen in full that changed a support agent's prompt (measured on evals) and shipped its settings screen, with one useful screenshot and one terminal screenshot",
+ "snapshot": {
+  "story": {
+   "area": "support",
+   "branch": "main",
+   "commit_shas": [
+    "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "b2c3d4e5f60718293a4b5c6d7e8f901234567890"
+   ],
+   "area_counts": {
+    "support": 4,
+    "web": 2
+   },
+   "risks": [],
+   "conversation_ids": [
+    "k17a1b2c3d4e5f6g7h8j9k0"
+   ],
+   "kind": "feature",
+   "importance": 3
+  },
+  "commits": [
+   {
+    "sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+    "subject": "feat(support): refund agent confirms the order before promising a refund",
+    "author_name": "Priya Raman",
+    "author_email": "priya@example.com",
+    "timestamp": 1768388400000,
+    "branch": "main",
+    "conversation_id": "k17a1b2c3d4e5f6g7h8j9k0",
+    "insertions": 46,
+    "deletions": 12,
+    "areas": {
+     "support": {
+      "touches": 4,
+      "insertions": 46,
+      "deletions": 12
+     }
+    },
+    "top_paths": [
+     "packages/support/prompts/refund-agent.md",
+     "packages/support/agent.ts"
+    ]
+   },
+   {
+    "sha": "b2c3d4e5f60718293a4b5c6d7e8f901234567890",
+    "subject": "feat(web): refund policy settings screen",
+    "author_name": "Priya Raman",
+    "author_email": "priya@example.com",
+    "timestamp": 1768390200000,
+    "branch": "main",
+    "conversation_id": "k17a1b2c3d4e5f6g7h8j9k0",
+    "insertions": 210,
+    "deletions": 4,
+    "areas": {
+     "web": {
+      "touches": 2,
+      "insertions": 210,
+      "deletions": 4
+     }
+    },
+    "top_paths": [
+     "packages/web/app/settings/refunds/page.tsx"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "k17a1b2c3d4e5f6g7h8j9k0",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Refund agent asks for the order number before promising anything",
+    "summary": "The refund agent used to promise refunds before checking the order existed; customers were told yes and then refused. The prompt now has it ask for and confirm the order first, and admins can set the refund window on a new settings screen.",
+    "turns": [
+     {
+      "ask": "stop the refund bot promising refunds it can't give",
+      "did": [
+       "rewrote the refund agent prompt to confirm the order first",
+       "ran the refund-agent evals: 12/20 before, 19/20 after, separated better"
+      ]
+     },
+     {
+      "ask": "let admins set the refund window",
+      "did": [
+       "added a refund policy settings screen with a 14 to 90 day window"
+      ]
+     }
+    ],
+    "media": {
+     "images": [
+      {
+       "url": "https://convex.example/api/storage/terminal",
+       "timestamp": 1768387800000,
+       "context": "evals check refund-agent --reps 5 output in the terminal"
+      },
+      {
+       "url": "https://convex.example/api/storage/settings",
+       "timestamp": 1768390100000,
+       "context": "The new refund policy settings screen with the refund window slider set to 30 days"
+      }
+     ],
+     "edits": [
+      {
+       "path": "packages/support/prompts/refund-agent.md",
+       "before": "When a customer asks for a refund, reassure them and explain the refund will be processed.",
+       "after": "When a customer asks for a refund, ask for their order number and confirm the order exists and is inside the refund window before you promise anything. If it is outside the window, say so plainly.",
+       "timestamp": 1768387200000
+      }
+     ]
+    }
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek"
+  ]
+ },
+ "label": {
+  "why": "session"
+ }
+}

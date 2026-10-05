@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { evalsHref, evalsHrefFor, evalsSearchTargets, evalsSenseHref, evalsSection, evalsTabLabel, parseEvalsPath, type EvalsView } from "./evalsPaths";
+import { evalsCanonicalPath, evalsHref, evalsHrefFor, evalsSearchTargets, evalsSenseHref, evalsSection, evalsTabLabel, parseEvalsPath, type EvalsView } from "./evalsPaths";
 
 const at = (href: string) => {
   const [path, query = ""] = href.split("?");
@@ -15,8 +15,8 @@ describe("parseEvalsPath", () => {
     { view: "home", cadence: "nightly" },
     { view: "surface", surface: "settle", batch: null, compare: null },
     { view: "surface", surface: "settle", batch: BATCH, compare: "2026-10-01T00:00:00.000Z" },
-    { view: "freeze", freezeId: "ef03830f-4363-41c1-9fe9-1e0a4532e14d", batch: BATCH, a: null, b: null },
-    { view: "freeze", freezeId: "ef03830f-4363-41c1-9fe9-1e0a4532e14d", batch: null, a: RUN, b: "title-7ab2a29e-seed5-2026-10-03T01-13-08-164Z" },
+    { view: "freeze", freezeId: "ef03830f", batch: BATCH, a: null, b: null },
+    { view: "freeze", freezeId: "ef03830f", batch: null, a: RUN, b: "title-7ab2a29e-seed5-2026-10-03T01-13-08-164Z" },
     { view: "commit", sha: "0ae504f0123", surface: "settle" },
     { view: "commit", sha: "0ae504f0123", surface: null },
     { view: "patch", sha: "87d03b".padEnd(64, "0") },
@@ -105,10 +105,46 @@ describe("evalsSearchTargets", () => {
 
   it("reads a known freeze prefix as the freeze, and an unknown hex as a commit", () => {
     expect(evalsSearchTargets("ef03830f", known)).toEqual([{ kind: "freeze", label: "unresolvable-error (ef03830f)", href: evalsHref.freeze("ef03830f-4363-41c1-9fe9-1e0a4532e14d") }]);
-    expect(evalsSearchTargets("6cd0083b3", known)).toEqual([{ kind: "commit", label: "commit 6cd0083b3 as the bad end", href: evalsHref.bisectNew({ bad: "6cd0083b3" }) }]);
+    expect(evalsSearchTargets("6cd0083b3", known)).toEqual([{ kind: "commit", label: "commit 6cd0083b3", href: evalsHref.commit("6cd0083b3") }]);
+  });
+
+  it("offers runs and freezes the index found by prefix, not only full ids", () => {
+    const found = { ...known, freezes: [...known.freezes, { id: "jx7btyt:100", name: "the broken moment" }], runs: [{ id: RUN, surface: "settle", freezeName: "unresolvable-error" }] };
+    expect(evalsSearchTargets(RUN.slice(0, 12), found)).toContainEqual({ kind: "run", label: RUN, href: evalsHref.run(RUN) });
+    expect(evalsSearchTargets("jx7b", found)).toContainEqual({ kind: "freeze", label: "the broken moment (jx7btyt:)", href: evalsHref.freeze("jx7btyt:100") });
   });
 
   it("finds nothing for blank input", () => {
     expect(evalsSearchTargets("   ", known)).toEqual([]);
+  });
+});
+
+describe("addresses carry identifiers only", () => {
+  const FULL = "ef03830f-4363-41c1-9fe9-1e0a4532e14d";
+  const LABEL = "org-review-opus-ct56470-v1";
+
+  it("names a freeze by its 8-character prefix", () => {
+    expect(evalsHref.freeze(FULL)).toBe("/evals/f/ef03830f");
+    expect(evalsHref.bisectNew({ surface: "title", freeze: FULL })).toBe("/evals/bisect/new?surface=title&freeze=ef03830f");
+  });
+
+  it("keeps a stamp or a sha as itself and hashes any other batch name", () => {
+    expect(evalsHref.surface("title", { batch: BATCH })).toContain(encodeURIComponent(BATCH));
+    expect(evalsHref.bisectNew({ surface: "title", good: "6cd0083b3", bad: BATCH })).toContain("good=6cd0083b3");
+    const href = evalsHref.surface("title", { batch: LABEL, compare: `${BATCH}~line-branch` });
+    expect(href).not.toContain("org-review");
+    expect(href).not.toContain("line-branch");
+    expect(href).toMatch(/batch=_[0-9a-f]{8}&compare=_[0-9a-f]{8}$/);
+  });
+
+  it("brings any typed or older address to that form, and anything else to the wall", () => {
+    expect(evalsCanonicalPath(`/evals/f/${FULL}?batch=${LABEL}`)).toMatch(/^\/evals\/f\/ef03830f\?batch=_[0-9a-f]{8}$/);
+    expect(evalsCanonicalPath(`/evals/r/${RUN}#gate-no-leak`)).toBe(`/evals/r/${RUN}#gate-no-leak`);
+    expect(evalsCanonicalPath("/evals/r/not a run id")).toBe("/evals");
+    expect(evalsCanonicalPath("/evals/whatever/this/is")).toBe("/evals");
+    expect(evalsCanonicalPath("/evals/s/title?batch=" + encodeURIComponent(BATCH))).toBe(evalsHref.surface("title", { batch: BATCH }));
+    // Idempotent: a canonical address stays as it is.
+    const once = evalsCanonicalPath(`/evals/bisect/new?surface=title&good=${LABEL}&bad=${BATCH}&freeze=${FULL}`);
+    expect(evalsCanonicalPath(once)).toBe(once);
   });
 });

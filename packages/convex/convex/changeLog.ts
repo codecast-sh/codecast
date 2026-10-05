@@ -23,6 +23,7 @@ import {
 } from "./syncLog";
 import { accessStampFor, computeWorkspaceKeyDb, type AccessStamp } from "./lib/accessKeys";
 import { withdrawDeletedConversation } from "./lib/changesDirty";
+import { agentTypeChangeRefusal } from "@codecast/shared/contracts";
 
 // One memoized POST-WRITE document read per tracked write. The sync log reads
 // it for three things (sync-log-cargo): the access-derived fan-out scopes, the
@@ -200,6 +201,11 @@ async function emitOwnerAdded(rawDb: any, collector: SyncAckCollector | null, co
 //
 // `collector` (optional) accumulates the sync positions this transaction appended;
 // dispatch returns them to an opting-in client as its write acknowledgement.
+function assertAgentTypeKept(preDoc: any, next: string | undefined) {
+  const refusal = preDoc ? agentTypeChangeRefusal(preDoc.agent_type, next) : null;
+  if (refusal) throw new Error(refusal);
+}
+
 export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | null = null): any {
   // Only wrap a real Convex DatabaseWriter, detected via normalizeId — the
   // table-from-id primitive the interceptor relies on. A partial test mock that
@@ -248,8 +254,12 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
       // A patch that touches scope fields can MOVE the entity between scopes; the
       // departed scope needs a revocation action, which requires the pre-write doc.
       const movesScope = !!table && Object.keys(fields).some((k) => SCOPE_FIELDS.has(k));
-      const preDoc = movesScope ? await rawDb.get(id) : null;
-      const preScope = preDoc && table
+      const movesAgent = table === "conversations" && "agent_type" in fields;
+      const preDoc = movesScope || movesAgent ? await rawDb.get(id) : null;
+      // Every writer passes here, so a conversation can never cross between
+      // hosted and local, whichever mutation writes agent_type first.
+      if (movesAgent) assertAgentTypeKept(preDoc, fields.agent_type);
+      const preScope = movesScope && preDoc && table
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;
       const res = await rawDb.patch(id, fields);
@@ -295,6 +305,7 @@ export function makeChangeTrackedDb(rawDb: any, collector: SyncAckCollector | nu
     async replace(id: any, doc: any) {
       const table = trackedTableOf(rawDb, id);
       const preDoc = table ? await rawDb.get(id) : null;
+      if (table === "conversations") assertAgentTypeKept(preDoc, doc?.agent_type);
       const preScope = preDoc && table
         ? syncScopeFromStamp(await accessStampFor({ db: rawDb }, table, preDoc))
         : null;

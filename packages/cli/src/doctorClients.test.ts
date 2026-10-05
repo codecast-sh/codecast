@@ -7,13 +7,13 @@
 // real file watchers, and the registry directly, exactly as the doctor does.
 
 import { describe, expect, test } from "bun:test";
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { LOCAL_AGENT_CLIENTS, type LocalAgentClientId } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser.js";
 import { clientFixture, watcherFires, probeClient, probeAllClients } from "./doctorClients.js";
 
-const ALL_CLIENTS = Object.keys(AGENT_CLIENTS) as AgentClientId[];
-const JSONL_CLIENTS: AgentClientId[] = ["claude", "codex", "gemini", "pi", "grok", "muse"];
-const SQLITE_CLIENTS: AgentClientId[] = ["opencode", "cursor"];
+const ALL_CLIENTS = Object.keys(LOCAL_AGENT_CLIENTS) as LocalAgentClientId[];
+const JSONL_CLIENTS: LocalAgentClientId[] = ["claude", "codex", "gemini", "pi", "grok", "muse"];
+const SQLITE_CLIENTS: LocalAgentClientId[] = ["opencode", "cursor"];
 
 describe("clientFixture — the synthetic transcript round-trips the PRODUCTION parser", () => {
   for (const id of ALL_CLIENTS) {
@@ -28,7 +28,7 @@ describe("clientFixture — the synthetic transcript round-trips the PRODUCTION 
 describe("clientFixture — readySample matches the descriptor's promptReadyPattern", () => {
   for (const id of ALL_CLIENTS) {
     test(`${id}: promptReadyPattern matches its representative ready line`, () => {
-      const { promptReadyPattern } = AGENT_CLIENTS[id];
+      const { promptReadyPattern } = LOCAL_AGENT_CLIENTS[id];
       expect(promptReadyPattern).toBeInstanceOf(RegExp);
       expect(promptReadyPattern.test(clientFixture(id).readySample)).toBe(true);
     });
@@ -38,9 +38,9 @@ describe("clientFixture — readySample matches the descriptor's promptReadyPatt
 describe("resumeCmd constructs a command referencing the client binary", () => {
   for (const id of ALL_CLIENTS) {
     test(`${id}: resumeCmd is non-empty and names the binary`, () => {
-      const cmd = AGENT_CLIENTS[id].resumeCmd("sid-123");
+      const cmd = LOCAL_AGENT_CLIENTS[id].resumeCmd("sid-123");
       expect(cmd.trim().length).toBeGreaterThan(0);
-      expect(cmd).toContain(AGENT_CLIENTS[id].binary);
+      expect(cmd).toContain(LOCAL_AGENT_CLIENTS[id].binary);
     });
   }
 });

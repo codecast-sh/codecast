@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
@@ -127,7 +128,11 @@ export function useCallSync(): void {
   const transcribeOff = !!roomFlags?.transcribe_off;
   const transcribeOffAt: number | null = roomFlags?.transcribe_off_at ?? null;
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
-  const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
+  // "": a live record with no scribe yet (getLive's started_by null), kept
+  // apart from null (no record) in one primitive so the effect's deps stay
+  // a string compare.
+  const liveStartedBy =
+    liveTranscript === undefined ? undefined : liveTranscript ? (liveTranscript.started_by ? String(liveTranscript.started_by) : "") : null;
   useWatchEffect(() => {
     const verdict = decideAutoScribe({
       roomKey: seatedRoomKey,
@@ -138,7 +143,7 @@ export function useCallSync(): void {
       scribeStartedAt,
       rosterIds: rosterSig ? rosterSig.split("|") : [],
       meId,
-      live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy },
+      live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy || null },
       scribeActive,
     });
     if (verdict === "start" && seatedRoomKey) autoScribe(seatedRoomKey);
@@ -252,8 +257,8 @@ function notifyKnock(title: string, body: string, key: string): void {
 // answered from a toast leaves the door in every surface at once.
 const KNOCK_ANSWERS: KnockAnswers = {
   admitPerson: (roomKey, userId) => void admitKnock(roomKey, userId),
-  admitGuest: (guestId, name) => admitGuest(guestId, name),
-  denyGuest: (guestId) => denyGuest(guestId),
+  admitGuest: (guestId, name) => void admitGuest(guestId, name, toast.error),
+  denyGuest: (guestId) => void denyGuest(guestId, false, toast.error),
 };
 
 export { channelRoomKey, sessionRoomKey };

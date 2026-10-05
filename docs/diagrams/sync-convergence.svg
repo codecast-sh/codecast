@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 604" role="img" aria-labelledby="t d">
+  <title id="t">Convergence is checked, not assumed</title>
+  <desc id="d">One pure module, inboxProjection.ts in packages/shared/contracts, is run on both sides. The server's sessionsLiveness query runs it over canonical state at the minute epoch and ships facts, per-row stamps, the epoch, the version and set_digest. The replica writes the facts onto its rows, buffers the stamps in sessionsProjection by scope, and runs the same module through placeInboxRows at the payload's epoch. inboxDigestCompare compares the two: an equal digest passes; otherwise a per-row diff names missing and extra ids and bucket and fold deltas, and only a diff that persists across two epochs counts as drift. Drift spends a bounded heal: getInboxSessionsByIds for missing and extra ids, an overlay probe for stale facts, three heals per ten minutes before healing latches off.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    .link { stroke: #93a1a1; stroke-width: 1.25; fill: none }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .okLbl { fill: #859900 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      .link { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+      .okLbl { fill: #859900 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="604" rx="12"/>
+
+  <!-- Shared module -->
+  <rect class="card" x="280" y="24" width="400" height="128" rx="8"/>
+  <text class="h" x="296" y="50">inboxProjection.ts</text>
+  <text class="n" x="296" y="70">packages/shared/contracts: pure, one copy</text>
+  <rect class="inset" x="296" y="82" width="368" height="56" rx="5"/>
+  <text class="n" x="306" y="98">selectWorkingSet, computeFold,</text>
+  <text class="n" x="306" y="114">placeInboxRow, digestProjection,</text>
+  <text class="n" x="306" y="130">computeBucketStale, INBOX_PROJECTION_VERSION</text>
+
+  <!-- same code links -->
+  <path class="link" d="M280 88 H224 V188"/>
+  <path class="link" d="M680 88 H736 V188"/>
+  <text class="n" x="232" y="172">same code</text>
+  <text class="n" x="664" y="172">same code</text>
+
+  <text class="k" x="24" y="180">CONVEX</text>
+  <text class="k" x="868" y="180">CLIENT</text>
+
+  <!-- Server -->
+  <rect class="card" x="24" y="192" width="400" height="160" rx="8"/>
+  <text class="h" x="40" y="218">sessionsLiveness</text>
+  <text class="n" x="40" y="238">runs the module over canonical state</text>
+  <text class="n" x="40" y="254">at epoch = floor(now / 60s) * 60s</text>
+  <rect class="inset" x="40" y="266" width="368" height="24" rx="5"/>
+  <text class="n" x="50" y="282">facts per row: the only fact writer</text>
+  <rect class="inset" x="40" y="294" width="368" height="24" rx="5"/>
+  <text class="n" x="50" y="310">stamps: bucket, below_fold, bucket_stale_at</text>
+  <rect class="inset" x="40" y="322" width="368" height="24" rx="5"/>
+  <text class="n" x="50" y="338">epoch, v, set_digest</text>
+
+  <!-- payload -->
+  <path class="data" d="M424 300 H532" marker-end="url(#aData)"/>
+  <text class="l dataLbl" x="448" y="290">payload</text>
+
+  <!-- Replica -->
+  <rect class="core" x="536" y="192" width="400" height="160" rx="10"/>
+  <text class="h" x="552" y="218">placeInboxRows</text>
+  <text class="n" x="552" y="238">runs the same module over replica rows</text>
+  <text class="n" x="552" y="254">at the payload's epoch, never the device clock</text>
+  <rect class="inset" x="552" y="266" width="368" height="24" rx="5"/>
+  <text class="n" x="562" y="282">facts land on rows through syncOverlay</text>
+  <rect class="inset" x="552" y="294" width="368" height="24" rx="5"/>
+  <text class="n" x="562" y="310">stamps wait in sessionsProjection[scope]</text>
+  <rect class="inset" x="552" y="322" width="368" height="24" rx="5"/>
+  <text class="n" x="562" y="338">local buckets, fold, digest</text>
+
+  <path class="data" d="M736 352 V396" marker-end="url(#aData)"/>
+
+  <!-- Compare -->
+  <rect class="core" x="536" y="400" width="400" height="140" rx="10"/>
+  <text class="h" x="552" y="426">inboxDigestCompare</text>
+  <text class="n" x="552" y="446">every 15s, when quiescent and complete</text>
+  <text class="l okLbl" x="552" y="470">digest equal: converged</text>
+  <text class="n" x="552" y="490">else per-row diff: missing, extra,</text>
+  <text class="n" x="552" y="506">bucket_deltas, fold_deltas; drift only</text>
+  <text class="n" x="552" y="522">if it persists across two epochs</text>
+
+  <!-- Heal -->
+  <path class="cmd" d="M536 464 H428" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="456" y="454">drift</text>
+  <rect class="card" x="24" y="400" width="400" height="140" rx="8"/>
+  <text class="h" x="40" y="426">Bounded heal</text>
+  <text class="n" x="40" y="450">missing, extra: getInboxSessionsByIds</text>
+  <text class="n" x="40" y="466">bucket or fold deltas: one overlay probe</text>
+  <text class="n" x="40" y="490">3 heals per 10 min, then</text>
+  <text class="n" x="40" y="506">inbox_drift_persistent latches it off</text>
+  <path class="cmd" d="M224 400 V356" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="232" y="384">refetch by id, probe</text>
+
+  <!-- Legend -->
+  <path class="data" d="M40 570 H80" marker-end="url(#aData)"/><text class="n" x="90" y="574">data: payloads and placements</text>
+  <path class="cmd" d="M380 570 H420" marker-end="url(#aCmd)"/><text class="n" x="430" y="574">control: heals</text>
+  <text class="n" x="600" y="574">inbox_drift, inbox_digest_heartbeat</text>
+  <text class="n" x="600" y="590">report every check, skip and heal</text>
+</svg>

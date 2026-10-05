@@ -57,6 +57,15 @@ describe("focusBrowserTab — what the pill learns", () => {
     expect(seen.map((r) => r.url)).toEqual(["http://127.0.0.1:4242/browser/focus?session_uuid=uuid-1&tmux_session=cc-1"]);
   });
 
+  test("a row's tab id rides with its session, so a gone tab falls back to the session's", async () => {
+    const seen: { url: string }[] = [];
+    await focusBrowserTab(convex, { tabId: "4A2CDC7E", sessionUuid: "uuid-1" }, {
+      getEndpoint: async () => endpoint,
+      fetchImpl: daemon(() => response(200, { ok: true }), seen),
+    });
+    expect(seen.map((r) => r.url)).toEqual(["http://127.0.0.1:4242/browser/focus?tab=4A2CDC7E&session_uuid=uuid-1"]);
+  });
+
   test("daemon confirms focus, straight off the trusted cache with no probe", async () => {
     const seen: { url: string; auth?: string }[] = [];
     const asked: unknown[] = [];

@@ -1,21 +1,25 @@
 "use client";
 // The right side of an initiative's page
-// (docs/architecture/initiatives-projects-role-page.md I1 "The page"), in the
-// contract's order: what it is for, the projects that carry it, what the owner
-// said and when, and the initiatives under it. One scroll, no tabs: a person
-// should be able to say what the company is trying to reach, who drives it,
-// how it is going and which projects carry it without opening anything else.
+// (docs/architecture/initiatives-projects-role-page.md I1 "The page", I5 "The
+// test"), as two tabs in the scope panel's grammar. Goal is the record, read
+// top to bottom in the order of the test: what we are trying to reach, the
+// number now against its target, why it matters, what done looks like, the
+// milestones, what is undecided, what was decided and who said it where; then
+// the projects that carry it, what the owner said and when, and the goals
+// under it. Activity is everything that moved in its projects and its sub
+// goals', through the one feed a scope uses.
 import { useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { ChevronDown, FolderKanban, Pencil, Plus, X } from "lucide-react";
-import { INITIATIVE_HEALTH_LABEL, INITIATIVE_METRICS_MAX, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricKeyOf, metricReadings, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import { Activity, ChevronDown, Flag, FolderKanban, Pencil, Plus, X } from "lucide-react";
+import { INITIATIVE_HEALTH_LABEL, INITIATIVE_METRICS_MAX, INITIATIVE_UPDATE_HEALTHS, initiativeChain, metricKeyOf, metricReadings, metricTrends, parseIntentSource, type InitiativeRow, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, type ProjectItem } from "../../store/inboxStore";
 import { undoAsOne } from "../../store/undoActions";
 import { quoted } from "../../store/undo/labels";
 import { useInitiativeProjects } from "../../hooks/useInitiativeProjects";
 import { useInitiativeUpdates } from "../../hooks/useInitiatives";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
-import { initiativeHref, newInitiativeKey, projectTrouble, subInitiatives } from "../../lib/initiatives";
+import { goalScopeInitiativeIds, goalScopeProjectIds, initiativeHref, newInitiativeKey, projectTrouble, subInitiatives } from "../../lib/initiatives";
+import type { ScopeRef } from "../../hooks/useScopeQueries";
 import { cn } from "../../lib/utils";
 import { ProjectLeadChip } from "../charter/ProjectLeadChip";
 import { FilterOptionList } from "../FilterDropdown";
@@ -23,54 +27,74 @@ import { ProjectCard } from "../identity/RoleScopeView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
-import { HealthChip, MetricReadingLine, OwnerChip, StatusGlyph } from "./InitiativeAtoms";
+import { HealthChip, MetricTile, OwnerChip, SourceLink, StatusGlyph } from "./InitiativeAtoms";
 import { EntityIdPill } from "../EntityIdPill";
+import { ScopeFeed } from "../org/scope/ScopeFeed";
+import { InitiativeRecord, RecordSection as Section } from "./InitiativeRecord";
+import { IntentTabs, type IntentTab } from "./IntentHeader";
 import { ProjectInitiatives } from "./ProjectInitiatives";
 
+/** The panel's tabs; the first is the one the bare address opens on. */
+export const INITIATIVE_TABS = ["goal", "activity"] as const;
+export type InitiativeTab = (typeof INITIATIVE_TABS)[number];
+const TABS: readonly IntentTab<InitiativeTab>[] = [{ key: "goal", label: "Goal", icon: Flag }, { key: "activity", label: "Activity", icon: Activity }];
+
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
+/** A report's source is free text: an address opens, anything else is read as written. */
+const metricSource = (text: string) => { const src = parseIntentSource(text); return src.kind === "note" ? null : src; };
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.target_date ?? ""}|${(p.risks ?? []).length}`;
 
-export function InitiativePanel({ initiative, all, now, onClose, closeLabel }: {
+export function InitiativePanel({ initiative, all, now, tab, onTab, onClose, closeLabel }: {
   initiative: InitiativeRow;
   all: InitiativeRow[];
   now: number;
+  tab: InitiativeTab;
+  onTab: (next: InitiativeTab) => void;
   /** Present when the panel sits beside a conversation and can be put away. */
   onClose?: () => void;
   closeLabel?: string;
 }) {
   return (
-    <div className="h-full flex flex-col min-h-0" data-initiative-panel={initiative.short_id || initiative._id}>
-      {onClose && (
-        <div className="shrink-0 flex items-center justify-between h-9 pl-4 pr-1.5 border-b" style={{ borderColor: HAIRLINE }}>
-          <span className="text-[12px] font-semibold">Initiative</span>
-          <button type="button" onClick={onClose} className="inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label={closeLabel} title={closeLabel} data-initiative-panel-close>
+    <div className="initiative-panel-cq h-full flex flex-col min-h-0" data-initiative-panel={initiative.short_id || initiative._id} data-scope-tab-active={tab}>
+      {/* The panel is a 360px column beside a conversation and a 760px page alone: two numbers sit side by side only where there is room. */}
+      <style>{`.initiative-panel-cq { container-type: inline-size; } @container (min-width: 560px) { .initiative-metric-grid[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); } }`}</style>
+      <IntentTabs
+        tabs={TABS}
+        active={tab}
+        onTab={onTab}
+        trailing={onClose && (
+          <button type="button" onClick={onClose} className="shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-text-muted)" }} aria-label={closeLabel} title={closeLabel} data-initiative-panel-close>
             {closeLabel === "Back to the conversation" ? <ChevronDown className="w-4 h-4" /> : <X className="w-4 h-4" />}
           </button>
+        )}
+      />
+      {tab === "activity" ? (
+        <GoalActivity initiative={initiative} all={all} />
+      ) : (
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-7" data-initiative-scroll>
+          <Description initiative={initiative} />
+          <Metrics initiative={initiative} all={all} now={now} />
+          <InitiativeRecord initiative={initiative} all={all} now={now} />
+          <Projects initiative={initiative} now={now} />
+          <Updates initiative={initiative} now={now} />
+          <SubInitiatives rows={subInitiatives(all, initiative._id)} now={now} />
         </div>
       )}
-      <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-7" data-initiative-scroll>
-        <Description initiative={initiative} />
-        <Metrics initiative={initiative} all={all} now={now} />
-        <Projects initiative={initiative} now={now} />
-        <Updates initiative={initiative} now={now} />
-        <SubInitiatives rows={subInitiatives(all, initiative._id)} now={now} />
-      </div>
     </div>
   );
 }
 
-function Section({ name, label, count, action, children }: { name: string; label: string; count?: number; action?: ReactNode; children: ReactNode }) {
-  return (
-    <section data-initiative-section={name}>
-      <div className="flex items-center gap-2 mb-2.5 min-h-[24px]">
-        <h2 className="text-[12.5px] font-semibold tracking-tight">{label}</h2>
-        {count ? <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{count}</span> : null}
-        <span className="flex-1" />
-        {action}
-      </div>
-      {children}
-    </section>
-  );
+/** Everything that moved under the goal: its projects and its sub goals',
+ *  with the goals' own updates and the calls that name them. The scope feed
+ *  is the engine; this only says which scope. */
+function GoalActivity({ initiative, all }: { initiative: InitiativeRow; all: InitiativeRow[] }) {
+  const projectIds = goalScopeProjectIds(initiative, all).join(",");
+  const initiativeIds = goalScopeInitiativeIds(initiative, all).join(",");
+  const scope = useMemo<ScopeRef>(() => ({
+    scope: { project_ids: projectIds ? projectIds.split(",") : [], plan_ids: [], initiative_ids: initiativeIds ? initiativeIds.split(",") : [] },
+    ...(initiative.team_id ? { team_id: initiative.team_id } : {}),
+  }), [projectIds, initiativeIds, initiative.team_id]);
+  return <ScopeFeed key={JSON.stringify(scope)} scope={scope} fill />;
 }
 
 function GhostButton({ icon: Icon, children, onClick, ...rest }: { icon: any; children: ReactNode; onClick?: () => void } & Record<`data-${string}`, string | undefined>) {
@@ -130,6 +154,7 @@ function Description({ initiative }: { initiative: InitiativeRow }) {
  *  role reports the value with `cast initiative report`. */
 function Metrics({ initiative, all, now }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number }) {
   const readings = metricReadings(initiative);
+  const trends = metricTrends(initiative);
   const chain = useMemo(() => initiativeChain(initiative, (id) => all.find((r) => r._id === id)), [initiative, all]);
   const [draft, setDraft] = useState<Array<{ name: string; target: string }> | null>(null);
   const save = () => {
@@ -159,13 +184,20 @@ function Metrics({ initiative, all, now }: { initiative: InitiativeRow; all: Ini
           <p className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>A target reads as a number to reach; write "under 5%" for one to stay below.</p>
         </div>
       ) : (
-        <div className="space-y-1.5">
-          {readings.map((r) => (
-            <div key={r.key} className="flex items-center gap-2 min-w-0" data-initiative-metric={r.key}>
-              <MetricReadingLine reading={r} now={now} className="min-w-0 flex-1" />
-              {r.source && /^https?:\/\//.test(r.source) ? <a href={r.source} target="_blank" rel="noreferrer" className="text-[11px] no-underline hover:underline shrink-0" style={{ color: "var(--sol-text-dim)" }}>source</a> : r.source ? <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>{r.source}</span> : null}
+        <div className="space-y-2">
+          {readings.length > 0 && (
+            <div className="initiative-metric-grid grid grid-cols-1 gap-2" data-count={readings.length}>
+              {readings.map((r) => {
+                const source = r.source ? metricSource(r.source) : null;
+                return (
+                  <div key={r.key} className="min-w-0 flex flex-col" data-initiative-metric={r.key}>
+                    <MetricTile reading={r} trend={trends[r.key]} now={now} size="tile" className="flex-1" />
+                    {source ? <SourceLink source={source} now={now} className="mt-1 pl-1" /> : r.source ? <p className="mt-1 pl-1 text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }} title={r.source}>{r.source}</p> : null}
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          )}
           {readings.length > 0 && readings.every((r) => r.value === null) && (
             <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Nobody has reported a value yet: <code className="text-[11px]">cast initiative report {initiative.short_id} {readings[0].key}=&lt;value&gt; --source &lt;link&gt;</code></p>
           )}

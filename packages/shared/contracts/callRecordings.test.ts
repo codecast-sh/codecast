@@ -3,11 +3,25 @@ import {
   CALL_FRAME_PREFER,
   coveredSpans,
   describeSpans,
+  describeClockSpans,
+  parseCallTime,
+  spanStartSecond,
+  nearestRecordedMs,
+  NEAREST_END_INSET_MS,
   isRecordingActive,
+  isRecordingFilming,
+  CALL_RECORDING_STATUSES,
   playableFiles,
   recordingSubject,
   segmentAt,
-  lineMomentMs,
+  CALL_LAST_SAID_HOLD_MS,
+  callFrameSeenRef,
+  callFrameSeenText,
+  lineSaidAt,
+  describeSpan,
+  lineFilmed,
+  lineFrameMs,
+  lineSeekMs,
   locateCallMoment,
   offsetIntoRecording,
   recordingAudience,
@@ -131,6 +145,11 @@ describe("recordingWindow", () => {
     expect(["starting", "recording", "stopping"].every((s) => isRecordingActive(s as any))).toBe(true);
     expect(isRecordingActive("ready") || isRecordingActive("failed")).toBe(false);
   });
+
+  test("filming is active minus stopping, for every status", () => {
+    const table = Object.fromEntries(CALL_RECORDING_STATUSES.map((s) => [s, [isRecordingActive(s), isRecordingFilming(s)]]));
+    expect(table).toEqual({ starting: [true, true], recording: [true, true], stopping: [true, false], ready: [false, false], failed: [false, false] });
+  });
 });
 
 describe("sampleCallMoments", () => {
@@ -144,10 +163,6 @@ describe("sampleCallMoments", () => {
     expect(sampleCallMoments(0, 2_000, 10, 1_000)).toEqual([0, 1_000, 2_000]);
   });
 
-  test("a line points where its first word was said", () => {
-    expect(lineMomentMs({ t0: 1234 })).toBe(1234);
-    expect(lineMomentMs({ t0: -5 })).toBe(0);
-  });
 });
 
 describe("a frame of a moment", () => {
@@ -208,7 +223,9 @@ describe("a frame of a moment", () => {
     // A span keeps whose screen it is, so its words can mark a guest's.
     const s2 = spans.find((x) => x.id === "s2")!;
     expect(s2.participant_identity).toBe("guest:g1");
-    expect(describeSpans([s2])).toBe("10:00-12:00 Ben's screen (guest)");
+    // It began half a second in, so its printed start is the first whole
+    // second it filmed.
+    expect(describeSpans([s2])).toBe("10:01-12:00 Ben's screen (guest)");
   });
 });
 
@@ -234,6 +251,25 @@ describe("segmentAt", () => {
   });
 });
 
+describe("lineSaidAt", () => {
+  const lines = [{ t0: 0, t1: 2000 }, { t0: 5000, t1: 9000 }];
+  test("the line being said, else the last one said while the hold lasts", () => {
+    expect(lineSaidAt(lines, 6000)).toEqual({ index: 1, during: true });
+    expect(lineSaidAt(lines, 9000 + CALL_LAST_SAID_HOLD_MS)).toEqual({ index: 1, during: false });
+    expect(lineSaidAt(lines, 9001 + CALL_LAST_SAID_HOLD_MS)).toBeNull();
+  });
+});
+
+describe("a frame an agent looked at", () => {
+  test("its reference round-trips through a tool result's text, alone or after other words", () => {
+    expect(callFrameSeenRef(callFrameSeenText("cl-117@2:30"))).toBe("cl-117@2:30");
+    expect(callFrameSeenRef(`Read 1 file\n${callFrameSeenText("cl-7@1:02:03")}`)).toBe("cl-7@1:02:03");
+    expect(callFrameSeenRef("A note: Frame of the call: cl-1@0:10")).toBeNull();
+    expect(callFrameSeenRef("Frame of the call: pl-1")).toBeNull();
+    expect(callFrameSeenRef(undefined)).toBeNull();
+  });
+});
+
 describe("offsetIntoRecording", () => {
   const room: CallRecordingSpan = { id: "r", kind: "composite", status: "ready", started_at: T + min(1), duration_ms: min(4) };
   test("is the alignment rule, end exclusive", () => {
@@ -254,12 +290,15 @@ describe("offsetIntoRecording", () => {
 
 describe("recording words", () => {
   test("the audience follows the room's kind, as canReadCall does", () => {
-    expect(recordingAudience("dm:a:b")).toBe("the people this huddle is between");
-    expect(recordingAudience("channel:c1")).toBe("everyone in the channel");
-    expect(recordingAudience("session:s1")).toBe("everyone who can open the session");
+    // canReadCall's second door: a teammate seated while it recorded may
+    // watch it, whatever the room's own reach.
+    expect(recordingAudience("dm:a:b")).toBe("the people this huddle is between and any teammate who sat in it while it recorded");
+    expect(recordingAudience("channel:c1")).toBe("everyone in the channel and any teammate who sat in it while it recorded");
+    expect(recordingAudience("session:s1")).toBe("everyone who can open the session and any teammate who sat in it while it recorded");
     expect(recordingAudience(null)).toBe("the team hosting it");
-    expect(recordingKeptWords("channel:c1")).toContain("everyone in the channel can watch it");
+    expect(recordingKeptWords("channel:c1")).toContain("everyone in the channel and any teammate who sat in it while it recorded can watch it");
     expect(recordingKeptWords()).toContain("public link if someone shares the video");
+    expect(recordingKeptWords()).toContain("share single pictures from it by link");
   });
   test("a failure reads as one sentence whichever side wrote it", () => {
     expect(recordingFailureWords(null)).toBe("The recording failed.");
@@ -285,5 +324,106 @@ describe("a press is a moment", () => {
     const { recordingPressStale } = await import("./callRecordings");
     expect(recordingPressStale(now + 5_000, now)).toBe(false);
     expect(recordingPressStale(undefined, now)).toBe(false);
+  });
+  test("Record waits out the cooldown after a stop, on every platform alike", async () => {
+    const { recordingCooling, RECORDING_RESTART_COOLDOWN_MS } = await import("./callRecordings");
+    expect(recordingCooling("stopping", now - 1_000, now)).toBe(true);
+    expect(recordingCooling("stopping", now - RECORDING_RESTART_COOLDOWN_MS, now)).toBe(false);
+    // A stop whose moment has not arrived yet: wait for it.
+    expect(recordingCooling("stopping", null, now)).toBe(true);
+    // Filming, or nothing running: there is no stop to wait on.
+    expect(recordingCooling("recording", now - 1_000, now)).toBe(false);
+    expect(recordingCooling(null, null, now)).toBe(false);
+  });
+});
+
+describe("the moment a line points at", () => {
+  test("a line's frame is a whole second just inside it", () => {
+    expect(lineFrameMs({ t0: 70_000, t1: 74_000 })).toBe(71_000);
+    expect(lineFrameMs({ t0: 70_100, t1: 74_000 })).toBe(71_000);
+    expect(lineFrameMs({ t0: 70_800, t1: 74_000 })).toBe(72_000);
+    // Too short to reach the nudged second: the whole second it still spans,
+    // so the citation (whole seconds) names the frame taken.
+    expect(lineFrameMs({ t0: 70_800, t1: 71_200 })).toBe(71_000);
+    expect(lineFrameMs({ t0: 70_900, t1: 71_200 })).toBe(71_000);
+    // A line that spans no whole second: the next one, never a second
+    // before its first word, which would show the line before it (cl-117's
+    // line 8, 2:41.501-2:41.808, was framed at 2:41 and labelled line 7).
+    expect(lineFrameMs({ t0: 70_100, t1: 70_400 })).toBe(71_000);
+    expect(lineFrameMs({ t0: 161_501, t1: 161_808 })).toBe(162_000);
+    expect(lineFrameMs({ t0: 70_000, t1: 70_100 })).toBe(70_000);
+  });
+
+  test("a line before its first whole second clamps to the call's start", () => {
+    expect(lineFrameMs({ t0: -5, t1: 100 })).toBe(0);
+    // A segment with no end yet (still being said) is its start.
+    expect(lineFrameMs({ t0: 70_100 })).toBe(71_000);
+  });
+
+  test("a line is filmed when a stretch covers its frame's second, not its first word", () => {
+    // Record's first frame at 162.0s: a line starting 200 ms earlier is on
+    // camera by the second its frame is taken, on every surface alike.
+    const filmed = [{ fromMs: 162_000, toMs: 200_000 }];
+    expect(lineFilmed(filmed, { t0: 161_800, t1: 165_000 })).toBe(true);
+    expect(lineFilmed(filmed, { t0: 161_501, t1: 161_808 })).toBe(true);
+    expect(lineFilmed(filmed, { t0: 150_000, t1: 155_000 })).toBe(false);
+    // The end is exclusive.
+    expect(lineFilmed(filmed, { t0: 199_900, t1: 202_000 })).toBe(false);
+  });
+
+  test("a click seeks a line's first word, or its frame when only the frame was filmed", () => {
+    const filmed = [{ fromMs: 162_000, toMs: 200_000 }];
+    // Filmed from its first word: heard from the start.
+    expect(lineSeekMs(filmed, { t0: 170_300, t1: 174_000 })).toBe(170_300);
+    // Its first word came before Record's first frame, yet the rail marks it
+    // filmed: the seek lands on the frame the rail promised, never on a
+    // moment with no video.
+    expect(lineSeekMs(filmed, { t0: 161_800, t1: 165_000 })).toBe(163_000);
+    expect(lineSeekMs(filmed, { t0: 161_501, t1: 161_808 })).toBe(162_000);
+    // Not filmed at all, or no video: its first word, for the audio.
+    expect(lineSeekMs(filmed, { t0: 150_000, t1: 155_000 })).toBe(150_000);
+    expect(lineSeekMs([], { t0: 161_800, t1: 165_000 })).toBe(161_800);
+  });
+});
+
+describe("describeSpan", () => {
+  const span = { id: "s1", kind: "screen" as const, fromMs: 132_000, toMs: 375_000, pending: true, participant_identity: "u1", participant_name: "Ana" };
+  test("the clock pair leads by default; a caller's lead replaces it", () => {
+    expect(describeSpan(span)).toBe("2:12-6:15 Ana's screen (still saving)");
+    expect(describeSpan(span, "lines 6-41 (2:12-6:15)")).toBe("lines 6-41 (2:12-6:15) Ana's screen (still saving)");
+  });
+});
+
+describe("nearestRecordedMs", () => {
+  const spans = coveredSpans(runs, T, T + min(30));
+
+  test("a moment covered is itself; one before a span lands on its first second", () => {
+    expect(nearestRecordedMs(spans, min(3))).toBe(min(3));
+    expect(nearestRecordedMs(spans, min(7))).toBe(min(5) - NEAREST_END_INSET_MS);
+    expect(nearestRecordedMs(spans, min(9))).toBe(min(10));
+    expect(nearestRecordedMs([], 0)).toBeNull();
+  });
+
+  test("past a span's end it lands inside it, off the last keyframe where filler sits", () => {
+    expect(nearestRecordedMs(spans, min(20))).toBe(min(12) - NEAREST_END_INSET_MS);
+    // A span shorter than the inset still offers a moment inside it.
+    const short = coveredSpans([rec({ id: "c", kind: "composite", started_at: T + 60_000, duration_ms: 1_500 })], T, T + min(30));
+    expect(nearestRecordedMs(short, min(5))).toBe(60_000);
+  });
+
+  test("stretches as clock pairs", () => {
+    expect(describeClockSpans([{ fromMs: min(2) + 12_000, toMs: min(6) + 15_000 }, { fromMs: min(9) + 40_000, toMs: min(12) + 2_000 }])).toBe("2:12-6:15, 9:40-12:02");
+    expect(describeClockSpans([])).toBe("");
+  });
+
+  test("a stretch's printed start is its first whole second, one a snap can name", () => {
+    // cl-117's screen began 132894 ms in: 2:12 was not filmed, 2:13 was.
+    expect(describeClockSpans([{ fromMs: 132_894, toMs: 375_406 }])).toBe("2:13-6:15");
+    const screen = [rec({ id: "s", kind: "screen", started_at: T + 132_894, duration_ms: 375_406 - 132_894, participant_identity: "u_ana", participant_name: "Ana" })];
+    const printed = parseCallTime(describeClockSpans(coveredSpans(screen, T, T + min(30))).split("-")[0])!;
+    expect(locateCallMoment({ callStartedAt: T, atMs: printed, recordings: screen, now: T + min(30) }).ok).toBe(true);
+    expect(locateCallMoment({ callStartedAt: T, atMs: printed - 1000, recordings: screen, now: T + min(30) }).ok).toBe(false);
+    // A stretch inside one second keeps the second it began in.
+    expect(spanStartSecond({ fromMs: 132_100, toMs: 132_800 })).toBe(132_000);
   });
 });

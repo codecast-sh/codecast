@@ -1,7 +1,9 @@
 // A surface's recent history in one row: batch medians as a step line over
 // faint rep dots, the 0.7 pass mark as a hairline, prompt epochs as notches on
 // the baseline, and footing changes on the axis (a diamond where the model
-// moved, a violet slash where the judge's ruler moved).
+// moved, a violet slash where the judge's ruler moved). A batch the model was
+// never asked about (BatchStats.unasked) is a crash cross on the axis, never a
+// median of 0.
 //
 // On a worse row the strip says where the verdict looked: the baseline
 // batches carry cyan ticks on the axis, bracketed, under a dashed cyan level
@@ -78,7 +80,9 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
   const x = linear(from, to, 2, w - 2 - NEWEST_STEP);
   const plotBottom = height - AXIS;
   const y = scoreScale(PAD_TOP, plotBottom - 2);
-  const batches = strip.filter((b) => !b.dry && b.median !== null);
+  const batches = strip.filter((b) => !b.dry && !b.unasked && b.median !== null);
+  const unasked = strip.filter((b) => b.unasked);
+  const unaskedNames = new Set(unasked.map((b) => b.batch));
   const at = (b: { batchAt: string }) => Date.parse(b.batchAt);
   const xs = batches.map((b) => x(at(b)));
   const line = stepPath(
@@ -113,7 +117,7 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
       <svg className="ev-strip" width={w} height={height} viewBox={`0 0 ${w} ${height}`} role="img" aria-label={label ?? "score history"} data-ev-strip>
         <line x1={0} x2={w} y1={y(PASS_MARK)} y2={y(PASS_MARK)} className="ev-strip-mark" />
         {dots.map((d, i) => {
-          if (d.score === null || d.status === "dry") return null;
+          if (d.score === null || d.status === "dry" || unaskedNames.has(d.batch)) return null;
           const cx = x(Date.parse(d.at)) + jitter(`${d.batch}:${i}`, 1.6);
           const cy = y(d.status === "fail" && d.score === 0 ? 0 : d.score);
           return d.status === "pass" ? (
@@ -154,6 +158,15 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
               </g>
             ) : null;
           })}
+        {unasked.map((b) => {
+          const ux = x(at(b));
+          return (
+            <g key={b.batch} className="ev-quiet" data-ev-strip-unasked={b.batch}>
+              <title>{`${b.reps} reps never reached the model: nothing was spent and every one failed, so the harness answered, not the prompt`}</title>
+              <path d={`M${ux - 2.2},${plotBottom - 4.4} L${ux + 2.2},${plotBottom} M${ux + 2.2},${plotBottom - 4.4} L${ux - 2.2},${plotBottom}`} stroke="currentColor" strokeWidth={1.2} strokeLinecap="round" />
+            </g>
+          );
+        })}
         {footing.map((m, i) => (
           <FootingGlyph key={i} marker={m} x={x(Date.parse(m.batchAt))} y={height - 3.5} />
         ))}

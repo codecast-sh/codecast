@@ -1,5 +1,5 @@
 import type { AgentClientId } from "@codecast/shared/contracts";
-import { AGENT_CLIENTS } from "@codecast/shared/contracts";
+import { LOCAL_AGENT_CLIENTS } from "@codecast/shared/contracts";
 
 // ── Recognizing a live agent process by its `ps` comm ───────────────────────
 // The daemon's "is this pane's process still an agent" check (isAgentProcess,
@@ -18,7 +18,7 @@ import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 // interpreters keep the historic path-tolerant substring match (comm is often a
 // full path like "/opt/homebrew/bin/node").
 const AGENT_BINARY_BASENAMES = new Set(
-  Object.values(AGENT_CLIENTS).map((d) => basename(d.binary).toLowerCase())
+  Object.values(LOCAL_AGENT_CLIENTS).map((d) => basename(d.binary).toLowerCase())
 );
 const AGENT_INTERPRETERS = ["node", "bun", "deno"];
 

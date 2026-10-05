@@ -80,15 +80,24 @@ export function routeGates(meta: SurfaceMeta, result: Pick<ReplayResult, 'calls'
     gates.push(gate('prod-budget', over.length === 0, over.length ? over.map((c) => `${c.outputTokens} output tokens against max_tokens ${c.request.max_tokens} (stop ${c.stopReason}): prod would have truncated`).join('; ') : 'every reply fit the max_tokens prod sends'));
   } else {
     const lines = result.agents.flatMap((a) => a.calls);
-    const unserved = lines.filter((l) => l.startsWith('UNSERVED '));
+    // A world cut at its capture refuses every read it did not capture; only one under the surface's own frozenVerbs is a snapshot that lacks what it must hold.
+    const refusedUnserved = lines.filter((l) => l.startsWith('UNSERVED '));
+    const unserved = meta.cut ? refusedUnserved.filter((l) => namesFrozenVerb(l.slice('UNSERVED '.length), meta.frozenVerbs ?? [])) : refusedUnserved;
+    const past = refusedUnserved.length - unserved.length;
     const allowed = [...(meta.allowedRefusals ?? []), ...allowedHere].map((p) => new RegExp(p));
     const refused = lines.filter((l) => l.startsWith('REFUSED ') && !allowed.some((re) => re.test(l.slice('REFUSED '.length))) && !guardCallsRead(l.slice('REFUSED '.length)));
     gates.push(
-      gate('frozen-reads', unserved.length === 0, unserved.length ? `${unserved.map((l) => `cast ${l.slice('UNSERVED '.length)}`).join('; ')} was not captured, so it was refused: add it to meta.frozenReads and re-run \`./evals snapshot\` (for a fixture, add it to the world it reads)` : 'every frozen read was served'),
+      gate('frozen-reads', unserved.length === 0, unserved.length ? `${unserved.map((l) => `cast ${l.slice('UNSERVED '.length)}`).join('; ')} was not captured, so it was refused: add it to meta.frozenReads and re-run \`./evals snapshot\` (for a fixture, add it to the world it reads)` : `every frozen read was served${past ? `; ${past} read(s) past the capture were refused` : ''}`),
       gate('no-unexpected-writes', refused.length === 0, refused.length ? `refused: ${refused.map((l) => `cast ${l.slice('REFUSED '.length)}`).join('; ')}` : 'no write was attempted outside the harness note'),
     );
   }
   return gates;
+}
+
+/** Whether a logged argv's first word, or first two, is one of `verbs`, as the guard matches its `frozen` lines. */
+function namesFrozenVerb(line: string, verbs: string[]): boolean {
+  const argv = loggedArgv(line) ?? line.split(' ');
+  return verbs.includes(argv[0] ?? '') || verbs.includes(argv.slice(0, 2).join(' '));
 }
 
 /**

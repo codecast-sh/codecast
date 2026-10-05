@@ -3,10 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { agentLoginsBundleFor, armInterruptGuard, fetchRootOccupant, freshWorktreeName, parseAcquireOutput, parseStartFrom, pushAgentLoginsNow, readyHostHome, remoteRepoPath, resolveSeedRoots, ROOT_WORKSPACE_NAME, sameGitOrigin, seedBranchNames, toolsForPrepare } from "./prepare";
+import { agentLoginsBundleFor, armInterruptGuard, fetchRootOccupant, freshWorktreeName, HOST_MIN_FREE_BYTES, parseAcquireOutput, parseStartFrom, pushAgentLoginsNow, readyHostHome, remoteRepoPath, resolveSeedRoots, ROOT_WORKSPACE_NAME, sameGitOrigin, seedBranchNames, toolsForPrepare } from "./prepare";
+
 import { checkoutRefusal, cloudSeedRef, CloudSeedNameError, finishSeededWorktree } from "./transfer";
 import { NODE_22_VERSION, type HostToolsReport } from "./hostTools";
 import { cloudStartArgs, cloudStartSkipReason, launchModelKey, parkedRowStillPending, seedPlacementArg } from "./cli";
+
+const FREE = HOST_MIN_FREE_BYTES * 10;
 
 const host = { address: "1.2.3.4", user: "ubuntu", keyPath: "/k", remoteBaseDir: "/home/ubuntu/work", homeDir: "/home/ubuntu" };
 
@@ -154,7 +157,7 @@ describe("agent logins step (readyHostHome step 1)", () => {
     const mirrorDeps = async () => ({ pushed: true, changed: 0, hash: "abcdef1234" });
     const spec = { packages: ["redis-server"], services: ["redis-server"], run: [] };
     const report = await readyHostHome(host, {
-      skipGit: true, onProgress: (m) => lines.push(m), localGitRoot: "/Users/a/src/codecast", mirrorDeps,
+      skipGit: true, diskStep: () => FREE, onProgress: (m) => lines.push(m), localGitRoot: "/Users/a/src/codecast", mirrorDeps,
       hostSetup: () => ({ report: { ok: true, applied: true }, spec }),
       loginsDeps: { pushClaude: () => ({ pushed: true }), push: () => ({ pushed: true, kept: [], files: 0, deleted: 0, env: [], trust: 1 }), sources },
       toolsDeps: { required: () => ({ node: { minMajor: 20, install: NODE_22_VERSION, source: "x" }, clients: {}, tools: [], unsupported: [] }), run: () => tools },
@@ -166,7 +169,7 @@ describe("agent logins step (readyHostHome step 1)", () => {
     expect(lines).toContain("host tools: missing uv (for skills)");
     expect(lines).toContain("host setup applied (1 package(s), 1 service(s))");
     const failed = await readyHostHome(host, {
-      skipGit: true, onProgress: (m) => lines.push(m), mirrorDeps,
+      skipGit: true, diskStep: () => FREE, onProgress: (m) => lines.push(m), mirrorDeps,
       hostSetup: () => ({ report: { ok: false, step: "install redis-server", error: "E: Unable to locate package\nE: dpkg was interrupted" }, spec }),
       loginsDeps: { pushClaude: () => ({ pushed: true }), push: () => ({ pushed: true, kept: [], files: 0, deleted: 0, env: [], trust: 0 }), sources },
       toolsDeps: { required: () => { throw new Error("no repo"); }, run: () => tools },
@@ -178,10 +181,18 @@ describe("agent logins step (readyHostHome step 1)", () => {
     expect(toolsForPrepare(host, () => {}, { deps: { required: () => ({ node: { minMajor: 20, install: NODE_22_VERSION, source: "x" }, clients: {}, tools: [], unsupported: [] }), run: () => { throw new Error("ssh: Connection refused"); } } })).toBeUndefined();
   });
 
+  test("readyHostHome refuses a host whose disk is full before any step runs", async () => {
+    const mustNot = () => { throw new Error("must not run"); };
+    await expect(readyHostHome(host, {
+      diskStep: () => 4 * 1024 ** 2, hostSetup: mustNot, mirrorDeps: mustNot as any,
+      loginsDeps: { push: mustNot, pushClaude: mustNot, sources }, toolsDeps: { required: mustNot },
+    })).rejects.toThrow("the host's disk is full (4 MiB free)");
+  });
+
   test("readyHostHome with skipLogins runs neither the push nor the tools check", async () => {
     const report = await readyHostHome(host, {
       hostSetup: () => { throw new Error("must not run"); },
-      skipGit: true, skipLogins: true, mirrorDeps: async () => ({ pushed: true, changed: 0, hash: "abcdef1234" }),
+      skipGit: true, skipLogins: true, diskStep: () => FREE, mirrorDeps: async () => ({ pushed: true, changed: 0, hash: "abcdef1234" }),
       loginsDeps: { push: () => { throw new Error("must not run"); }, pushClaude: () => { throw new Error("must not run"); }, sources },
       toolsDeps: { required: () => { throw new Error("must not run"); } },
     });

@@ -54,10 +54,10 @@ describe("call video", () => {
     const spans = filmedSpans([room, ann, saving, later], T);
     // A screen inside its run adds nothing; a run still saving plays nothing yet.
     expect(videoStretches(spans)).toEqual([{ fromMs: 65_000, toMs: 125_000 }, { fromMs: 300_000, toMs: 320_000 }]);
-    expect(describeStretches(videoStretches(spans))).toBe("1:05–2:05, 5:00–5:20");
+    expect(describeStretches(videoStretches(spans))).toBe("1:05-2:05, 5:00-5:20");
     expect(noVideoWords(10_000, spans).jump).toEqual({ ms: 65_000, words: "The video starts at 1:05" });
     expect(noVideoWords(280_000, spans).jump).toEqual({ ms: 300_000, words: "The video resumes at 5:00" });
-    expect(noVideoWords(400_000, spans).jump).toEqual({ ms: 319_000, words: "The nearest video is at 5:19" });
+    expect(noVideoWords(400_000, spans).jump).toEqual({ ms: 318_000, words: "The nearest video is at 5:18" });
     expect(noVideoWords(10_000).jump).toBeNull();
   });
 

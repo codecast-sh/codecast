@@ -90,3 +90,52 @@ describe("the huddle-summary wire tag", () => {
     expect(parseHuddleSummaryTag("just words")).toBeNull();
   });
 });
+
+// A filmed huddle names its video wherever its digest lands, and a card reads
+// the stretches back from the same words, so the chat row and the session
+// turn need no field of their own for it.
+describe("a huddle recorded on video", () => {
+  const filmed = { ...digest, video: [{ fromMs: 280_000, toMs: 440_000 }, { fromMs: 600_000, toMs: 615_000 }] };
+
+  test("the digest says so on its own line, and the card reads it back", () => {
+    const out = formatHuddleDigest(filmed);
+    expect(out).toContain("\n\nRecorded on video: 4:40-7:20, 10:00-10:15.\n\n");
+    const head = parseHuddleDigestContent(out)!;
+    expect(head.video).toEqual(filmed.video);
+    expect(head.body).toBe(
+      "Alice and Bob agreed to ship the fix behind a flag.\n\n" + "Action items:\n- Bob: ship the fix behind a flag",
+    );
+  });
+
+  test("filmed in silence: the video is what it left, with no excuse for a summary", () => {
+    const silent = { ...filmed, speakers: [], summary: null, actionItems: [], summaryStatus: "skipped" as const };
+    expect(formatHuddleDigest(silent)).toBe(
+      "**Auth rollout** · 12 min huddle\n\nRecorded on video: 4:40-7:20, 10:00-10:15.",
+    );
+    const head = parseHuddleDigestContent(formatHuddleDigest(silent))!;
+    expect(head.body).toBe("");
+    expect(head.video).toEqual(filmed.video);
+  });
+
+  test("the agent is told it can snap a frame, by the call's short id", () => {
+    const wire = formatHuddleSummaryTag("t123", filmed, { callRef: "cl-42" });
+    expect(wire).toContain("`cast call snap cl-42:<line>`");
+    const parsed = parseHuddleSummaryTag(wire)!;
+    expect(parsed.video).toEqual(filmed.video);
+    expect(parsed.body).toBe(formatHuddleDigest(filmed));
+    expect(formatHuddleSummaryTag("t123", digest)).not.toContain("cast call snap");
+    expect(parseHuddleSummaryTag(formatHuddleSummaryTag("t123", digest))!.video).toBeNull();
+  });
+
+  test("heard live: the card body is still the digest alone", () => {
+    const parsed = parseHuddleSummaryTag(formatHuddleSummaryTag("t123", filmed, { heardLive: true }))!;
+    expect(parsed.body).toBe(formatHuddleDigest(filmed));
+    expect(parsed.video).toEqual(filmed.video);
+  });
+
+  test("a line that only looks like the video line is left in the body", () => {
+    const head = parseHuddleDigestContent("**Huddle** · 2 min huddle\n\nRecorded on video: soon.")!;
+    expect(head.video).toBeNull();
+    expect(head.body).toBe("Recorded on video: soon.");
+  });
+});

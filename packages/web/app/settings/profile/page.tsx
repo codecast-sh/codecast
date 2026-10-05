@@ -10,6 +10,7 @@ import { Input } from "../../../components/ui/input";
 import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
+import { LaneSettingRow } from "../../../components/simple/LaneSwitch";
 import { SelectBox } from "../../../components/ui/select-box";
 import { useInboxStore, resolveSimpleView, resolveInboxCompact, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
@@ -238,6 +239,7 @@ const INTERFACE_TOGGLES: Array<{
 function InterfaceSection() {
   return (
     <SettingsSection title="Interface" icon={LayoutList} description="What the inbox and conversations show.">
+      <LaneSettingRow />
       {INTERFACE_TOGGLES.map((t) => (
         <PrefToggleRow key={t.prefKey} {...t} />
       ))}

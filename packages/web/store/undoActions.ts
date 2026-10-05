@@ -5,15 +5,15 @@
 // grouping that makes a multi-row gesture one undo.
 import { askRetireInstead } from "../lib/seatKill";
 import { soundDormant } from "../lib/sounds";
-import { useInboxStore, type InboxSession } from "./inboxStore";
+import { isFavoriteInStore, useInboxStore, type InboxSession } from "./inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
-import { undoGroup, type UndoEntry } from "./undoStack";
 import { registerUndoRevert } from "./undo/onRevert";
 import { USER_REST_LABEL } from "./undo/policies/sessions";
-import { counted } from "./undo/labels";
+import { counted, undoAsOne } from "./undo/labels";
 import { toast } from "sonner";
+import { gestureToast } from "./undoStack";
 
-export { USER_REST_LABEL };
+export { USER_REST_LABEL, undoAsOne };
 
 // How long a restored row may take to mount before its entrance is dropped.
 const ENTER_WAIT_MS = 1000;
@@ -81,15 +81,6 @@ function animateSessionExit(id: string, then: (leaving: Element | null) => void)
   };
   wrapper.addEventListener('animationend', finish, { once: true });
   setTimeout(finish, 250);
-}
-
-/** Fold every undoable write `fn` makes into one undo. One write keeps its own
- *  label; several take `summary`. */
-export function undoAsOne<T>(summary: string | ((entries: UndoEntry[]) => string), fn: () => T): T {
-  return undoGroup(
-    (entries: UndoEntry[]) => (entries.length === 1 ? entries[0]!.label : typeof summary === "function" ? summary(entries) : summary),
-    fn,
-  );
 }
 
 const exitFinished = (id: string) => new Promise<Element | null>((resolve) => animateSessionExit(id, resolve));
@@ -168,3 +159,29 @@ registerUndoRevert("sessions", (rows) => {
     if (unhid) animateSessionEnter(id);
   }
 });
+
+export type SessionToggle = "pin" | "favorite";
+
+const toggleIsOn = (state: any, id: string, kind: SessionToggle) =>
+  kind === "pin" ? !!state.sessions[id]?.is_pinned : isFavoriteInStore(state, id);
+
+/**
+ * Pin or favorite a selection the way its first row goes, so a mixed
+ * selection ends all on (or all off) instead of flipping each row. Rows
+ * already in that end state are left alone, and the one undo and its toast
+ * count only the rows that changed.
+ */
+export function toggleSessionsLikeFirst(ids: string[], kind: SessionToggle): void {
+  if (ids.length === 0) return;
+  const state = useInboxStore.getState() as any;
+  const on = toggleIsOn(state, ids[0]!, kind);
+  const changing = ids.filter((id) => toggleIsOn(state, id, kind) === on);
+  const verb = kind === "pin" ? (on ? "Unpinned" : "Pinned") : on ? "Unfavorited" : "Favorited";
+  const many = changing.length > 1 ? ` ${counted(changing.length, "session")}` : "";
+  const confirm = kind === "pin" ? `${verb}${many}` : on ? `Removed${many} from favorites` : `Added${many} to favorites`;
+  gestureToast(confirm, () =>
+    undoAsOne((entries) => `${verb} ${counted(entries.length, "session")}`, () => {
+      for (const id of changing) kind === "pin" ? state.pinSession(id) : state.toggleFavorite(id);
+    }),
+  );
+}

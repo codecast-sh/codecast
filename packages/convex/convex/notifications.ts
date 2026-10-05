@@ -721,6 +721,7 @@ export async function deriveConversationVerdict(
     status: conv.status,
     updatedAt: conv.updated_at,
     daemonAlive,
+    agentType: conv.agent_type,
     now,
   });
   let isIdle = activity.isIdle;

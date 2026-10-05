@@ -13,6 +13,7 @@ import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } f
 import { fmt } from "./colors.js";
 import { findLineProfile, formatLineProfile, LINE_PROFILE_REL_PATH, LineProfileError, loadLineProfile, starterLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
+import type { LineProfileFacts } from "@codecast/shared/contracts/lineProfile";
 
 function fail(message: string, code = 2): never {
   console.error(fmt.error(message));
@@ -69,12 +70,24 @@ export function publishGroups(r: ResolvedLineProfile): { groups: PublishGroup[];
   return { groups: [...groups.values()], unprojected };
 }
 
+/**
+ * The rest of the resolved profile, sent with every publish so the app shows
+ * the whole line without a daemon round trip: every value but the finders
+ * (those ride their groups), where each came from, and the file's path
+ * relative to the root it was found under.
+ */
+export function publishFacts(r: ResolvedLineProfile): LineProfileFacts {
+  const { finders: _finders, ...values } = r.profile;
+  const file = r.file ? (r.root ? path.relative(r.root, r.file) : r.file) : null;
+  return { ...values, sources: r.sources, notes: r.notes, warnings: r.warnings, file };
+}
+
 export function registerLineProfileCommands(line: Command, deps: PublishDeps): void {
   line
     .command("profile")
     .description("The line profile for this directory (.codecast/line.toml merged with the defaults), each value with where it came from")
     .option("--json", "Machine-readable output")
-    .option("--publish", "Declare this profile's finders on the projects they file into, so /line shows each one and says when it goes silent")
+    .option("--publish", "Publish this profile onto the projects its finders file into, so the app shows the whole line and /line says when a finder goes silent")
     .option("--starter", "Print a starter .codecast/line.toml for a repository that has none: the defaults written out, the project filled in")
     .option("--project <name>", "With --starter: the project its signals and line belong to")
     .option("--team <name>", "With --starter: the workspace for writes from this repo")
@@ -109,7 +122,14 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
       if (!groups.length) fail(`nothing to publish: the profile names no project (${resolved.file ?? "no .codecast/line.toml"})`);
       // The write lands where `cast signal add` from this checkout would.
       const { scopeFor } = await import("./signalCommand.js");
-      const result = await apiPost(deps, "/cli/line/profile/publish", { ...(await scopeFor(deps, undefined, true)), root: resolved.root ?? undefined, groups });
+      const { deviceId } = await import("./remote/device.js");
+      const result = await apiPost(deps, "/cli/line/profile/publish", {
+        ...(await scopeFor(deps, undefined, true)),
+        root: resolved.root ?? undefined,
+        groups,
+        profile: publishFacts(resolved),
+        device_id: deviceId(),
+      });
       if (options.json) { console.log(JSON.stringify({ ...result, unprojected }, null, 2)); return; }
       for (const p of result.projects ?? []) {
         console.log(`${p.short_id ?? p.project}  ${p.title}  ${p.finders} finder${p.finders === 1 ? "" : "s"}  ${p.changed ? "published" : "unchanged"}`);

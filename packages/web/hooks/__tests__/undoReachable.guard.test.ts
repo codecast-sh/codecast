@@ -1,0 +1,61 @@
+// Every window either reaches its undo history or records none
+// (hooks/useUndoUnreachable). The undo history is in memory per window, and
+// only the dashboard mounts a way back (useUndoWalk's ⌘Z, the timeline, a
+// toast the window can click). An auxiliary Electron window that records
+// strands its entries: a kill from the agent dock looked undoable, its toast
+// sat outside the dock's clickable region, and ⌘Z in the main window took
+// back an unrelated older entry.
+//
+// The windows are read from the shell (electron/main.js loads each by URL),
+// their pages from the router (src/App.tsx). A window's page must mount
+// useUndoUnreachable, through TransparentWindowLayout or on its own, or the
+// dashboard.
+import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+const WEB = join(import.meta.dir, "..", "..");
+const read = (rel: string) => readFileSync(join(WEB, rel), "utf8");
+
+const MAIN_WINDOW_PATHS = new Set(["inbox"]);
+
+function auxiliaryWindowPaths(): string[] {
+  const main = read("../electron/main.js");
+  const paths = new Set<string>();
+  for (const m of main.matchAll(/loadURL\(`\$\{currentBaseUrl\}\/([a-z][a-z-]*)`\)/g)) paths.add(m[1]!);
+  const people = main.match(/const PEOPLE_PATH = "\/([a-z-]+)"/);
+  if (people && /loadURL\(`\$\{currentBaseUrl\}\$\{PEOPLE_PATH\}`\)/.test(main)) paths.add(people[1]!);
+  if (/loadURL\(callPanelUrl\(/.test(main)) paths.add("call-panel");
+  return [...paths].filter((p) => !MAIN_WINDOW_PATHS.has(p)).sort();
+}
+
+const holdsUndoAway = (source: string) => /\buseUndoUnreachable\(\)/.test(source);
+const reachesUndo = (source: string) => /\buseUndoWalk\(\)|<DashboardLayout\b/.test(source);
+
+describe("every window reaches its undo history or records none", () => {
+  const app = read("src/App.tsx");
+  const transparent = app.match(/<Route element=\{<TransparentWindowLayout \/>\}>([\s\S]*?)<\/Route>/)?.[1] ?? "";
+  const inTransparent = new Set([...transparent.matchAll(/path="([^"]+)"/g)].map((m) => m[1]!));
+
+  it("finds the shell's auxiliary windows and the transparent layout", () => {
+    expect(auxiliaryWindowPaths().length).toBeGreaterThanOrEqual(6);
+    expect(inTransparent.size).toBeGreaterThan(0);
+  });
+
+  it("the transparent window layout records none", () => {
+    expect(holdsUndoAway(read("src/layouts/TransparentWindowLayout.tsx"))).toBe(true);
+  });
+
+  for (const path of auxiliaryWindowPaths()) {
+    it(`/${path}`, () => {
+      if (inTransparent.has(path)) return;
+      const route = app.match(new RegExp(`<Route path="${path}" element=\\{<E name="(\\w+)">`));
+      expect(route, `no route for the /${path} window in src/App.tsx`).toBeTruthy();
+      const name = route![1]!;
+      const lazy = app.match(new RegExp(`const ${name} = lazy\\(\\(\\) => import\\("@/([^"]+)"\\)\\)`));
+      expect(lazy, `no lazy import for ${name} in src/App.tsx`).toBeTruthy();
+      const page = read(`${lazy![1]}.tsx`);
+      expect(holdsUndoAway(page) || reachesUndo(page), `/${path} records undo history it cannot reach: mount useUndoUnreachable()`).toBe(true);
+    });
+  }
+});

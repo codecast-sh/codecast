@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from 'react';
 import { StyleProp, StyleSheet, TextStyle } from 'react-native';
 
 // JetBrains Mono is the app face, same as web (web aliases font-sans to it —
@@ -14,6 +15,38 @@ export const Mono = {
 } as const;
 
 const MONO_FAMILIES = new Set<string>([...Object.values(Mono), 'SpaceMono']);
+
+// Medium, Bold and Italic load after first paint (app/_layout.tsx). Text laid
+// out in a face that is not registered yet is measured in the system font and
+// then drawn in the wider mono face without being measured again, which
+// clipped labels ("Inbo", "Inb…"). Until they land, each late face resolves
+// to the nearest face already loaded; the flip re-renders every Text, and the
+// changed family makes it measure again.
+let lateFacesLoaded = false;
+const lateListeners = new Set<() => void>();
+export function markLateFacesLoaded(): void {
+  if (lateFacesLoaded) return;
+  lateFacesLoaded = true;
+  lateListeners.forEach((l) => l());
+}
+export function useLateFacesLoaded(): boolean {
+  return useSyncExternalStore(
+    (l) => { lateListeners.add(l); return () => { lateListeners.delete(l); }; },
+    () => lateFacesLoaded,
+  );
+}
+const EARLY_STAND_IN: Record<string, string> = {
+  [Mono.bold]: Mono.semiBold,
+  [Mono.medium]: Mono.regular,
+  [Mono.italic]: Mono.regular,
+};
+function loadedFace(face: string, late: boolean): string {
+  return late ? face : EARLY_STAND_IN[face] ?? face;
+}
+/** A face for nav-level styles (tab bar, header titles), standing in until the late faces load. */
+export function useMonoFace(face: string): string {
+  return loadedFace(face, useLateFacesLoaded());
+}
 
 function faceFor(weight: TextStyle['fontWeight'], italic: boolean): string {
   if (italic) return Mono.italic;
@@ -39,9 +72,9 @@ function faceFor(weight: TextStyle['fontWeight'], italic: boolean): string {
  * nothing); legacy 'SpaceMono'/'JetBrainsMono' families are re-resolved so
  * their fontWeight finally renders as a real face.
  */
-export function monoStyle(style: StyleProp<TextStyle>): TextStyle {
+export function monoStyle(style: StyleProp<TextStyle>, late = lateFacesLoaded): TextStyle {
   const flat = StyleSheet.flatten(style) ?? {};
   if (flat.fontFamily && !MONO_FAMILIES.has(flat.fontFamily)) return flat;
   const { fontWeight, fontStyle, ...rest } = flat;
-  return { ...rest, fontFamily: faceFor(fontWeight, fontStyle === 'italic') };
+  return { ...rest, fontFamily: loadedFace(faceFor(fontWeight, fontStyle === 'italic'), late) };
 }

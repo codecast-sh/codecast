@@ -12,6 +12,16 @@ test('parsed file attachments and empty attachment fields cross ingestion valida
     await expect(validateIngestResult(value,job)).resolves.toEqual(value);
   }
 });
+test('an image a Read returned carries its source size across ingestion validation; a malformed one is refused',async()=>{
+  for (const source of [undefined,{bytes:137430,width:1100,height:1614},{bytes:0}]) {
+    const value={...result(),messages:[{...result().messages[0],images:[{mediaType:'image/webp',data:'UklGR',toolUseId:'t',...(source ? {source} : {})}]}]};
+    await expect(validateIngestResult(value,job)).resolves.toEqual(value);
+  }
+  for (const source of [{bytes:-1},{bytes:1,width:0},{bytes:1,extra:true},'big']) {
+    const value={...result(),messages:[{...result().messages[0],images:[{mediaType:'image/webp',data:'UklGR',source}]}]};
+    await expect(validateIngestResult(value,job)).rejects.toThrow('schema');
+  }
+});
 test('ingestion rejects malformed file attachments',async()=>{
   for (const files of [{name:'report.md'},[{}],[{name:7}],[{name:'report.md',localPath:7}],[{name:'report.md',size:-1}],[{name:'report.md',unexpected:true}]]) {
     const value={...result(),messages:[{...result().messages[0],files}]};

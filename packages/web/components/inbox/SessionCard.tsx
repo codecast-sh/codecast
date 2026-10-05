@@ -216,7 +216,7 @@ export const SessionCard = memo(function SessionCard({
   // snapshot lives on the parent's standing row, so it is read from there.
   const roleAbove = rest.subRow === "role" ? roleLookingAfter(session) ?? leadRoleOf(session) : null;
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const sendMessage = useInboxStore((s) => s.sendMessage);
   const ackAssignment = useAckAssignment();
 
   const handleDropFiles = useCallback(async (dropped: File[], title: string) => {
@@ -234,7 +234,7 @@ export const SessionCard = memo(function SessionCard({
         const { storageId } = await result.json();
         storageIds.push(storageId);
       }
-      await sendMessage({ conversation_id: cardId as Id<"conversations">, content: "[image]", image_storage_ids: storageIds, human: true });
+      sendMessage(cardId, "[image]", storageIds);
       toast.success(`Attached ${files.length} image${files.length > 1 ? "s" : ""} to "${title}"`);
     } catch {
       toast.error("Failed to attach files");
