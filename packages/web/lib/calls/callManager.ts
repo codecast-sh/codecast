@@ -262,7 +262,7 @@ export async function heartbeatOnce(roomKey: string): Promise<void> {
   // hungUp: the person pressed End on another device. Leave with them.
   if (res?.hungUp && cur.roomKey === roomKey) return leaveCall(roomKey);
   if (res?.ok === false && cur.roomKey === roomKey && cur.phase === "connected") {
-    await controlJoin(roomKey).catch(() => void leaveCall());
+    await controlJoin(roomKey).catch(() => void leaveCall(undefined, { hangup: false }));
   }
 }
 
@@ -653,7 +653,8 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       }
       // SFU-side disconnect (kicked, server restart, network gave up after
       // livekit-client's own retries): reflect reality and free the row.
-      void leaveCall();
+      // Not a hang-up: nobody pressed End, and they may well be back.
+      void leaveCall(undefined, { hangup: false });
     });
     // A RECONNECT IS STILL THE CALL. livekit-client's `Reconnecting` is the
     // media plane repairing itself under a seat that never moved: the row is
@@ -817,14 +818,19 @@ async function yieldRoomToOtherWindow(): Promise<void> {
 
 /** `roomKey`: the seat the card shows, for when this engine holds none of
  *  its own (a reloaded window whose row on the server outlived it): the row
- *  is what everyone else sees, so End must be able to delete it regardless. */
-export async function leaveCall(roomKey?: string): Promise<void> {
+ *  is what everyone else sees, so End must be able to delete it regardless.
+ *  A leave is a hang-up (the person pressed End) unless `hangup: false` says
+ *  the call fell away under them: the server stops a recording the moment
+ *  the last teammate hangs up, and gives a fall-away the time to come back
+ *  (calls.leaveRoom). */
+export async function leaveCall(roomKey?: string, opts?: { hangup?: boolean }): Promise<void> {
+  const hangup = opts?.hangup !== false;
   if (voiceHostElsewhere() && !currentRoomKey) {
     // The host hangs up; this window lets go of the row at the press too.
     noteLeft(roomKey ?? useInboxStore.getState().call.roomKey);
-    if (await sendVoiceCommand("leaveCall", roomKey ? [roomKey] : [])) return;
+    if (await sendVoiceCommand("leaveCall", [roomKey ?? null, hangup])) return;
   }
-  return leaveCallHere(roomKey);
+  return leaveCallHere(roomKey, hangup);
 }
 
 /** Hanging up is final at the press: the row stops reading the server's seat
@@ -834,7 +840,7 @@ function noteLeft(roomKey: string | null | undefined): void {
   if (roomKey) setCall({ left: { roomKey, at: Date.now() } });
 }
 
-async function leaveCallHere(shown?: string): Promise<void> {
+async function leaveCallHere(shown?: string, hangup = true): Promise<void> {
   const roomKey = currentRoomKey ?? useInboxStore.getState().call.roomKey ?? shown ?? null;
   noteLeft(roomKey);
   callGen++;
@@ -854,7 +860,7 @@ async function leaveCallHere(shown?: string): Promise<void> {
   // tab that never got to say goodbye.
   const left =
     convex && roomKey
-      ? convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {})
+      ? convex.mutation(api.calls.leaveRoom, { room_key: roomKey, ...(hangup ? { hangup: true } : {}) }).catch(() => {})
       : null;
   // Idle first, then the scribe flush and media teardown: waiting on the flush left the row live for seconds after End.
   setCall({
@@ -1411,7 +1417,7 @@ export async function runCallCommand(cmd: string, args: unknown[]): Promise<void
       return joinCallHere(roomKey, opts);
     }
     case "leaveCall":
-      return leaveCallHere(typeof a[0] === "string" ? a[0] : undefined);
+      return leaveCallHere(typeof a[0] === "string" ? a[0] : undefined, a[1] !== false);
     case "setMuted":
       return setMutedHere(!!a[0], a[1] && typeof a[1] === "object" ? a[1] : undefined);
     case "setCamera":

@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { Clock, DoorClosed, Hand, LogOut, MonitorX, PhoneOff, Unlink, UserX, WifiOff } from "lucide-react";
 import { copyToClipboard } from "../../../lib/utils";
-import { GUEST_LINK_REFUSAL_PARTS, guestLinkRefusal, type CallGuestView, type GuestLinkRefusal } from "@codecast/shared/contracts";
+import { guestLinkRefusal, guestLinkRefusalParts, type CallGuestView, type GuestLinkRefusal } from "@codecast/shared/contracts";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { GUEST_PRIMARY } from "./MeetChrome";
 
 // Every way a guest's visit can stop short of the call or end after it, in
 // plain words: what happened, whether it was anything they did, and the one
@@ -19,25 +20,50 @@ const REFUSAL_TITLE: Record<GuestLinkRefusal, string> = {
 
 /** The words under a refusal's heading: what to do next, plus why when the
  *  heading alone does not say it (a link that "no longer works" because its
- *  sender lost the standing to invite). Never the heading again. */
-function refusalBody(reason: GuestLinkRefusal): string {
-  const { what, next } = GUEST_LINK_REFUSAL_PARTS[reason];
+ *  sender lost the standing to invite). Never the heading again. With the
+ *  sender's first name, whom to ask by name. */
+function refusalBody(reason: GuestLinkRefusal, inviter?: string | null): string {
+  const { what, next } = guestLinkRefusalParts(reason, inviter);
   return reason === "inviter_gone" ? `${what} ${next}` : next;
+}
+
+/** How a link stopped working under a guest who was waiting at its door. */
+const CLOSED_WHILE_WAITING: Record<GuestLinkRefusal, string> = {
+  not_found: "stopped working",
+  revoked: "was turned off",
+  expired: "expired",
+  unavailable: "stopped taking guests",
+  inviter_gone: "stopped working",
+};
+
+/** The page that was waiting at the door says what happened to it, naming
+ *  the meeting: "The link to A call with Ashot expired while you were
+ *  waiting. Ask Ashot for a new one." */
+function closedWhileWaiting(reason: GuestLinkRefusal, meeting: string | null | undefined, inviter?: string | null): string {
+  const link = meeting ? `The link to ${meeting}` : "This link";
+  return `${link} ${CLOSED_WHILE_WAITING[reason]} while you were waiting. ${refusalBody(reason, inviter)}`;
 }
 
 /** A described link as the guest should see it at `now`: once its expiry
  *  has passed it reads as the server would answer a fresh load of it, so the
  *  lobby a guest left open gives way to the same Expired screen. */
-export function linkAsOf<L extends { ok: true; expires_at: number } | { ok: false; reason: GuestLinkRefusal }>(
+type LinkInviter = { name: string | null; image?: string | null };
+type Named = { title?: string | null; inviter?: LinkInviter };
+
+export function linkAsOf<L extends ({ ok: true; expires_at: number } & Named) | ({ ok: false; reason: GuestLinkRefusal } & Named)>(
   link: L | undefined,
   now: number,
-): L | { ok: false; reason: GuestLinkRefusal } | undefined {
+): L | ({ ok: false; reason: GuestLinkRefusal } & Named) | undefined {
   const lapsed = link?.ok ? guestLinkRefusal(link, now) : null;
-  return lapsed ? { ok: false, reason: lapsed } : link;
+  // Still named, as the server names a link that closed (describeGuestLink).
+  return lapsed && link ? { ok: false, reason: lapsed, title: link.title, inviter: link.inviter } : link;
 }
 
+/** Who to name in a refusal: the meeting, and the sender's first name. */
+type LinkNames = { meeting?: string | null; inviter?: string | null };
+
 export type Outcome =
-  | { kind: "refused"; reason: GuestLinkRefusal }
+  | ({ kind: "refused"; reason: GuestLinkRefusal } & LinkNames)
   | {
       kind: "view";
       view: Exclude<CallGuestView, "waiting" | "admitted">;
@@ -48,6 +74,8 @@ export type Outcome =
        *  to walk back into: the action rejoins, no knock. */
       resumable?: boolean;
       reason?: GuestLinkRefusal;
+      meeting?: string | null;
+      inviter?: string | null;
       /** The page is still telling the server about the guest's own Leave:
        *  the way back in waits for that, or it would be undone by it. */
       pending?: boolean;
@@ -84,7 +112,7 @@ export function GuestOutcome({ outcome, onAskAgain, busy, error }: { outcome: Ou
   } else if (outcome.kind === "refused") {
     icon = <Unlink />;
     title = REFUSAL_TITLE[outcome.reason];
-    text = refusalBody(outcome.reason);
+    text = refusalBody(outcome.reason, outcome.inviter);
   } else {
     const { view, leftReason, retryAt, canAskAgain, resumable } = outcome;
     if (view === "denied") {
@@ -136,7 +164,7 @@ export function GuestOutcome({ outcome, onAskAgain, busy, error }: { outcome: Ou
       // closed: the link stopped working while they waited at the door.
       icon = <DoorClosed />;
       title = outcome.reason ? REFUSAL_TITLE[outcome.reason] : "This link was closed";
-      text = refusalBody(outcome.reason ?? "revoked");
+      text = closedWhileWaiting(outcome.reason ?? "revoked", outcome.meeting, outcome.inviter);
     }
   }
 
@@ -152,7 +180,7 @@ export function GuestOutcome({ outcome, onAskAgain, busy, error }: { outcome: Ou
           type="button"
           disabled={busy || action.disabled}
           onClick={onAskAgain}
-          className="mt-2 rounded-xl bg-sol-cyan px-5 py-2.5 text-[13.5px] font-semibold text-sol-base03 transition-[transform,opacity] hover:bg-[#33b3a9] active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-45"
+          className={`${GUEST_PRIMARY} mt-2 px-5 py-2.5`}
         >
           {busy ? (action.busy ?? "Asking…") : action.label}
         </button>
@@ -176,7 +204,7 @@ export function GuestOutcome({ outcome, onAskAgain, busy, error }: { outcome: Ou
                 .then(() => setCopied("copied"))
                 .catch(() => setCopied("failed"))
             }
-            className="rounded-xl bg-sol-cyan px-5 py-2.5 text-[13.5px] font-semibold text-sol-base03 transition-[transform,opacity] hover:bg-[#33b3a9] active:scale-[0.985]"
+            className={`${GUEST_PRIMARY} px-5 py-2.5`}
           >
             {copied === "copied" ? "Link copied" : "Copy link"}
           </button>

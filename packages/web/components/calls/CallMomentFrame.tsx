@@ -1,19 +1,24 @@
 import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowUpRight, Film, MonitorUp, Phone } from "lucide-react";
-import { CALL_FRAME_PREFER, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
+import { CALL_FRAME_PREFER, CALL_JUST_SAID_MS, isRecordingFilming, locateCallMoment, offsetIntoRecording, recordingSubject, type CallMomentMiss } from "@codecast/shared/contracts";
 import { formatCallTime, parseCallRef } from "@codecast/shared/entities";
 import { toVideoFile, useCallRecordings } from "../../hooks/useRoomRecording";
 import { useNearViewport } from "../../hooks/useNearViewport";
 import { useStableMediaSrcs } from "../../hooks/useStableMediaSrcs";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { ParticipantTag } from "./GuestTag";
+import { ParticipantTag, PersonName } from "./GuestTag";
+import { speakerColor } from "./speakers";
 import { CALL_VIDEO_LOADING, playableFiles, videoAt } from "../../lib/calls/callVideo";
+import { keepMomentFrame, momentFrame, momentFrameKey } from "../../lib/calls/momentFrames";
 
 // A moment of a call, written in a message as `cl-42@12:34` on a line of its
 // own: the call as it looked then, a frame of its video, linking to the call
 // page waiting at that second. What an agent quotes after `cast call snap`,
-// and what the call page's player copies as the moment's reference.
+// and what the call page's player copies as the moment's reference. Its
+// caption is the line being said at that moment, by the rule the CLI prints
+// beside the same frame (lineSaidAt), so a reader and an agent see the same
+// words under the same picture.
 //
 // The frame is the recording itself, seeked: no image is made or stored, so it
 // is exactly the picture the page plays at that second, and it is read under
@@ -25,6 +30,11 @@ import { CALL_VIDEO_LOADING, playableFiles, videoAt } from "../../lib/calls/call
 // player opens on the room, and a frame of a shared screen must not open on a
 // different picture, so it carries `view=screen` and the page shows the
 // screen this frame shows, by the same rule (CALL_FRAME_PREFER).
+//
+// Once a frame has drawn it is kept as a picture in memory
+// (lib/calls/momentFrames), and the next mount of that moment (the card
+// scrolled back to, a hover card, a second citation) is an image: no
+// request, no decoder.
 
 export function CallMomentFrame({
   rawId,
@@ -43,6 +53,12 @@ export function CallMomentFrame({
   const ref = parseCallRef(rawId);
   const time = formatCallTime(ref?.at_ms ?? 0);
   const title = entity?.title || entity?.short_id || ref?.call || "Call";
+  // What was being said then, the most useful words a frame can carry (the
+  // call's title is the same on every frame of it, so it drops to the dim
+  // second line).
+  const caption = momentCaption(entity, ref?.at_ms ?? 0);
+  const line = caption?.line;
+  const saidBefore = !!caption?.saidBefore;
 
   if (served && !entity) {
     return (
@@ -59,22 +75,51 @@ export function CallMomentFrame({
       // icon, as on every other call card and pill, and a red ring here
       // would read as the REC mark of a call being filmed now.
       className="group my-1 block w-[min(100%,420px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40 transition-shadow hover:ring-sol-border/70"
-      title={`Open the call at ${time}`}
+      title={`Open ${title} at ${time}`}
       data-call-moment={rawId}
     >
       <CallMomentPicture rawId={rawId} entity={entity} served={served} />
-      <div className="flex items-center gap-2 px-2.5 py-1.5">
-        {/* A frame, not a phone: in a chat of citations a red handset reads
-            as a missed call, and red is kept for the REC mark of a call being
-            filmed now. */}
-        <Film className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
-        <span className="min-w-0 flex-1 truncate text-[12px] text-sol-text">{title}</span>
-        <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{rawId}</span>
-        <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
-      </div>
+      {line ? (
+        <div className="px-2.5 py-1.5">
+          <div className="flex items-center gap-1.5 text-[12px]" data-moment-line={line.seq}>
+            <span className={`flex min-w-0 max-w-[40%] shrink-0 items-center gap-1 font-medium ${speakerColor(line.speaker_id)}`}>
+              <PersonName identity={line.speaker_id} name={line.speaker_name} />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-sol-text">{line.text}</span>
+            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
+          </div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10.5px] text-sol-text-dim">
+            <Film className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 truncate">{title}</span>
+            {saidBefore && <span className="shrink-0">· last said at {formatCallTime(line.t0)}</span>}
+            <span className="ml-auto shrink-0 font-mono">{rawId}</span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 px-2.5 py-1.5">
+          {/* A frame, not a phone: in a chat of citations a red handset reads
+              as a missed call, and red is kept for the REC mark of a call being
+              filmed now. */}
+          <Film className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-sol-text">{title}</span>
+          <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{rawId}</span>
+          <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
+        </div>
+      )}
     </Link>
   );
 }
+
+/** The line a moment's card is captioned with (webGetCallRef's `line`, the
+ *  shared lineSaidAt), and whether it ended long enough before the moment
+ *  that the card says when it was said, the way `cast call snap` does. */
+export function momentCaption(entity: any, atMs: number): { line: MomentLine; saidBefore: boolean } | null {
+  const line: MomentLine | null | undefined = entity?.line;
+  if (!line) return null;
+  return { line, saidBefore: !line.during && atMs - line.t1 >= CALL_JUST_SAID_MS };
+}
+
+type MomentLine = { seq: number; speaker_id: string; speaker_name: string; text: string; t0: number; t1: number; during: boolean };
 
 /** The picture alone, 16:9 with the time in its corner: the embed's top, and
  *  the hover card of an inline `cl-42@12:34` pill. Nothing is asked of the
@@ -108,7 +153,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
     // still being written is "not yet", not "never"; one still filming is
     // "now", not "saving").
     const miss = locateCallMoment({ callStartedAt: recs.call_started_at, atMs, recordings: files });
-    const filming = files.some((f) => (f.status === "starting" || f.status === "recording") && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
+    const filming = files.some((f) => isRecordingFilming(f.status) && offsetIntoRecording(f, recs.call_started_at, atMs) !== null);
     return {
       ok: false as const,
       reason: miss.ok ? ("outside" as const) : miss.reason,
@@ -123,12 +168,17 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
   // The browser took the video and drew nothing (see MomentVideo).
   const [blank, setBlank] = useState<string | null>(null);
   const undrawn = !!src && blank === src;
+  // This moment drawn before on this page: its kept picture, shown at once.
+  const frameKey = located?.ok ? momentFrameKey(located.file.id, located.seconds) : null;
+  const kept = frameKey ? momentFrame(frameKey) : null;
   return (
     <div ref={boxRef} className="relative aspect-video overflow-hidden bg-black">
       {/* Until a frame draws (and wherever none will), a faint grid under the
           pulse so the box reads as a picture on its way, not a dead screen. */}
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-[0.07]" style={GRID} />
-      {located?.ok && !dead && !undrawn ? (
+      {kept ? (
+        <img src={kept} alt={`The call at ${time}`} draggable={false} className="pointer-events-none relative h-full w-full bg-black object-contain" />
+      ) : located?.ok && !dead && !undrawn ? (
         src && close ? (
           <MomentVideo
             key={src}
@@ -138,6 +188,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
             onLoaded={() => media.loaded(located.file.id)}
             onRefused={() => media.refused(located.file.id)}
             onBlank={() => setBlank(src)}
+            onDrawn={(el) => void keepMomentFrame(frameKey!, { call: String(entity._id), recording: located.file.id }, el)}
           />
         ) : (
           <div className={CALL_VIDEO_LOADING} />
@@ -159,7 +210,7 @@ export function CallMomentPicture({ rawId, entity, served }: { rawId: string; en
       <span className="absolute bottom-2 left-2 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-white">
         {time}
       </span>
-      {located?.ok && !dead && !undrawn && located.file.kind === "screen" && (
+      {located?.ok && (kept || (!dead && !undrawn)) && located.file.kind === "screen" && (
         <span className="absolute bottom-2 right-2 flex items-center gap-1 rounded bg-black/70 px-1.5 py-0.5 font-mono text-[10.5px] text-white/85">
           <MonitorUp className="h-3 w-3" /> {recordingSubject(located.file, "label")}
           <ParticipantTag identity={located.file.participant_identity} />
@@ -201,6 +252,7 @@ function MomentVideo({
   onLoaded,
   onRefused,
   onBlank,
+  onDrawn,
 }: {
   src: string;
   seconds: number;
@@ -208,6 +260,8 @@ function MomentVideo({
   onLoaded: () => void;
   onRefused: () => void;
   onBlank: () => void;
+  /** The frame at the position is on screen: the host keeps it. */
+  onDrawn: (el: HTMLVideoElement) => void;
 }) {
   const [step, setStep] = useState<"waiting" | "metadata" | "eager" | "drawn">("waiting");
   const blankRef = useRef(onBlank);
@@ -217,7 +271,13 @@ function MomentVideo({
     const timer = setTimeout(() => (step === "metadata" ? setStep("eager") : blankRef.current()), PAINT_WAIT_MS);
     return () => clearTimeout(timer);
   }, [step]);
-  const drawn = () => setStep("drawn");
+  const drawn = (e: React.SyntheticEvent<HTMLVideoElement>) => {
+    setStep("drawn");
+    // Kept only once the picture is the moment's own: a first frame that
+    // arrives before the seek lands is not.
+    const el = e.currentTarget;
+    if (Math.abs(el.currentTime - seconds) <= 0.5) onDrawn(el);
+  };
   // The frame fades in over the loading box once it has data at the position,
   // so it arrives rather than pops (and a browser that loads the metadata but
   // draws nothing never shows a black rectangle in place of the pulse).
@@ -226,6 +286,9 @@ function MomentVideo({
       {step !== "drawn" && <div className={CALL_VIDEO_LOADING} />}
       <video
         src={`${src}#t=${seconds.toFixed(2)}`}
+        // CORS (the recordings bucket allows the app's origins), so the drawn
+        // frame can be kept as a picture (lib/calls/momentFrames).
+        crossOrigin="anonymous"
         preload={step === "eager" ? "auto" : "metadata"}
         muted
         playsInline

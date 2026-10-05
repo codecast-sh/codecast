@@ -29,7 +29,7 @@ import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
 import { authorizeRoom } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
-import { scheduleFaceLeave, scheduleFaceSpeak } from "./tavusPal";
+import { scheduleFaceLeave, scheduleFaceTell } from "./callFace";
 
 const MAX_TEXT = 4000;
 const PAGE = 200;
@@ -109,6 +109,10 @@ export const list = query({
         // "failed"), and a guest who pressed Stop is named as themselves.
         event_reason: r.event_reason ?? null,
         event_guest_name: r.event_guest_name ?? null,
+        // Which run a recording line is about, and what a deleted one had
+        // filmed, so the thread marks a deleted run's lines as gone.
+        event_run_id: r.event_run_id ?? null,
+        event_span: r.event_span ?? null,
       };
     });
   },
@@ -121,7 +125,13 @@ export type RoomEvent =
   | "transcribe_off"
   | "record_on"
   | "record_off"
+  | "record_lost"
   | "record_deleted"
+  | "frame_shared"
+  | "video_shared"
+  | "video_unshared"
+  | "link_on"
+  | "link_off"
   | "guest_admitted"
   | "guest_removed";
 
@@ -144,6 +154,9 @@ export async function postEvent(
     reason?: string;
     guest_name?: string;
     detail?: string;
+    // A recording event's run, and a deleted run's filmed stretch (schema).
+    run_id?: string;
+    span?: { from_ms: number; to_ms: number };
   },
 ): Promise<Id<"call_chat_messages"> | null> {
   if (isRecRoomKey(args.room_key)) return null;
@@ -157,6 +170,8 @@ export async function postEvent(
     ...(args.transcript_id ? { transcript_id: args.transcript_id } : {}),
     ...(args.reason ? { event_reason: args.reason } : {}),
     ...(args.guest_name ? { event_guest_name: args.guest_name } : {}),
+    ...(args.run_id ? { event_run_id: args.run_id } : {}),
+    ...(args.span ? { event_span: args.span } : {}),
   });
 }
 
@@ -386,7 +401,7 @@ export const mirrorAgentTurn = internalMutation({
     }
     await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
-    await scheduleFaceSpeak(ctx, feed, posted.map((m) => m.content ?? ""));
+    await scheduleFaceTell(ctx, feed, posted.map((m) => m.content ?? ""));
     return { mirrored: true };
   },
 });

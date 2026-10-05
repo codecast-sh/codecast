@@ -4,7 +4,7 @@ import { Switch } from "../ui/switch";
 import { firstName } from "./speakers";
 
 // Whether a call's public link shows its video too. Off unless somebody turns
-// it on for this very link (convex callRecordings.shareIncludesVideo): a link
+// it on for this very link (shared/contracts callRecordings shareIncludesVideo): a link
 // made to share a transcript never starts handing out faces and screens
 // because Record was pressed later, and a link turned off and on again starts
 // without. Only the room's recording is shared, never a single person's
@@ -112,6 +112,21 @@ export function ShareVideoSwitch({
         </p>
       )}
     </div>
+  );
+}
+
+/** What the call's public link tells about the guests in it: their words go
+ *  out with everyone's, and they joined from a link without choosing that,
+ *  so whoever opens the link to anyone reads their names first. Nothing for
+ *  a call without guests, and nothing to a viewer who cannot open it. */
+export function CallLinkGuestNote({ linkOn, canShare = true, guests = [] }: { linkOn: boolean; canShare?: boolean; guests?: string[] }) {
+  const words = guestList(guests);
+  if (!words || (!linkOn && !canShare)) return null;
+  const said = `what ${words} said as ${guests.length === 1 ? "a guest" : "guests"}`;
+  return (
+    <p className="text-xs leading-snug text-sol-text-muted">
+      {linkOn ? `Anyone with the link can read every word said, including ${said}.` : `Opened to anyone, the link shows every word said, including ${said}.`}
+    </p>
   );
 }
 
