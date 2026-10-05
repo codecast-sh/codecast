@@ -15,7 +15,9 @@ import { formatAgo, formatCountdown, labeledUsageWindows } from "@codecast/share
 import { usageTone } from "../lib/usageTone";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { LoginCodePaste } from "./LoginCodePaste";
+import { profileFlowPhase, type SignInDevice } from "./ProfileSignInDialog";
+import { SpinnerDot } from "./MintTokenDialog";
+import { useInboxStore } from "../store/inboxStore";
 
 export type { CcUsage };
 
@@ -171,25 +173,14 @@ export function LoginExpiredBadge({ profile }: { profile: { login_expired_at?: n
   );
 }
 
-export type ProfileLoginFlow = {
-  status: "pending" | "confirmed" | "rejected";
-  email?: string;
-  profile?: string;
-  reason?: string;
-  url?: string;
-  started_at: number;
-  finished_at?: number;
-};
-
-// A pending flow older than this means the daemon died mid-flow (its own
-// watcher gives up at 5 min); mirrors LOGIN_FLOW_STALE_MS server-side.
-const PROFILE_LOGIN_STALE_MS = 6 * 60 * 1000;
+export type { ProfileLoginFlow } from "./ProfileSignInDialog";
 
 /**
  * The one place a browser opens for a saved account: a person clicks it. The
- * daemon runs `claude auth login` for that profile into the profile's own
- * credential store, so the machine's current login is untouched, and reports
- * through the device's cc_login_flow (scoped here by profile name).
+ * click opens the sign-in dialog (ProfileSignInDialog), which starts the
+ * daemon's `claude auth login` for that profile and follows it to the end.
+ * The dialog lives at window level, so it outlives the panel this sits in;
+ * while a flow runs, this line says so and reopens the dialog.
  */
 export function ProfileSignInButton({
   device,
@@ -197,67 +188,46 @@ export function ProfileSignInButton({
   className,
   force = false,
 }: {
-  device: { device_id: string; label?: string; online?: boolean; is_remote?: boolean; login_flow?: ProfileLoginFlow | null };
+  device: SignInDevice;
   profile: { name: string; email?: string; login_expired_at?: number | null };
   className?: string;
   // A failed machine switch that found a dead snapshot should still offer
   // sign-in even if the heartbeat has not yet stamped login_expired_at.
   force?: boolean;
 }) {
-  const requestLogin = useMutation(api.accountSwitch.requestLoginFlow);
-  const [launching, setLaunching] = useState(false);
+  const openSignIn = useInboxStore((s) => s.openProfileSignIn);
   const now = useCoarseNowLocal();
   if ((!force && !profile.login_expired_at) || device.is_remote || device.online === false) return null;
-  const flow = device.login_flow?.profile === profile.name ? device.login_flow : null;
-  const pending = launching || (flow?.status === "pending" && now - flow.started_at < PROFILE_LOGIN_STALE_MS);
-  const rejected = flow?.status === "rejected" && !!flow.finished_at && now - flow.finished_at < 10 * 60 * 1000;
+  const phase = profileFlowPhase(device, profile.name, now);
   const machine = device.label || "the selected machine";
+  const open = (start: boolean) => openSignIn({ deviceId: device.device_id, profile: profile.name, start });
 
-  const start = async (force = false) => {
-    setLaunching(true);
-    try {
-      await requestLogin({ device_id: device.device_id, profile: profile.name, ...(force ? { force: true } : {}) });
-      toast.message(`Sign-in requested on ${machine}`, {
-        description: `Waiting for ${machine} to open the browser for ${profile.email ?? profile.name}.`,
-      });
-      setTimeout(() => setLaunching(false), 5_000);
-    } catch (err) {
-      setLaunching(false);
-      toast.error(err instanceof Error ? err.message : "Couldn't start the sign-in");
-    }
-  };
-
-  if (pending) {
+  if (phase === "pending") {
     return (
-      <span className={`inline-flex max-w-full items-start gap-1 text-[10px] text-amber-500 ${className ?? ""}`}>
-        <span className="mt-0.5 h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
-        <span className="min-w-0 break-words">
-          sign-in pending on {machine}{" "}
-          <button
-            type="button"
-            onClick={() => start(true)}
-            className="underline decoration-dotted underline-offset-2 hover:text-amber-400"
-            title={`Restart the sign-in on ${machine}`}
-          >
-            relaunch
-          </button>
-          {flow?.status === "pending" && <LoginCodePaste deviceId={device.device_id} flow={flow} />}
-        </span>
-      </span>
+      <button
+        type="button"
+        onClick={() => open(false)}
+        title="Open the sign-in: relaunch it, or finish it from here with a code"
+        className={`inline-flex max-w-full items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 ${className ?? ""}`}
+      >
+        <SpinnerDot />
+        <span className="min-w-0 break-words underline decoration-dotted underline-offset-2">sign-in pending on {machine}</span>
+      </button>
     );
   }
+  const failed = phase === "rejected" || phase === "stalled";
   return (
     <button
       type="button"
-      onClick={() => start(false)}
+      onClick={() => open(true)}
       title={
-        rejected
-          ? `The last sign-in didn't complete${flow?.reason ? `: ${flow.reason}` : ""}. Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
+        failed
+          ? `The last sign-in didn't complete${device.login_flow?.reason ? `: ${device.login_flow.reason}` : ""}. Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
           : `Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is`
       }
       className={`shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 hover:bg-amber-500/20 ${className ?? ""}`}
     >
-      {rejected ? "sign in again · retry" : "sign in again"}
+      {failed ? "sign in again · retry" : "sign in again"}
     </button>
   );
 }

@@ -6,7 +6,7 @@ import { splitQuoteRuns } from "../lib/quoteFormat";
 // A quote inside a user's message (what the quote tool drops into the reply).
 // The quoted words are context, the reply is the point, so a long quote folds
 // to its first lines and opens on click.
-const FOLDED_PX = 42;
+const FOLDED_PX = 46;
 
 // `compact` is one truncated line, for a preview that is itself clamped.
 export function ReplyQuote({ children, compact }: { children: ReactNode; compact?: boolean }) {

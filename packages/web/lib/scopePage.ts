@@ -4,7 +4,9 @@
 // queries read. Kept out of the components so they test without React.
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import type { WorkState } from "@codecast/shared/contracts";
+import type { InitiativeHealth } from "@codecast/shared/contracts/initiative";
 import { isNonTabRoute } from "./tabRoutes";
+import { HEALTH_COLOR } from "./initiativeColors";
 import { ORG_STATE_META } from "../components/org/orgMeta";
 import type { FeedKind } from "../components/org/scope/scopeTypes";
 import type { OrgAnchor, OrgRole, OrgTree } from "../components/org/orgTypes";
@@ -75,8 +77,10 @@ const SESSION_TONE: Record<string, string> = {
 export const FEED_NEUTRAL_TONE = "color-mix(in srgb, var(--sol-border) 60%, transparent)";
 
 /** Yellow means "a person must act" everywhere else on the org surfaces, so
- *  only a session waiting on input and a pending decision earn it here. An
- *  open task is the neutral border; moving work is green; finished cyan. */
+ *  only a session waiting on input, a pending decision and a goal's open
+ *  question earn it here. An open task is the neutral border; moving work is
+ *  green; finished cyan. An update on a goal wears its health's own colour,
+ *  the one the health chip shows everywhere. */
 export function feedStateTone(kind: FeedKind, state?: string): string {
   if (!state) return FEED_NEUTRAL_TONE;
   const s = state.toLowerCase();
@@ -90,6 +94,10 @@ export function feedStateTone(kind: FeedKind, state?: string): string {
     if (s.startsWith("completed")) return "var(--sol-cyan)";
     return FEED_NEUTRAL_TONE;
   }
+  if (kind === "update" && s in HEALTH_COLOR) return HEALTH_COLOR[s as InitiativeHealth];
+  // Reached, answered and decided are finished; a question still open waits.
+  if (kind === "goal") return s === "asked" ? "var(--sol-yellow)" : "var(--sol-cyan)";
+  if (kind === "call") return s === "live" ? "var(--sol-green)" : FEED_NEUTRAL_TONE;
   if (s === "done" || s === "answered" || s === "completed" || s === "merged") return "var(--sol-cyan)";
   if (s === "in_progress" || s === "active" || s === "working") return "var(--sol-green)";
   if (s === "dropped" || s === "dismissed" || s === "withdrawn") return "var(--sol-red)";

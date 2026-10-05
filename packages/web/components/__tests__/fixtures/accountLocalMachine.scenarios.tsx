@@ -4,11 +4,13 @@ import { JSDOM } from "jsdom";
 import { toast } from "sonner";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { useInboxStore } from "../../../store/inboxStore";
-import { AccountHarness, createAccountClient, localDevice, otherDevice, seedAccounts } from "./accountLocalMachine";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost", pretendToBeVisual: true });
-const restore = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, MutationObserver: dom.window.MutationObserver, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true });
+const restore = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, MutationObserver: dom.window.MutationObserver, Node: dom.window.Node, NodeFilter: dom.window.NodeFilter, CustomEvent: dom.window.CustomEvent, HTMLInputElement: dom.window.HTMLInputElement, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true });
 const { createRoot } = await import("react-dom/client");
+// After the globals: Radix picks its layout effect at import time, and without
+// a document it picks a no-op, so a dialog's portal would never mount.
+const { AccountHarness, createAccountClient, localDevice, otherDevice, seedAccounts } = await import("./accountLocalMachine");
 const realFetch = globalThis.fetch;
 const requests: string[] = [];
 let host: HTMLDivElement;
@@ -16,6 +18,7 @@ let root: ReturnType<typeof createRoot>;
 let account: ReturnType<typeof createAccountClient>;
 const settle = (ms = 0) => act(async () => { await new Promise(resolve => setTimeout(resolve, ms)); });
 const mount = (identityOnly = false) => act(() => root.render(<AccountHarness client={account.client} identityOnly={identityOnly} />));
+const docButton = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === text);
 const button = (text: string) => [...host.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === text);
 const hover = () => act(() => host.firstElementChild!.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })));
 const cache = (deviceId = localDevice.device_id) => sessionStorage.setItem("cast_term_endpoint", JSON.stringify({ port: 45123, token: "local-fixture", deviceId, tmux: true }));
@@ -31,7 +34,7 @@ beforeEach(async () => {
   globalThis.fetch = (async (input, init) => reply(input, init)) as typeof fetch;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(() => root.unmount()); host.remove(); globalThis.fetch = realFetch; });
+afterEach(async () => { await act(() => { useInboxStore.setState({ profileSignIn: null }); root.unmount(); }); host.remove(); globalThis.fetch = realFetch; });
 afterAll(() => { dom.window.close(); restore(); });
 
 test("two online Macs sharing a port: authenticate local before showing controls, then route sign-in and relaunch locally", async () => {
@@ -49,16 +52,23 @@ test("two online Macs sharing a port: authenticate local before showing controls
   expect(host.textContent).toContain(localDevice.label);
   expect(host.textContent).not.toContain("other@example.com");
   expect(requests).toEqual(["Bearer other-fixture", "Bearer local-fixture"]);
+  // The sign-in runs in a window-level dialog, so it outlives the hover panel.
   await act(() => button("sign in again")!.click());
+  await settle();
   expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:requestLoginFlow", args: { device_id: "local-mac", profile: "local" } });
+  expect(document.body.textContent).toContain("Sign in to local@example.com");
+  expect(document.body.textContent).toContain(`asking ${localDevice.label} to open the page`);
+  const pendingFlow = { status: "pending" as const, profile: "local", email: "local@example.com", started_at: Date.now(), url: "https://claude.ai/oauth/authorize?code=true" };
+  await act(() => seedAccounts([{ ...localDevice, login_flow: pendingFlow }, otherDevice]));
   expect(host.textContent).toContain(`sign-in pending on ${localDevice.label}`);
-  const notice = toast.getHistory().at(-1)!;
-  expect(notice.title).toBe(`Sign-in requested on ${localDevice.label}`);
-  expect(notice.type).not.toBe("success");
-  await act(() => seedAccounts([localDevice, otherDevice]));
-  await act(() => button("relaunch")!.click());
+  expect(document.body.textContent).toContain("waiting for the sign-in");
+  expect(document.body.textContent).toContain(`Not at ${localDevice.label}?`);
+  await act(() => docButton("page didn't open? relaunch")!.click());
+  await settle();
   expect(account.mutations.at(-1)).toEqual({ name: "accountSwitch:requestLoginFlow", args: { device_id: "local-mac", profile: "local", force: true } });
-});
+  await act(() => seedAccounts([{ ...localDevice, login_flow: { ...pendingFlow, started_at: Date.now() + 1, status: "confirmed" as const, finished_at: Date.now() + 2 } }, otherDevice]));
+  expect(document.body.textContent).toContain("Signed in as local@example.com");
+}, 30_000);
 
 test("account switching and recovery changes use the same local target", async () => {
   cache(); await mount(); await settle(); await hover();

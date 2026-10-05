@@ -279,14 +279,22 @@ describe("the undo chords", () => {
     expect(resolve(false, keyEvent({ ctrlKey: true, altKey: true }))).toBe("ui.undoHistory");
   });
 
-  // The triage chords fire from an empty composer and leave focus there, so
-  // undo and redo reach app undo from an empty field; a field with text keeps
-  // its own.
-  test("undo and redo bypass the input guard only from an empty field", () => {
+  // ⌃Y is the system yank in a mac text field (it pastes what ⌃K killed), so
+  // it is redo off mac only.
+  test("ctrl+y is no app chord on mac", () => {
+    expect(resolve(true, keyEvent({ key: "y", code: "KeyY", ctrlKey: true }))).toBeUndefined();
+  });
+
+  // Undo and redo reach their handler from every field, empty or not: the
+  // handler (hooks/useUndoWalk, createFieldUndoGuard) decides whether the
+  // field has a step of its own, and declines the press to it when it does.
+  // A draft a triage step seeded into the composer has none, so the press
+  // must reach the handler there too.
+  test("undo and redo reach the handler from any field, which decides", () => {
     for (const def of SHORTCUTS.filter((d) => d.action === "ui.undo" || d.action === "ui.redo")) {
-      expect(def.skipInputCheck).toBe("whenEmpty");
+      expect(def.skipInputCheck).toBe(true);
       expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "" })).toBe(true);
-      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "draft" })).toBe(false);
+      expect(inputGuardBypass(def, { tagName: "TEXTAREA", value: "draft" })).toBe(true);
     }
   });
 

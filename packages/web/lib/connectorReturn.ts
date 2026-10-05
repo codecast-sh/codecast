@@ -13,6 +13,8 @@
 //       fragment's `provider`, so the search key carries it there.
 //   ?<provider>=error&reason=<text>
 //       The connector refused before it ever stored anything.
+//   ?<provider>=connected
+//       A reconnect of an account already confirmed: nothing left to do.
 //   ?success=true | ?error=<reason>
 //       The GitHub App install return, which predates the connector protocol
 //       and names no provider.
@@ -78,6 +80,9 @@ export function parseConnectorReturn(hash: string, search: string): ConnectorRet
     };
   }
 
+  const connected = toAppId([...query.entries()].find(([, v]) => v === "connected")?.[0]);
+  if (connected) return { kind: "success", provider: connected };
+
   // The GitHub App install return, which names no provider of its own.
   if (query.get("success") === "true") return { kind: "success", provider: "github" };
   const githubError = query.get("error");
@@ -123,7 +128,7 @@ export function describeConnectorError(reason: string): string {
 export function strippedUrl(pathname: string, search: string, hash: string): string {
   const query = params(search, "?");
   for (const [key, value] of [...query.entries()]) {
-    if (value === "pending" || value === "error") query.delete(key);
+    if (value === "pending" || value === "error" || value === "connected") query.delete(key);
   }
   for (const key of ["reason", "success", "error"]) query.delete(key);
   const frag = params(hash, "#");

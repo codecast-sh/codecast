@@ -14,6 +14,7 @@ import {
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
 import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 import { authPrincipal } from "../lib/authPrincipal";
+import { storableActionArgs } from "../lib/tabSafePath";
 
 export type OutboxEntry = {
   id: string;
@@ -44,9 +45,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 51;
+export const CACHE_SCHEMA_VERSION = 55;
 export const CACHE_SCHEMA_SIGNATURE =
-  "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|decisionDetails:_id|decisionStacks:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|machineResources:_id|managedSessions:_id|messageFeed:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|signals:_id|taskEvidence:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|decisionDetails:_id|decisionStacks:_id|docDetails:_id|docs:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|foreignTriggers:_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|machineResources:_id|managedSessions:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|plans:_id|projectUpdates:_id, project_id|projects:_id|pullRequests:_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|sessionCommands:_id|sessionDecisions:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|signals:_id|taskEvidence:_id|tasks:_id|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -724,7 +725,8 @@ export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
   // clear that follows the boundary unbinds the outbox, and this covers the
   // gap before that clear. Resolved, not rejected: it is not a storage fault.
   if (!persistenceOwned()) return Promise.resolve();
-  return db.dispatchOutbox.put(entry).then(() => {});
+  // The engine hands over the args as the caller passed them; a tab address in them is stored in its safe form (lib/tabSafePath).
+  return db.dispatchOutbox.put({ ...entry, args: storableActionArgs(entry.action, entry.args) }).then(() => {});
 }
 
 export function removeDispatch(id: string): Promise<void> {

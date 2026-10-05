@@ -397,6 +397,20 @@
     opacity 220ms ease calc(var(--stack-i, 0) * 30ms),
     transform 320ms var(--settle) calc(var(--stack-i, 0) * 30ms);
 }
+/* Pointed at, the others fan out of their circle as a small overlapped
+   stack, drawn by transform inside the room their seats already hold, so the
+   row's width (and the window measured from it) never changes. Awake, not
+   veiled: the pointer is on them. A press spreads them full size. */
+.face-row[data-density="float"] .face-row-others ~ .face-seat[data-stacked] {
+  margin-left: 0;
+  transform: translateX(calc(var(--face) * -0.12 + var(--stack-i, 0) * (var(--face) * -0.6 - var(--face-gap)))) scale(0.82);
+}
+.face-row[data-density="float"] .face-row-others ~ .face-seat[data-stacked] .face {
+  filter: var(--drain,);
+}
+.face-row[data-density="float"] .face-row-others ~ .face-seat[data-stacked] .face::after {
+  opacity: 0;
+}
 .face-row-others {
   flex: none;
   align-self: center;
@@ -1595,6 +1609,14 @@
   box-shadow: inset 0 1px 0 var(--hairline);
   transition: none;
   animation: none;
+}
+/* Leading the card (it hangs below the faces): the rule goes under the
+   controls, and the notch takes their deeper paper. */
+.face-row-below > .face-row-chrome:first-child:not(:last-child) {
+  box-shadow: inset 0 -1px 0 var(--hairline);
+}
+.face-row[data-density="float"] .face-row-below[data-notch]:has(> .face-row-chrome:first-child)::before {
+  background: var(--paper-foot);
 }
 .face-row-below .faces-btn {
   color: var(--ink-soft);

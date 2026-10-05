@@ -25,6 +25,10 @@ import { runNodeCounts, runNodeRows } from "../../lib/workflowRun";
 import { compactAge } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
 import { WorkflowsDashboardContent } from "./dashboard";
+import { useLineForks, type LineForkProject } from "../../hooks/useLineForks";
+import { lineRunKind } from "../../lib/line/lineStations";
+import { lineSettingsHref } from "../../lib/lineSettings";
+import { CustomizedLineChip } from "../../components/line/CustomizedLineChip";
 
 const api = _api as any;
 
@@ -589,7 +593,8 @@ const RUN_TONE: Record<string, string> = {
   pending: "var(--sol-text-dim)", running: "var(--sol-cyan)", paused: "var(--sol-yellow)", completed: "var(--sol-green)", failed: "var(--sol-red)",
 };
 
-function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () => void }) {
+function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen: () => void; forks: ReadonlyMap<string, LineForkProject> }) {
+  const line = lineRunKind(run, forks);
   const st = STATUS_STYLES[run.status] || STATUS_STYLES.pending;
   const StatusIcon = st.icon;
   const tone = RUN_TONE[run.status] ?? RUN_TONE.pending;
@@ -612,6 +617,7 @@ function RunRow({ run, now, onOpen }: { run: LineRun; now: number; onOpen: () =>
           <span className="flex items-center gap-1.5 min-w-0">
             <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{run.workflow_name || run.workflow_slug || "workflow"}</span>
             <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
+            {line?.kind === "customized" && <CustomizedLineChip project={line.project.title} href={lineSettingsHref({ project: line.project, section: "stations" })} />}
             {node && <span className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
             {counts.total > 0 && (
               <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`${counts.done} of ${counts.total} steps done`}>
@@ -649,6 +655,7 @@ export function RunsTab() {
   const now = useCoarseNow(30_000);
   const { ready } = useSyncRuns(useMemo(() => ({ limit: 100 }), []));
   const runs = useWorkspaceRuns();
+  const forks = useLineForks();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   if (!ready && runs.length === 0) return <AppLoader className="min-h-[16rem] h-full" />;
   return (
@@ -668,7 +675,7 @@ export function RunsTab() {
           </div>
         ) : (
           <ul className="space-y-1">
-            {runs.map((r) => <RunRow key={r._id} run={r} now={now} onOpen={() => router.push(`/workflows/runs/${r._id}`)} />)}
+            {runs.map((r) => <RunRow key={r._id} run={r} now={now} forks={forks} onOpen={() => router.push(`/workflows/runs/${r._id}`)} />)}
           </ul>
         )}
       </div>

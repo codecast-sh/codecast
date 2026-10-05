@@ -29,6 +29,10 @@ const Inbox = lazyPage("@/app/inbox/page", () => import("@/app/inbox/page"));
 const Feed = lazyPage("@/app/feed/page", () => import("@/app/feed/page"));
 // What the team shipped and why, one day as an edition (changes-page.md).
 const Changes = lazyPage("@/app/changes/page", () => import("@/app/changes/page"));
+const Mods = lazyPage("@/app/mods/page", () => import("@/app/mods/page"));
+const ModPane = lazyPage("@/app/m/page", () => import("@/app/m/page"));
+const ModObjects = lazyPage("@/app/objects/page", () => import("@/app/objects/page"));
+const ModObject = lazyPage("@/app/o/page", () => import("@/app/o/page"));
 const Crosstalk = lazyPage("@/app/crosstalk/page", () => import("@/app/crosstalk/page"));
 // A web page as a pane: the address rides the query string (?u= / ?watch=).
 const Browser = lazyPage("@/app/browser/page", () => import("@/app/browser/page"));
@@ -65,6 +69,7 @@ const Notifications = lazyPage("@/app/notifications/page", () => import("@/app/n
 const Questions = lazyPage("@/app/questions/page", () => import("@/app/questions/page"));
 // The line: the whole factory as one flow (the-line-end-to-end.md LE13).
 const Line = lazyPage("@/app/line/page", () => import("@/app/line/page"));
+const LineSettings = lazyPage("@/app/line/settings/page", () => import("@/app/line/settings/page"));
 const DecisionDetail = lazyPage("@/app/decisions/[id]/page", () => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazyPage("@/app/decisions/stacks/page", () => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazyPage("@/app/decisions/stacks/[id]/page", () => import("@/app/decisions/stacks/[id]/page"));
@@ -148,6 +153,11 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/inbox$/, paramNames: [], component: Inbox },
   { pattern: /^\/feed$/, paramNames: [], component: Feed },
   { pattern: /^\/changes$/, paramNames: [], component: Changes },
+  { pattern: /^\/mods$/, paramNames: [], component: Mods },
+  { pattern: /^\/m\/([^/]+)$/, paramNames: ["mod"], component: ModPane },
+  { pattern: /^\/m\/([^/]+)\/([^/]+)$/, paramNames: ["mod", "pane"], component: ModPane },
+  { pattern: /^\/objects\/([^/]+)$/, paramNames: ["prefix"], component: ModObjects },
+  { pattern: /^\/o\/([^/]+)$/, paramNames: ["id"], component: ModObject },
   { pattern: /^\/crosstalk$/, paramNames: [], component: Crosstalk },
   { pattern: /^\/browser$/, paramNames: [], component: Browser },
   { pattern: /^\/org$/, paramNames: [], component: Org },
@@ -185,6 +195,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/notifications$/, paramNames: [], component: Notifications },
   { pattern: /^\/questions$/, paramNames: [], component: Questions },
   { pattern: /^\/line$/, paramNames: [], component: Line },
+  { pattern: /^\/line\/settings$/, paramNames: [], component: LineSettings },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },
   { pattern: /^\/admin\/daemon-logs$/, paramNames: [], component: AdminDaemonLogs },
 ];

@@ -22,7 +22,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { rekeyUndoIds, withoutUndo } from "@platform/engine";
+import { rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, hasViewNavigated, recordNavEvent, type ViewNavSource } from "./viewNav";
@@ -96,6 +96,7 @@ import {
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
   isSessionUnread,
+  guestIdentity,
   type SessionActivityFacts,
   type InboxBucket,
   type InboxTally,
@@ -183,6 +184,18 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 
 // A trigger strip request (see triggerStripRequest): taskId null means the
 // conversation's all-triggers view; expand asks the strip to open.
+/** The fields the triggers page's form edits (agentTasks.webUpdate's args). */
+export type TriggerEdit = {
+  prompt?: string;
+  title?: string;
+  mode?: string;
+  agent_type?: string;
+  project_path?: string;
+  schedule_type?: "once" | "recurring" | "event";
+  interval_ms?: number;
+  run_at?: number;
+  event_filter?: import("@codecast/shared/contracts").TriggerScopeFilter;
+};
 export type TriggerStripRequest = { convId: string; taskId: string | null; expand: boolean; nonce: number };
 /** accountSwitch.requestAccountSwitch's args, as the store action forwards them. */
 export type AccountSwitchArgs = {
@@ -195,25 +208,18 @@ export type AccountSwitchArgs = {
   conversation_ids?: string[];
 };
 
-// One row per command target: a new request for the same conversation (or
-// machine, for a switch) replaces the last, and rows age out after a day. Every store action that paints a sessionCommands row goes through here.
-function stampSessionCommand(draft: { sessionCommands: Record<string, any> }, row: Record<string, any>) {
-  const now = Date.now();
-  for (const [id, prev] of Object.entries(draft.sessionCommands)) {
-    const sameTarget = row.conversation_id ? prev.conversation_id === row.conversation_id : prev.kind === row.kind && prev.device_id === row.device_id;
-    if (sameTarget || now - (prev.executed_at ?? prev.requested_at ?? now) > 86400_000) delete draft.sessionCommands[id];
-  }
-  draft.sessionCommands[row._id] = { requested_at: now, executed_at: null, result: null, error: null, ...row };
-}
+import { stampSessionCommand } from "./sessionCommandStamp";
 
 // Imported for internal use AND re-exported so the many call sites that import
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
 import { healTabPaths, isNonTabRoute, shellTabPath } from "../lib/tabRoutes";
+import { tabSafePath, tabSafeTitle } from "../lib/tabSafePath";
 import {
   countLeaves,
   findLeaf as findStageLeaf,
@@ -260,6 +266,9 @@ import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFie
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { createProjectUpdatesSlice, type ProjectUpdatesSliceActions } from "./projectUpdatesSlice";
+import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
+import { createLineSlice, type LineSliceActions } from "./lineSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
@@ -296,6 +305,7 @@ export type {
 export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes";
 export { threadRowId } from "./threadTypes";
 import type { ThreadsCursor } from "./threadTypes";
+import { isTriggerEditable } from "../lib/triggerEditable";
 export type { ThreadsCursor } from "./threadTypes";
 
 // Critical UI prefs mirrored to localStorage so they're available
@@ -1152,6 +1162,13 @@ const SHARE_COLLECTIONS: Record<PublicShareKind, string[]> = {
   run: ["workflowRuns"],
 };
 
+/** A close parked behind the open-subtasks dialog (lib/taskActions closeTaskWithGuard). */
+export type TaskCloseGuard = {
+  status: 'done' | 'dropped';
+  statusId?: string;
+  parents: Array<{ shortId: string; open: TaskItem[] }>;
+};
+
 export type TaskItem = {
   _id: string;
   short_id: string;
@@ -1609,6 +1626,10 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // Which app this person lives in: "simple" is the hosted assistant's calm
+  // lane (/simple, docs/architecture/hosted-assistant.md), "full" or absent is
+  // the whole app. Stamped LWW, so a switch on one device follows the person.
+  lane?: "simple" | "full";
   /** Resource pressure suggestions dismissed per machine (device id → until, ms). */
   resource_plan_dismissed?: Record<string, number>;
   visual_style?: "classic" | "minimal";
@@ -1619,6 +1640,8 @@ export type ClientUI = {
   // otherwise, so it outlives the route — and the reload. Unstamped: the
   // sidebar's shape is a per-device layout preference like the rest.
   nav_sections?: Record<string, boolean>;
+  /** Teammates' shared mods this person runs (lib/mods/host): mod ids. Their own mods run by their own switch. */
+  mods_installed?: string[];
   zen_mode?: boolean;
   sticky_headers_disabled?: boolean;
   diff_panel_open?: boolean;
@@ -1902,7 +1925,9 @@ export type StageInsertOpts = { id?: string; focus?: boolean };
 
 /** `path` and the focused leaf must say the same thing; every path write goes
  *  through here so they cannot drift. */
-function withTabPath(tab: AppTab, path: string): AppTab {
+function withTabPath(tab: AppTab, raw: string): AppTab {
+  // Every path write lands here, so the address a tab persists is always the storable one (lib/tabSafePath).
+  const path = tabSafePath(raw);
   if (tab.layout && tab.focusedLeafId) {
     return { ...tab, path, layout: setStageLeafPath(tab.layout, tab.focusedLeafId, path) };
   }
@@ -1910,6 +1935,18 @@ function withTabPath(tab: AppTab, path: string): AppTab {
   // render it as a bare session pane, which cannot load a row the store lacks
   // (a teammate's session from a deep link). The inbox spelling loads it.
   return { ...tab, path: conversationTabPath(path) };
+}
+
+/** A patch applied to a tab, the one way: a path write flows into the focused
+ *  leaf (withTabPath) unless the patch replaces the layout itself, a caller's
+ *  layout has each leaf take the storable spelling (setLeafPath), as does the
+ *  path written beside it, and the title follows the stored path. */
+function patchedTab(t: AppTab, patch: Partial<AppTab>): AppTab {
+  const { path, ...rest } = patch;
+  if (rest.layout) rest.layout = stageLeavesOf(rest.layout).reduce((root, l) => setStageLeafPath(root, l.id, l.path), rest.layout);
+  const base = path !== undefined && rest.layout === undefined ? withTabPath(t, path) : t;
+  const next = { ...base, ...rest, ...(path !== undefined && rest.layout !== undefined ? { path: tabSafePath(path) } : {}) };
+  return { ...next, title: tabSafeTitle(next.path, next.title) };
 }
 
 // The session boot lands on when the URL names a conversation: that session if
@@ -1951,12 +1988,11 @@ export function stampedTabPath(tab: AppTab): string {
 // live path, the panel arrangement, and the right rail's conversation.
 function stampActiveTab(draft: { activeTabId: string | null; tabs: AppTab[]; workspace: WorkspaceState; sidePanelSessionId: string | null }, patch?: Partial<AppTab>) {
   if (!draft.activeTabId) return;
-  draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? {
+  draft.tabs = draft.tabs.map((t: AppTab) => t.id === draft.activeTabId ? patchedTab({
     ...withTabPath(t, stampedTabPath(t)),
     workspace: draft.workspace,
     railSessionId: draft.sidePanelSessionId,
-    ...patch,
-  } : t);
+  }, patch ?? {}) : t);
 }
 
 // The other half of the freeze: put a tab's stamped frame back on screen.
@@ -2724,10 +2760,12 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
+const _workStateCache = new WeakMap<object, WorkState>();
 const _classifyCache = new WeakMap<object, SessionVerdict>();
-export function classifySession(s: InboxSession): SessionVerdict {
-  let c = _classifyCache.get(s);
-  if (!c) {
+/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession): WorkState {
+  let ws = _workStateCache.get(s);
+  if (!ws) {
     // The shipped live fields as they stand — no clock, no re-derivation.
     const live: LiveFacts = {
       agent_status: s.agent_status ?? null,
@@ -2736,8 +2774,15 @@ export function classifySession(s: InboxSession): SessionVerdict {
       awaiting_input: !!s.awaiting_input,
       daemon_alive: !!s.is_connected,
     };
-    const ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
-    c = verdictOfWorkState(ws);
+    ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
+    _workStateCache.set(s, ws);
+  }
+  return ws;
+}
+export function classifySession(s: InboxSession): SessionVerdict {
+  let c = _classifyCache.get(s);
+  if (!c) {
+    c = verdictOfWorkState(sessionWorkState(s));
     _classifyCache.set(s, c);
   }
   return c;
@@ -3981,8 +4026,9 @@ export function resolveComposeProjectPath(opts: {
     !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
       ? conversation.projectPath || conversation.gitRoot
       : undefined;
+  // The viewed session may run in a worktree; a new session starts from its checkout.
   const convPath =
-    rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? rawConvPath : undefined;
+    rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? projectRootOf(rawConvPath) : undefined;
   return context?.projectPath || context?.gitRoot || teamPath || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
@@ -4877,6 +4923,9 @@ export type CallRoomFlags = {
   transcribe_off: boolean;
   /** When the opt-out was switched on; null while transcription is on. */
   transcribe_off_at: number | null;
+  /** The live record's public link is on: the transcript reaches anyone
+   *  holding it as it is written. Absent on rows from an older server. */
+  words_public?: boolean;
   /** The room is being recorded on LiveKit's servers (callRecordings): a run
    *  is starting or filming. What every call surface's red mark paints, for
    *  everyone in the room. Absent on rows from a server that predates it. */
@@ -4952,7 +5001,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -5046,7 +5095,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // the host: the value lands on the row this window holds, under the same
   // field lock the follower holds, until the server echoes it. Rows this
   // window does not hold are skipped (the mut ships those whole).
-  applyReplicatedFields: (key: string, fields: Record<string, Record<string, unknown>>, ts?: number) => void;
+  applyReplicatedFields: (key: string, fields: Record<string, Record<string, unknown>>, ts?: number, release?: Record<string, Record<string, unknown>>) => void;
   // Team-mode active set: the ids the team board is currently showing (own +
   // teammates' team-visible), fed by the listTeamInboxSessions subscription.
   // The analogue of liveInboxIds for inbox_scope "team" — the panel gates the
@@ -5214,8 +5263,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
   // Any surface (list, kanban, palette, plan board, detail) sets this via
   // closeTaskWithGuard; a single CloseGuardDialog in DashboardLayout renders it.
-  taskCloseGuard: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null;
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => void;
+  // Every parent a close is waiting on, in the order the gesture named them:
+  // a bulk close asks once for all of them.
+  taskCloseGuard: TaskCloseGuard | null;
+  setTaskCloseGuard: (g: TaskCloseGuard | null) => void;
 
   // -- Fork navigation --
   // Forks are first-class conversations; we navigate to them by URL. No overlay state.
@@ -5334,7 +5385,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   confirmSessionCommand: (requestId: string) => void;
   dismissSessionCommand: (requestId: string) => void;
   convCommand: (convId: string, command: string, extraArgs?: Record<string, any>, optimistic?: Record<string, any>) => Promise<any>;
-  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean }) => Promise<any>;
+  createSession: (opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }) => Promise<any>;
   // Create the server session for a DEFERRED stub, sourcing project + agent from
   // the LIVE stub row (the new-session pickers write it via updateSessionProject /
   // setConversationAgent) rather than a begin-time closure. This is what makes a
@@ -5375,7 +5426,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
   stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean }) => void;
-  retireAckedPending: (scopeKey: string, upTo: number) => void;
+  retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
+  /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
+  forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
   // Scope lifecycle (D5): purge a revoked team's rows from the workspace-scoped
   // collections and drop its log cursor.
   purgeTeamScopeRows: (teamId: string) => void;
@@ -5593,6 +5646,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans" | "workspace"; prefs: any; shared?: boolean; icon?: string; client_key?: string; team_id?: string }) => any;
   updateSavedView: (id: string, fields: Record<string, any>) => void;
   deleteSavedView: (id: string) => void;
+  /** Turn a mod on or off (lib/mods). The running set follows the row at once. */
+  setModEnabled: (id: string, enabled: boolean) => void;
+  /** Create an object of a mod-declared kind; a stub row renders at once and the server row supersedes it. */
+  createModObject: (opts: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string; team_id?: string; client_key?: string }) => any;
+  updateModObject: (id: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string; archived?: boolean }) => void;
 
   // -- Tabs --
   tabs: AppTab[];
@@ -5658,6 +5716,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Tier-2 store-fed surfaces (see clientSyncRegistry) --
   // Crosstalk graph snapshot (sessionThreads.listSessionThreads).
   sessionThreads: { links: any[]; nodes: any[] } | null;
+  // The hosted assistant's wallet (wallet.mine); null until it first syncs.
+  wallet: import("@codecast/convex/convex/lib/wallet").WalletSummary | null;
   // Aggregate fleet CPU/memory samples over the last 2h.
   sessionMetricsAggregate: Array<{ collected_at: number; cpu: number; memory: number; pid_count: number }> | null;
   migrationCandidates: import("../lib/migrationPlan").MigrationCandidate[] | null;
@@ -5675,6 +5735,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // and the Head of People's review, org-staffing.md S29): the row's interval
   // flips on the draft, the named side effect runs agentTasks.webUpdate.
   setTriggerInterval: (taskId: string, intervalMs: number) => void;
+  // The triggers page's edit form: prompt, title and schedule in one gesture.
+  // False when the trigger already ran or ended (the server refuses those).
+  editTrigger: (taskId: string, fields: TriggerEdit) => boolean;
   // Remove rows from a NON-localFirst collection without planting tombstones —
   // for transient per-scope collections whose server answer of "nothing" is
   // itself the deletion (pendingMessageStatus). A localFirst collection must
@@ -5771,6 +5834,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   cycleInboxViewMode: () => void;
   // Drag-to-reorder in the "time" view: pin `id` at `key` (epoch-ms space).
   setSessionManualOrder: (id: string, key: number) => void;
+  /** Several cards' sort keys in one write: one drag, one undo entry. */
+  setSessionManualOrders: (keys: Record<string, number>) => void;
   // Forget all manual pins — the "time" view returns to pure creation order.
   clearManualOrder: () => void;
 
@@ -5808,6 +5873,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
   dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
   restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
+  /** Team settings and membership, painted on the teams / teamMembers rows at
+   *  once; each resolves (or rejects) with the server's answer. */
+  renameTeam: (teamId: string, name: string) => Promise<unknown>;
+  updateTeamIcon: (teamId: string, fields: { icon?: string; icon_color?: string }) => Promise<unknown>;
+  updateTeamTaskStatuses: (teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) => Promise<unknown>;
+  setTeamMemberRole: (teamId: string, userId: string, role: "member" | "admin") => Promise<unknown>;
+  removeTeamMember: (teamId: string, userId: string) => Promise<unknown>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -5817,6 +5889,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   deleteComment: (commentId: string) => Promise<unknown>;
   askAgentInThread: (conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
   resolveCommentThread: (conversationId: string, anchor: { messageId?: string; filePath?: string; lineNumber?: number }, resolved: boolean) => void;
+  resolveCodeCommentThread: (commentIds: string[], resolved: boolean) => void;
+  /** Bind (or wake, or put to sleep) the session that owns a pull request
+   *  (prShepherd.setShepherd), painted on the pullRequests row at once. */
+  setPrShepherd: (prId: string, conversationId: string | undefined, enabled: boolean) => void;
+  /** Start an agent session on a task (tasks.assignToAgent); resolves to the spawn. */
+  assignTaskToAgent: (shortId: string, agentType: string, initialMessage?: string) => Promise<unknown>;
+  editCodeComment: (commentId: string, content: string) => void;
+  deleteCodeComment: (commentId: string) => void;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -5932,6 +6012,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // persisted): which window you are in is not a preference.
   peopleWallOpen: boolean;
   openPeopleWall: () => void;
+  // -- Saved-account sign-in dialog (components/ProfileSignInDialog) --
+  // Window level, not inside the hover panel that opens it: the sign-in
+  // happens in a browser, and the panel closes the moment the pointer leaves.
+  // Ephemeral (a modal toggle, never persisted).
+  profileSignIn: { deviceId: string; profile: string; start?: boolean } | null;
+  openProfileSignIn: (target: { deviceId: string; profile: string; start?: boolean }) => void;
+  closeProfileSignIn: () => void;
   closePeopleWall: () => void;
   togglePeopleWall: () => void;
 
@@ -6051,7 +6138,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setRoomTranscribeOff: (roomKey: string, off: boolean) => Promise<unknown>;
   /** Start or stop recording the room (callRecordings.startRecording /
    *  stopRecording). Rejects with the server's reason when refused. */
-  setRoomRecording: (roomKey: string, on: boolean, pressedAt: number) => Promise<unknown>;
+  setRoomRecording: (roomKey: string, on: boolean, pressedAt: number, runId?: string) => Promise<unknown>;
   undoRoomRecordingPress: (roomKey: string, on: boolean) => void;
   /** The room's answers to a guest at the door (callGuests.admitGuest /
    *  denyGuest): the knock leaves roomKnocks at once. `name` is the name the
@@ -6070,7 +6157,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  with the server's reason. */
   deleteCallRecording: (recordingId: string) => Promise<unknown>;
   /** Drop the exclude tombstones of recording rows a push no longer sends. */
-  settleCallRecordingTombstones: (released: string[]) => void;
+  settleCallRecordingTombstones: (released: string[], collection?: "callRecordings" | "callFrameShares") => void;
+  /** Take a picture of a call off its public link (callRecordings
+   *  .deleteCallFrameShare): the row leaves on the press. */
+  deleteCallFrameShare: (shareId: string) => Promise<unknown>;
   /** Whether the call's share link hands out the room's video
    *  (callRecordings.setCallShareVideo). Rejects with the server's reason,
    *  and the switch falls back with it. */
@@ -6716,6 +6806,9 @@ const SYNC_REGISTRY: Record<string, SyncOpts> = {
   // push, so absence means removed. Delta mode would treat a deleted or
   // un-shared view as "unchanged" and leave it on the rail forever.
   savedViews: { altKey: "client_key" },
+  // NOT delta: modObjects.webList is the complete visible set. altKey retires
+  // an optimistic create stub when the server row with its client_key lands.
+  modObjects: { altKey: "client_key" },
   // altKey supersede for optimistic create-stubs: the incoming server row with
   // the same name rekeys the stub away (names are per-user and practically
   // unique; a rare duplicate-name create just retires the stub onto the older
@@ -7686,8 +7779,17 @@ function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: s
 // stamps it on the reverted values it broadcasts (an un-announced undo leaves a
 // sibling holding the pre-undo row — see gestureBridge.ts).
 export function bridgeUserId(state: any): string | null {
+  return myUserId(state);
+}
+
+/** The signed-in user's id as a string, or null while signed out: the one
+ *  way a surface asks "is this me?". A scalar, so a component subscribed
+ *  through useMyUserId re-renders only when the person changes. */
+export function myUserId(state: any): string | null {
   return state.currentUser?._id?.toString?.() ?? null;
 }
+
+export const useMyUserId = (): string | null => useInboxStore(myUserId);
 
 // The bridged subset of a generic field patch, or null if it touches none of
 // them. Values pass through verbatim so the receiver's planted locks hold
@@ -7727,6 +7829,45 @@ function pickBridgedFields(
 // never echoes it.
 const ACK_DERIVED_TWINS: Record<string, string> = CONVERSATION_FIELD_TWINS;
 
+// A field lock retired by its acknowledgement. Rows that reached the window
+// while the lock still held were hidden under it (the lock's `seen`, newest
+// last), and nothing delivers them again: a follower takes the page's rows
+// before the host's cursor, and an ack can arrive after the cursor passed it.
+// So the row takes the newest value the lock hid, unless the field moved on
+// from the lock's own value. The host's log applier retires before it applies
+// a range and passes `restore: false`: that range's rows land unblocked.
+//
+// The lock's time is remembered per field (retiredAckTs): the same write can
+// still reach this window late, as a sibling's replicated mut that waited in
+// the channel, and it must not put its value back over what the server has
+// delivered since, under a lock no acknowledgement covers any more.
+const RETIRED_ACK_LIMIT = 2000;
+const retiredAckTs = new Map<string, number>();
+function noteRetiredAck(key: string, ts: unknown): void {
+  if (typeof ts !== "number") return;
+  if (ts <= (retiredAckTs.get(key) ?? -Infinity)) return;
+  retiredAckTs.delete(key);
+  retiredAckTs.set(key, ts);
+  while (retiredAckTs.size > RETIRED_ACK_LIMIT) retiredAckTs.delete(retiredAckTs.keys().next().value!);
+}
+
+function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
+  const entry = draft.pending[key] as any;
+  delete draft.pending[key];
+  noteRetiredAck(key, entry?.ts);
+  if (!restore || entry?.type !== "field" || !entry.seen?.length) return;
+  const newest = entry.seen[entry.seen.length - 1];
+  if (sameShape(newest, entry.value)) return;
+  const fieldAt = key.lastIndexOf(":");
+  const storeAt = key.indexOf(":");
+  if (storeAt < 0 || fieldAt <= storeAt) return;
+  const row = draft[key.slice(0, storeAt)]?.[key.slice(storeAt + 1, fieldAt)];
+  const field = key.slice(fieldAt + 1);
+  if (!row || typeof row !== "object" || !sameShape(row[field], entry.value)) return;
+  if (newest === undefined) delete row[field];
+  else row[field] = newest;
+}
+
 function stampSyncAckInDraft(
   draft: any,
   patches: any,
@@ -7739,7 +7880,7 @@ function stampSyncAckInDraft(
     const entry = draft.pending[key] as any;
     if (!entry) return;
     if (compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) {
-      delete draft.pending[key];
+      retireAckedLockInDraft(draft, key);
     } else {
       entry.ack = compact;
     }
@@ -8231,13 +8372,28 @@ const inboxStoreConfig = (set: any, get: any) => ({
       this.sessionsProjection[scopeKey] = { ...slot, receivedAtMono };
     }
   }),
-  applyReplicatedFields: sync(function (this: Draft, key: string, fields: Record<string, Record<string, unknown>>, ts: number = Date.now()) {
+  applyReplicatedFields: sync(function (this: Draft, key: string, fields: Record<string, Record<string, unknown>>, ts: number = Date.now(), release?: Record<string, Record<string, unknown>>) {
     const rows = (this as any)[key] as Record<string, any> | undefined;
     if (!rows) return;
     for (const id in fields) {
       const row = rows[id];
       if (!row) continue;
       for (const [field, value] of Object.entries(fields[id])) {
+        // A sibling's refused write, rolled back there: the server never took
+        // `refused`, so no echo will retire the lock this window mirrored on
+        // it. Release that lock and take the rolled-back value without a new
+        // lock. A field holding anything else has moved on since; leave it.
+        if (release?.[id] && field in release[id]) {
+          const refused = release[id][field];
+          const rk = `${key}:${id}:${field}`;
+          const held = this.pending[rk] as any;
+          const mirrored = held?.type === "field" && sameLockValue(held.value, refused);
+          if (!mirrored && (held?.type === "field" || !sameLockValue(row[field], refused))) continue;
+          if (mirrored) delete this.pending[rk];
+          if (value === undefined) delete row[field];
+          else row[field] = value;
+          continue;
+        }
         // The same write can reach this window twice (the gesture bridge and
         // the follower's replicated mut), in either order with its server
         // acknowledgement. A row already holding the value with no lock on it
@@ -8253,6 +8409,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
         const prev = this.pending[k] as any;
         const locked = prev?.type === "field";
         if (locked && fieldLockTs(this, k) > ts) continue;
+        // The same write, or an older one, already landed here and was
+        // acknowledged: the row holds the server's state since.
+        if (!locked && (retiredAckTs.get(k) ?? -Infinity) >= ts) continue;
         // Only the server's kill transition writes inbox_killed_at, so the stamp
         // a row holds is the newest kill: a sibling's clear made before it (an
         // undone kill's mut, late behind a redo) is stale, and its lock would
@@ -8499,7 +8658,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
   taskCloseGuard: null,
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => set({ taskCloseGuard: g }),
+  setTaskCloseGuard: (g: TaskCloseGuard | null) => set({ taskCloseGuard: g }),
 
   optimisticForkChildren: [],
   recentProjects: [],
@@ -8549,6 +8708,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row) row.shared_team_ids = [...teamIds].sort();
   }),
   sessionThreads: null,
+  wallet: null,
   sessionMetricsAggregate: null,
   migrationCandidates: null,
   migrationBatches: null,
@@ -8596,6 +8756,36 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const last = typeof t.last_run_at === "number" ? t.last_run_at : Date.now();
     t.interval_ms = intervalMs;
     if (t.status === "scheduled") t.run_at = Math.max(Date.now(), last + intervalMs);
+  }),
+  // Mirrors the server's applyTaskUpdate on the draft. The stored
+  // event_filter is the server's to write (it resolves the project's repo),
+  // so an event schedule only clears the cadence fields here.
+  editTrigger: action(function (this: Draft, taskId: string, fields: TriggerEdit) {
+    const t = (this.agentTasks as any)[taskId] ?? (this.foreignTriggers as any)[taskId];
+    if (t && !isTriggerEditable(t.status)) return false;
+    if (!t) return true;
+    if (fields.title !== undefined) t.title = fields.title.trim() || t.title;
+    if (fields.prompt?.trim()) t.prompt = fields.prompt.trim();
+    if (fields.mode !== undefined) t.mode = fields.mode === "apply" ? "apply" : "propose";
+    if (fields.agent_type !== undefined) t.agent_type = fields.agent_type || "claude";
+    if (fields.project_path !== undefined) t.project_path = fields.project_path || undefined;
+    if (fields.schedule_type === "recurring" && fields.interval_ms) {
+      t.schedule_type = "recurring";
+      t.interval_ms = fields.interval_ms;
+      t.run_at = fields.run_at ?? Date.now() + fields.interval_ms;
+    } else if (fields.schedule_type === "event") {
+      t.schedule_type = "event";
+      t.run_at = undefined;
+      t.interval_ms = undefined;
+    } else if (fields.schedule_type === "once") {
+      t.schedule_type = "once";
+      t.run_at = fields.run_at ?? Date.now();
+      t.interval_ms = undefined;
+    } else if (fields.schedule_type === undefined) {
+      if (fields.interval_ms !== undefined) t.interval_ms = fields.interval_ms;
+      if (fields.run_at !== undefined) t.run_at = fields.run_at;
+    }
+    return true;
   }),
   dropRows: sync(function (this: Draft, key: string, ids: string[]) {
     const coll = (this as any)[key];
@@ -8863,9 +9053,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     ];
     state.setInboxViewMode(cycle[(cycle.indexOf(current) + 1) % cycle.length]);
   },
-  setSessionManualOrder: (id: string, key: number) => {
+  setSessionManualOrder: (id: string, key: number) => get().setSessionManualOrders({ [id]: key }),
+  setSessionManualOrders: (keys: Record<string, number>) => {
     const current = get().clientState.ui?.inbox_manual_order ?? {};
-    get().updateClientUI({ inbox_manual_order: { ...current, [id]: key } });
+    get().updateClientUI({ inbox_manual_order: { ...current, ...keys } });
   },
   clearManualOrder: () => {
     if (!get().clientState.ui?.inbox_manual_order) return;
@@ -9240,11 +9431,29 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // BEFORE it overlays the range's stage-two rows, so the authoritative
   // post-write state lands unblocked (review: retiring after the apply strands
   // a diverged field with no lock and no re-fetch). sync() — local bookkeeping.
-  retireAckedPending: sync(function (this: Draft, scopeKey: string, upTo: number) {
+  //
+  // `restore` (a follower, whose host sends the page's rows before its
+  // cursor): the rows already landed under the lock, so each retired lock
+  // hands its row the newest value it hid (retireAckedLockInDraft).
+  // A follower's own write, echoed back by the host (forgetSeenBeforeOwnEcho
+  // in syncReplication.ts): the host rows its locks recorded before predate
+  // that write, so an acknowledgement must not land one of them.
+  forgetLockSeen: sync(function (this: Draft, keys: string[], rowPrefixes: string[] = []) {
+    const forget = (key: string) => {
+      const entry = this.pending[key] as any;
+      if (entry?.type === "field" && entry.seen) delete entry.seen;
+    };
+    for (const key of keys) forget(key);
+    if (rowPrefixes.length > 0) {
+      for (const key of Object.keys(this.pending)) if (rowPrefixes.some((p) => key.startsWith(p))) forget(key);
+    }
+  }),
+
+  retireAckedPending: sync(function (this: Draft, scopeKey: string, upTo: number, opts?: { restore?: boolean }) {
     for (const [key, entry] of Object.entries(this.pending)) {
       const ackList = (entry as any)?.ack as Array<{ s: string; p: number }> | undefined;
       if (ackList?.some((a) => a.s === scopeKey && a.p <= upTo)) {
-        delete this.pending[key];
+        retireAckedLockInDraft(this, key, !!opts?.restore);
       }
     }
   }),
@@ -9395,8 +9604,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // inbox_killed_at has to go with them. Restore is one of the three sanctioned
   // revivals (with an explicit send and Restart), and it is the only one that
   // reaches a row killed through the killSession MUTATION (the web's
-  // convCommand("killSession") — the /sessions kill button and the panel's
-  // kill-and-complete), which stamps the marker WITHOUT inbox_dismissed_at.
+  // convCommand("killSession") — the Killed shelf's kill-and-complete, and
+  // older clients), which stamps the marker WITHOUT inbox_dismissed_at.
   // (`cast kill` and the web's own kill action both write inbox_dismissed_at
   // too, so those rows were already covered.) The server's un-kill mirror can't
   // cover a marker-only row for us: it fires only when the patch clears
@@ -9901,7 +10110,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resumeSession: (convId: string) => get().convCommand(convId, "resumeSession"),
 
-  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession"),
+  // The press time rides along so the daemon can tell an Escape aimed at the
+  // previous turn from one for the turn a queued message started after it.
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now() }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -10001,7 +10212,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (optimistic && this.sessions[convId]) Object.assign(this.sessions[convId], optimistic);
   }),
 
-  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean }) {
+  // first_message/first_message_client_id ride the dispatch only: a hosted
+  // conversation's start queues its first message server side, matched to
+  // the optimistic bubble by its client id.
+  createSession: asyncAction(function (this: Draft, opts: { agent_type: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: "isolated" | "shared"; cloud_start_from?: "checkout" | "origin_main"; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }) {
     const sessionId = opts.session_id || (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2));
     if (!opts.session_id) opts.session_id = sessionId;
     const existing = this.sessions[sessionId];
@@ -10307,6 +10521,47 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   deleteSavedView: action(function (this: Draft, id: string) {
     delete (this.savedViews as any)[id];
+  }),
+
+  setModEnabled: action(function (this: Draft, id: string, enabled: boolean) {
+    const row = ((this as any).mods ?? {})[id];
+    if (row) Object.assign(row, { enabled, updated_at: Date.now() });
+  }),
+
+  createModObject: action(function (this: Draft, opts: { prefix: string; title: string; status?: string; fields?: Record<string, unknown>; body?: string; team_id?: string; client_key?: string }) {
+    // Mutate opts: the dispatch forwards these args, so the client_key and the
+    // team must ride to the server, not just the stub (see createSavedView).
+    if (!opts.client_key) opts.client_key = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const teamId = this.clientState.ui?.active_team_id;
+    if (teamId && opts.team_id === undefined) opts.team_id = teamId;
+    const userId = String((this as any).currentUser?._id ?? "");
+    const stubId = `temp_obj_${opts.client_key}`;
+    const coll = ((this as any).modObjects ??= {});
+    const now = Date.now();
+    coll[stubId] = {
+      _id: stubId,
+      client_key: opts.client_key,
+      user_id: userId,
+      team_id: opts.team_id,
+      workspace: opts.team_id ? `team:${opts.team_id}` : `user:${userId}`,
+      prefix: opts.prefix,
+      short_id: `${opts.prefix}-…`,
+      title: opts.title,
+      status: opts.status,
+      fields: opts.fields ?? {},
+      body: opts.body,
+      created_at: now,
+      updated_at: now,
+    };
+    return { ...opts };
+  }),
+
+  updateModObject: action(function (this: Draft, id: string, patch: { title?: string; status?: string; fields?: Record<string, unknown>; body?: string; archived?: boolean }) {
+    const row = ((this as any).modObjects ?? {})[id];
+    if (!row) return;
+    const { fields, ...rest } = patch;
+    Object.assign(row, rest, { updated_at: Date.now() });
+    if (fields) row.fields = { ...(row.fields ?? {}), ...fields };
   }),
 
   updateClientLayout: action(function (this: Draft, key: string, value: any) {
@@ -12203,6 +12458,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
   }),
 
+  renameTeam: asyncAction(function (this: Draft, teamId: string, name: string) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (team) team.name = name;
+  }),
+
+  updateTeamIcon: asyncAction(function (this: Draft, teamId: string, fields: { icon?: string; icon_color?: string }) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (!team) return;
+    if (fields.icon !== undefined) team.icon = fields.icon;
+    if (fields.icon_color !== undefined) team.icon_color = fields.icon_color;
+  }),
+
+  updateTeamTaskStatuses: asyncAction(function (this: Draft, teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (team) team.task_statuses = statuses;
+  }),
+
+  // teamMembers holds the active team's roster, keyed by user id.
+  setTeamMemberRole: asyncAction(function (this: Draft, teamId: string, userId: string, role: "member" | "admin") {
+    if (this.clientState.ui?.active_team_id !== teamId) return;
+    const member = (this.teamMembers ?? []).find((m: any) => String(m?._id) === userId);
+    if (member) member.role = role;
+  }),
+
+  removeTeamMember: asyncAction(function (this: Draft, teamId: string, userId: string) {
+    if (this.clientState.ui?.active_team_id !== teamId) return;
+    this.teamMembers = (this.teamMembers ?? []).filter((m: any) => String(m?._id) !== userId);
+  }),
+
   restoreTeamRow: sync(function (this: Draft, team: any, previousActiveTeamId: string | undefined) {
     if (!(this.teams ?? []).some((t: any) => t?._id === team?._id)) this.teams = [...(this.teams ?? []), team];
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -12327,6 +12611,39 @@ const inboxStoreConfig = (set: any, get: any) => ({
       comment.resolved_at = resolved ? now : undefined;
       comment.resolved_by = resolved ? me?._id : undefined;
     }
+  }),
+
+  // Resolve or reopen one code review thread (the PR, commit and file pages).
+  // Only the flag is painted: the server stamps resolved_at itself, and the
+  // flag is what commentResolved reads first. The server settles the whole
+  // thread, root and replies, from any one of its comments.
+  resolveCodeCommentThread: action(function (this: Draft, commentIds: string[], resolved: boolean) {
+    for (const id of commentIds) {
+      const row = (this as any).codeComments?.[id];
+      if (row) row.resolved = resolved;
+    }
+  }),
+
+  editCodeComment: action(function (this: Draft, commentId: string, content: string) {
+    const row = (this as any).codeComments?.[commentId];
+    if (row) row.content = content;
+  }),
+
+  // The server folds shepherd_state from these and keeps enabled off for a
+  // closed pull request; the paint follows the same rule.
+  setPrShepherd: action(function (this: Draft, prId: string, conversationId: string | undefined, enabled: boolean) {
+    const row = (this as any).pullRequests?.[prId];
+    if (!row) return;
+    row.shepherd_enabled = enabled && row.state === "open";
+    if (conversationId) row.shepherd_conversation_id = conversationId;
+  }),
+
+  // The session lands through the inbox feed; nothing to paint first.
+  assignTaskToAgent: asyncAction(function (this: Draft, _shortId: string, _agentType: string, _initialMessage?: string) {}),
+
+  deleteCodeComment: action(function (this: Draft, commentId: string) {
+    const rows = (this as any).codeComments;
+    if (rows?.[commentId]) delete rows[commentId];
   }),
 
   // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
@@ -12702,6 +13019,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   peopleWallOpen: false,
   openPeopleWall: () => set({ peopleWallOpen: true }),
+  profileSignIn: null,
+  openProfileSignIn: (target: { deviceId: string; profile: string; start?: boolean }) => set({ profileSignIn: target }),
+  closeProfileSignIn: () => set({ profileSignIn: null }),
   closePeopleWall: () => set({ peopleWallOpen: false }),
   togglePeopleWall: () => set({ peopleWallOpen: !get().peopleWallOpen }),
 
@@ -12911,15 +13231,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
     // every boot until the store was hand-repaired. Refuse it at the door.
     if (!opts?.path || typeof opts.path !== "string") return "";
     const id = `tab_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    // Only a shell route: the desktop boots at `/`, and a first tab seeded
+    // from that URL rendered a blank stage on every launch (lib/tabRoutes).
+    // And never the /conversation/<id> redirect route — a pane popped out of
+    // a split arrives with that spelling; the tab holds the /inbox?s= form
+    // the redirect would have produced (same rule as closeTab's promotion).
+    const path = conversationTabPath(shellTabPath(opts.path));
     const tab: AppTab = {
       id,
-      title: opts.title,
-      // Only a shell route: the desktop boots at `/`, and a first tab seeded
-      // from that URL rendered a blank stage on every launch (lib/tabRoutes).
-      // And never the /conversation/<id> redirect route — a pane popped out of
-      // a split arrives with that spelling; the tab holds the /inbox?s= form
-      // the redirect would have produced (same rule as closeTab's promotion).
-      path: conversationTabPath(shellTabPath(opts.path)),
+      // The title persists beside the path, so it follows the same storable rule (lib/tabSafePath).
+      title: tabSafeTitle(path, opts.title),
+      path,
       sessionId: opts.sessionId,
       createdAt: Date.now(),
     };
@@ -12990,14 +13312,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if ((current as any)[k] !== (patch as any)[k]) { changed = true; break; }
     }
     if (!changed) return;
-    this.tabs = this.tabs.map((t: AppTab) => {
-      if (t.id !== id) return t;
-      // A path write flows into the focused leaf (withTabPath) unless the
-      // patch replaces the layout itself — the split invariant's chokepoint.
-      const { path, ...rest } = patch;
-      const base = path !== undefined && rest.layout === undefined ? withTabPath(t, path) : t;
-      return { ...base, ...rest, ...(path !== undefined && rest.layout !== undefined ? { path } : {}) };
-    });
+    this.tabs = this.tabs.map((t: AppTab) => (t.id === id ? patchedTab(t, patch) : t));
   }),
 
   saveCurrentTabState: action(function (this: Draft, patch?: Partial<AppTab>) {
@@ -13031,7 +13346,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const focus = opts?.focus !== false;
     const focusedLeafId = focus ? res.leafId : (tab.focusedLeafId ?? firstLeafId!);
     this.tabs = this.tabs.map((t: AppTab) =>
-      t.id === tab.id ? { ...t, layout: res.root, focusedLeafId, path: focus ? path : t.path } : t,
+      t.id === tab.id ? (focus ? withTabPath({ ...t, layout: res.root, focusedLeafId }, path) : { ...t, layout: res.root, focusedLeafId }) : t,
     );
     return res.leafId;
   }),
@@ -13042,7 +13357,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const layout = setStageLeafPath(tab.layout, leafId, path);
     this.tabs = this.tabs.map((t: AppTab) =>
       t.id === tab.id
-        ? { ...t, layout, ...(t.focusedLeafId === leafId ? { path } : {}) }
+        ? (t.focusedLeafId === leafId ? withTabPath({ ...t, layout }, path) : { ...t, layout })
         : t,
     );
   }),
@@ -13233,7 +13548,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // `pressedAt` is when the person pressed: a press is a moment, so one
   // delivered long after it (parked through an outage, replayed on a reload)
   // is refused at both ends (lib/calls/recordingPress, convex dispatch).
-  setRoomRecording: asyncAction(function (this: Draft, roomKey: string, on: boolean, _pressedAt: number) {
+  // `runId` (Stop only) is the run the mark showed, which is all the press
+  // may end.
+  setRoomRecording: asyncAction(function (this: Draft, roomKey: string, on: boolean, _pressedAt: number, _runId?: string) {
     const row = (this.callRooms[roomKey] ??= { _id: roomKey, locked: false, transcribe_off: false, transcribe_off_at: null });
     row.recording = on;
     return { roomKey, on };
@@ -13261,7 +13578,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // back through restoreCallGuest (lib/calls/guestDoorActions).
   removeCallGuest: asyncAction(function (this: Draft, roomKey: string, guestId: string, revokeLink?: boolean) {
     dropGuestKnock(this, guestId);
-    const identity = `guest:${guestId}`;
+    const identity = guestIdentity(guestId);
     const room = ((this.liveRooms ?? []) as any[]).find((r) => r?.room_key === roomKey);
     if (room?.guests?.some((g: any) => g.identity === identity)) room.guests = room.guests.filter((g: any) => g.identity !== identity);
     return { roomKey, guestId, revokeLink: !!revokeLink };
@@ -13302,11 +13619,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // call the server no longer sends is gone for good, ids never come back),
   // so their excludes have nothing left to hold out. Without this they would
   // pile up in the persisted pending map.
-  settleCallRecordingTombstones: sync(function (this: Draft, released: string[]) {
+  settleCallRecordingTombstones: sync(function (this: Draft, released: string[], collection: "callRecordings" | "callFrameShares" = "callRecordings") {
     for (const id of released) {
-      const key = `callRecordings:${id}`;
+      const key = `${collection}:${id}`;
       if (this.pending[key]?.type === "exclude") delete this.pending[key];
     }
+  }),
+  // A picture of the call taken off its public link: the row leaves on the
+  // draft (its exclude tombstone holds it out of an older push) and the
+  // dispatch deletes the public object. Taking one down is any reader's and
+  // a picture already gone is acknowledged, so there is no refusal to undo.
+  deleteCallFrameShare: asyncAction(function (this: Draft, shareId: string) {
+    delete ((this as any).callFrameShares as Record<string, unknown>)[shareId];
+    return { shareId };
   }),
   // The switch moves on the press and holds through a push computed before
   // the write committed (a field lock on video_shared); a refusal lifts the
@@ -13339,6 +13664,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Initiative writes (store/initiativeSlice.ts); the collections themselves
   // are registry slots.
   ...createInitiativeSlice(),
+  // Project update writes (store/projectUpdatesSlice.ts), same rule.
+  ...createProjectUpdatesSlice(),
+  ...createLineWorkflowSlice(),
+
+  // Line profile edits (store/lineSlice.ts): paint projects.line_profile, ride to the daemon.
+  ...createLineSlice(),
 
   // Ops writes (store/opsSlice.ts): group triage, sources, app grants.
   ...createOpsSlice(),

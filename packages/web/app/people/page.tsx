@@ -13,6 +13,7 @@ import { useSyncTeams } from "../../hooks/useSyncTeams";
 import { useCallSync } from "../../hooks/useCallSync";
 import { useCallRing } from "../../hooks/useCallRing";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
+import { useUndoUnreachable } from "../../hooks/useUndoUnreachable";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 /**
@@ -27,6 +28,8 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
  * knock are ITS job — a buddy list that could not ring would be an ornament.
  */
 export default function PeoplePage() {
+  // An auxiliary window: no undo key, timeline or toast of the dashboard's.
+  useUndoUnreachable();
   return (
     <AuthGuard>
       <PeopleWindow />

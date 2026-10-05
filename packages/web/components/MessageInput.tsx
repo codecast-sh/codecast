@@ -9,7 +9,7 @@ import { createPortal } from "react-dom";
 import { compressImage } from "../lib/compressImage";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
-import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, type AgentStatus } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, isHostedAgentType, type AgentStatus } from "@codecast/shared/contracts";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
@@ -23,7 +23,8 @@ import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { toast } from "sonner";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
-import { attachReviewToMessage, quotedImageStorageIds } from "../lib/reviewActions";
+import { attachReviewToMessage, quotedImages } from "../lib/reviewActions";
+import { uploadMarkedImage } from "../lib/markedImage";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
 import { ComposerFoot, ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
@@ -57,6 +58,7 @@ import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { WorkingStatusLine } from "./conversation/sessionChrome";
 import { LiveCompactionCard } from "./conversation/CompactionProgressCard";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
+import { SLASH_QUERY_RE, SLASH_TRIGGER_RE, matchSlashSkills } from "../lib/sessionSkills";
 
 const api = _typedApi as any;
 const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
@@ -87,10 +89,6 @@ const CHAT_AC_WIDTH = 560;
 
 const MENTION_TRIGGER_RE = /@([\w./\\-]*(?: [\w./\\-]+){0,4} ?)$/;
 const MENTION_QUERY_RE = /^[\w./\\-]*(?: [\w./\\-]+){0,4} ?/;
-// A slash command opens at the start of the text or of any word, so a skill
-// can be named mid-sentence; a "/" inside a word (a path, "and/or") is prose.
-const SLASH_TRIGGER_RE = /(?:^|\s)\/([\w:.-]*)$/;
-const SLASH_QUERY_RE = /^[\w:.-]*/;
 // A channel reference opens after whitespace or "(" and takes the slug
 // alphabet channel names are normalized to (convex chatText
 // normalizeChannelName), so "##" headings and "a#b" stay prose.
@@ -292,7 +290,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const composeMentionQuery = useMentionQuery(mentionScope);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(null);
-  const [showStuckBanner, setShowStuckBanner] = useState(false);
+  // A hosted conversation has no machine to resume or restart: its turn
+  // engine owns delivery, so the stuck banner and the resumes it drives never
+  // apply to it.
+  const hostedConversation = isHostedAgentType(agentType);
+  const [stuckBannerRaised, setShowStuckBanner] = useState(false);
+  const showStuckBanner = stuckBannerRaised && !hostedConversation;
   const [isResuming, setIsResuming] = useState(false);
   // Distinct from isResuming: true only while a destructive kill+restart is in flight, so the
   // footer can say "Killing & restarting" instead of the gentler "Waiting for connection".
@@ -421,9 +424,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       return orderMentionItems(mergeMentionSuggestions(channels, [], new Map(), 12, acQuery, false, acContext));
     }
     if (acTrigger.type === "/") {
-      return (skills || [])
-        .filter(s => s.name.toLowerCase().includes(acQuery))
-        .slice(0, 30)
+      return matchSlashSkills(skills, acQuery)
         .map(s => ({ label: s.name, description: s.description, type: "skill" as string }));
     }
     if (acTrigger.type === "@") {
@@ -908,7 +909,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // the agent to be inactive, because a long-running/busy agent can trip "undeliverable" purely
   // from being busy past the retry budget, and must never be killed mid-task. Fires once.
   useWatchEffect(() => {
-    if (autoRestartTriggeredRef.current) return;
+    if (autoRestartTriggeredRef.current || hostedConversation) return;
     if (messageStatus?.status !== "undeliverable") return;
     if (isAgentActive || messageReachedSession) return;
     if (!conversationId || !isConvexId(conversationId)) return;
@@ -926,7 +927,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           toast.error(`Session restart failed: ${msg}`);
         }
       });
-  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, ghostRestartContext, handleRestartResult]);
+  }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, ghostRestartContext, handleRestartResult, hostedConversation]);
 
   // The draft id with a debounced write in flight (lib/pendingDraftWrites).
   const draftPendingIdRef = useRef<string | null>(null);
@@ -1554,10 +1555,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // and each quote names its picture by that attachment number. A fork from a
     // selection sends text only, so its image quotes point by address instead.
     const forkingFromSelection = !!(isSelectionActive && selectedMessageUuid && onForkFromMessage);
-    const quotedImageIds = forkingFromSelection ? [] : quotedImageStorageIds(conversationId);
-    message = attachReviewToMessage(conversationId, message, quotedImageIds.length ? submitImages.length + 1 : undefined);
-    const quotedImages: OptimisticImage[] = quotedImageIds.map(storage_id => ({ media_type: "image/png", storage_id }));
-    const hasUploadingImages = submitImages.some(img => img.uploading);
+    // Each quoted picture is sent as a copy with its notes' points drawn on as
+    // numbered markers; the bubble shows the original until that copy lands.
+    const quoted = forkingFromSelection ? [] : quotedImages(conversationId);
+    message = attachReviewToMessage(conversationId, message, quoted.length ? submitImages.length + 1 : undefined);
+    const quotedOriginals: OptimisticImage[] = quoted.map(q => ({ media_type: "image/png", storage_id: q.storageId }));
+    const quotedUploads = quoted.map(q => uploadMarkedImage(convex, q));
+    const hasUploadingImages = submitImages.some(img => img.uploading) || quotedUploads.length > 0;
     const canSend = message.trim() || submitImages.length > 0;
     if (!canSend) return;
 
@@ -1610,7 +1614,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       img.storageId
         ? { media_type: img.file.type, storage_id: img.storageId as string }
         : { media_type: img.file.type, preview_url: img.previewUrl, uploading: true }
-    ), ...quotedImages];
+    ), ...quotedOriginals];
     sendingRef.current = true;
     let clientId: string;
     try {
@@ -1678,7 +1682,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     };
 
     if (hasUploadingImages) {
-      // Detached: finish the in-flight uploads, swap the bubble's previews for
+      // Detached: finish the in-flight uploads (the composer's and the marked
+      // copies of quoted pictures), swap the bubble's previews for
       // real storage records (drops the spinner), then send. Awaits the upload
       // promises from the module-level registry, not component state, so it
       // survives a session switch or composer remount. The user can already
@@ -1694,7 +1699,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         const settled = await Promise.all(tasks.map(t => t.promise.then(storageId => ({ ...t, storageId }))));
         const resolvedImages: OptimisticImage[] = [...settled
           .filter(t => t.storageId)
-          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string })), ...quotedImages];
+          .map(t => ({ media_type: t.mediaType, storage_id: t.storageId as string })),
+          ...(await Promise.all(quotedUploads)).map(storage_id => ({ media_type: "image/png", storage_id }))];
         // Every upload failed and there was no text — nothing real to send.
         // uploadImage already toasted each failure; just fail the bubble.
         if (resolvedImages.length === 0 && !message.trim()) {
@@ -1713,7 +1719,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         await finishSend(resolvedImages.map(i => i.storage_id as string));
       })();
     } else {
-      await finishSend([...submitImages.map(img => img.storageId as string), ...quotedImageIds]);
+      await finishSend(submitImages.map(img => img.storageId as string));
     }
   };
 

@@ -5,7 +5,7 @@
 // Set that production keeps per window would silently leak between simulated
 // windows. This walks the import graph from every sim file, collects the
 // top-level `let`/`var` and `const X = new Map|Set` bindings of
-// packages/web/{store,hooks,lib}, and fails on any binding sim/windowSlots.ts
+// packages/web/{store,hooks,lib} and of the engine, and fails on any binding sim/windowSlots.ts
 // does not classify, printing the line to add. It also fails on a classified
 // binding that no longer exists, so the table never lies.
 //
@@ -20,7 +20,9 @@ import { WINDOW_SLOTS } from "./windowSlots";
 
 const SIM = import.meta.dir;
 const WEB = join(SIM, "../../..");
-const GUARDED = /^(store|hooks|lib)\//;
+// The web's own state, and the engine the store runs on (its undo history is
+// per window too).
+const GUARDED = /^((store|hooks|lib)\/|\.\.\/\.\.\/platform\/packages\/engine\/src\/)/;
 const SKIP = /(^|\/)__tests__\/|\.test\.tsx?$/;
 
 /** Top-level mutable bindings of one source file, in source order. Prettier keeps top-level declarations at column 0. */
@@ -61,6 +63,7 @@ describe("sim window slots", () => {
         .sort();
       // A walk that stops at the sim's own files would pass vacuously.
       expect(files).toContain("store/inboxStore.ts");
+      expect(files).toContain("../../platform/packages/engine/src/undoStack.ts");
 
       const missing: string[] = [];
       for (const file of files) {

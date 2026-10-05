@@ -19,18 +19,14 @@
 // membership-only when they truly render no row fields.
 import { useMemo } from "react";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
-import { activeWorkspaceKey, filterByWorkspace, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
-import type { WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
+import { activeWorkspaceKeyOf, filterByWorkspace, inWorkspace, type WorkspaceKey } from "../lib/workspaceScope";
+import { collectionRowListed, type WorkspaceScopedStoreKey } from "../store/clientSyncRegistry";
 
 // Derived from the registry: a collection declares `workspaceScoped: true`
 // and this hook accepts it — no second list to keep in step.
 export type WorkspaceScopedTable = WorkspaceScopedStoreKey;
 
-/** The viewer's active workspace key, read off store state: the active-team
- *  pointer, else the viewer's own personal key. Null while the viewer is unknown. */
-export function activeWorkspaceKeyOf(s: { clientState: { ui?: { active_team_id?: string | null } }; currentUser?: { _id?: unknown } | null }): WorkspaceKey | null {
-  return activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
-}
+export { activeWorkspaceKeyOf };
 
 /** The viewer's active workspace key, from the canonical pointers. Null while
  *  the viewer is unknown — everything reads empty (fail closed), never all. */
@@ -43,29 +39,34 @@ export function useActiveWorkspaceKey(): WorkspaceKey | null {
 // The store reuses a collection's identity when nothing in it changed, so this
 // scan (10k+ rows for tasks/docs) runs once per real change, not once per
 // store notification per subscriber.
-type SigEntry = { key: WorkspaceKey | null; sig: string };
+type SigEntry = { key: WorkspaceKey | null; table?: WorkspaceScopedTable; sig: string };
 const sigCache = new WeakMap<object, Map<((row: any) => string) | null, SigEntry>>();
+// `table` names the collection, whose registry `listed` rule (a soft-deleted
+// row stays held but leaves lists) applies here too.
 export function membershipSig(
   collection: Record<string, any>,
   key: WorkspaceKey | null,
   fieldSig: ((row: any) => string) | null = null,
+  table?: WorkspaceScopedTable,
 ): string {
   let perFn = sigCache.get(collection);
   const hit = perFn?.get(fieldSig);
-  if (hit && hit.key === key) return hit.sig;
+  if (hit && hit.key === key && hit.table === table) return hit.sig;
+  const listed = table ? collectionRowListed(table) : undefined;
   const ids: string[] = [];
   let extra = "";
   if (key) {
     for (const id in collection) {
       const row = collection[id];
       if (!inWorkspace(row, key)) continue;
+      if (listed && !listed(row)) continue;
       ids.push(id);
       if (fieldSig) extra += fieldSig(row) + "\n";
     }
   }
   const sig = fieldSig ? ids.join("\n") + "\u0000" + extra : ids.join("\n");
   if (!perFn) { perFn = new Map(); sigCache.set(collection, perFn); }
-  perFn.set(fieldSig, { key, sig });
+  perFn.set(fieldSig, { key, table, sig });
   return sig;
 }
 
@@ -77,6 +78,25 @@ export function membershipSig(
 // to stay invisible on /tasks until some row entered or left the workspace.
 export function defaultFieldSig(row: any): string {
   return String(row?.updated_at ?? "");
+}
+
+/**
+ * The rows of `table` a list shows in workspace `key`: in the workspace,
+ * listed by the collection's registry rule, and filed under their own _id.
+ * Rows filed under a store key that isn't their own _id are dropped (e.g. a
+ * task detail-query copy keyed by its URL short id, planted by pre-fix
+ * builds). Every sync channel keys rows by _id, so such a copy never receives
+ * updates — rendered, it's a phantom frozen at stale field values beside (or
+ * instead of) the live row. Stubs pass: keyed by their temp _id.
+ */
+export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record<string, T>, key: WorkspaceKey | null): T[] {
+  const listed = collectionRowListed(table);
+  return filterByWorkspace(
+    Object.entries(coll ?? {})
+      .filter(([k, row]) => k === String((row as any)?._id) && (!listed || listed(row)))
+      .map(([, row]) => row) as any[],
+    key,
+  ) as T[];
 }
 
 /**
@@ -94,26 +114,15 @@ export function useWorkspaceCollection<T = any>(
     (st) => activeWorkspaceKeyOf(st),
     (st) => {
       const key = activeWorkspaceKeyOf(st);
-      return membershipSig((st as any)[table], key, fieldSig);
+      return membershipSig((st as any)[table], key, fieldSig, table);
     },
   ]);
   const key = activeWorkspaceKeyOf(s);
   const coll = (s as any)[table] as Record<string, T>;
-  const memberSig = membershipSig(coll, key, fieldSig);
-  // Rows filed under a store key that isn't their own _id are dropped (e.g. a
-  // task detail-query copy keyed by its URL short id, planted by pre-fix
-  // builds). Every sync channel keys rows by _id, so such a copy never
-  // receives updates — rendered, it's a phantom frozen at stale field values
-  // beside (or instead of) the live row. Stubs pass: keyed by their temp _id.
+  const memberSig = membershipSig(coll, key, fieldSig, table);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- memberSig stands in for the churny collection ref
   return useMemo(
-    () =>
-      filterByWorkspace(
-        Object.entries(coll)
-          .filter(([k, row]) => k === String((row as any)?._id))
-          .map(([, row]) => row) as any[],
-        key,
-      ) as T[],
+    () => workspaceRows(table, coll, key),
     [memberSig, key, fieldSig ? coll : null],
   );
 }

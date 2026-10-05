@@ -2,6 +2,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { TeamVisibility } from "./visibilityLevels";
+import { useInboxStore } from "../../store/inboxStore";
 import { isMappedToTeam, type UserWorkspace } from "../../hooks/useTeamWorkspaceSuggestions";
 
 type SetVisibility = (args: { team_id: Id<"teams">; visibility: TeamVisibility }) => Promise<unknown>;
@@ -53,9 +54,12 @@ export async function saveTeamSetup(
   return { mapped };
 }
 
-/** Binds the two mutations so a component calls `save(input)` directly. */
+/** Binds the two writes so a component calls `save(input)` directly. The
+ *  member's level goes through the store action every other surface uses
+ *  (setTeamMembershipVisibility), so it paints at once and is classified. */
 export function useSaveTeamSetup() {
-  const setTeamVisibility = useMutation(api.teams.setTeamVisibility);
+  const setMembershipVisibility = useInboxStore((s) => s.setTeamMembershipVisibility);
+  const setTeamVisibility: SetVisibility = async ({ team_id, visibility }) => setMembershipVisibility(team_id, visibility);
   const updateDirectoryMapping = useMutation(api.users.updateDirectoryTeamMapping);
   return (input: SaveTeamSetupInput) =>
     saveTeamSetup(input, { setTeamVisibility, updateDirectoryMapping });

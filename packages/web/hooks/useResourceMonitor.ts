@@ -5,7 +5,6 @@
 import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { type MachineResourceSnapshot, type ResourcePoint } from "@codecast/shared/contracts";
-import { useInboxStore } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import { useIsSyncHost } from "./useSyncRole";
 import { useCollectionRows } from "./useCollectionRows";
@@ -117,7 +116,6 @@ export function useResourceMonitor() {
   const { candidates } = useMigrationCandidates();
   const { batches } = useMigrationBatches();
   const pinnedIds = useCollectionRows<any>("sessions", { where: (r: any) => !!r.inbox_pinned_at, sig: (r: any) => r._id });
-  const dismissed = useInboxStore((s) => s.clientState.ui?.resource_plan_dismissed);
 
   const machines = useMemo(() => joinMachines(devices, rows), [devices, rows]);
   const sessions = useMemo(() => {
@@ -130,12 +128,12 @@ export function useResourceMonitor() {
     const out: OffloadPlan[] = [];
     for (const source of machines) {
       if (source.role !== "local") continue;
-      if ((dismissed?.[source.deviceId] ?? 0) > now) continue;
+      // Dismissing quiets the app-wide notice (ResourcePressureNotice); this page always offers the plan.
       const plan = buildOffloadPlan({ source, machines, sessions, devices: devices as any, candidates, now });
       if (plan) out.push(plan);
     }
     return out;
-  }, [machines, sessions, devices, candidates, dismissed, now]);
+  }, [machines, sessions, devices, candidates, now]);
 
   const runs = useMemo(() => {
     const byConv = new Map(sessions.filter((s) => s.conversationId).map((s) => [s.conversationId!, s.sessionId]));

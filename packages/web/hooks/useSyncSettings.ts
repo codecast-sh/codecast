@@ -11,6 +11,9 @@ const queries = {
   syncProjects: api.users.getRecentProjectsWithGitInfo,
   accountProfiles: api.accountSwitch.listAccountProfiles,
   connections: api.appConnections.listConnections,
+  // The person's Google connections with what each grant allows (the simple
+  // lane's connections screen). Read on demand, not in the global set.
+  googleConnections: api.googleOAuth.listConnections,
   teamMembers: api.teams.getTeamMembers,
   // The active team's own record (name, invite code) for the team settings row.
   team: api.teams.getTeam,
@@ -22,6 +25,23 @@ const queries = {
 
 export type SettingsDataName = keyof typeof queries;
 
+// The settings the sync host feeds for every window (useSyncSettings), for the
+// active team. Replication carries them to followers, so a follower reading
+// one of these for the active team leaves the query to the host. Anything
+// else (an on-demand name, another team's copy) is a per-view read and
+// subscribes in whichever window asks for it.
+const HOST_FED: readonly SettingsDataName[] = [
+  "directoryMappings",
+  "syncProjects",
+  "accountProfiles",
+  "connections",
+  "teamMembers",
+  "githubInstallations",
+  "personalGithubInstallations",
+  "agentBoxes",
+];
+const HOST_FED_SET = new Set<SettingsDataName>(HOST_FED);
+
 function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null) {
   const userId = useInboxStore((s) => s.currentUser?._id);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
@@ -29,7 +49,8 @@ function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null
   const isHost = useIsSyncHost();
   const key = settingsDataKey(name, userId, teamId);
   const teamQuery = TEAM_SCOPED_SETTINGS.has(name);
-  const args = !key || !isHost || (teamQuery && !isConvexId(String(teamId)))
+  const hostFeedsIt = HOST_FED_SET.has(name) && requestedTeamId === undefined;
+  const args = !key || (!isHost && hostFeedsIt) || (teamQuery && !isConvexId(String(teamId)))
     ? "skip"
     : teamQuery ? { team_id: teamId }
       : name === "syncProjects" ? { limit: 100 } : {};
@@ -47,12 +68,6 @@ export function useSettingsData<Name extends SettingsDataName>(name: Name, teamI
 }
 
 export function useSyncSettings() {
-  useSettingsFeed("directoryMappings");
-  useSettingsFeed("syncProjects");
-  useSettingsFeed("accountProfiles");
-  useSettingsFeed("connections");
-  useSettingsFeed("teamMembers");
-  useSettingsFeed("githubInstallations");
-  useSettingsFeed("personalGithubInstallations");
-  useSettingsFeed("agentBoxes");
+  // A constant list, so the hook order never changes between renders.
+  for (const name of HOST_FED) useSettingsFeed(name);
 }

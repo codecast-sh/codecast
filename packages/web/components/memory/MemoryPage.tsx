@@ -21,6 +21,7 @@ import { MemoryHealthView } from "./MemoryHealthView";
 import { MemoryEditor, NEW_MEMORY } from "./MemoryEditor";
 import { BudgetMeter } from "./parts";
 import { MEMORY_VIEWS, TYPE_TONE, healthAlarm, memoryHealth, memoryHref, noteMatches, toneCss, typeKey, type MemoryView } from "./memoryView";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 const MemoryMap = lazy(() => import("./MemoryMap"));
 
@@ -160,7 +161,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
   useEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !isTabActive || !openFile) return;
     const target = event.target as HTMLElement | null;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || keysOwnedElsewhere(target))) return;
     event.preventDefault();
     close();
   });

@@ -21,6 +21,15 @@ describe("decideAutoScribe", () => {
     expect(decideAutoScribe(base)).toBe("start");
   });
 
+  test("a record a Record press made, with nobody scribing it, is taken under the same roster rule", () => {
+    // The presser is seated (on a phone, which never scribes): their seat is
+    // no reason to hold, since they hold no scribe seat.
+    expect(decideAutoScribe({ ...base, rosterIds: ["me", "presser"], live: { startedBy: null } })).toBe("start");
+    expect(decideAutoScribe({ ...base, rosterIds: ["me"], live: { startedBy: null } })).toBe("hold");
+    // A window already scribing never reads an unclaimed record as adopted away.
+    expect(decideAutoScribe({ ...base, scribeActive: true, live: { startedBy: null } })).toBe("hold");
+  });
+
   test("a walkie's background seat never scribes", () => {
     expect(decideAutoScribe({ ...base, deliberate: false })).toBe("hold");
   });

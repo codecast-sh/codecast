@@ -1,4 +1,6 @@
-// A story's evidence (spec 3, level 3): its commits in mono with their
+// An opened story: its article (markdown: sections, screenshots with
+// captions, quoted instruction changes), its why, risks and people, then its
+// evidence (spec 3, level 3): its commits in mono with their
 // diffstats, the sessions behind it with their insight headline and turns as
 // ask/did pairs, its pull requests, and its files grouped by area. The commits
 // come from the shared `commits` collection, so a commit the /commit page
@@ -21,6 +23,7 @@ import {
 import { DiffStat, MetaDot } from "../entityDisplay";
 import { EntityIdPill } from "../EntityIdPill";
 import { CommitLinks } from "../repo/CommitLinks";
+import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { AreaTag, People, Provenance, ReleaseTag, RiskLine, Tip, clockOf } from "./StoryParts";
 import { areaColor } from "./areaColor";
 import { plural } from "./format";
@@ -153,7 +156,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
 
   return (
     <div className="mt-2 space-y-3 pb-1">
-      {story.body && <p className="chg-ui text-[13px] leading-[1.6] text-sol-text/80 [overflow-wrap:anywhere]">{story.body}</p>}
+      {story.body && <MarkdownRenderer content={story.body} className="chg-article prose-p:my-2 prose-headings:mb-1 prose-headings:mt-4 prose-h3:text-[14px] max-w-[46rem] text-[13.5px] leading-[1.65]" />}
       <RiskLine story={story} full />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <People story={story} />

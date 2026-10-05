@@ -7,46 +7,24 @@
  * digest of what changed. Each post carries a flat comment thread underneath,
  * the same shape task comments have.
  *
- * Data comes straight from reactive queries (api.projectUpdates.*), not the
- * synced store: these tables are untracked children of the project, the same
- * trade task_comments makes, so Convex keeps this view live on its own.
+ * The list renders from the store's projectUpdates collection, fed by
+ * projectUpdates.webList for the project on screen, and every gesture is a
+ * store action (store/projectUpdatesSlice.ts) that paints at once and rides
+ * the outbox to the web mutation. Editing a post's body is undoable.
  */
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { toast } from "sonner";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 import { Megaphone, MessageSquare, Pencil, Sparkles, Trash2 } from "lucide-react";
-import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { useProjectUpdates } from "../hooks/useProjectUpdates";
 import { useInboxStore } from "../store/inboxStore";
+import { newProjectUpdateKey, type ProjectUpdateComment, type ProjectUpdateRow } from "../store/projectUpdatesSlice";
 import { relTimeShort } from "../lib/utils";
 import { CommentAvatar } from "./comments/CommentAvatar";
 import { MarkdownRenderer } from "./tools/MarkdownRenderer";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 
-const api = _api as any;
 
-type UpdateComment = {
-  _id: string;
-  author: string;
-  author_user_id?: string;
-  author_kind: "user" | "agent";
-  text: string;
-  created_at: number;
-};
-
-type ProjectUpdate = {
-  _id: string;
-  short_id?: string;
-  author: string;
-  author_user_id?: string;
-  author_kind: "user" | "agent";
-  kind: "update" | "digest";
-  title?: string;
-  body: string;
-  created_at: number;
-  edited_at?: number;
-  comments: UpdateComment[];
-};
+type UpdateComment = ProjectUpdateComment;
+type ProjectUpdate = ProjectUpdateRow;
 
 /** Auto-growing textarea with the app's ⌘↵-to-send convention. Sizes itself
  *  to its content on mount too, so editing a long update opens at full
@@ -107,28 +85,19 @@ function UpdateComposer({ projectId }: { projectId: string }) {
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const post = useMutation(api.projectUpdates.webPost);
 
-  const submit = useCallback(async () => {
+  const submit = useCallback(() => {
     const trimmed = body.trim();
-    if (!trimmed || posting) return;
-    setPosting(true);
-    try {
-      await post({
-        project_id: projectId,
-        body: trimmed,
-        title: title.trim() || undefined,
-      });
-      setTitle("");
-      setBody("");
-      setOpen(false);
-    } catch {
-      toast.error("Could not post the update");
-    } finally {
-      setPosting(false);
-    }
-  }, [body, title, posting, post, projectId]);
+    if (!trimmed) return;
+    useInboxStore.getState().postProjectUpdate(projectId, {
+      client_key: newProjectUpdateKey(),
+      body: trimmed,
+      title: title.trim() || undefined,
+    });
+    setTitle("");
+    setBody("");
+    setOpen(false);
+  }, [body, title, projectId]);
 
   if (!open) {
     return (
@@ -172,7 +141,7 @@ function UpdateComposer({ projectId }: { projectId: string }) {
         </button>
         <button
           onClick={submit}
-          disabled={!body.trim() || posting}
+          disabled={!body.trim()}
           className="px-2.5 py-1 rounded-md text-[11px] bg-sol-bg-highlight text-sol-text border border-sol-border/40 hover:border-sol-border/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Post <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
@@ -204,61 +173,40 @@ function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentU
   const [commentDraft, setCommentDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [bodyDraft, setBodyDraft] = useState(update.body);
-  const sending = useRef(false);
-  const comment = useMutation(api.projectUpdates.webComment);
-  const edit = useMutation(api.projectUpdates.webEdit);
-  const remove = useMutation(api.projectUpdates.webDelete);
 
   const mine = !!currentUserId && String(update.author_user_id) === String(currentUserId);
   const digest = update.kind === "digest";
 
-  const submitComment = useCallback(async () => {
+  const submitComment = useCallback(() => {
     const text = commentDraft.trim();
-    if (!text || sending.current) return;
-    sending.current = true;
-    try {
-      await comment({ update_id: update._id, text });
-      setCommentDraft("");
-      setCommenting(false);
-    } catch {
-      toast.error("Could not post the comment");
-    } finally {
-      sending.current = false;
-    }
-  }, [commentDraft, comment, update._id]);
+    if (!text) return;
+    useInboxStore.getState().commentProjectUpdate(update._id, text);
+    setCommentDraft("");
+    setCommenting(false);
+  }, [commentDraft, update._id]);
 
-  const saveEdit = useCallback(async () => {
+  const saveEdit = useCallback(() => {
     const next = bodyDraft.trim();
     setEditing(false);
     if (!next || next === update.body) {
       setBodyDraft(update.body);
       return;
     }
-    try {
-      await edit({ id: update._id, body: next });
-    } catch {
-      // The draft is the only copy of what they typed — reopen with it intact.
-      toast.error("Could not save the edit");
-      setEditing(true);
-    }
-  }, [bodyDraft, edit, update._id, update.body]);
+    useInboxStore.getState().editProjectUpdate(update._id, next);
+  }, [bodyDraft, update._id, update.body]);
 
   // Two-step inline confirm instead of window.confirm: the first click arms
   // the button, the second (within 3s) deletes. No blocking dialog.
   const [armed, setArmed] = useState(false);
-  const confirmDelete = useCallback(async () => {
+  const confirmDelete = useCallback(() => {
     if (!armed) {
       setArmed(true);
       setTimeout(() => setArmed(false), 3000);
       return;
     }
     setArmed(false);
-    try {
-      await remove({ id: update._id });
-    } catch {
-      toast.error("Could not remove the update");
-    }
-  }, [armed, remove, update._id]);
+    useInboxStore.getState().deleteProjectUpdate(update._id);
+  }, [armed, update._id]);
 
   return (
     <div className="rounded-lg border border-sol-border/30 bg-sol-bg group">
@@ -373,14 +321,10 @@ function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; currentU
 }
 
 export function ProjectUpdates({ projectId }: { projectId: string }) {
-  const { data: updates, error, retry } = useQueryNoThrow(
-    api.projectUpdates.webList,
-    projectId ? { project_id: projectId } : "skip",
-  );
+  const { ready, error, refused, retry, updates: list } = useProjectUpdates(projectId);
   const currentUserId = useInboxStore((s: any) => s.currentUser?._id && String(s.currentUser._id));
-  const list = useMemo(() => (updates ?? []) as ProjectUpdate[], [updates]);
 
-  if (error) {
+  if (error && list.length === 0) {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
         <p className="text-xs text-sol-text-dim">Updates could not load.</p>
@@ -390,14 +334,14 @@ export function ProjectUpdates({ projectId }: { projectId: string }) {
       </div>
     );
   }
-  if (updates === undefined) {
+  if (!ready && list.length === 0) {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center text-xs text-sol-text-dim">Loading updates…</div>
     );
   }
   // null = the server refused (signed out, or no access to this project).
   // Showing a live composer here would just set the poster up to fail.
-  if (updates === null) {
+  if (refused) {
     return (
       <div className="max-w-3xl mx-auto py-12 text-center text-xs text-sol-text-dim">
         You don't have access to this project's updates.

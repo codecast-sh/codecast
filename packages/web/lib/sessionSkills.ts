@@ -46,3 +46,27 @@ export function resolveSessionSkills(opts: {
   const names = new Set(extracted.map((s) => s.name.toLowerCase()));
   return [...extracted, ...builtins.filter((b) => !names.has(b.name.toLowerCase()))];
 }
+
+// A slash command opens at the start of the text or of any word, so a skill
+// can be named mid-sentence; a "/" inside a word (a path, "and/or") is prose.
+export const SLASH_TRIGGER_RE = /(?:^|\s)\/([\w:.-]*)$/;
+export const SLASH_QUERY_RE = /^[\w:.-]*/;
+
+/** The slash command being typed at the caret: where its "/" sits and the query after it, or null. */
+export function slashQueryAt(textBeforeCaret: string): { start: number; query: string } | null {
+  const m = textBeforeCaret.match(SLASH_TRIGGER_RE);
+  return m ? { start: textBeforeCaret.length - m[1].length - 1, query: m[1].toLowerCase() } : null;
+}
+
+/** The skills a typed query names, in list order. */
+export function matchSlashSkills(skills: SkillItem[] | undefined, query: string, limit = 30): SkillItem[] {
+  return (skills ?? []).filter((s) => s.name.toLowerCase().includes(query)).slice(0, limit);
+}
+
+/** The text with the slash token at `start` replaced by the picked command (its whole token, so a mid-word pick leaves no tail), and where the caret lands. */
+export function applySlashSkill(text: string, start: number, name: string): { text: string; caret: number } {
+  const before = text.slice(0, start);
+  const after = text.slice(start + 1).replace(SLASH_QUERY_RE, "").replace(/^ /, "");
+  const inserted = `/${name} `;
+  return { text: before + inserted + after, caret: before.length + inserted.length };
+}

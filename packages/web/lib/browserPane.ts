@@ -96,6 +96,35 @@ export function isLoopbackUrl(url: string): boolean {
   }
 }
 
+/**
+ * A loopback address another machine serves, reached through a port on this
+ * one (the laptop daemon's SSH forward to a cloud host, cli/cloud/hostForward):
+ * the same path on `localhost:<local>`. Null when the address has no port to
+ * forward (http on 80 is never a dev server's).
+ */
+export function forwardedLoopbackUrl(url: string, localPort: number): string | null {
+  try {
+    const u = new URL(url);
+    if (!isLoopbackHost(u.hostname) || !u.port) return null;
+    u.hostname = "localhost";
+    u.port = String(localPort);
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/** The address a forwarded page reports, said in the serving machine's terms. */
+export function unforwardedUrl(live: string, forwarded: string, original: string): string {
+  try {
+    const from = new URL(forwarded).origin;
+    if (!live.startsWith(from)) return live;
+    return new URL(original).origin + live.slice(from.length);
+  } catch {
+    return live;
+  }
+}
+
 /** True when this URL can only be served by this machine or this network. */
 export function isPrivateNetworkUrl(url: string): boolean {
   try {
