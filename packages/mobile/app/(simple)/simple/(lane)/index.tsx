@@ -63,8 +63,8 @@ export default function SimpleHome() {
                   paddingHorizontal: 14,
                   borderRadius: 999,
                   borderWidth: 1,
-                  borderColor: pressed ? c.tideWash2 : c.line,
-                  backgroundColor: pressed ? c.tideWash : c.sheet,
+                  borderColor: pressed ? c.lineStrong : c.line,
+                  backgroundColor: pressed ? c.hover : c.sheet,
                   transform: [{ scale: pressed ? 0.97 : 1 }],
                 })}
               >

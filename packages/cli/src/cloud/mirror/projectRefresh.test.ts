@@ -352,7 +352,9 @@ test("registrations follow stable host identity and retirement never recreates a
   const file = path.join(local, "registry.json");
   fs.writeFileSync(file, JSON.stringify([{ host: "u@old.invalid", sourceRoot, targetRoot }]));
   const moved = { ...host, address: "new.invalid" };
-  await registerProjectContext(moved, sourceRoot, targetRoot, { file, hostId: "i-123", previousAddress: host.address });
+  expect(await registerProjectContext(moved, sourceRoot, targetRoot, { file, hostId: "i-123", previousAddress: host.address })).toBe(true);
+  // Registering what is already there changes nothing, so a cloud prepare skips its second mirror push.
+  expect(await registerProjectContext(moved, sourceRoot, targetRoot, { file, hostId: "i-123" })).toBe(false);
   expect(readProjectRegistrations(moved, file, "i-123")[0].hostId).toBe("i-123");
   expect(readProjectRegistrations(moved, file, "i-123")[0].host).toBe("u@new.invalid");
   const rows = readProjectRegistrations(moved, file, "i-123");

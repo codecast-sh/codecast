@@ -1,21 +1,25 @@
-// The hosted assistant's Calendar tools (plan pl-840): list events, find free
-// time, create and update events on the person's primary Google calendar,
-// over the Calendar REST API with the owner's token (google.ts). Listing and
-// finding are risk "read"; creating and updating are "write" and pass the
-// gate. Event titles and descriptions are written by whoever sent the
-// invitation, so every tool that returns them declares source "calendar".
+// The hosted assistant's calendar tools (plan pl-840): list events, find free
+// time, create and update events on the person's primary calendar. The tools
+// are written against a Calendar, the few verbs any calendar engine offers,
+// with events in Google Calendar's event shape (the shape the family's
+// calendars already sync in). googleCalendar.ts is today's Calendar; the spec
+// moves calendars to Whisk (ct-57102), which is another Calendar, not a
+// rewrite of these tools.
+//
+// Listing and finding are risk "read"; creating and updating are "write" and
+// pass the gate. Event titles and descriptions are written by whoever sent
+// the invitation, so every tool that returns them declares source "calendar".
 import { defineTool, Type, type Tool } from "@platform/agent";
-import { CALENDAR_EVENTS_SCOPE } from "../../googleOAuth";
-import { googleCall, type GoogleDeps } from "./google";
 import { dayBounds, wallClockAt } from "../../lib/teamDay";
-
-export const CALENDAR_API = "https://www.googleapis.com/calendar/v3/calendars/primary";
 
 /** The longest window find_free_time searches. */
 export const FREE_TIME_MAX_DAYS = 14;
 const SLOT_STEP_MS = 15 * 60 * 1000;
 
-type EventTime = { dateTime?: string; date?: string; timeZone?: string };
+/** An event edge: `dateTime` for a timed event, `date` for an all-day one.
+ *  A patch clears `date` with null when it makes an all-day edge timed, since
+ *  a patch merges into the stored edge rather than replacing it. */
+type EventTime = { dateTime?: string; date?: string | null; timeZone?: string };
 export type CalendarEvent = {
   id: string;
   status?: string;
@@ -29,9 +33,21 @@ export type CalendarEvent = {
   organizer?: { email?: string; self?: boolean };
   htmlLink?: string;
 };
-type EventList = { items?: CalendarEvent[]; timeZone?: string; nextPageToken?: string };
-/** Events read for a window, and whether Google holds more past the last one read. */
-type EventRead = { items: CalendarEvent[]; timeZone?: string; more: boolean };
+/** Events read for a window, and whether the calendar holds more past the last one read. */
+export type EventRead = { items: CalendarEvent[]; timeZone?: string; more: boolean };
+
+/** The verbs the calendar tools need from a calendar engine, on the owner's primary calendar. */
+export interface Calendar {
+  /** Events in a window (single instances of repeating ones), oldest first,
+   *  reading up to `pages` pages of `pageSize`. */
+  events(from: number, to: number, opts: { q?: string; pageSize: number; pages: number }, signal?: AbortSignal): Promise<EventRead>;
+  event(id: string, signal?: AbortSignal): Promise<CalendarEvent>;
+  /** Creates the event under its own `id`. A create that already landed
+   *  under that id (an earlier attempt of the same call) returns that event. */
+  insert(event: Partial<CalendarEvent> & { id: string }, notify: boolean, signal?: AbortSignal): Promise<CalendarEvent>;
+  /** Changes only the fields given. */
+  patch(id: string, patch: Record<string, unknown>, notify: boolean, signal?: AbortSignal): Promise<CalendarEvent>;
+}
 
 /** A time the model gave, which must carry its offset so it names one instant. */
 export function instant(value: string, what: string): number {
@@ -95,37 +111,6 @@ function describeEvent(e: CalendarEvent, range: (a: number, b: number) => string
   ].join("\n");
 }
 
-/** Events in a window, oldest first, following Google's pages up to `pages`
- *  of `pageSize`. `more` says the window holds events past the last one read. */
-async function listEvents(
-  deps: GoogleDeps,
-  from: number,
-  to: number,
-  opts: { signal?: AbortSignal; q?: string; pageSize: number; pages: number },
-): Promise<EventRead> {
-  const items: CalendarEvent[] = [];
-  let timeZone: string | undefined;
-  let pageToken: string | undefined;
-  for (let page = 0; page < opts.pages; page++) {
-    const list = await googleCall<EventList>(deps, CALENDAR_EVENTS_SCOPE, `${CALENDAR_API}/events`, {
-      query: {
-        timeMin: new Date(from).toISOString(),
-        timeMax: new Date(to).toISOString(),
-        singleEvents: true,
-        orderBy: "startTime",
-        maxResults: opts.pageSize,
-        q: opts.q,
-        pageToken,
-      },
-    }, opts.signal);
-    items.push(...(list.items ?? []));
-    timeZone ??= list.timeZone;
-    pageToken = list.nextPageToken;
-    if (!pageToken) break;
-  }
-  return { items, timeZone, more: !!pageToken };
-}
-
 /** How many events list_events reads and shows. */
 export const LIST_EVENTS_MAX = 100;
 /** How many pages of 250 find_free_time reads before it shortens its search. */
@@ -183,7 +168,7 @@ const hhmm = (value: string, what: string) => {
 
 const Iso = (description: string) => Type.String({ description: `${description} ISO 8601 with its UTC offset, like 2026-10-06T10:00:00-07:00.` });
 
-export function listEventsTool(deps: GoogleDeps): Tool {
+export function listEventsTool(calendar: Calendar): Tool {
   return defineTool({
     name: "list_events",
     label: "Check the calendar",
@@ -196,7 +181,7 @@ export function listEventsTool(deps: GoogleDeps): Tool {
     risk: "read",
     source: "calendar",
     run: async ({ from, to, query }, { signal }) => {
-      const list = await listEvents(deps, instant(from, "from"), instant(to, "to"), { signal, q: query, pageSize: LIST_EVENTS_MAX, pages: 1 });
+      const list = await calendar.events(instant(from, "from"), instant(to, "to"), { q: query, pageSize: LIST_EVENTS_MAX, pages: 1 }, signal);
       const events = list.items.filter((e) => e.status !== "cancelled");
       const { zone, range } = formatterFor(list.timeZone);
       const more = list.more ? `\n\nMore events follow the last one shown. Ask for a later or shorter window to see them.` : "";
@@ -206,7 +191,7 @@ export function listEventsTool(deps: GoogleDeps): Tool {
   });
 }
 
-export function findFreeTimeTool(deps: GoogleDeps): Tool {
+export function findFreeTimeTool(calendar: Calendar): Tool {
   return defineTool({
     name: "find_free_time",
     label: "Find free time",
@@ -226,7 +211,7 @@ export function findFreeTimeTool(deps: GoogleDeps): Tool {
       const start = instant(from, "from");
       const asked = Math.min(instant(to, "to"), start + FREE_TIME_MAX_DAYS * 24 * 3600 * 1000);
       if (asked <= start) throw new Error("to must come after from");
-      const list = await listEvents(deps, start, asked, { signal, pageSize: 250, pages: FREE_TIME_MAX_PAGES });
+      const list = await calendar.events(start, asked, { pageSize: 250, pages: FREE_TIME_MAX_PAGES }, signal);
       const { zone, range, at } = formatterFor(list.timeZone);
       // Events past the last page are unread, so time after the last event
       // read cannot be called free: the search stops where reading stopped.
@@ -252,9 +237,10 @@ export function findFreeTimeTool(deps: GoogleDeps): Tool {
   });
 }
 
-/** A Calendar event id from the model's call id, so a create that lands twice
- *  (a crash after Google accepted it) is one event: Google refuses the second
- *  insert of an id with 409. Event ids take base32hex characters, which hex is. */
+/** An event id from the model's call id, so a create that lands twice (a
+ *  crash after the calendar accepted it) is one event: Calendar.insert answers
+ *  a repeated id with the event it already made. Google's event ids take
+ *  base32hex characters, which hex is. */
 export async function eventIdFor(callId: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`codecast-assistant:${callId}`));
   return `cc${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 40)}`;
@@ -262,11 +248,11 @@ export async function eventIdFor(callId: string): Promise<string> {
 
 const Attendees = Type.Array(Type.String({ description: "An email address." }), { maxItems: 50 });
 
-export function createEventTool(deps: GoogleDeps): Tool {
+export function createEventTool(calendar: Calendar): Tool {
   return defineTool({
     name: "create_event",
     label: "Add to the calendar",
-    description: "Create an event on the person's primary Google calendar. With attendees and notify, Google emails them an invitation.",
+    description: "Create an event on the person's primary calendar. With attendees and notify, they are emailed an invitation.",
     parameters: Type.Object({
       title: Type.String(),
       start: Iso("When it starts."),
@@ -279,37 +265,53 @@ export function createEventTool(deps: GoogleDeps): Tool {
     risk: "write",
     run: async ({ title, start, end, description, location, attendees, notify }, { callId, signal }) => {
       if (instant(end, "end") <= instant(start, "start")) throw new Error("end must come after start");
-      const id = await eventIdFor(callId);
-      let event: CalendarEvent;
-      try {
-        event = await googleCall<CalendarEvent>(deps, CALENDAR_EVENTS_SCOPE, `${CALENDAR_API}/events`, {
-          method: "POST",
-          query: { sendUpdates: notify ? "all" : "none" },
-          body: {
-            id,
-            summary: title,
-            start: { dateTime: start },
-            end: { dateTime: end },
-            ...(description ? { description } : {}),
-            ...(location ? { location } : {}),
-            ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
-          },
-        }, signal);
-      } catch (error) {
-        // Already made by an earlier attempt of this same call.
-        if (!(error instanceof Error && error.message.startsWith("Google answered 409"))) throw error;
-        event = await googleCall<CalendarEvent>(deps, CALENDAR_EVENTS_SCOPE, `${CALENDAR_API}/events/${id}`, {}, signal);
-      }
+      const event = await calendar.insert({
+        id: await eventIdFor(callId),
+        summary: title,
+        start: { dateTime: start },
+        end: { dateTime: end },
+        ...(description ? { description } : {}),
+        ...(location ? { location } : {}),
+        ...(attendees?.length ? { attendees: attendees.map((email) => ({ email })) } : {}),
+      }, !!notify, signal);
       return { content: `Added "${title}" (event ${event.id}).`, details: { event_id: event.id, link: event.htmlLink } };
     },
   });
 }
 
-export function updateEventTool(deps: GoogleDeps): Tool {
+/** The new edges for an event whose start, end or both change. A new start
+ *  alone moves the event and keeps its length; a new end alone keeps its
+ *  start. Edges keep the event's own time zone, which a repeating event
+ *  needs. An all-day event changes time only with both edges given. */
+export function movedEdges(current: CalendarEvent, start: string | undefined, end: string | undefined): { start?: EventTime; end?: EventTime } {
+  const edge = (dateTime: string, was: EventTime | undefined): EventTime => ({
+    dateTime,
+    ...(was?.date ? { date: null } : {}),
+    ...(was?.timeZone ? { timeZone: was.timeZone } : {}),
+  });
+  const s = start !== undefined ? instant(start, "start") : undefined;
+  const e = end !== undefined ? instant(end, "end") : undefined;
+  if (s !== undefined && e !== undefined) {
+    if (e <= s) throw new Error("end must come after start");
+    return { start: edge(start!, current.start), end: edge(end!, current.end) };
+  }
+  if (!current.start?.dateTime || !current.end?.dateTime) {
+    throw new Error("That is an all-day event: give both start and end to change its time");
+  }
+  const wasStart = Date.parse(current.start.dateTime);
+  const wasEnd = Date.parse(current.end.dateTime);
+  if (s !== undefined) return { start: edge(start!, current.start), end: edge(new Date(s + (wasEnd - wasStart)).toISOString(), current.end) };
+  if (e! <= wasStart) throw new Error(`end must come after the event's start, ${current.start.dateTime}`);
+  return { end: edge(end!, current.end) };
+}
+
+export function updateEventTool(calendar: Calendar): Tool {
   return defineTool({
     name: "update_event",
     label: "Change an event",
-    description: "Change an event on the person's primary Google calendar: its title, time, notes, place or attendees. Fields left out stay as they are.",
+    description:
+      "Change an event on the person's primary calendar: its title, time, notes, place or attendees. Fields left out stay as they are. " +
+      "A new start alone moves the event and keeps its length; a new end alone keeps its start. An all-day event needs both.",
     parameters: Type.Object({
       event_id: Type.String(),
       title: Type.Optional(Type.String()),
@@ -322,38 +324,35 @@ export function updateEventTool(deps: GoogleDeps): Tool {
       notify: Type.Optional(Type.Boolean({ description: "Email the attendees about the change. Off by default." })),
     }),
     risk: "write",
-    // The result names the event as Google holds it, a title the inviter may have written.
+    // The result names the event as the calendar holds it, a title the inviter may have written.
     source: "calendar",
     run: async ({ event_id, title, start, end, description, location, add_attendees, remove_attendees, notify }, { signal }) => {
-      if (start) instant(start, "start");
-      if (end) instant(end, "end");
-      const url = `${CALENDAR_API}/events/${encodeURIComponent(event_id)}`;
+      // Check the times before anything is read, so a malformed one fails alone.
+      if (start !== undefined) instant(start, "start");
+      if (end !== undefined) instant(end, "end");
+      const retimed = start !== undefined || end !== undefined;
+      const reattended = !!(add_attendees?.length || remove_attendees?.length);
+      const current = retimed || reattended ? await calendar.event(event_id, signal) : undefined;
       const patch: Record<string, unknown> = {
         ...(title !== undefined ? { summary: title } : {}),
-        ...(start ? { start: { dateTime: start } } : {}),
-        ...(end ? { end: { dateTime: end } } : {}),
+        ...(retimed ? movedEdges(current!, start, end) : {}),
         ...(description !== undefined ? { description } : {}),
         ...(location !== undefined ? { location } : {}),
       };
-      if (add_attendees?.length || remove_attendees?.length) {
-        const current = await googleCall<CalendarEvent>(deps, CALENDAR_EVENTS_SCOPE, url, {}, signal);
+      if (reattended) {
         const drop = new Set((remove_attendees ?? []).map((a) => a.toLowerCase()));
-        const kept = (current.attendees ?? []).filter((a) => !drop.has(a.email.toLowerCase()));
+        const kept = (current!.attendees ?? []).filter((a) => !drop.has(a.email.toLowerCase()));
         const have = new Set(kept.map((a) => a.email.toLowerCase()));
         patch.attendees = [...kept, ...(add_attendees ?? []).filter((a) => !have.has(a.toLowerCase())).map((email) => ({ email }))];
       }
       if (Object.keys(patch).length === 0) throw new Error("Nothing to change");
-      const event = await googleCall<CalendarEvent>(deps, CALENDAR_EVENTS_SCOPE, url, {
-        method: "PATCH",
-        query: { sendUpdates: notify ? "all" : "none" },
-        body: patch,
-      }, signal);
+      const event = await calendar.patch(event_id, patch, !!notify, signal);
       return { content: `Updated "${event.summary ?? event_id}" (event ${event.id}).`, details: { event_id: event.id } };
     },
   });
 }
 
-/** The Calendar tools, when the connection allows calendar events. */
-export function calendarTools(deps: GoogleDeps): Tool[] {
-  return [listEventsTool(deps), findFreeTimeTool(deps), createEventTool(deps), updateEventTool(deps)];
+/** The calendar tools over any Calendar. */
+export function calendarTools(calendar: Calendar): Tool[] {
+  return [listEventsTool(calendar), findFreeTimeTool(calendar), createEventTool(calendar), updateEventTool(calendar)];
 }

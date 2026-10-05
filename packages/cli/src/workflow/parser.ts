@@ -392,8 +392,10 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
 // run records exactly which graph it executed. Whitespace, comments and
 // attribute order in the source do not change it; any node, edge or graph
 // attribute does. Taken before the runner expands $vars into the goal.
+const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+
 export function graphHash(graph: WorkflowGraph): string {
-  const sorted = (o: object) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)));
+  const sorted = sortedAttrs;
   const { nodes, edges, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
@@ -401,4 +403,13 @@ export function graphHash(graph: WorkflowGraph): string {
     edges: edges.map(sorted),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
+}
+
+// Each station's own hash (LE14): the node as parsed with the edges leaving
+// it, so two versions of a graph say which stations changed (a prompt edit,
+// a new route) rather than only that something did.
+export function graphNodeHashes(graph: WorkflowGraph): Array<{ id: string; h: string }> {
+  return [...graph.nodes.values()]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((n) => ({ id: n.id, h: createHash("sha256").update(JSON.stringify({ node: sortedAttrs(n), out: graph.edges.filter((e) => e.from === n.id).map(sortedAttrs) })).digest("hex").slice(0, 8) }));
 }

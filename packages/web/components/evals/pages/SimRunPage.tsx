@@ -5,19 +5,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangesResponse } from "@codecast/shared/contracts/evalsApi";
-import { EmptyState } from "../../EmptyState";
-import { EVALS_POLL_MS, useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { useTabVisible } from "../../../hooks/usePagePresence";
-import { useEvalsStore } from "../../../store/evalsStore";
+import { EVALS_POLL_MS, useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
+import { useEvalsHost } from "../host";
 import { SimRunView, type ShrinkState } from "../SimRunView";
 import { jobLive, jobState, shownJobState } from "../simJobState";
 
 export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run" }> }) {
+  const host = useEvalsHost();
+  const { EmptyState } = host.ui;
+  const { call } = useEvalsClient();
   const res = useEvalsResource("GET /sim/run/:session/:run", { params: { session: view.session, run: view.run } });
   const [shrink, setShrink] = useState<ShrinkState>({ state: "idle" });
   const jobId = useRef<string | null>(null);
-  const visible = useTabVisible();
+  const visible = host.useVisible();
   const { reload } = res;
 
   // A reload forgets this page's job; the run's newest shrink job says how it went (or that it still runs).
@@ -45,20 +46,20 @@ export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run
   const onShrink = useCallback(async () => {
     setShrink({ state: "starting" });
     try {
-      const { job } = await useEvalsStore.getState().call("POST /sim/shrink", { body: { session: view.session, run: view.run } });
+      const { job } = await call("POST /sim/shrink", { body: { session: view.session, run: view.run } });
       jobId.current = job;
       setShrink({ state: "running", job: null });
     } catch (e) {
       setShrink({ state: "failed", error: e instanceof Error ? e.message : String(e) });
     }
-  }, [view.session, view.run]);
+  }, [call, view.session, view.run]);
 
   if (!res.data) {
     if (res.status === 404)
       return <EmptyState title="No such Multiplayer sim run" description={`Session ${view.session} has no run folder ${view.run}. Older sessions are pruned when they hold no failure.`} action={{ label: "Open the Multiplayer sim", href: evalsHref.sim() }} />;
     if (res.error) return <EmptyState title="This Multiplayer sim run did not load" description={res.error} />;
     return (
-      <div className="ev-page text-[12px] ev-quiet" data-evals-page="sim-run" data-evals-loading>
+      <div className="ev-page ev-note" data-evals-page="sim-run" data-evals-loading>
         Reading the run's deliveries...
       </div>
     );

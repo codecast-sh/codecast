@@ -21,7 +21,7 @@ import { DecisionOptionList } from "./DecisionOptionList";
 import { AskingSession, CategoryNote, HolderLine, PersonChip } from "./DecisionParties";
 import { GateRunChip } from "./DecisionCompactCard";
 import { OptionPages } from "./OptionPages";
-import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
+import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView, answererNameOf, cardAnswerIndexes, cardOutcome } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
 import { chosenOptions, decisionWaitLabel, ladderRecommendation } from "../../lib/decisionLinks";
 import "./decisions.css";
@@ -108,13 +108,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
 
   // A settled change card says what happened once: the verdict, who gave it
   // and when, as the card's last line.
-  const answererName = !answeredBy
-    ? "a person"
-    : answeredBy.kind === "policy"
-      ? "policy"
-      : answeredBy.kind === "role"
-        ? detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === answeredBy.id)?.role?.name ?? "a role"
-        : answeredPerson?.name ?? (answeredBy.id === meId ? "you" : "a person");
+  const answererName = answererNameOf(detail, meId);
   const outcome = decision.card ? cardOutcome(decision, answererName, now) : null;
 
   // Reopen is the people's (asked_users): gate on the detail's people set, not

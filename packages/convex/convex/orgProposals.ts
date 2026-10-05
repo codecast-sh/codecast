@@ -1,4 +1,4 @@
-import { openOrgBatch, orgBatchHead, type OrgBatchHead } from "./lib/orgChangeLog";
+import { openOrgBatch, orgBatchHead, takeOrgRows, type OrgBatchHead } from "./lib/orgChangeLog";
 import { mutation, query, internalMutation } from "./functions";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -17,9 +17,13 @@ import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
 import { performProvisionRole, rolesInBoundary } from "./orgRoles";
 import { setInboxStatus } from "./sessionDecisions";
 import {
+  andList,
+  changeSentence,
   describeOrgChange, orgChangeDependencies, orgChangeTakesOver,
   editedOrgChange,
+  proposalReplyText,
   isOrgChangeDecidable,
+  isOrgQuietChange,
   orderOrgChanges,
   orgChangeError,
   orgChangeKey,
@@ -33,11 +37,15 @@ import {
   withAboutChange,
   type OrgChange,
   type OrgChangeRevision,
+  type OrgProposalReply,
   type OrgProposalSpec,
+  type OrgReplyItem,
+  type OrgReplyVerdict,
   type OrgReviseOp,
   type OrgRevision,
   type OrgVerdictSeen,
 } from "@codecast/shared/contracts/orgProposal";
+import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
 // to the chart with a rationale each, authored by an agent or a person and
@@ -389,6 +397,9 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
     const sibling = (await changesOf(ctx, proposal._id)).find((c) => c.change.kind === "adopt" && c.change.handle.trim().replace(/^@/, "").toLowerCase() === handle && (decidable(c) || c.status === "accepted"));
     if (sibling && sibling.change.kind === "adopt") awaitingAdopt = sibling.change.conversation;
   }
+  // The log hands over the rows this apply writes, from here on: an accept
+  // all runs several changes on one ctx and shares one batch between them.
+  takeOrgRows(ctx);
   let result: ApplyResult;
   try {
     result = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt, evidence: change.evidence });
@@ -397,7 +408,11 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   }
   const ok = result.status === "applied";
   const note = result.status === "applied" || result.status === "skipped" ? result.note : result.status === "error" ? result.error : "not applied";
-  await ctx.db.patch(change._id, { status: ok ? "applied" : "failed", applied_note: note.slice(0, 500), applied_at: now });
+  // The stamp (S39): what this accept moved, so the decided card still shows
+  // before and after once the record moves on. A limit is never a field a
+  // person reads (S23.2), and an apply that moved nothing wrote no row.
+  const applied_diff = ok && !isOrgQuietChange(merged) ? orgAppliedDiff(takeOrgRows(ctx)) : undefined;
+  await ctx.db.patch(change._id, { status: ok ? "applied" : "failed", applied_note: note.slice(0, 500), applied_at: now, ...(applied_diff ? { applied_diff } : {}) });
   return { change_id: change._id, seq: change.seq, status: ok ? "applied" : "failed", note, role: ok && "role" in result ? result.role : undefined, line: describeOrgChange(merged) };
 }
 
@@ -779,7 +794,7 @@ export const PROPOSAL_MESSAGE_TAG = "proposal-message";
 export function formatProposalMessage(o: { short_id: string; title: string; change: { seq: number; line: string } | null; ask?: { index: number; title: string } | null; from: string; body: string }): string {
   const q = (x: string) => x.replace(/"/g, "'");
   const inner = o.change ? withAboutChange(o.body, o.short_id, o.change.seq, o.change.line) : o.ask ? withAboutAsk(o.body, o.short_id, o.ask.index, o.ask.title) : `About ${o.short_id} ("${q(o.title)}"):\n\n${o.body}`;
-  const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`. Accepting stays the person's.)`;
+  const tail = `(Reply here; the org page shows this thread beside ${o.short_id}. To change the proposal run \`cast org revise ${o.short_id} --remove <n>\`, \`--amend <n> --edits '{...}'\` or \`--add change.json\`. Applying stays the person's.)`;
   const attrs = `proposal="${o.short_id}"${o.change ? ` change="${o.change.seq}"` : ""}${o.ask ? ` ask="${o.ask.index}"` : ""} from="${q(o.from)}"`;
   return `<${PROPOSAL_MESSAGE_TAG} ${attrs}>\n${inner}\n\n${tail}\n</${PROPOSAL_MESSAGE_TAG}>`;
 }
@@ -799,7 +814,6 @@ export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { 
   if (!body) throw new Error("Message body is empty");
   const thread = await threadOf(ctx, proposal);
   if (!thread) throw new Error(`${proposal.short_id} was posted by a person, so there is no agent to talk to about it`);
-  if (!(await canSendProductMessage(ctx, userId, thread))) throw new Error(`You cannot send into the thread of ${proposal.short_id} (${thread.short_id ?? String(thread._id)})`);
   let change: { seq: number; line: string } | null = null;
   if (args.change !== undefined) {
     const row = (await changesOf(ctx, proposal._id)).find((c) => c.seq === args.change);
@@ -814,14 +828,150 @@ export async function performSayInThread(ctx: Ctx, userId: Id<"users">, args: { 
     if (!found) throw new Error(`${proposal.short_id} has no ask ${args.ask}`);
     ask = { index: args.ask, title: found.title };
   }
+  const sent = await sendIntoThread(ctx, userId, proposal, thread, { change, ask, body, client_id: args.client_id });
+  return { ...sent, proposal: proposal.short_id, change: change?.seq, ask: ask?.index };
+}
+
+/**
+ * The one way a person's words enter a proposal's thread: the say above and
+ * a reply's message (performReply) both come through here, so the agent reads
+ * the same wrapper, the same sender and the same rail whichever surface the
+ * words left from. The caller has resolved the thread and decided what a
+ * missing one means (say refuses; a reply applies and sends nothing).
+ */
+async function sendIntoThread(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, thread: any, o: { change: { seq: number; line: string } | null; ask: { index: number; title: string } | null; body: string; client_id?: string }): Promise<{ message_id: Id<"pending_messages">; thread: { conversation_id: string; short_id?: string; title?: string } }> {
+  if (!(await canSendProductMessage(ctx, userId, thread))) throw new Error(`You cannot send into the thread of ${proposal.short_id} (${thread.short_id ?? String(thread._id)})`);
   const from = (await resolveActor(ctx as any, userId, null)).name ?? "A person";
-  const content = formatProposalMessage({ short_id: proposal.short_id, title: proposal.title, change, ask, from, body });
+  const content = formatProposalMessage({ short_id: proposal.short_id, title: proposal.title, change: o.change, ask: o.ask, from, body: o.body });
   const message_id = await enqueuePendingMessage(ctx, thread, userId, {
     content,
-    client_id: args.client_id ?? `proposal-message:${proposal._id}:${Date.now()}`,
+    client_id: o.client_id ?? `proposal-message:${proposal._id}:${Date.now()}`,
     human: true,
   });
-  return { message_id, proposal: proposal.short_id, change: change?.seq, ask: ask?.index, thread: { conversation_id: String(thread._id), short_id: thread.short_id ?? undefined, title: thread.title ?? undefined } };
+  return { message_id, thread: { conversation_id: String(thread._id), short_id: thread.short_id ?? undefined, title: thread.title ?? undefined } };
+}
+
+// ── Reply (S39): a card answers the agent ───────────────────────────────────
+
+/** One answer as the mutation takes it: a verdict over the changes of one
+ *  card, with the person's words. `seqs` names the drawn changes, the ones
+ *  the words name; `change_ids` names the card's whole set, quiet riders (a
+ *  limit beside a trust change) and carried task rows included, which have
+ *  no place in the words. The verdict acts on the union of both. `seqs`
+ *  empty with no `change_ids` is a note on the whole proposal. */
+export type OrgReplyArg = { verdict: OrgReplyVerdict; seqs: number[]; change_ids?: string[]; text?: string };
+
+/**
+ * A person's answers to a proposal, sent together (S39). Approvals are
+ * applied as accept is (the accept all core narrowed to their seqs: apply
+ * order, one log entry, the stamp, the same chunks and continuation), a
+ * rejection skips its changes and keeps the words on the row, and a note
+ * keeps the words and decides nothing, so the card still waits; a note that
+ * names no change is kept on the proposal row (`reply`). Human only,
+ * like every verdict, and `seen` is read once for the whole reply: a
+ * proposal the author revised under the reader is refused whole and nothing
+ * is written. `say` is for a surface with no composer in reach: the answers
+ * are written in the shared words (proposalReplyText) and sent into the
+ * proposal's thread as one message, through the same path as say; a
+ * proposal with no thread (a person posted it) applies the verdicts and
+ * tells nobody. A change the person already decided is left as decided.
+ */
+export async function performReply(
+  ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> },
+  userId: Id<"users">,
+  args: { proposal: string; items: OrgReplyArg[]; seen?: OrgVerdictSeen; say?: { body?: string; client_id?: string }; leave_sessions?: boolean; from_session?: string; api_token?: string; provision?: boolean },
+): Promise<any> {
+  await refuseUnlessHumanDecider(ctx, args);
+  const proposal = await findProposal(ctx, args.proposal);
+  if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
+  await requireAdmin(ctx, userId, proposal);
+  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
+  const rows = await changesOf(ctx, proposal._id);
+  refuseIfRevised(proposal, rows, args.seen);
+
+  // Every item is checked before the first write, so a bad list writes nothing.
+  // An item's rows are the union of what its seqs and its change_ids name,
+  // each row once; a row named by two items is answered twice and refused.
+  const bySeq = new Map<number, ChangeRow>(rows.map((c) => [c.seq, c]));
+  const byId = new Map<string, ChangeRow>(rows.map((c) => [String(c._id), c]));
+  const named = new Set<string>();
+  const rowsOf: ChangeRow[][] = [];
+  for (const [i, item] of (args.items ?? []).entries()) {
+    if (item.verdict !== "approve" && item.verdict !== "reject" && item.verdict !== "note") throw new Error(`items[${i}]: verdict is one of approve, reject, note`);
+    const mine = new Map<string, ChangeRow>();
+    for (const seq of item.seqs) {
+      const row = bySeq.get(seq);
+      if (!row || row.status === "removed") throw new Error(`items[${i}]: ${proposal.short_id}#${seq} does not exist`);
+      mine.set(String(row._id), row);
+    }
+    for (const id of item.change_ids ?? []) {
+      const row = byId.get(id);
+      if (!row || row.status === "removed") throw new Error(`items[${i}]: change ${id} is not in ${proposal.short_id}`);
+      mine.set(id, row);
+    }
+    if (!mine.size && item.verdict !== "note") throw new Error(`items[${i}]: an answer with no changes is a note on the whole proposal; ${item.verdict} names its changes`);
+    for (const [id, row] of mine) {
+      if (named.has(id)) throw new Error(`items[${i}]: ${proposal.short_id}#${row.seq} is answered twice`);
+      named.add(id);
+    }
+    rowsOf.push([...mine.values()].sort((a, b) => a.seq - b.seq));
+  }
+
+  const now = Date.now();
+  const provision = args.provision ?? true;
+  const stamp = (text: string | undefined, verdict: OrgReplyVerdict) => ({ verdict, ...(text?.trim() ? { text: text.trim() } : {}), at: now, by: userId });
+  const results: any[] = [];
+  let noted = 0;
+  const approved: number[] = [];
+  for (const [i, item] of (args.items ?? []).entries()) {
+    // A note that names no change is on the whole proposal: its words live
+    // on the proposal row, so the ledger's closing row says them after the
+    // send. Wordless, it says nothing and writes nothing.
+    if (item.verdict === "note" && !rowsOf[i].length) {
+      if (!item.text?.trim()) continue;
+      await ctx.db.patch(proposal._id, { reply: stamp(item.text, "note") });
+      noted++;
+      continue;
+    }
+    for (const row of rowsOf[i]) {
+      const seq = row.seq;
+      if (item.verdict === "note") {
+        await ctx.db.patch(row._id, { reply: stamp(item.text, "note") });
+        noted++;
+        continue;
+      }
+      if (!decidable(row)) continue;
+      if (item.verdict === "reject") {
+        await ctx.db.patch(row._id, { reply: stamp(item.text, "reject") });
+        results.push(await skipOne(ctx, userId, proposal, row, now, provision));
+      } else {
+        if (item.text?.trim()) await ctx.db.patch(row._id, { reply: stamp(item.text, "approve") });
+        approved.push(seq);
+      }
+    }
+  }
+  let applied = 0, failed = 0, remaining = 0, resolved = false;
+  if (approved.length) {
+    const out = await performAcceptAll(ctx, userId, { proposal: proposal.short_id, seqs: approved, provision, continuation: true, leave_sessions: args.leave_sessions, log_head: { door: "proposal", gesture: "reply", key: `proposal:${proposal._id}:reply:${now}`, proposal: { id: proposal._id, short_id: proposal.short_id, ...(proposal.title ? { title: proposal.title } : {}) } } });
+    results.push(...out.results);
+    ({ applied, failed, remaining, resolved } = out);
+  } else {
+    await ctx.db.patch(proposal._id, { updated_at: now });
+    resolved = await resolveIfDone(ctx, proposal, now);
+  }
+  const skipped = results.filter((r) => r.status === "skipped").length;
+
+  let message_id: Id<"pending_messages"> | undefined;
+  if (args.say) {
+    const thread = await threadOf(ctx, proposal);
+    const body = (args.say.body ?? "").trim();
+    const items: OrgReplyItem[] = (args.items ?? []).map((item) => ({ verdict: item.verdict, seqs: item.seqs, ...(item.text?.trim() ? { text: item.text.trim() } : {}), line: andList(item.seqs.map((seq) => changeSentence(bySeq.get(seq).change))) }));
+    if (body) items.push({ verdict: "note", seqs: [], text: body, line: "" });
+    const reply: OrgProposalReply = { proposal: proposal.short_id, title: proposal.title, items };
+    const text = proposalReplyText(reply);
+    if (thread && text) message_id = (await sendIntoThread(ctx, userId, proposal, thread, { change: null, ask: null, body: text, client_id: args.say.client_id })).message_id;
+  }
+  return { proposal: proposal.short_id, results, applied, failed, skipped, noted, remaining, resolved, ...(message_id ? { message_id } : {}) };
 }
 
 // ── Functions ───────────────────────────────────────────────────────────────
@@ -998,6 +1148,23 @@ export const revise = mutation({
 export const say = mutation({
   args: { api_token: v.optional(v.string()), proposal: v.string(), change: v.optional(v.number()), ask: v.optional(v.number()), body: v.string(), client_id: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performSayInThread(ctx, await requireCaller(ctx, api_token, undefined), args),
+});
+
+/** A person's answers to a proposal, sent together (S39): approvals applied,
+ *  rejections skipped with the words kept, notes kept; with `say`, one
+ *  message into the thread. `leave_sessions` is the person's one edit on
+ *  what they approve (R1). */
+export const reply = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    from_session: v.optional(v.string()),
+    proposal: v.string(),
+    items: v.array(v.object({ verdict: v.union(v.literal("approve"), v.literal("reject"), v.literal("note")), seqs: v.array(v.number()), change_ids: v.optional(v.array(v.string())), text: v.optional(v.string()) })),
+    seen: verdictSeen,
+    say: v.optional(v.object({ body: v.optional(v.string()), client_id: v.optional(v.string()) })),
+    leave_sessions: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { api_token, ...args }) => performReply(ctx, await requireCaller(ctx, api_token, undefined), { ...args, api_token }),
 });
 
 /** One sweep for S24: withdraw the queue cards proposals filed before

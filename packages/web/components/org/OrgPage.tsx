@@ -38,13 +38,17 @@ import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgS
 import { OrgHistory, OrgHistoryPreview } from "./history/OrgHistory";
 import { STAFFING_LEAD_W } from "../../lib/orgPanelLayout";
 import { AsksSheet, ProposalThread, type ProposalAbout, type ProposalThreadLayout } from "./ProposalThread";
-import { askNames, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
+import { askNames, asksProgress, proposalAsks } from "./staffingAsks";
 import { proposalThread, revisedSince } from "./staffingRevise";
 import { latestOrgRevisionAt, orgChangeTakeover, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { HeadSeatDialog, type HeadSeatChoice } from "./HeadSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
+import { proposalBatchKey, sendProposalAnswers } from "./ProposalReplyBox";
+import { proposalAnswersOf } from "../../lib/reviewActions";
+import { workspaceDisplayName } from "../../lib/workspaceScope";
+import { useSubjectLive } from "./proposalHooks";
 import { HealthBoard, HEALTH_DRAWER_FRACTION } from "./HealthBoard";
 import { flowDays, flowMap, roleFlows } from "./orgFlow";
 import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
@@ -79,6 +83,8 @@ const PAGE = 8;
 const ORG_PREVIEW_DEV = !!import.meta.env.DEV;
 /** The desktop panel overlays the canvas; the graph fits to what is left. */
 const PANEL_W = 380;
+/** No proposal is open: nothing for a live read to name. One array, so the read is not redone every render. */
+const NO_CHANGES: OrgProposalChange[] = [];
 
 type MoveSubject = { kind: "session" | "role"; id: string; title: string };
 
@@ -260,6 +266,9 @@ export function OrgPageInner() {
     return t ? [{ key: c._id, ...t }] : [];
   }), [preview, proposal?.changes]);
   const takeovers = useTakeoverPreviews(tree?.workspace, takeoverAsks).byKey;
+  // What each entry of the open proposal read as before it (S39): the live
+  // goals, projects, plans and named tasks, gathered once for the pane.
+  const subjectLive = useSubjectLive(proposal ?? undefined, proposal?.changes ?? NO_CHANGES);
   // The linked proposal, whatever workspace it lives in: the get feeder fills
   // its row and changes, and the resolver names a foreign or unreadable link.
   const linkedRef = proposalShortId ?? proposal?.short_id ?? null;
@@ -270,8 +279,7 @@ export function OrgPageInner() {
     if (linkState.kind === "open") return undefined;
     if (linkState.kind !== "foreign") return linkState;
     const ws = linkState.workspace;
-    const team = ws.kind === "team" ? (s.teams ?? []).find((t: { _id?: string }) => t?._id === ws.id) : null;
-    const workspaceName = ws.kind === "team" ? (team?.name ?? "another team") : ws.id === meId ? "your personal workspace" : "another workspace";
+    const workspaceName = workspaceDisplayName(ws, s.teams, meId);
     // The switch keeps `?proposal=` in the URL: the feeders re-scope to the
     // new pointer and the pane opens on the proposal once its list row lands.
     return { kind: "foreign", shortId: linkState.shortId, workspaceName, onSwitch: () => void switchWorkspace(ws.kind === "team" ? ws.id : null) };
@@ -332,6 +340,21 @@ export function OrgPageInner() {
   }, [healthIsPage, setHealthPage]);
   const focusChangeId = storeFocusChangeId;
   const setFocusChangeId = useCallback((id: string | null) => useInboxStore.getState().setOrgFocusChangeId(id), []);
+  // `?proposal=op-N&focus=<n>` is the link of one change (`op-N#n`): the
+  // proposal opens with that change in hand. Once per proposal and number, so
+  // a person who then picks another entry is not pulled back; a number whose
+  // row has not landed yet is tried again when the rows do.
+  const focusParam = new URLSearchParams(searchParams.toString()).get("focus");
+  const focusApplied = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!proposal || proposal.short_id !== proposalShortId || !focusParam || !/^\d+$/.test(focusParam)) return;
+    const key = `${proposal._id}#${focusParam}`;
+    if (focusApplied.current === key) return;
+    const change = proposal.changes.find((c) => c.seq === Number(focusParam) && c.status !== "removed");
+    if (!change) return;
+    focusApplied.current = key;
+    setFocusChangeId(change._id);
+  }, [proposal?._id, proposal?.changes, proposalShortId, focusParam, setFocusChangeId]);
   // The compose text lands in the standing session's store draft, which is
   // what the embedded composer seeds from (MessageInput reads getDraft), then
   // the parameter leaves the URL so a reload does not seed it twice. A draft
@@ -575,22 +598,41 @@ export function OrgPageInner() {
     useInboxStore.getState().withdrawOrgProposal(proposalId);
     toast.success("Withdrawn; the newer proposal stays open");
   }, [preview]);
-  /** One ask, accepted or skipped whole (S19): one store action flips every
-   *  row the card showed (`seen.seqs`) that still waits and rides one dispatch
-   *  to orgProposals.decideAsk, which reads the verdict against `seen` and
-   *  refuses one the author revised under the reader (S18). */
-  const decideAsk = useCallback((proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => {
-    if (verdict === "accept") markIntroSeen();
+  /** The proposal's thread and the batch its answers wait in (S39): the
+   *  thread's conversation when it has one, so the asks column and the
+   *  conversation beside it share one batch; else a key of the proposal's own. */
+  const threadRef = useMemo(() => proposal && proposal.status === "open" ? proposalThread(proposal, tree) : null, [proposal, tree]);
+  const threadKey = useMemo(() => (threadRef ? { conversation_id: threadRef.conversationId } : null), [threadRef]);
+  const batchKey = proposal ? proposalBatchKey(proposal._id, threadKey) : null;
+  /** Send the proposal's pending answers with what was typed (S39): live,
+   *  the batch helpers apply the approvals (replyOnOrgProposal) and the
+   *  server says them into the thread as one message; the preview flips its
+   *  local rows the way each answer would and clears the batch itself. */
+  const sendReply = useCallback((typed: string) => {
+    if (!proposal || !batchKey) return;
+    const s = useInboxStore.getState();
+    const answers = proposalAnswersOf(s.reviewComments[batchKey], proposal._id);
+    if (answers.some((a) => a.proposal.verdict === "approve")) markIntroSeen();
     if (preview) {
-      setPreviewProposals((rows) => rows.map((p) => {
-        if (p._id !== proposalId) return p;
-        const seqs = new Set(seen.seqs ?? []);
-        return { ...p, changes: p.changes.map((c) => seqs.has(c.seq) && isDecidable(c.status) ? { ...c, status: verdict === "accept" ? "applied" as const : "skipped" as const, decided_at: Date.now() } : c) };
+      const at = Date.now();
+      setPreviewProposals((rows) => rows.map((p) => p._id !== proposal._id ? p : {
+        ...p,
+        changes: p.changes.map((c) => {
+          const a = answers.find((x) => x.proposal.change_ids.includes(c._id) || x.proposal.seqs.includes(c.seq));
+          if (!a || !isDecidable(c.status)) return c;
+          const text = a.body.trim();
+          const reply = { verdict: a.proposal.verdict, ...(text ? { text } : {}), at };
+          if (a.proposal.verdict === "approve") return { ...c, status: "applied" as const, decided_at: at, ...(text ? { reply } : {}) };
+          if (a.proposal.verdict === "reject") return { ...c, status: "skipped" as const, decided_at: at, reply };
+          return { ...c, reply };
+        }),
       }));
+      for (const a of answers) s.removeReviewComment(batchKey, a.id);
+      toast.success("Preview: nothing is sent");
       return;
     }
-    useInboxStore.getState().decideOrgProposalAsk(proposalId, askIndex, verdict, seen, opts);
-  }, [preview, markIntroSeen]);
+    sendProposalAnswers(batchKey, proposal._id, threadKey, typed);
+  }, [preview, proposal, batchKey, threadKey, markIntroSeen]);
   /** Click on a change: focus its ghost (the scalar) and, when its subject
    *  already exists on the chart, highlight that node. */
   const selectChange = useCallback((changeId: string | null) => {
@@ -734,7 +776,6 @@ export function OrgPageInner() {
   // uses. On a desktop it is the panel's wider left column and the asks sit
   // to its right; on the phone the conversation is the sheet, and a bar at
   // its foot opens the asks as a sheet over it.
-  const threadRef = useMemo(() => proposal && proposal.status === "open" ? proposalThread(proposal, tree) : null, [proposal, tree]);
   const roomyForThread = useMinWidth(PANEL_W + STAFFING_LEAD_W.roomy + 360);
   const threadLayout: ProposalThreadLayout = phone ? "phone" : "lead";
   const [asksOpen, setAsksOpen] = useState(false);
@@ -753,32 +794,22 @@ export function OrgPageInner() {
   }, [proposal?._id]);
   const revisedRows = useMemo(() => proposal && revisedSeen?.proposalId === proposal._id ? revisedSince(proposal.changes, revisedSeen.at) : [], [proposal, revisedSeen]);
   const seenRevisions = useCallback(() => { if (proposal) setRevisedSeen({ proposalId: proposal._id, at: latestOrgRevisionAt(proposal.changes) }); }, [proposal]);
-  // What the next message is about: the change the person is looking at, or
-  // the ask whose card said "Ask about this". A focused change wins, because
-  // it is the narrower subject.
-  const [aboutAskIndex, setAboutAskIndex] = useState<number | null>(null);
-  useWatchEffect(() => { setAboutAskIndex(null); }, [proposal?._id]);
+  // What the next message is about: the change the person is looking at
+  // inside a fold. Anything else is said on a card and arrives as an answer.
   const about = useMemo<ProposalAbout>(() => {
     const change = focusChangeId ? proposal?.changes.find((c) => c._id === focusChangeId) : null;
-    if (change) return { kind: "change", change };
-    const ask = aboutAskIndex !== null ? asks[aboutAskIndex] : null;
-    return ask ? { kind: "ask", ask } : null;
-  }, [focusChangeId, proposal, aboutAskIndex, asks]);
+    return change ? { kind: "change", change } : null;
+  }, [focusChangeId, proposal]);
   /** The person's words into the thread, with what they were about: the
-   *  bubble paints at once, dispatch runs orgProposals.say. */
+   *  bubble paints at once, dispatch runs orgProposals.say. Answers waiting
+   *  in the thread's batch (S39) are not taken here: the thread's composer
+   *  takes them on its send (MessageInput's gate path, attachReviewToMessage)
+   *  and `body` already carries their words. */
   const say = useCallback((threadConvId: string, shortId: string, on: { changeSeq: number | null; askIndex: number | null }, body: string) => {
     if (preview) { toast.success("Preview: nothing is sent"); return; }
     useInboxStore.getState().sayOnOrgProposal(threadConvId, shortId, on.changeSeq, body, `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`, on.askIndex);
   }, [preview]);
-  /** "Ask about this": the next message names the subject, the phone's asks
-   *  sheet closes, and the composer comes to hand. */
-  const bringComposer = useCallback(() => {
-    setAsksOpen(false);
-    requestAnimationFrame(() => (document.querySelector("[data-proposal-thread] textarea") as HTMLTextAreaElement | null)?.focus());
-  }, []);
-  const askAbout = useCallback((c: OrgProposalChange) => { setAboutAskIndex(null); selectChange(c._id); bringComposer(); }, [selectChange, bringComposer]);
-  const askAboutAsk = useCallback((ask: AskView) => { selectChange(null); setAboutAskIndex(ask.index); bringComposer(); }, [selectChange, bringComposer]);
-  const clearAbout = useCallback(() => { setAboutAskIndex(null); selectChange(null); }, [selectChange]);
+  const clearAbout = useCallback(() => selectChange(null), [selectChange]);
   const openAsks = useCallback(() => setAsksOpen(true), []);
   const closeAsks = useCallback(() => setAsksOpen(false), []);
   const firstTime = !introSeen && !hasAcceptedBefore(workspaceProposals, meId);
@@ -828,6 +859,7 @@ export function OrgPageInner() {
       onRetryHealth={refreshHealth}
       proposals={workspaceProposals}
       proposal={proposal}
+      live={preview ? null : subjectLive}
       selectedChangeId={focusChangeId}
       head={head}
       reviewing={reviewing}
@@ -836,7 +868,7 @@ export function OrgPageInner() {
       now={now}
       onSelectChange={selectChange}
       onDecide={decideChange}
-      onDecideAsk={decideAsk}
+      onSendReply={sendReply}
       takeovers={takeovers}
       onEditRole={setEditRoleChange}
       onSelectNode={focusNode}
@@ -846,10 +878,11 @@ export function OrgPageInner() {
       onHireHeadOfPeople={hireHeadOfPeople}
       onProposeNow={proposeNow}
       onResumeHeadOfPeople={resumeHeadOfPeople}
-      hasThread={!!threadRef}
+      thread={threadKey}
+      // The lead column's composer shows the batch and sends it; the phone's
+      // sheet covers it, and the preview draws a frame with no composer.
+      threadComposerOnScreen={threadLeads && !phone && !preview}
       titleInPageHeader={titleInPageHeader}
-      onAskAbout={threadRef ? askAbout : undefined}
-      onAskAboutAsk={threadRef ? askAboutAsk : undefined}
       revised={threadRef ? { rows: revisedRows, who: threadRef.name, onSeen: seenRevisions } : undefined}
       link={link}
       onOpenHealth={() => { closePanel(); setHealthPage(true); }}

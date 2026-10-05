@@ -20,7 +20,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.169",
+      "version": "1.1.170",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -79,7 +79,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.124",
+      "version": "1.1.125",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
         "electron-updater": "^6.3.0",
@@ -118,6 +118,7 @@
         "@livekit/react-native": "^2.12.0",
         "@livekit/react-native-webrtc": "^144.1.2",
         "@platform/analytics": "file:../../platform/packages/analytics",
+        "@platform/design": "file:../../platform/packages/design",
         "@platform/flags": "file:../../platform/packages/flags",
         "@react-navigation/native": "^7.1.8",
         "@sentry/cli": "3.4.0",
@@ -217,6 +218,7 @@
         "@observablehq/plot": "^0.6.17",
         "@platform/analytics": "file:../../platform/packages/analytics",
         "@platform/auth": "file:../../platform/packages/auth",
+        "@platform/design": "file:../../platform/packages/design",
         "@platform/engine": "file:../../platform/packages/engine",
         "@platform/flags": "file:../../platform/packages/flags",
         "@platform/keys": "file:../../platform/packages/keys",
@@ -4428,6 +4430,8 @@
 
     "@codecast/web/@platform/auth": ["@platform/auth@file:platform/packages/auth", { "devDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "@types/bun": "latest", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "19.1.0", "typescript": "^5.7.2" }, "peerDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "^19.0.0" }, "optionalPeers": ["@auth/core", "jose", "oslo", "react"] }],
 
+    "@codecast/web/@platform/design": ["@platform/design@file:platform/packages/design", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
+
     "@codecast/web/@platform/engine": ["@platform/engine@file:platform/packages/engine", { "dependencies": { "dexie": "^4.3.0", "mutative": "^1.3.0", "zustand": "^5.0.9" }, "devDependencies": { "@types/react": "^19.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "react": "^19.0.0" } }],
 
     "@codecast/web/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
@@ -4899,6 +4903,8 @@
     "mobile/@convex-dev/auth": ["@convex-dev/auth@0.0.90", "", { "dependencies": { "@oslojs/crypto": "^1.0.1", "@oslojs/encoding": "^1.1.0", "cookie": "^1.0.1", "is-network-error": "^1.1.0", "jose": "^5.2.2", "jwt-decode": "^4.0.0", "lucia": "^3.2.0", "oauth4webapi": "^3.1.2", "path-to-regexp": "^6.3.0", "server-only": "^0.0.1" }, "peerDependencies": { "@auth/core": "^0.37.0", "convex": "^1.17.0", "react": "^18.2.0 || ^19.0.0-0" }, "optionalPeers": ["react"], "bin": { "auth": "dist/bin.cjs" } }, "sha512-aqw88EB042HvnaF4wcf/f/wTocmT2Bus2VDQRuV79cM0+8kORM0ICK/ByZ6XsHgQ9qr6TmidNbXm6QAgndrdpQ=="],
 
     "mobile/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
+
+    "mobile/@platform/design": ["@platform/design@file:platform/packages/design", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "mobile/@platform/flags": ["@platform/flags@file:platform/packages/flags", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "posthog-js": ">=1.0.0", "posthog-react-native": ">=3.0.0", "react": ">=18.0.0" }, "optionalPeers": ["posthog-js", "posthog-react-native", "react"], "bin": { "platform-flags": "src/cli.ts" } }],
 

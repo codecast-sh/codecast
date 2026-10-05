@@ -1105,18 +1105,21 @@ export function buildHostsCommand(parent: Command): Command {
         // Outside a repo (the daemon runs this for the app), the host's registered laptop checkout names the repo.
         const { readProjectRegistrations } = await import("../cloud/mirror/projectRefresh.js");
         const root = cwdGitRoot() ?? readProjectRegistrations(host).filter((p) => !p.retired).sort((a, b) => a.targetRoot.length - b.targetRoot.length)[0]?.sourceRoot;
-        const { report, spec } = runHostSetup(host, { repoRoot: root, repoPath: root ? remoteRepoPath(host, root) : undefined, force: o.force });
-        // Simulators are driven from here, not the host script: Xcode comes from this laptop (sim/provision.ts).
+        const { resolveHostSpec } = await import("../cloud/hostSetup.js");
+        const declared = resolveHostSpec({ repoRoot: root });
+        // Simulators first, driven from here (Xcode comes from this laptop, sim/provision.ts): a
+        // selected but unlicensed Xcode stops every /usr/bin developer shim the setup script runs.
         let sims: { state?: string; steps?: string[]; error?: string } | undefined;
-        if (spec.simulators?.length && up.platform === "darwin") {
+        if (declared.simulators?.length && up.platform === "darwin") {
           const { provisionSimHost, describeSimHost } = await import("../sim/provision.js");
           try {
-            const r = provisionSimHost(host, spec.simulators, say);
+            const r = provisionSimHost(host, declared.simulators, say);
             sims = { state: describeSimHost(r.after), steps: r.steps };
           } catch (err) {
             sims = { error: (err as Error).message };
           }
         }
+        const { report, spec } = runHostSetup(host, { repoRoot: root, repoPath: root ? remoteRepoPath(host, root) : undefined, force: o.force, spec: declared });
         if (o.json) { console.log(JSON.stringify({ host: up.id, spec, ...report, ...(sims ? { simulators: sims } : {}) }, null, 2)); return; }
         console.log(`${report.ok ? OK : fmt.warning(icons.cross)} ${up.id}  ${describeHostSetup(report, spec)}`);
         if (sims) console.log(`${sims.error ? fmt.warning(icons.cross) : OK} ${up.id}  simulators: ${sims.error ?? `${sims.state}${sims.steps?.length ? ` (${sims.steps.join(", ")})` : ""}`}`);
