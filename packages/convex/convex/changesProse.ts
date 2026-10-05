@@ -122,7 +122,7 @@ export type StoryPromptSession = {
 };
 
 /** A screenshot the story may place, by ref; its URL stays out of the prompt. */
-export type StoryPromptImage = { ref: string; at: string; context: string };
+export type StoryPromptImage = { ref: string; at: string; context: string; origin?: string };
 
 /** An edit to instruction text (a prompt, a skill, an agent guide) from a session the team sees in full. */
 export type StoryPromptEdit = { path: string; before: string; after: string };
@@ -282,7 +282,7 @@ function storyMedia(sessions: readonly GatedSession[]): Pick<StoryPromptInput, "
   const image_urls: Record<string, string> = {};
   found.forEach((img, i) => {
     const ref = `img${i + 1}`;
-    images.push({ ref, at: new Date(img.timestamp).toISOString().slice(0, 16).replace("T", " "), context: img.context });
+    images.push({ ref, at: new Date(img.timestamp).toISOString().slice(0, 16).replace("T", " "), context: img.context, ...(img.origin ? { origin: img.origin } : {}) });
     image_urls[ref] = img.url;
   });
   const edits = full
@@ -364,7 +364,7 @@ function renderStoryInput(i: StoryPromptInput): string {
 
   if (i.images.length) {
     out.push("", "Screenshots from the sessions, by ref, with the words around each:");
-    for (const img of i.images) out.push(`- ${img.ref} (${img.at}): ${img.context || "(no words around it)"}`);
+    for (const img of i.images) out.push(`- ${img.ref} (${[img.at, img.origin].filter(Boolean).join(", ")}): ${img.context || "(no words around it)"}`);
   }
 
   if (i.risks.length) {
@@ -685,6 +685,40 @@ export type StoryRead = {
   sessions: GatedSession[];
   prs: Array<{ number: number; title: string; body: string }>;
 };
+
+/**
+ * What one team day's stories were offered and what their articles placed:
+ * per story, the gated sessions by mode, the screenshots, instruction edits
+ * and embeds storyMedia would hand the prompt, and the images and embeds the
+ * written body holds. Read-only, for measuring the media path.
+ */
+export const mediaAudit = internalQuery({
+  args: { team_id: v.id("teams"), date: v.string() },
+  handler: async (ctx, args) => {
+    const stories: Doc<"change_stories">[] = await ctx.db
+      .query("change_stories")
+      .withIndex("by_team_date", (q) => q.eq("team_id", args.team_id).eq("date", args.date))
+      .take(80);
+    const out = [];
+    for (const story of stories) {
+      if (!story.on_default_branch) continue;
+      const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, { since: story.first_at - MEDIA_MARGIN_MS, until: story.last_at + MEDIA_MARGIN_MS });
+      const media = storyMedia(sessions);
+      const body = story.body ?? "";
+      out.push({
+        key: story.story_key,
+        headline: story.headline,
+        sessions: story.conversation_ids.length,
+        gated: sessions.map((x) => x.mode),
+        offered: { images: media.images.length, edits: media.edits.length, embeds: media.embeds.length },
+        contexts: media.images.map((i) => i.context),
+        embeds: media.embeds.map((e) => `${e.ref}: ${e.title}`),
+        placed: { images: (body.match(/!\[/g) ?? []).length, embeds: (body.match(/```cast-canvas|codecast\.sh\/a\//g) ?? []).length },
+      });
+    }
+    return out;
+  },
+});
 
 /** A pending story with the sessions that pass the gate now and its pull requests; null once it is no longer pending. */
 export const readStory = internalQuery({

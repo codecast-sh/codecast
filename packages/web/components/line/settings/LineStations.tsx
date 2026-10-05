@@ -203,8 +203,10 @@ function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, 
         {field && <LineChip>{field}{body.file ? ` from ${body.file}` : ""}</LineChip>}
         {changed.length > 0 && <LineChip tone="magenta">edited: {changed.join(", ")}</LineChip>}
         <span className="flex-1" />
-        {editable && changed.length > 0 && <button type="button" className="lset-ghost" onClick={onReset} data-reset-station>Reset to shipped</button>}
-        <button type="button" className="lset-ghost" onClick={onClose} aria-label="Close station">Close</button>
+        <span className="inline-flex items-center gap-4">
+          {editable && changed.length > 0 && <button type="button" className="lset-ghost" onClick={onReset} data-reset-station>Reset to shipped</button>}
+          <button type="button" className="lset-ghost" onClick={onClose} aria-label="Close station">Close</button>
+        </span>
       </div>
 
       {!field && <p className="lset-empty">This station routes the run and carries no prompt or script.</p>}
@@ -234,12 +236,12 @@ function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, 
           />
           <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
             {dirty
-              ? <>Saves when you leave the field, or {saveKeys}. <KeyCap size="xs">Esc</KeyCap> puts it back.</>
+              ? <>Saves when you leave the field, or on {saveKeys}. <KeyCap size="xs">Esc</KeyCap> puts it back.</>
               : savedAt
                 ? <span key={savedAt} className="lset-status" data-state={runsIt ? "saved" : "warn"} role="status">
                     {runsIt ? `Saved. A run of the customized line started after this reads the new ${field}.` : "Saved to the copy. No role runs it yet, so no run reads it."}
                   </span>
-                : <>Edit the {field}; it saves when you leave the field, or {saveKeys}.</>}
+                : <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>}
           </div>
         </>
       )}

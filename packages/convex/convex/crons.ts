@@ -448,4 +448,13 @@ crons.interval(
   {}
 );
 
+crons.interval(
+  // The hosted assistant's wallet: give back holds that ended turns leaked,
+  // including holds whose turn row was deleted, which the lease cannot see.
+  "reconcile wallet holds",
+  { hours: 1 },
+  internal.wallet.reconcile,
+  {}
+);
+
 export default crons;

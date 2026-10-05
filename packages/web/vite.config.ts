@@ -11,6 +11,7 @@ import { updatePromptVite } from "../../platform/packages/update-prompt/src/buil
 import { storeHmrPlugin } from "./plugins/storeHmr";
 import { hookRefreshPlugin } from "./plugins/hookRefresh";
 import { handoffBootPlugin } from "./plugins/handoffBoot";
+import { laneBootPlugin } from "./plugins/laneBoot";
 import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
@@ -59,6 +60,9 @@ export default defineConfig(({ mode, command }) => ({
     // for the desktop app never boots, and re-injects the boot chunk's
     // modulepreload hints on a normal load.
     handoffBootPlugin(),
+    // Puts the family token sheet and the lane flag into <head>, so a cold
+    // load of a simple lane page opens on the lane's paper, not the app's splash.
+    laneBootPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.

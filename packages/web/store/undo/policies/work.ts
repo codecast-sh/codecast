@@ -18,6 +18,7 @@
 import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine";
 import { DEFAULT_TASK_STATUS_NAMES, teamTaskStatuses } from "@codecast/shared/tasks";
 import { targetDayOf } from "@codecast/shared/time";
+import { INITIATIVE_RECORD_NOUN, type InitiativeRecordOp } from "@codecast/shared/contracts/initiative";
 import { assigneeLabelOf, resolveAssigneeInfo } from "../../../lib/liveEntities";
 import type { UndoPolicy } from "../policy";
 import type { OrgReparentSessionTarget } from "../../orgSlice";
@@ -137,11 +138,10 @@ function widenedRoleScope(ctx: UndoCtx): boolean {
 const viaInitiativeWriter = (label: (ctx: UndoCtx) => string, extra?: Partial<UndoSpec>): Spec =>
   viaWriter((ctx) => (widenedRoleScope(ctx) ? null : label(ctx)), extra);
 
-type RecordOpLike = { list: string; action: string };
-const RECORD_NOUN: Record<string, string> = { milestones: "milestone", questions: "question", decisions: "decision", sources: "source" };
+type RecordOpLike = Pick<InitiativeRecordOp, "list" | "action">;
 /** "Reached a milestone of “X”", "Answered a question on “X”", "Added a source to “X”". */
 function recordLabel(op: RecordOpLike, goal: string): string {
-  const noun = RECORD_NOUN[op?.list] ?? "entry";
+  const noun = INITIATIVE_RECORD_NOUN[op?.list] ?? "entry";
   if (op?.action === "close") return op.list === "questions" ? `Answered a question on ${goal}` : `Reached a milestone of ${goal}`;
   if (op?.action === "add") return `Added a ${noun} to ${goal}`;
   if (op?.action === "remove") return `Removed a ${noun} from ${goal}`;
@@ -810,6 +810,7 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   hireExecutiveAssistant: org(() => "Hired an executive assistant"),
   acceptAllOrgProposal: org(() => "Accepted an org proposal"),
   decideOrgProposalAsk: org((ctx) => `${ctx.args[2] === "accept" ? "Accepted" : "Skipped"} an org proposal ask`),
+  replyOnOrgProposal: org((ctx) => { const n = (ctx.args[1] as unknown[] | undefined)?.length ?? 0; return `Answered ${n === 1 ? "a change" : `${n} changes`} of an org proposal`; }),
   decideOrgProposalChange: org((ctx) => `${ctx.args[1] === "accept" ? "Accepted" : "Skipped"} an org change`),
   withdrawOrgProposal: org(() => "Withdrew an org proposal"),
   undoOrgChange: org(() => "Undid an org change"),

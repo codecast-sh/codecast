@@ -268,13 +268,13 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 // Cancel a run. Its open gate decision is withdrawn through the shared
 // withdraw path (the-line.md L4) so the queue, the stack and the ladder
 // learn the question is gone.
-export async function cancelCore(ctx: Ctx, run: any, now = Date.now()): Promise<void> {
+export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
   if (run.gate_decision_id) {
     const decision = await ctx.db.get(run.gate_decision_id);
     if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
   }
-  await ctx.db.patch(run._id, { status: "failed", fail_reason: "Cancelled by user", updated_at: now });
+  await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
 }
 
 export const create = mutation({
@@ -1181,6 +1181,10 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
     gate_decision_short_id: decision?.short_id,
     gate_decision_status: decision?.status,
+    // What the last gate was answered with, in the option's own words, and
+    // what its card says the run cost (LE16 run report, LE14 versions).
+    gate_answer: decision?.status === "answered" && typeof decision.answer_index === "number" ? decision.options?.[decision.answer_index]?.label : undefined,
+    card_cost_usd: typeof decision?.card?.cost?.usd === "number" ? decision.card.cost.usd : undefined,
   };
 }
 

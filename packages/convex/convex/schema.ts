@@ -19,6 +19,7 @@ import { assistantTables } from "./assistantSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
+import { expectationTables } from "./expectationsSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
@@ -86,6 +87,15 @@ const linkableEntityTypeValidator = v.union(
   v.literal("task"),
   v.literal("plan"),
 );
+
+// The record an org log row is about (OrgLogSubject): on the log row, and on
+// the copy a proposal change keeps of what its accept moved.
+const orgLogSubjectValidator = v.object({
+  type: v.union(v.literal("role"), v.literal("project"), v.literal("plan"), v.literal("task"), v.literal("session"), v.literal("initiative")),
+  id: v.string(),
+  short_id: v.optional(v.string()),
+  label: v.string(),
+});
 
 export default defineSchema({
   // Capability library tables (fleet mirror + catalog cache). Defined in their
@@ -1612,7 +1622,7 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     workspace: v.string(),
     door: v.union(v.literal("proposal"), v.literal("settings"), v.literal("chart"), v.literal("project_page"), v.literal("initiative"), v.literal("cli"), v.literal("history")),
-    gesture: v.union(v.literal("accept_ask"), v.literal("accept_all"), v.literal("accept_change"), v.literal("save"), v.literal("drag"), v.literal("command"), v.literal("undo"), v.literal("redo")),
+    gesture: v.union(v.literal("accept_ask"), v.literal("accept_all"), v.literal("accept_change"), v.literal("reply"), v.literal("save"), v.literal("drag"), v.literal("command"), v.literal("undo"), v.literal("redo")),
     // The proposal and the ask the gesture accepted, when there was one.
     proposal: v.optional(v.object({ id: v.id("org_proposals"), short_id: v.string(), title: v.optional(v.string()) })),
     ask: v.optional(v.object({ index: v.number(), title: v.string() })),
@@ -1643,12 +1653,7 @@ export default defineSchema({
     workspace: v.string(),
     seq: v.number(), // rising per workspace
     kind: v.string(), // OrgLogKind
-    subject: v.object({
-      type: v.union(v.literal("role"), v.literal("project"), v.literal("plan"), v.literal("task"), v.literal("session"), v.literal("initiative")),
-      id: v.string(),
-      short_id: v.optional(v.string()),
-      label: v.string(),
-    }),
+    subject: orgLogSubjectValidator,
     // OrgLogFields, OrgLogEffects: typed in the contract, the fields that
     // moved and what the change did beyond its subject. Never a sentence.
     before: v.any(),
@@ -1754,6 +1759,29 @@ export default defineSchema({
     decided_at: v.optional(v.number()),
     applied_note: v.optional(v.string()),
     applied_at: v.optional(v.number()),
+    // What the accept moved (S39), an OrgAppliedDiffRow per log row the apply
+    // wrote: its typed before and after, cut to the fields a card draws.
+    // Absent on a row accepted before the field, on a skip, on a failed or
+    // no-op apply and on a limit.
+    applied_diff: v.optional(v.array(v.object({
+      kind: v.string(), // OrgLogKind
+      subject: orgLogSubjectValidator,
+      before: v.any(),
+      after: v.any(),
+      added: v.optional(v.object({ milestones: v.optional(v.array(v.string())), questions: v.optional(v.array(v.string())), decisions: v.optional(v.array(v.string())), sources: v.optional(v.array(v.string())) })),
+      labels: v.record(v.string(), v.string()),
+      batch: v.optional(v.string()),
+    }))),
+    // The person's answer to this change (S39, OrgChangeReply): approve,
+    // reject or a note, with their words, so the card says it after a reload
+    // and on another device. Shown while `at` is later than the row's last
+    // revision; an amend makes the row answerable again.
+    reply: v.optional(v.object({
+      verdict: v.union(v.literal("approve"), v.literal("reject"), v.literal("note")),
+      text: v.optional(v.string()),
+      at: v.number(),
+      by: v.optional(v.id("users")),
+    })),
   }).index("by_proposal", ["proposal_id", "seq"]),
 
   // ── Roles hired from a template (docs/architecture/org-hire.md W8) ──
@@ -7847,6 +7875,7 @@ export default defineSchema({
 
   ...issueSyncTables,
   ...agentTables,
+  ...expectationTables,
   ...assistantTables,
 
 }, {

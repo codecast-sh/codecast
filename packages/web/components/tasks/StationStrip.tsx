@@ -1,7 +1,8 @@
 "use client";
-import { useMemo } from "react";
+import { useMemo, type ReactNode } from "react";
 import Link from "next/link";
-import { ArrowUpRight, GitBranch } from "lucide-react";
+import { ArrowUpRight, Eye, GitBranch } from "lucide-react";
+import { shortDay } from "../../lib/line/runReport";
 import { classifySession, useTrackedStore, type TaskItem } from "../../store/inboxStore";
 import { useTeamTaskStatusList, statusVisual } from "../../lib/taskStatuses";
 import { useWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
@@ -75,7 +76,10 @@ function HandLink({ conversationId, sessionId, fallbackTitle, isActive }: { conv
   );
 }
 
-export function StationStrip({ task }: { task: TaskItem & LineTask }) {
+/** `embedded`: the strip heads the task's Line block (TaskLineStory), which
+ *  draws the frame and tells the run's story, so the strip drops its own
+ *  border and a settled verdict. `aside` sits beside the current status. */
+export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineTask; embedded?: boolean; aside?: ReactNode }) {
   const statuses = useTeamTaskStatusList(task.team_id);
   const stations = useMemo(() => stationOrder(statuses), [statuses]);
   const cur = currentStationIndex(task, stations);
@@ -94,12 +98,15 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
   const lineProject = line?.kind === "customized" ? line.project : (task as { project_id?: string | null }).project_id ?? null;
   const now = useCoarseNow(30_000);
   const elapsed = live ? formatElapsed(node?.started_at, now) : null;
-  const verdict = task.review_verdict ?? null;
+  // A verdict speaks while its run is live; once the run ends, the block's
+  // path says what the review came to.
+  const verdict = embedded && !live ? null : task.review_verdict ?? null;
   const showDetail = (live && node) || verdict;
 
   return (
-    <div className="mb-4 rounded-lg border border-sol-border/30 bg-sol-bg-alt/20" data-station-strip={stations[cur]?.id ?? ""}>
-      <div className="flex items-center overflow-x-auto px-2 pt-2 pb-1.5 [scrollbar-width:thin]" role="list" aria-label="Stations">
+    <div className={embedded ? "" : "mb-4 rounded-lg border border-sol-border/30 bg-sol-bg-alt/20"} data-station-strip={stations[cur]?.id ?? ""}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 pt-2 pb-1.5">
+      <div className="flex items-center min-w-0 max-w-full overflow-x-auto [scrollbar-width:thin]" role="list" aria-label="Stations">
         {stations.map((s, i) => {
           const v = statusVisual(s, stations);
           const Icon = v.icon;
@@ -126,6 +133,8 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
             </div>
           );
         })}
+      </div>
+      {aside && <div className="min-w-0 px-1" data-station-aside>{aside}</div>}
       </div>
       {showDetail && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 text-[11px] text-sol-text-muted" data-station-detail>
@@ -174,8 +183,12 @@ function rowsByTask(collection: Record<string, any>, keep: (row: any) => boolean
 const isOpenHold = (d: any) => d.status === "pending" && !!d.blocking;
 const anyRun = () => true;
 
-export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTask; className?: string }) {
+export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTask & { watch_until?: number | null }; className?: string }) {
   const statuses = useTeamTaskStatusList(task.team_id);
+  // The watch after a ship (LM3: done, "watching until <day>"), on a coarse
+  // clock so the chip leaves on the day the watch ends.
+  const now = useCoarseNow(15 * 60_000);
+  const watching = task.status === "done" && typeof task.watch_until === "number" && task.watch_until > now ? task.watch_until : null;
   const station = stationLabel(stationOf(task), statuses);
   const dep = useMemo(() => (st: any) => {
     const held = heldDecisionFor(task, rowsByTask(st.sessionDecisions, isOpenHold).get(task._id) ?? []);
@@ -187,6 +200,14 @@ export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTa
   }, [task._id, task.status, task.status_id, task.workflow_run_id, station]);
   const s = useTrackedStore([dep]);
   const [text, tone] = dep(s).split("|");
+  if (!text && watching) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-[10px] shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line counts its signals again until this day, and reopens it if one comes back" data-task-line-chip="watch">
+        <Eye className="w-3 h-3" />
+        watching until {shortDay(watching)}
+      </span>
+    );
+  }
   if (!text) return null;
   const held = tone === "held";
   return (

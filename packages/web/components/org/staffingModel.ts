@@ -489,7 +489,7 @@ export function cadenceLabel(ms: number | null | undefined): string {
   const days = ms / 86_400_000;
   if (days >= 1 && Number.isInteger(days)) return `every ${days} days`;
   const hours = Math.round(ms / 3_600_000);
-  return `every ${hours} hour${hours === 1 ? "" : "s"}`;
+  return hours === 1 ? "every hour" : `every ${hours} hours`;
 }
 
 /** A short label for a flag code, for badges. */

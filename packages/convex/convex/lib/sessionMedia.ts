@@ -139,7 +139,10 @@ export async function sessionArtifacts(
     for (const match of text.matchAll(PAGE_URL)) {
       if (seen.has(match[0])) continue;
       seen.add(match[0]);
-      out.push({ kind: "page", url: match[0], title: artifactTitle(text, match.index ?? 0), timestamp: m.timestamp });
+      // The page's own title says what it shows; the line around the link is the fallback.
+      const slug = match[0].split("/").pop()!;
+      const page: Doc<"artifacts"> | null = await ctx.db.query("artifacts").withIndex("by_slug", (q: any) => q.eq("slug", slug)).first();
+      out.push({ kind: "page", url: match[0], title: page?.title?.trim() || artifactTitle(text, match.index ?? 0), timestamp: m.timestamp });
     }
     if (out.length >= opts.max) break;
   }

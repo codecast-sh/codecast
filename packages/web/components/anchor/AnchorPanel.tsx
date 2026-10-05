@@ -19,8 +19,10 @@ import { agentName, agentTitle, deriveAnchorStatus, useAnchors, useRootAgent, ty
 import { AnchorAvatar, AnchorScopePill } from "./AnchorIdentity";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
-import { Pin, PinOff } from "lucide-react";
+import { anchorIdentityWords, globalAssistantOf, isHeaderPinned, readHeaderPins, resolveHeaderPins, toggleHeaderPin, type ResolvedPin } from "../../lib/headerPins";
+import { Pin, PinOff, Plus } from "lucide-react";
+import { DropdownMenuItem } from "../ui/dropdown-menu";
+import { ContextMenu, CtxCheckItem, CtxHeader, CtxItem, CtxLabel, CtxSeparator, useContextMenu } from "../ui/context-menu";
 import { SessionFace } from "../identity/SessionFace";
 import { RoleOffer } from "../org/scope/RoleOffer";
 
@@ -69,7 +71,7 @@ export function AnchorPanel() {
   const close = () => useInboxStore.getState().closeAnchorPanel();
   const name = shown?.name ?? agentName(current);
   const openFull = () => {
-    router.push(current ? (current.role ? `/org/${current.role.short_id}` : "/anchor") : shown?.conversationId ? `/conversation/${shown.conversationId}` : "/anchor");
+    router.push(pagePathOf(shown));
     close();
   };
 
@@ -113,6 +115,7 @@ export function AnchorPanel() {
           </ShortcutTooltip>
         </div>
       </header>
+      <PinStrip pins={pins} shownKey={shown?.key ?? null} />
       {shown && !hasGlobalAssistant && !hiring && (
         <button type="button" onClick={() => setHiring(true)} className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-[11.5px] border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 text-left" data-hire-assistant-cta>
           <AnchorAvatar anchor={null} size={16} />
@@ -216,16 +219,160 @@ export function HeaderPins() {
   const pins = useHeaderPins();
   const root = useRootAgent();
   const orgOn = useWorkspaceFeature("org");
+  const menu = useContextMenu<ResolvedPin | null>();
   if (!orgOn) return null;
-  if (!pins.length) return <HirePinChip hasRoot={!!root} />;
   return (
     <span className="inline-flex items-center gap-0.5" data-header-pins>
-      {pins.map((p) => <PinChip key={p.key} pin={p} />)}
+      {pins.length
+        ? pins.map((p) => <PinChip key={p.key} pin={p} onMenu={(e) => menu.open(e, p)} />)
+        : <HirePinChip hasRoot={!!root} onMenu={(e) => menu.open(e, null)} />}
+      <PinMenu state={menu} />
     </span>
   );
 }
 
-function PinChip({ pin }: { pin: ResolvedPin }) {
+/** Where a pin's full page lives: a role's page, else the session. */
+function pagePathOf(pin: ResolvedPin | null): string {
+  const role = pin?.anchor?.role;
+  if (pin?.anchor) return role ? `/org/${role.short_id}` : "/anchor";
+  return pin?.conversationId ? `/conversation/${pin.conversationId}` : "/anchor";
+}
+
+/** What the panel opens for a pin. */
+function targetOf(pin: ResolvedPin): { kind: "anchor" | "session"; id: string } {
+  return pin.anchor ? { kind: "anchor", id: pin.anchor._id } : { kind: "session", id: pin.conversationId ?? pin.key };
+}
+
+/** The pin a resolved face stands for, the default face included (its role). */
+function pinIdOf(pin: ResolvedPin): { kind: "role" | "session"; id: string } | null {
+  if (pin.pin) return pin.pin;
+  return pin.anchor?.role ? { kind: "role", id: String(pin.anchor.role._id) } : null;
+}
+
+/** Every role the header can pin: the person's assistant first, then each
+ *  workspace's agent, then the leads. */
+function usePinnableRoles() {
+  const anchors = useAnchors();
+  return useMemo(() => {
+    const rank = (a: AnchorRow) => (a.scope_type === "user" ? 0 : a.is_root ? 1 : 2);
+    return anchors
+      .filter((a) => a.role && a.role.status !== "retired" && a.status !== "decommissioned")
+      .map((a) => ({ roleId: String(a.role!._id), anchor: a, ...anchorIdentityWords(a) }))
+      .sort((x, y) => rank(x.anchor) - rank(y.anchor) || x.name.localeCompare(y.name));
+  }, [anchors]);
+}
+
+/** The checklist every pin menu shares: tick a role or session to keep its
+ *  face in the header. Ticking keeps the menu open, so several go in one pass. */
+function PinChecklist() {
+  const pins = useHeaderPins();
+  const roles = usePinnableRoles();
+  const currentId = useInboxStore((st) => st.currentSessionId);
+  const pinnedRoles = new Set(pins.map((p) => (p.anchor?.role ? String(p.anchor.role._id) : null)).filter(Boolean));
+  const sessions = pins.filter((p) => !p.anchor && p.conversationId);
+  const current = currentId && !sessions.some((p) => p.conversationId === currentId)
+    ? (useInboxStore.getState() as any).sessions[currentId] ?? null
+    : null;
+  const tick = (kind: "role" | "session", id: string) => (e: Event) => { e.preventDefault(); toggleHeaderPin(kind, id); };
+  return (
+    <>
+      <CtxLabel>Pin to header</CtxLabel>
+      {roles.map((r) => (
+        <CtxCheckItem key={r.roleId} checked={pinnedRoles.has(r.roleId)} onSelect={tick("role", r.roleId)} data-pin-option={`role:${r.roleId}`}>
+          <span className="flex items-center gap-2 min-w-0">
+            <AnchorAvatar anchor={r.anchor} size={16} className="shrink-0" />
+            <span className="truncate">{r.name}</span>
+            <span className="truncate text-[11px] text-sol-text-dim">{r.subtitle}</span>
+          </span>
+        </CtxCheckItem>
+      ))}
+      {(sessions.length > 0 || current) && <CtxSeparator />}
+      {sessions.map((p) => (
+        <CtxCheckItem key={p.key} checked onSelect={tick("session", p.conversationId!)}>
+          <span className="flex items-center gap-2 min-w-0">
+            <SessionPinFace id={p.conversationId!} size={16} />
+            <span className="truncate">{p.name}</span>
+          </span>
+        </CtxCheckItem>
+      ))}
+      {current && (
+        <CtxCheckItem checked={false} onSelect={tick("session", currentId!)} data-pin-option="current-session">
+          <span className="flex items-center gap-2 min-w-0">
+            <SessionPinFace id={currentId!} size={16} />
+            <span className="truncate">{current.title || "This session"}</span>
+            <span className="truncate text-[11px] text-sol-text-dim">this session</span>
+          </span>
+        </CtxCheckItem>
+      )}
+    </>
+  );
+}
+
+/** A face's menu (right click) or the panel's Pin button: the face's own
+ *  verbs when there is one, then the checklist. */
+function PinMenu({ state }: { state: ReturnType<typeof useContextMenu<ResolvedPin | null>> }) {
+  const router = useRouter();
+  return (
+    <ContextMenu state={state}>
+      {(pin) => {
+        const id = pin && pinIdOf(pin);
+        return (
+          <>
+            {pin && (
+              <>
+                <CtxHeader title={pin.name} />
+                <CtxItem icon={ArrowUpRight} onSelect={() => router.push(pagePathOf(pin))}>Open {pin.name}&apos;s page</CtxItem>
+                {id && <CtxItem icon={PinOff} onSelect={() => toggleHeaderPin(id.kind, id.id)}>Unpin from header</CtxItem>}
+                <CtxSeparator />
+              </>
+            )}
+            <PinChecklist />
+          </>
+        );
+      }}
+    </ContextMenu>
+  );
+}
+
+/** The pins inside the panel: one tab per face to switch between them, and
+ *  the Pin button that adds or removes one, where the person already is. */
+function PinStrip({ pins, shownKey }: { pins: ResolvedPin[]; shownKey: string | null }) {
+  const menu = useContextMenu<ResolvedPin | null>();
+  return (
+    <div className="shrink-0 flex items-center gap-1 px-2 h-9 border-b border-sol-border/60 overflow-x-auto scrollbar-none" data-pin-strip>
+      {pins.map((p) => {
+        const on = p.key === shownKey;
+        return (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => useInboxStore.getState().openAnchorPanel(targetOf(p))}
+            onContextMenu={(e) => menu.open(e, p)}
+            title={`${p.name} · ${p.subtitle}`}
+            aria-pressed={on}
+            className={`shrink-0 inline-flex items-center gap-1.5 h-6 pl-0.5 pr-2 rounded-full text-[11.5px] transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"}`}
+          >
+            {p.anchor ? <AnchorAvatar anchor={p.anchor} size={18} /> : <SessionPinFace id={p.conversationId ?? ""} size={18} />}
+            <span className="truncate max-w-[110px]">{p.name}</span>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); menu.openAt(r.left, r.bottom + 4, null); }}
+        className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11.5px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"
+        title="Choose which roles and sessions sit in the header"
+        data-pin-picker
+      >
+        <Plus className="w-3 h-3" />
+        Pin
+      </button>
+      <PinMenu state={menu} />
+    </div>
+  );
+}
+
+function PinChip({ pin, onMenu }: { pin: ResolvedPin; onMenu: (e: React.MouseEvent) => void }) {
   const now = useCoarseNow(30_000);
   const open = useInboxStore((st) => st.anchorPanel.open);
   const target = useInboxStore((st) => st.anchorPanel.target);
@@ -234,11 +381,11 @@ function PinChip({ pin }: { pin: ResolvedPin }) {
     : status.tone === "attention" ? "bg-sol-yellow"
     : status.tone === "working" ? "bg-sol-cyan animate-pulse"
     : status.tone === "online" ? "bg-sol-green"
-    : "bg-sol-text-dim/50";
+    : "bg-sol-text-dim";
   const label = status?.tone === "attention" ? `${pin.name} needs you`
     : status?.tone === "working" ? `${pin.name} is working`
     : `Talk to ${pin.name}`;
-  const mine: typeof target = pin.anchor ? { kind: "anchor", id: pin.anchor._id } : { kind: "session", id: pin.conversationId ?? pin.key };
+  const mine = targetOf(pin);
   const active = open && (!target ? pin.isDefault : target.kind === mine.kind && target.id === mine.id);
   return (
     <ShortcutTooltip label={`${label} · ${pin.subtitle}`} action="anchor.toggle">
@@ -247,11 +394,7 @@ function PinChip({ pin }: { pin: ResolvedPin }) {
           const st = useInboxStore.getState();
           if (active) st.closeAnchorPanel(); else st.openAnchorPanel(mine);
         }}
-        onContextMenu={(e) => {
-          if (!pin.pin) return;
-          e.preventDefault();
-          toggleHeaderPin(pin.pin.kind, pin.pin.id);
-        }}
+        onContextMenu={onMenu}
         aria-label={label}
         aria-pressed={active}
         active={active}
@@ -268,32 +411,28 @@ function PinChip({ pin }: { pin: ResolvedPin }) {
 }
 
 /** Nothing pinned and nothing to show by default: the way in. */
-function HirePinChip({ hasRoot }: { hasRoot: boolean }) {
+function HirePinChip({ hasRoot, onMenu }: { hasRoot: boolean; onMenu: (e: React.MouseEvent) => void }) {
   const open = useInboxStore((st) => st.anchorPanel.open);
   const label = hasRoot ? "Pin a role or session here" : "Set up the workspace's agent";
   return (
     <ShortcutTooltip label={label} action="anchor.toggle">
-      <TopbarButton onClick={() => useInboxStore.getState().toggleAnchorPanel()} aria-label={label} aria-pressed={open} active={open} desktopOnly>
+      <TopbarButton onClick={() => useInboxStore.getState().toggleAnchorPanel()} onContextMenu={onMenu} aria-label={label} aria-pressed={open} active={open} desktopOnly>
         <AnchorAvatar anchor={null} size={18} />
       </TopbarButton>
     </ShortcutTooltip>
   );
 }
 
-/** "Pin to header" / "Unpin": the one gesture, for a role page's or a
- *  session header's menu. */
-export function HeaderPinToggle({ kind, id, className = "" }: { kind: "role" | "session"; id: string; className?: string }) {
-  const pinned = useInboxStore((st) => isHeaderPinned(st, kind, id));
+/** "Pin to header" / "Unpin from header" for a session's own menu. Renders
+ *  nothing where the header has no pins (the org feature is off). */
+export function HeaderPinMenuItem({ sessionId }: { sessionId: string }) {
+  const orgOn = useWorkspaceFeature("org");
+  const pinned = useInboxStore((st) => isHeaderPinned(st, "session", sessionId));
+  if (!orgOn) return null;
   return (
-    <button
-      type="button"
-      onClick={() => toggleHeaderPin(kind, id)}
-      className={`inline-flex items-center gap-1 text-[11px] text-sol-text-muted hover:text-sol-text ${className}`}
-      title={pinned ? "Remove from the app header" : "Keep in the app header, on every page"}
-      data-header-pin-toggle={pinned ? "pinned" : "unpinned"}
-    >
-      {pinned ? <PinOff className="w-3 h-3" /> : <Pin className="w-3 h-3" />}
-      {pinned ? "Unpin" : "Pin to header"}
-    </button>
+    <DropdownMenuItem onSelect={() => toggleHeaderPin("session", sessionId)} data-header-pin-toggle={pinned ? "pinned" : "unpinned"}>
+      {pinned ? <PinOff className="w-3 h-3 mr-1.5" /> : <Pin className="w-3 h-3 mr-1.5" />}
+      {pinned ? "Unpin from header" : "Pin to header"}
+    </DropdownMenuItem>
   );
 }

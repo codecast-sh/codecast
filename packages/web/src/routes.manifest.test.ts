@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { ROUTES, routeHref, tabRoutes, type RouteEntry } from "./routes.manifest";
+import { NON_TAB_EXACT, NON_TAB_PREFIXES } from "../lib/tabRoutes";
+import { isUnderRoot } from "../components/simple/laneBoot";
 import { APP_SURFACES, APP_SURFACE_EXCLUDED_PATHS } from "@codecast/shared/contracts";
 
 /**
@@ -24,7 +26,6 @@ const appSrc = read("src/App.tsx");
 // The route map lives in RoutePane (shared by plain tabs and split panes).
 const tabContentSrc = read("components/RoutePane.tsx");
 const dashLayoutSrc = read("components/DashboardLayout.tsx");
-const tabRoutingSrc = read("lib/tabRoutes.ts");
 // The in-shell single-segment set lives with the desktop hand-off gate (which
 // may import nothing) and is shared by tabRoutes.
 const handoffSrc = read("lib/desktopHandoff.ts");
@@ -186,20 +187,11 @@ function parseFullWidthBasePaths(src: string): string[] {
 
 const fullWidthBases = parseFullWidthBasePaths(dashLayoutSrc);
 
-// -- (4) tabRouting parser: the NON_TAB exact set + prefixes (outside the tab shell) -------
+// -- (4) tabRouting: the NON_TAB exact set + prefixes (outside the tab shell) -------------
+// Imported rather than parsed: tabRoutes is pure, and some prefixes are built
+// from shared constants (the lane's roots) that a source parse would miss.
 
-function parseNonTabRules(src: string): { exact: Set<string>; prefixes: string[] } {
-  const exactBlock = src.match(/NON_TAB_EXACT\s*=\s*new Set\(\[([\s\S]*?)\]\)/);
-  const prefixBlock = src.match(/NON_TAB_PREFIXES\s*=\s*\[([\s\S]*?)\]/);
-  const pull = (block: string | undefined) =>
-    block ? Array.from(block.matchAll(/"([^"]+)"/g)).map((m) => m[1]) : [];
-  return {
-    exact: new Set(pull(exactBlock?.[1])),
-    prefixes: pull(prefixBlock?.[1]),
-  };
-}
-
-const nonTab = parseNonTabRules(tabRoutingSrc);
+const nonTab = { exact: NON_TAB_EXACT, prefixes: NON_TAB_PREFIXES };
 
 // tabRouting also knows the single-segment in-shell routes: any bare segment NOT
 // in this set is a public-profile handle (/:username) served full-page outside the
@@ -216,7 +208,7 @@ const inShellSegments = parseInShellRootSegments(handoffSrc);
 // that isn't a known in-shell route — i.e. a public-profile handle.
 function isNonTabHref(href: string): boolean {
   if (nonTab.exact.has(href)) return true;
-  if (nonTab.prefixes.some((p) => href === p || href.startsWith(p + "/"))) return true;
+  if (nonTab.prefixes.some((p) => isUnderRoot(href, p))) return true;
   const single = href.match(/^\/([^/]+)$/);
   return !!single && !inShellSegments.has(single[1].replace(/^:/, ""));
 }
@@ -355,7 +347,7 @@ describe("non-tab routes (tabRouting.ts) are NOT tagged tab-routable in the mani
       const href = routeHref(r.path);
       const isNonTab =
         nonTab.exact.has(href) ||
-        nonTab.prefixes.some((p) => href === p || href.startsWith(p + "/"));
+        nonTab.prefixes.some((p) => isUnderRoot(href, p));
       if (isNonTab) offenders.push(href);
     }
     expect(offenders).toEqual([]);
@@ -443,5 +435,15 @@ describe("(e) every param-free signed-in route is a cast app surface", () => {
       return expected !== s.kind;
     }).map((s) => `${s.name}: ${s.kind} vs ${servingRoute(s.name)?.layout}`);
     expect(wrong).toEqual([]);
+  });
+});
+
+describe("the simple lane's paths are routes", () => {
+  it("every LANE_PATHS entry, Stripe's return page included, has a ROUTES entry", async () => {
+    const { LANE_PATHS } = await import("../components/simple/lanePaths");
+    const { BILLING_RETURN } = await import("@codecast/shared/contracts/assistant");
+    const hrefs = new Set(ROUTES.map((r) => routeHref(r.path)));
+    for (const path of Object.values(LANE_PATHS)) expect(hrefs.has(path)).toBe(true);
+    expect(hrefs.has(BILLING_RETURN.path)).toBe(true);
   });
 });

@@ -1,4 +1,4 @@
-import { captureException } from "@sentry/react";
+import { captureError } from "./analytics";
 import type { ConvexAgentType } from "@codecast/shared/contracts";
 import { isConvexId, type InboxSession, useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -22,7 +22,7 @@ export async function switchSessionAgent(
     await useInboxStore.getState().convCommand(id, "switchSessionAgent", { agent_type: targetAgentType });
   } catch (error) {
     if (isParkedDispatchError(error)) return;
-    captureException(error);
+    captureError(error instanceof Error ? error : new Error(String(error)));
     // The switch failed: taking back our own stamp is not an undoable change.
     withoutUndo(() => useInboxStore.getState().setConversationAgent(id, previousAgentType));
     throw error;
@@ -80,7 +80,7 @@ export function forkSessionAsAgent(
 
   const ready = dispatch.catch((error) => {
     if (isParkedDispatchError(error)) return sessionId;
-    captureException(error);
+    captureError(error instanceof Error ? error : new Error(String(error)));
     const latest = useInboxStore.getState();
     latest.moveDraft(sessionId, parentId);
     latest.discardForkStub(sessionId, parentId);
@@ -88,4 +88,15 @@ export function forkSessionAsAgent(
   });
 
   return { sessionId, ready };
+}
+
+export type SessionAgentRow = Pick<InboxSession, "_id" | "title" | "agent_type" | "project_path" | "git_root">;
+
+/** The row the move actions act on: the live store row, else a minimal
+ *  stand-in from what the caller already knows. */
+export function sessionRowFor(conversationId: string, agentType: string | undefined): SessionAgentRow {
+  const s = useInboxStore.getState();
+  const id = s.getConvexId(conversationId) ?? conversationId;
+  const row = (s.sessions[id] ?? s.conversations[id]) as SessionAgentRow | undefined;
+  return row ?? ({ _id: conversationId, agent_type: agentType } as SessionAgentRow);
 }

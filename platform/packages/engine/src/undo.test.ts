@@ -3214,9 +3214,11 @@ const manualServer = (h: ReturnType<typeof makeStore>) => {
       fail: (msg = "Server Error") => reject(new Error(msg)),
     });
   }));
-  const next = async (action: string) => {
-    await waitFor(() => queue.some((q) => q.action === action));
-    return queue.splice(queue.findIndex((q) => q.action === action), 1)[0]!;
+  // The next request for `action`, or for `action` writing row `id`.
+  const next = async (action: string, id?: string) => {
+    const match = (q: (typeof queue)[number]) => q.action === action && (!id || id in q.patch);
+    await waitFor(() => queue.some(match));
+    return queue.splice(queue.findIndex(match), 1)[0]!;
   };
   // Lands everything still asked for, and whatever its retries ask next.
   const drain = async () => {
@@ -3659,8 +3661,8 @@ describe.skipIf(!FUZZ)("refusal fuzz", () => {
         quiet = queue.length === 0 && held.length === 0 && h.outbox.size === 0 ? quiet + 1 : 0;
       }
     };
-    h.wrapped.seed(A, { title: "t0", color: "c0" });
-    h.wrapped.seed(B, { title: "t0", color: "c0" });
+    h.wrapped.seed(A, { title: "t0", color: "c0", priority: "t0" });
+    h.wrapped.seed(B, { title: "t0", color: "c0", priority: "t0" });
     // Seeds always land.
     await waitFor(() => queue.length === 2);
     for (const q of queue.splice(0)) {
@@ -3668,32 +3670,42 @@ describe.skipIf(!FUZZ)("refusal fuzz", () => {
       q.resolve({});
     }
     await waitFor(() => h.outbox.size === 0);
-    for (const id of [A, B]) server.set(id, { title: "t0", color: "c0" });
+    for (const id of [A, B]) server.set(id, { title: "t0", color: "c0", priority: "t0" });
     const ops: string[] = [];
-    const n = 3 + Math.floor(r() * 5);
+    // UNDO_FUZZ_LEN=<n> runs longer sequences (refusals reach further back).
+    const n = Number(process.env.UNDO_FUZZ_LEN ?? 0) || 3 + Math.floor(r() * 5);
     for (let i = 0; i < n; i++) {
       const k = r();
       const id = pick([A, B]);
       const t = pick(["t0", "t1", "t2"]);
       const c = pick(["c0", "c1"]);
-      if (k < 0.3) { ops.push(`retitle ${id[0]} ${t}`); h.wrapped.retitle(id, t); }
-      else if (k < 0.5) { ops.push(`setTwo ${id[0]} ${t} ${c}`); h.wrapped.setTwo(id, t, c); }
-      else if (k < 0.6) { ops.push(`group ${t} ${c}`); undoGroup("g", () => { h.wrapped.retitle(A, t); h.wrapped.setTwo(B, pick(["t0", "t1", "t2"]), c); }); }
-      else if (k < 0.8) { ops.push("undo"); performUndo(); }
-      else if (k < 0.9) { ops.push("redo"); performRedo(); }
-      else {
+      if (k < 0.22) { ops.push(`retitle ${id[0]} ${t}`); h.wrapped.retitle(id, t); }
+      else if (k < 0.36) { ops.push(`setTwo ${id[0]} ${t} ${c}`); h.wrapped.setTwo(id, t, c); }
+      // Coalesced calls: a run of them merges, and one that ends where it began vanishes.
+      else if (k < 0.48) { ops.push(`cycle ${id[0]} ${t}`); h.wrapped.cycle(id, t); }
+      else if (k < 0.56) { ops.push(`group ${t} ${c}`); undoGroup("g", () => { h.wrapped.retitle(A, t); h.wrapped.setTwo(B, pick(["t0", "t1", "t2"]), c); }); }
+      else if (k < 0.72) { ops.push("undo"); performUndo(); }
+      else if (k < 0.82) { ops.push("redo"); performRedo(); }
+      else if (k < 0.88) {
         const order = getUndoHistory().undoOrder;
         if (order.length > 1) { ops.push(`undoTo ${order.length - 1}`); undoTo(order[order.length - 1]!); }
+      } else if (k < 0.94) {
+        // A toast's own undo: an entry below the top, out of turn.
+        const order = getUndoHistory().undoOrder;
+        if (order.length > 0) { const at = Math.floor(r() * order.length); ops.push(`undoEntry ${at}`); undoEntry(order[at]!); }
+      } else {
+        const order = getUndoHistory().redoOrder;
+        if (order.length > 0) { ops.push(`redoTo ${order.length - 1}`); redoTo(order[order.length - 1]!); }
       }
       const steps = Math.floor(r() * 3);
       for (let j = 0; j < steps; j++) settleOne();
       await sleep(r() < 0.5 ? 0 : 8);
     }
     await settleAll();
-    const fail = (why: string) => `seed ${seed}: ${why}\n  ops ${JSON.stringify(ops)}\n  history ${JSON.stringify(items().map((i) => [i.label, i.status, (i.changes ?? []).map((c) => `${c.id[0]}.${c.field}:${c.before}>${c.after}`)]))}\n  server ${JSON.stringify([...server.entries()].map(([id, row]) => [id[0], row.title, row.color]))} screen ${JSON.stringify([A, B].map((id) => [id[0], h.state.items[id].title, h.state.items[id].color]))}`;
+    const fail = (why: string) => `seed ${seed}: ${why}\n  ops ${JSON.stringify(ops)}\n  history ${JSON.stringify(items().map((i) => [i.label, i.status, (i.changes ?? []).map((c) => `${c.id[0]}.${c.field}:${c.before}>${c.after}`)]))}\n  server ${JSON.stringify([...server.entries()].map(([id, row]) => [id[0], row.title, row.color, row.priority]))} screen ${JSON.stringify([A, B].map((id) => [id[0], h.state.items[id].title, h.state.items[id].color, h.state.items[id].priority]))}`;
     for (const id of [A, B]) {
       const s = server.get(id)!;
-      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color) return fail("screen differs from server");
+      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color || s.priority !== h.state.items[id].priority) return fail("screen differs from server");
     }
     const byId = new Map(items().map((i) => [i.id, i]));
     for (const id of [...getUndoHistory().undoOrder, ...getUndoHistory().redoOrder]) {
@@ -3710,7 +3722,7 @@ describe.skipIf(!FUZZ)("refusal fuzz", () => {
     }
     for (const id of [A, B]) {
       const s = server.get(id)!;
-      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color) return fail("screen differs from server after the walk");
+      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color || s.priority !== h.state.items[id].priority) return fail("screen differs from server after the walk");
     }
     return null;
   };
@@ -3740,5 +3752,282 @@ describe("replay bookkeeping goes through beginStep", () => {
     const assigns = outside.match(/\.(replayOutboxIds|replayDir|replaySent|supersededReplay)\s*=(?!=)/g) ?? [];
     // The one other writer: a pass's commit appends its own outbox id.
     expect(assigns).toEqual([".replayOutboxIds ="]);
+  });
+});
+
+// A coalesced run that ended where it began leaves the history while its
+// calls are still on the wire, and it can come back. While it is out it must
+// take every rebase the history takes: a refusal under it moves the value its
+// run began from.
+describe("a vanished run takes the rebases of the history", () => {
+  it("a refusal under the run, then a refusal of its closing call: its undo goes back to what stood", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    h.wrapped.seed(B, { title: "b", priority: "p0" });
+    (await server.next("seed")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    undoGroup("Set priority", () => h.wrapped.cycle(B, "p2"));
+    h.wrapped.cycle(B, "p1");
+    h.wrapped.cycle(B, "p2");
+    expect(items().map((i) => i.label)).toEqual(["Set priority"]);
+    (await server.next("cycle")).fail("Uncaught Error: no");
+    (await server.next("cycle")).ok();
+    (await server.next("cycle")).fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[B].priority).toBe("p1");
+    expect(server.rows.get(B)?.priority).toBe("p1");
+    const run = items().find((i) => i.label === "Priority p1")!;
+    expect(run.status).toBe("done");
+    expect(run.changes!.find((c) => c.field === "priority")).toMatchObject({ before: "p0", after: "p1" });
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[B].priority).toBe("p0");
+    expect(server.rows.get(B)?.priority).toBe("p0");
+  });
+
+  it("a refusal under the run when every call lands: the run is a change again and undoes to what stood", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    h.wrapped.seed(B, { title: "b", priority: "p0" });
+    (await server.next("seed")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    undoGroup("Set priority", () => h.wrapped.cycle(B, "p2"));
+    h.wrapped.cycle(B, "p1");
+    h.wrapped.cycle(B, "p2");
+    (await server.next("cycle")).fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(B)?.priority).toBe("p2");
+    expect(h.state.items[B].priority).toBe("p2");
+    const run = items().find((i) => i.label === "Priority p2")!;
+    expect(run?.status).toBe("done");
+    expect(getUndoHistory().undoOrder[0]).toBe(run.id);
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[B].priority).toBe("p0");
+    expect(server.rows.get(B)?.priority).toBe("p0");
+  });
+});
+
+// The group form of "an undo replay overtaken by a redo": a child's step
+// starts through beginStep and keeps the replay it overtook, so a refusal of
+// the child's redo after that replay was dropped puts the child back too.
+describe("a group child's undo replay overtaken by its redo", () => {
+  const C = "c".repeat(32);
+  it("re-invoke: the child stays done and the group undoes it", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.seed(B, { title: "b0" });
+    (await server.next("seed")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    undoGroup("g", () => { h.wrapped.retitle(A, "x"); h.wrapped.retitle(B, "y"); });
+    (await server.next("retitle", A)).ok();
+    (await server.next("retitle", B)).ok();
+    await waitFor(() => h.outbox.size === 0);
+    const group = top();
+    expect(performUndo()).toBe(true);
+    const replayA = await server.next("applyUndoPatches", A);
+    const replayB = await server.next("applyUndoPatches", B);
+    expect(performRedo()).toBe(true);
+    const redoA = await server.next("retitle", A);
+    const redoB = await server.next("retitle", B);
+    replayA.fail();
+    replayB.ok();
+    await sleep(20);
+    redoA.fail("Uncaught Error: no");
+    redoB.ok();
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("x");
+    expect(h.state.items[A].title).toBe("x");
+    const g = items().find((i) => i.id === group.id)!;
+    expect(g.status).toBe("done");
+    expect(g.children!.map((c) => [c.label, c.status])).toEqual([["Retitled to x", "done"], ["Retitled to y", "done"]]);
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect([h.state.items[A].title, h.state.items[B].title]).toEqual(["a0", "b0"]);
+    expect([server.rows.get(A)?.title, server.rows.get(B)?.title]).toEqual(["a0", "b0"]);
+  });
+
+  it("partial redo: the child stays done and the group undoes it", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "a" });
+    (await server.next("seed")).ok();
+    h.wrapped.seed(B, { title: "b" });
+    (await server.next("seed")).ok();
+    h.wrapped.seed(C, { title: "c" });
+    (await server.next("seed")).ok();
+    undoGroup("g", () => { h.wrapped.renameBoth(A, B, "both"); h.wrapped.retitle(C, "z"); });
+    (await server.next("renameBoth")).ok();
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    const group = top();
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    expect(performUndo()).toBe(true);
+    const replayC = await server.next("applyUndoPatches", C);
+    const replayA = await server.next("applyUndoPatches", A);
+    expect(performRedo()).toBe(true);
+    const redoA = await server.next("applyUndoPatches", A);
+    const redoC = await server.next("retitle", C);
+    replayA.fail();
+    replayC.ok();
+    await sleep(20);
+    redoA.fail("Uncaught Error: no");
+    redoC.ok();
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("both");
+    expect(h.state.items[A].title).toBe("both");
+    const g = items().find((i) => i.id === group.id)!;
+    expect(g.children!.map((c) => c.status)).toEqual(["done", "done"]);
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect([h.state.items[A].title, h.state.items[C].title]).toEqual(["a", "c"]);
+    expect([server.rows.get(A)?.title, server.rows.get(C)?.title]).toEqual(["a", "c"]);
+  });
+});
+
+// A refusal of an entry's forward write is judged against the entry's later
+// steps: a redo replay that re-sends the after values stands on its own, and
+// a refused forward under a redo that is refused too leaves nothing standing.
+describe("a refused forward under the entry's later steps", () => {
+  it("a partial redo's replay is out when the forward is refused: the entry stays done and the gesture after it undoes to its value", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "a" });
+    (await server.next("seed")).ok();
+    h.wrapped.seed(B, { title: "b" });
+    (await server.next("seed")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    h.wrapped.renameBoth(A, B, "both");
+    const forward = await server.next("renameBoth");
+    const both = top();
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    expect(performUndo()).toBe(true);
+    expect(performRedo()).toBe(true);
+    h.wrapped.retitle(A, "z");
+    const later = top();
+    forward.fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("z");
+    expect(items().find((i) => i.id === both.id)!.status).toBe("done");
+    expect(items().find((i) => i.id === later.id)!.changes!.find((c) => c.field === "title")).toMatchObject({ before: "both", after: "z" });
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("both");
+    expect(server.rows.get(A)?.title).toBe("both");
+  });
+
+  it("a forward refused under a re-invoke redo that is refused too, with the undo replay between dropped: the entry is refused", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.retitle(A, "x");
+    const forward = await server.next("retitle");
+    const entry = top();
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    expect(performRedo()).toBe(true);
+    const redo = await server.next("retitle");
+    forward.fail("Uncaught Error: no");
+    await sleep(20);
+    replay.fail();
+    await sleep(20);
+    redo.fail("Uncaught Error: no");
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("a0");
+    // Nothing after the seed landed (the seed's own add is not a row patch).
+    expect(server.rows.get(A)?.title).toBeUndefined();
+    expect(items().find((i) => i.id === entry.id)!.status).toBe("refused");
+    expect(getUndoHistory().undoOrder).not.toContain(entry.id);
+    expect(getUndoHistory().redoOrder).not.toContain(entry.id);
+  });
+});
+
+// A refused forward under an undone entry waits beside its undo replay
+// (replayDeferred). A redo that overtakes the replay starts a new step and
+// records the replay's value as its before; when the replay is refused, the
+// deferred move must reach that before too.
+describe("a deferred rebase outlives the step that superseded its replay", () => {
+  it("and every step after it: undo, re-invoke redo, undo again, then the first replay refused", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.retitle(A, "t1");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    h.wrapped.retitle(A, "bad");
+    const refusedForward = await server.next("retitle");
+    h.wrapped.retitle(A, "z");
+    const entry = top();
+    (await server.next("retitle")).ok();
+    expect(performUndo()).toBe(true);
+    const firstReplay = await server.next("applyUndoPatches");
+    refusedForward.fail("Uncaught Error: no");
+    await sleep(20);
+    expect(performRedo()).toBe(true);
+    const redo = await server.next("retitle");
+    expect(performUndo()).toBe(true);
+    const secondReplay = await server.next("applyUndoPatches");
+    firstReplay.fail("Uncaught Error: no");
+    await sleep(20);
+    redo.ok();
+    secondReplay.fail("Uncaught Error: no");
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("z");
+    expect(server.rows.get(A)?.title).toBe("z");
+    const e = items().find((i) => i.id === entry.id)!;
+    expect(e.status).toBe("done");
+    expect(e.changes!.find((c) => c.field === "title")).toMatchObject({ before: "t1", after: "z" });
+  });
+
+  it("forward under the entry refused while its undo replay was out, then a re-invoke redo, then the replay refused", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.retitle(A, "t1");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    h.wrapped.retitle(A, "bad");
+    const refusedForward = await server.next("retitle");
+    h.wrapped.retitle(A, "z");
+    const entry = top();
+    (await server.next("retitle")).ok();
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    refusedForward.fail("Uncaught Error: no");
+    await sleep(20);
+    expect(performRedo()).toBe(true);
+    const redo = await server.next("retitle");
+    replay.fail("Uncaught Error: no");
+    await sleep(20);
+    redo.ok();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("z");
+    expect(server.rows.get(A)?.title).toBe("z");
+    const e = items().find((i) => i.id === entry.id)!;
+    expect(e.status).toBe("done");
+    expect(e.changes!.find((c) => c.field === "title")).toMatchObject({ before: "t1", after: "z" });
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("t1");
+    expect(server.rows.get(A)?.title).toBe("t1");
   });
 });

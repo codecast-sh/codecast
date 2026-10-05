@@ -7,7 +7,7 @@
 // the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
 // LineStations, built beside this page.
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
@@ -50,11 +50,16 @@ export function LineSettingsPage() {
   const target = lineSettingsTarget(useSearchParams());
   const body = useRef<HTMLDivElement>(null);
   const ready = !!project && !!lp;
+  // Once per arrival: a later render must never pull the reader back up.
+  const landed = useRef<string | null>(null);
   useEffect(() => {
     // A station scrolls itself into view once its panel opens (LineStations).
     if (!ready || !target.section || target.station) return;
+    const key = `${project?._id}:${target.section}`;
     const el = body.current?.querySelector<HTMLElement>(`[data-lset-section="${target.section}"]`);
-    el?.scrollIntoView({ block: "start" });
+    if (!el || landed.current === key) return;
+    landed.current = key;
+    el.scrollIntoView({ block: "start" });
   }, [ready, target.section, project?._id]);
 
   const sense = useMemo(() => (project && lp
@@ -73,6 +78,19 @@ export function LineSettingsPage() {
     const i = all.indexOf(el);
     const next = all[i + (k === "ArrowDown" || k === "j" ? 1 : -1)];
     if (next) { e.preventDefault(); next.focus(); next.scrollIntoView({ block: "nearest" }); }
+  };
+
+  // The rail marks the section being read: the last one whose top has passed
+  // a third of the way down the view. Scroll position only, so it holds in a
+  // background tab where observers stall.
+  const [inView, setInView] = useState<string>(NAV[0].id);
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const line = el.getBoundingClientRect().top + el.clientHeight / 3;
+    const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    let id = NAV[0].id;
+    for (const s of el.querySelectorAll<HTMLElement>("[data-lset-section]")) if (atEnd || s.getBoundingClientRect().top <= line) id = s.dataset.lsetSection!;
+    if (id !== inView) setInView(id);
   };
 
   const commitField = (field: LineField) => (text: string) => {
@@ -98,10 +116,10 @@ export function LineSettingsPage() {
       {!project || !lp ? (
         <Unset lineKey={line.key} titled={project?.title} hasLines={rollup.length > 0} />
       ) : (
-        <div ref={body} className="flex-1 min-h-0 overflow-y-auto" onKeyDown={onKeyDown}>
+        <div ref={body} className="flex-1 min-h-0 overflow-y-auto" onKeyDown={onKeyDown} onScroll={onScroll}>
           <div className="lset-body px-4 sm:px-6 pb-10">
             <nav className="lset-index" aria-label="Sections">
-              {NAV.map((n) => <a key={n.id} href={`#lset-${n.id}`} className="lset-index-link">{n.title}</a>)}
+              {NAV.map((n) => <a key={n.id} href={`#lset-${n.id}`} className="lset-index-link" aria-current={inView === n.id ? "location" : undefined}>{n.title}</a>)}
             </nav>
             <div className="lset-main">
               <Plate lp={lp} gate={gate} />

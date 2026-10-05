@@ -32,6 +32,7 @@ import { laneOf, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
 import { startConversationWith } from "../../components/simple/startConversation";
 import { useLaneFont } from "../../components/simple/useLaneFont";
+import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneGoogle } from "../../components/simple/useLaneGoogle";
 import { SKIP_PARAM, SKIP_VALUE, stepDirection, welcomeStep, welcomeTrail, type WelcomeStep } from "./onboarding";
 import "../../components/simple/simple.css";
@@ -99,6 +100,7 @@ function useShownStep(target: WelcomeStep | null, hold: boolean): WelcomeStep | 
 
 export default function Welcome() {
   useLaneFont();
+  useLaneDocumentTitle();
   const signedIn = useLocalAuth();
   return (
     <div data-simple-lane data-welcome>

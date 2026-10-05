@@ -44,7 +44,10 @@ export function Spark({
 /**
  * A line through values, oldest first, with the last point marked: a number
  * read over time (a goal's metric history). A target, when given and in
- * range, is a faint rule so the eye sees the distance to it.
+ * range, is a faint rule so the eye sees the distance to it. In range means
+ * the series keeps at least a third of the height with the target on the
+ * scale; a target further off would flatten the line, so it is left off and
+ * the series draws at full height.
  */
 export function SparkLine({
   values,
@@ -64,8 +67,9 @@ export function SparkLine({
   className?: string;
 }) {
   if (values.length < 2) return null;
-  const all = target != null ? [...values, target] : values;
-  const lo = Math.min(...all), hi = Math.max(...all);
+  const seriesLo = Math.min(...values), seriesHi = Math.max(...values);
+  const ruled = target != null && (seriesHi === seriesLo || (seriesHi - seriesLo) * 3 >= Math.max(seriesHi, target) - Math.min(seriesLo, target));
+  const lo = ruled ? Math.min(seriesLo, target) : seriesLo, hi = ruled ? Math.max(seriesHi, target) : seriesHi;
   const span = hi - lo || 1;
   const pad = 2;
   const x = (i: number) => pad + (i / (values.length - 1)) * (width - pad * 2);
@@ -74,7 +78,7 @@ export function SparkLine({
   const last = values[values.length - 1];
   return (
     <svg className={cn("shrink-0", className)} width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label={label} role={label ? "img" : undefined} data-sparkline>
-      {target != null && <line x1={pad} x2={width - pad} y1={y(target)} y2={y(target)} stroke="currentColor" strokeOpacity={0.25} strokeDasharray="2 2" strokeWidth={1} />}
+      {ruled && <line x1={pad} x2={width - pad} y1={y(target)} y2={y(target)} stroke="currentColor" strokeOpacity={0.25} strokeDasharray="2 2" strokeWidth={1} />}
       <polyline points={points} fill="none" stroke={tone} strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" />
       <circle cx={x(values.length - 1)} cy={y(last)} r={2} fill={tone} />
     </svg>

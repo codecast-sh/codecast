@@ -44,14 +44,15 @@ export function deviceBusy(psOutput: string, udid: string, graceSecs: number): b
   return false;
 }
 
-export type ReapAction = "skip" | "strike" | "reap" | "clear-stale";
+/** skip clears any strike; wait keeps a strike that has not aged past the grace period yet. */
+export type ReapAction = "skip" | "strike" | "wait" | "reap" | "clear-stale";
 
 /** What one pass does with one pool device: the pure decision, for tests. */
 export function reapDecision(e: { state: PoolEntry["state"]; booted: boolean; watched: boolean; busy: boolean; seenAt?: number }, now: number, graceSecs = REAP_GRACE_SECS): ReapAction {
   if (!e.booted) return e.state === "stale" ? "clear-stale" : "skip";
   if (e.state === "held" || e.watched || e.busy) return "skip";
   if (e.seenAt === undefined) return "strike";
-  return now - e.seenAt >= graceSecs ? "reap" : "skip";
+  return now - e.seenAt >= graceSecs ? "reap" : "wait";
 }
 
 export interface ReapReport {
@@ -77,7 +78,7 @@ export function reapIdleSimulators(opts: { graceSecs?: number; log?: (m: string)
     try { seenAt = parseInt(fs.readFileSync(marker, "utf-8"), 10) || undefined; } catch {}
     const isBooted = booted.has(entry.udid);
     const action = reapDecision({ state: entry.state, booted: isBooted, watched: current === entry.udid, busy: isBooted && deviceBusy(ps, entry.udid, grace), seenAt }, now, grace);
-    if (action !== "strike" && action !== "reap") fs.rmSync(marker, { force: true });
+    if (action === "skip" || action === "clear-stale") fs.rmSync(marker, { force: true });
     if (action === "clear-stale") {
       releaseLock(entry.udid, dir);
       report.cleared.push(entry.udid);

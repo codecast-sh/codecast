@@ -6,15 +6,18 @@
 // false, and the screen claims neither that card payments are open nor that
 // they are not.
 import { useState } from "react";
+import { useSearchParams } from "react-router";
 import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { BillingRedirect, BillingStatus } from "@codecast/convex/convex/billing";
-import type { PlanId } from "@codecast/shared/contracts/assistant";
+import type { WalletSummary } from "@codecast/convex/convex/lib/wallet";
+import { BILLING_RETURN, billingReturnOutcome, type PlanId } from "@codecast/shared/contracts/assistant";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { BILLING_RETURN_PATIENCE_MS, billingReturnNote, billingReturnSettled, type BillingReturnNote } from "./lane";
 
 /** A plan to subscribe to, or a top-up in one of `TOPUP.amounts_usd`. Where
- *  Stripe sends the person back is the server's (BILLING_RETURN_PATH, this
- *  lane's plan page). */
+ *  Stripe sends the person back is BILLING_RETURN, this lane's plan page. */
 export type CheckoutRequest = { plan: PlanId } | { topup_usd: number };
 
 const DIDNT_OPEN = "Stripe didn't open. Try again in a moment.";
@@ -68,4 +71,29 @@ export function useBilling(open: OpenBillingPage = leaveForPage): BillingStatus 
     checkout: (req) => redirect(() => startCheckout(req)),
     manage: () => redirect(() => openPortal({})),
   };
+}
+
+/** The note for a return from Stripe (BILLING_RETURN). `?billing=` is read
+ *  once and taken off the URL, so a reload or a shared link does not repeat
+ *  it. The person is usually back before Stripe's webhook has reached the
+ *  wallet, so the note says the payment is on its way until the wallet shows
+ *  it (`billingReturnSettled`), then thanks them. A payment still missing
+ *  after BILLING_RETURN_PATIENCE_MS gets a note that points to support. */
+export function useBillingReturn(wallet: WalletSummary | null): BillingReturnNote | null {
+  const [params, setParams] = useSearchParams();
+  const [returned] = useState(() => ({ outcome: billingReturnOutcome(params.get(BILLING_RETURN.param)), at: Date.now() }));
+  const [late, setLate] = useState(false);
+  useMountEffect(() => {
+    if (!params.has(BILLING_RETURN.param)) return;
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete(BILLING_RETURN.param);
+      return next;
+    }, { replace: true });
+    if (returned.outcome !== "done" && returned.outcome !== "topup") return;
+    const timer = setTimeout(() => setLate(true), BILLING_RETURN_PATIENCE_MS);
+    return () => clearTimeout(timer);
+  });
+  if (!returned.outcome) return null;
+  return billingReturnNote(returned.outcome, billingReturnSettled(returned.outcome, wallet, returned.at), late);
 }

@@ -24,7 +24,9 @@
 set -u
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GIT=""
-IFS=: read -ra dirs <<< "${PATH:-}"
+# Process substitution, not a here-string: a here-string needs a temp file,
+# which the run's sandbox refuses.
+IFS=: read -ra dirs < <(printf '%s\n' "${PATH:-}")
 for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/git" ] && { GIT="$dir/git"; break; }; done
 [ -n "$GIT" ] || { echo "dry run: no real git on PATH" >&2; exit 127; }
 
@@ -123,7 +125,7 @@ for ((j = i + 1; j <= $#; j++)); do
       echo "dry run: $rev is on no branch of this repository as of $AT, when this run's record was captured" >&2
       exit 128
     fi
-  done <<< "$pieces"
+  done < <(printf '%s\n' "$pieces")
 done
 
 mark_call PINNED "$@"
