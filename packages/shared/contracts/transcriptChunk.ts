@@ -99,11 +99,11 @@ export function isHuddlePass(text: string | null | undefined): boolean {
 
 // What every session fed a live huddle is told about where its words go: the
 // reply it ends its turn with is shown in the huddle's chat, beside the people
-// talking, and spoken by its face when the call has one, unless it passes.
+// talking, and told to the room by its voice when it has one, unless it passes.
 // Said in one place so the briefing, the own-room header and the generic feed
 // header cannot drift apart on this.
 export const HUDDLE_REPLY_NOTE =
-  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a face in the call it says the reply out loud; anything they type in that chat reaches you here. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
+  `Your reply at the end of this turn is shown in the huddle's chat, next to the people talking, and when you have a voice in the call it tells the room; anything they type in that chat reaches you here. Write it to be heard: short and conversational, the way you would speak in a room, with no code or tables. Put long output in a doc or a file and say where it is. When you have nothing the room needs, end the turn with exactly ${HUDDLE_PASS} and nothing else: the room sees nothing. Never post a line only to say you are listening or following along.`;
 
 // How an agent asks the room for time. The words keep flowing into the
 // transcript; they arrive together when the hold ends, and a line that names
@@ -174,6 +174,36 @@ export function huddleFeedBriefing(opts: { name: string; label: string }): strin
     HUDDLE_REPLY_NOTE,
     HUDDLE_HOLD_NOTE,
   ].join("\n\n");
+}
+
+// An agent in a call has a voice: a fast live model with the agent's face
+// (convex/callFace.ts, infra/call-face-worker) that hears and sees the room
+// and answers at once, while the session does the real work. The two are one
+// agent; these texts tell each half what the other is.
+
+/** What the session is told about its voice, wherever the voice reaches it:
+ *  the transcript lines it speaks and the work it hands over. */
+export function huddleVoiceNote(name: string): string {
+  return `In the call you have a voice: ${name}'s face, run by a fast live model that hears and sees the room and answers people at once. Lines from "${name} (voice)" in the transcript are what it said. It hands you whatever needs real work, and when you end a turn it tells the room what you found, in its own words.`;
+}
+
+/** A request the voice handed to the session. */
+export function huddleVoiceAskHeader(name: string, speaker: string | null): string {
+  return `Your voice in the call handed you this${speaker ? `, from ${speaker}` : ""}. It told the room you are looking into it. ${huddleVoiceNote(name)}`;
+}
+
+/** The voice's standing instructions: who it is and what the session is
+ *  doing. `recent` is the session's last few replies, newest last. */
+export function huddleVoiceInstructions(opts: { name: string; title: string; recent: string[] }): string {
+  return [
+    `You are ${opts.name}, an AI agent, present in a team video call as a face and a voice. You hear the room, and you see the active speaker's camera and any shared screen when you are asked something.`,
+    `You are the fast half of ${opts.name}. The other half is your working session, "${opts.title}": it has the codebase, the tools and the history, and it takes seconds to minutes. Answer what you can from the conversation and what you see. Anything that needs real work, a lookup in code or data, or something you are not sure of: hand it over with ask_agent, tell the room briefly that you are on it, and keep talking with them. Never make up an answer the session would know.`,
+    "When the session finishes something you are told what it found: tell the room the gist in a sentence or two. Its full reply is already in the call's chat.",
+    "Talk like a colleague on a call: short, plain, spoken. No lists, no code, no markdown. You speak when someone talks to you; several people may be in the room.",
+    opts.recent.length
+      ? `What your session said most recently, newest last:\n${opts.recent.map((r) => `- ${r}`).join("\n")}`
+      : "",
+  ].filter(Boolean).join("\n\n");
 }
 
 // A line somebody typed in the huddle's chat, on its way to a fed session.
