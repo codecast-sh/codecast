@@ -21,7 +21,15 @@ export type TimelineDay = {
   total: number;
 };
 
-export type TimelineWeek = { kind: "week"; week: string; headline: string };
+export type TimelineWeek = {
+  kind: "week";
+  week: string;
+  headline: string;
+  /** The week told in a few sentences: what shipped and what it adds up to. */
+  summary: string | null;
+  /** The week's stories a teammate most needs to read, heaviest first. */
+  top: string[];
+};
 
 export type TimelineItem = TimelineDay | TimelineWeek;
 
@@ -38,6 +46,8 @@ export function buildTimeline(input: {
   person: Person | null;
   /** The team's today: its week is still being written, so it has no divider. */
   today: string;
+  /** A week already shown above the timeline, so it gets no divider of its own. */
+  skipWeek?: string;
 }): TimelineItem[] {
   const { url, person } = input;
   const byDate = new Map<string, StoryRow[]>();
@@ -48,11 +58,8 @@ export function buildTimeline(input: {
     byDate.set(s.date, day);
   }
   const editionOf = new Map(input.editions.map((e) => [e.date, e]));
-  const thisWeek = isoWeekOf(input.today);
   const summaries = new Set(input.editions.filter((e) => hasProse(e)).map((e) => e.headline!));
-  const weekHeadline = new Map(
-    input.weeks.filter((w) => hasProse(w) && w.date < thisWeek && !summaries.has(w.headline!)).map((w) => [w.date, w.headline!]),
-  );
+  const weekOf = new Map(finishedWeeks(input.weeks, input.today).filter((w) => !summaries.has(w.headline)).map((w) => [w.week, w]));
 
   const out: TimelineItem[] = [];
   let lastWeek: string | null = null;
@@ -63,8 +70,8 @@ export function buildTimeline(input: {
     const week = isoWeekOf(date);
     if (week !== lastWeek) {
       lastWeek = week;
-      const headline = weekHeadline.get(week);
-      if (headline) out.push({ kind: "week", week, headline });
+      const notes = weekOf.get(week);
+      if (notes && notes.week !== input.skipWeek) out.push(notes);
     }
     const edition = editionOf.get(date);
     const brief = edition && hasProse(edition) && edition.brief_story_keys ? new Set(edition.brief_story_keys) : null;
@@ -79,6 +86,18 @@ export function buildTimeline(input: {
     });
   }
   return out;
+}
+
+/**
+ * The finished weeks whose notes are written, newest first. The week in
+ * progress has none: its notes only restate its newest day.
+ */
+export function finishedWeeks(weeks: readonly EditionRow[], today: string): TimelineWeek[] {
+  const thisWeek = isoWeekOf(today);
+  return weeks
+    .filter((w) => hasProse(w) && w.date < thisWeek)
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map((w) => ({ kind: "week", week: w.date, headline: w.headline!, summary: w.narrative?.trim() || null, top: w.top_story_keys ?? [] }));
 }
 
 /** The days the timeline shows, oldest last: what a "load earlier" reads to know it reached the fed range. */

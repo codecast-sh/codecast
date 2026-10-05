@@ -12,6 +12,7 @@
 import * as Accordion from "@radix-ui/react-accordion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { isoWeekOf, weekMonday } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { localDate, normalizeTimezone } from "@codecast/convex/convex/lib/teamDay";
 import {
@@ -39,12 +40,12 @@ import { TooltipProvider } from "../ui/tooltip";
 import { TimelineHeader, type FilterOptions } from "./ChangesHeader";
 import { commitPath } from "./EvidenceDrawer";
 import { assignAreaColors } from "./areaColor";
-import { nameOfPerson, peopleOf, personFor } from "./editionModel";
+import { hasProse, nameOfPerson, peopleOf, personFor } from "./editionModel";
 import { plural } from "./format";
 import { NoMatch } from "./StoryParts";
 import { StoryRow } from "./StoryRow";
 import { StoryCtx, createFocusStore, type StoryContext } from "./storyContext";
-import { buildTimeline, type TimelineDay } from "./timelineModel";
+import { buildTimeline, finishedWeeks, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { changesHref, clearFilters, hasFilters, useChangesUrlState } from "./useChangesUrlState";
 
@@ -107,14 +108,42 @@ function DaySection({ day, today }: { day: TimelineDay; today: string }) {
   );
 }
 
-function WeekDivider({ headline }: { headline: string }) {
+/**
+ * A week told whole: its headline, a few sentences on what shipped and what
+ * it adds up to, and the stories most worth opening. The latest finished week
+ * opens the page; earlier ones sit where the timeline enters them.
+ */
+function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label: string; byKey: ReadonlyMap<string, Story>; onOpen: (key: string) => void }) {
+  const top = week.top.map((k) => byKey.get(k)).filter((s): s is Story => !!s && hasProse(s));
   return (
-    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 pb-2 pt-8">
-      <span className="font-mono text-[11px] text-sol-text/40">week</span>
-      <p className="chg-ui text-[13px] leading-[1.5] text-sol-text/60">{headline}</p>
-    </div>
+    <section className="chg-week grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label}>
+      <h2 className="self-start pt-0.5 font-mono text-[12px] text-sol-text/55">{label}</h2>
+      <div className="min-w-0 rounded-lg bg-sol-bg-alt/50 px-5 py-4">
+        <p className="chg-ui text-[16px] font-semibold leading-[1.4] text-sol-text [overflow-wrap:anywhere]">{week.headline}</p>
+        {week.summary && <p className="chg-ui mt-2 max-w-[46rem] text-[14px] leading-[1.65] text-sol-text/80 [overflow-wrap:anywhere]">{week.summary}</p>}
+        {top.length > 0 && (
+          <ul className="mt-3 space-y-1">
+            {top.map((s) => (
+              <li key={s.story_key}>
+                <button type="button" onClick={() => onOpen(s.story_key)} className="chg-ui text-left text-[13px] leading-[1.5] text-sol-text/70 underline-offset-2 hover:text-sol-text hover:underline">
+                  {s.headline}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
+
+/** The calendar day `days` from `day` (YYYY-MM-DD), free of any clock or zone. */
+const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+const weekLabel = (week: string) => {
+  const monday = weekMonday(week);
+  return monday ? `Week of ${changesDayLabel(monday)}` : week;
+};
 
 /** Calls `onReach` whenever the element scrolls into view (or near it). */
 function useReach(onReach: () => void) {
@@ -194,7 +223,11 @@ export function ChangesPage() {
   const personName = useMemo(() => nameOfPerson(people, fallbackName), [people, fallbackName]);
 
   const viewUrl = useMemo(() => ({ ...url, story: undefined }), [changesHref({ ...url, story: undefined })]); // eslint-disable-line react-hooks/exhaustive-deps
-  const items = useMemo(() => buildTimeline({ stories, editions, weeks, url: viewUrl, person, today }), [stories, editions, weeks, viewUrl, person, today]);
+  const latestWeek = useMemo(() => finishedWeeks(weeks, today)[0] ?? null, [weeks, today]);
+  const items = useMemo(
+    () => buildTimeline({ stories, editions, weeks, url: viewUrl, person, today, skipWeek: hasFilters(viewUrl) ? undefined : latestWeek?.week }),
+    [stories, editions, weeks, viewUrl, person, today, latestWeek],
+  );
   const shown = useMemo(() => items.flatMap((i) => (i.kind === "day" ? [...i.stories, ...i.small] : [])), [items]);
   const byKey = useMemo(() => new Map(shown.map((s) => [s.story_key, s])), [shown]);
 
@@ -309,6 +342,12 @@ export function ChangesPage() {
     rootRef.current?.querySelector<HTMLElement>(`[data-story-key="${CSS.escape(key)}"]`)?.scrollIntoView({ block: "center" });
   }, [url.story, byKey, focus]);
 
+  /** Open a story from outside its day (a week's top list): the landing effect scrolls it on screen. */
+  const openStory = useCallback((key: string) => {
+    landed.current = null;
+    setUrl({ story: key });
+  }, [setUrl]);
+
   const more = useReach(() => setChunks((c) => (c < MAX_CHUNKS ? c + 1 : c)));
   const cold = !feed.ready && stories.length === 0 && editions.length === 0;
   const filtering = hasFilters(url);
@@ -341,9 +380,10 @@ export function ChangesPage() {
             )
           ) : (
             <Accordion.Root type="single" collapsible value={url.story ?? ""} onValueChange={(v) => setUrl({ story: v || undefined })} className="mt-4">
+              {latestWeek && !filtering && <WeekSummary week={latestWeek} label={latestWeek.week === isoWeekOf(shiftDay(today, -7)) ? "Last week" : weekLabel(latestWeek.week)} byKey={byKey} onOpen={openStory} />}
               {items.map((item) =>
                 item.kind === "week"
-                  ? <WeekDivider key={`w-${item.week}`} headline={item.headline} />
+                  ? <WeekSummary key={`w-${item.week}`} week={item} label={weekLabel(item.week)} byKey={byKey} onOpen={openStory} />
                   : <DaySection key={item.date} day={item} today={today} />,
               )}
             </Accordion.Root>
