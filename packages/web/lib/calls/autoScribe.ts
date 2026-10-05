@@ -28,8 +28,10 @@ export type AutoScribeInput = {
   rosterIds: string[];
   meId: string | null;
   // transcripts.getLive: undefined while loading, null when nobody is
-  // transcribing, else the live run and who started it.
-  live: { startedBy: string } | null | undefined;
+  // transcribing, else the live run and its scribe. A scribe of null is a
+  // record a Record press made that nobody has scribed yet (scribe_open):
+  // the presser owns it, but may be on a phone that never scribes.
+  live: { startedBy: string | null } | null | undefined;
   scribeActive: boolean;
 };
 
@@ -46,7 +48,7 @@ export function decideAutoScribe(i: AutoScribeInput): AutoScribeVerdict {
   // transcript stays live — it is theirs now.
   if (i.scribeActive) {
     if (i.transcribeOff && optOutAimsAtRun(i)) return "stop";
-    return i.live && i.live.startedBy !== i.meId ? "yield" : "hold";
+    return i.live && i.live.startedBy !== null && i.live.startedBy !== i.meId ? "yield" : "hold";
   }
   if (i.transcribeOff) return "hold";
   // A huddle is two or more people; a seat waiting for a ring to be answered
@@ -58,6 +60,9 @@ export function decideAutoScribe(i: AutoScribeInput): AutoScribeVerdict {
   // the transcript is how the words reach it.
   if (i.rosterIds.length < 2 && !sessionRoomConversationId(i.roomKey)) return "hold";
   if (!i.live) return "start";
+  // A live record with no scribe yet: take it, under the same roster rule a
+  // fresh run follows.
+  if (i.live.startedBy === null) return "start";
   if (i.live.startedBy === i.meId) return "start";
   // Somebody else's run whose scribe is no longer seated: an orphan to adopt.
   // The server re-checks the lease; this only avoids asking every heartbeat.

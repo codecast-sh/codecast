@@ -11,12 +11,32 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { useAuthActions } from "@convex-dev/auth/react";
 
-export type OAuthProviderId = "apple" | "github";
+export type OAuthProviderId = "google" | "apple" | "github";
 
-export type ProviderButton = { id: OAuthProviderId; label: string; iconPath: string };
+export type ProviderButton = {
+  id: OAuthProviderId;
+  label: string;
+  /** A one color glyph (24x24 viewBox), drawn in the button's text color. */
+  iconPath: string;
+  /** A brand mark that must keep its own colors (Google's G); drawn instead of iconPath when present. */
+  iconParts?: readonly { d: string; fill: string }[];
+};
 
-/** Apple and GitHub, in codecast's order, with their glyph paths (24x24 viewBox). */
+const GOOGLE_G_PARTS = [
+  { fill: "#4285F4", d: "M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" },
+  { fill: "#34A853", d: "M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.06-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" },
+  { fill: "#FBBC05", d: "M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" },
+  { fill: "#EA4335", d: "M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" },
+] as const;
+
+/** Every provider button, in display order, with its glyph (24x24 viewBox). */
 export const OAUTH_PROVIDER_BUTTONS: readonly ProviderButton[] = [
+  {
+    id: "google",
+    label: "Google",
+    iconPath: GOOGLE_G_PARTS.map((p) => p.d).join(""),
+    iconParts: GOOGLE_G_PARTS,
+  },
   {
     id: "apple",
     label: "Apple",
@@ -30,6 +50,18 @@ export const OAUTH_PROVIDER_BUTTONS: readonly ProviderButton[] = [
       "M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z",
   },
 ];
+
+/**
+ * The providers shown when the app passes no `providers` list. Google is left
+ * out because a deployment offers it only once its OAuth client is configured;
+ * the app asks its server and passes the full list when Google is available.
+ */
+export const DEFAULT_OAUTH_PROVIDERS: readonly OAuthProviderId[] = ["apple", "github"];
+
+/** The button for a provider id read from a URL or a prop, or undefined when it names none. */
+export function oauthProviderButton(id: string | null | undefined): ProviderButton | undefined {
+  return OAUTH_PROVIDER_BUTTONS.find((b) => b.id === id);
+}
 
 export function makeNonce(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
@@ -62,6 +94,8 @@ export type ProviderSignInParams = {
    */
   desktop?: { openExternal: (url: string) => void; deviceName: string; origin: string } | null;
   desktopRelayProviderId?: string;
+  /** Which buttons to show, in OAUTH_PROVIDER_BUTTONS order. Default DEFAULT_OAUTH_PROVIDERS. */
+  providers?: readonly OAuthProviderId[];
 };
 
 export type ProviderSignInState = {
@@ -126,7 +160,7 @@ export function useProviderSignIn(params: ProviderSignInParams): ProviderSignInS
   }, [nonce, deposited, signIn]);
 
   return {
-    buttons: OAUTH_PROVIDER_BUTTONS,
+    buttons: OAUTH_PROVIDER_BUTTONS.filter((b) => (params.providers ?? DEFAULT_OAUTH_PROVIDERS).includes(b.id)),
     start,
     cancel,
     nonce,

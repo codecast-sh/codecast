@@ -43,11 +43,12 @@ export const meta: SurfaceMeta = {
   // server's inject frame (agentTasks.triggerFrameFor over formatScheduledTask),
   // never buildTriggerFrame, which frames a spawned run. Real freezes replay
   // the frame prod built; fixtures render it from the tree.
-  sources: surfaceSources('role-wake', 'packages/shared/contracts/machineMessages.ts', 'packages/convex/convex/lib/orgRoutine.ts', 'packages/shared/contracts/briefStanding.ts', 'packages/evals/src/served.ts', 'packages/cli/scripts/prompt-dry-run-bin/cast'),
+  sources: surfaceSources('role-wake', 'packages/shared/contracts/machineMessages.ts', 'packages/convex/convex/lib/orgRoutine.ts', 'packages/shared/contracts/briefStanding.ts', 'packages/shared/contracts/rolePlaybook.ts', 'packages/cli/src/briefLines.ts', 'packages/evals/src/served.ts', 'packages/cli/scripts/prompt-dry-run-bin/cast'),
   reps: { check: 8, smoke: 3 },
   maxUsdPerRep: 1.5,
   criteria: 'asks a person only what needs them; each line names evidence',
   ...STANDING_READS,
   // A stashed session's frame tells the role to declare its state, and every check ends by saving its brief; those writes are the frame's, not the role's choice.
-  allowedRefusals: ['^state ', OWN_BRIEF_EDIT],
+  // Its own check is the role's to tune (org-staffing.md S38); whether a tune was right is the fixture's wake-tune gate.
+  allowedRefusals: ['^state ', OWN_BRIEF_EDIT, '^role tune( |$)'],
 };

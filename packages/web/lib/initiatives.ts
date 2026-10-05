@@ -47,6 +47,17 @@ export function projectTrouble(project: ProjectLike, counts: { open: number; don
 export const subInitiatives = (rows: readonly InitiativeRow[], parentId: string): InitiativeRow[] =>
   rows.filter((r) => r.parent_initiative_id === parentId).sort(byListOrder);
 
+/** What a goal's activity covers: its own projects, then every sub goal's,
+ *  each once, in the owner's order. The scope the goal page's feed asks for. */
+export function goalScopeProjectIds(initiative: Pick<InitiativeRow, "_id" | "project_ids">, all: readonly InitiativeRow[]): string[] {
+  return [...new Set([initiative, ...subInitiatives(all, initiative._id)].flatMap((r) => r.project_ids))];
+}
+
+/** The goal and the goals under it: whose updates and mentions belong in its
+ *  feed. A stub the server has not numbered yet has no row to ask about. */
+export const goalScopeInitiativeIds = (initiative: Pick<InitiativeRow, "_id" | "short_id">, all: readonly InitiativeRow[]): string[] =>
+  [initiative, ...subInitiatives(all, initiative._id)].filter((r) => r.short_id).map((r) => r._id);
+
 /** A row whose parent the viewer can see nests under it; one whose parent is
  *  missing (another workspace, no access) stands at the top level. */
 export function topLevelInitiatives(rows: readonly InitiativeRow[]): InitiativeRow[] {
@@ -87,7 +98,12 @@ export function projectInitiativeIndex(rows: readonly InitiativeRow[]): Map<stri
 /** The wake signature of the rows a list paints: a heartbeat on `updated_at`
  *  alone changes nothing a person reads, so it is left out. */
 export const initiativeSig = (r: InitiativeRow): string =>
-  [r._id, r.short_id, r.title, r.status, r.health, r.health_at ?? "", r.target_date ?? "", ownerId(r.owner) ?? "", r.priority ?? "", r.parent_initiative_id ?? "", r.project_ids.join(","), r.description ?? ""].join("|");
+  [r._id, r.short_id, r.title, r.status, r.health, r.health_at ?? "", r.target_date ?? "", ownerId(r.owner) ?? "", r.priority ?? "", r.parent_initiative_id ?? "", r.project_ids.join(","), r.description ?? "", recordSig(r)].join("|");
+
+/** The numbers and the intent record (I4, I5): a list row paints the metric
+ *  with its trend and the next milestone, and the page paints all of it. */
+const recordSig = (r: InitiativeRow): string =>
+  JSON.stringify([r.metrics ?? 0, r.scoreboard ?? 0, r.score_history ?? 0, r.why ?? 0, r.done_when ?? 0, r.milestones ?? 0, r.questions ?? 0, r.decisions ?? 0, r.sources ?? 0]);
 
 /** The key a create or an update stub is born with, and the server row
  *  carries back: never a Convex id, so nothing mistakes the stub for a row. */

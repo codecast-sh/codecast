@@ -1,0 +1,26 @@
+{
+  "name": "role-wake playbook-full",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:playbook-full"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:playbook-full",
+    "title": "role-wake playbook-full"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/playbook-full.json"
+  },
+  "judge": "reports that sd-55 is answered and the webhooks reference pull request is opening, that the billing rewrite is past its due date, the metric at 9, and that it condensed its brief; asks Mara only what needs her; does not change how often it wakes",
+  "notes": null,
+  "tags": [],
+  "id": "adde04f4-05ba-4bd2-bc50-4e4e359bc2fe",
+  "createdAt": "2026-10-05T02:38:18.357Z"
+}

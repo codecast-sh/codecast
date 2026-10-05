@@ -273,6 +273,14 @@ function remoteRepoExists(host: RemoteHost, remotePath: string): boolean {
   } catch { return false; }
 }
 
+/** Uncommitted edits to tracked files in a host checkout (a push into it is refused); false when it is no repo yet. */
+export function hostCheckoutDirty(host: RemoteHost, remotePath: string): boolean {
+  if (!remoteRepoExists(host, remotePath)) return false;
+  try {
+    return ssh(host, `git -C ${shq(remotePath)} status --porcelain --untracked-files=no | head -1`).trim() !== "";
+  } catch { return false; }
+}
+
 /**
  * Bootstrap a remote clone when absent. In production the Mac would clone from
  * the repo's origin (fast, full history); for environments without remote
@@ -280,9 +288,16 @@ function remoteRepoExists(host: RemoteHost, remotePath: string): boolean {
  * receive.denyCurrentBranch=updateInstead so subsequent branch pushes update
  * its working tree in place.
  */
-export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string): void {
+export function ensureRemoteRepo(host: RemoteHost, localCwd: string, remotePath: string, seedFrom?: string): void {
   if (remoteRepoExists(host, remotePath)) {
     ssh(host, `cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
+    repairRemoteOrigin(host, localCwd, remotePath);
+    return;
+  }
+  // A second landing beside a checkout the host already has: a local clone
+  // shares its objects, so only the session's snapshot crosses the network.
+  if (seedFrom && remoteRepoExists(host, seedFrom)) {
+    ssh(host, `rm -rf ${shq(remotePath)} && git clone -q ${shq(seedFrom)} ${shq(remotePath)} && cd ${shq(remotePath)} && git config receive.denyCurrentBranch updateInstead`);
     repairRemoteOrigin(host, localCwd, remotePath);
     return;
   }
@@ -363,13 +378,19 @@ export async function gitPushWorktree(
   host: RemoteHost,
   localCwd: string,
   remotePath: string,
+  seedFrom?: string,
 ): Promise<{ branch: string; head: string }> {
   const branch = currentBranch(localCwd);
   const snap = await createWipSnapshot(localCwd);
   // No snapshot (not a repo / no commits) — fall back to the real tip so a
   // history-only push still works.
   const head = snap?.sha ?? git(localCwd, ["rev-parse", "HEAD"]);
-  ensureRemoteRepo(host, localCwd, remotePath);
+  ensureRemoteRepo(host, localCwd, remotePath, seedFrom);
+  // The repo's own ignore list (.git/info/exclude) is not something a push
+  // carries; without it the host snapshots files this folder never would, and
+  // bringing the session home then trips over them.
+  const exclude = git(localCwd, ["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"]);
+  if (fs.existsSync(exclude)) rsyncFileInto(host, exclude, `${remotePath}/.git/info`);
   execFileSync(
     "git",
     ["-C", localCwd, "push", "--force", gitSshUrl(host, remotePath), `${head}:refs/heads/${branch}`],
@@ -405,7 +426,8 @@ export async function gitPullWorktree(
   host: RemoteHost,
   localCwd: string,
   remotePath: string,
-): Promise<{ ff: boolean; reason?: string; backupRef?: string }> {
+  start?: string,
+): Promise<{ ff: boolean; reason?: string; appliedWork?: boolean; conflicts?: string[] }> {
   const branch = currentBranch(localCwd);
   const ref = remoteBackRef(branch);
   try {
@@ -421,9 +443,9 @@ export async function gitPullWorktree(
     const err = e as { stderr?: Buffer; message?: string };
     return { ff: false, reason: `could not fetch the remote snapshot: ${(err.stderr?.toString() || err.message || String(e)).slice(0, 200)}` };
   }
-  const applied = await applySnapshotFastForward(localCwd, ref);
+  const applied = await applySnapshotFastForward(localCwd, ref, { start });
   if (!applied.ok) return { ff: false, reason: applied.reason };
-  return { ff: true, backupRef: applied.backupRef };
+  return { ff: true, appliedWork: applied.appliedWork, conflicts: applied.conflicts };
 }
 
 // --------------------------------------------------------------------------
@@ -669,7 +691,7 @@ export interface SyncVerification {
   localHead: string;
   remoteHead: string | null;
   headsMatch: boolean;
-  /** Entries in the remote's `git status --porcelain` (0 = clean tree exactly
+  /** Tracked-file entries in the remote's `git status --porcelain` (0 = tracked files exactly
    * at the pushed tip); null when the check itself failed. */
   remoteDirty: number | null;
 }
@@ -700,7 +722,7 @@ export function verifyRemoteSync(
   try {
     const lines = ssh(
       host,
-      `cd ${shq(remoteCwd)} && git rev-parse HEAD && git status --porcelain | wc -l`,
+      `cd ${shq(remoteCwd)} && git rev-parse HEAD && git status --porcelain --untracked-files=no | wc -l`,
     ).trim().split("\n");
     remoteHead = lines[0]?.trim() || null;
     const dirty = parseInt(lines[lines.length - 1]?.trim() ?? "", 10);
@@ -717,6 +739,8 @@ export interface MoveResult {
   /** Present for git worktrees; rsync'd plain directories have no cheap
    * content proof. */
   verification?: SyncVerification;
+  /** The commit this push landed: the folder's snapshot, uncommitted work included. */
+  pushedHead?: string;
 }
 
 /**
@@ -738,9 +762,10 @@ export function remoteRepoPath(host: RemoteHost, localGitRoot: string): string {
  * tree push is idempotent for git worktrees, but a plain directory rsyncs
  * with --delete, and two sessions in one directory must not race that.
  */
-export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean } = {}): Promise<MoveResult> {
+export async function pushSession(sessionId: string, host: RemoteHost, opts: { skipTree?: boolean; pushedHead?: string; landing?: (main: string) => Promise<string> } = {}): Promise<MoveResult> {
   const s = resolveLocalSession(sessionId);
-  const remoteCwd = remoteRepoPath(host, s.cwd);
+  const main = remoteRepoPath(host, s.cwd);
+  const remoteCwd = opts.landing ? await opts.landing(main) : main;
   const remoteProjectDir = path.posix.join(
     remoteHome(host), ".claude", "projects",
     cwdToSlug(remoteCwd),
@@ -766,11 +791,14 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
   }
   // 3. working tree — git-over-SSH for repos (full git on the remote), else rsync
   let verification: SyncVerification | undefined;
+  let pushedHead: string | undefined;
   if (opts.skipTree) {
-    // Nothing to push; prove the tree is still there and at the pushed tip.
-    if (isWorktree(s.cwd)) verification = verifyRemoteSync(host, s.cwd, remoteCwd);
+    // Nothing to push; prove the tree is still there and at the tip the
+    // sibling pushed (its snapshot, never this folder's plain HEAD).
+    if (isWorktree(s.cwd)) verification = verifyRemoteSync(host, s.cwd, remoteCwd, opts.pushedHead);
   } else if (isWorktree(s.cwd)) {
-    const { head } = await gitPushWorktree(host, s.cwd, remoteCwd);
+    const { head } = await gitPushWorktree(host, s.cwd, remoteCwd, remoteCwd === main ? undefined : main);
+    pushedHead = head;
     copyGitignoredFiles(host, s.cwd, remoteCwd); // .env etc, not carried by git
     // Verify against what we PUSHED (the snapshot), not local HEAD — the
     // snapshot is intentionally never committed locally.
@@ -787,7 +815,7 @@ export async function pushSession(sessionId: string, host: RemoteHost, opts: { s
     fs.rmSync(relocated.dir, { recursive: true, force: true });
   }
 
-  return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification };
+  return { sessionId, localCwd: s.cwd, remoteCwd, remoteProjectDir, verification, pushedHead };
 }
 
 /**
@@ -824,7 +852,7 @@ function gitRootOf(cwd: string): string {
  * tree via git fast-forward (no clobber) for repos, else rsync. Returns
  * whether the working-tree pull fast-forwarded cleanly.
  */
-export async function pullSession(sessionId: string, host: RemoteHost, move: MoveResult): Promise<{ ff: boolean; reason?: string; backupRef?: string }> {
+export async function pullSession(sessionId: string, host: RemoteHost, move: MoveResult): Promise<{ ff: boolean; reason?: string; appliedWork?: boolean; conflicts?: string[] }> {
   // transcript back (rsync into the project dir)
   const remoteJsonl = path.posix.join(move.remoteProjectDir, `${sessionId}.jsonl`);
   const localProjectDir = path.join(CLAUDE_PROJECTS, cwdToSlug(move.localCwd));
@@ -836,7 +864,8 @@ export async function pullSession(sessionId: string, host: RemoteHost, move: Mov
   fs.renameSync(tmp, localJsonl);
   // working tree back
   if (isWorktree(move.localCwd)) {
-    return await gitPullWorktree(host, move.localCwd, move.remoteCwd);
+    // Where the host's work began: the commit this move pushed, else the one the host was at when the session landed.
+    return await gitPullWorktree(host, move.localCwd, move.remoteCwd, move.pushedHead ?? move.verification?.remoteHead ?? undefined);
   }
   rsyncDown(host, move.remoteCwd, move.localCwd, { delete: true });
   return { ff: true };

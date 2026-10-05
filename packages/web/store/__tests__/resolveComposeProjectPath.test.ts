@@ -189,4 +189,10 @@ describe("resolveComposeProjectPath with a room's team", () => {
       resolveComposeProjectPath({ conversation: { projectPath: "/Users/j/src/products" }, recentProjects: ranked, teamId: "other" }),
     ).toBe("/Users/j/src/products");
   });
+
+  it("starts from the checkout when the viewed session runs in a worktree", () => {
+    expect(
+      resolveComposeProjectPath({ conversation: { projectPath: "/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5" } }),
+    ).toBe("/home/ubuntu/work/codecast");
+  });
 });

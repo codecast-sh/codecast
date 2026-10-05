@@ -7,3 +7,10 @@ import { useInboxStore } from "../store/inboxStore";
 export function useRoomTranscribeOff(roomKey: string | null | undefined): boolean {
   return useInboxStore((s) => !!roomKey && !!s.callRooms[roomKey]?.transcribe_off);
 }
+
+/** The huddle's live record has its public link on, so the words reach
+ *  anyone holding it as they are written (calls.getLiveRooms words_public,
+ *  false while transcription is off). */
+export function useRoomWordsPublic(roomKey: string | null | undefined): boolean {
+  return useInboxStore((s) => !!roomKey && !!s.callRooms[roomKey]?.words_public);
+}

@@ -7,24 +7,12 @@ import type { BisectSummary } from "@codecast/shared/contracts/evalsApi";
 import { formatDuration } from "../../lib/conversationFormat";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { EmptyState } from "../EmptyState";
-import { EvalsLink, VerdictGlyph, shortSha, usd, type VerdictState } from "./parts";
+import { EvalsLink, StallChip, VerdictGlyph } from "./parts";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
+import { bisectGlyph, bisectSummaryWord, endpointLabel, isBisectLive, isBisectStalled, sortBisects } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
-
-function glyphOf(b: BisectSummary): VerdictState {
-  if (isBisectLive(b.status)) return "unscored";
-  if (b.outcome === "culprit") return "fail";
-  if (b.outcome === "range") return "mixed";
-  if (b.status === "failed") return "crash";
-  return "dry";
-}
-
-/** Running first, then newest first. */
-export function sortBisects(list: readonly BisectSummary[]): BisectSummary[] {
-  return [...list].sort((a, b) => Number(isBisectLive(b.status)) - Number(isBisectLive(a.status)) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
-}
+import { shortSha, usd } from "./format";
 
 export function BisectListView({ bisects, now }: { bisects: readonly BisectSummary[]; now: number }) {
   const router = useRouter();
@@ -32,10 +20,10 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
   return (
     <div className="evb-page" data-evb-list={rows.length}>
       <header className="evb-head">
-        <h1>Bisects</h1>
+        <h1 className="ev-page-title">Bisects</h1>
         <span className="evb-sub">Each one takes a regression to the change behind it, spending at most its shown bound.</span>
         <span className="flex-1" />
-        <EvalsLink className="evb-btn" href={evalsHref.bisectNew()}>
+        <EvalsLink className="ev-btn ev-btn--lg" href={evalsHref.bisectNew()}>
           Attribute a regression
         </EvalsLink>
       </header>
@@ -51,9 +39,9 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
                 <th>Surface</th>
                 <th>Good to bad</th>
                 <th>Outcome</th>
-                <th className="text-right">Spend</th>
-                <th className="text-right">Duration</th>
-                <th className="text-right">Started</th>
+                <th className="evb-num">Spend</th>
+                <th className="evb-num">Duration</th>
+                <th className="evb-num">Started</th>
               </tr>
             </thead>
             <tbody>
@@ -63,7 +51,7 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
                 const href = evalsHref.bisect(b.id);
                 return (
                   <tr key={b.id} data-evb-row={b.id} data-evb-live={live || undefined} onClick={(e) => (e.metaKey || e.ctrlKey ? window.open(href, "_blank") : router.push(href))}>
-                    <td>{live ? <span className={`evb-live-dot inline-block ${stalled ? "" : "ev-pulse"}`} aria-label={stalled ? "stalled" : "running"} /> : <VerdictGlyph state={glyphOf(b)} size={12} />}</td>
+                    <td>{live ? <span className={`evb-live-dot inline-block ${stalled ? "" : "ev-pulse"}`} aria-label={stalled ? "stalled" : "running"} /> : <VerdictGlyph state={bisectGlyph(b)} title={bisectSummaryWord(b)} size={12} />}</td>
                     <td>
                       <EvalsLink href={href} className="ev-mono text-[12px]" onClick={(e) => e.stopPropagation()}>
                         {b.id}
@@ -76,9 +64,7 @@ export function BisectListView({ bisects, now }: { bisects: readonly BisectSumma
                     <td>
                       {b.culprit ? <span className="ev-mono">culprit {shortSha(b.culprit)}</span> : bisectSummaryWord(b)}
                       {stalled && (
-                        <span className="evb-stall-chip" title={`No new step since ${new Date(b.updatedAt).toLocaleTimeString()}: check its tmux session or log`} data-evb-stalled>
-                          stalled?
-                        </span>
+                        <StallChip since={b.updatedAt} data-evb-stalled />
                       )}
                     </td>
                     <td className="evb-num">

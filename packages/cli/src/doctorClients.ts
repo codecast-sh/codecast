@@ -32,7 +32,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { whichBin } from "./proc.js";
-import { AGENT_CLIENTS, type AgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, type AgentClientId, type LocalAgentClientId, type AgentClientDescriptor } from "@codecast/shared/contracts";
 import { parseTranscriptFor } from "./parser.js";
 import { SessionWatcher } from "./sessionWatcher.js";
 import { TranscriptDirWatcher, transcriptDirWatcherConfig, expandTranscriptRoot, encodeGrokCwdSlug } from "./transcriptDirWatcher.js";
@@ -57,7 +57,7 @@ const uuid = () => randomUUID();
 
 /** Fixtures are built per call so watcher filenames carry a fresh uuid (codex/pi
  *  key the session id off the filename's trailing uuid). */
-export function clientFixture(id: AgentClientId): ClientFixture {
+export function clientFixture(id: LocalAgentClientId): ClientFixture {
   switch (id) {
     case "claude":
       return {
@@ -247,8 +247,8 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
 }
 
 /** Run the full offline probe for one client. */
-export async function probeClient(id: AgentClientId): Promise<ClientProbeResult> {
-  const descriptor = AGENT_CLIENTS[id];
+export async function probeClient(id: LocalAgentClientId): Promise<ClientProbeResult> {
+  const descriptor = LOCAL_AGENT_CLIENTS[id];
   const installed = hasBin(descriptor.binary);
   if (!installed) {
     return { id, binary: descriptor.binary, installed: false, subChecks: [], ok: true };
@@ -291,6 +291,6 @@ export async function probeClient(id: AgentClientId): Promise<ClientProbeResult>
 /** Probe every registered client. Installed clients run the full matrix; the rest
  *  come back as installed:false (skipped, not failed). Clients run concurrently. */
 export async function probeAllClients(): Promise<ClientProbeResult[]> {
-  const ids = Object.keys(AGENT_CLIENTS) as AgentClientId[];
+  const ids = Object.keys(LOCAL_AGENT_CLIENTS) as LocalAgentClientId[];
   return Promise.all(ids.map((id) => probeClient(id)));
 }

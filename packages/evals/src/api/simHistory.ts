@@ -1,5 +1,4 @@
-import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,7 +24,8 @@ import { readRuns, readSession, sessionsDir, simHome } from '../../../web/store/
 import { simGridOf } from '../../../web/store/__tests__/sim/grid';
 import { bisectCommand, parseOrder, replayCommands } from '../../../web/store/__tests__/sim/replay';
 import { REPO_ROOT, writeJsonAtomic } from '../paths';
-import { readJsonFile } from './files';
+import { gitHead } from '../state';
+import { readJsonFile, tailLines } from './files';
 import { launch, simRunner, stillRunning, type Launched } from './spawn';
 
 // The multiplayer sim's history as the api child serves it (evals-ui.md
@@ -52,9 +52,23 @@ function legacyRow(dir: string, name: string): SimRunRow | null {
   return { scenario: r.scenario, mode: r.mode, seed: r.seed, passed: r.passed === true, deliveries: r.passed ? r.deliveries : r.delivery, ms: r.realMs ?? 0, dir: name };
 }
 
+/**
+ * A legacy folder this user wrote. On a Linux host tmpdir() is the shared
+ * /tmp, so another local user could plant a run whose replay lines the
+ * founder would paste; the bridge holds the checkout to the same rule.
+ */
+function ownLegacy(root: string, name: string): boolean {
+  try {
+    const st = lstatSync(join(root, name));
+    return st.isDirectory() && st.uid === (process.getuid?.() ?? st.uid);
+  } catch {
+    return false;
+  }
+}
+
 function legacySession(): { session: SimSession; runs: SimRunRow[] } | null {
   const root = legacyRoot();
-  const names = subdirs(root).filter(safe);
+  const names = subdirs(root).filter((n) => safe(n) && ownLegacy(root, n));
   const runs = names.map((n) => legacyRow(root, n)).filter((r): r is SimRunRow => !!r);
   if (!runs.length) return null;
   const times = names.map((n) => statSync(join(root, n)).mtime.toISOString()).sort();
@@ -121,6 +135,7 @@ function readEvents(dir: string): SimEvent[] {
 /** One run in full, or null when the session or run folder is not there. */
 export async function simRun(sessionId: string, run: string): Promise<SimRunResponse | null> {
   if (!safe(run)) return null;
+  if (sessionId === UNSESSIONED && !ownLegacy(legacyRoot(), run)) return null;
   const found = sessionAndRuns(sessionId);
   if (!found) return null;
   const dir = join(sessionPath(sessionId), run);
@@ -138,6 +153,7 @@ export async function simRun(sessionId: string, run: string): Promise<SimRunResp
     final: readJsonFile<SimFinal>(join(dir, 'final.json')),
     minimal: readJsonFile<SimMinimal>(join(dir, 'minimal.json')),
     shrinking: readJsonFile<SimShrinkProgress>(join(dir, 'minimal.json.tmp')),
+    lastShrink: simJobs().find((j) => j.kind === 'shrink' && j.session === sessionId && j.run === run) ?? null,
     invariant: failure ? (invariants.find((i) => i.id === failure.invariant.id) ?? { id: failure.invariant.id, meaning: failure.invariant.meaning, keys: [] }) : null,
     replay: failure ? { ...simReplay(failure), bisect: bisectCommand(dir) } : { trace: replayCommands(result.scenario, result.seed, [], null)[0]!, order: '', minimal: null, bisect: null },
   };
@@ -149,7 +165,7 @@ const simDir = (): string => join(REPO_ROOT, 'packages', 'web', 'store', '__test
 
 /** What the catalog depends on: HEAD plus the newest mtime among the files the runner reads statically. */
 function catalogKey(): string {
-  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).stdout.trim();
+  const head = gitHead(REPO_ROOT);
   const dir = simDir();
   let newest = 0;
   for (const sub of ['scenarios', 'selftests']) for (const f of existsSync(join(dir, sub)) ? readdirSync(join(dir, sub)) : []) newest = Math.max(newest, statSync(join(dir, sub, f)).mtimeMs);
@@ -233,6 +249,7 @@ interface StoredJob extends SimJob {
 
 const jobsDir = (): string => join(simHome(), 'jobs');
 const jobPath = (id: string): string => join(jobsDir(), `${id}.json`);
+const jobLog = (id: string): string => join(jobsDir(), `${id}.log`);
 const stamp = (at: Date): string => at.toISOString().replace(/[-:]/g, '').replace(/\.(\d+)Z$/, '$1z').toLowerCase();
 
 function startJob(kind: SimJob['kind'], args: string[], o: { session: string | null; run: string | null; dir: string | null; total: number | null }): StoredJob {
@@ -240,7 +257,7 @@ function startJob(kind: SimJob['kind'], args: string[], o: { session: string | n
   const id = `${kind}-${stamp(now)}`;
   const { argv, cwd } = simRunner();
   const full = [...argv, ...args];
-  const launched = launch(`evals-sim-${id}`, full, { cwd, log: join(jobsDir(), `${id}.log`) });
+  const launched = launch(`evals-sim-${id}`, full, { cwd, log: jobLog(id) });
   const job: StoredJob = { id, kind, status: 'running', startedAt: now.toISOString(), updatedAt: now.toISOString(), tmux: launched.tmux, progress: { done: 0, total: o.total, text: 'starting' }, session: o.session, run: o.run, launched, dir: o.dir, argv: full };
   mkdirSync(jobsDir(), { recursive: true });
   writeJsonAtomic(jobPath(id), job);
@@ -249,14 +266,18 @@ function startJob(kind: SimJob['kind'], args: string[], o: { session: string | n
 
 export class SimRequestError extends Error {}
 
-/** Starts `bun run sim --shrink <artifact folder>` on a failing run. */
-export function startShrink(sessionId: string, run: string): StoredJob {
+/** Starts `bun run sim --shrink <artifact folder>` on a failing run of a scenario the suite still holds. */
+export async function startShrink(sessionId: string, run: string): Promise<StoredJob> {
   if (sessionId === UNSESSIONED) throw new SimRequestError('a legacy unsessioned run is read-only; rerun it with bun run sim to shrink it');
   if (!safe(sessionId) || !safe(run)) throw new SimRequestError('session and run name folders, not paths');
   const dir = join(sessionsDir(), sessionId, run);
   const result = readJsonFile<SimResult>(join(dir, 'result.json'));
   if (!result) throw new SimRequestError(`no run ${run} in session ${sessionId}`);
   if (result.passed) throw new SimRequestError(`${run} passed; only a failure shrinks`);
+  // sim.ts --shrink replays the scenario by name and exits at once when the suite no longer holds it,
+  // so refuse here, where the reason can still reach the page.
+  const { scenarios } = await staticCatalog();
+  if (!scenarios.some((x) => x.name === result.scenario)) throw new SimRequestError(`${result.scenario} is no longer in the suite, so nothing can replay ${run} to shrink it`);
   return startJob('shrink', ['--shrink', dir], { session: sessionId, run, dir, total: null });
 }
 
@@ -288,7 +309,7 @@ function refreshJob(job: StoredJob, sessions: () => Array<{ session: SimSession;
       next.progress = { done: m?.attempts ?? next.progress.done, total: m?.attempts ?? null, text: m ? `${m.order.length + m.removed.length} recorded, ${m.order.length} needed${m.oneMinimal ? ' (1-minimal)' : ' (a cap stopped the search)'}` : 'done' };
     } else if (!alive) {
       next.status = 'failed';
-      next.progress.text = 'the shrink ended with no minimal order: the recorded order no longer fails the same way, or it crashed (see its tmux or log)';
+      next.progress.text = 'the shrink ended with no minimal order: the recorded order no longer fails the same way, or it crashed (its last lines are below)';
     }
   } else if (job.kind === 'sweep') {
     const mine = sessions().find(({ session }) => !session.unsessioned && Date.parse(session.startedAt) >= Date.parse(job.startedAt) - 2000 && session.argv.includes('--sweep'));
@@ -300,7 +321,7 @@ function refreshJob(job: StoredJob, sessions: () => Array<{ session: SimSession;
     }
     if (next.status === 'running' && !alive) {
       next.status = mine?.session.finishedAt ? 'done' : 'failed';
-      if (next.status === 'failed') next.progress.text = 'the sweep ended before its session closed (see its tmux or log)';
+      if (next.status === 'failed') next.progress.text = 'the sweep ended before its session closed (its last lines are below)';
     }
   }
   if (JSON.stringify(next) !== JSON.stringify(job)) {
@@ -322,5 +343,5 @@ export function simJobs(): SimJob[] {
     .filter((j): j is StoredJob => !!j?.id)
     .map((j) => refreshJob(j, lazy))
     .sort((a, b) => (a.startedAt < b.startedAt ? 1 : -1))
-    .map(({ launched: _, dir: __, argv: ___, ...job }) => job);
+    .map(({ launched: _, dir: __, argv: ___, ...job }) => (job.status === 'running' ? job : { ...job, logTail: tailLines(jobLog(job.id), 12) }));
 }

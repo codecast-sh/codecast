@@ -68,24 +68,17 @@ function verdictHistory(): Rep[] {
 
 // Captured from the verdict lines `check` printed before batchVerdict existed; the real-history replay of the same check found every one of 515 recorded batches byte-identical.
 // The nightly cases since read night by night per freeze (separateNights): two freezes over at most three nights cannot separate, so they print too-few.
+// An older batch is since weighed only against batches that began before it (upTo, on every path), as the wall weighs it: 09-01 has
+// no previous set, 09-03 passes over 09-02 rather than 09-09, and the first two nights build their baseline from the nights before.
 const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches?: number; lines: string[]; regression: boolean }> = [
-  {
-    batch: '2026-09-01T00:00:00.000Z',
-    lines: [
-      'demo  pass 15/15 (100%)  mean 0.87  0.80-0.90  flips 0  $0.150  m1',
-      '  not separated: medians 0.90 vs 0.90, ranges 0.80-0.90 vs 0.75-0.90',
-      '  passed over 2026-09-09T00:00:00.000Z: another model on the same freezes',
-      "  passed over 2026-09-09T00:00:00.000Z: graded on another ruler (judge or write guard); ./evals rescore --batch <it> --rejudge brings it onto today's (a guard alone needs no --rejudge)",
-    ],
-    regression: false,
-  },
+  { batch: '2026-09-01T00:00:00.000Z', lines: ['demo  pass 15/15 (100%)  mean 0.87  0.80-0.90  flips -  $0.150  m1', '  no previous run set to compare with'], regression: false },
   {
     batch: '2026-09-03T00:00:00.000Z',
     lines: [
       'demo  pass 10/16 (63%)  mean 0.63  0.00-0.90  flips 1  $0.170  m1',
-      '  not separated: medians 0.90 vs 0.80, ranges 0.00-0.90 vs 0.75-0.90 (over the 3 freeze(s) the previous set ran)',
-      '  passed over 2026-09-09T00:00:00.000Z: another model on the same freezes',
-      "  passed over 2026-09-09T00:00:00.000Z: graded on another ruler (judge or write guard); ./evals rescore --batch <it> --rejudge brings it onto today's (a guard alone needs no --rejudge)",
+      '  not separated: medians 0.90 vs 0.90, ranges 0.00-0.90 vs 0.80-0.90 (over the 3 freeze(s) the previous set ran)',
+      '  passed over 2026-09-02T00:00:00.000Z: another model on the same freezes',
+      "  passed over 2026-09-02T00:00:00.000Z: graded on another ruler (judge or write guard); ./evals rescore --batch <it> --rejudge brings it onto today's (a guard alone needs no --rejudge)",
       '  gates failed: no-leak',
       '  live reads: 2/16 reps read the live workspace (6 reads; ./evals runs show <run> lists them)',
       '  1 crashed, left out of the numbers above: ./evals runs list --scenario demo- --status crash; ./evals check demo --batch 2026-09-03T00:00:00.000Z with the same --reps and --freeze runs them again',
@@ -93,14 +86,10 @@ const VERDICT_SNAPSHOT: Array<{ batch: string; against?: string; baselineBatches
     regression: false,
   },
   { batch: '2026-09-04T00:00:00.000Z', lines: ['demo  dry: 3 rep(s) ran through the wiring on canned output; nothing is graded or compared'], regression: false },
-  {
-    batch: '2026-09-05T00:00:00.000Z',
-    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches night by night (2026-09-06T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
-    regression: false,
-  },
+  { batch: '2026-09-05T00:00:00.000Z', lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips -  $0.060  m1', '  nightly: building its baseline: no previous run set to compare with'], regression: false },
   {
     batch: '2026-09-06T00:00:00.000Z',
-    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last 3 nightly batches night by night (2026-09-05T00:00:00.000Z to 2026-09-08T00:00:00.000Z, 18 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
+    lines: ['demo  pass 6/6 (100%)  mean 0.92  0.90-0.95  flips 0  $0.060  m1', '  against the last nightly batch (2026-09-05T00:00:00.000Z, 6 reps): too few nights and freezes to separate (each freeze counts once a night; one freeze alone needs 19 earlier nights)'],
     regression: false,
   },
   {
@@ -163,9 +152,9 @@ describe('batchVerdict: the verdict check prints, as one value', () => {
     expect(batchVerdict(meta, '2026-09-04T00:00:00.000Z', history)).toMatchObject({ dry: true, baseline: null, flips: [] });
   });
 
-  test('earlierOnly weighs an old batch only against batches before it', () => {
+  test('an old batch is weighed only against batches before it', () => {
     expect(upTo(history, '2026-09-05T00:00:00.000Z').every((r) => r.batch <= '2026-09-05T00:00:00.000Z')).toBe(true);
-    const v = batchVerdict(meta, '2026-09-05T00:00:00.000Z', history, { earlierOnly: true });
+    const v = batchVerdict(meta, '2026-09-05T00:00:00.000Z', history);
     expect(v.baseline).toMatchObject({ kind: 'pooled', batches: [], reps: 0 });
     expect(plain(verdictLinesOf(v))[1]).toBe('  nightly: building its baseline: no previous run set to compare with');
   });
@@ -204,8 +193,8 @@ describe('batchVerdict: a cadence batch night by night, and bisect probes never 
     const v = batchVerdict(meta, '2026-09-23T00:00:00.000Z', history);
     expect(v.baseline).toMatchObject({ kind: 'previous', batches: ['2026-09-20T00:00:00.000Z'] });
     expect(v.regression).toBe(false);
-    // A probe, weighed as the history views weigh an older batch: against the real batch before it, never the other probe.
-    const p = batchVerdict(meta, '2026-09-22T00:00:00.000Z', history, { earlierOnly: true });
+    // A probe, an older batch: weighed against the real batch before it, never the other probe.
+    const p = batchVerdict(meta, '2026-09-22T00:00:00.000Z', history);
     expect(p.baseline).toMatchObject({ kind: 'previous', batches: ['2026-09-20T00:00:00.000Z'], cadence: null });
   });
 });
@@ -237,6 +226,20 @@ describe('flipsBetween', () => {
     const rows = [...batchOf('g', day(1), { [A]: {}, [B]: {} }), ...batchOf('b', day(2), { [A]: { score: 0.1 }, [B]: {} })];
     const r = flipsBetween(rows, 'g', 'b');
     expect(r.ok && r.flips.map((f) => [f.freezeId, f.name, f.direction, f.after.length])).toEqual([[A, 'demo a1a1', 'broke', 3]]);
+  });
+
+  test("leads each side with a rep that agrees with its side's verdict", () => {
+    // Real title jx7btyt:100 on 2026-10-04: two of three reps failed, and seed 1 (listed first) passed.
+    const good = batchOf('g', day(1), { [A]: {} }).map((r) => (r.seed === 1 ? { ...r, score: 0.2, status: 'fail' as const } : r));
+    const bad = batchOf('b', day(2), { [A]: { score: 0.1, status: 'fail' } }).map((r) => (r.seed === 1 ? { ...r, score: 0.7, status: 'pass' as const } : r));
+    const r = flipsBetween([...good, ...bad], 'g', 'b');
+    if (!r.ok) throw new Error(r.reason);
+    const [f] = r.flips;
+    expect(f.direction).toBe('broke');
+    expect(f.after).toHaveLength(3);
+    expect(f.before).toHaveLength(3);
+    expect(bad.find((x) => x.id === f.after[0])!.status).toBe('fail');
+    expect(good.find((x) => x.id === f.before[0])!.status).toBe('pass');
   });
 
   test('refuses across a model or a judge ruler, and on a batch that graded nothing', () => {
@@ -314,7 +317,7 @@ describe('epochs', () => {
 // ── Attribution (Tier 0) ────────────────────────────────────────────────────
 
 /** A linear main line C(0)..C(6); the declared sources move at `touching`. */
-function fakeGit(touching = [2, 4, 5], o: { changed?: string[] } = {}): AttributionGit {
+function fakeGit(touching = [2, 4, 5], o: { changed?: string[]; show?: (sha: string, path: string) => string | null } = {}): AttributionGit {
   const line = [0, 1, 2, 3, 4, 5, 6].map(C);
   const ref = (sha: string): CommitRef => ({ sha, subject: `commit ${sha[0]}`, author: 'dev', at: day(1), session: sha === C(5) ? 'jx7abcd' : null, mainSha: sha, onMain: true });
   const at = (sha: string) => line.indexOf(sha);
@@ -323,7 +326,7 @@ function fakeGit(touching = [2, 4, 5], o: { changed?: string[] } = {}): Attribut
     isAncestor: (a, b) => at(a) >= 0 && at(a) <= at(b),
     path: (g, b, paths) => line.slice(at(g) + 1, at(b) + 1).filter((s) => paths === null || touching.includes(at(s))).map(ref),
     changed: () => o.changed ?? [],
-    show: () => null,
+    show: o.show ?? (() => null),
   };
 }
 
@@ -372,6 +375,20 @@ describe('attribution: the first class that differs is the answer', () => {
     expect(run(world()).checklist[1]!.detail).toBe('the frozen moments match (1 private freeze(s) predate freezeSha and are taken as unchanged)');
   });
 
+  test("a legacy public freeze whose file changed only in its judge line moved the rubric, not the moment: footing, not freeze", () => {
+    const fixture = (judge: string | null) => JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', snapshot: { text: 'the moment' }, ...(judge ? { judge } : {}) });
+    const pub = world({ good: { visibility: 'public' }, bad: { visibility: 'public' } });
+    const pointer = `packages/evals/freezes/${A}.json`;
+    const rubricOnly = fakeGit([2, 4, 5], { changed: [pointer], show: (sha) => fixture(sha === C(0) ? 'be terse' : null) });
+    const a = run(pub, { git: rubricOnly });
+    expect(a.answer).toMatchObject({ kind: 'footing', change: 'judge', freezeIds: [A] });
+    expect(a.checklist[0]!.detail).toContain('the per-freeze rubric changed on');
+    expect(a.checklist[1]).toMatchObject({ class: 'freeze', differs: false });
+    // The moment itself moving is still the freeze class.
+    const momentMoved = fakeGit([2, 4, 5], { changed: [pointer], show: (sha) => JSON.stringify({ snapshot: { text: sha === C(0) ? 'the moment' : 'another moment' } }) });
+    expect(run(pub, { git: momentMoved }).answer).toEqual({ kind: 'freeze', freezeIds: [A] });
+  });
+
   test('live reads on the bad side: not reproducible', () => {
     expect(run(world({ bad: { liveReads: 2 } })).answer).toEqual({ kind: 'live-reads', reps: 3, reads: 6 });
   });
@@ -392,6 +409,30 @@ describe('attribution: the first class that differs is the answer', () => {
     expect(commits(run(world().filter((r) => r.batch !== 'r3')))).toEqual(['4', '5']);
     expect(run(world({ recorded: false })).answer).toMatchObject({ kind: 'source', confidence: 'narrowed', narrowedBy: [] });
     expect(commits(run(world({ recorded: false })))).toEqual(['2', '4', '5']);
+  });
+
+  test("a recorded batch reads by the bisect's probe rule: a tied freeze is no vote, so it narrows nothing", () => {
+    // At C4, one rep of A passed and one failed. Read by majority() the tie failed and pinned C4 for free; the probe rule reads it unsure.
+    const tie = [row('tie', day(3), A, 1, { gitHead: C(4), mainSha: C(4) }), row('tie', day(3), A, 2, { gitHead: C(4), mainSha: C(4), score: 0.2 })];
+    const a = run(world({ recorded: false, extra: [...batchOf('r1', day(2), { [A]: { gitHead: C(3), mainSha: C(3) } }), ...tie] }));
+    expect(a.answer.kind === 'source' && a.answer.narrowedBy.map((p) => [p.batch, p.verdict])).toEqual([['r1', 'good'], ['tie', 'unsure']]);
+    expect(commits(a)).toEqual(['4', '5']);
+  });
+
+  test('the prompt diff of a flip opens on reps that agree with each side, never the dissenter of a 2-to-1 majority', () => {
+    // Real title jx7btyt:100 on 2026-10-04: two of three bad reps failed, and seed 1, the first by stamp, passed.
+    const rows = world({ recorded: false }).map((r) => (r.batch === 'bad' && r.freezeId === A && r.seed === 1 ? { ...r, score: 0.9, status: 'pass' as const } : r));
+    const id = (batch: string, seed: number) => `demo-a1a1a1a1-seed${seed}-${batch}`;
+    const a = run(rows, { reader: fakeReader({ [id('good', 1)]: { 'call1/prompt.md': 'p' }, [id('bad', 2)]: { 'call1/prompt.md': 'p' } }) });
+    expect(a.promptDiffs.map((d) => [d.a.runId, d.b.runId])).toEqual([[id('good', 1), id('bad', 2)]]);
+    expect(a.promptDiffs[0]!.b.runId).toBe(a.flipped[0]!.after[0]);
+  });
+
+  test("a batch head heads.json has not mapped yet is unknown, never taken as on main", () => {
+    const heads: HeadsFile = { updatedAt: day(9), mainLine: ['main'], heads: { [C(0)]: { on: 'main', mainSha: C(0), how: 'self', pinned: true } } };
+    const a = run(world({ recorded: false, bad: { gitHead: ORPHAN, mainSha: null, offBranch: false } }), { heads });
+    expect(a.bad).toMatchObject({ sha: ORPHAN, mainSha: null });
+    expect(a.answer).toMatchObject({ kind: 'source', confidence: 'unattributable', reason: "bad's head eeeeeeeee is not in heads.json yet, so where it sits is unknown: ./evals pin --backfill maps it" });
   });
 
   test('the patch candidate: a dirty bad batch with a tree patch, pinned when its head reads good', () => {
@@ -418,7 +459,9 @@ describe('attribution: the first class that differs is the answer', () => {
     const heads: HeadsFile = { updatedAt: day(9), mainLine: ['main'], heads: { [ORPHAN]: { on: 'none', mainSha: C(6), how: 'patch-id', pinned: true } } };
     const a = run(world(), { bad: ORPHAN.slice(0, 12), heads });
     expect(a.bad).toMatchObject({ batch: null, sha: ORPHAN, mainSha: C(6) });
-    expect(a.answer.kind).toBe('source');
+    // A bare end has no reps, so no freeze is weighed and nothing fell for a commit to explain (a plan would probe nothing).
+    expect(a.checklist.find((c) => c.class === 'source')).toMatchObject({ differs: false, detail: expect.stringMatching(/^no freeze graded on both sides fell/) });
+    expect(a.answer.kind).toBe('noise');
   });
 
   test('no declared source moved, and --all-commits widens the search to every commit', () => {
@@ -450,22 +493,23 @@ describe('attribution: the first class that differs is the answer', () => {
   });
 
   test('endpoints found from the records: the newest red batch, and the newest earlier one that passed its broken freezes', () => {
+    // r2 (day 4) is where A broke: bad (day 5) only repeats it against r2, the batch that began just before it, whatever the names sort to.
     const a = run(world(), { good: undefined, bad: undefined });
-    expect([a.bad.batch, a.good.batch]).toEqual(['bad', 'r3']);
+    expect([a.bad.batch, a.good.batch]).toEqual(['r2', 'r3']);
     expect(commits(a)).toEqual(['5']);
   });
 
   test('the prompt change rides along whatever the answer', () => {
     const rows = world({ good: { promptSha: 'p1' }, bad: { promptSha: 'p2' } });
     const id = (batch: string, seed: number) => `demo-a1a1a1a1-seed${seed}-${batch}`;
-    const a = run(rows, { reader: fakeReader({ [id('good', 3)]: { 'call1/prompt.md': 'old' }, [id('bad', 1)]: { 'call1/prompt.md': 'new' } }) });
-    expect(a.promptDiffs).toEqual([{ freezeId: A, file: 'call1/prompt.md', a: { runId: id('good', 3), text: 'old' }, b: { runId: id('bad', 1), text: 'new' } }]);
+    const a = run(rows, { reader: fakeReader({ [id('good', 1)]: { 'call1/prompt.md': 'old' }, [id('bad', 1)]: { 'call1/prompt.md': 'new' } }) });
+    expect(a.promptDiffs).toEqual([{ freezeId: A, file: 'call1/prompt.md', a: { runId: id('good', 1), text: 'old' }, b: { runId: id('bad', 1), text: 'new' } }]);
     expect(a.checklist[3]!.detail).toBe('the rendered prompt changed on a1a1a1a1; the commit moved: 000000000 to 666666666');
   });
 
   test('a prompt that held still still rides along, so a page can say so', () => {
     const id = (batch: string, seed: number) => `demo-a1a1a1a1-seed${seed}-${batch}`;
-    const a = run(world(), { reader: fakeReader({ [id('good', 3)]: { 'call1/prompt.md': 'same' }, [id('bad', 1)]: { 'call1/prompt.md': 'same' } }) });
-    expect(a.promptDiffs).toEqual([{ freezeId: A, file: 'call1/prompt.md', a: { runId: id('good', 3), text: 'same' }, b: { runId: id('bad', 1), text: 'same' } }]);
+    const a = run(world(), { reader: fakeReader({ [id('good', 1)]: { 'call1/prompt.md': 'same' }, [id('bad', 1)]: { 'call1/prompt.md': 'same' } }) });
+    expect(a.promptDiffs).toEqual([{ freezeId: A, file: 'call1/prompt.md', a: { runId: id('good', 1), text: 'same' }, b: { runId: id('bad', 1), text: 'same' } }]);
   });
 });

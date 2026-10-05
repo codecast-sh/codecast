@@ -5,6 +5,7 @@ import {
   PEEK_DELAY_MS,
   WALK_IDLE,
   createFieldUndoGuard,
+  fieldHoldsText,
   fieldOwnsStep,
   walk,
   walkTimer,
@@ -85,16 +86,22 @@ describe("held-modifier undo walk", () => {
     expect(walk(fading, undo(T0 + 800)).phase).toBe("peek");
   });
 
-  test("releasing while the pointer is over the card pins it", () => {
+  // A pointer that happens to rest over the card holds it open as a peek; it
+  // takes no focus and no keys until the user presses on it.
+  test("releasing while the pointer is over the card holds the peek without taking keys", () => {
     const s = run(undo(), { type: "peekTimer" }, { type: "release", hovered: true });
-    expect(s.phase).toBe("pinned");
-    expect(walkView(s)).toEqual({ open: true, mode: "interactive" });
+    expect(s.phase).toBe("hovered");
+    expect(walkView(s)).toEqual({ open: true, mode: "peek" });
+    expect(walkTimer(s)).toBeNull();
+    expect(walk(s, { type: "otherKey" }).phase).toBe("idle");
+    expect(walk(s, { type: "cardPress" }).phase).toBe("pinned");
   });
 
-  test("the pointer reaching the card during the fade pins it", () => {
+  test("the pointer reaching the card during the fade holds it; leaving resumes the fade", () => {
     const s = run(undo(), { type: "peekTimer" }, { type: "release", hovered: false }, { type: "pointerEnter" });
-    expect(s.phase).toBe("pinned");
-    expect(walk(s, { type: "fadeTimer" }).phase).toBe("pinned");
+    expect(s.phase).toBe("hovered");
+    expect(walk(s, { type: "fadeTimer" }).phase).toBe("hovered");
+    expect(walk(s, { type: "pointerLeave" }).phase).toBe("fading");
   });
 
   test("any other key cancels the walk at every unpinned phase", () => {
@@ -228,5 +235,64 @@ describe("createFieldUndoGuard", () => {
     at(150);
     guard.edited(field);
     expect(guard.declines("undo", field, { ...history, items: [{ id: "a", ts: 100, redoneAt: 200 }] }, () => {})).toBe(false);
+  });
+  // A field holding text keeps its own undo while it has one. A draft the
+  // app seeded (a triage step that lands on a session with one) has none:
+  // nobody edited it, and the browser's undo would do nothing.
+  describe("a field holding text", () => {
+    test("seeded and never edited, the press is the app's", () => {
+      const { guard } = setup();
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+
+    // Chromium's queryCommandEnabled answers for the frame: typing in any
+    // mounted field makes it true for every other one. Only an edit record
+    // of this field keeps the press; the browser's "nothing" drops it.
+    test("a frame-wide yes never keeps the press for a field nobody edited", () => {
+      const { guard, at } = setup();
+      const other = {};
+      at(5);
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(false);
+      expect(guard.declines("undo", field, history, () => {}, true)).toBe(false);
+      at(10);
+      guard.edited(field);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(true);
+      expect(guard.keepsWithText(field, () => {}, false)).toBe(false);
+    });
+
+    test("a kept press whose browser step lands in another field gives the field's later presses to the app", () => {
+      const { guard, at } = setup();
+      const other = {};
+      at(5);
+      guard.edited(field);
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(true);
+      // The browser's undo edited the other field: this one had nothing left.
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(false);
+    });
+
+    test("edited, however long ago, it keeps the press until it has nothing left", () => {
+      const { guard, flush, at } = setup();
+      let appSteps = 0;
+      at(10);
+      guard.edited(field);
+      expect(guard.keepsWithText(field, () => { appSteps += 1; })).toBe(true);
+      // No input came of the browser's undo: the field had nothing, the app steps.
+      flush();
+      expect(appSteps).toBe(1);
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+  });
+});
+
+describe("fieldHoldsText", () => {
+  test("reads inputs by value, editables by text, and nothing else", () => {
+    expect(fieldHoldsText({ tagName: "TEXTAREA", value: "draft" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "INPUT", value: "" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: " \n" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: "note" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "DIV" } as any)).toBeNull();
   });
 });

@@ -1,4 +1,6 @@
-import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import { showActionSheet } from '@/lib/actionSheet';
 import { Text as RNText } from '@/components/Themed';
 import { useState, useCallback } from 'react';
 import { useRouter } from 'expo-router';
@@ -46,6 +48,26 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
     });
   }, []);
 
+  // Long-press: the trigger's verbs, through the same store action as web
+  // (the row flips locally, the dispatch runs the mutation).
+  const manage = (task: TaskRow) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const act = useInboxStore.getState().triggerAction;
+    const paused = task.status === 'paused';
+    showActionSheet(taskDisplayTitle(task), [
+      { label: 'Run now', onPress: () => act(task._id, 'runNow') },
+      { label: paused ? 'Resume' : 'Pause', onPress: () => act(task._id, paused ? 'resume' : 'pause') },
+      {
+        label: 'Cancel trigger',
+        destructive: true,
+        onPress: () => Alert.alert('Cancel this trigger?', taskDisplayTitle(task), [
+          { text: 'Keep', style: 'cancel' },
+          { text: 'Cancel trigger', style: 'destructive', onPress: () => act(task._id, 'cancel') },
+        ]),
+      },
+    ]);
+  };
+
   if (rows.length === 0) return null;
 
   const failing = rows.some((r) => isTriggerFailing(r.task));
@@ -87,6 +109,8 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
                 onPress={() => {
                   if (row.openId) router.push(`/session/${row.openId}`);
                 }}
+                onLongPress={() => manage(task)}
+                delayLongPress={350}
               >
                 <RNView style={styles.rowMain}>
                   {isTriggerFailing(task) && <RNView style={styles.failDot} />}

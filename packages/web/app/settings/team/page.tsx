@@ -2,7 +2,7 @@ import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
-import { useMutation, useAction } from "convex/react";
+import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { AvatarImg } from "../../../lib/avatarCache";
@@ -39,11 +39,13 @@ export default function TeamPage() {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const effectiveTeamId = activeTeamId;
   const team = useInboxStore((s) => s.teams.find((t) => t?._id === effectiveTeamId));
-  const removeMember = useMutation(api.teams.removeMember);
-  const renameTeam = useMutation(api.teams.renameTeam);
-  const setMemberRole = useMutation(api.teams.setMemberRole);
+  // Team settings and membership paint from the store at once and reach the
+  // server through its dispatch, like createTeam and deleteTeam.
+  const removeTeamMember = useInboxStore((s) => s.removeTeamMember);
+  const renameTeam = useInboxStore((s) => s.renameTeam);
+  const setTeamMemberRole = useInboxStore((s) => s.setTeamMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
-  const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
+  const updateTeamIcon = useInboxStore((s) => s.updateTeamIcon);
   const { data: teamMembers, error: membersError } = useSettingsData("teamMembers");
   // Nothing cached and the roster query failed: no count is known, so none
   // is claimed.
@@ -80,11 +82,7 @@ export default function TeamPage() {
     if (!user._id || !effectiveTeamId || !teamName.trim()) return;
     setIsSavingTeamName(true);
     try {
-      await renameTeam({
-        team_id: effectiveTeamId,
-        requesting_user_id: user._id,
-        name: teamName.trim(),
-      });
+      await renameTeam(effectiveTeamId, teamName.trim());
       setIsEditingTeamName(false);
       setTeamName("");
     } finally {
@@ -106,7 +104,7 @@ export default function TeamPage() {
     if (!Object.keys(patch).length) return;
     setIsSavingIcon(true);
     try {
-      await updateTeamIcon({ team_id: effectiveTeamId, ...patch });
+      await updateTeamIcon(effectiveTeamId, patch);
     } finally {
       setIsSavingIcon(false);
     }
@@ -116,11 +114,7 @@ export default function TeamPage() {
     if (!memberToRemove || !user._id || !effectiveTeamId) return;
     setIsRemoving(true);
     try {
-      await removeMember({
-        requesting_user_id: user._id,
-        member_user_id: memberToRemove,
-        team_id: effectiveTeamId,
-      });
+      await removeTeamMember(effectiveTeamId, memberToRemove);
       setMemberToRemove(null);
     } finally {
       setIsRemoving(false);
@@ -156,12 +150,7 @@ export default function TeamPage() {
     if (!user._id || !effectiveTeamId) return;
     setRoleChangeInProgress(memberId);
     try {
-      await setMemberRole({
-        requesting_user_id: user._id,
-        member_user_id: memberId,
-        role: newRole,
-        team_id: effectiveTeamId,
-      });
+      await setTeamMemberRole(effectiveTeamId, memberId, newRole);
     } finally {
       setRoleChangeInProgress(null);
     }

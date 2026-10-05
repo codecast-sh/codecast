@@ -1,5 +1,5 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { localAgentTypeOf } from "@codecast/shared/contracts";
 import { resetConversationPendingMessages } from "./pendingMessages";
 import { parkOnCloudHost } from "./cloudPlacement";
 
@@ -121,6 +121,8 @@ export async function enqueueResumeSession(
   ctx: DbCtx,
   conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "project_path" | "git_root" | "agent_type" | "owner_device_id">,
 ): Promise<{ deduplicated: boolean; command_id?: Id<"daemon_commands"> }> {
+  // Throws for a hosted conversation: no daemon resumes it.
+  const agentType = localAgentTypeOf(conv.agent_type);
   const pendingCommands = await ctx.db
     .query("daemon_commands")
     .withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).eq("executed_at", undefined))
@@ -137,7 +139,7 @@ export async function enqueueResumeSession(
     target_device_id: conv.owner_device_id,
     args: JSON.stringify({
       session_id: conv.session_id,
-      agent_type: fromConvexAgentType(conv.agent_type),
+      agent_type: agentType,
       conversation_id: conv._id,
       project_path: conv.project_path || conv.git_root,
     }),

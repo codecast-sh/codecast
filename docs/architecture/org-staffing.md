@@ -201,12 +201,17 @@ apply (`ds-N`) keeps working for stacks already created.
 
 Ghosts. Open proposal changes render on the chart merged into the layout:
 
-- role: a ghost node under its proposed parent (dashed border, 55% opacity, the role's handle, scope chips, a "proposed" tag).
-- move: a dashed edge to the new parent; the old edge at 30% opacity.
-- retire: the node with a hatched overlay and a "retire" tag.
-- scope, budget, trust: a dashed chip on the node ("+ project X", "tokens 400k to 800k", "trust to decide").
-- routine: a dashed clock chip on the node.
-- project_meta: a dashed chip on the scope panel's project row.
+- role: a ghost node under its proposed parent (a thin violet outline over a soft violet tint, 55% opacity, the role's handle, scope chips, the word "proposed").
+- move: a violet edge to the new parent; the old edge at 30% opacity.
+- retire: the node with a hatched overlay and the word "retire".
+- scope, budget, trust: a violet chip on the node ("+ project X", "tokens 400k to 800k", "trust to decide").
+- routine: a violet clock chip on the node.
+- project_meta: a violet chip on the scope panel's project row.
+
+A proposed thing wears one quiet mark on the chart: the tint and outline
+(`changeFrameStyle`, `orgMeta.ts`) with its icon in violet. Its tag is a plain
+word, its chips are solid, and no card, tag, chip or edge on the chart is
+dashed. A chart full of proposals must still read as a chart.
 - adopt: a ghost node marked "this session" when the viewer is looking from the session that offered.
 
 Every ghost carries an action row: Accept, Edit, Skip. Edit opens the hire
@@ -1347,3 +1352,197 @@ the caller, the target and the anchors and builds the roster; a landing is
 `route@<team>:<ct-N>` and `route@fixture:<case>`; gates `parse`, `no-misfile`,
 `owner-known`).
 
+
+## S36. Goals on the chart, and the chart beside a conversation
+
+Written 2026-10-04. The chart drew who reports to whom. It now also draws
+what the company is trying to reach and who answers for each part of it.
+
+### Two lenses, one canvas
+
+The chart has two lenses, switched by a toggle in its toolbar and by
+`?lens=goals` in the URL: **People** (the reporting tree, as before) and
+**Goals**.
+
+The Goals lens is an outline on the left and a column of owners on the right:
+
+- The company is the root. There is no purpose row in the data, and none is
+  added: the top level goals (initiatives with no parent) are the purpose, in
+  the same sense the proposal card uses ("purpose first, then what feeds it").
+- Under the company, each top level goal; under a goal, the goals that feed
+  it (one level, `parent_initiative_id`), then the projects that carry it
+  (`project_ids`, in the owner's order). A project several goals carry is
+  drawn once (`projectRows`): under the goal nearest the work (the deepest in
+  the outline); among those, under a goal that carries it today before one a
+  proposal would set; then under the goal whose owner leads the project; else
+  under the first in the outline. Every other goal that carries it shows a
+  small reference chip naming where it is drawn. A purpose set over every
+  project would otherwise repeat the whole list above the goals that answer
+  for each. A row an `initiative_projects` change adds is that change's one
+  mark on the chart, so it is always a row.
+- Siblings read in the order the proposal card reads them: live goals in list
+  order, then what the proposal sets or moves, by its number in the proposal.
+- On the right, one card for every person or role that owns a goal or leads a
+  project, level with the first thing it owns (the purpose's owner sits beside
+  the purpose). A goal belongs to its owner (`initiative.owner`) and a project
+  to its lead (`projectLeadOf`, the one rule the project page uses), when the
+  project names the lead or the lead's scope lists it. The whole workspace
+  fallback (a head of people with no area) covers every project by the rule,
+  so it is no lead here.
+- The trunk from a card to its children drops from under the card and runs
+  down the gutter left of the children, so it never crosses a card.
+
+Why a toggle and not goals as a band above the roles: a band keeps both trees
+on screen, so every owner edge has to cross the reporting tree to reach its
+role, and a company with five goals and fifteen projects draws twenty edges
+over the cards. In the outline the picture answers one question: who owns
+what. The reporting line is one click away in the other lens, and an owner
+card opens its seat there. The outline is also tall and narrow, which is the
+shape of a pane beside a conversation.
+
+The resting chart draws no owner edge. Every goal wears its owner's face and
+every led project its lead's, so a line from each across the canvas would
+repeat what the card says and bury the outline under curves. The canvas draws
+the owner edges of one card at a time (`goalsFlowEdges`): the card under the
+pointer, else the selected card, else the card of the change in focus.
+Pointing at an owner shows everything it owns; pointing at a goal or a
+project shows who answers for it. The edge leaves the row's right side, runs
+out past the deepest row and curves to the owner, through the empty band
+between the two columns.
+
+### Goal ghosts
+
+The lens draws the goal tree **as it will be** once the open proposal is
+accepted, with every changed thing in the ghost chrome role ghosts wear
+(the violet tint, the plain word). This is the same reading the proposal card
+gives, because both come from one resolver: `proposalChangeRows`
+(`proposalTree.ts`) names each goal change's goal, parent, owner and former
+parent, one row per change. The card joins and nests those rows
+(`proposalTreeRows`); `goalsPlan` (`goalsLayout.ts`) places them. Nothing
+resolves a goal ref, an owner ref or a parent a second time, and a tag reads
+the same word in both places.
+
+| Change | Drawn as |
+|---|---|
+| `initiative` | A ghost goal under its parent (or under the company), the word "new", its projects as ghost rows beneath it (or reference chips, when a live goal already draws them), its owner's face, a violet line for its metrics |
+| `initiative_shape` with a parent | The goal under its new parent, tag "moves here" (or "to the top"), with a line "was under X" |
+| `initiative_shape` with metrics | A violet line on the goal: the metrics and their targets |
+| `initiative_projects` | Ghost project rows under the goal, tag "added" |
+| `initiative_owner` | The new owner's face on the goal and a violet line "owner X"; pointing at the goal shows a violet edge to the new owner and a faint one to the old |
+
+A proposed change is a ghost, an accepted one is drawn solid until the store
+carries it, an applied or skipped one draws nothing. An owner nothing answers
+to is a warning tag on the goal, never a dropped change. A click on a ghost
+focuses its change, the way a role ghost's does, and the focused change wears
+the Accept, Edit, Skip strip role ghosts wear (`GhostActions`, one component).
+Goal rows sit tight, so the strip waits for the focus and the layout keeps one
+row free under the focused card for it (`GOALS_SIZES.actionRow`).
+
+### The chart beside a conversation
+
+`/org?view=chart` is the chart alone: no page header, no staffing pane, the
+lens toggle and the proposal's name in one slim bar. It is an ordinary route,
+so the stage hosts it as a pane beside a conversation (`openBeside`, the one
+reused target pane, opened unfocused so the conversation stays primary). It
+opens from a proposal card ("Chart") and from the session header (a chip that
+appears when the thread holds a proposal). On a dev build `preview=1` draws
+the fixture org, as it does on the org page.
+
+Its address is its whole state: `proposal=op-N` draws that proposal's ghosts,
+`focus=` pans to one thing (a change by its number in the proposal, a goal by
+`in-N`, a role by `@handle`), `lens=` picks the lens (absent, the lens the
+focus or the proposal's changes call for), and `s=<conversation>` names the
+conversation it follows.
+
+**How the agent drives it.** The pane follows the thread it was opened from:
+it reads that conversation's messages from the store and points itself at the
+newest pointer in them. A pointer is something the agent already writes:
+
+- `op-N` on its own line (the proposal card): the pane shows that proposal.
+- A link to the chart, `/org?proposal=op-N&focus=3`: the pane shows that
+  proposal and pans to that change. The agent writes this when it wants the
+  person to look at one thing while it talks about it.
+
+No server state, no new message type and no new channel: the pointer is
+message text, the pane's state is its URL, and the follow is a read of the
+local store. The person keeps control: the pane only moves when a newer
+pointer arrives, anything they click or toggle in it holds until then, and
+"Following" in its bar turns the follow off.
+
+## S37. Semantic zoom: one picture, read like a map
+
+Written 2026-10-04. A card on the chart says more the closer you look. The
+canvas zoom picks one of three levels for every card (`orgZoom.ts`,
+`useZoomLevel`), and nothing else changes: there is no second view.
+
+| Level | Zoom | A goal | A role or a person |
+|---|---|---|---|
+| far | under 0.55 | The title, large, and its health dot | The name, large, and one dot in the seat's colour |
+| middle | 0.55 to 1.15 | The card: owner face, the first metric against its target, the health word, how many projects carry it, a line per proposed change | The card as before: standing line, area, session counts |
+| close | from 1.15 | Under a rule: the description, every metric with its latest value, trend and date, the next milestone, the latest update in its owner's words, the sessions working under its projects now. A project row adds its number, status and lead; an owner card its standing line | The line under the name moves to a row of its own so the name, the title and the session count read whole; the changes on the card become a line each instead of a row of chips; then the charter line, the role's open work (open tasks, in flight, active plans: `org.health`'s ledger for its area) and the sessions running now |
+
+The goal card's health, metric, milestone and update lines are the intent
+layer's atoms (`InitiativeAtoms`: `HealthChip`, `MetricReadingLine`,
+`MetricTile`, `NextMilestoneChip`, `UpdateLine`), so a goal reads the same on
+the chart as on its own page.
+
+**Each level has its own layout.** A card is a fixed size at each level, and
+the layout is computed for the level on screen (`layoutGoals(input, level)`,
+`layoutOrgTree(tree, view, ghosts, level)`): a far goal is its title alone
+(`goalFarHeight`), a middle card is the card, a close card adds the close
+rows. So the resting chart keeps no room for what only the close card says,
+and about twice as much of a company fits in a pane as when every card
+reserved its close size. Zooming inside a level moves nothing.
+
+**Crossing a stop is anchored.** When the zoom crosses a stop the layout for
+the new level replaces the old one, placed so the card under the pointer
+stays exactly where it is (`bandOrigin`, `orgViewport.ts`; with no pointer on
+the canvas, the card nearest its centre). The other cards slide to their
+places around it (the `.org-flow` node transition, 260ms) and the edges
+follow. The canvas itself is not moved, so a pinch in progress is never
+fought, and the layout's origin simply travels with the anchor. A card
+subscribes to the level, not the zoom, so it re-renders when the zoom crosses
+a stop and never on a zoom tick. On the Goals lens an edge meets a card at a
+fixed distance from its top (`goalsAnchor`), which is inside the card at
+every level. Titles are measured the way the browser wraps them, by word
+(`wrappedLines`), so a two line title never pushes a row out of its card.
+
+Close is for reading, so a close card never cuts a name or a count: the
+close layout books the rows the text needs (`roleCloseExtra`, `personCloseExtra`,
+with `roleMetaLine` wrapped by word), and a name takes a second line before
+it is cut. A session row names its state in words at every level, beside the
+colour of its edge.
+
+The health map (`structureOnly`) has one level: its cards are the same size at every zoom.
+
+## S38. A role keeps a playbook and tunes its own wake
+
+A role that runs for months learns things its next run would otherwise learn again: which diagnosis was wrong, what the person already decided, what was chased and found false. One long running session kept all of that by rewriting its own trigger prompt, 51 times, until the prompt was 154 KB and every wake reloaded it. The idea is right and the home was wrong. The learning belongs in the brief, which the role already reads at every wake and already writes at the end of every check, and it needs a budget.
+
+**The playbook is five sections of the brief**, written by the role with `cast brief edit -`, beside "Where it stands". Each is a list, one line per entry, and each line carries its date, so the wake frame, the role page and the learning loop read the same sentences (`packages/shared/contracts/rolePlaybook.ts`, built on the `briefStanding.ts` line reader).
+
+| Section | A line holds |
+| --- | --- |
+| `## North metric` | A first line naming the one number the area is read by, then one reading per line, dated. The role keeps the recent readings and the milestones and drops the rest |
+| `## Rules learned` | The rule, the mistake that taught it (`Learned from:`), the date |
+| `## Refuted` | What turned out false and what showed it, the date, so it is not chased again |
+| `## Standing decisions` | What was decided, who decided it, when |
+| `## Open threads` | What is open and what it waits for, when it opened, when it is due |
+
+A section the role has nothing for is left out. `cast brief` prints the shape of an entry in each section under the brief, at every read, so the format lives in one place and the wake prompt carries none of it. It prints them every time, not only for a section the brief lacks: in the first dry runs the shapes showed only for missing sections, and a role condensing a full brief kept the facts and dropped every date and every "Learned from", which left a brief no reader could parse.
+
+**The brief has a size budget** (`BRIEF_BUDGET_CHARS`, 12,000 characters, about 3,000 tokens a wake). `cast brief` says how full it is once it passes three quarters. A save from the role's own session that is over the budget is refused with the reason, so the role condenses before it grows: it merges rules that say one thing, drops closed threads, and thins old metric readings down to the milestones. A person editing the brief on the role page is not capped.
+
+**How it wakes has one home: the routine itself.** The cadence, the precheck, the focus, and the reason for the last change are fields of the role's check trigger, never sentences the role repeats in its brief. `cast brief` and the role page print them from the trigger, so what the playbook says about the wake cannot drift from what the wake does.
+
+- The focus is the role's own part of its wake: a short text (600 characters at most) the frame carries after the routine's prompt. The routine's prompt stays the product's, so a prompt change still reaches every seated role, and the role's part can never grow past its cap.
+- `cast role tune --every <1h to 7d> --precheck "<command>" --focus "<text>" --why "<reason>"` changes them. It takes no trigger id: from a role's session it finds that role's own check and nothing else, so a role never reads or writes the person's roster of triggers to tune itself. A reason is required.
+- Inside the bounds the change applies at once, with no proposal. It is one row in the org log (`routine_tune`: the cadence, precheck and focus before and after, and the reason), so the person sees it in History and on the role's page, and takes it back with the same undo as any other change. It is also a revision of the trigger, so `cast trigger history` shows it.
+- Outside the bounds (a cadence under an hour or over a week) the command refuses and says to propose a `routine` change, which the person accepts like any other. An accepted routine change that names the role's own check changes that check through the same writer (`applyRoutineTune`); it never arms a second trigger beside it.
+- A tune made from inside the check's own run is taken (the trigger is `running` then): the cadence, the gate, the focus and the reason are the only fields a running trigger accepts, and the new interval counts from the arming after that run.
+
+**The check ends by keeping the playbook.** `ROLE_CHECK_PROMPT` gains two short lines at principle level (`ROLE_PLAYBOOK_LINES`): the role ends a run by revising its brief with what the run taught it and keeps it short enough to read every time, and it changes its check when how often it runs no longer fits how fast the area moves. The prompt names no section and gives no example; the shapes come from `cast brief`. The lines are proven on the `role-wake` eval surface with four fixtures (a steady area that taught a rule, the same run on a brief with no playbook yet, an area gone quiet, a brief at its budget), old prompt against new, 8 reps a side, gates decided in code: every entry parses with its date and a rule with what taught it, the brief fits its budget, the role tunes when the rhythm changed and leaves its cadence alone when it did not. What the runs showed (2026-10-05, Sonnet 5.5): without the wake line no rep of 32 slowed a check on an area frozen for five weeks; with it 8 of 8 did, with a reason, and 0 of 24 on the other fixtures tuned at all. The playbook line itself moved no gate: the roles wrote dated rules with their mistakes under the old prompt too, because `cast brief` prints the shapes. A first draft of the wake line ("when it does, leave it alone") tuned 3 of 8; saying what a check costs moved it to 8 of 8. The Head of People's weekly review keeps its own prompt unchanged: it reads the same `cast brief` and may tune itself the same way, and its prompt changes only with a run of the `org-review` surface behind it.
+
+**Rules feed the template learning loop** (org-hire.md H12). When a role hired from a template stands in an opted-in workspace, the pass reads the rules it learned since the last pass as one more signal beside what people typed and where the hire stalled. The model generalizes them into lessons about the template; every lesson still goes through the leak check, and a rule is read once (its key joins the instance's `seen` list). A role that was not hired from a template feeds nothing.
+
+**The role page shows it.** The Overview carries a Playbook block under "Where it stands": the metric with its readings and milestones, the rules with what taught each, what was refuted, the standing decisions with who and when, the open threads with a due date that turns yellow when it has passed, and a line for how the role wakes and why, with the date it last tuned itself.

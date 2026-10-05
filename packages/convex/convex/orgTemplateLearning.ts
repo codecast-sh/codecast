@@ -6,7 +6,8 @@
 // orgTemplateLearning (contracts).
 //
 // A session is read in exactly one place, `performDigest`, an internal query
-// only the pass calls, and the opt-in is read there again. What it returns
+// only the pass calls, and the opt-in is read there again. The role's brief
+// is read there too, for the rules in its playbook. What it returns
 // goes to the model and nowhere else: the pass's caller, Codecast's scheduled
 // run, receives lessons that passed the leak check and counts.
 import { v } from "convex/values";
@@ -20,7 +21,8 @@ import { noteOrgChange, roleSubject, whereOfRole } from "./lib/orgChangeLog";
 import { isToolResultCarrier, parseUserMessage } from "@codecast/shared/contracts";
 import { compareVersions, type OrgTemplate } from "@codecast/shared/contracts/orgTemplateManifest";
 import { readiness } from "@codecast/shared/contracts/orgTemplateState";
-import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, structuralSignals, workspaceTerms, type CanaryInstance, type LeakKind, type LearningDigest, type Redirect, type WorkspaceFacts } from "@codecast/shared/contracts/orgTemplateLearning";
+import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, playbookRuleSignals, structuralSignals, workspaceTerms, type CanaryInstance, type LeakKind, type LearningDigest, type Redirect, type WorkspaceFacts } from "@codecast/shared/contracts/orgTemplateLearning";
+import { parsePlaybook } from "@codecast/shared/contracts/rolePlaybook";
 import { CODECAST_TEMPLATE_ACCESS, callerWorkspace, enqueueBind, fileLessonRow, requireCaller, requireCodecastPublisher, routineRows, stateOf, templateRow, visibleTemplate, type Ctx } from "./orgTemplates";
 import { standingConversationOf } from "./orgRoles";
 
@@ -156,8 +158,12 @@ export async function performDigest(ctx: Ctx, args: { instance_id: Id<"org_templ
     const routine = signal.key.includes(":failed:") ? routines.find((r) => r.id === signal.about) : null;
     if (routine?.trigger) signal.detail = (await ctx.db.get(routine.trigger.id as Id<"agent_tasks">))?.last_run_summary;
   }
-  const digest: LearningDigest = { redirects: await redirectsOf(ctx, role, since), signals };
-  return { request: digest.redirects.length || signals.length ? learningRequest(manifest, digest) : null, signal_keys: signals.map((s) => s.key) };
+  // The rules the role wrote in its own playbook (org-staffing.md S38), each
+  // read once: its key joins the instance's `seen` with the structural ones.
+  const brief = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
+  const rules = playbookRuleSignals(parsePlaybook(brief?.content).rules, row.learning?.seen);
+  const digest: LearningDigest = { redirects: await redirectsOf(ctx, role, since), signals, rules };
+  return { request: digest.redirects.length || signals.length || rules.length ? learningRequest(manifest, digest) : null, signal_keys: [...signals.map((s) => s.key), ...rules.map((r) => r.key)] };
 }
 
 /** The names a lesson from this instance's workspace must not carry. */

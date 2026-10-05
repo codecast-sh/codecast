@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "bun:test";
 import type { SimEvent } from "@codecast/shared/contracts/evalsApi";
-import { buildTimeline, failIndex, keptIndexes, parseChannel, rowDiffSides, shrinkCaption, traceLabels } from "./simLanes";
+import { buildTimeline, failIndex, keptIndexes, parseChannel, rowDiffSides, shrinkCaption, splitRowDiff, stepLabels, traceLabels, type StepBand } from "./simLanes";
 import { SimLabels, traceMatches } from "../../store/__tests__/sim/labels";
 
 const REAL: SimEvent[] = [
@@ -105,3 +105,63 @@ describe("rowDiffSides", () => {
     expect(rowDiffSides("INV-x", null, null)).toEqual({ server: "server", replica: "replica" });
   });
 });
+
+describe("stepLabels", () => {
+  const band = (at: number, end: number, verb: string, label: string, actor = "world"): StepBand => ({ at, end, verb, actor, label });
+  const x0 = (i: number) => 10 + 20 * i;
+  const charW = 6;
+  const ends = (steps: StepBand[], right: number) =>
+    stepLabels(steps, x0, right, charW).map((p, k) => (p ? { row: p.row, from: p.x, to: p.x + steps[k].verb.length * charW + (p.detail ? 5 + p.detail.length * charW : 0) } : null));
+
+  it("keeps a label on the top row when its verb fits before the next band", () => {
+    const [a] = stepLabels([band(0, 10, "settle", "settle #1"), band(10, 20, "remove", "acme bo")], x0, 500, charW);
+    expect(a).toEqual({ row: 0, x: 14, detail: "settle #1" });
+  });
+
+  it("drops a narrow band's label to the second row instead of running it into the next label", () => {
+    // The real fixture's first step: a settle one delivery wide, then a send.
+    const steps = [band(0, 1, "settle", "settle #1"), band(1, 9, "send", "s1 hello", "laptop-host"), band(9, 20, "remove", "acme ada", "bo.admin")];
+    const placed = ends(steps, 500);
+    expect(placed.map((p) => p?.row)).toEqual([1, 0, 0]);
+    for (const row of [0, 1]) {
+      const onRow = placed.filter((p) => p?.row === row) as Array<{ from: number; to: number }>;
+      for (let i = 1; i < onRow.length; i++) expect(onRow[i].from).toBeGreaterThan(onRow[i - 1].to);
+    }
+    // A top-row label never passes the next band's edge.
+    expect(placed[1]!.to).toBeLessThanOrEqual(x0(9));
+  });
+
+  it("leaves a label to its title when neither row has room", () => {
+    // Three checks at one delivery: only the last has room, on the second row.
+    const steps = [band(0, 0, "settle", "a"), band(0, 0, "expect", "b"), band(0, 0, "inspect", "c"), band(0, 30, "remove", "d")];
+    const rows = stepLabels(steps, x0, 700, charW).map((p) => p?.row ?? null);
+    expect(rows).toEqual([null, null, 1, 0]);
+  });
+});
+
+describe("splitRowDiff", () => {
+  // Shaped like zzProbeStashRestoreFollower interleave 333090: the server side is a projection, so most fields are absent there.
+  const diff = [
+    { field: "archived_at", server: "(absent)", replica: "null" },
+    { field: "agent_status", server: "\"needs_input\"", replica: "\"stashed\"" },
+    { field: "has_unread", server: "(absent)", replica: "false" },
+    { field: "inbox_stashed_at", server: "null", replica: "1800000025000" },
+    { field: "message_count", server: "(absent)", replica: "0" },
+    { field: "tags", server: "[]", replica: "(absent)" },
+    { field: "title", server: "(absent)", replica: "\"ada/s\"" },
+  ];
+
+  it("puts the fields one side lacks and the other leaves empty behind a count", () => {
+    const { shown, omitted } = splitRowDiff(diff, {});
+    expect(omitted.map((d) => d.field)).toEqual(["archived_at", "has_unread", "message_count", "tags"]);
+    // A field absent on one side but holding a real value on the other still says something.
+    expect(shown.map((d) => d.field)).toEqual(["agent_status", "inbox_stashed_at", "title"]);
+  });
+
+  it("leads with the fields the invariant compares or the message names", () => {
+    const { shown } = splitRowDiff(diff, { message: "placed stashed, the server places needs_input; inbox_stashed_at moved", keys: ["agent_status"] });
+    expect(shown.map((d) => d.field)).toEqual(["agent_status", "inbox_stashed_at", "title"]);
+    expect(splitRowDiff(diff, { keys: ["title"] }).shown[0]!.field).toBe("title");
+  });
+});
+

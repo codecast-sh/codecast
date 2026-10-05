@@ -7,6 +7,7 @@ import {
   Circle,
   CircleUserRound,
   ExternalLink,
+  Globe,
   Link2,
   Lock,
   MessageSquare,
@@ -32,7 +33,9 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useRoomTranscribeOff } from "../../hooks/useRoomTranscribeOff";
+import { usePressOutside } from "../../hooks/usePressOutside";
+import { useRoomTranscribeOff, useRoomWordsPublic } from "../../hooks/useRoomTranscribeOff";
+import { TRANSCRIPT_SHARED_WORDS } from "../../lib/calls/roomRecordingEnd";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import { TranscribeControls } from "./TranscribePanel";
 import { RecordButton, RecordingNoticeBanner, StageRecordingBadge } from "./RoomRecording";
@@ -77,6 +80,7 @@ import { EdgeResizeHandle, useEdgeResize } from "../../hooks/useEdgeResize";
 import { UnreadCount } from "./UnreadCount";
 import { AgentReplyPeek } from "./AgentReplyPeek";
 import { takeCallThreadRequest } from "../../lib/calls/callStage";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The media notice, with the fix in reach: when the error is a device the OS
 // refused, the button is the one gesture that changes that (the OS prompt,
@@ -222,6 +226,8 @@ export function CallStage({
   ).data as
     | {
         transcript_id: string;
+        // null while a record Record made waits for its first scribe.
+        started_by: string | null;
         started_at: number;
         team_id: string;
         routes: Array<{ kind: string; target: string; mode: string; added_by: string }>;
@@ -235,8 +241,11 @@ export function CallStage({
   // ran only once the record answered, and the hook count changing between
   // renders crashed the whole stage.
   const transcribeOff = useRoomTranscribeOff(call.roomKey);
+  const wordsPublic = useRoomWordsPublic(call.roomKey);
   const stageHost = useMemo(() => memberStageHost(call.roomKey), [call.roomKey]);
-  const transcribing = !!live && !transcribeOff;
+  // A record Record made with nobody scribing it yet holds no words: it is
+  // transcribing once a client claims the scribe seat.
+  const transcribing = !!live && !!live.started_by && !transcribeOff;
 
   const [view, setView] = useState<StageView>("auto");
   const [threadOpen, setThreadOpen] = useState(takeCallThreadRequest);
@@ -267,7 +276,7 @@ export function CallStage({
     // key that closed the window would end a call by accident.
     if (panel) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || keysOwnedElsewhere(e.target)) return;
       // Typing in the thread composer: Esc leaves the field, not the stage.
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "TEXTAREA" || el.tagName === "INPUT")) return el.blur();
@@ -359,6 +368,20 @@ export function CallStage({
           {/* The room is being recorded: said where the room's name is, for
               everyone in it, whoever pressed. */}
           <StageRecordingBadge roomKey={call.roomKey} />
+          {/* The words go out by the call's public link as they are said:
+              told to everyone in the room, as the guests' notice tells them
+              (the green of the thread's transcribing dot). */}
+          {transcribing && wordsPublic && (
+            <span
+              className="ml-1 flex shrink-0 items-center gap-1 rounded-full bg-sol-green/10 px-1.5 py-px font-mono text-[10.5px] text-sol-green"
+              title={TRANSCRIPT_SHARED_WORDS}
+              aria-label={TRANSCRIPT_SHARED_WORDS}
+              role="img"
+            >
+              <Globe className="h-3 w-3" aria-hidden="true" />
+              <span className="stage-word">public</span>
+            </span>
+          )}
           {parsed?.kind === "session" && (
             <StageChromeButton
               onClick={() => {
@@ -445,7 +468,7 @@ export function CallStage({
           }
           title={
             transcribing
-              ? "Transcribing. Open the thread: the words, the chat, the agents in the room."
+              ? `Transcribing.${wordsPublic ? ` ${TRANSCRIPT_SHARED_WORDS}` : ""} Open the thread: the words, the chat, the agents in the room.`
               : "Open the thread: chat with the room, add an agent, start transcribing."
           }
         >
@@ -933,13 +956,7 @@ function SharePicker({
 }) {
   const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
-  useWatchEffect(() => {
-    const onDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    return () => document.removeEventListener("pointerdown", onDown, true);
-  }, [onClose]);
+  usePressOutside(rootRef, true, onClose, { escape: true });
 
   const screens = sources?.filter((s) => s.kind === "screen") ?? [];
   const q = query.trim().toLowerCase();
@@ -949,11 +966,6 @@ function SharePicker({
   return (
     <div
       ref={rootRef}
-      onKeyDown={(e) => {
-        if (e.key !== "Escape") return;
-        e.stopPropagation();
-        onClose();
-      }}
       className="absolute bottom-full left-1/2 z-10 mb-3 w-[440px] -translate-x-1/2 rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
     >
       {sources === null ? (

@@ -8,7 +8,7 @@ import { View as RNView,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, TAB_BAR_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
-import { Mono } from '@/constants/fonts';
+import { Mono, useMonoFace } from '@/constants/fonts';
 import { StoreSyncBridge } from '@/components/StoreSyncBridge';
 import { useChatUnread } from '@codecast/web/hooks/useChatSync';
 import {
@@ -72,6 +72,7 @@ const badgeStyles = themedStyles((Theme) => StyleSheet.create({
 
 export default function TabLayout() {
   const Theme = useTheme();
+  const labelFace = useMonoFace(Mono.medium);
   // The badge counts unread rows in the persisted store list, so it paints at
   // boot and clears in the same tick as a mark-read (web NotificationBell).
   const unreadCount = useInboxStore((s) => {
@@ -102,7 +103,7 @@ export default function TabLayout() {
         },
         tabBarLabelStyle: {
           ...MOBILE_TAB_LABEL_STYLE,
-          fontFamily: Mono.medium,
+          fontFamily: labelFace,
         },
         headerStyle: {
           ...MOBILE_HEADER_STYLE,

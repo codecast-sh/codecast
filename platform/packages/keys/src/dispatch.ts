@@ -108,6 +108,10 @@ export function createKeydownHandler<A extends string>(
   dispatcher: ShortcutDispatcher<A>,
   opts: KeydownOptions<A> = {},
 ): (e: KeyboardEvent) => void {
+  // Whether each noRepeat binding's last fresh press was handled. A held chord
+  // is swallowed only when the app took the press; a declined press (a text
+  // field's own undo) belongs to the browser, and so do its repeats.
+  const heldTaken = new Map<ShortcutDef<A>, boolean>();
   return (e: KeyboardEvent) => {
     const modalOpen = hasOpenModal();
     const target = e.target as HTMLElement | null;
@@ -117,11 +121,14 @@ export function createKeydownHandler<A extends string>(
       if (def.when && !dispatcher.hasContext(def.when)) continue;
       if (!shortcutAllowedAt(target, def, opts, modalOpen)) continue;
       if (def.noRepeat && e.repeat) {
+        if (!heldTaken.get(def)) continue;
         e.preventDefault();
         return;
       }
 
-      if (dispatcher.dispatch(def.action, "key")) {
+      const handled = dispatcher.dispatch(def.action, "key");
+      if (def.noRepeat) heldTaken.set(def, handled);
+      if (handled) {
         e.preventDefault();
         e.stopImmediatePropagation();
         opts.onShortcutUsed?.(def.action);

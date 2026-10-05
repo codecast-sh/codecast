@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Check, Copy, Link2, RefreshCw, Unlink, UserMinus, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
@@ -71,7 +72,7 @@ export function GuestRemoveButton({
   const out = (revokeLink: boolean) => (e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirm(false);
-    removeGuest(roomKey, guestId, { revokeLink });
+    void removeGuest(roomKey, guestId, revokeLink, toast.error);
   };
   if (confirm) {
     const armed = `${base} bg-sol-red/80 text-white hover:bg-sol-red`;

@@ -263,6 +263,29 @@ describe("focusRequestedTab", () => {
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
   });
 
+  // Agents switch, share and close each other's tabs, so an older row's tab is
+  // often gone while the session drives another one: the tab "watch live"
+  // shows. The click raises that one instead of offering to reopen the page.
+  test("a row whose tab is gone raises the tab its session drives now", async () => {
+    const calls: string[] = [];
+    const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
+      engines: [engine("builtin", { calls })],
+      raiseApp: () => {},
+      resolveSessionTab: () => T1,
+    });
+    expect(out).toEqual({ tab: T1, result: { ok: true, pid: 1234 } });
+    expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
+  });
+
+  test("a gone row tab with no session tab stays tab-not-found, so the reopen is offered", async () => {
+    const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
+      engines: [engine("builtin")],
+      raiseApp: () => {},
+      resolveSessionTab: () => null,
+    });
+    expect(out).toEqual({ tab: "4a2cdc7e", result: { ok: false, reason: "tab-not-found" } });
+  });
+
   test("a session that drives no tab is tab-not-found, never a random tab", async () => {
     const out = await focusRequestedTab(new URLSearchParams({ session_uuid: "s-1" }), {
       engines: [engine("builtin")],

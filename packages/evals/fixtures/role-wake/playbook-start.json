@@ -1,0 +1,134 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "S38: the steady run on a brief that holds no playbook yet. The role's own line called the webhooks section complete off a session's state, four events were missing, and Mara answered sd-55. The brief it saves should start a playbook from what the run taught: a rule with the mistake, the decision with who and when; nothing padded, and the wake left alone.",
+  "label": {
+    "rereads": [
+      "jx7ref2"
+    ],
+    "tune": "none",
+    "playbook": {
+      "rules": [
+        1,
+        2
+      ],
+      "decisions": 1
+    }
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@docs",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"_id\": \"or7docsfixture\",\n    \"short_id\": \"or-7\",\n    \"name\": \"Docs lead\",\n    \"given_name\": \"Wren\",\n    \"handle\": \"docs\",\n    \"status\": \"active\",\n    \"trust\": \"direct\",\n    \"reports_to\": {\n      \"kind\": \"user\",\n      \"user_id\": \"u7mara\"\n    },\n    \"review_backend\": null,\n    \"authority\": [],\n    \"standing_short_id\": \"jx7dcs1\",\n    \"standing_conversation_id\": \"jx7dcs1fixture\",\n    \"checked_at\": 1790499600000,\n    \"routine\": {\n      \"_id\": \"tr901fixture\",\n      \"short_id\": \"tr-901\",\n      \"title\": \"Check Docs lead's area\",\n      \"status\": \"scheduled\",\n      \"run_at\": 1790672400000,\n      \"last_run_at\": 1790499600000,\n      \"interval_ms\": 86400000,\n      \"wake\": {\n        \"every_ms\": 86400000,\n        \"precheck\": null,\n        \"focus\": null,\n        \"why\": null,\n        \"tuned_at\": null\n      }\n    }\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        {\n          \"id\": \"pj7docs\",\n          \"title\": \"Docs site\"\n        },\n        {\n          \"id\": \"pj7api\",\n          \"title\": \"API reference\"\n        }\n      ],\n      \"plans\": [\n        {\n          \"id\": \"pl31fixture\",\n          \"short_id\": \"pl-31\",\n          \"title\": \"Reference from schema\",\n          \"project_id\": \"pj7api\"\n        }\n      ],\n      \"whole_workspace\": false\n    },\n    \"tasks\": {\n      \"total\": 14,\n      \"open\": 6,\n      \"by_status\": {\n        \"backlog\": 2,\n        \"in_progress\": 3,\n        \"in_review\": 1,\n        \"done\": 8\n      },\n      \"by_priority\": {\n        \"high\": 2,\n        \"medium\": 4\n      }\n    },\n    \"plans\": [\n      {\n        \"short_id\": \"pl-31\",\n        \"title\": \"Reference from schema\",\n        \"status\": \"active\",\n        \"updated_at\": 1790578800000,\n        \"progress\": {\n          \"total\": 5,\n          \"done\": 3,\n          \"in_progress\": 1\n        }\n      }\n    ],\n    \"hands\": [\n      {\n        \"_id\": \"jx7ref2fixture\",\n        \"short_id\": \"jx7ref2\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"state\": \"working\",\n        \"state_line\": \"Regenerating with the four missing events\",\n        \"state_status\": null,\n        \"state_at\": 1790582400000,\n        \"updated_at\": 1790582400000,\n        \"waiting_since\": null,\n        \"task\": {\n          \"short_id\": \"ct-412\",\n          \"title\": \"Regenerate the webhooks reference\",\n          \"status\": \"in_progress\"\n        }\n      },\n      {\n        \"_id\": \"jx7bil3fixture\",\n        \"short_id\": \"jx7bil3\",\n        \"title\": \"Rewrite the billing page for the new plans\",\n        \"state\": \"working\",\n        \"state_line\": \"Drafting the new plans table\",\n        \"state_status\": null,\n        \"state_at\": 1790578800000,\n        \"updated_at\": 1790578800000,\n        \"waiting_since\": null,\n        \"task\": {\n          \"short_id\": \"ct-418\",\n          \"title\": \"Billing page still describes the old plans\",\n          \"status\": \"in_progress\"\n        }\n      },\n      {\n        \"_id\": \"jx7stl4fixture\",\n        \"short_id\": \"jx7stl4\",\n        \"title\": \"Daily page staleness report\",\n        \"state\": \"done\",\n        \"state_line\": \"9 pages past a month unreviewed\",\n        \"state_status\": \"done\",\n        \"state_at\": 1790582400000,\n        \"updated_at\": 1790582400000,\n        \"waiting_since\": null,\n        \"task\": null\n      }\n    ],\n    \"initiatives\": [],\n    \"standing\": {\n      \"short_id\": \"jx7dcs1\",\n      \"state\": \"dormant\",\n      \"state_line\": \"Docs lead for Fernhill: the reference migration is under way; billing rewrite under way.\",\n      \"state_status\": \"working\",\n      \"state_at\": 1790499600000\n    },\n    \"people\": [],\n    \"changed\": [\n      {\n        \"kind\": \"task\",\n        \"short_id\": \"ct-412\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"status\": \"in_progress\",\n        \"updated_at\": 1790582400000\n      }\n    ],\n    \"changed_since\": 1790499600000,\n    \"decisions\": {\n      \"open\": 0,\n      \"answered_today\": 1\n    },\n    \"usage\": {\n      \"day\": \"2026-09-28\",\n      \"wakes\": 1,\n      \"hands\": 0,\n      \"tokens\": 3900,\n      \"caps\": {\n        \"hands_per_day\": 6,\n        \"wakes_per_day\": 40,\n        \"tokens_per_day\": 400000\n      },\n      \"uncounted_sessions\": 0\n    },\n    \"generated_at\": 1790586000000\n  },\n  \"narrative\": \"Docs lead for Fernhill: the reference migration is under way; billing rewrite under way.\\nStatus: working\\n\\n## Where it stands\\n- Docs site: billing page rewrite under way in jx7bil3; the old plans are still live on it. (2026-09-27)\\n- API reference: webhooks section regenerated from the schema and complete, per jx7ref2. (2026-09-27)\",\n  \"brief_doc_id\": \"doc7docsbrief\",\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"charter_doc_id\": null\n}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7ref2"
+        ],
+        "out": "Regenerate the webhooks reference (jx7ref2) \u00b7 working \u00b7 48 messages\n\n[44] user (Mara): Your brief says the webhooks section is complete. Four events are missing from it: invoice.voided, payout.failed, seat.added, seat.removed. Who checked this?\n[45] assistant: The generator skips any event whose schema entry has no description, and still exits clean. My state said complete because the run passed. Nobody compared the page against the schema's list: the schema defines 23 events and the page has 19.\n[46] assistant: Added a count check to the generator: it now fails when the page holds fewer events than the schema. Regenerating with descriptions for the four.\n[47] user (Mara): Answered sd-55. Keep the v1 events table, marked deprecated, until the six guides that link to it have moved. Do not drop it before then.\n[48] assistant: Keeping the v1 table, marked deprecated. Regeneration is running; I will open the pull request when the count check passes.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7stl4"
+        ],
+        "out": "Daily page staleness report (jx7stl4) \u00b7 done \u00b7 12 messages\n\n[10] user: Report every public page whose feature shipped more than a month ago and that nobody has reviewed since.\n[11] assistant: 9 pages are past a month unreviewed today (11 yesterday): the billing page, the v1 events table, the SSO setup guide and six SDK changelog pages.\n[12] assistant: Report posted. Done.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "No open decisions."
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-55"
+        ],
+        "out": "sd-55 \u00b7 answered \u00b7 asked by jx7ref2\nDrop the v1 events table from the reference, or keep it marked deprecated?\nAnswer: Keep it marked deprecated until the six guides that link to it have moved \u00b7 Mara \u00b7 2026-09-28 08:10"
+      },
+      {
+        "argv": [
+          "stack",
+          "show",
+          "sd-55"
+        ],
+        "out": "sd-55 \u00b7 answered by Mara 2026-09-28 08:10: keep the v1 events table marked deprecated until the six guides move"
+      },
+      {
+        "argv": [
+          "sessions"
+        ],
+        "out": "Sessions \u00b7 you\nworking 2  \u00b7  done 1\n\nWorking (2)\n  jx7ref2  Regenerate the webhooks reference   Regenerating with the four missing events\n  jx7bil3  Rewrite the billing page for the new plans   Drafting the new plans table\nDone (1)\n  jx7stl4  Daily page staleness report   9 pages past a month unreviewed",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "org",
+          "ls"
+        ],
+        "out": "Fernhill\n  Mara (you) \u00b7 owner\n    Docs lead @docs \u00b7 active \u00b7 6 open\n      jx7ref2 Regenerate the webhooks reference \u00b7 working\n      jx7bil3 Rewrite the billing page for the new plans \u00b7 working\n      jx7stl4 Daily page staleness report \u00b7 done"
+      },
+      {
+        "argv": [
+          "trigger",
+          "ls"
+        ],
+        "out": "  tr-901   active   Check Docs lead's area  every 1d  inline\n           Reviews recent changes and pending items in the docs role's scope, then updates its brief\n           last: Webhooks reference reported complete by jx7ref2; billing rewrite under way.\n  tr-902   active   Docs lead: a session needs input  on session_needs_input  inline\n           Answers or routes a session under the docs role that stopped for a person"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7dcs1"
+        ],
+        "out": "Docs lead (jx7dcs1) \u00b7 standing session \u00b7 dormant\n\n[201] assistant: Docs lead for Fernhill: the reference migration is under way; billing rewrite under way. Brief saved; nothing needs Mara.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decisions",
+          "list"
+        ],
+        "out": "No decisions recorded in this project."
+      },
+      {
+        "argv": [
+          "decisions"
+        ],
+        "out": "No decisions recorded in this project.",
+        "prefix": true
+      }
+    ]
+  }
+}

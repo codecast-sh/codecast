@@ -16,13 +16,15 @@ import type { MutationCtx } from "./_generated/server";
 import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
 import { canReadCall } from "./transcripts";
 import { sharedCallVideoKey, sharedCallVideos } from "./callRecordings";
-import { restampRunShare } from "./lib/callRecordingRuns";
+import { callTeamRetired, mayPublishCall, restampRunShare } from "./lib/callRecordingRuns";
+import { stampRoomWordsPublic } from "./callRooms";
+import { postEvent } from "./callChat";
 import { assigneeNamesFor } from "./tasks";
 import { userMayRead } from "./sessionDecisions";
 import { canReadStack } from "./decisionStacks";
 import { canViewTask } from "./agentTasks";
 import { canReadRun } from "./workflow_runs";
-import { isRecRoomKey } from "@codecast/shared/contracts";
+import { CALL_LINK_REFUSED_WORDS, isRecRoomKey } from "@codecast/shared/contracts";
 import { publicName } from "./lib/displayNames";
 
 export const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -33,12 +35,14 @@ type ShareTable =
 
 /** Point `row`'s share token at `token` (null clears it). A token already
  *  serving another row of the table is refused, so one link can never be
- *  re-aimed at a different object. */
+ *  re-aimed at a different object. `by` is the person who did it, for a
+ *  call's thread (restampCallRuns). */
 export async function claimShareToken(
   ctx: Pick<MutationCtx, "db">,
   table: ShareTable,
   row: { _id: Id<ShareTable>; share_token?: string | null },
   token: string | null,
+  by?: Id<"users">,
 ): Promise<void> {
   // A call's link may also carry its video (callRecordings.setCallShareVideo).
   // That choice belongs to the link it was made for: a link cleared or
@@ -49,7 +53,7 @@ export async function claimShareToken(
   if (token === null) {
     if (row.share_token) {
       await ctx.db.patch(row._id, { share_token: undefined, ...dropVideo } as any);
-      await restampCallRuns(ctx, table, row);
+      await restampCallRuns(ctx, table, row, by && { by, event: "link_off" });
     }
     return;
   }
@@ -60,34 +64,59 @@ export async function claimShareToken(
     .first();
   if (taken) throw new Error("Invalid share token");
   await ctx.db.patch(row._id, { share_token: token, ...dropVideo } as any);
-  await restampCallRuns(ctx, table, row);
+  await restampCallRuns(ctx, table, row, by && { by, event: "link_on" });
 }
 
 /** A call's running recordings carry whether their video goes out with the
  *  link (the room's live notice reads it there): a link cleared or re-aimed
- *  has just dropped the video, so they are told. */
-async function restampCallRuns(ctx: Pick<MutationCtx, "db">, table: ShareTable, row: { _id: Id<ShareTable> }): Promise<void> {
+ *  has just dropped the video, so they are told. The room carries whether
+ *  its words do (getSharedCall shows a live record's transcript as it is
+ *  written), so a link turned on in the middle of a call is news to
+ *  everyone in it, guests first. A call that has ended reaches nobody that
+ *  way, so whoever turned the link on or off is named in the room's thread
+ *  (`told`), the way a picture shared from its video is: everyone who was
+ *  in it can see their words went public, and who to ask. */
+async function restampCallRuns(
+  ctx: Pick<MutationCtx, "db">,
+  table: ShareTable,
+  row: { _id: Id<ShareTable> },
+  told?: { by: Id<"users">; event: "link_on" | "link_off" },
+): Promise<void> {
   if (table !== "transcripts") return;
   const call = await ctx.db.get(row._id as Id<"transcripts">);
-  if (call) await restampRunShare(ctx, call);
+  if (!call) return;
+  await restampRunShare(ctx, call);
+  await stampRoomWordsPublic(ctx, call);
+  if (told) await postEvent(ctx, { room_key: call.room_key, team_id: call.team_id, user_id: told.by, event: told.event, transcript_id: call._id });
 }
 
 // Who may turn a kind's link on or off: whoever may read the object. Docs,
-// plans and tasks are team-editable, and a call's record belongs to everyone
-// who sat through it. Wrapped, not referenced: this module sits in an import
+// plans and tasks are team-editable. A call is the exception, split by
+// direction: anyone who may read it may close its link, but opening it (a new
+// token, `token` here) puts every word on the open web, guests' words
+// included, so that takes someone who sat through it or a team admin
+// (mayPublishCall). Wrapped, not referenced: this module sits in an import
 // cycle with conversations.ts, and a bare binding read at load is a TDZ.
 const SHARE_KINDS = {
   doc: { table: "docs", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessDoc(ctx, u, row) },
   plan: { table: "plans", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessPlan(ctx, u, row) },
   task: { table: "tasks", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessTask(ctx, u, row) },
-  call: { table: "transcripts", canManage: (ctx: any, u: Id<"users">, row: any) => canReadCall(ctx, u, row) },
+  call: {
+    table: "transcripts",
+    canManage: async (ctx: any, u: Id<"users">, row: any, token?: string | null) => {
+      if (!(await canReadCall(ctx, u, row))) return false;
+      if (!token || token === row.share_token || (await mayPublishCall(ctx, u, row))) return true;
+      // A reader already knows the call is there, so the refusal says why.
+      throw new Error(CALL_LINK_REFUSED_WORDS);
+    },
+  },
   project: { table: "projects", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessProject(ctx, u, row) },
   initiative: { table: "initiatives", canManage: (ctx: any, u: Id<"users">, row: any) => canAccessInitiative(ctx, u, row) },
   decision: { table: "session_decisions", canManage: (ctx: any, u: Id<"users">, row: any) => userMayRead(ctx, u, row) },
   stack: { table: "decision_stacks", canManage: (ctx: any, u: Id<"users">, row: any) => canReadStack(ctx, u, row) },
   trigger: { table: "agent_tasks", canManage: (ctx: any, u: Id<"users">, row: any) => canViewTask(ctx, u, row) },
   run: { table: "workflow_runs", canManage: (ctx: any, u: Id<"users">, row: any) => canReadRun(ctx, u, row) },
-} as const satisfies Record<string, { table: TableNames; canManage: (ctx: any, userId: Id<"users">, row: any) => Promise<boolean> }>;
+} as const satisfies Record<string, { table: TableNames; canManage: (ctx: any, userId: Id<"users">, row: any, token?: string | null) => Promise<boolean> }>;
 
 export type ObjectShareKind = keyof typeof SHARE_KINDS;
 
@@ -107,8 +136,8 @@ export async function writeObjectShareLink(
   const rowId = ctx.db.normalizeId(table, id);
   const row = rowId ? await ctx.db.get(rowId) : null;
   // One error for "no row" and "not yours", so a probe learns nothing.
-  if (!row || !(await canManage(ctx, userId, row))) throw new Error("Not found");
-  await claimShareToken(ctx, table, row as any, token);
+  if (!row || !(await canManage(ctx, userId, row, token))) throw new Error("Not found");
+  await claimShareToken(ctx, table, row as any, token, userId);
 }
 
 async function byShareToken<T extends ShareTable>(ctx: any, table: T, token: string): Promise<Doc<T> | null> {
@@ -164,7 +193,10 @@ export const getSharedCall = query({
   args: { share_token: v.string() },
   handler: async (ctx, args) => {
     const t = await byShareToken(ctx, "transcripts", args.share_token);
-    if (!t) return null;
+    // A deleted team's calls serve nothing while it may be restored, words
+    // included (lib/callRecordingRuns.callTeamRetired); a restore brings the
+    // link back as it was.
+    if (!t || (await callTeamRetired(ctx, t))) return null;
     const segs = await ctx.db
       .query("transcript_segments")
       .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))

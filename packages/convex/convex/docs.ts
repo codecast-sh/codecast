@@ -3,8 +3,8 @@ import { FOREIGN_PLAN_CAPS, foreignProse, referenceGuidance, foreignTaskSource }
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
 import { afterRoleDocWrite } from "./orgRoles";
-import { v } from "convex/values";
-import { mutation, query, internalMutation, internalQuery } from "./functions";
+import { v, type ObjectType } from "convex/values";
+import { mutation, query, internalMutation, internalQuery, type MutationCtx } from "./functions";
 import { Id, type Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { verifyApiToken } from "./apiTokens";
@@ -1352,34 +1352,41 @@ export const webSearch = query({
 });
 
 
+const webUpdateArgs = {
+  id: v.id("docs"),
+  title: v.optional(v.string()),
+  content: v.optional(v.string()),
+  doc_type: v.optional(v.string()),
+  labels: v.optional(v.array(v.string())),
+  pinned: v.optional(v.boolean()),
+  archived: v.optional(v.boolean()),
+};
+
 export const webUpdate = mutation({
-  args: {
-    id: v.id("docs"),
-    title: v.optional(v.string()),
-    content: v.optional(v.string()),
-    doc_type: v.optional(v.string()),
-    labels: v.optional(v.array(v.string())),
-    pinned: v.optional(v.boolean()),
-    archived: v.optional(v.boolean()),
-  },
+  args: webUpdateArgs,
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-
-    const doc = await ctx.db.get(args.id);
-    if (!doc) throw new Error("Doc not found");
-    if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
-
-    const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
-    if (args.doc_type !== undefined) updates.doc_type = args.doc_type;
-    if (args.labels !== undefined) updates.labels = args.labels;
-    if (args.pinned !== undefined) updates.pinned = args.pinned;
-    if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
-
-    await ctx.db.patch(args.id, updates);
-    return { success: true };
+    return await updateDocAs(ctx, userId, args);
   },
 });
+
+/** Update a doc as `userId`, the way the web's update does. The hosted
+ *  assistant's write_doc runs this same path. */
+export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webUpdateArgs>) {
+  const doc = await ctx.db.get(args.id);
+  if (!doc) throw new Error("Doc not found");
+  if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
+
+  const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
+  if (args.doc_type !== undefined) updates.doc_type = args.doc_type;
+  if (args.labels !== undefined) updates.labels = args.labels;
+  if (args.pinned !== undefined) updates.pinned = args.pinned;
+  if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
+
+  await ctx.db.patch(args.id, updates);
+  return { success: true };
+}
 
 export const deleteBySource = internalMutation({
   args: {
@@ -2267,62 +2274,69 @@ export const expandMentions = query({
   },
 });
 
+const webCreateArgs = {
+  title: v.string(),
+  content: v.optional(v.string()),
+  doc_type: v.optional(v.string()),
+  labels: v.optional(v.array(v.string())),
+  parent_id: v.optional(v.id("docs")),
+  workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+  team_id: v.optional(v.id("teams")),
+};
+
 export const webCreate = mutation({
-  args: {
-    title: v.string(),
-    content: v.optional(v.string()),
-    doc_type: v.optional(v.string()),
-    labels: v.optional(v.array(v.string())),
-    parent_id: v.optional(v.id("docs")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
-    team_id: v.optional(v.id("teams")),
-  },
+  args: webCreateArgs,
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-
-    // The doc lives in the workspace it was created in: a doc made while in a
-    // team space is that team's doc, one made in the personal space stays
-    // personal. Membership is enforced by resolveWorkspace; callers that send
-    // nothing (older clients) land personal — never the active team, which
-    // would silently auto-share every web-created doc.
-    const db = await createDataContext(ctx, {
-      userId,
-      workspace: args.workspace ?? "personal",
-      team_id: args.team_id,
-    });
-
-    // If adding under a parent, compute sort_order as last child
-    let sort_order: number | undefined;
-    if (args.parent_id) {
-      const parent = await requireAccessibleDoc(ctx, userId, args.parent_id);
-      requireSameWorkspace(parent, db.workspace, "parent doc");
-      const siblings = await ctx.db
-        .query("docs")
-        .withIndex("by_parent_id", (q) => q.eq("parent_id", args.parent_id!))
-        .collect();
-      sort_order = siblings.length > 0
-        ? Math.max(...siblings.map((s) => s.sort_order ?? 0)) + 1
-        : 0;
-    }
-
-    const content = withTitleHeading(args.title, args.content);
-    const id = await db.insert("docs", {
-      title: docTitleFromContent(content, args.title),
-      content,
-      doc_type: (args.doc_type || "note") as any,
-      source: "human" as any,
-      labels: args.labels,
-      parent_id: args.parent_id,
-      sort_order,
-    });
-
-    // The row rides back with the receipt so the client seeds its store before
-    // navigating: the doc page paints from the store, never waiting on the
-    // list feed to echo the create.
-    return { id, row: await ctx.db.get(id) };
+    return await createDocAs(ctx, userId, args);
   },
 });
+
+/** Create a doc as `userId`, the way the web's create does. The hosted
+ *  assistant's write_doc runs this same path. */
+export async function createDocAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webCreateArgs>) {
+  // The doc lives in the workspace it was created in: a doc made while in a
+  // team space is that team's doc, one made in the personal space stays
+  // personal. Membership is enforced by resolveWorkspace; callers that send
+  // nothing (older clients) land personal — never the active team, which
+  // would silently auto-share every web-created doc.
+  const db = await createDataContext(ctx, {
+    userId,
+    workspace: args.workspace ?? "personal",
+    team_id: args.team_id,
+  });
+
+  // If adding under a parent, compute sort_order as last child
+  let sort_order: number | undefined;
+  if (args.parent_id) {
+    const parent = await requireAccessibleDoc(ctx, userId, args.parent_id);
+    requireSameWorkspace(parent, db.workspace, "parent doc");
+    const siblings = await ctx.db
+      .query("docs")
+      .withIndex("by_parent_id", (q) => q.eq("parent_id", args.parent_id!))
+      .collect();
+    sort_order = siblings.length > 0
+      ? Math.max(...siblings.map((s) => s.sort_order ?? 0)) + 1
+      : 0;
+  }
+
+  const content = withTitleHeading(args.title, args.content);
+  const id = await db.insert("docs", {
+    title: docTitleFromContent(content, args.title),
+    content,
+    doc_type: (args.doc_type || "note") as any,
+    source: "human" as any,
+    labels: args.labels,
+    parent_id: args.parent_id,
+    sort_order,
+  });
+
+  // The row rides back with the receipt so the client seeds its store before
+  // navigating: the doc page paints from the store, never waiting on the
+  // list feed to echo the create.
+  return { id, row: await ctx.db.get(id) };
+}
 
 /** Move a doc to a new parent (or to root if parent_id is null) and update sort_order */
 export const webMoveDoc = mutation({

@@ -7,6 +7,7 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
+import { formatTaskCommentMessage, parseTaskCommentMessage } from "@codecast/shared/contracts";
 
 const TOKEN = "o".repeat(64);
 const HOUR = 3_600_000;
@@ -14,6 +15,8 @@ const HOUR = 3_600_000;
 const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
   "./tasks.ts": () => import("./tasks"),
+  "./sessionOwnership.ts": () => import("./sessionOwnership"),
+  "./notificationRouter.ts": () => import("./notificationRouter"),
 };
 
 async function setup(ownerUpdatedAgo: number) {
@@ -83,5 +86,37 @@ describe("one owning session per task", () => {
     const { ownerId, elsewhereId, get, start } = await setup(60_000);
     await start("sess-owner", "ct-2");
     expect(String((await get(ownerId)).active_task_id)).toBe(String(elsewhereId));
+  });
+});
+
+describe("a person's comment reaches the session that owns the task", () => {
+  const comment = (t: any, text: string, conversation_id?: string) =>
+    t.mutation(api.tasks.addComment, { api_token: TOKEN, short_id: "ct-1", text, ...(conversation_id ? { conversation_id } : {}) });
+  const pending = (t: any) => t.run(async (ctx: any) => await ctx.db.query("pending_messages").collect()) as Promise<any[]>;
+  const comments = (t: any) => t.run(async (ctx: any) => await ctx.db.query("task_comments").collect()) as Promise<any[]>;
+
+  test("a working owner gets it framed with the task, and the comment says where it went", async () => {
+    const { t, ownerId } = await setup(60_000);
+    await comment(t, "Use the store row, not the snapshot");
+    const rows = await pending(t);
+    expect(rows).toHaveLength(1);
+    expect(String(rows[0].conversation_id)).toBe(String(ownerId));
+    expect(rows[0].content).toBe(formatTaskCommentMessage({ task: "ct-1", title: "task ct-1", from: "Owner", body: "Use the store row, not the snapshot" }));
+    const [c] = await comments(t);
+    expect(String(c.delivered_to_conversation_id)).toBe(String(ownerId));
+    expect(parseTaskCommentMessage(rows[0].content)).toEqual({ task: "ct-1", from: "Owner", about: 'About ct-1 ("task ct-1"):', body: "Use the store row, not the snapshot" });
+  });
+
+  test("a quiet owner is left alone; the comment waits on the task", async () => {
+    const { t } = await setup(3 * HOUR);
+    await comment(t, "Whenever you are back");
+    expect(await pending(t)).toHaveLength(0);
+    expect((await comments(t))[0].delivered_to_conversation_id).toBeUndefined();
+  });
+
+  test("an agent's comment from a session never relays", async () => {
+    const { t } = await setup(60_000);
+    await comment(t, "Progress: halfway", "sess-other");
+    expect(await pending(t)).toHaveLength(0);
   });
 });

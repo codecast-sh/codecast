@@ -19,7 +19,7 @@ import { nextShortId } from "./counters";
 import type { Doc, Id } from "./_generated/dataModel";
 import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat } from "./lib/orgAccess";
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
-import { findDecision, findStack, finalizeAnswer, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
+import { findDecision, findStack, finalizeAnswer, hostedAnswerRefusal, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
 
 type Ctx = { db: any };
 type StackRow = Doc<"decision_stacks">;
@@ -454,13 +454,10 @@ export async function applyAutoDefaultsCore(ctx: Ctx, now: number): Promise<{ an
       // the ask: an old advisory added to a fresh stack still gets its window.
       const since = Math.max(m.created_at, (m as any).stack_joined_at ?? 0);
       if (since + ms > now) continue;
-      const r = await finalizeAnswer(
-        ctx,
-        m,
-        { status: "answered", answer_index: m.default_option },
-        { kind: "policy", id: `stack:${stack._id}` },
-        { deliver: true, now },
-      );
+      const by = { kind: "policy" as const, id: `stack:${stack._id}` };
+      // A hosted assistant's question waits for its owner (hostedAnswerRefusal).
+      if (await hostedAnswerRefusal(ctx, m, by)) continue;
+      const r = await finalizeAnswer(ctx, m, { status: "answered", answer_index: m.default_option }, by, { deliver: true, now });
       if (!r.already_resolved) answered += 1;
     }
   }

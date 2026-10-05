@@ -20,6 +20,10 @@ import {
 } from "@/lib/calls/callManager";
 import { startRinging, stopRinging } from "@/lib/calls/ringtone";
 import { callKitAvailable, endCallKitRingIfStale } from "@/lib/calls/callKit";
+import { useRoomRecordingMark } from "@/lib/calls/recordingMark";
+import { isRecordingFilming } from "@codecast/shared/contracts";
+import { RecordingNotice } from "./RecordingNotice";
+import { LivePulse } from "./LiveRooms";
 import * as Notifications from "expo-notifications";
 
 async function dismissRingNotifications() {
@@ -138,7 +142,12 @@ export function useIncomingRingsLoaded(): { rings: RingRow[]; loaded: boolean } 
 //   name and Join / Decline. Haptic on arrival; expires with the 45s server
 //   TTL (the subscription stops returning it).
 //   IN-CALL PILL — while a call is live and the stage is closed, a floating
-//   pill above the tab bar keeps the call one tap away (and mute two).
+//   pill above the tab bar keeps the call one tap away (and mute two). It
+//   wears the room's REC, as the web's header card and desktop float do,
+//   since it is where a collapsed huddle sits most of the time.
+//   RECORDING NOTICE — a run somebody starts while the stage is closed is
+//   said over whatever screen is up, with its haptic, rather than waiting
+//   for the person to reopen the call (the stage mounts the same notice).
 export function CallOverlay() {
   const Theme = useTheme();
   const router = useRouter();
@@ -202,6 +211,7 @@ export function CallOverlay() {
 
   const onStage = pathname === "/call";
   const showPill = call.phase !== "idle" && !onStage;
+  const filming = isRecordingFilming(useRoomRecordingMark(call.phase === "connected" ? call.roomKey : null).status);
   // Tab screens carry the tab bar; anything pushed over them (session, chat,
   // thread) does not.
   const onTabScreen =
@@ -219,6 +229,7 @@ export function CallOverlay() {
       {/* Incoming ring banner — also mounted on the call stage (a
           fullScreenModal covers this root-level layer). */}
       <RingBanner ring={ring} top={insets.top + 6} onJoin={joinRing} onDecline={declineRing} />
+      {showPill && <RecordingNotice roomKey={call.roomKey} floating={{ top: insets.top + 6 }} />}
 
       {/* In-call pill */}
       {showPill && (
@@ -234,15 +245,20 @@ export function CallOverlay() {
           <Pressable
             onPress={() => router.push("/call")}
             style={({ pressed }) => [styles.pillMain, pressed && styles.pressed]}
-            accessibilityLabel="Open the call"
+            accessibilityLabel={filming ? "Open the call. This call is being recorded" : "Open the call"}
           >
-            <View style={[styles.liveDot, call.phase === "error" && styles.errorDot]} />
+            {filming ? (
+              <LivePulse color={SolarizedLight.red} size={6} />
+            ) : (
+              <View style={[styles.liveDot, call.phase === "error" && styles.errorDot]} />
+            )}
             <Text style={styles.pillText} numberOfLines={1}>
               {call.phase === "connecting"
                 ? "connecting…"
                 : call.phase === "error"
                   ? "huddle failed"
                   : "in a huddle"}
+              {filming && <Text style={styles.pillRec}> · REC</Text>}
             </Text>
           </Pressable>
           <Pressable
@@ -339,6 +355,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   errorDot: { backgroundColor: Theme.orange },
   // The pill floats on the always-dark call surface, so its text stays cream.
   pillText: { fontSize: 12, color: SolarizedLight.bgAlt },
+  pillRec: { fontWeight: "600", letterSpacing: 0.6, color: SolarizedLight.red },
   pillMute: {
     width: 44,
     height: 44,

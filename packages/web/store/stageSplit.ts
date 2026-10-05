@@ -10,7 +10,10 @@
 //
 // Pure functions only — the store's actions are thin wrappers, and the drag
 // preview calls the same ops on a hypothetical tree, so the preview and the
-// real layout can never disagree.
+// real layout can never disagree. A leaf's path is persisted with its tab, so
+// it takes the storable spelling (lib/tabSafePath) like the tab's own.
+
+import { tabSafePath } from "../lib/tabSafePath";
 
 export type SplitDir = "row" | "col";
 export type SplitEdge = "left" | "right" | "top" | "bottom";
@@ -52,7 +55,7 @@ export function besideLeafId(tabId: string): string {
 }
 
 export function leafNode(path: string, id?: string): StageLeaf {
-  return { type: "leaf", id: id ?? newLeafId(), path };
+  return { type: "leaf", id: id ?? newLeafId(), path: tabSafePath(path) };
 }
 
 export function leavesOf(root: StageNode | null | undefined): StageLeaf[] {
@@ -269,7 +272,7 @@ export function removeLeaf(root: StageNode, leafId: string): StageNode | null {
 }
 
 export function setLeafPath(root: StageNode, leafId: string, path: string): StageNode {
-  if (root.type === "leaf") return root.id === leafId ? { ...root, path } : root;
+  if (root.type === "leaf") return root.id === leafId ? { ...root, path: tabSafePath(path) } : root;
   let changed = false;
   const children = root.children.map((c) => {
     const next = setLeafPath(c, leafId, path);
@@ -468,7 +471,7 @@ export function sanitizeLayout(raw: unknown, isValidPath?: (p: string) => boolea
       if (seen.has(n.id)) return null;
       if (isValidPath && !isValidPath(n.path)) return null;
       seen.add(n.id);
-      return { type: "leaf", id: n.id, path: n.path };
+      return { type: "leaf", id: n.id, path: tabSafePath(n.path) };
     }
     if (n.type === "split") {
       if (typeof n.id !== "string" || !n.id || (n.dir !== "row" && n.dir !== "col") || !Array.isArray(n.children)) return null;

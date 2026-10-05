@@ -17,24 +17,27 @@
 //   consent would bind the victim's Gmail to the attacker's row. Slack closes
 //   the relay by completing in the victim's authenticated web session
 //   (slack.ts:27-33), which this flow cannot do. So a NEW connection lands
-//   PENDING and unusable until `confirmConnection` — called from the /apps
-//   page the callback redirects to — proves the browser that finished consent
+//   PENDING and unusable until `confirmConnection`, called from the in-app
+//   page the callback redirects to (GOOGLE_RETURN_PATHS), proves the browser
+//   that finished consent
 //   is signed in as the SAME user the state names. Under a relay that check
 //   fails: the victim's confirm deletes the row and revokes the grant at
 //   Google, and the attacker never learns the confirm token (it travels only
 //   inside the victim's redirect).
 //
-// Scopes are requested INCREMENTALLY: gmail.readonly at connect; the later
-// send ask (grant: "gmail.send") requests readonly AND send — never send
-// alone, because the callback must read the Gmail profile (readonly) to key
-// the row, and a user whose earlier grant was revoked would otherwise consent
-// to a send-only token the callback can only discard. include_granted_scopes
-// makes the overlap free when readonly is already granted. The refresh token
+// Scopes are requested INCREMENTALLY: gmail.readonly at connect; each later
+// ask (a GoogleGrant: gmail.send, gmail.modify, calendar.events) requests
+// readonly AND the grant, never the grant alone, because the callback must
+// read the Gmail profile (readonly) to key the row, and a user whose earlier
+// grant was revoked would otherwise consent to a token the callback can only
+// discard. include_granted_scopes makes the overlap free when readonly is
+// already granted. The refresh token
 // is stored encrypted (AES-256-GCM, key HKDF-derived from the client secret)
 // using the cipher/KDF parameters already standardized in
 // @codecast/shared/contracts/providerKeyCrypto.ts — plaintext never reaches
-// the database. Agent-facing verbs (read/send mail) ship separately through
-// the audited credential path; this module is only connect/store/refresh.
+// the database. The hosted assistant's tools get a token through
+// googleAccessTokenForUser (server only, keyed by user and required scope);
+// the verbs themselves live with the tools.
 //
 // Env: GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET (documented next to
 // the Slack env vars). Absent config fails with a clear "not configured".
@@ -60,6 +63,58 @@ const internalApi = internal as any;
 
 export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 export const GMAIL_SEND_SCOPE = "https://www.googleapis.com/auth/gmail.send";
+// Read, archive, label and send; everything except permanent deletion.
+export const GMAIL_MODIFY_SCOPE = "https://www.googleapis.com/auth/gmail.modify";
+export const GMAIL_COMPOSE_SCOPE = "https://www.googleapis.com/auth/gmail.compose";
+export const GMAIL_FULL_SCOPE = "https://mail.google.com/";
+export const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const CALENDAR_FULL_SCOPE = "https://www.googleapis.com/auth/calendar";
+
+/** The incremental asks beyond the readonly connect, by the name callers pass. */
+export const GOOGLE_GRANT_SCOPES = {
+  "gmail.send": GMAIL_SEND_SCOPE,
+  "gmail.modify": GMAIL_MODIFY_SCOPE,
+  "calendar.events": CALENDAR_EVENTS_SCOPE,
+} as const;
+export type GoogleGrant = keyof typeof GOOGLE_GRANT_SCOPES;
+const grantValidator = v.union(v.literal("gmail.send"), v.literal("gmail.modify"), v.literal("calendar.events"));
+
+/** Every scope a connect asks for: readonly always (the callback keys the row
+ *  on the Gmail profile), then each grant once, in the order given. */
+export function googleConnectScopes(grants: readonly GoogleGrant[] = []): string[] {
+  return [...new Set([GMAIL_READONLY_SCOPE, ...grants.map((g) => GOOGLE_GRANT_SCOPES[g])])];
+}
+
+// Broader scopes a person may already hold that cover a narrower one, per
+// Google's API reference for the calls each scope gates (messages.send takes
+// gmail.modify or gmail.compose; events.* take the full calendar scope).
+const SCOPE_COVERED_BY: Record<string, readonly string[]> = {
+  [GMAIL_READONLY_SCOPE]: [GMAIL_MODIFY_SCOPE, GMAIL_FULL_SCOPE],
+  [GMAIL_SEND_SCOPE]: [GMAIL_MODIFY_SCOPE, GMAIL_COMPOSE_SCOPE, GMAIL_FULL_SCOPE],
+  [GMAIL_MODIFY_SCOPE]: [GMAIL_FULL_SCOPE],
+  [CALENDAR_EVENTS_SCOPE]: [CALENDAR_FULL_SCOPE],
+};
+
+/** Whether a connection's granted scopes let it make calls that need `required`. */
+export function googleScopeGranted(granted: readonly string[], required: string): boolean {
+  return granted.includes(required) || (SCOPE_COVERED_BY[required] ?? []).some((s) => granted.includes(s));
+}
+
+/** What a grant lets the assistant do with someone's Google account, by the
+ *  calls each scope gates: read mail, send mail, and read and write the
+ *  calendar. */
+export function googleCapabilities(granted: readonly string[]): { read_mail: boolean; send_mail: boolean; calendar: boolean } {
+  return {
+    read_mail: googleScopeGranted(granted, GMAIL_READONLY_SCOPE),
+    send_mail: googleScopeGranted(granted, GMAIL_SEND_SCOPE),
+    calendar: googleScopeGranted(granted, CALENDAR_EVENTS_SCOPE),
+  };
+}
+
+/** The grant to ask for when `required` is missing (undefined for readonly, which every connect carries). */
+export function googleGrantFor(required: string): GoogleGrant | undefined {
+  return (Object.keys(GOOGLE_GRANT_SCOPES) as GoogleGrant[]).find((g) => GOOGLE_GRANT_SCOPES[g] === required);
+}
 
 export const GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -73,8 +128,21 @@ export const GMAIL_PROFILE_URL = "https://gmail.googleapis.com/gmail/v1/users/me
 // infra change on every deployment.
 export const GOOGLE_CALLBACK_PATH = "/api/webhooks/google-oauth/callback";
 
+// The in-app pages a connect may come back to. Each one must run the confirm
+// step (parseConnectorReturn, then confirmConnection) itself. A fixed list, not
+// a prefix or origin check: the confirm token rides the redirect's fragment,
+// and a page that let anyone else's script read it would hand a relay attacker
+// the one thing the defense keeps from them. The settings page is the default.
+export const GOOGLE_RETURN_PATHS = ["/settings/integrations", "/simple/connections", "/welcome"] as const;
+export type GoogleReturnPath = (typeof GOOGLE_RETURN_PATHS)[number];
+
+/** `raw` when it is an allowed return page, else undefined. */
+export function googleReturnPath(raw: unknown): GoogleReturnPath | undefined {
+  return (GOOGLE_RETURN_PATHS as readonly unknown[]).includes(raw) ? (raw as GoogleReturnPath) : undefined;
+}
+
 // How long a freshly-stored connection may sit unconfirmed before the confirm
-// token dies. Generous enough for a slow /apps load, short enough that a
+// token dies. Generous enough for a slow page load, short enough that a
 // relayed-but-never-confirmed grant doesn't linger.
 const CONFIRM_TTL_MS = 15 * 60 * 1000;
 
@@ -281,28 +349,36 @@ export const resolveConnectUser = internalQuery({
   },
 });
 
-// getConnectUrl — the Apps tab's "Connect Gmail" button calls this and sends
-// the browser to the returned URL. First connect asks ONLY for gmail.readonly;
-// grant: "gmail.send" is the later incremental ask (triggered the first time
-// the user wants an agent to send).
+// getConnectUrl: a "Connect Google" button calls this and sends the browser
+// to the returned URL. First connect asks ONLY for gmail.readonly; `grant` is
+// a later incremental ask (one grant or several at once: the simple lane asks
+// for mail and calendar together). `return_to` names the in-app page the
+// callback lands on (GOOGLE_RETURN_PATHS); it rides the signed state, so the
+// callback trusts only what this action accepted.
 export const getConnectUrl = action({
   args: {
     api_token: v.optional(v.string()),
-    grant: v.optional(v.literal("gmail.send")),
+    grant: v.optional(v.union(grantValidator, v.array(grantValidator))),
+    return_to: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ ok: boolean; url?: string; error?: string }> => {
     const env = googleEnv();
     if (!env) return { ok: false, error: NOT_CONFIGURED };
+    const returnTo = args.return_to === undefined ? undefined : googleReturnPath(args.return_to);
+    if (args.return_to !== undefined && !returnTo) {
+      return { ok: false, error: `return_to must be one of ${GOOGLE_RETURN_PATHS.join(", ")}` };
+    }
     const who = await ctx.runQuery(internalApi.googleOAuth.resolveConnectUser, {
       api_token: args.api_token,
     });
     if (!who) return { ok: false, error: "Authentication failed — sign in and retry from the Apps tab" };
-    // The send ask carries readonly TOO (module header explains why send-alone
-    // dead-ends at the profile read when the earlier grant was revoked).
-    const scopes =
-      args.grant === "gmail.send" ? [GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE] : [GMAIL_READONLY_SCOPE];
-    const state = await signStateWith(env.clientSecret, { user_id: who.user_id, ts: Date.now() });
-    return { ok: true, url: googleAuthorizeUrl(state, scopes) };
+    const grants = args.grant === undefined ? [] : Array.isArray(args.grant) ? args.grant : [args.grant];
+    const state = await signStateWith(env.clientSecret, {
+      user_id: who.user_id,
+      ts: Date.now(),
+      ...(returnTo ? { return_to: returnTo } : {}),
+    });
+    return { ok: true, url: googleAuthorizeUrl(state, googleConnectScopes(grants)) };
   },
 });
 
@@ -315,17 +391,20 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   if (!env) return new Response(NOT_CONFIGURED, { status: 503 });
 
   const url = new URL(request.url);
-  const errorRedirect = (reason: string) =>
-    Response.redirect(`${webBaseUrl()}/apps?google=error&reason=${encodeURIComponent(reason)}`, 302);
-
-  // User declined on Google's consent screen — a normal outcome, back to Apps.
-  if (url.searchParams.get("error")) return errorRedirect(url.searchParams.get("error")!);
-
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
+  const st = state ? await verifyStateWith(env.clientSecret, state) : null;
+  // Only a verified state may pick the landing page; anything else lands on
+  // the settings page.
+  const landing = `${webBaseUrl()}${googleReturnPath(st?.return_to) ?? GOOGLE_RETURN_PATHS[0]}`;
+  const errorRedirect = (reason: string) =>
+    Response.redirect(`${landing}?google=error&reason=${encodeURIComponent(reason)}`, 302);
+
+  // User declined on Google's consent screen: a normal outcome, back to the page.
+  if (url.searchParams.get("error")) return errorRedirect(url.searchParams.get("error")!);
+
   // A missing/forged/stale state is hostile or dead, not a user we can route
   // anywhere useful — hard 400, nothing stored.
-  const st = state ? await verifyStateWith(env.clientSecret, state) : null;
   if (!st || typeof st.user_id !== "string" || !code) return new Response("bad_state", { status: 400 });
 
   // Exchange the code. The response's `scope` is the FULL accumulated grant
@@ -381,17 +460,17 @@ export const callbackHandler = async (ctx: any, request: Request): Promise<Respo
   });
   if (!stored?.ok) return errorRedirect(stored?.error || "store_failed");
   if (stored.pending) {
-    // A NEW connection is stored pending; /apps completes it by calling
+    // A NEW connection is stored pending; the landing page completes it by calling
     // confirmConnection with these params from the signed-in session. They
     // ride in the FRAGMENT, not the query: a fragment never leaves the
     // browser, so the confirm token cannot land in the web server's access
     // logs.
     return Response.redirect(
-      `${webBaseUrl()}/apps?google=pending#installation=${encodeURIComponent(stored.id)}&confirm=${confirmToken}`,
+      `${landing}?google=pending#installation=${encodeURIComponent(stored.id)}&confirm=${confirmToken}`,
       302,
     );
   }
-  return Response.redirect(`${webBaseUrl()}/apps?google=connected`, 302);
+  return Response.redirect(`${landing}?google=connected`, 302);
 };
 
 export const callback = httpAction(callbackHandler);
@@ -502,7 +581,7 @@ export const finishConfirm = internalMutation({
   },
 });
 
-// confirmConnection — /apps calls this with the installation + confirm params
+// confirmConnection: the landing page calls this with the installation + confirm params
 // from the callback redirect, in the signed-in session. Success activates the
 // row; every failure says what the user should do next.
 export const confirmConnection = action({
@@ -554,6 +633,9 @@ export const listConnections = query({
       _id: r._id,
       email: r.email,
       granted_scopes: r.granted_scopes,
+      // What the grant lets the assistant do, through the same coverage rule
+      // the tools check (googleScopeGranted), so a screen never re-derives it.
+      can: googleCapabilities(r.granted_scopes ?? []),
       // Awaiting confirmConnection — the Apps tab shows these as incomplete.
       pending: !!r.pending_confirm_hash,
       created_at: r.created_at,
@@ -565,15 +647,18 @@ export const listConnections = query({
 // getOwnedConnection — auth + ownership in one internal read, for the actions.
 // Returns the ciphertext; only server-side action code ever sees it. PENDING
 // rows are invisible by default — an unconfirmed grant must not be usable —
-// except to disconnect, which may clean one up (include_pending).
+// except to disconnect, which may clean one up (include_pending). `user_id`
+// is for server callers with no session (the assistant's tools), which have
+// already decided whose connection they act for.
 export const getOwnedConnection = internalQuery({
   args: {
     api_token: v.optional(v.string()),
+    user_id: v.optional(v.string()),
     installation_id: v.string(),
     include_pending: v.optional(v.boolean()),
   },
   handler: async (ctx, args): Promise<(RefreshRow & { _id: string }) | null> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    const userId = args.user_id ?? (await getAuthenticatedUserId(ctx, args.api_token));
     if (!userId) return null;
     const rowId = (ctx.db as any).normalizeId("google_installations", args.installation_id);
     const row: any = rowId ? await ctx.db.get(rowId) : null;
@@ -661,13 +746,54 @@ export const disconnect = action({
   },
 });
 
-// getFreshAccessToken — the refresh half. Internal only: access tokens flow to
-// the audited credential path (the coming agent verbs), never to clients.
-// The access token is cached with its expiry and refreshed single flight
-// (lib/tokenRefresh), so a Gmail call no longer pays a token round trip and
-// two concurrent callers cannot both spend a rotating refresh token.
-// invalid_grant means the user revoked us (or the secret rotated) — reported,
-// not thrown, so callers can surface "reconnect Gmail".
+/** Refresh-or-reuse one connection's access token through the single flight
+ *  protocol. `read` names whose row it is; both entry points below share it. */
+async function refreshConnection(
+  ctx: any,
+  env: { clientId: string; clientSecret: string },
+  read: { api_token?: string; user_id?: string; installation_id: string },
+  force: boolean | undefined,
+  errors: { noConnection: string; undecryptable: string; reconnect: string },
+) {
+  return await singleFlightRefresh({
+    provider: "Google",
+    read: () => ctx.runQuery(internalApi.googleOAuth.getOwnedConnection, read),
+    claim: (installation_id, expected_enc, now) =>
+      ctx.runMutation(internalApi.googleOAuth.claimRefresh, { installation_id, expected_enc, now }),
+    write: (installation_id, outcome) =>
+      ctx.runMutation(internalApi.googleOAuth.writeRefreshOutcome, { installation_id, ...outcome }),
+    decrypt: (enc) => decryptRefreshToken(enc, env.clientSecret),
+    encrypt: (plain) => encryptRefreshToken(plain, env.clientSecret),
+    request: async (refreshToken) => {
+      const resp = await fetch(GOOGLE_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          refresh_token: refreshToken,
+          client_id: env.clientId,
+          client_secret: env.clientSecret,
+          grant_type: "refresh_token",
+        }).toString(),
+      });
+      let tok: any = null;
+      try { tok = await resp.json(); } catch { tok = null; }
+      return { ok: resp.ok, status: resp.status, tok };
+    },
+    force,
+    errors,
+  });
+}
+
+const secondsUntil = (at: number | undefined) =>
+  at ? Math.max(0, Math.floor((at - Date.now()) / 1000)) : undefined;
+
+// getFreshAccessToken: the refresh half, for one installation the caller
+// owns. Internal only: access tokens never reach clients. The access token is
+// cached with its expiry and refreshed single flight (lib/tokenRefresh), so a
+// Gmail call no longer pays a token round trip and two concurrent callers
+// cannot both spend a rotating refresh token. invalid_grant means the user
+// revoked us (or the secret rotated): reported, not thrown, so callers can
+// surface "reconnect Gmail".
 export const getFreshAccessToken = internalAction({
   args: { api_token: v.optional(v.string()), installation_id: v.string(), force: v.optional(v.boolean()) },
   handler: async (
@@ -676,42 +802,132 @@ export const getFreshAccessToken = internalAction({
   ): Promise<{ ok: boolean; access_token?: string; expires_in?: number; error?: string }> => {
     const env = googleEnv();
     if (!env) return { ok: false, error: NOT_CONFIGURED };
-    const res = await singleFlightRefresh({
-      provider: "Google",
-      read: () => ctx.runQuery(internalApi.googleOAuth.getOwnedConnection, { api_token: args.api_token, installation_id: args.installation_id }),
-      claim: (installation_id, expected_enc, now) =>
-        ctx.runMutation(internalApi.googleOAuth.claimRefresh, { installation_id, expected_enc, now }),
-      write: (installation_id, outcome) =>
-        ctx.runMutation(internalApi.googleOAuth.writeRefreshOutcome, { installation_id, ...outcome }),
-      decrypt: (enc) => decryptRefreshToken(enc, env.clientSecret),
-      encrypt: (plain) => encryptRefreshToken(plain, env.clientSecret),
-      request: async (refreshToken) => {
-        const resp = await fetch(GOOGLE_TOKEN_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            refresh_token: refreshToken,
-            client_id: env.clientId,
-            client_secret: env.clientSecret,
-            grant_type: "refresh_token",
-          }).toString(),
-        });
-        let tok: any = null;
-        try { tok = await resp.json(); } catch { tok = null; }
-        return { ok: resp.ok, status: resp.status, tok };
-      },
-      force: args.force,
-      errors: {
+    const res = await refreshConnection(
+      ctx,
+      env,
+      { api_token: args.api_token, installation_id: args.installation_id },
+      args.force,
+      {
         noConnection: "No such Gmail connection for this account (or it is unconfirmed) — reconnect from the Apps tab",
         undecryptable: "Stored token undecryptable (GOOGLE_OAUTH_CLIENT_SECRET rotated?) — disconnect and reconnect Gmail from the Apps tab",
         reconnect: "reconnect Gmail from the Apps tab",
       },
-    });
+    );
     if (!res.ok) return { ok: false, error: res.error };
-    return {
-      ok: true,
-      access_token: res.token,
-      expires_in: res.expires_at ? Math.max(0, Math.floor((res.expires_at - Date.now()) / 1000)) : undefined,
-    };
+    return { ok: true, access_token: res.token, expires_in: secondsUntil(res.expires_at) };
   },
+});
+
+// ── The assistant's token getter ────────────────────────────────────────────
+// The hosted assistant's tools run inside a turn (an action with no session),
+// for a user the turn engine already resolved. They ask for a scope, not an
+// installation: the getter picks the person's connection that can make the
+// call, refreshes its token, and says plainly why when it cannot.
+
+export type GoogleTokenFailure = "not_configured" | "not_connected" | "missing_scope" | "reconnect" | "unavailable";
+export type GoogleTokenResult =
+  | { ok: true; access_token: string; email: string; installation_id: string; expires_in?: number }
+  | { ok: false; code: GoogleTokenFailure; error: string; grant?: GoogleGrant };
+
+/** The user's confirmed connections, newest first. A pending row (awaiting
+ *  confirmConnection) is never usable, so it is never listed. */
+async function confirmedConnections(ctx: { db: any }, userIdRaw: string, email?: string): Promise<any[]> {
+  const userId = ctx.db.normalizeId("users", userIdRaw);
+  if (!userId) return [];
+  const rows: any[] = await ctx.db
+    .query("google_installations")
+    .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
+    .collect();
+  return rows
+    .filter((r) => !r.pending_confirm_hash && (email === undefined || r.email === email))
+    .sort((a, b) => b.updated_at - a.updated_at);
+}
+
+/** What each of the user's confirmed connections allows, for server code that
+ *  decides which Google tools to offer. Never the tokens. */
+export const connectionScopesForUser = internalQuery({
+  args: { user_id: v.string() },
+  handler: async (ctx, args): Promise<{ email: string; granted_scopes: string[] }[]> =>
+    (await confirmedConnections(ctx, args.user_id)).map((r) => ({ email: r.email, granted_scopes: r.granted_scopes ?? [] })),
+});
+
+/** Which of the user's confirmed connections serves `scope`: the one named by
+ *  `email` when given, else the most recently updated one that holds the scope. */
+export const pickConnectionForUser = internalQuery({
+  args: { user_id: v.string(), scope: v.string(), email: v.optional(v.string()) },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ ok: true; installation_id: string; email: string } | { ok: false; code: "not_connected" | "missing_scope" }> => {
+    const confirmed = await confirmedConnections(ctx, args.user_id, args.email);
+    if (confirmed.length === 0) return { ok: false, code: "not_connected" };
+    const row = confirmed.find((r) => googleScopeGranted(r.granted_scopes ?? [], args.scope));
+    if (!row) return { ok: false, code: "missing_scope" };
+    return { ok: true, installation_id: row._id.toString(), email: row.email };
+  },
+});
+
+/**
+ * A fresh access token for `user_id` that can make calls needing `scope`.
+ * Call it from server code only (the assistant's tools, inside an action);
+ * the token must never be returned to a client. Refusals are values, with a
+ * code the tool can turn into "connect Google" or "allow calendar access".
+ */
+export async function googleAccessTokenForUser(
+  ctx: { runQuery: (ref: any, args: any) => Promise<any>; runMutation: (ref: any, args: any) => Promise<any> },
+  args: { user_id: string; scope: string; email?: string; force?: boolean },
+): Promise<GoogleTokenResult> {
+  const env = googleEnv();
+  if (!env) return { ok: false, code: "not_configured", error: NOT_CONFIGURED };
+  const picked = await ctx.runQuery(internalApi.googleOAuth.pickConnectionForUser, {
+    user_id: args.user_id,
+    scope: args.scope,
+    ...(args.email !== undefined ? { email: args.email } : {}),
+  });
+  const account = args.email ? `the Google account ${args.email}` : "a Google account";
+  if (!picked.ok && picked.code === "not_connected") {
+    return { ok: false, code: "not_connected", error: `Not connected: ${account} is not connected. Connect Google first.` };
+  }
+  if (!picked.ok) {
+    const grant = googleGrantFor(args.scope);
+    return {
+      ok: false,
+      code: "missing_scope",
+      error: `Missing scope: ${account} is connected without ${args.scope}. Ask the person to allow ${grant ?? "it"} from Connections.`,
+      ...(grant ? { grant } : {}),
+    };
+  }
+  const reconnect = "reconnect Google from Connections";
+  const errors = {
+    noConnection: `Not connected: the Google connection went away. ${reconnect}`,
+    undecryptable: `The stored Google token cannot be read; ${reconnect}`,
+    reconnect,
+  };
+  const res = await refreshConnection(
+    ctx,
+    env,
+    { user_id: args.user_id, installation_id: picked.installation_id },
+    args.force,
+    errors,
+  );
+  if (!res.ok || !res.token) {
+    const error = res.error ?? "Google token refresh failed";
+    const code: GoogleTokenFailure =
+      error === errors.noConnection ? "not_connected" : error.includes(reconnect) ? "reconnect" : "unavailable";
+    return { ok: false, code, error };
+  }
+  return {
+    ok: true,
+    access_token: res.token,
+    email: picked.email,
+    installation_id: picked.installation_id,
+    expires_in: secondsUntil(res.expires_at),
+  };
+}
+
+/** googleAccessTokenForUser as an internal action, for callers that are not
+ *  already inside an action. Never exposed publicly. */
+export const getAccessTokenForUser = internalAction({
+  args: { user_id: v.string(), scope: v.string(), email: v.optional(v.string()), force: v.optional(v.boolean()) },
+  handler: async (ctx, args): Promise<GoogleTokenResult> => await googleAccessTokenForUser(ctx, args),
 });

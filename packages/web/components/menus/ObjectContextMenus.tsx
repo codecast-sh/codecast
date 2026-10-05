@@ -50,8 +50,9 @@ import {
   type TaskItem,
   type DocItem,
 } from "../../store/inboxStore";
-import { closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
-import { animatedSetSessionRest, undoAsOne } from "../../store/undoActions";
+import { setTaskParent, updateTasksAsOne } from "../../lib/taskActions";
+import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
+import { gestureToast } from "../../store/undoStack";
 import { counted } from "../../store/undo/labels";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
@@ -142,32 +143,14 @@ export function TaskMenuItems({
   const taskStatuses = useTeamTaskStatusList((tasks[0] as any)?.team_id);
   const statusOptions = React.useMemo(() => statusEntityOptions(taskStatuses), [taskStatuses]);
 
-  const applyAll = (fields: Record<string, any>) => {
-    const { updateTask } = useInboxStore.getState();
-    undoAsOne(`Changed ${counted(count, "task")}`, () => {
-      for (const t of tasks) updateTask(t.short_id, fields);
-    });
-  };
+  // One undo named for the change; terminal moves route through the close
+  // gateway so a parent with open subtasks gets the shared dialog.
+  const applyAll = (fields: Record<string, any>) => updateTasksAsOne(tasks.map((t) => t.short_id), fields);
 
   const setStatus = (key: string) => {
     const target = statusByKey(taskStatuses, key);
     if (!target) return;
-    const fields = statusWriteFields(target);
-    // Terminal moves route through the close gateway so a parent with open
-    // subtasks gets the shared dialog instead of a stranded local Done.
-    if (fields.status === "done" || fields.status === "dropped") {
-      let deferred = false;
-      const status = fields.status;
-      undoAsOne(`Moved ${counted(count, "task")} to ${target.name}`, () => {
-        for (const t of tasks) {
-          if (closeTaskWithGuard(t.short_id, status, undefined, fields.status_id).needsConfirm) deferred = true;
-        }
-      });
-      if (!deferred) toast.success(`${bulkLabel} → ${target.name}`);
-    } else {
-      applyAll(fields);
-      toast.success(`${bulkLabel} → ${target.name}`);
-    }
+    if (!applyAll(statusWriteFields(target)).needsConfirm) toast.success(`${bulkLabel} → ${target.name}`);
   };
 
   const hasParent = tasks.some((t) => (t as any).parent_id);
@@ -496,8 +479,7 @@ export function SessionMenuItems({
         icon={session.is_pinned ? PinOff : Pin}
         shortcut="session.pin"
         onSelect={() => {
-          useInboxStore.getState().pinSession(id);
-          toast.success(session.is_pinned ? "Unpinned" : "Pinned");
+          toggleSessionsLikeFirst([id], "pin");
         }}
       >
         {session.is_pinned ? "Unpin session" : "Pin session"}
@@ -506,8 +488,7 @@ export function SessionMenuItems({
         icon={Star}
         shortcut="conv.favorite"
         onSelect={() => {
-          useInboxStore.getState().toggleFavorite(id);
-          toast.success(isFavorite ? "Removed from favorites" : "Added to favorites");
+          toggleSessionsLikeFirst([id], "favorite");
         }}
       >
         {isFavorite ? "Remove from favorites" : "Add to favorites"}
@@ -523,8 +504,7 @@ export function SessionMenuItems({
                 leading={<span className={cn("inline-block size-2 rounded-full shrink-0", color.dot)} />}
                 trailing={currentBucketId === b._id ? <Check className="size-3.5 text-sol-cyan" /> : undefined}
                 onSelect={() => {
-                  useInboxStore.getState().assignSessionToBucket(id, b._id);
-                  toast.success(`Filed under "${b.name}"`);
+                  gestureToast(`Filed under "${b.name}"`, () => useInboxStore.getState().assignSessionToBucket(id, b._id));
                 }}
               >
                 {b.name}
@@ -534,8 +514,7 @@ export function SessionMenuItems({
           {currentBucketId && (
             <CtxItem
               onSelect={() => {
-                useInboxStore.getState().assignSessionToBucket(id, null);
-                toast.success("Label removed");
+                gestureToast("Label removed", () => useInboxStore.getState().assignSessionToBucket(id, null));
               }}
             >
               Remove label

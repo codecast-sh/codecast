@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { Epoch, FootingMarker, PromptFilePair, RunRow } from '@codecast/shared/contracts/evalsApi';
+import { unaskedSet, type Epoch, type FootingMarker, type PromptFilePair, type RunRow } from '@codecast/shared/contracts/evalsApi';
 
 import { batchSet, batchStarts, BISECT_CADENCE, defaultRuler, footingOf, type RulerOf, type VerdictRun } from '../commands/verdict';
 import { homePaths } from '../paths';
@@ -232,8 +232,10 @@ export function footingMarkers<R extends VerdictRun & EpochRow>(rows: R[], ruler
   const out: FootingMarker[] = [];
   let prev: { model: string | null; ruler: string | null } | null = null;
   for (const { batch, at } of timeline(rows)) {
-    const graded = batchSet(rows, batch).filter((r) => r.status !== 'crash' && r.status !== 'dry');
-    if (!graded.length) continue;
+    const set = batchSet(rows, batch);
+    const graded = set.filter((r) => r.status !== 'crash' && r.status !== 'dry');
+    // A batch the model was never asked about has no judge to read a ruler from: it moves no footing.
+    if (!graded.length || unaskedSet(set)) continue;
     const f = footingOf(graded[0]!, ruler);
     if (prev && prev.model !== f.model) out.push({ batch, batchAt: at, kind: 'model', from: prev.model, to: f.model });
     if (prev && prev.ruler !== f.ruler) out.push({ batch, batchAt: at, kind: 'judge', from: prev.ruler, to: f.ruler });

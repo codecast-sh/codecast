@@ -4,6 +4,8 @@ import type { Options as ReactMarkdownOptions } from "react-markdown";
 import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs } from "./entityLinks";
 import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
 import { filesHref } from "./vault/vaultHref";
+import { isObjectRef, objectRefScanRegex } from "./mods/objects";
+import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 
 // Both shapes come from the shared mention vocabulary (@codecast/shared/
 // entities), so registering a new object type there lights it up in prose
@@ -18,6 +20,11 @@ const MENTION_RE = entityMentionRegex();
 // `pr:#N|<as written>` payload (`pr:?#N|…` for a lone `#N`) that EntityAwareLink completes from the
 // conversation's repository, or prints back verbatim where there is none.
 const CONTEXTUAL_PR_RE = contextualPrRefRegex();
+// `bug-14`: an object of a kind some mod declares (lib/mods/objects). The scan
+// is the shape alone; whether the prefix is a kind is asked per match, at
+// parse time, because kinds arrive with the mods rather than at build time.
+// Unknown prefixes ("covid-19", "top-10") stay prose.
+const OBJECT_REF_RE = objectRefScanRegex();
 // Obsidian-style transclusion: ![[doc:<convex id>]]. Only docs are embeddable —
 // they're the entity whose body IS markdown meant to be read in place.
 const EMBED_RE = /!\[\[(doc:[a-z0-9]{32})\]\]/g;
@@ -338,6 +345,14 @@ export function remarkEntityIds() {
             url: `entity://${match.toLowerCase()}`,
             children: [{ type: "text", value: match.toLowerCase() }],
           };
+        },
+      ],
+      [
+        OBJECT_REF_RE,
+        (match: string) => {
+          if (!isObjectRef(match)) return false;
+          const payload = `${OBJECT_REF_PREFIX}${match.toLowerCase()}`;
+          return { type: "link", url: `entity://${payload}`, children: [{ type: "text", value: payload }] };
         },
       ],
       [

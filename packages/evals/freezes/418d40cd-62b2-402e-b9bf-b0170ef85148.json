@@ -1,0 +1,26 @@
+{
+  "name": "changes-story release-thin-parts",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:release-thin-parts"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:release-thin-parts",
+    "title": "changes-story release-thin-parts"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/release-thin-parts.json"
+  },
+  "judge": "The article tells the two described changes (patients move their own appointment from the confirmation email, and the old slot is released at once; a move cancels the old reminder, so no double reminders). The table shell and the export command get at most a line naming them, or are left out. It never remarks on its inputs or what they leave out (no 'the inputs give no detail', 'not described', 'beyond the names' or similar).",
+  "notes": null,
+  "tags": [],
+  "id": "418d40cd-62b2-402e-b9bf-b0170ef85148",
+  "createdAt": "2026-10-05T04:00:03.026Z"
+}

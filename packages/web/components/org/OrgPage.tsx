@@ -31,7 +31,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { cn } from "../../lib/utils";
-import { OrgGraph, type OrgReparentRequest } from "./OrgGraph";
+import { OrgGraph, type OrgLens, type OrgReparentRequest } from "./OrgGraph";
+import { OrgLensToggle } from "./OrgChartPane";
+import { GOALS_FIXTURE_DATA, ORG_GOALS_FIXTURE_PROPOSAL } from "./goalsFixture";
 import { OrgScopePanel, type OrgPanelMode, type OrgSessionsSource } from "./OrgScopePanel";
 import { OrgHistory, OrgHistoryPreview } from "./history/OrgHistory";
 import { STAFFING_LEAD_W } from "../../lib/orgPanelLayout";
@@ -178,7 +180,7 @@ export function OrgPageInner() {
   const preview = orgPreviewEnabled(searchParams.toString(), ORG_PREVIEW_DEV);
   const [previewTree, setPreviewTree] = useState<OrgTree>(() => readOrgPreviewTree() ?? ORG_FIXTURE);
   // A dry run's spec in this tab's session storage paints ahead of the fixtures (org-eval.md).
-  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>(() => { const spec = readOrgPreviewSpec(); return [...(spec ? [spec] : []), ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL]; });
+  const [previewProposals, setPreviewProposals] = useState<OrgProposalRow[]>(() => { const spec = readOrgPreviewSpec(); return [...(spec ? [spec] : []), ORG_STAFFING_FIXTURE_PROPOSAL, ORG_STAFFING_FIXTURE_REVISED_PROPOSAL, ORG_GOALS_FIXTURE_PROPOSAL]; });
   // The slot holds one tree. After a workspace switch it still holds the
   // previous workspace's until the new answer lands; a tree that names another
   // workspace is not this page's data, so paint the skeleton for that round
@@ -311,6 +313,12 @@ export function OrgPageInner() {
   const setProposalParam = useCallback((shortId: string | null) => replaceParams((params) => {
     if (shortId) { params.set("proposal", shortId); params.delete("view"); } else params.delete("proposal");
   }), [replaceParams]);
+  // `?lens=goals` (S36): the same canvas draws goals, projects and who owns
+  // each. A goal card is not a node this page holds, so the lens keeps its
+  // own selection (it lights the owner edges, nothing else).
+  const lens: OrgLens = new URLSearchParams(searchParams.toString()).get("lens") === "goals" ? "goals" : "people";
+  const setLens = useCallback((next: OrgLens) => replaceParams((params) => { if (next === "goals") params.set("lens", "goals"); else params.delete("lens"); }), [replaceParams]);
+  const [goalsSelectedId, setGoalsSelectedId] = useState<string | null>(null);
   const setHealthPage = useCallback((on: boolean) => replaceParams((params) => {
     if (on) { params.set("view", "health"); params.delete("proposal"); } else params.delete("view");
   }), [replaceParams]);
@@ -369,7 +377,8 @@ export function OrgPageInner() {
   const resetPreview = useCallback(async (): Promise<OrgResetPreview> => preview
     ? { roles: (tree?.roles ?? []).filter((r) => r.status !== "retired").map((r) => ({ short_id: r.short_id, handle: r.handle, name: r.name, sessions: r.total })), proposals: previewProposals.length }
     : resetMutation({ ...resetArgs, dry_run: true }), [preview, tree, previewProposals, resetMutation]); // eslint-disable-line react-hooks/exhaustive-deps
-  const resetOrg = useCallback(async () => { if (!preview) await resetMutation(resetArgs); }, [preview, resetMutation, tree]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The real reset goes through the store, so it is classified like every org verb.
+  const resetOrg = useCallback(async () => { if (!preview) await useInboxStore.getState().resetOrg(resetArgs.team_id); }, [preview, tree]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetNode = isAdmin ? <OrgReset preview={resetPreview} reset={resetOrg} onDone={() => { setSelectedId(null); retryTree(); }} /> : null;
   const canEditRole = useCallback((roleId: string) => {
     const r = tree?.roles.find((x) => x._id === roleId);
@@ -995,8 +1004,8 @@ export function OrgPageInner() {
             {tree && <span className="text-[13px] font-normal mt-1 truncate" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>/ {tree.workspace.name || (tree.workspace.kind === "user" ? "personal" : "team")}</span>}
           </h1>
           <p className="mt-1.5 text-[12.5px] truncate flex items-center gap-2" style={{ color: "var(--sol-text-muted)" }}>
-            <span className="hidden sm:inline truncate">{healthPage ? "How work moves through the company this week, and what you can change about it." : "Who reports to whom: people, the roles they hired, every session. Drag a card to move it."}</span>
-            <span className="sm:hidden truncate">Who reports to whom. Drag a card to move it.</span>
+            <span className="hidden sm:inline truncate">{healthPage ? "How work moves through the company this week, and what you can change about it." : lens === "goals" ? "What the company is trying to reach, the projects that carry each goal, and who owns them." : "Who reports to whom: people, the roles they hired, every session. Drag a card to move it."}</span>
+            <span className="sm:hidden truncate">{lens === "goals" ? "Goals, their projects, and who owns them." : "Who reports to whom. Drag a card to move it."}</span>
             {tree && (
               <button type="button" onClick={() => startTour("org-page", { replay: true })} className="shrink-0 underline-offset-2 hover:underline" style={{ color: "var(--sol-violet)" }} data-org-guide="reopen">How this page works</button>
             )}
@@ -1022,6 +1031,7 @@ export function OrgPageInner() {
               </div>
             </div>
           )}
+          {!healthPage && <OrgLensToggle lens={lens} onChange={setLens} />}
           <button
             type="button"
             onClick={() => { if (!healthPage) closePanel(); setHealthPage(!healthPage); }}
@@ -1095,10 +1105,13 @@ export function OrgPageInner() {
             <OrgGraph
               tree={tree}
               view={view}
-              selectedId={selectedId}
+              lens={lens}
+              goalsData={preview ? GOALS_FIXTURE_DATA : undefined}
+              onOpenInPeople={(id) => { setLens("people"); setSelectedId(id); askFocus("node", id); }}
+              selectedId={lens === "goals" ? goalsSelectedId : selectedId}
               loadingClusters={loadingClusters}
               showMiniMap={showMiniMap}
-              onSelect={setSelectedId}
+              onSelect={lens === "goals" ? setGoalsSelectedId : setSelectedId}
               onToggleCollapse={toggleCollapse}
               onExpandCluster={loadMore}
               onCollapseCluster={collapseCluster}

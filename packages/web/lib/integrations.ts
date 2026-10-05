@@ -60,6 +60,9 @@ export function issueSyncTitle(external: TaskExternal): string {
   return external.last_error ? `${base}. Sync error: ${external.last_error}` : base;
 }
 
+/** An incremental Google grant (googleOAuth.ts GOOGLE_GRANT_SCOPES). */
+export type GoogleConnectGrant = "gmail.send" | "gmail.modify" | "calendar.events";
+
 export type AppConnectionActions = {
   connect: () => Promise<void>;
   /** token-paste apps: validate and store a pasted token with its settings.
@@ -91,6 +94,9 @@ export function useAppConnection(
   descriptor: AppDescriptor,
   connection: AppConnectionStatus | undefined,
   scope: AppConnectionScope = "team",
+  /** Google only: the grants to ask for beyond read access, and the page the
+   *  callback lands on (googleOAuth.ts GOOGLE_RETURN_PATHS). */
+  google: { grants?: GoogleConnectGrant[]; returnTo?: string } = {},
 ): AppConnectionActions {
   const getSlackUrl = useAction(api.slack.getInstallUrl);
   const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
@@ -143,8 +149,15 @@ export function useAppConnection(
 
     await attempt(async () => {
       if (descriptor.id === "gmail") {
-        // Readonly scope only on first connect; the send grant is a later ask.
-        await openMinted(() => getGoogleUrl({}), "Couldn't start the Google connection");
+        // Readonly scope only on first connect; the send grant is a later ask,
+        // unless the caller asks for its grants up front (the simple lane).
+        await openMinted(
+          () => getGoogleUrl({
+            ...(google.grants?.length ? { grant: google.grants } : {}),
+            ...(google.returnTo ? { return_to: google.returnTo } : {}),
+          }),
+          "Couldn't start the Google connection",
+        );
       } else if (descriptor.id === "linear" || descriptor.id === "notion") {
         // The generic connector: one flow, provider and scope in the signed state.
         await openMinted(

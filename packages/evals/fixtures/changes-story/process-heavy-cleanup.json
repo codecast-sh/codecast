@@ -1,0 +1,88 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a data cleanup told through a process-heavy session (review page, dry run, test runs, verification, file counts) and a commit message cut off mid-sentence",
+ "snapshot": {
+  "story": {
+   "area": "backend",
+   "branch": "main",
+   "commit_shas": [
+    "c3d4e5f60718293a4b5c6d7e8f9012345678901a"
+   ],
+   "area_counts": {
+    "backend": 7
+   },
+   "risks": [],
+   "conversation_ids": [
+    "k27b2c3d4e5f6g7h8j9k0m1"
+   ],
+   "kind": "feature",
+   "importance": 3
+  },
+  "commits": [
+   {
+    "sha": "c3d4e5f60718293a4b5c6d7e8f9012345678901a",
+    "subject": "feat(notes): keep staff notes apart from a customer's request",
+    "body": "Staff had been typing internal notes into the customer's request text, which customers could then read in their portal. Notes are now separate entries that only staff see. A one-off cleanup moved existing notes out of 48 requests. The cleanup keeps every moved sentence verbatim and",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768388400000,
+    "branch": "main",
+    "conversation_id": "k27b2c3d4e5f6g7h8j9k0m1",
+    "insertions": 520,
+    "deletions": 140,
+    "areas": {
+     "backend": {
+      "touches": 7,
+      "insertions": 520,
+      "deletions": 140
+     }
+    },
+    "top_paths": [
+     "packages/backend/notes/model.ts",
+     "packages/backend/scripts/moveNotes.ts"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "k27b2c3d4e5f6g7h8j9k0m1",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Staff notes split out of customer requests, 48 cleaned",
+    "summary": "Built separate staff notes and cleaned 48 requests that had notes typed into them. Built a review page showing every planned move, ran a dry run, wrote all 48, verified each against the review, ran 214 backend tests, touched 7 files.",
+    "turns": [
+     {
+      "ask": "customers can see our internal notes in their portal, fix it",
+      "did": [
+       "added staff-only note entries",
+       "wrote a cleanup script for existing requests"
+      ]
+     },
+     {
+      "ask": "show me before you write anything",
+      "did": [
+       "built a review page with all 48 planned moves highlighted",
+       "ran a dry run: 48 planned, 0 skipped"
+      ]
+     },
+     {
+      "ask": "go",
+      "did": [
+       "wrote all 48",
+       "verified each request against the review page",
+       "ran 214 backend tests, all passing"
+      ]
+     }
+    ]
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Dana Whitfield",
+   "Kofi Mensah"
+  ]
+ },
+ "label": {
+  "why": "commit"
+ }
+}

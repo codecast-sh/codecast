@@ -12,7 +12,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  AGENT_CLIENTS,
+  LOCAL_AGENT_CLIENTS,
   parseExecutionAgentClientId,
   validateAgentChain,
   validateAgentDefinition,
@@ -33,7 +33,7 @@ import { readStdinBody, stdinText } from "./sendBody.js";
 import { c } from "./colors.js";
 import { parseExecTimeout, parseOutputFormat, resolveExecPrompt, runChain } from "./execCommand.js";
 
-const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
+const AGENT_NAMES = Object.keys(LOCAL_AGENT_CLIENTS).join(", ");
 
 function fail(msg: string): never {
   console.error(msg);

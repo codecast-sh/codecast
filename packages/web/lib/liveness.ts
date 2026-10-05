@@ -6,6 +6,7 @@ import { deriveLiveAt, type LiveFactsRow } from "@codecast/shared/contracts";
 // reader can hand the rule a different row than another.
 export function liveFactsOf(s: {
   status?: string | null;
+  agent_type?: string | null;
   updated_at?: number;
   message_count?: number | null;
   has_pending?: boolean | null;
@@ -27,6 +28,7 @@ export function liveFactsOf(s: {
 }): LiveFactsRow {
   return {
     status: s.status ?? "active",
+    agent_type: s.agent_type ?? null,
     updated_at: s.updated_at ?? 0,
     message_count: s.message_count ?? 0,
     has_pending_messages: s.has_pending ?? null,

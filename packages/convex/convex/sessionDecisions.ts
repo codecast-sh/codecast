@@ -20,10 +20,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { teamVisibleConvTeam } from "./privacy";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
-import { enqueuePendingMessage, reachableRole, tellRole } from "./pendingMessages";
+import { enqueuePendingMessage, reachableRole, tellRole, wakeHostedConversation } from "./pendingMessages";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { roleOfConversation } from "./lib/actor";
 import { roleGrants, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
@@ -61,7 +61,9 @@ export const kindValidator = v.union(v.literal("single"), v.literal("multi"), v.
 
 type DecisionKind = "single" | "multi" | "rank" | "form";
 type DecisionRow = Doc<"session_decisions">;
-type Ctx = { db: any };
+// Resolve paths run in mutations, so the scheduler is there to wake a hosted
+// conversation (wakeHostedConversation); reads pass a bare { db }.
+type Ctx = { db: any; scheduler?: any };
 
 // Resolved rows stay in the subscription window briefly so an answer made on
 // one device reconciles on others instead of the row just vanishing.
@@ -237,6 +239,11 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
 // person's queue holds only what a lead that reports to them asks. With no
 // role to hear, the people's queue is where it lands, so it is never lost.
 export async function routeFor(ctx: Ctx, conversation: any, now: number) {
+  // A hosted conversation's question is its owner's alone (hostedAnswerRefusal):
+  // no role hears it and nobody else is asked.
+  if (isHostedAgentType(conversation.agent_type)) {
+    return { role: null, ladder: await buildLadder(ctx, null, now), people: [conversation.user_id as Id<"users">], hears: null };
+  }
   const role = await roleOfConversation(ctx, conversation);
   const parent = conversation.standing_role_id ? role?.reports_to : undefined;
   const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
@@ -511,6 +518,22 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
 
 export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants"> };
 
+export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
+
+// A hosted conversation's question is its consent gate
+// (docs/architecture/hosted-assistant.md): only the conversation's owner
+// answers or dismisses it, in person. An asked teammate, a role under a grant
+// and a stack default are all refused. Every resolve path checks this before
+// it writes: finalizeAnswer (CLI, web resolve, a run's gate, a stack
+// default), answerCore (so the CLI gets the reason back as an error), the
+// stack's auto default (which skips the row) and the web's dispatch rail. Returns why the answer is refused, or null.
+export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<"conversations"> }, by: AnsweredBy): Promise<string | null> {
+  const conversation: any = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+  if (!conversation || !isHostedAgentType(conversation.agent_type)) return null;
+  if (by.kind === "user" && String(by.user_id) === String(conversation.user_id)) return null;
+  return HOSTED_ANSWER_REFUSED;
+}
+
 // The one place a decision is resolved, for every path (web resolve, CLI
 // answer, a role under a grant, a stack auto default, a dismissal). First
 // writer wins: a row that is no longer pending is left alone.
@@ -526,6 +549,8 @@ export async function finalizeAnswer(
   opts: { deliver: boolean; now?: number },
 ): Promise<{ already_resolved: boolean; answer_label?: string; delivered?: boolean; resumed_run?: boolean }> {
   if (row.status !== "pending") return { already_resolved: true };
+  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  if (refusal) throw new Error(refusal);
   const now = opts.now ?? Date.now();
   const label = answerLabel(row, verdict);
   await ctx.db.patch(row._id, {
@@ -562,6 +587,12 @@ async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: A
     content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
     client_id: `decision-answer:${row._id}`,
     human: by.kind === "user",
+    // Only the owner answers a hosted conversation's question
+    // (hostedAnswerRefusal), so this always wakes it as an approval; every
+    // other conversation ignores the cause. It is a scheduling hint, never
+    // consent: a hosted turn executes a write only after reading its
+    // session_decisions row.
+    wake_cause: "approval",
   });
 }
 
@@ -610,6 +641,13 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
   // An answered card gate is recorded and learned from (LE12).
   await learnFromCardGate(ctx, row, verdict, by.user_id);
+  // A dismissal delivers no message, so a hosted turn parked on this
+  // question is woken here to read the declined row and move on. An answer
+  // wakes through its delivered message (deliverAnswer).
+  if (verdict.status === "dismissed") {
+    const conversation = await ctx.db.get(row.conversation_id);
+    if (conversation) await wakeHostedConversation(ctx, conversation, "approval");
+  }
   return await settleGateRun(ctx, row, verdict, now);
 }
 
@@ -863,7 +901,10 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const existing = openRows.find((r) => r.question === args.question);
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
   const routed = await routeFor(ctx, conversation, now);
-  const addressed = args.to?.length ? await resolveAskedPeople(ctx, conversation, args.to) : null;
+  // A hosted conversation asks its owner only, so an address (--to) is ignored.
+  const addressed = args.to?.length && !isHostedAgentType(conversation.agent_type)
+    ? await resolveAskedPeople(ctx, conversation, args.to)
+    : null;
   if (addressed && "error" in addressed) return addressed;
   // An addressed card (--to) is the named people's alone: the ladder does not
   // hear it and nobody else is asked.
@@ -1411,6 +1452,8 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now);
   if ("error" in by) return by;
+  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });

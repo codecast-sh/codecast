@@ -1,0 +1,10 @@
+// Minimal ambient types for bun's test runner. The repo does not carry
+// @types/bun, and this package installs no dependencies, so the few symbols the
+// suite uses are declared here to keep `tsc --noEmit` covering the tests
+// instead of excluding them.
+declare module "bun:test" {
+  export const describe: (name: string, fn: () => void) => void;
+  export const it: (name: string, fn: () => unknown) => void;
+  export const test: (name: string, fn: () => unknown) => void;
+  export const expect: any;
+}

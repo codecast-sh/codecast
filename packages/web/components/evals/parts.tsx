@@ -4,30 +4,18 @@
 // prompt diff. Colour follows section 6's fixed meanings, and state is also
 // told by shape (filled against hollow), never by colour alone.
 
-import { forwardRef, useState, type AnchorHTMLAttributes, type ReactNode } from "react";
+import { forwardRef, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Check, Copy, GitBranch, Globe, Lock } from "lucide-react";
-import { toast } from "sonner";
-import type { BatchStats, BatchVerdict, PromptFilePair, RunRow, SeparationResult, EvalVisibility, VerdictFlip } from "@codecast/shared/contracts/evalsApi";
-import { copyToClipboard } from "../../lib/utils";
+import type { PromptFilePair, RunRow, SeparationResult, EvalVisibility } from "@codecast/shared/contracts/evalsApi";
 import { DiffView } from "../DiffView";
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { PASS_MARK } from "./charts/scale";
 import { evalsHref } from "./evalsPaths";
-import { batchLabel, whenLabel } from "./format";
+import { batchLabel, whenLabel, shortSha, score2, pLabel, offBranchWords } from "./format";
 import "./evals.css";
-
-export const shortSha = (sha: string | null | undefined, n = 8) => (sha ? sha.slice(0, n) : "none");
-export const usd = (v: number) => (v >= 10 ? `$${v.toFixed(0)}` : v >= 0.1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(3)}` : "$0");
-export { batchLabel, whenLabel };
-
-/** A count with its noun: "1 class", "3 classes". */
-export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-export const score2 = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : v.toFixed(2));
-/** A model as a person names it: no vendor prefix, no date stamp. */
-export const shortModel = (m: string | null | undefined) => (m ? m.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "none");
-/** A judge ruler (`<model>#<rubric>`) as its rubric, else the short model. */
-export const shortRuler = (r: string | null | undefined) => (r ? (r.includes("#") ? r.slice(r.indexOf("#") + 1) : shortModel(r)) : "none");
+import { type VerdictState, verdictOfRow, type FlipRuns } from "./verdictModel";
+import { useCopy } from "./useCopy";
 
 // ── EvalsLink ───────────────────────────────────────────────────────────────
 
@@ -55,8 +43,6 @@ export const EvalsLink = forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTML
 
 // ── VerdictGlyph ────────────────────────────────────────────────────────────
 
-export type VerdictState = "pass" | "fail" | "crash" | "mixed" | "dry" | "unscored";
-
 const VERDICT_WORDS: Record<VerdictState, string> = { pass: "passed", fail: "failed", crash: "crashed", mixed: "mixed", dry: "dry render", unscored: "not scored yet" };
 
 /** A filled disc for pass, a ring for fail, a cross for crash, a half disc for mixed. */
@@ -80,23 +66,9 @@ export function VerdictGlyph({ state, size = 12, title }: { state: VerdictState;
   );
 }
 
-/** A run's glyph state. */
-export const verdictOfRow = (row: Pick<RunRow, "status">): VerdictState => (row.status === "pass" ? "pass" : row.status === "fail" ? "fail" : row.status === "crash" ? "crash" : row.status === "dry" ? "dry" : "unscored");
-
-/** A set's glyph state from its pass count. */
-export function verdictOfSet(passed: number, reps: number): VerdictState {
-  if (!reps) return "unscored";
-  if (passed === reps) return "pass";
-  if (passed === 0) return "fail";
-  return "mixed";
-}
-
 // ── SeparationMark ──────────────────────────────────────────────────────────
 
 const SEPARATION_WORDS = { better: "better", worse: "worse", "not-separated": "not separated", "too-few": "too few reps" } as const;
-
-/** A p value as every page prints it: two significant figures, and anything under 0.001 as "<0.001". */
-export const pLabel = (p: number) => (p < 0.001 ? "<0.001" : String(Number(p.toPrecision(2))));
 
 /** A batch against its baseline: up for better, down for worse, level for not separated, open for too few. */
 export function SeparationMark({ result, showWord = false, size = 12 }: { result: SeparationResult | null; showWord?: boolean; size?: number }) {
@@ -115,39 +87,6 @@ export function SeparationMark({ result, showWord = false, size = 12 }: { result
       {showWord && <span className="text-[11.5px] ev-tabular">{word}</span>}
     </span>
   );
-}
-
-// ── A verdict's baseline ────────────────────────────────────────────────────
-
-/** A verdict's baseline in words: short for a row ("vs pooled 3"), long for a title or a header ("3 pooled nightly batches: Oct 1, ...; ..."). */
-export function baselineWords(base: BatchVerdict["baseline"]): { short: string; long: string } | null {
-  if (!base) return null;
-  const n = base.batches.length;
-  if (!base.reps) return { short: `${base.kind} baseline building`, long: `the ${base.kind} baseline has no graded reps yet` };
-  const what = base.kind === "pooled" ? `${n} pooled ${base.cadence ? `${base.cadence} ` : ""}${n === 1 ? "batch" : "batches"}` : base.kind === "against" ? "one named batch" : n === 1 ? "the previous batch" : `each freeze's previous batch (${n} batches)`;
-  return { short: `vs ${base.kind}${n > 1 ? ` ${n}` : ""}`, long: `${what}: ${base.batches.map((b) => batchLabel(b)).join("; ")}` };
-}
-
-/**
- * How a verdict's p was reached, for a title, as verdict.ts weighs it: a
- * cadence baseline (`pooled`) night by night per freeze (separateNights over
- * nightStrata), any other by a one-sided Mann-Whitney of per-rep scores.
- * Without a p (too few, or no baseline) it is the baseline's words alone.
- */
-export function separationTitle(v: Pick<BatchVerdict, "baseline" | "separation">): string | undefined {
-  const words = baselineWords(v.baseline);
-  if (!words || !("p" in v.separation)) return words?.long;
-  return v.baseline?.kind === "pooled"
-    ? `Night by night per freeze: the latest batch's mean on each freeze ranked among that freeze's means on ${words.long}`
-    : `One-sided Mann-Whitney of the latest batch's per-rep scores against ${words.long}`;
-}
-
-/** The newest batch of a verdict's baseline, by when each began (`stats` carries the times); null with no baseline. */
-export function newestBaseline(v: BatchVerdict, stats: readonly BatchStats[]): string | null {
-  const base = v.baseline?.batches ?? [];
-  if (!base.length) return null;
-  const at = new Map(stats.map((b) => [b.batch, Date.parse(b.batchAt)]));
-  return [...base].sort((a, b) => (at.get(b) ?? (Date.parse(b) || -Infinity)) - (at.get(a) ?? (Date.parse(a) || -Infinity)))[0]!;
 }
 
 // ── ScoreBar ────────────────────────────────────────────────────────────────
@@ -213,11 +152,16 @@ export function ProvenanceChips({ row, epoch = null, children }: { row: Provenan
             dirty
           </span>
         ))}
-      {row.offBranch && (
-        <span className="ev-chip ev-chip--offbranch" title="The head is on no branch; its main-line twin has the same patch">
-          off-branch, main {shortSha(row.mainSha)}
-        </span>
-      )}
+      {row.offBranch &&
+        (row.mainSha || !row.gitHead ? (
+          <span className="ev-chip ev-chip--offbranch" title={offBranchWords(row).title} data-ev-offbranch="twin">
+            {offBranchWords(row).label}
+          </span>
+        ) : (
+          <EvalsLink className="ev-chip ev-chip--offbranch" href={evalsHref.commit(row.gitHead, { surface: row.surface })} title={`${offBranchWords(row).title} Open the commit for the reason heads.json records.`} data-ev-offbranch="none">
+            {offBranchWords(row).label}
+          </EvalsLink>
+        ))}
       {epoch !== null && <span className="ev-chip" title={`Prompt epoch ${epoch}`}>e{epoch}</span>}
       {row.batch && (
         <span className="ev-chip" title={`Batch ${row.batch}`}>
@@ -234,13 +178,6 @@ export function ProvenanceChips({ row, epoch = null, children }: { row: Provenan
     </span>
   );
 }
-
-// ── A flip's links ──────────────────────────────────────────────────────────
-
-type FlipRuns = Pick<VerdictFlip, "freezeId" | "before" | "after">;
-
-/** The freeze a flip names, opened on the two reps the flip compares rather than the freeze page's own default pair. */
-export const flipFreezeHref = (f: FlipRuns) => evalsHref.freeze(f.freezeId, { a: f.before[0] ?? null, b: f.after[0] ?? null });
 
 /** One rep from each side of a flip, so a failing run is one click from the tile that names it. */
 export function FlipRunLinks({ flip, className = "" }: { flip: FlipRuns; className?: string }) {
@@ -262,19 +199,38 @@ export function FlipRunLinks({ flip, className = "" }: { flip: FlipRuns; classNa
   );
 }
 
-// ── CopyCommand ─────────────────────────────────────────────────────────────
+// ── StallChip ───────────────────────────────────────────────────────────────
 
-/** The one copy behaviour every evals copy control shares: the clipboard, a toast, and a check mark for a moment. */
-export function useCopy(text: string): [copied: boolean, copy: () => Promise<void>] {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await copyToClipboard(text);
-    setCopied(true);
-    toast.success("Copied");
-    setTimeout(() => setCopied(false), 1400);
-  };
-  return [copied, copy];
+/** The flag every live job wears after five quiet minutes (section 3.6): a bisect, a shrink or a sweep. */
+export function StallChip({ since, ...rest }: { since: string } & HTMLAttributes<HTMLSpanElement>) {
+  return (
+    <span className="evb-stall-chip" title={`No new step since ${new Date(since).toLocaleTimeString()}: check its tmux session or log`} {...rest}>
+      stalled?
+    </span>
+  );
 }
+
+// ── LogTail ─────────────────────────────────────────────────────────────────
+
+/**
+ * A job's last lines, the newest in view: a bisect's log, or what a shrink or
+ * a sweep printed before it ended. Every launched job writes its log, so the
+ * reason it stopped is here after its tmux window has closed.
+ */
+export function LogTail({ lines, label = "Log tail", ...rest }: { lines: readonly string[]; label?: string } & HTMLAttributes<HTMLPreElement>) {
+  if (!lines.length) return null;
+  return (
+    <div className="ev-logtail flex flex-col gap-1.5">
+      <span className="text-[11px] ev-quiet">{label}</span>
+      {/* A column-reverse scroller opens at its end and stays there as lines land, so the newest line is the one in view. */}
+      <pre className="ev-log" {...rest}>
+        <span>{lines.join("\n")}</span>
+      </pre>
+    </div>
+  );
+}
+
+// ── CopyCommand ─────────────────────────────────────────────────────────────
 
 export function CopyCommand({ command, label = "Copy" }: { command: string; label?: string }) {
   const [copied, copy] = useCopy(command);

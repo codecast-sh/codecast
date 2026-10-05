@@ -1,5 +1,8 @@
 # Fabro Analysis: Learnings for Codecast
 
+> **Status (2026-10-04):** Research note, mostly acted on. Adopted: commit trailers (`Codecast-Plan`/`Codecast-Task`), `model_stylesheet`, plan retros and `verify_with` (`packages/cli/src/index.ts`, `agents/prompts.ts`), plus graph workflows (`packages/cli/src/workflow/`, `packages/web/components/WorkflowGraphView.tsx`).
+> Differs from its advice: codecast did adopt DOT as the workflow format (`cast workflow run flow.cast`). Not built: a typed `OrchestrationEvent` stream and cloud sandboxes.
+
 ## What Fabro Is
 
 Fabro is an open-source (MIT) AI workflow orchestration platform. Single Rust binary, zero runtime dependencies. Workflows are defined as Graphviz DOT graphs where each node is a stage (agent, command, human gate, conditional, parallel) executed by a deterministic engine. It targets expert engineers who want structured, repeatable agent processes instead of one-shot prompting or babysitting.

@@ -9,6 +9,8 @@ sense → attach → ground → admit → [plan gate] → prove → build → ve
       → eval → review → card → decide gate → ship → watch → learn
 ```
 
+![The line end to end: finders write through signals.ingest into causes, lineGround.sweep grounds them, cast workflow run starts one line.cast run (ground through card), the card becomes a decide gate the person answers, Ship lands the change and watches the cause, and a Revise or Drop note becomes a lesson signal](../diagrams/the-line-end-to-end.svg)
+
 The front half turns what the world tells us (errors, eval drift, judge
 findings, people's complaints, our own corrections) into a small number of
 causes, each tied to a goal. The back half turns a cause into one change with
@@ -132,6 +134,11 @@ offer, a value outside the vocabulary) leaves the cause `needs_context` with
 the reason, for a person; no reply at all leaves it for the next pass.
 
 ## LE6. Admit: work starts at the rate decisions finish
+
+The admission sweep is off: `crons.ts` does not register `orgLine.sweep`
+(since 2026-10-02), so a run starts when someone runs `cast workflow run
+--task <ct-N>` (no file: the calling role's line, else the shipped `line`).
+The rule below is what `orgLine.sweep` and `orgLine.queue` compute.
 
 `orgLine.sweep` (the-line.md L9) admits causes, highest priority first, while
 both hold:
