@@ -52,7 +52,7 @@ export function HealthChip({ health, at, now, bare, className }: { health: Initi
  *  `partial` says the task store is still filling (useTasksBackfilled): the
  *  bar dims and "counting" stands where the number would, so a low count on a
  *  cold cache never reads as the truth. */
-export function ProgressBar({ progress, partial, className }: { progress: Progress; partial?: boolean; className?: string }) {
+export function ProgressBar({ progress, partial, bare, className }: { progress: Progress; partial?: boolean; /** The bar alone, for a card that prints its own counts. */ bare?: boolean; className?: string }) {
   const pct = progressPercent(progress);
   const moving = progress.total === 0 ? 0 : Math.round(((progress.done + progress.in_progress) / progress.total) * 100);
   const title = partial ? "Counting: the task cache is still filling" : progress.total === 0 ? "No tasks yet" : `${progress.done} of ${progress.total} tasks done, ${progress.in_progress} in progress`;
@@ -62,7 +62,7 @@ export function ProgressBar({ progress, partial, className }: { progress: Progre
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${moving}%`, background: `color-mix(in srgb, ${INITIATIVE_ACCENT} 30%, transparent)` }} />
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${pct}%`, background: INITIATIVE_ACCENT }} />
       </span>
-      <span className={cn("shrink-0 text-[11px] tabular-nums", partial && "italic")} style={{ color: "var(--sol-text-dim)" }}>{partial ? "counting" : progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>
+      {!bare && <span className={cn("shrink-0 text-[11px] tabular-nums", partial && "italic")} style={{ color: "var(--sol-text-dim)" }}>{partial ? "counting" : progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>}
     </span>
   );
 }
@@ -194,7 +194,7 @@ export function MetricTile({ reading, trend, now, size = "tile", className }: { 
 /** The next milestone and its day: red when its day has passed and it is not reached; "no milestone" when none is set. */
 export function NextMilestoneChip({ milestone, now, counts, className }: { milestone: InitiativeMilestone | null; now: number; counts?: { done: number; total: number }; className?: string }) {
   if (!milestone) {
-    return counts?.total ? <span className={cn("text-[11.5px]", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone="all-reached">All {counts.total} milestones reached</span> : null;
+    return counts?.total ? <span className={cn("text-[11.5px]", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone="all-reached">{counts.total === 1 ? "Its milestone is reached" : `All ${counts.total} milestones reached`}</span> : null;
   }
   const late = !!milestone.date && milestone.date < now;
   return (

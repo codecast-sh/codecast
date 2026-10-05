@@ -53,7 +53,9 @@ import {
   History,
   Megaphone,
   FolderOpen,
+  Workflow,
 } from "lucide-react";
+import { ProjectLineTab } from "../../../components/line/ProjectLineTab";
 import { taskPriority } from "../../../lib/taskPriority";
 import { DocDates } from "../../../components/DocDates";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -212,7 +214,7 @@ function SectionHeader({ icon: Icon, label, count }: { icon: typeof Target; labe
 // Which face of the project you're on. Tasks is the default: a project is
 // somewhere to work; the others are the ways you step back from it: overview
 // for shape, updates for narration, timeline for the record.
-const PROJECT_TABS = ["tasks", "overview", "updates", "timeline"] as const;
+const PROJECT_TABS = ["tasks", "overview", "updates", "timeline", "line"] as const;
 type ProjectTab = (typeof PROJECT_TABS)[number];
 const PROJECT_ACCENT = "var(--sol-cyan)";
 const PROJECT_STATUS_OPTIONS = PROJECT_STATUS_ORDER.map((key) => {
@@ -379,6 +381,8 @@ function ProjectDetailContent() {
     { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
     { key: "updates", label: "Updates", icon: Megaphone },
     { key: "timeline", label: "Timeline", icon: History },
+    // The project's line (LM7): its flow, sources, stations, versions.
+    { key: "line", label: "Line", icon: Workflow },
   ];
 
   return (
@@ -515,6 +519,10 @@ function ProjectDetailContent() {
       ) : tab === "timeline" ? (
         <div className="flex-1 overflow-y-auto">
           <ProjectTimeline projectId={projectId} />
+        </div>
+      ) : tab === "line" ? (
+        <div className="flex-1 overflow-y-auto">
+          <ProjectLineTab projectId={project._id} />
         </div>
       ) : (
       <div className="flex-1 overflow-y-auto">

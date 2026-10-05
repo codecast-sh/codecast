@@ -3,10 +3,13 @@ import { changeLine, takeoverPhrase } from "./orgProposal";
 import {
   dependentBatches,
   invertRow,
+  addedRecordWords,
   leftAloneLine,
   mergeFact,
   movedFields,
+  ORG_DIFF_FIELDS,
   ORG_INVERSE_KIND,
+  orgAppliedDiff,
   orgLogEffectLines,
   orgLogEntryLine,
   orgLogLine,
@@ -14,6 +17,7 @@ import {
   rowChangedSomething,
   rowRoleIds,
   undoVerdict,
+  type OrgLandedRow,
   type OrgLogKind,
   type OrgLogRow,
   type OrgOpenRow,
@@ -153,6 +157,26 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
     expect(movedFields({ why: "a", done_when: null }, { why: "a", done_when: "b" })).toEqual({ before: { done_when: null }, after: { done_when: "b" } });
   });
 
+  // A project's fields (S39): the log says them in the card's words, with the
+  // priority read against what it was, and never prints what was written down.
+  test("a project's fields read as the proposal's sentence, the priority against what it was", () => {
+    const subject = { type: "project" as const, id: "p1", short_id: "pr-1", label: "Website" };
+    const set = row("project_meta", { subject, before: { priority: null }, after: { priority: "p0" } });
+    expect(orgLogLine(set)).toBe("Make Website the top priority");
+    const raised = row("project_meta", { subject, before: { priority: "p2" }, after: { priority: "p1" } });
+    expect(orgLogLine(raised)).toBe("Raise Website to a high priority");
+    expect(orgLogLine(invertRow(raised))).toBe("Lower Website to a medium priority");
+    expect(orgLogLine(row("project_meta", { subject, before: { priority: "p2" }, after: { priority: "p0" } }))).toBe("Make Website the top priority");
+    const whole = row("project_meta", { subject, before: { priority: null, owner_role_id: null, goal: null, success_metrics: null }, after: { priority: "p1", owner_role_id: "r1", goal: "Double signups", success_metrics: ["100 signups"] } });
+    expect(orgLogRowChange(whole)).toEqual({ kind: "project_meta", project: "Website", owner: "@growth", priority: "p1", goal: "Double signups", success_metrics: ["100 signups"] });
+    expect(orgLogLine(whole)).toBe("Make Website a high priority, make @growth its lead and write down what it is for and how it is measured");
+    expect(orgLogLine(whole)).toBe(changeLine(orgLogRowChange(whole)!));
+    expect(orgLogLine(row("project_meta", { subject, before: { risks: null }, after: { risks: ["one engineer"] } }))).toBe("Write down the risks to Website");
+    // The way back of a first setting clears the fields: the row names the project.
+    expect(orgLogLine(invertRow(set))).toBe("Change the project Website");
+    for (const r of [set, raised, whole]) expect(orgLogLine(r)).not.toMatch(/charter|\bp[0-3]\b|Double signups|100 signups/);
+  });
+
   test("a kind this build does not know still reads as a sentence", () => {
     expect(orgLogLine(row("rename" as any))).toBe('A change this version of codecast cannot show yet ("rename")');
   });
@@ -235,5 +259,83 @@ describe("an entry reads as one sentence with the count of rows inside", () => {
     expect(orgLogEntryLine({ gesture: "save", actor, row_count: 3, lead })).toBe("Mark done: Launch (pl-7), and 2 more changes");
     expect(orgLogEntryLine({ gesture: "undo", actor, row_count: 1, lead: invertRow(lead), undoes_lead: lead })).toBe('Undid "Mark done: Launch (pl-7)"');
     expect(orgLogEntryLine({ gesture: "redo", actor, row_count: 2, lead })).toBe('Applied again "Mark done: Launch (pl-7)": 2 records');
+  });
+});
+
+// The stamp (org-staffing.md S39): what accepting one proposal change moved,
+// cut from the log rows the apply wrote to the fields a card draws.
+describe("the stamp a proposal's accept leaves on its change", () => {
+  const landed = (kind: OrgLogKind, over: Partial<OrgLandedRow> = {}): OrgLandedRow => ({ kind, subject: { type: "role", id: "r1", short_id: "or-1", label: "@growth" }, before: {}, after: {}, labels: LABELS, ...over });
+  const project = { type: "project" as const, id: "p1", short_id: "pr-1", label: "Website" };
+  const goal = { type: "initiative" as const, id: "i1", short_id: "in-1", label: "Reach 1k teams" };
+
+  test("a priority move keeps the priority, its subject and its entry, and no label it does not mention", () => {
+    // (The file's toy ids p1 and p2 read like priorities, so this row brings its own labels.)
+    const labels = { r1: "@growth", r2: "@ops", u1: "Ashot" };
+    expect(orgAppliedDiff([landed("project_meta", { subject: project, before: { priority: "p2" }, after: { priority: "p1" }, labels, batch: "b7" })]))
+      .toEqual([{ kind: "project_meta", subject: project, before: { priority: "p2" }, after: { priority: "p1" }, labels: {}, batch: "b7" }]);
+    // A field that went from nothing keeps its null, so the card can say "not set".
+    const [first] = orgAppliedDiff([landed("project_meta", { subject: project, before: { priority: null, owner_role_id: null }, after: { priority: "p0", owner_role_id: "r1" }, labels })])!;
+    expect(first.before).toEqual({ priority: null, owner_role_id: null });
+    expect(first.labels).toEqual({ r1: "@growth" });
+    expect("batch" in first).toBe(false);
+  });
+
+  test("a limit, a role's long text and its face never survive", () => {
+    expect(orgAppliedDiff([landed("budget", { before: { caps: { hands_per_day: 3 } }, after: { caps: { hands_per_day: 8 } } })])).toBeUndefined();
+    const [hire] = orgAppliedDiff([landed("role", {
+      before: { status: null },
+      after: { status: "active", name: "Head of Growth", handle: "growth", avatar: "fox", charter: "Owns the funnel.", tenure: { kind: "standing" }, review_backend: "codex", caps: { tokens_per_day: 800_000 }, trust: "direct", reports_to: { kind: "user", user_id: "u1" }, scope: { project_ids: ["p1"], plan_ids: ["pl1"] } },
+    })])!;
+    expect(hire.before).toEqual({ status: null });
+    expect(hire.after).toEqual({ status: "active", name: "Head of Growth", trust: "direct", reports_to: { kind: "user", user_id: "u1" }, scope: { project_ids: ["p1"], plan_ids: ["pl1"] } });
+    expect(hire.labels).toEqual({ u1: "Ashot", p1: "Website", pl1: "pl-7" });
+    expect(JSON.stringify(hire)).not.toMatch(/800000|caps|charter|Owns the funnel|avatar|tenure|codex|"handle"/);
+    for (const dropped of ["caps", "charter", "tenure", "avatar", "handle", "review_backend", "parent", "milestones", "questions", "decisions", "sources"]) expect(ORG_DIFF_FIELDS as readonly string[]).not.toContain(dropped);
+  });
+
+  test("a goal's record arrives as what was added, in words, never as the whole lists", () => {
+    const beta = { key: "private_beta_open", title: "Private beta open", date: 1_800_000_000_000 };
+    const before = { parent_initiative_id: null, why: null, milestones: [{ key: "alpha", title: "Alpha" }], questions: null, decisions: null, sources: [{ kind: "task" as const, ref: "ct-1" }] };
+    const after = {
+      parent_initiative_id: "i2", why: "Teams that run an agent weekly stay.",
+      milestones: [{ key: "alpha", title: "Alpha" }, beta],
+      questions: [{ key: "price", text: "Do we price per seat?", at: 5 }],
+      decisions: [{ key: "brokers", text: "Ship to brokers first", at: 5 }],
+      sources: [{ kind: "task" as const, ref: "ct-1" }, { kind: "call" as const, ref: "cl-42:14", quote: "a thousand teams" }, { kind: "chat" as const, quote: "said in passing" }],
+    };
+    expect(addedRecordWords(before, after)).toEqual({ milestones: ["Private beta open"], questions: ["Do we price per seat?"], decisions: ["Ship to brokers first"], sources: ["cl-42:14", "said in passing"] });
+    expect(addedRecordWords(before, { ...before, why: "x" })).toBeUndefined();
+    expect(addedRecordWords({}, { milestones: [beta] })).toEqual({ milestones: ["Private beta open"] });
+    const [stamp] = orgAppliedDiff([landed("initiative_shape", { subject: goal, before, after, labels: { i2: "Win the market", ct1: "unused" } })])!;
+    expect(stamp).toEqual({
+      kind: "initiative_shape", subject: goal,
+      before: { parent_initiative_id: null, why: null },
+      after: { parent_initiative_id: "i2", why: "Teams that run an agent weekly stay." },
+      added: { milestones: ["Private beta open"], questions: ["Do we price per seat?"], decisions: ["Ship to brokers first"], sources: ["cl-42:14", "said in passing"] },
+      labels: { i2: "Win the market" },
+    });
+    expect(JSON.stringify(stamp)).not.toMatch(/Alpha|ct-1|"key"/);
+    // A row that only added to the record still stamps, with no field on either side.
+    expect(orgAppliedDiff([landed("initiative_shape", { subject: goal, before: { questions: null }, after: { questions: [{ key: "price", text: "Do we price per seat?", at: 5 }] } })]))
+      .toEqual([{ kind: "initiative_shape", subject: goal, before: {}, after: {}, added: { questions: ["Do we price per seat?"] }, labels: {} }]);
+    // The log's sentence reads the same derivation.
+    expect(orgLogRowChange(row("initiative_shape", { subject: goal, before, after }))).toMatchObject({ milestones: [{ title: "Private beta open", date: 1_800_000_000_000 }], questions: ["Do we price per seat?"], decisions: ["Ship to brokers first"], sources: ["cl-42:14", "said in passing"] });
+  });
+
+  test("one stamp row per log row, a row with nothing to draw dropped, and no rows is no stamp", () => {
+    const created = landed("projects", { subject: project, after: { projects: [{ op: "create", project_id: "p1", title: "Website" }] } });
+    const folded = landed("projects", { subject: { type: "project", id: "p2", label: "Billing" }, after: { projects: [{ op: "merge", from_id: "p2", into_id: "p1" }] } });
+    const faceOnly = landed("role_edit", { before: { avatar: "a" }, after: { avatar: "b" } });
+    const stamp = orgAppliedDiff([created, faceOnly, folded])!;
+    expect(stamp.map((r) => r.subject.label)).toEqual(["Website", "Billing"]);
+    expect(stamp[1].labels).toEqual({ p1: "Website", p2: "Billing" });
+    expect(orgAppliedDiff([faceOnly])).toBeUndefined();
+    expect(orgAppliedDiff([])).toBeUndefined();
+    // A goal's projects and owner carry the names of the ids on both sides.
+    const [carried] = orgAppliedDiff([landed("initiative_projects", { subject: goal, before: { project_ids: ["p1"] }, after: { project_ids: ["p1", "p2"] } })])!;
+    expect(carried).toMatchObject({ before: { project_ids: ["p1"] }, after: { project_ids: ["p1", "p2"] }, labels: { p1: "Website", p2: "Billing" } });
+    const [owned] = orgAppliedDiff([landed("initiative_owner", { subject: goal, before: { owner: { kind: "user", user_id: "u1" } }, after: { owner: { kind: "role", role_id: "r2" } } })])!;
+    expect(owned.labels).toEqual({ u1: "Ashot", r2: "@ops" });
   });
 });

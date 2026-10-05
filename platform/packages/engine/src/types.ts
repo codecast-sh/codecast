@@ -374,7 +374,12 @@ export type UndoEntry = {
    * settles. When the step is refused and its rollback steps back past this
    * replay's dropped send, neither landed.
    */
-  supersededReplay?: { ids: string[]; dir: "undo" | "redo" };
+  supersededReplay?: {
+    ids: string[];
+    dir: "undo" | "redo";
+    /** The replay's replayDeferred: they apply to the entry if it is refused. */
+    deferred?: CellChange[];
+  };
   /**
    * Rebases of this entry's cells by a refused forward write that arrived
    * while its undo replay was out, as cells (`before` the value moved from,
@@ -382,6 +387,19 @@ export type UndoEntry = {
    * only if it is refused.
    */
   replayDeferred?: CellChange[];
+  /**
+   * The forward ids a redo's re-invoke replaced (outboxIds holds the newest
+   * forward's). The state the redo's undo replay wrote over is theirs, so a
+   * refusal of one is judged when that redo settles (forwardRefused).
+   */
+  priorOutboxIds?: string[];
+  /**
+   * The forward this entry's current step builds on was refused while the
+   * step was out (a redo replay re-sending the after values, or a re-invoke).
+   * What stands is that step's alone: if it is refused too, or rolls back
+   * past an undo replay it overtook, nothing of the entry stands.
+   */
+  forwardRefused?: boolean;
 };
 
 export type UndoConfig = {

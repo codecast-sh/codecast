@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { peopleOf, personFor, riskText, type Person } from "../editionModel";
-import { buildTimeline, type TimelineDay } from "../timelineModel";
+import { buildTimeline, finishedWeeks, type TimelineDay } from "../timelineModel";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, edition, story } from "./fixtures";
 
@@ -55,6 +55,16 @@ describe("buildTimeline", () => {
     expect(days(stories, url({ areas: ["web"] }))).toHaveLength(1);
     const day = days(stories, url({ areas: ["web"] }))[0] as TimelineDay;
     expect(day.total).toBe(2);
+  });
+
+  test("a finished week carries its summary and top stories, and a week shown above the timeline gets no divider", () => {
+    const stories = [story({ story_key: "a", date: "2026-10-01" }), story({ story_key: "b", date: "2026-09-30" })];
+    const weeks = [edition({ scope: "week", date: "2026-W40", headline: "Calls moved to one window", narrative: "Calls now open in one window. Two fixes followed.", top_story_keys: ["a"], status: "final" } as any)];
+    const [week] = finishedWeeks(weeks as any, "2026-10-12");
+    expect(week).toMatchObject({ week: "2026-W40", summary: "Calls now open in one window. Two fixes followed.", top: ["a"] });
+    expect(finishedWeeks(weeks as any, "2026-10-03")).toEqual([]);
+    const shown = buildTimeline({ stories, editions: [], weeks, url: url(), person: null, today: "2026-10-12", skipWeek: "2026-W40" });
+    expect(shown.map((i) => i.kind)).toEqual(["day", "day"]);
   });
 
   test("a finished week's notes sit where the timeline enters the week, only once written and never repeating a day", () => {

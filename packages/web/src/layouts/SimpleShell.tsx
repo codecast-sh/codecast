@@ -16,6 +16,7 @@ import { useSetLane } from "@/components/simple/useSetLane";
 import { useLaneFont } from "@/components/simple/useLaneFont";
 import { LaneSync } from "@/components/simple/LaneSync";
 import { UndoReach } from "@/components/undo/UndoTimeline";
+import { useLaneUndoFrame } from "@/components/simple/useLaneUndoFrame";
 import "@/components/simple/simple.css";
 
 const ICONS: Record<LaneSectionKey, typeof House> = { home: House, approvals: Hand, routines: CalendarClock, connections: Plug, plan: CircleGauge };
@@ -124,6 +125,7 @@ function LaneChrome() {
 }
 
 export default function SimpleShell() {
+  const undoFrame = useLaneUndoFrame();
   return (
     <AuthGuard signedOutPath={LANE_PATHS.welcome}>
       <LaneSync />
@@ -131,7 +133,7 @@ export default function SimpleShell() {
       {/* The lane's gestures record undo history (a routine paused from its
           page takes an Undo toast), so the lane reaches it the way the
           dashboard does. */}
-      <UndoReach />
+      <UndoReach frame={undoFrame} />
     </AuthGuard>
   );
 }

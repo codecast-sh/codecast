@@ -1185,6 +1185,12 @@ describe("goal changes in a proposal", () => {
     expect(origin).toMatchObject({ proposal: { short_id: r.short_id }, undone: false });
     expect(await recordOrigin(ctxOf(db), ME as any, "initiatives_win")).toBeNull();
     expect(await recordOrigin(ctxOf(db), MATE as any, String(made._id))).toMatchObject({ proposal: { short_id: r.short_id } });
+    // Each accepted goal change is stamped with what it moved (S39), the ids named in its labels.
+    const stamps = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes.map((c: any) => c.applied_diff);
+    expect(stamps[0]).toMatchObject([{ kind: "initiative", subject: { type: "initiative", id: String(made._id), label: "Grow trades" }, after: { status: "proposed", project_ids: [P], owner: { kind: "role", role_id: GROWTH } }, labels: { [P]: "Growth", [GROWTH]: "@growth" } }]);
+    expect(stamps[1]).toMatchObject([{ kind: "initiative_projects", subject: { id: "initiatives_win", short_id: "in-2" }, before: { project_ids: [Q] }, after: { project_ids: [Q, P] } }]);
+    expect(stamps[2]).toMatchObject([{ kind: "initiative_owner", before: { owner: null }, after: { owner: { kind: "user", user_id: ME } }, labels: { [ME]: "Me" } }]);
+    expect(stamps[3]).toBeUndefined();
   });
   test("a goal that already exists, a project already in it and an owner already named are applied as no-ops, never twins", async () => {
     const db = goals();
@@ -1195,5 +1201,80 @@ describe("goal changes in a proposal", () => {
     const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
     expect(out.results.map((x: any) => [x.status, x.note])).toEqual([["applied", 'the goal "Win the private network" already exists (in-2)'], ["applied", 'in-2 "Win the private network" already carries pr-2']]);
     expect(db._tables.initiatives).toHaveLength(1);
+    // Nothing moved, so nothing is stamped: the card shows only what was set.
+    expect(db._tables.org_proposal_changes.map((c: any) => [c.status, c.applied_diff])).toEqual([["applied", undefined], ["applied", undefined]]);
+  });
+});
+
+// docs/architecture/org-staffing.md S39. Accepting a change stamps the row
+// with what the apply moved: the log's own before and after, taken as the
+// rows are written and cut to the fields a card draws. No stamp for a limit,
+// a skip, a failed apply or an apply that moved nothing.
+describe("the stamp of what an accept moved (S39)", () => {
+  const post = async (db: any, changes: any[]) => {
+    const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(changes) });
+    return { ...r, ids: r.changes.map((c: any) => String(c.id)) };
+  };
+  const accept = (ctx: any, id: string, edits?: unknown) => performDecideChange(ctx, ME as any, { change_id: id, verdict: "accept", edits, provision: false });
+  const growth = { type: "project", id: P, short_id: "pr-1", label: "Growth" };
+
+  test("a priority change is stamped with before and after, the next proposal's reads the first as its before, and get returns both", async () => {
+    const db = fixtures();
+    const p = await post(db, [change({ kind: "project_meta", project: "pr-1", priority: "p1" })]);
+    const ctx = ctxOf(db);
+    await accept(ctx, p.ids[0]);
+    const first = (await db.get(p.ids[0] as any)).applied_diff;
+    expect(first).toEqual([{ kind: "project_meta", subject: growth, before: { priority: null }, after: { priority: "p1" }, labels: {}, batch: expect.any(String) }]);
+    // The stamp names the log entry the apply wrote: the way back, through the org record.
+    expect(db._tables.org_changes.map((c: any) => String(c.batch))).toEqual([first[0].batch]);
+    expect((await readProposal(ctx, ME as any, p.short_id)).changes[0].applied_diff).toEqual(first);
+    // The record has moved on by the next proposal; the first stamp still reads as it did.
+    const next = await post(db, [change({ kind: "project_meta", project: "pr-1", priority: "p0", owner: "@growth" })]);
+    await accept(ctxOf(db), next.ids[0]);
+    expect((await readProposal(ctx, ME as any, p.short_id)).changes[0].applied_diff).toEqual(first);
+    expect((await readProposal(ctx, ME as any, next.short_id)).changes[0].applied_diff).toEqual([{ kind: "project_meta", subject: growth, before: { priority: "p1", owner_role_id: null }, after: { priority: "p0", owner_role_id: GROWTH }, labels: { [GROWTH]: "@growth" }, batch: expect.any(String) }]);
+  });
+
+  test("an apply that moves nothing, a limit, a skip and a refused apply leave no stamp", async () => {
+    const db = fixtures({ projects: [{ _id: P, user_id: ME, team_id: TEAM, workspace: WS, short_id: "pr-1", title: "Growth", status: "active", priority: "p1", created_at: 1, updated_at: 1 }] });
+    const p = await post(db, [
+      change({ kind: "project_meta", project: "pr-1", priority: "p1" }),
+      change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }),
+      change({ kind: "role", name: "Growth again", handle: "growth" }),
+      change({ kind: "trust", handle: "growth", trust: "decide" }),
+    ]);
+    const ctx = ctxOf(db);
+    expect(await accept(ctx, p.ids[0])).toMatchObject({ status: "applied" });
+    expect(await accept(ctx, p.ids[1])).toMatchObject({ status: "applied", note: "@growth: wakes 40 → 12/day" });
+    // The limit did land in the log; it is the stamp that never holds one (S23.2).
+    expect(db._tables.org_changes.map((c: any) => [c.kind, c.after.caps?.wakes_per_day])).toEqual([["budget", 12]]);
+    expect(await accept(ctx, p.ids[2])).toMatchObject({ status: "failed" });
+    expect(await performDecideChange(ctx, ME as any, { change_id: p.ids[3], verdict: "skip" })).toMatchObject({ status: "skipped" });
+    const rows = await Promise.all(p.ids.map((id: string) => db.get(id as any)));
+    expect(rows.map((c: any) => [c.status, c.applied_diff])).toEqual([["applied", undefined], ["applied", undefined], ["failed", undefined], ["skipped", undefined]]);
+  });
+
+  test("changes accepted on one ctx into one batch each carry only their own rows; a change that wrote two rows carries both", async () => {
+    const db = fixtures();
+    const p = await post(db, [
+      change({ kind: "trust", handle: "growth", trust: "decide" }),
+      change({ kind: "budget", handle: "growth", caps: { wakes_per_day: 12 } }),
+      change({ kind: "project_meta", project: "pr-2", priority: "p2" }),
+      change({ kind: "projects", changes: [{ op: "create", title: "Platform" }, { op: "create", title: "Docs" }] }),
+      change({ kind: "file", plan: "pl-999", project: "pr-1" }),
+    ]);
+    const out = await performAcceptAll(ctxOf(db), ME as any, { proposal: p.short_id, provision: false });
+    expect(out).toMatchObject({ applied: 4, failed: 1 });
+    const [trust, budget, meta, projects, file] = await Promise.all(p.ids.map((id: string) => db.get(id as any)));
+    // The limit ran between them on the same ctx: its row reaches no stamp, its own or a neighbour's.
+    expect(budget.applied_diff).toBeUndefined();
+    expect(trust.applied_diff).toMatchObject([{ kind: "trust", subject: { type: "role", id: GROWTH, label: "@growth" }, after: { trust: "direct" } }]);
+    expect(trust.applied_diff).toHaveLength(1);
+    expect(meta.applied_diff).toEqual([{ kind: "project_meta", subject: { type: "project", id: Q, short_id: "pr-2", label: "Billing" }, before: { priority: null }, after: { priority: "p2" }, labels: {}, batch: expect.any(String) }]);
+    expect(projects.applied_diff.map((d: any) => [d.kind, d.subject.label])).toEqual([["projects", "Platform"], ["projects", "Docs"]]);
+    // One gesture, one log entry: every stamp of the accept all names the same batch.
+    expect(new Set([trust, meta, projects].flatMap((c: any) => c.applied_diff.map((d: any) => d.batch))).size).toBe(1);
+    // An apply that threw lands failed from the accept all's catch, with no stamp.
+    expect([file.status, file.applied_diff]).toEqual(["failed", undefined]);
   });
 });

@@ -227,8 +227,8 @@ export async function releaseTurn(ctx: MutationCtx, turnId: Id<"assistant_turns"
  *  an approval and the answer wakes a new turn, so what it still holds is a
  *  hold its finish failed to give back. */
 const LIVE_TURN = new Set<Doc<"assistant_turns">["status"]>(["queued", "running"]);
-/** The newest ledger rows the leak scan also reads, for holds whose turn row
- *  was deleted (and so carries no `holding` flag to find it by). */
+/** The newest ledger rows reconcileWallet also reads, for holds whose turn
+ *  row was deleted (and so carries no `holding` flag to find it by). */
 const LEAK_SCAN_ROWS = 1000;
 /** Turns flagged `holding` the scan reads: the live ones plus any leaked. */
 const LEAK_SCAN_TURNS = 500;
@@ -246,26 +246,52 @@ function holdLeaked(turn: Doc<"assistant_turns"> | null, now: number): boolean {
   return now - (turn.ended_at ?? turn.started_at ?? turn._creationTime) >= LEAK_GRACE_MS;
 }
 
-/** Releases what ended turns of this person still hold: a turn whose finish
- *  ended it without settling, or whose row was deleted (Averil's hourly
- *  reconcile). A turn still `queued` or `running` is never touched, so a turn
- *  whose run action died keeps its hold until the turn engine's lease expiry
- *  ends it, and that sweep settles or releases it in the same mutation. Run only when a reservation is refused, the one moment a leak
- *  costs the person anything. Candidates are every turn flagged `holding`,
- *  however far back its reserve row sits, plus the reserve rows among the
- *  newest ledger rows, which catch a hold whose turn row was deleted. */
-async function releaseLeaks(ctx: MutationCtx, userId: Id<"users">, now = Date.now()): Promise<number> {
-  const turns = new Set<Id<"assistant_turns">>();
+/** The turns flagged `holding` whose hold has leaked, and the most they could
+ *  give back (each turn's `cost_reserved_usd`, which settleTurn and
+ *  releaseTurn clear the flag beside). Reads only by_user_holding, so it is
+ *  cheap enough for the lease mutation. */
+async function leakedHolding(ctx: MutationCtx, userId: Id<"users">, now: number): Promise<{ turns: Id<"assistant_turns">[]; heldUsd: number }> {
   const holding = await ctx.db.query("assistant_turns").withIndex("by_user_holding", (q) => q.eq("user_id", userId).eq("holding", true)).take(LEAK_SCAN_TURNS);
-  for (const turn of holding) turns.add(turn._id);
-  const rows = await ctx.db.query("wallet_ledger").withIndex("by_user_at", (q) => q.eq("user_id", userId)).order("desc").take(LEAK_SCAN_ROWS);
-  for (const row of rows) if (row.kind === "reserve" && row.turn_id) turns.add(row.turn_id);
+  const leaked = holding.filter((turn) => holdLeaked(turn, now));
+  return { turns: leaked.map((turn) => turn._id), heldUsd: money(leaked.reduce((sum, turn) => sum + turn.cost_reserved_usd, 0)) };
+}
+
+async function releaseAll(ctx: MutationCtx, turns: Iterable<Id<"assistant_turns">>): Promise<number> {
   let released = 0;
-  for (const turnId of turns) {
-    if (!holdLeaked(await ctx.db.get(turnId), now)) continue;
-    released += await releaseTurn(ctx, turnId);
-  }
+  for (const turnId of turns) released += await releaseTurn(ctx, turnId);
   return money(released);
+}
+
+/** Releases what this person's ended turns still hold, for a reservation
+ *  that does not fit: a turn whose finish ended it without settling. A turn
+ *  still `queued` or `running` is never touched, so a turn whose run action
+ *  died keeps its hold until the turn engine's lease expiry ends it, and that
+ *  sweep settles or releases it in the same mutation. It reads only holding
+ *  turns, and releases only when the leaked holds could make room for
+ *  `needUsd`: a refusal it cannot turn into a reservation writes nothing,
+ *  so the lease near the end of an allowance stays a few reads and does
+ *  not contend with the person's other money movements. Holds whose turn
+ *  row was deleted carry no flag to find them by; reconcileWallet catches
+ *  those on its hourly pass. */
+async function releaseLeaksFor(ctx: MutationCtx, userId: Id<"users">, roomUsd: number, needUsd: number, now = Date.now()): Promise<number> {
+  const { turns, heldUsd } = await leakedHolding(ctx, userId, now);
+  if (turns.length === 0 || roomUsd + heldUsd + EPSILON < needUsd) return 0;
+  return releaseAll(ctx, turns);
+}
+
+/** Averil's reconcile: gives back every leaked hold of one person, including
+ *  a hold whose turn row was deleted (found among the reserve rows in the
+ *  newest LEAK_SCAN_ROWS ledger rows). Heavier than the lease's pass, so it
+ *  runs from the scheduled sweep (wallet.reconcile), never on a turn start.
+ *  Idempotent: a released turn holds nothing. Returns what it gave back. */
+export async function reconcileWallet(ctx: MutationCtx, userId: Id<"users">, now = Date.now()): Promise<number> {
+  const candidates = new Set((await leakedHolding(ctx, userId, now)).turns);
+  const rows = await ctx.db.query("wallet_ledger").withIndex("by_user_at", (q) => q.eq("user_id", userId)).order("desc").take(LEAK_SCAN_ROWS);
+  for (const row of rows) {
+    if (row.kind !== "reserve" || !row.turn_id || candidates.has(row.turn_id)) continue;
+    if (holdLeaked(await ctx.db.get(row.turn_id), now)) candidates.add(row.turn_id);
+  }
+  return releaseAll(ctx, candidates);
 }
 
 /** A turn's charge row, the mark that it was settled. */
@@ -287,7 +313,7 @@ export async function reserve(ctx: MutationCtx, userId: Id<"users">, turnId: Id<
   if (!LIVE_TURN.has(turn.status) || (await chargeOf(ctx, turnId))) return false;
   let wallet = await ensureWallet(ctx, userId);
   if (walletRoom(wallet) + EPSILON < amount) {
-    if ((await releaseLeaks(ctx, userId)) <= 0) return false;
+    if ((await releaseLeaksFor(ctx, userId, walletRoom(wallet), amount)) <= 0) return false;
     wallet = (await ctx.db.get(wallet._id))!;
     if (walletRoom(wallet) + EPSILON < amount) return false;
   }

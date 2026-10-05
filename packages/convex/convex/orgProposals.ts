@@ -1,4 +1,4 @@
-import { openOrgBatch, orgBatchHead, type OrgBatchHead } from "./lib/orgChangeLog";
+import { openOrgBatch, orgBatchHead, takeOrgRows, type OrgBatchHead } from "./lib/orgChangeLog";
 import { mutation, query, internalMutation } from "./functions";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -20,6 +20,7 @@ import {
   describeOrgChange, orgChangeDependencies, orgChangeTakesOver,
   editedOrgChange,
   isOrgChangeDecidable,
+  isOrgQuietChange,
   orderOrgChanges,
   orgChangeError,
   orgChangeKey,
@@ -38,6 +39,7 @@ import {
   type OrgRevision,
   type OrgVerdictSeen,
 } from "@codecast/shared/contracts/orgProposal";
+import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
 // to the chart with a rationale each, authored by an agent or a person and
@@ -389,6 +391,9 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
     const sibling = (await changesOf(ctx, proposal._id)).find((c) => c.change.kind === "adopt" && c.change.handle.trim().replace(/^@/, "").toLowerCase() === handle && (decidable(c) || c.status === "accepted"));
     if (sibling && sibling.change.kind === "adopt") awaitingAdopt = sibling.change.conversation;
   }
+  // The log hands over the rows this apply writes, from here on: an accept
+  // all runs several changes on one ctx and shares one batch between them.
+  takeOrgRows(ctx);
   let result: ApplyResult;
   try {
     result = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt, evidence: change.evidence });
@@ -397,7 +402,11 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   }
   const ok = result.status === "applied";
   const note = result.status === "applied" || result.status === "skipped" ? result.note : result.status === "error" ? result.error : "not applied";
-  await ctx.db.patch(change._id, { status: ok ? "applied" : "failed", applied_note: note.slice(0, 500), applied_at: now });
+  // The stamp (S39): what this accept moved, so the decided card still shows
+  // before and after once the record moves on. A limit is never a field a
+  // person reads (S23.2), and an apply that moved nothing wrote no row.
+  const applied_diff = ok && !isOrgQuietChange(merged) ? orgAppliedDiff(takeOrgRows(ctx)) : undefined;
+  await ctx.db.patch(change._id, { status: ok ? "applied" : "failed", applied_note: note.slice(0, 500), applied_at: now, ...(applied_diff ? { applied_diff } : {}) });
   return { change_id: change._id, seq: change.seq, status: ok ? "applied" : "failed", note, role: ok && "role" in result ? result.role : undefined, line: describeOrgChange(merged) };
 }
 

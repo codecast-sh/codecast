@@ -60,6 +60,16 @@ model call of its own) reports it with `ctx.charge(usd)`. The run adds it to
 so a costly tool can end the run with `budget`. `ctx.charge` is the only
 route for a tool's spend; there is no second callback to add to a wallet.
 
+Calls run in parallel, and the ceiling is only checked between model calls,
+so a paid tool guards its own spend with `ctx.remainingUsd()`: the dollars
+left under `ceilingUsd` after everything charged so far, sibling calls
+included. Check it and charge an estimate before the first `await`, then
+charge the difference (a negative amount refunds, up to what the call
+charged) once the real cost is known. Parallel siblings then see the
+reservation. The run passes its ceiling only by however much a call's real
+cost exceeds its estimate, so make the estimate a true bound where the tool
+allows one.
+
 No call starts once the run is cancelled or past its deadline, in the loop
 or outside it (a resumed approval, a call a dead run left behind): the run
 checks before and after the gate decides, and `runTool` refuses to start on

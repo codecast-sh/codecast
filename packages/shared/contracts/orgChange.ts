@@ -20,6 +20,7 @@ import {
   takeoverPhrase,
   type OrgChange,
   type OrgChangeKind,
+  type OrgPriority,
   type OrgProposalCaps,
 } from "./orgProposal";
 
@@ -362,6 +363,7 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       ...(row.after.owner_role_id ? { owner: nameOf(row, row.after.owner_role_id) } : {}),
       ...(row.after.priority ? { priority: row.after.priority as any } : {}),
       ...(row.after.goal ? { goal: row.after.goal } : {}),
+      ...Object.fromEntries((["success_metrics", "non_goals", "risks"] as const).filter((k) => Array.isArray(row.after[k])).map((k) => [k, row.after[k]])),
     };
     case "projects": return {
       kind: "projects",
@@ -382,8 +384,7 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
     // A row that did none of those (an entry edited, closed or removed, words
     // cleared, the inverse of an add) reads through orgLogLine's own words.
     case "initiative_shape": {
-      const { before: b, after: a } = row;
-      const milestones = addedEntries(b.milestones, a.milestones, (m) => m.key), questions = addedEntries(b.questions, a.questions, (q) => q.key), decisions = addedEntries(b.decisions, a.decisions, (d) => d.key), sources = addedEntries(b.sources, a.sources, intentSourceKey);
+      const { milestones, questions, decisions, sources } = addedRecord(row.before, row.after);
       const says = "parent_initiative_id" in row.after || "metrics" in row.after || !!row.after.why || !!row.after.done_when || milestones.length + questions.length + decisions.length + sources.length > 0;
       return !says ? null : {
         kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
@@ -391,10 +392,10 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
         ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
         ...(row.after.why ? { why: row.after.why } : {}),
         ...(row.after.done_when ? { done_when: row.after.done_when } : {}),
-        ...(milestones.length ? { milestones: milestones.map((m) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) })) } : {}),
-        ...(questions.length ? { questions: questions.map((q) => q.text) } : {}),
-        ...(decisions.length ? { decisions: decisions.map((d) => d.text) } : {}),
-        ...(sources.length ? { sources: sources.map((s) => s.ref ?? s.quote ?? s.kind) } : {}),
+        ...(milestones.length ? { milestones } : {}),
+        ...(questions.length ? { questions } : {}),
+        ...(decisions.length ? { decisions } : {}),
+        ...(sources.length ? { sources } : {}),
       };
     }
     default: return null;
@@ -405,6 +406,88 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
 function addedEntries<T>(before: readonly T[] | null | undefined, after: readonly T[] | null | undefined, keyOf: (e: T) => string): T[] {
   const had = new Set((before ?? []).map(keyOf));
   return (after ?? []).filter((e) => !had.has(keyOf(e)));
+}
+
+/** What a row added to a goal's record, in the proposal's own form: a
+ *  milestone by its title and day, a question and a decision by their words,
+ *  a source by its address or the words said. The log keeps each list whole
+ *  on both sides; every reader that says what a change wrote reads this. */
+function addedRecord(before: OrgLogFields, after: OrgLogFields) {
+  return {
+    milestones: addedEntries(before.milestones, after.milestones, (m) => m.key).map((m) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) })),
+    questions: addedEntries(before.questions, after.questions, (q) => q.key).map((q) => q.text),
+    decisions: addedEntries(before.decisions, after.decisions, (d) => d.key).map((d) => d.text),
+    sources: addedEntries(before.sources, after.sources, intentSourceKey).map((s) => s.ref ?? s.quote ?? s.kind),
+  };
+}
+
+/** The same entries as words, a milestone by its title: only the lists that
+ *  gained something, and undefined when none did. */
+export function addedRecordWords(before: OrgLogFields, after: OrgLogFields): OrgAppliedDiffRow["added"] {
+  const { milestones, ...rest } = addedRecord(before, after);
+  const gained = Object.entries({ milestones: milestones.map((m) => m.title), ...rest }).filter(([, words]) => words.length);
+  return gained.length ? Object.fromEntries(gained) : undefined;
+}
+
+// ── The stamp: what accepting one proposal change moved ─────────────────────────
+
+/** The fields a decided card may draw a before and after for. A limit is not
+ *  a field a person reads (S23.2), a role's long text and its face stay in
+ *  the log, and a goal's record lists arrive as what was added (`added`),
+ *  never whole. */
+export const ORG_DIFF_FIELDS = [
+  "status", "name", "reports_to", "scope", "trust", "authority", "instance", "upgrade", "standing_session", "routine",
+  "owner_role_id", "project_id", "goal", "success_metrics", "priority", "non_goals", "risks", "projects",
+  "owner", "project_ids", "parent_initiative_id", "metrics", "why", "done_when",
+] as const satisfies readonly (keyof OrgLogFields)[];
+export type OrgDiffField = (typeof ORG_DIFF_FIELDS)[number];
+
+/** A log row as its writer hands it over the moment it lands: what a door
+ *  that stamps its own record (a proposal's accept) reads. */
+export type OrgLandedRow = Pick<OrgLogRow, "kind" | "subject" | "before" | "after" | "labels"> & { batch?: string };
+
+/** What accepting one proposal change moved, stamped on the change row so a
+ *  decided card still shows before and after once the live record has moved on. */
+export type OrgAppliedDiffRow = {
+  kind: OrgLogKind;
+  /** The record the apply resolved: its id, short id and name. */
+  subject: OrgLogSubject;
+  /** Only the fields that moved; null where there was nothing. */
+  before: Partial<Pick<OrgLogFields, OrgDiffField>>;
+  after: Partial<Pick<OrgLogFields, OrgDiffField>>;
+  /** Entries a goal change added to the goal's record, as words. */
+  added?: { milestones?: string[]; questions?: string[]; decisions?: string[]; sources?: string[] };
+  /** The name of each id that before and after mention. */
+  labels: Record<string, string>;
+  /** The log entry the apply wrote: the way back, through the org record. */
+  batch?: string;
+};
+
+/** Every string inside a value: the ids a field may mention, and its words
+ *  beside them (an id is never a word a field holds, so reading both is safe
+ *  and a field added later needs no entry here). */
+function stringsIn(value: unknown, into: Set<string>): Set<string> {
+  if (typeof value === "string") into.add(value);
+  else if (value && typeof value === "object") for (const v of Object.values(value)) stringsIn(v, into);
+  return into;
+}
+
+/**
+ * The stamp for the rows one apply wrote: each row cut to the fields a card
+ * draws, with what it added to a goal's record as words and only the labels
+ * those fields mention. A row left with nothing to show is dropped, and an
+ * apply that leaves no row has no stamp.
+ */
+export function orgAppliedDiff(rows: readonly OrgLandedRow[]): OrgAppliedDiffRow[] | undefined {
+  const cut = (fields: OrgLogFields) => Object.fromEntries(ORG_DIFF_FIELDS.filter((k) => k in fields).map((k) => [k, fields[k]])) as OrgAppliedDiffRow["before"];
+  const out = rows.flatMap((row): OrgAppliedDiffRow[] => {
+    const before = cut(row.before), after = cut(row.after), added = addedRecordWords(row.before, row.after);
+    if (!Object.keys(before).length && !Object.keys(after).length && !added) return [];
+    const mentioned = stringsIn([before, after], new Set());
+    const labels = Object.fromEntries(Object.entries(row.labels).filter(([id]) => mentioned.has(id)));
+    return [{ kind: row.kind, subject: row.subject, before, after, ...(added ? { added } : {}), labels, ...(row.batch ? { batch: row.batch } : {}) }];
+  });
+  return out.length ? out : undefined;
 }
 
 const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = {
@@ -453,6 +536,8 @@ export function orgLogLine(row: OrgLogRow): string {
   // retuned it: the routine stands on both sides, so the row reads as a tune
   // in either direction, never as a start or a stop.
   if ((row.kind === "routine" || row.kind === "routine_stop") && row.before.routine && row.after.routine) return capitalize(routineTuneSentence(row));
+  // A project's priority reads against what it was, which only the row knows.
+  if (change?.kind === "project_meta") return changeLine(change, { was: { priority: row.before.priority as OrgPriority | null | undefined } });
   if (change) return changeLine(change);
   // A hire and an upgrade are recorded; their way back is the host step
   // (org-staffing.md S21), so the inverse row says what the undo did do.

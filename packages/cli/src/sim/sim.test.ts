@@ -116,10 +116,33 @@ describe("ui", () => {
     expect(screenPoints(els)).toEqual({ width: 402, height: 874 });
   });
 
+  test("the tree is flat and drops axe's duplicate text nodes", async () => {
+    const { formatTree } = await import("./ui.js");
+    const dup = [{ ...raw[0], children: [...raw[0].children, { type: "StaticText", AXLabel: "Sign in", frame: { x: 100, y: 600, width: 200, height: 50 } }] }];
+    expect(formatTree(flattenUi(dup))).toEqual([
+      'Application "Codecast"  @201,437',
+      '  Button "Sign in"  @200,625',
+      '  TextField "Email"  @200,322',
+      '  Button "Sign in with Apple"  @200,725',
+    ]);
+  });
+
   test("an exact label beats a substring; the app root never matches", () => {
     const els = flattenUi(raw);
     expect(findElements(els, "sign in").map((e) => e.label)).toEqual(["Sign in"]);
     expect(findElements(els, "apple").map((e) => e.label)).toEqual(["Sign in with Apple"]);
     expect(findElements(els, "codecast")).toEqual([]);
   });
+});
+
+describe("host probe", () => {
+  test.skipIf(process.platform !== "darwin")("prints one JSON line without python", async () => {
+    const { probeScript } = await import("./provision.js");
+    const { spawnSync } = await import("../proc.js");
+    const r = spawnSync("bash", ["-c", probeScript()], { encoding: "utf-8", timeout: 120_000 });
+    const state = JSON.parse(r.stdout.trim().split("\n").pop()!);
+    expect(typeof state.macos).toBe("string");
+    expect(typeof state.license).toBe("boolean");
+    expect(Array.isArray(state.runtimes)).toBe(true);
+  }, 130_000);
 });

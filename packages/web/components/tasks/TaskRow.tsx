@@ -378,8 +378,9 @@ export function KanbanCard({
       </div>
       <p className="text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium">{task.title}</p>
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0">
           <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
+          <TaskLineChip task={task as any} />
           {firstLabel && (() => {
             const lc = getLabelColor(firstLabel);
             return (

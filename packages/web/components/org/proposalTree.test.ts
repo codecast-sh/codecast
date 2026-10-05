@@ -5,7 +5,7 @@
 // Run: bun test components/org/proposalTree.test.ts
 import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
-import { proposalOutcome, proposalQuietLines, proposalTreeRows } from "./proposalTree";
+import { partyFace, proposalChangeRows, proposalOutcome, proposalQuietLines, proposalTreeRows, treeOrder } from "./proposalTree";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 
 const change = (id: string, seq: number, c: any, status: OrgProposalChange["status"] = "proposed", extra: Partial<OrgProposalChange> = {}): OrgProposalChange =>
@@ -53,6 +53,29 @@ describe("proposalTreeRows", () => {
     expect(row.tag).toBe("→ done");
     expect(row.closes).toBe("done");
     expect(row.detail).toBe("shipped on main");
+  });
+
+  test("a change to a project's fields draws the project: its live id with the workspace's projects, the ref without", () => {
+    const projects = [{ id: "p-platform", title: "Platform", short_id: "pr-11" }];
+    const changes = [
+      change("c-meta", 1, { kind: "project_meta", project: "pr-11", priority: "p1", owner: "@growth" }),
+      change("c-status", 2, { kind: "project_status", project: "Platform", status: "paused", reason: "nobody on it" }),
+    ];
+    const [meta, status] = proposalChangeRows(ORG_FIXTURE, changes, { projects });
+    expect(meta.node).toEqual({ kind: "record", record: "project", id: "p-platform", name: "Platform" });
+    expect(meta).toMatchObject({ tag: "charter", parent: null, from: null, closes: null, unresolved: false, owner: { kind: "role", handle: "growth" } });
+    // A status change on the same project names the same record, so the two share a subject.
+    expect(status.node).toEqual({ kind: "record", record: "project", id: "p-platform", name: "Platform" });
+    expect(status).toMatchObject({ tag: "→ paused", detail: "nobody on it" });
+
+    const [bare, bareStatus] = proposalChangeRows(ORG_FIXTURE, changes);
+    expect(bare.node).toEqual({ kind: "record", record: "project", id: "pr-11", name: "pr-11" });
+    expect(bareStatus.node).toEqual({ kind: "record", record: "project", id: "Platform", name: "Platform" });
+    // No lead named: nobody rides as the owner, and nothing is unresolved.
+    const [plain] = proposalChangeRows(ORG_FIXTURE, [change("c", 1, { kind: "project_meta", project: "Platform", priority: "p0" })]);
+    expect(plain).toMatchObject({ owner: null, unresolved: false, node: { kind: "record", record: "project" } });
+    const [orphan] = proposalChangeRows(ORG_FIXTURE, [change("c", 1, { kind: "project_meta", project: "Platform", owner: "@nobody" })]);
+    expect(orphan).toMatchObject({ unresolved: true, owner: { kind: "unknown", name: "nobody" } });
   });
 
   test("only a closing status strikes the record; reopening it does not", () => {
@@ -120,6 +143,29 @@ describe("proposalTreeRows", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe("skipped");
     expect(rows[0].node).toMatchObject({ kind: "role", name: "Head of Platform" });
+  });
+});
+
+describe("treeOrder", () => {
+  const item = (id: string, parent: string | null = null) => ({ id, parent });
+  const order = (items: { id: string; parent: string | null }[]) => treeOrder(items, (t) => t.id, (t) => t.parent).map((t) => t.id);
+
+  test("an item follows its parent, depth first; the rest keep their order", () => {
+    expect(order([item("c", "b"), item("x"), item("b", "a"), item("a"), item("d", "a")])).toEqual(["x", "a", "b", "c", "d"]);
+  });
+
+  test("a parent the list does not hold makes a root; a loop and a self parent still come out once", () => {
+    expect(order([item("a", "gone"), item("b", "a")])).toEqual(["a", "b"]);
+    expect(order([item("a", "b"), item("b", "a"), item("c", "c")])).toEqual(["c", "a", "b"]);
+  });
+});
+
+describe("partyFace", () => {
+  test("a person or a role by the ref a record stores, and a ref the tree does not hold", () => {
+    expect(partyFace(ORG_FIXTURE, { kind: "user", user_id: "fixture-user-me" })).toMatchObject({ kind: "person", name: "Ashot Petrosian", me: true });
+    expect(partyFace(ORG_FIXTURE, { kind: "role", role_id: "fixture-role-growth" })).toMatchObject({ kind: "role", handle: "growth", name: "Head of Growth" });
+    expect(partyFace(ORG_FIXTURE, { kind: "role", role_id: "gone" })).toEqual({ kind: "unknown", id: "gone", name: "a role" });
+    expect(partyFace(ORG_FIXTURE, null)).toBeNull();
   });
 });
 
