@@ -151,10 +151,17 @@ describe("pasteAndSubmitText", () => {
 });
 
 describe("typed delivery", () => {
+  // A pane that shows what has been typed into it, as a client that reads its
+  // input does.
   const recorder = () => {
     const calls: string[][] = [];
-    const exec = async (args: string[]) => { calls.push(args); return { stdout: "", stderr: "" }; };
-    return { calls, exec };
+    let screen = "❯ ";
+    const exec = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === "send-keys" && args.includes("-l")) screen += args.at(-1);
+      return { stdout: args[0] === "capture-pane" ? screen : "", stderr: "" };
+    };
+    return { calls, exec, writes: () => calls.filter((c) => c[0] === "send-keys") };
   };
 
   test("types into an idle Claude composer, so a long message is not wrapped as a paste", () => {
@@ -183,10 +190,43 @@ describe("typed delivery", () => {
     expect(calls).toEqual([["send-keys", "-t", "s:0.0", "-l", "--", "- first\nsecond"]]);
   });
 
+  test("each chunk waits until the pane shows the one before it", async () => {
+    // A client starved of CPU reads everything queued in the pty at once, and
+    // Claude takes a burst that size for a paste it may never close (jx76c85).
+    // This pane renders a write one capture late, so a writer that does not
+    // wait would send its next chunk while the last one is still unread.
+    const writes: string[] = [];
+    let rendered = "";
+    let lastSeen = "";
+    let early = 0;
+    const exec = async (args: string[]) => {
+      if (args[0] === "send-keys" && args.includes("-l")) {
+        if (lastSeen !== writes.join("")) early++;
+        writes.push(args.at(-1)!);
+      }
+      if (args[0] !== "capture-pane") return { stdout: "", stderr: "" };
+      lastSeen = rendered;
+      rendered = writes.join("");
+      return { stdout: "❯ " + lastSeen, stderr: "" };
+    };
+    const text = "x".repeat(100) + "y".repeat(100) + "z".repeat(100);
+    await deliverTextIntoPane(exec, "s:0.0", text, { agentType: "claude", idle: true });
+    expect(writes.join("")).toBe(text);
+    expect(writes.length).toBe(3);
+    expect(early).toBe(0);
+  });
+
+  test("a pane that never shows the text slows typing but does not stop it", async () => {
+    const calls: string[][] = [];
+    const exec = async (args: string[]) => { calls.push(args); return { stdout: "", stderr: "" }; };
+    await deliverTextIntoPane(exec, "s:0.0", "a".repeat(300), { agentType: "claude", idle: true, echoBudgetMs: 50 });
+    expect(calls.filter((c) => c[0] === "send-keys").map((c) => c.at(-1)).join("")).toBe("a".repeat(300));
+  });
+
   test("never leaves a lone character for the last chunk", async () => {
     const { calls, exec } = recorder();
     await deliverTextIntoPane(exec, "s:0.0", "a".repeat(129), { agentType: "claude", idle: true });
-    const chunks = calls.map((c) => c.at(-1)!);
+    const chunks = calls.filter((c) => c[0] === "send-keys").map((c) => c.at(-1)!);
     expect(chunks.join("")).toBe("a".repeat(129));
     expect(Math.min(...chunks.map((c) => c.length))).toBeGreaterThan(1);
   });

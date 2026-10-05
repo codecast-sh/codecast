@@ -385,6 +385,13 @@ function harnessWorld(stream: object[]) {
     'cat "$FAKE_CLAUDE_STREAM"',
     "",
   ].join("\n"), 0o755);
+  // The real CLI the guard finds: answers anything, and records each argv with the state dir it ran under.
+  write(path.join(bin, "cast"), [
+    "#!/usr/bin/env bash",
+    'printf "%s dir=%s\\n" "$*" "${CODECAST_DIR:-}" >> "$FAKE_CLAUDE_REC/real-calls"',
+    'echo "LIVE $* dir=${CODECAST_DIR:-}"',
+    "",
+  ].join("\n"), 0o755);
   write(path.join(dir, "stream.jsonl"), stream.map((e) => JSON.stringify(e)).join("\n") + "\n");
   // `--account fake` reads its token from the state dir, so no keychain is touched.
   write(path.join(state, "cc-token-fake.env"), "CLAUDE_CODE_OAUTH_TOKEN='fake-token'\n");
@@ -403,7 +410,7 @@ function harnessWorld(stream: object[]) {
     return { code, err };
   };
   const recorded = (name: string) => (fs.existsSync(path.join(rec, name)) ? fs.readFileSync(path.join(rec, name), "utf8") : null);
-  return { dir, run, runWith, runAsync, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
+  return { dir, bin, rec, state, run, runWith, runAsync, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
 }
 
 const reply = (text: string, stop: string, outputTokens: number) => [
@@ -498,6 +505,85 @@ describe("prompt-dry-run.ts", () => {
     expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
     expect(h.recorded("bash")).toContain("dry run: 'cast task create Something' would write, and is refused");
     expect(fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8")).toBe("task create Something\nREFUSED task create Something\n");
+  }, 60_000);
+
+  // 2026-10-05: agents left running after their harness was killed went around the guard with the
+  // real state directory and wrote proposals to prod. Every route they had is tried here.
+  test.if(process.platform === "darwin")("an agent that goes around the guard finds no sign-in, and the broker runs only reads", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0.01 }]);
+    write(path.join(h.state, "config.json"), '{"auth_token":"SIGN-IN-SENTINEL"}');
+    const main = path.join(import.meta.dir, "..", "src", "main.ts");
+    const planted = path.join(import.meta.dir, "prompt-dry-run-bin", `planted-${process.pid}`);
+    const bash = [
+      `cat '${h.state}/config.json' 2>&1 | sed 's/^/cat: /'`,
+      `ls '${h.state}' 2>&1 | sed 's/^/ls: /'`,
+      `echo "env: $(env | grep -c 'SIGN-IN-SENTINE[L]')"`,
+      `echo "real-dir: \${DRY_RUN_REAL_CODECAST_DIR:-unset}"`,
+      "cast task ls 2>&1 | sed 's/^/read: /'",
+      `printf 'task\\0create\\0Escaped\\0' | curl -sS --data-binary @- "$DRY_RUN_BROKER" 2>&1 | sed 's/^/broker: /'`,
+      `CODECAST_DIR='${h.state}' '${process.execPath}' '${main}' task create Escaped2 2>&1 | head -2 | sed 's/^/main: /'`,
+      `( : > '${planted}' ) 2>&1 | sed 's/^/plant: /'`,
+    ].join("; ");
+    try {
+      expect(h.runWith({ FAKE_CLAUDE_BASH: bash }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake").code).toBe(0);
+      const said = h.recorded("bash")!;
+      expect(said).not.toContain("SIGN-IN-SENTINEL");
+      expect(said).toMatch(/cat: .*Operation not permitted/);
+      expect(said).toMatch(/ls: .*Operation not permitted/);
+      expect(said).toContain("env: 0");
+      expect(said).toContain("real-dir: unset");
+      // A read still reaches the real CLI under the real state dir, through the harness.
+      expect(said).toContain(`read: LIVE task ls dir=${h.state}`);
+      expect(said).toContain("broker: dry run: 'cast task create Escaped' would write, and is refused");
+      expect(said).toMatch(/main: .*(EPERM|not permitted)/);
+      expect(said).toMatch(/plant: .*Operation not permitted/);
+      expect(fs.existsSync(planted)).toBe(false);
+      const real = h.recorded("real-calls")!;
+      expect(real).toContain(`task ls dir=${h.state}`);
+      expect(real).not.toContain("create");
+      const log = fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8");
+      expect(log).toContain("LIVE task ls\n");
+      expect(log).toContain("REFUSED task create Escaped\n");
+    } finally {
+      fs.rmSync(planted, { force: true });
+    }
+  }, 90_000);
+
+  test.if(process.platform === "darwin")("a guard that cannot answer stops the run before any agent starts", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false }]);
+    const broken = path.join(h.dir, "broken-guard");
+    write(path.join(broken, "cast"), "#!/usr/bin/env bash\necho 'cannot create temp file for here document' >&2\nexit 1\n", 0o755);
+    const r = h.run("--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake", "--guard", broken);
+    expect(r.code).toBe(2);
+    expect(r.err).toContain("the dry run's guard is not usable, so no agent starts");
+    expect(r.err).toContain("cannot create temp file for here document");
+    expect(h.recorded("argv")).toBeNull();
+  }, 60_000);
+
+  test("a run dir that belongs to a live run is refused, and nothing in it is touched", () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false }]);
+    write(path.join(h.runDir, "harness.pid"), `${process.pid}\n`);
+    write(path.join(h.runDir, ".claude", "dry-run-env.sh"), "live");
+    const r = h.run("--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake");
+    expect(r.code).toBe(2);
+    expect(r.err).toContain(`belongs to a run still alive (harness pid ${process.pid})`);
+    expect(fs.readFileSync(path.join(h.runDir, ".claude", "dry-run-env.sh"), "utf8")).toBe("live");
+    expect(h.recorded("argv")).toBeNull();
+  }, 30_000);
+
+  test.if(process.platform === "darwin")("the agent dies with its harness, even when the harness is killed outright", async () => {
+    const h = harnessWorld([{ type: "result", result: "Done.", is_error: false }]);
+    const p = Bun.spawn(["bun", HARNESS, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake"], {
+      env: { PATH: `${h.bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: h.dir, CODECAST_DIR: h.state, FAKE_CLAUDE_REC: h.rec, FAKE_CLAUDE_STREAM: path.join(h.dir, "stream.jsonl"), FAKE_CLAUDE_BASH: `echo $$ > "$FAKE_CLAUDE_REC/agent-pid"; sleep 120` },
+      stdout: "ignore", stderr: "ignore",
+    });
+    const until = async (ok: () => boolean, ms: number) => { const end = Date.now() + ms; while (!ok() && Date.now() < end) await Bun.sleep(200); return ok(); };
+    expect(await until(() => !!h.recorded("agent-pid")?.trim(), 30_000)).toBe(true);
+    const agent = Number(h.recorded("agent-pid")!.trim());
+    const alive = () => { try { process.kill(agent, 0); return true; } catch { return false; } };
+    expect(alive()).toBe(true);
+    p.kill("SIGKILL");
+    expect(await until(() => !alive(), 20_000)).toBe(true);
   }, 60_000);
 
   // ct-56832: two agents in flight both wrote /tmp/org_inputs.json and one graded the other's world.

@@ -1107,3 +1107,32 @@ describe("Claude Code's limit dialog (2026-10-04)", () => {
     expect(limitDialogOnPane(question)).toBe(false);
   });
 });
+
+// A typed draft renders in full, so a long one makes the composer box taller
+// than the live region's 25-line tail: only the box's bottom rule is in it.
+// jx76rqh held two messages for 90 minutes on exactly this pane.
+describe("a composer box taller than the live tail", () => {
+  const rule = "─".repeat(120);
+  const draft = Array.from({ length: 40 }, (_, i) => `  line ${i} of a long typed report from a worker session`);
+  const pane = (footer: string[]) => [
+    "⏺ Checks: 310 tests pass across these changes.",
+    "✻ Cogitated for 29m 14s · done 11:24 AM",
+    rule,
+    "❯ <session-message from=\"jx7f680\">",
+    ...draft,
+    "  </session-message>",
+    rule,
+    ...footer,
+  ].join("\n");
+
+  test("reads as the idle composer holding the draft", () => {
+    const region = extractTmuxLiveRegion(pane(["  session 34%, resets in 2h 55m", "  ⏵⏵ bypass permissions on (shift+tab to cycle)"]));
+    expect(region).toContain("❯ <session-message");
+    expect(classifyTmuxLiveState(region)).toBe("idle");
+  });
+
+  test("a dialog under a lone rule is still read as that dialog", () => {
+    const region = extractTmuxLiveRegion(pane([" Do you want to proceed?", " ❯ 1. Yes", "   2. No", " Esc to cancel · Tab to amend"]));
+    expect(region).not.toContain("<session-message");
+  });
+});

@@ -9,28 +9,30 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Copy, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, ChevronDown, ChevronRight, Copy, SlidersHorizontal } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
+import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { SessionDecisionItem } from "../../store/inboxStore";
 import { useInitiatives } from "../../hooks/useInitiatives";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../shortcuts";
 import { KeyHint } from "../changes/useChangesKeys";
-import { LINE_STATION_SETTINGS, lineSettingsHref } from "../../lib/lineSettings";
+import { LINE_STATION_SETTINGS, lineSettingsHref, lineTabHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
   ageShort, buildLineFlow, silentText, groupBuild, lineHeadline, scopeLine, ALL_PROJECTS, NO_PROJECT, DAY, LINE_STEPS,
-  type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type SenseSource, type StageState, type WatchRow,
+  type BuildBlock, type HeadlinePart, type CauseRow, type LineProject, type ClosedRow, type Column, type GoalRow, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
 import { LINE_SIGNAL_WINDOW_MS } from "@codecast/shared/contracts/lineProfile";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
 import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
 import { useLineFloor } from "./useLineFloor";
+import { LineSetup } from "./LineSetup";
 import { CustomizedLineChip } from "./CustomizedLineChip";
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
 import { edgeAttrs, useScrollEdges } from "./useScrollEdges";
@@ -96,10 +98,12 @@ const template = (set: TrackSet, emptyOf: (s: Station) => boolean, stacked = fal
     return [...(i ? [set.rail] : []), track];
   }).join(" ");
 
-export function LinePage() {
+/** `project` pins the page to one project's line: the project's Line tab
+ *  embeds it with no switcher, and links out to the whole /line. */
+export function LinePage({ project: pinned, workspace }: { project?: string; workspace?: string | null } = {}) {
   const router = useRouter();
   const initiatives = useInitiatives();
-  const { now, tasks, projects, lineRows, rollup, line } = useLineFloor();
+  const { now, tasks, projects, lineRows, rollup, line } = useLineFloor(pinned, workspace);
   // Settings belong to one project's line. From the roll-up (or "no project")
   // the link names none, and the settings page opens on its own default: the
   // project of the repo the viewer is in, else the busiest line.
@@ -108,7 +112,9 @@ export function LinePage() {
   useShortcutContext("line");
   useShortcutAction("line.settings", () => { router.push(settingsOf()); return true; });
   // With no line anywhere the roll-up has nothing to count: the page teaches instead.
-  const rollupView = line.key === ALL_PROJECTS && rollup.length > 0;
+  const rollupView = !pinned && line.key === ALL_PROJECTS && rollup.length > 0;
+  // One project's line lives on its project's Line tab too (LM7).
+  const tabHref = settingsProject && !pinned ? lineTabHref(line.key) : null;
   const lineProfile = useMemo(() => projects.find((p) => p._id === line.key)?.line_profile, [projects, line.key]);
   const finders = lineProfile?.finders;
   const findersSince = lineProfile?.changed_at;
@@ -125,6 +131,17 @@ export function LinePage() {
   // Every ranked cause lacks a goal: said once in the header, not per row.
   const ungrounded = flow.causes.items.length > 0 && flow.causes.items.every((c) => c.goal.kind === "ungrounded");
   const taskById = useMemo(() => new Map(tasks.map((t) => [t._id, t])), [tasks]);
+  // A shipped or closed cause opens onto the report of its newest line run
+  // (LE16): what it did, the card's answer, the diff, and the cause itself.
+  const onward = useMemo(() => {
+    const newest = new Map<string, { _id: string; created_at: number }>();
+    for (const r of lineRows.runs) {
+      if (!r.task_id || !isLineRun(r.node_statuses)) continue;
+      const had = newest.get(r.task_id);
+      if (!had || r.created_at > had.created_at) newest.set(r.task_id, r);
+    }
+    return (t: { _id: string; short_id?: string }) => { const r = newest.get(t._id); return r ? runHref(r._id) : taskHref(t); };
+  }, [lineRows.runs]);
   const buildBlocks = useMemo(() => groupBuild(flow.build.items), [flow.build.items]);
   const [parkedOpen, setParkedOpen] = useState(false);
   // Sources quiet for 24 hours fold under their own line, the way parked
@@ -146,9 +163,9 @@ export function LinePage() {
     causes: [...flow.causes.items, ...(parkedOpen ? flow.causes.parked : [])].map((r) => taskHref(r.task)),
     build: buildBlocks.flatMap((g) => g.rows).map((b) => runHref(b.run._id)),
     awaiting: flow.awaiting.items.map((d) => decisionHref(d)),
-    watching: flow.watching.items.map((w) => taskHref(w.task)),
-    closed: flow.closed.items.map((c) => taskHref(c.task)),
-  }), [flow, senseRows, buildBlocks, taskById, parkedOpen, line.href]);
+    watching: flow.watching.items.map((w) => onward(w.task)),
+    closed: flow.closed.items.map((c) => onward(c.task)),
+  }), [flow, senseRows, buildBlocks, taskById, parkedOpen, line.href, onward]);
 
   const columns: Record<StationKey, Column<unknown>> = flow as unknown as Record<StationKey, Column<unknown>>;
   // Sense counts today's signals but lists the week's sources.
@@ -189,7 +206,7 @@ export function LinePage() {
         setFocus({ col, row: Math.max(0, Math.min(rows - 1, row + dr)) });
       };
       // Brackets walk the lines: the roll-up, then each project.
-      if ((e.key === "[" || e.key === "]") && rollup.length > 0) {
+      if ((e.key === "[" || e.key === "]") && rollup.length > 0 && !pinned) {
         e.preventDefault();
         const keys = lineKeys(rollup);
         const idx = Math.max(0, keys.indexOf(line.key));
@@ -368,9 +385,9 @@ export function LinePage() {
             })}
           </div>)}
 
-      {s.key === "watching" && !empty("watching") && (flow.watching.items.map((w, r) => <WatchRowView key={w.task._id} row={w} focused={at("watching", r)} index={r} />))}
+      {s.key === "watching" && !empty("watching") && (flow.watching.items.map((w, r) => <WatchRowView key={w.task._id} row={w} href={hrefs.watching[r]} focused={at("watching", r)} index={r} />))}
 
-      {s.key === "closed" && !empty("closed") && (flow.closed.items.map((c, r) => <ClosedRowView key={c.task._id} row={c} now={now} focused={at("closed", r)} index={r} />))}
+      {s.key === "closed" && !empty("closed") && (flow.closed.items.map((c, r) => <ClosedRowView key={c.task._id} row={c} href={hrefs.closed[r]} now={now} focused={at("closed", r)} index={r} />))}
     </StationColumn>
   );
 
@@ -378,19 +395,29 @@ export function LinePage() {
     <div className="line-floor h-full flex flex-col min-h-0" data-line-page>
       <header className="shrink-0 px-4 sm:px-6 pt-5 pb-4 flex flex-col gap-3">
         <div className="flex items-baseline gap-3 min-w-0">
-          <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
+          <h1 className="text-[13px] font-semibold text-sol-text leading-none">{pinned ? "Flow" : "The line"}</h1>
           <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
-          <Link href={settingsOf()} className="ml-auto self-center shrink-0 inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text" title="What this line listens to, checks, limits and runs" data-line-settings-link>
+          {tabHref && (
+            <Link href={tabHref} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="This project's line: its flow, sources, stations and versions" data-line-tab-link>
+              Line tab
+            </Link>
+          )}
+          {pinned && (
+            <Link href={line.href} className="ml-auto self-center shrink-0 text-[11px] text-sol-text-dim hover:text-sol-text" title="Every project's line on one floor" data-line-all-link>
+              All lines
+            </Link>
+          )}
+          <Link href={settingsOf()} className={cn(tabHref || pinned ? "" : "ml-auto", "self-center shrink-0 inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text")} title="What this line listens to, checks, limits and runs" data-line-settings-link>
             <SlidersHorizontal className="w-3 h-3" />
             <span>settings</span>
             <KeyHint action="line.settings" />
           </Link>
         </div>
-        <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => { setFocus(null); line.select(k); }} />
+        {!pinned && <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => { setFocus(null); line.select(k); }} />}
         {!allEmpty && !rollupView && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={(key) => showStation(STATIONS.findIndex((x) => x.key === key))} />} />}
       </header>
 
-      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => { setFocus(null); line.select(k); }} /> : allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} settingsOf={settingsOf} /> : (<>
+      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => { setFocus(null); line.select(k); }} /> : allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} settingsOf={settingsOf} projects={pinned ? [] : projects} /> : (<>
       <nav ref={tabsRow} className="line-tabs line-edge-fade line-scroll-quiet sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations" {...edgeAttrs(tabEdges)}>
         {STATIONS.map((s, i) => (
           <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} data-ask={s.key === "awaiting" && columns[s.key].count > 0 ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
@@ -835,13 +862,14 @@ function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: 
 /** The line before anything has reached it: the first command, then the six
  *  stations in one row, each saying what will feed it and, on hover or under
  *  the cursor, the command that does. */
-function Onboarding({ focusedCol, onFocus, settingsOf }: { focusedCol: number; onFocus: (i: number) => void; settingsOf: (station: StationKey) => string }) {
+function Onboarding({ focusedCol, onFocus, settingsOf, projects }: { focusedCol: number; onFocus: (i: number) => void; settingsOf: (station: StationKey) => string; projects: LineProject[] }) {
   return (
     <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col" data-line-onboarding>
-      {/* The start card, then the stations, top aligned at the header's
-          rhythm: what to do, then where it will flow. The card is as wide as
-          its copy, and the command chip as wide as the command. */}
+      {/* The workspace's projects, each with the step that starts its line,
+          then the first signal, then the stations, top aligned at the
+          header's rhythm: where to start, what to do, where it will flow. */}
       <div className="flex flex-col gap-5 pt-1 pb-4">
+      {projects.length > 0 && <ProjectStarts projects={projects} />}
       <div className="line-start shrink-0 rounded-xl p-5 sm:p-6 max-w-[760px]">
         <div className="line-start-title text-sol-text">File the first signal.</div>
         <p className="mt-2 text-[13px] text-sol-text-muted leading-relaxed max-w-[60ch]">
@@ -873,6 +901,26 @@ function Onboarding({ focusedCol, onFocus, settingsOf }: { focusedCol: number; o
       </div>
       </div>
     </div>
+  );
+}
+
+/** Every project in the workspace, each with its line's next step: set it up,
+ *  or open its Line tab when its profile is published. */
+function ProjectStarts({ projects }: { projects: LineProject[] }) {
+  const rows = [...projects].sort((a, b) => Number(!!b.line_profile) - Number(!!a.line_profile) || (a.title ?? "").localeCompare(b.title ?? ""));
+  return (
+    <LineSetup heading="Start a line on one of this workspace's projects">
+      <ul className="mt-3 divide-y divide-sol-border/20 border-t border-sol-border/20" data-line-project-starts>
+        {rows.map((p) => (
+          <li key={p._id} className="flex items-baseline gap-3 py-1.5 text-[12.5px]" data-line-project-start={p.short_id ?? p._id}>
+            <span className="min-w-0 flex-1 truncate text-sol-text">{p.title ?? p.short_id}</span>
+            {p.line_profile
+              ? <Link href={lineTabHref(p.short_id ?? p._id)} className="shrink-0 text-sol-text-muted hover:text-sol-blue hover:underline">Line tab</Link>
+              : <Link href={lineSettingsHref({ project: p })} className="shrink-0 inline-flex items-center gap-1 text-sol-cyan hover:underline" data-line-setup-action>Set up the line<ArrowRight className="w-3 h-3" /></Link>}
+          </li>
+        ))}
+      </ul>
+    </LineSetup>
   );
 }
 
@@ -1027,10 +1075,10 @@ function Stepper({ at, label, tone }: { at: number; label: string | null; tone: 
   );
 }
 
-function WatchRowView({ row, focused, index }: { row: WatchRow; focused: boolean; index: number }) {
+function WatchRowView({ row, href, focused, index }: { row: WatchRow; href: string; focused: boolean; index: number }) {
   const span = Math.max(1, Math.ceil((row.until - (row.task.closed_at ?? row.until - 7 * DAY)) / DAY));
   return (
-    <RowLink href={taskHref(row.task)} focused={focused} index={index}>
+    <RowLink href={href} focused={focused} index={index}>
       <div className="flex items-start gap-2" title={[row.task.title, row.task.short_id].filter(Boolean).join(" · ")}>
         <span className="text-[13px] text-sol-text leading-snug flex-1 min-w-0 line-title">{row.task.title}</span>
       </div>
@@ -1054,10 +1102,10 @@ const OUTCOME: Record<ClosedRow["outcome"], { glyph: string; tone: string }> = {
   dissolved: { glyph: "○", tone: "text-sol-text-dim" },
 };
 
-function ClosedRowView({ row, now, focused, index }: { row: ClosedRow; now: number; focused: boolean; index: number }) {
+function ClosedRowView({ row, href, now, focused, index }: { row: ClosedRow; href: string; now: number; focused: boolean; index: number }) {
   const o = OUTCOME[row.outcome];
   return (
-    <RowLink href={taskHref(row.task)} focused={focused} index={index}>
+    <RowLink href={href} focused={focused} index={index}>
       <div className="flex items-start gap-2" title={[row.task.title, row.task.short_id].filter(Boolean).join(" · ")}>
         <span className={cn("text-[13px] w-3 shrink-0", o.tone)}>{o.glyph}</span>
         <span className={cn("text-[13px] leading-snug flex-1 min-w-0 line-title", row.outcome === "dissolved" ? "text-sol-text-muted" : "text-sol-text")}>{row.task.title}</span>

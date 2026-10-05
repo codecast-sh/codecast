@@ -29,7 +29,8 @@ import {
   type OrgTree,
 } from "../components/org/orgTypes";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, type OrgChangeStatus, type OrgHealth, type OrgProposalChange, type OrgProposalListRow } from "../components/org/orgStaffingTypes";
-import { describeOrgChange, isOrgChangeDecidable, ORG_VERDICT_REVISED, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { andList, changeLine, describeOrgChange, isOrgChangeDecidable, proposalReplyText, ORG_VERDICT_REVISED, type OrgChangeReply, type OrgProposalReply, type OrgReplyVerdict, type OrgTenureSpec, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { hasThreadState, clearedThreadStateFields, type ThreadStateFields } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { leadScopeChange, type LeadScopeChange } from "@codecast/shared/contracts/orgLead";
 import type { OrgLogEntry, OrgLogRow } from "@codecast/shared/contracts/orgChange";
@@ -51,7 +52,14 @@ export type OrgIntent =
   /** The role's line (the-line.md L2): the workflow slug its scope runs on.
    *  `from` is the slug the tree row held before, for a refusal to restore. */
   | { kind: "line"; id: string; role_id: string; slug: string; from?: string; at: number }
-  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; /** The ask this verdict came from (decideOrgProposalAsk): a refusal of that call reverts these rows and no others. */ ask?: number; at: number }
+  | { kind: "decideChange"; id: string; change_id: string; proposal_id: string; from: OrgChangeStatus; to: OrgChangeStatus; line: string; edits?: Record<string, unknown>; /** The ask this verdict came from (decideOrgProposalAsk): a refusal of that call reverts these rows and no others. */ ask?: number; /** Set when the verdict came in a reply (replyOnOrgProposal, S39): a refusal of that call reverts every row of the reply and no others. */ via?: "reply"; /** The answer the reply stamps on the row beside the verdict (a rejection, an approval with words), and what the row held before, for a refusal to put back. */ reply?: OrgChangeReply; reply_from?: OrgChangeReply; at: number }
+  /** A person's words on a change with no verdict (S39): the row keeps its
+   *  status and gains the `reply` stamp. The server's own stamp (another
+   *  `at`, or a `by`) is the echo. */
+  | { kind: "noteChange"; id: string; change_id: string; proposal_id: string; reply: OrgChangeReply; from?: OrgChangeReply; line: string; at: number }
+  /** A person's words on the whole proposal (S39, a note naming no change):
+   *  the list row gains the `reply` stamp. Same echo as noteChange. */
+  | { kind: "noteProposal"; id: string; proposal_id: string; short_id: string; reply: OrgChangeReply; from?: OrgChangeReply; at: number }
   /** Withdraw a proposal from the pane (S4 supersession): the list row flips
    *  to withdrawn; the server's resolved_at stamp is the echo. */
   | { kind: "withdraw"; id: string; proposal_id: string; short_id: string; at: number }
@@ -307,6 +315,17 @@ export type OrgSliceActions = {
    *  refuses a verdict the author revised under the reader (S18). That
    *  refusal is permanent, so dropRejectedOrgIntent puts every row back. */
   decideOrgProposalAsk: (proposalId: string, askIndex: number, verdict: "accept" | "skip", seen: OrgVerdictSeen, opts?: { leave_sessions?: boolean }) => void;
+  /** A person's answers to a proposal's cards, sent together (S39): each
+   *  item approves, rejects or writes on the changes of one card (`seqs`
+   *  empty = the whole proposal). Approvals and rejections flip their rows on
+   *  the draft like an ask's verdict and carry the `reply` stamp; a note
+   *  stamps `reply` and nothing else (on the list row when it names no
+   *  change). One dispatch runs orgProposals.reply,
+   *  which applies the approvals in order, skips the rejections, stores the
+   *  words, and with `say` sends the reply text into the proposal's thread
+   *  (the optimistic bubble is added here, keyed by `say.client_id`). A
+   *  refusal reverts every row of the reply (dropRejectedOrgIntent). */
+  replyOnOrgProposal: (proposalId: string, items: OrgReplyInput[], seen: OrgVerdictSeen, opts?: OrgReplyOpts) => void;
   /** Accept or skip one change (S5). Accept is optimistic: the row flips to
    *  accepted and dispatch runs orgProposals.decide, which applies it and
    *  echoes applied or failed. Edits ride along as the patch decide takes;
@@ -351,6 +370,16 @@ type OrgServerVerbs<R> = {
   requestOrgTemplateBind: (instanceKey: string, secrets: { key: string; payload: { provider: string; epk: string; iv: string; ct: string } }[], deviceId?: string) => R;
   /** Whether Codecast may learn from the workspace's template roles (H12): orgTemplateLearning.setLearning. */
   setOrgTemplateLearning: (teamId: string | undefined, enabled: boolean) => R;
+};
+
+/** One answer as the store takes it: the verdict, the card's members (what
+ *  the draft flips) and its drawn seqs (what the server and the words name). */
+export type OrgReplyInput = { verdict: OrgReplyVerdict; change_ids: string[]; seqs: number[]; text?: string };
+export type OrgReplyOpts = {
+  leave_sessions?: boolean;
+  /** A surface with no composer: the server sends the reply text (and
+   *  `body`, when given) into the proposal's thread as one message. */
+  say?: { thread: string; body?: string; client_id: string };
 };
 
 export type OrgSliceState = OrgSliceData & OrgSliceActions;
@@ -513,6 +542,16 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
       const row = changes[intent.change_id];
       return !row || row.decided_by !== undefined;
     }
+    case "noteChange": {
+      if (!changes) return false;
+      const row = changes[intent.change_id];
+      return !row || replyStampEchoed(row.reply, intent);
+    }
+    case "noteProposal": {
+      if (!proposals) return false;
+      const row = proposals[intent.proposal_id];
+      return !row || replyStampEchoed(row.reply, intent);
+    }
     case "staff": {
       const head = liveHead(tree);
       return !!head && head._id !== intent.stub.client_id;
@@ -563,10 +602,12 @@ export function orgIntentSatisfied(tree: OrgTree, intent: OrgIntent, changes?: R
 export function applyOrgIntent(tree: OrgTree, intent: OrgIntent, row?: OrgSession | null): void {
   switch (intent.kind) {
     case "decideChange":
+    case "noteChange":
+    case "noteProposal":
     case "withdraw":
     case "undoChange":
       // Act on the proposal rows, not the tree: applyOrgChangeIntent,
-      // applyOrgWithdrawIntent. An undo acts on the record: applyOrgUndoIntent.
+      // applyOrgProposalIntent. An undo acts on the record: applyOrgUndoIntent.
       return;
     case "staff": {
       if (liveHead(tree)) return;
@@ -709,29 +750,80 @@ function applyRoleFields(role: OrgRole, fields: OrgUpdateRoleInput, keys: (keyof
  *  `match`, one intent each, so a refusal of the whole call puts every row
  *  back and a partial echo settles row by row. Accept all and an ask's
  *  verdict are the same gesture over a different set of rows. */
-function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, ask?: number): void {
-  const now = Date.now();
+function decideWaitingChanges(draft: OrgDraft, proposalId: string, to: "accepted" | "skipped", match: (c: OrgProposalChange) => boolean, ask?: number, reply?: (c: OrgProposalChange) => OrgChangeReply | undefined, now = Date.now()): void {
   for (const c of Object.values(draft.orgProposalChanges)) {
     if (c.proposal_id !== proposalId || !isOrgChangeDecidable(c.status) || !match(c)) continue;
-    const intent: OrgIntent = { kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to, line: describeOrgChange(c.change), ...(ask !== undefined ? { ask } : {}), at: now };
+    const stamp = reply?.(c);
+    const intent: OrgIntent = {
+      kind: "decideChange", id: intentId(), change_id: c._id, proposal_id: proposalId, from: c.status, to, line: describeOrgChange(c.change),
+      ...(ask !== undefined ? { ask } : {}),
+      ...(reply ? { via: "reply" as const } : {}),
+      ...(stamp ? { reply: stamp, ...(c.reply ? { reply_from: c.reply } : {}) } : {}),
+      at: now,
+    };
     applyOrgChangeIntent(draft.orgProposalChanges, intent);
     pushIntent(draft, intent);
   }
 }
 
-export function applyOrgChangeIntent(changes: Record<string, OrgProposalChange>, intent: Extract<OrgIntent, { kind: "decideChange" }>): void {
+/** The words a person wrote on a change with no verdict (S39): the row keeps
+ *  its status and gains the `reply` stamp, one intent per row. */
+function noteChanges(draft: OrgDraft, proposalId: string, match: (c: OrgProposalChange) => boolean, stamp: OrgChangeReply): void {
+  for (const c of Object.values(draft.orgProposalChanges)) {
+    if (c.proposal_id !== proposalId || !match(c)) continue;
+    const intent: OrgIntent = { kind: "noteChange", id: intentId(), change_id: c._id, proposal_id: proposalId, reply: stamp, ...(c.reply ? { from: c.reply } : {}), line: describeOrgChange(c.change), at: stamp.at };
+    applyOrgChangeIntent(draft.orgProposalChanges, intent);
+    pushIntent(draft, intent);
+  }
+}
+
+/** The words a person wrote on the whole proposal (S39, a note naming no
+ *  change): the list row gains the `reply` stamp. No row in the store, no
+ *  stamp to draw: the server keeps it either way. */
+function noteProposal(draft: OrgDraft, proposalId: string, stamp: OrgChangeReply): void {
+  const p = draft.orgProposals[proposalId];
+  if (!p) return;
+  const intent: OrgIntent = { kind: "noteProposal", id: intentId(), proposal_id: proposalId, short_id: p.short_id, reply: stamp, ...(p.reply ? { from: p.reply } : {}), at: stamp.at };
+  applyOrgProposalIntent(draft.orgProposals, intent);
+  pushIntent(draft, intent);
+}
+
+export function applyOrgChangeIntent(changes: Record<string, OrgProposalChange>, intent: Extract<OrgIntent, { kind: "decideChange" | "noteChange" }>): void {
   const c = changes[intent.change_id];
-  if (!c || c.decided_by !== undefined || c.status === intent.to) return;
+  if (!c) return;
+  if (intent.kind === "noteChange") return applyNoteStamp(c, intent);
+  if (c.decided_by !== undefined || c.status === intent.to) return;
   c.status = intent.to;
   c.decided_at = intent.at;
   if (intent.edits && Object.keys(intent.edits).length > 0) c.edits = intent.edits;
+  if (intent.reply) c.reply = intent.reply;
 }
 
-/** The withdraw flip on the list row: the action's draft and the replay
- *  onto a list push that still says open. */
-export function applyOrgWithdrawIntent(proposals: Record<string, OrgProposalListRow>, intent: Extract<OrgIntent, { kind: "withdraw" }>): void {
+/** The server's own `reply` stamp written since this note was pressed: it
+ *  names who answered (the draft's stamp never does) and is not the stamp the
+ *  row held before (`from`, which the server wrote for an earlier answer).
+ *  No clocks: a client's `at` and the server's cannot be compared. */
+function replyStampEchoed(reply: OrgChangeReply | undefined, intent: { from?: OrgChangeReply }): boolean {
+  if (!reply || reply.by === undefined) return false;
+  const was = intent.from;
+  return !was || was.by !== reply.by || was.at !== reply.at || was.verdict !== reply.verdict || (was.text ?? "") !== (reply.text ?? "");
+}
+
+/** A note's stamp on its row (a change, or the proposal for a note on the
+ *  whole): the action's draft and the replay onto a push that predates the
+ *  mutation. The server's own stamp, once there, is left alone. */
+function applyNoteStamp(row: { reply?: OrgChangeReply }, intent: { reply: OrgChangeReply; from?: OrgChangeReply }): void {
+  if (!replyStampEchoed(row.reply, intent)) row.reply = intent.reply;
+}
+
+/** The intents that act on the list row (a withdraw's flip, a whole-proposal
+ *  note's stamp): the action's draft and the replay onto a list push that
+ *  started before the mutation landed. */
+export function applyOrgProposalIntent(proposals: Record<string, OrgProposalListRow>, intent: Extract<OrgIntent, { kind: "withdraw" | "noteProposal" }>): void {
   const p = proposals[intent.proposal_id];
-  if (!p || p.resolved_at !== undefined || p.status !== "open") return;
+  if (!p) return;
+  if (intent.kind === "noteProposal") return applyNoteStamp(p, intent);
+  if (p.resolved_at !== undefined || p.status !== "open") return;
   p.status = "withdrawn";
 }
 
@@ -785,6 +877,19 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
       c.status = intent.from;
       delete c.decided_at;
       if (intent.edits) c.edits = intent.edits;
+      if (intent.reply) putReplyBack(c, intent.reply_from);
+      return;
+    }
+    case "noteChange": {
+      const c = draft.orgProposalChanges[intent.change_id];
+      if (!c || replyStampEchoed(c.reply, intent)) return;
+      putReplyBack(c, intent.from);
+      return;
+    }
+    case "noteProposal": {
+      const p = draft.orgProposals?.[intent.proposal_id];
+      if (!p || replyStampEchoed(p.reply, intent)) return;
+      putReplyBack(p, intent.from);
       return;
     }
     case "staff": {
@@ -817,6 +922,11 @@ export function revertOrgIntent(draft: Pick<OrgDraft, "orgTree" | "orgProposalCh
   }
 }
 
+function putReplyBack(row: { reply?: OrgChangeReply }, from: OrgChangeReply | undefined): void {
+  if (from) row.reply = from;
+  else delete row.reply;
+}
+
 /** The tree edits whose apply cannot be undone by writing one field back: a
  *  move re-buckets a session and its counts, a retire re-homes a whole subtree,
  *  a follow edits a list. They are put back by rebuilding from the server's own
@@ -839,7 +949,9 @@ export function rebuildOrgTreeFromServer(draft: Pick<OrgDraft, "orgTree" | "orgT
 export function orgIntentNoticeText(intent: OrgIntent, reason: "refused" | "expired"): string {
   const tail = reason === "refused" ? "was refused" : "did not reach the server after a minute";
   switch (intent.kind) {
-    case "decideChange": return `${intent.to === "skipped" ? "Skipping" : "Accepting"} "${intent.line}" ${tail}; the change is back to ${intent.from}.`;
+    case "decideChange": return `${intent.via === "reply" ? (intent.to === "skipped" ? "Rejecting" : "Approving") : intent.to === "skipped" ? "Skipping" : "Accepting"} "${intent.line}" ${tail}; the change is back to ${intent.from}.`;
+    case "noteChange": return `Your note on "${intent.line}" ${tail}; say it again.`;
+    case "noteProposal": return `Your note on ${intent.short_id} ${tail}; say it again.`;
     case "withdraw": return `Withdrawing ${intent.short_id} ${tail}; it is open again.`;
     case "staff": return `Hiring the Head of People ${tail}.`;
     case "createRole": return `Adding @${intent.stub.handle} ${tail}; the seat is off the chart.`;
@@ -960,6 +1072,7 @@ export function dropRejectedOrgIntent(state: { orgIntents: OrgIntent[]; dropOrgI
     (action === "withdrawOrgProposal" && i.kind === "withdraw" && i.proposal_id === args[0]) ||
     (action === "acceptAllOrgProposal" && i.kind === "decideChange" && i.proposal_id === args[0]) ||
     (action === "decideOrgProposalAsk" && i.kind === "decideChange" && i.proposal_id === args[0] && i.ask === args[1]) ||
+    (action === "replyOnOrgProposal" && ((i.kind === "decideChange" && i.via === "reply") || i.kind === "noteChange" || i.kind === "noteProposal") && i.proposal_id === args[0]) ||
     (action === "staffHeadOfPeople" && i.kind === "staff" && i.stub.client_id === (args[0] as OrgStaffInput | undefined)?.client_id) ||
     (action === "createOrgRole" && i.kind === "createRole" && i.stub.client_id === (args[0] as OrgCreateRoleInput | undefined)?.client_id) ||
     (action === "updateOrgRole" && i.kind === "roleFields" && i.role_id === args[0] && sameValue(roleFieldKeys(i.fields), roleFieldKeys((args[1] as OrgUpdateRoleInput | undefined) ?? {}))) ||
@@ -1004,6 +1117,43 @@ function markOrgUndo(draft: OrgDraft, batch: string, redo: boolean, opts?: { wit
   pushIntent(draft, intent);
 }
 
+/** inboxStore's one writer of an optimistic user bubble (appendOptimisticMessage),
+ *  handed over when that module evaluates. The store spreads this slice in,
+ *  so an import the other way would evaluate inboxStore before this module's
+ *  exports exist (ORG_SYNC_REGISTRY is read at its top level); a binding
+ *  keeps one writer without the cycle. A bare slice (tests without the store)
+ *  has no writer and adds no bubble. */
+type OptimisticMessageWriter = (draft: any, convId: string, content: string, images: undefined, clientId: string) => string;
+let writeOptimisticMessage: OptimisticMessageWriter | null = null;
+export function bindOptimisticMessageWriter(fn: OptimisticMessageWriter): void {
+  writeOptimisticMessage = fn;
+}
+
+/** The optimistic bubble for a reply the server sends into the proposal's
+ *  thread (S39), so the words appear at once: the row sayOnOrgProposal
+ *  seeds, written by the bound inboxStore writer and keyed by the client id
+ *  the server's message carries, so the echo replaces it. The slice is
+ *  spread into the store, so the draft holds the thread's rows at run time. */
+function sayInThread(draft: OrgDraft, proposalId: string, items: OrgReplyInput[], say: NonNullable<OrgReplyOpts["say"]>): void {
+  const store = draft as OrgDraft & Partial<{ pendingMessages: Record<string, OrgThreadMessage[]>; sessions: Record<string, OrgThreadRow>; conversations: Record<string, OrgThreadRow>; messages: Record<string, { timestamp?: number }[]> }>;
+  if (!store.pendingMessages || !writeOptimisticMessage) return;
+  const p = draft.orgProposals[proposalId];
+  const rows = Object.values(draft.orgProposalChanges).filter((c) => c.proposal_id === proposalId);
+  const reply: OrgProposalReply = {
+    proposal: p?.short_id ?? proposalId,
+    title: p?.title ?? "",
+    items: items.map((item) => ({ verdict: item.verdict, seqs: item.seqs, ...(item.text ? { text: item.text } : {}), line: item.seqs.length ? andList(item.seqs.map((seq) => { const c = rows.find((r) => r.seq === seq); return c ? changeLine(c.change) : ""; }).filter(Boolean)) : "" })),
+  };
+  const content = [proposalReplyText(reply), (say.body ?? "").trim()].filter(Boolean).join("\n\n");
+  if (!content) return;
+  writeOptimisticMessage(store, say.thread, content, undefined, say.client_id);
+  for (const target of [store.sessions?.[say.thread], store.conversations?.[say.thread]]) {
+    if (target && hasThreadState(target)) Object.assign(target, clearedThreadStateFields());
+  }
+}
+type OrgThreadMessage = { _id: string; role: "user"; content: string; timestamp: number; _isOptimistic: true; _clientId: string; _sentBaselineTs?: number };
+type OrgThreadRow = { updated_at?: number } & ThreadStateFields;
+
 let intentSeq = 0;
 function intentId(): string {
   intentSeq += 1;
@@ -1016,8 +1166,9 @@ function pushIntent(draft: OrgDraft, intent: OrgIntent): void {
     i.kind === "moveSession" ? `s:${i.conversation_id}`
     : i.kind === "moveRole" ? `r:${i.role_id}`
     : i.kind === "follow" ? `f:${i.role_short_id}:${i.channel_id}`
-    : i.kind === "decideChange" ? `c:${i.change_id}`
+    : i.kind === "decideChange" || i.kind === "noteChange" ? `c:${i.change_id}`
     : i.kind === "withdraw" ? `w:${i.proposal_id}`
+    : i.kind === "noteProposal" ? `pn:${i.proposal_id}`
     // One subject per role AND field set: a pause and a caps edit on the
     // same role are two edits, each with its own `from` to go back to.
     : i.kind === "roleFields" ? `rf:${i.role_id}:${roleFieldKeys(i.fields).join(",")}`
@@ -1121,12 +1272,13 @@ export const ORG_SYNC_REGISTRY = {
       if (!draft?.orgIntents?.length) return;
       pruneOrgIntents(draft);
       for (const i of draft.orgIntents as OrgIntent[]) {
-        if (i.kind === "decideChange") applyOrgChangeIntent(draft.orgProposalChanges, i);
+        if (i.kind === "decideChange" || i.kind === "noteChange") applyOrgChangeIntent(draft.orgProposalChanges, i);
       }
     },
   },
-  // A withdraw's pending protection: a list push that started before the
-  // withdraw mutation landed still says open; replay the open intent.
+  // The list row's pending protection: a list push that started before the
+  // withdraw landed still says open, one before a whole-proposal note landed
+  // carries no stamp; replay the open intents.
   orgProposals: {
     kind: "collection" as const,
     isDelta: true,
@@ -1134,7 +1286,7 @@ export const ORG_SYNC_REGISTRY = {
       if (!draft?.orgIntents?.length) return;
       pruneOrgIntents(draft);
       for (const i of draft.orgIntents as OrgIntent[]) {
-        if (i.kind === "withdraw") applyOrgWithdrawIntent(draft.orgProposals, i);
+        if (i.kind === "withdraw" || i.kind === "noteProposal") applyOrgProposalIntent(draft.orgProposals, i);
       }
     },
   },
@@ -1332,6 +1484,28 @@ export function createOrgSlice(): OrgSliceImpl {
       decideWaitingChanges(this, proposalId, verdict === "accept" ? "accepted" : "skipped", (c) => seqs.has(c.seq), askIndex);
     }),
 
+    // The draft flips the card's members (change_ids), not the seqs: riders
+    // and carried rows decide with their card. `seen` and `leave_sessions`
+    // are the dispatch's. A text on an approval rides as the row's stamp; a
+    // rejection always stamps, words or not, so the card can say "Rejected".
+    // A note naming no change stamps the list row (the server keeps it on
+    // the proposal), so the closing row says it the moment it is sent.
+    replyOnOrgProposal: action(function (this: OrgDraft, proposalId: string, items: OrgReplyInput[], _seen: OrgVerdictSeen, opts?: OrgReplyOpts) {
+      const at = Date.now();
+      const stampOf = (item: OrgReplyInput): OrgChangeReply => ({ verdict: item.verdict, ...(item.text?.trim() ? { text: item.text.trim() } : {}), at });
+      for (const item of items) {
+        const ids = new Set(item.change_ids);
+        if (!ids.size) {
+          if (item.verdict === "note" && item.text?.trim()) noteProposal(this, proposalId, stampOf(item));
+          continue;
+        }
+        const stamp = stampOf(item);
+        if (item.verdict === "note") noteChanges(this, proposalId, (c) => ids.has(c._id), stamp);
+        else decideWaitingChanges(this, proposalId, item.verdict === "approve" ? "accepted" : "skipped", (c) => ids.has(c._id), undefined, (c) => (item.verdict === "reject" || stamp.text ? stamp : undefined), at);
+      }
+      if (opts?.say) sayInThread(this, proposalId, items, opts.say);
+    }),
+
     // `_seen` is the dispatch's, not the draft's: the middleware sends every
     // argument to the side effect, which hands it to orgProposals.decide.
     decideOrgProposalChange: action(function (this: OrgDraft, changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>, _seen?: OrgVerdictSeen) {
@@ -1349,7 +1523,7 @@ export function createOrgSlice(): OrgSliceImpl {
       const p = this.orgProposals[proposalId];
       if (!p || p.status !== "open") return;
       const intent: OrgIntent = { kind: "withdraw", id: intentId(), proposal_id: proposalId, short_id: p.short_id, at: Date.now() };
-      applyOrgWithdrawIntent(this.orgProposals, intent);
+      applyOrgProposalIntent(this.orgProposals, intent);
       pushIntent(this, intent);
     }),
 

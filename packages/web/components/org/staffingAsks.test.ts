@@ -24,19 +24,19 @@ describe("proposalAsks", () => {
     expect(asks[1].foldLabel).toBe("5 changes");
   });
 
-  test("state and verdict line: open while anything waits, then accepted or skipped", () => {
+  test("state and verdict line: open while anything waits, then approved or rejected", () => {
     const asks = proposalAsks(ORG_STAFFING_FIXTURE_PROPOSAL);
     expect(asks[0].state).toBe("open");
     expect(asks[0].verdictLine).toBeNull();
     // The rest ask holds an accepted, a skipped and two proposed rows.
     expect(asks[3].state).toBe("open");
-    expect(asks[3].verdictLine).toBe("2 of 4 changes decided");
+    expect(asks[3].verdictLine).toBe("2 of 4 changes answered");
     const flip = (status: string, seqs: number[]) => ({ ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => seqs.includes(c.seq) ? { ...c, status: status as any } : c) });
-    expect(proposalAsks(flip("applied", [7, 8]))[0]).toMatchObject({ state: "accepted", verdictLine: "Accepted", remaining: 0 });
-    expect(proposalAsks(flip("skipped", [7, 8]))[0]).toMatchObject({ state: "skipped", verdictLine: "Skipped" });
+    expect(proposalAsks(flip("applied", [7, 8]))[0]).toMatchObject({ state: "accepted", verdictLine: "Approved", remaining: 0 });
+    expect(proposalAsks(flip("skipped", [7, 8]))[0]).toMatchObject({ state: "skipped", verdictLine: "Rejected" });
     const mixed = { ...ORG_STAFFING_FIXTURE_PROPOSAL, changes: ORG_STAFFING_FIXTURE_PROPOSAL.changes.map((c) => c.seq === 7 ? { ...c, status: "applied" as const } : c.seq === 8 ? { ...c, status: "skipped" as const } : c) };
-    expect(proposalAsks(mixed)[0]).toMatchObject({ state: "accepted", verdictLine: "Accepted, 1 skipped" });
-    expect(proposalAsks(flip("failed", [7]))[0]).toMatchObject({ state: "open", verdictLine: "1 change failed. Accept tries it again", failed: 1 });
+    expect(proposalAsks(mixed)[0]).toMatchObject({ state: "accepted", verdictLine: "Approved, 1 rejected" });
+    expect(proposalAsks(flip("failed", [7]))[0]).toMatchObject({ state: "open", verdictLine: "1 change failed. Approve tries it again", failed: 1 });
   });
 
   test("a removed change belongs to no ask", () => {
@@ -83,7 +83,7 @@ describe("the letter", () => {
     expect(letterParts("A".repeat(1000)).lead).toBe("A".repeat(1000));
   });
   test("the introduction names a role, or an agent with no name", () => {
-    expect(letterIntro("Head of People", true)).toBe("I am your Head of People. I look at how the work here is organized and suggest changes. You decide each one, and nothing changes until you accept it.");
+    expect(letterIntro("Head of People", true)).toBe("I am your Head of People. I look at how the work here is organized and suggest changes. You decide each one, and nothing changes until you approve it.");
     expect(letterIntro("the author of this proposal", false)).toMatch(/^I looked at how the work here is organized/);
   });
 });

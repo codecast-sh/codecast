@@ -27,7 +27,8 @@ import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
 import { useTaskIsBlocked } from "../../../hooks/useTaskDecisions";
 import { CollapsibleBody } from "../../../components/CollapsibleBody";
-import { StationStrip } from "../../../components/tasks/StationStrip";
+import { TaskLineStory } from "../../../components/tasks/TaskLineStory";
+import { TaskLineChip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
@@ -636,6 +637,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
           {/* Primary properties — inline, editable (the card look) */}
           <div className="flex items-center gap-1 flex-wrap mb-4 -ml-1">
             <TaskStatusPicker task={data as any} shortcutHint="s to cycle" />
+            <TaskLineChip task={data as any} watch={false} />
             <PropertyDropdown value={data.priority} options={PRIORITY_OPTIONS} onChange={(v) => handleUpdate({ priority: v })} shortcutHint="p to cycle" />
             <button
               onClick={() => openCmd("assign")}
@@ -652,8 +654,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             </button>
           </div>
 
-          {/* The line (the-line.md L3): stations, the current one, its hold and its run */}
-          <StationStrip task={data as any} />
+          {/* The line (the-line.md L3, LM7, LE16): the station strip, and for a
+              cause the story under it: where it is, its goal, signals, card answer and runs */}
+          <TaskLineStory task={data as any} />
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">

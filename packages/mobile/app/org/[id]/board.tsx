@@ -24,9 +24,9 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useScopeFeedStream } from '@codecast/web/hooks/useScopeFeedStream';
 import { useRoleBrief, type ScopeRef } from '@codecast/web/hooks/useScopeQueries';
 import { compactAge } from '@codecast/web/lib/threadState';
-import { FEED_NEUTRAL_TONE, feedStateTone, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
+import { FEED_NEUTRAL_TONE, feedKindsFor, feedStateTone, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
 import { parentName, standingLineOf } from '@codecast/web/components/org/orgMeta';
-import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
+import { FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
 import type { OrgRole, OrgTree } from '@codecast/web/components/org/orgTypes';
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
 import { EntityPill } from '@/components/EntityPill';
@@ -257,7 +257,7 @@ function Board({ scope, head }: { scope: ScopeRef; head: React.ReactElement }) {
               <TouchableOpacity onPress={clearKinds} style={[styles.kind, kinds.length === 0 && { backgroundColor: Theme.text, borderColor: Theme.text }]}>
                 <RNText style={[styles.kindText, kinds.length === 0 && { color: Theme.bg }]}>Everything</RNText>
               </TouchableOpacity>
-              {FEED_KINDS.map((k) => {
+              {feedKindsFor(scope).map((k) => {
                 const on = kinds.includes(k);
                 return (
                   <TouchableOpacity key={k} onPress={() => toggleKind(k)} style={[styles.kind, on && { backgroundColor: Theme.bgHighlight, borderColor: Theme.textMuted }]} accessibilityState={{ selected: on }}>

@@ -20,6 +20,7 @@ import {
   type StableMode,
 } from "@codecast/shared/contracts";
 import { formatFeedResults } from "./formatter.js";
+import { orgContextBlock } from "@codecast/shared/contracts/orgWhere";
 import { STABLE_FEED_HOOK_FILE } from "./codecastOwned.js";
 import { defaultConfigDir } from "./config/configDir.js";
 
@@ -41,6 +42,9 @@ export interface BuildStableContextOptions {
   global: boolean;
   exclude?: string[];
   cwd?: string;
+  /** The session being started (conversation id or agent session id), so the
+   *  org context can say where it sits. Absent: the org context is unbound. */
+  session?: string;
 }
 
 export interface BuiltStableContext {
@@ -61,6 +65,7 @@ export async function buildStableContext(
   const limit = opts.mode === "team" ? 15 : 10;
   const exclude = opts.exclude ?? [];
   const siteUrl = config.convex_url.replace(".cloud", ".site");
+  const orgBlock = fetchOrgContext(siteUrl, config.auth_token, opts.session);
 
   try {
     const response = await fetch(`${siteUrl}/cli/feed`, {
@@ -114,11 +119,28 @@ export async function buildStableContext(
 ${instruction}
 
 ${feed}
-</stable-context>`,
+</stable-context>${await orgBlock}`,
       data: { mode: opts.mode, global: opts.global, injected_at: Date.now(), items },
     };
   } catch {
     return undefined;
+  }
+}
+
+/** Where the session sits in the org (shared/contracts/orgWhere), as a block
+ *  to follow the feed, or "" when the workspace has no org or the read fails. */
+async function fetchOrgContext(siteUrl: string, apiToken: string, session?: string): Promise<string> {
+  try {
+    const response = await fetch(`${siteUrl}/cli/org/where`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, session }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const where = response.ok ? ((await response.json()) as any) : null;
+    return where?.roles?.length ? `\n\n${orgContextBlock(where)}` : "";
+  } catch {
+    return "";
   }
 }
 
@@ -218,6 +240,7 @@ export async function runStableContextHook(
     global: launch.global,
     exclude: launch.exclude,
     cwd: payload.cwd || workspaceRoot || process.cwd(),
+    session: launch.conversationId || payload.session_id,
   });
   if (!built) return;
 

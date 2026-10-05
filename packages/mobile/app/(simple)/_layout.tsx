@@ -6,7 +6,7 @@
 // web lane's own addresses, so a shared link lands on the same surface.
 import { Stack } from 'expo-router';
 import { useFonts } from 'expo-font';
-import { FaceContext } from '@/constants/fonts';
+import { FaceContext, InkContext } from '@/constants/fonts';
 import { LANE_FACES, LANE_FONT_ASSETS, useLaneTheme } from '@/components/simple/laneTheme';
 
 export default function SimpleLaneLayout() {
@@ -17,10 +17,12 @@ export default function SimpleLaneLayout() {
   if (!loaded && !error) return null;
   return (
     <FaceContext.Provider value={loaded ? LANE_FACES : null}>
-      <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.paper } }}>
-        <Stack.Screen name="simple/(lane)" />
-        <Stack.Screen name="simple/c/[id]" />
-      </Stack>
+      <InkContext.Provider value={c.ink}>
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.paper } }}>
+          <Stack.Screen name="simple/(lane)" />
+          <Stack.Screen name="simple/c/[id]" />
+        </Stack>
+      </InkContext.Provider>
     </FaceContext.Provider>
   );
 }

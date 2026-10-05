@@ -11,6 +11,7 @@
 // type, never a third-party logo asset.
 
 import { isDesktopShell, openExternalUrl } from "./desktop";
+import { describeConnectorError } from "./connectorReturn";
 import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -70,10 +71,12 @@ export type AppConnectionActions = {
   disconnect: () => Promise<void>;
   busy: boolean;
   /**
-   * The last refusal, in the words the server used. A connect action that
-   * answers `{ok:false,error}` is usually the server saying an env var pair is
-   * missing — shown as-is, because "not configured" without naming the
-   * variable sends the reader looking in the wrong place.
+   * The last refusal, in plain words: a reason code goes through the
+   * connectors' one table (shared/contracts/connectorReasons.ts), and
+   * a sentence passes through. A connect action that answers `{ok:false,error}`
+   * is usually the server saying an env var pair is missing, kept as-is because
+   * "not configured" without naming the variable sends the reader looking in
+   * the wrong place.
    */
   error: string | null;
   setError: (message: string | null) => void;
@@ -213,5 +216,5 @@ export function useAppConnection(
     }, `Couldn't disconnect ${descriptor.name}`);
   };
 
-  return { connect, connectToken, disconnect, busy, error, setError };
+  return { connect, connectToken, disconnect, busy, error: error && describeConnectorError(error), setError };
 }

@@ -4,8 +4,11 @@
 // inboxStore plus the composer-injection callback passed in by the caller.
 
 import { useInboxStore } from "../store/inboxStore";
-import { toBlockquote, formatPendingComments, sortPendingComments, pinNumbers, type PendingComment, type QuotedImage, type QuotedPage } from "./quoteFormat";
+import { toBlockquote, formatPendingComments, sortPendingComments, pinNumbers, isProposalAnswer, type PendingComment, type PendingProposalAnswer, type QuotedImage, type QuotedPage } from "./quoteFormat";
 import type { ImageMarker } from "./markedImage";
+import { proposalRepliesText, type OrgProposalReply, type OrgReplyItem, type OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
+import { proposalSeen } from "../components/org/proposalHooks";
+import type { OrgReplyInput, OrgReplyOpts } from "../store/orgSlice";
 
 export type PopulateFn = (text: string, opts?: { append?: boolean }) => void;
 
@@ -51,23 +54,28 @@ export function quoteToComposer(text: string, populate: PopulateFn): void {
 //
 // Pass `messageId` to take only the comments anchored to one review target (e.g.
 // a plan rendered under its own namespaced key) and clear just those, leaving any
-// other pending comments untouched.
+// other pending comments untouched. A partial take never takes proposal answers.
 //
 // Pass `firstImageNumber` when the send attaches the quoted images (from
 // quotedImages, after the composer's own, each with its pins drawn on it):
 // each such image quote then names its attachment as `[Image N]`, numbered
 // from there, and its point as the marker number drawn on it.
+//
+// A whole take is the send: the proposal answers in the batch are applied
+// (takeProposalAnswers) and their words lead the message, then the quotes.
 export function takeReviewBatch(conversationId: string, messageId?: string, firstImageNumber?: number): string {
   const s = useInboxStore.getState();
+  const answers = messageId ? "" : takeProposalAnswers(conversationId);
   const taken = sortPendingComments(s
     .getReviewComments(conversationId)
-    .filter((c) => (c.body.trim() || c.quote.trim() || c.image) && (!messageId || c.messageId === messageId)));
+    .filter((c) => !isProposalAnswer(c) && (c.body.trim() || c.quote.trim() || c.image) && (!messageId || c.messageId === messageId)));
   const attached = firstImageNumber ? attachedImageIds(taken) : [];
   const numbers = new Map(taken.flatMap((c) => {
     const i = c.image?.storageId ? attached.indexOf(c.image.storageId) : -1;
     return i >= 0 ? [[c.id, firstImageNumber! + i] as const] : [];
   }));
-  const text = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
+  const quotes = formatPendingComments(taken, numbers, pinNumbers(s.getReviewComments(conversationId)));
+  const text = [answers, quotes].filter(Boolean).join("\n\n");
   if (!text) return "";
   if (messageId) {
     taken.forEach((c) => s.removeReviewComment(conversationId, c.id));
@@ -87,6 +95,106 @@ export function attachReviewToMessage(conversationId: string, typed: string, fir
   if (!batch) return typed;
   const reply = (typed || "").trim();
   return reply ? `${batch}\n\n${reply}` : batch;
+}
+
+// ── A card answers the agent (org-staffing.md S39) ──────────────────────────
+// A person's answer to one card of an org proposal joins the same batch as
+// the quotes: one item per card, replaced when the card is answered again,
+// withdrawn when the answer is null. The batch key is the conversation whose
+// composer is in reach, or the key a surface with no composer uses.
+
+export type ProposalCardRef = {
+  proposal: { id: string; short_id: string; title: string };
+  /** SubjectCard.key; "" for the whole proposal (a note only). */
+  key: string;
+  change_ids: string[];
+  seqs: number[];
+  sentence: string;
+  ordinal?: number;
+};
+
+/** A note with nothing said: no answer. Blank words are kept while the
+ *  field is open mid thought; the card withdraws them on close, and the take
+ *  drops them. */
+const blankNote = (c: { verdict: OrgReplyVerdict; text?: string }) => c.verdict === "note" && !(c.text ?? "").trim();
+
+/** Put, replace or withdraw this card's answer in the batch. */
+export function answerProposalCard(batchKey: string, card: ProposalCardRef, answer: { verdict: OrgReplyVerdict; text?: string; leave_sessions?: boolean } | null): void {
+  const s = useInboxStore.getState();
+  const have = pendingAnswerOf(s.reviewComments[batchKey], card.proposal.id, card.key);
+  // No answer, or a note with no words at all, is no answer.
+  if (!answer || (answer.verdict === "note" && !answer.text)) {
+    if (have) s.removeReviewComment(batchKey, have.id);
+    return;
+  }
+  const body = answer.text ?? "";
+  const leave = answer.verdict === "approve" && !!answer.leave_sessions;
+  const proposal: PendingProposalAnswer = {
+    id: card.proposal.id, short_id: card.proposal.short_id, title: card.proposal.title, card: card.key,
+    change_ids: card.change_ids, seqs: card.seqs, verdict: answer.verdict, ...(card.ordinal !== undefined ? { ordinal: card.ordinal } : {}), ...(leave ? { leave_sessions: true } : {}),
+  };
+  // Same verdict: only the words moved, so the item keeps its place and id.
+  if (have && have.proposal.verdict === answer.verdict && sameSeqs(have.proposal.seqs, card.seqs) && !!have.proposal.leave_sessions === leave) {
+    s.commitReviewComment(batchKey, have.id, body);
+    return;
+  }
+  if (have) s.removeReviewComment(batchKey, have.id);
+  s.addReviewComment(batchKey, { id: genCommentId(), messageId: "", blockIndex: 0, quote: card.sentence, body, createdAt: Date.now(), proposal });
+}
+
+const sameSeqs = (a: readonly number[], b: readonly number[]) => a.length === b.length && a.every((n, i) => n === b[i]);
+
+/** This card's pending answer, if any (a selector for the card to subscribe to). */
+export function pendingAnswerOf(comments: readonly PendingComment[] | undefined, proposalId: string, cardKey: string): (PendingComment & { proposal: PendingProposalAnswer }) | undefined {
+  return comments?.find((c): c is PendingComment & { proposal: PendingProposalAnswer } => isProposalAnswer(c) && c.proposal.id === proposalId && c.proposal.card === cardKey);
+}
+
+/** Every pending answer of one proposal, in the order given. */
+export function proposalAnswersOf(comments: readonly PendingComment[] | undefined, proposalId: string): (PendingComment & { proposal: PendingProposalAnswer })[] {
+  return (comments ?? []).filter((c): c is PendingComment & { proposal: PendingProposalAnswer } => isProposalAnswer(c) && c.proposal.id === proposalId);
+}
+
+/** The answers of one proposal as the store action takes them; a note with nothing said is not one. */
+export function replyItemsOf(comments: readonly PendingComment[] | undefined, proposalId: string): OrgReplyInput[] {
+  return proposalAnswersOf(comments, proposalId).filter((c) => !blankNote({ verdict: c.proposal.verdict, text: c.body })).map((c) => ({
+    verdict: c.proposal.verdict, change_ids: c.proposal.change_ids, seqs: c.proposal.seqs, ...(c.body.trim() ? { text: c.body.trim() } : {}),
+  }));
+}
+
+/** The words a proposal's answers read as (proposalReplyText), from the batch. */
+function replyOf(answers: readonly (PendingComment & { proposal: PendingProposalAnswer })[]): OrgProposalReply {
+  const first = answers[0].proposal;
+  const items: OrgReplyItem[] = answers.map((c) => ({ verdict: c.proposal.verdict, seqs: c.proposal.seqs, ...(c.body.trim() ? { text: c.body.trim() } : {}), line: c.quote }));
+  return { proposal: first.short_id, title: first.title, items };
+}
+
+/**
+ * Take the proposal answers out of the batch: apply them (one
+ * replyOnOrgProposal per proposal, `seen` from the store's rows of that
+ * proposal) and return the words for the message, one block per proposal.
+ * With `proposalId` only that proposal's answers are taken; `say` rides to
+ * the server for a surface with no composer, which then sends the words
+ * into the proposal's thread itself. A proposal's approvals leave the
+ * sessions where they are when any of them asks to (`leave_sessions`, per
+ * proposal on the server), or when the caller does. A note left blank is
+ * dropped, not sent. Returns "" when nothing was pending.
+ */
+export function takeProposalAnswers(batchKey: string, opts?: { proposalId?: string; say?: OrgReplyOpts["say"]; leave_sessions?: boolean }): string {
+  const s = useInboxStore.getState();
+  const taken = (s.reviewComments[batchKey] ?? []).filter(isProposalAnswer).filter((c) => !opts?.proposalId || c.proposal.id === opts.proposalId);
+  const all = taken.filter((c) => !blankNote({ verdict: c.proposal.verdict, text: c.body }));
+  const byProposal = new Map<string, typeof all>();
+  for (const c of all) (byProposal.get(c.proposal.id) ?? byProposal.set(c.proposal.id, []).get(c.proposal.id)!).push(c);
+  const replies: OrgProposalReply[] = [];
+  for (const [proposalId, answers] of byProposal) {
+    const rows = Object.values(s.orgProposalChanges).filter((c) => c.proposal_id === proposalId);
+    const items = replyItemsOf(answers, proposalId);
+    const leave = !!opts?.leave_sessions || answers.some((c) => c.proposal.leave_sessions);
+    s.replyOnOrgProposal(proposalId, items, proposalSeen(rows), { ...(leave ? { leave_sessions: true } : {}), ...(opts?.say ? { say: opts.say } : {}) });
+    replies.push(replyOf(answers));
+  }
+  for (const c of taken) s.removeReviewComment(batchKey, c.id);
+  return replies.length ? proposalRepliesText(replies) : "";
 }
 
 // Pictures whose bytes live in storage ride along on the send as real
@@ -204,16 +312,18 @@ export function addPageNote(
   return id;
 }
 
-// Compile the whole batch into the composer (so it can be edited inline) and clear
-// review state. The OPTIONAL "edit in input" action — sending already attaches the
-// batch via takeReviewBatch, this just materializes it as editable text first.
+// Compile the quotes of the batch into the composer (so they can be edited
+// inline) and clear review state. The OPTIONAL "edit in input" action: sending
+// already attaches the batch via takeReviewBatch, this just materializes it as
+// editable text first. Proposal answers stay in the batch: turned into text
+// they would send words and apply nothing.
 export function submitReview(conversationId: string, populate: PopulateFn): boolean {
   const s = useInboxStore.getState();
-  const comments = s.getReviewComments(conversationId).filter((c) => c.body.trim() || c.quote.trim() || c.image);
+  const comments = s.getReviewComments(conversationId).filter((c) => !isProposalAnswer(c) && (c.body.trim() || c.quote.trim() || c.image));
   const text = formatPendingComments(sortPendingComments(comments));
   if (!text) return false;
   populate(text, { append: true });
-  s.clearReviewComments(conversationId);
+  for (const c of s.getReviewComments(conversationId)) if (!isProposalAnswer(c)) s.removeReviewComment(conversationId, c.id);
   s.setReviewTarget(null);
   s.setReviewEditingId(null);
   return true;

@@ -14,8 +14,8 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { useInboxStore, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
 import { APPROVAL_LABEL, LANE_COPY, answerNotes, answerTone, answersInline, approvalAsk, conversationPath, draftIsLong } from '@codecast/web/components/simple/lane';
 import { AnswerControls, type AnswerLook } from '@/components/decisions/AnswerControls';
-import { LaneButton, Rise } from './LaneUI';
-import { useLaneTheme, type LaneColors } from './laneTheme';
+import { LaneButton, Reading, Rise } from './LaneUI';
+import { LANE_RADIUS, LANE_RADIUS_SM, LANE_READ_FACES, useLaneTheme, type LaneColors } from './laneTheme';
 
 /** The shared answer controls in the lane's colours. */
 function laneAnswerLook(c: LaneColors): AnswerLook {
@@ -25,12 +25,12 @@ function laneAnswerLook(c: LaneColors): AnswerLook {
     faint: c.faint,
     surface: c.sheet,
     border: c.lineStrong,
-    picked: c.tideInk,
-    accent: c.tideSolid,
-    onAccent: c.onTide,
-    danger: c.rose,
+    picked: c.mark,
+    accent: c.accent,
+    onAccent: c.onSolid,
+    danger: c.danger,
     placeholder: c.faint,
-    radius: 16,
+    radius: LANE_RADIUS_SM,
     numbered: false,
     icons: 'feather',
     press: 'shrink',
@@ -59,11 +59,11 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
       <View
         accessibilityLabel={decision.question}
         style={{
-          borderRadius: 22,
+          borderRadius: LANE_RADIUS,
           backgroundColor: c.sheet,
           borderWidth: 1,
-          borderColor: c.sunLine,
-          shadowColor: c.sun,
+          borderColor: c.accentLine,
+          shadowColor: c.accent,
           shadowOffset: { width: 0, height: 0 },
           shadowOpacity: 0.18,
           shadowRadius: 8,
@@ -71,8 +71,8 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 17, paddingTop: 13 }}>
-          <MaterialCommunityIcons name="hand-back-right-outline" size={15} color={c.sunInk} />
-          <Text style={{ fontSize: 13, fontWeight: '600', color: c.sunInk }}>{APPROVAL_LABEL[approvalAsk(decision)]}</Text>
+          <MaterialCommunityIcons name="hand-back-right-outline" size={15} color={c.accentText} />
+          <Text style={{ fontSize: 13, fontWeight: '600', color: c.accentText }}>{APPROVAL_LABEL[approvalAsk(decision)]}</Text>
           {from ? (
             // The one way from a card into its conversation, so it reads as a link.
             <Pressable
@@ -87,7 +87,7 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
             </Pressable>
           ) : null}
         </View>
-        <Text style={{ marginHorizontal: 17, marginTop: 6, marginBottom: 13, fontSize: 19, lineHeight: 24, fontWeight: '600', letterSpacing: -0.3, color: c.ink }}>
+        <Text style={{ marginHorizontal: 17, marginTop: 6, marginBottom: 13, fontFamily: LANE_READ_FACES.semiBold, fontSize: 20.5, lineHeight: 25.5, letterSpacing: -0.1, color: c.ink }}>
           {decision.question}
         </Text>
         {draft ? (
@@ -97,7 +97,7 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
                 marginHorizontal: 12,
                 paddingVertical: 14,
                 paddingHorizontal: 15,
-                borderRadius: 14,
+                borderRadius: LANE_RADIUS_SM,
                 backgroundColor: c.sheet2,
                 borderWidth: 1,
                 borderColor: c.line,
@@ -105,7 +105,9 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
                 maxHeight: long && !open ? FOLD_HEIGHT : undefined,
               }}
             >
-              <MarkdownContent text={draft} baseStyle={{ fontSize: 15, lineHeight: 23, color: c.ink2 }} />
+              <Reading>
+                <MarkdownContent text={draft} baseStyle={{ fontSize: 16.5, lineHeight: 25.5, color: c.ink }} />
+              </Reading>
               {long && !open ? (
                 <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: 48 }}>
                   <Svg width="100%" height="100%">
@@ -122,7 +124,7 @@ export function ApprovalCard({ decision, from, index = 0, here = false }: {
             </View>
             {long ? (
               <Pressable onPress={() => setOpen((v) => !v)} hitSlop={8} accessibilityRole="button" style={{ marginHorizontal: 17, marginTop: 6 }}>
-                <Text style={{ fontSize: 14, fontWeight: '500', color: c.tideInk }}>{open ? LANE_COPY.approval.showLess : LANE_COPY.approval.showAll}</Text>
+                <Text style={{ fontSize: 14, fontWeight: '500', color: c.mark }}>{open ? LANE_COPY.approval.showLess : LANE_COPY.approval.showAll}</Text>
               </Pressable>
             ) : null}
           </>

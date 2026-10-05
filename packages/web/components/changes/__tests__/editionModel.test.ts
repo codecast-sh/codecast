@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { peopleOf, personFor, riskText, type Person } from "../editionModel";
-import { buildTimeline, finishedWeeks, type TimelineDay } from "../timelineModel";
+import { buildTimeline, finishedWeeks, weekTop, type TimelineDay } from "../timelineModel";
 import { EMPTY_URL, type ChangesUrl } from "../useChangesUrlState";
 import { DAY, edition, story } from "./fixtures";
 
@@ -65,6 +65,16 @@ describe("buildTimeline", () => {
     expect(finishedWeeks(weeks as any, "2026-10-03")).toEqual([]);
     const shown = buildTimeline({ stories, editions: [], weeks, url: url(), person: null, today: "2026-10-12", skipWeek: "2026-W40" });
     expect(shown.map((i) => i.kind)).toEqual(["day", "day"]);
+  });
+
+  test("a week's top stories are its picks, else its heaviest stories when the picked keys moved", () => {
+    const a = story("a", { date: "2026-10-01", importance: 2 });
+    const b = story("b", { date: "2026-09-30", importance: 4 });
+    const later = story("c", { date: "2026-10-06", importance: 5 });
+    const byKey = new Map([a, b, later].map((s) => [s.story_key, s]));
+    const week = { kind: "week" as const, week: "2026-W40", headline: "h", summary: null, top: ["a"] };
+    expect(weekTop(week, byKey).map((s) => s.story_key)).toEqual(["a"]);
+    expect(weekTop({ ...week, top: ["gone"] }, byKey).map((s) => s.story_key)).toEqual(["b", "a"]);
   });
 
   test("a finished week's notes sit where the timeline enters the week, only once written and never repeating a day", () => {

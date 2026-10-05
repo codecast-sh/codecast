@@ -33,6 +33,7 @@ import { listSessionOwnerIds } from "./sessionOwners";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
+import { settleExpectationCard } from "./lib/expectationsApply";
 import { validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
@@ -641,6 +642,8 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
   // An answered card gate is recorded and learned from (LE12).
   await learnFromCardGate(ctx, row, verdict, by.user_id);
+  // An expectations proposal's card applies or drops it (LM5).
+  await settleExpectationCard(ctx, row, verdict, by, now);
   // A dismissal delivers no message, so a hosted turn parked on this
   // question is woken here to read the declined row and move on. An answer
   // wakes through its delivered message (deliverAnswer).

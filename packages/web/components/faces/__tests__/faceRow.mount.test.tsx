@@ -416,7 +416,7 @@ describe("two densities, one row", () => {
     expect(h.q(".face-row")!.getAttribute("data-density")).toBe("bar");
   });
 
-  test("the float's controls: a grip that moves the window, Open for a call, and a way to put it away, only while the pointer is in", async () => {
+  test("the float's controls: a grip that moves the window, Expand for a call, and a way to put it away, only while the pointer is in", async () => {
     const drags: boolean[] = [];
     const bridge = { setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) };
     const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
@@ -443,7 +443,7 @@ describe("two densities, one row", () => {
     expect(bar.closest(".face-row-below")).not.toBeNull();
     expect(h.q(".face-row-below")!.children.length).toBe(1);
     expect(bar.getAttribute("data-chrome-hit")).not.toBeNull();
-    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Open", "Hide"]);
+    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Expand", "Hide"]);
     // The grip: held, the window follows the cursor.
     const grip = h.q('[data-chrome-btn="move"]')!;
     await act(async () => {
@@ -467,7 +467,7 @@ describe("two densities, one row", () => {
     expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toEqual(["Move", "Close"]);
   });
 
-  test("a live card from a call another window holds still offers Open", async () => {
+  test("a live card from a call another window holds still offers Expand", async () => {
     // The voice window's own call slice is idle while another window (or
     // the walkie, or a seat the server lists) holds the call, and the row
     // still draws the live card. Open read that idle slice, so the float
@@ -481,7 +481,7 @@ describe("two densities, one row", () => {
     await act(async () => {
       dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
     });
-    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toContain("Open");
+    expect(h.all(".face-row-chrome .faces-btn-word").map((w) => w.textContent)).toContain("Expand");
     await h.click(h.q('[data-chrome-btn="open"]')!);
     expect(opened).toBe(1);
   });

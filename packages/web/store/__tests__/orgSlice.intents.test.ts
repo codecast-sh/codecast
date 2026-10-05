@@ -14,6 +14,10 @@ import {
   type OrgIntent,
   type OrgSliceData,
 } from "../orgSlice";
+// The store module binds its optimistic bubble writer into the slice when it
+// evaluates (bindOptimisticMessageWriter), so a reply's `say` bubble here is
+// the real row inboxStore writes, not a stub.
+import "../inboxStore";
 import { ORG_FIXTURE, ORG_FIXTURE_ALL_SESSIONS } from "../../components/org/orgFixture";
 import { sortOrgSessions, type OrgTree } from "../../components/org/orgTypes";
 
@@ -146,7 +150,7 @@ describe("org intents", () => {
   });
 
   it("withdraw flips the list row, replays over a stale list push, settles on the server's resolved_at, and reverts on refusal", async () => {
-    const { pruneOrgIntents, applyOrgWithdrawIntent } = await import("../orgSlice");
+    const { pruneOrgIntents, applyOrgProposalIntent } = await import("../orgSlice");
     const rows = () => ({
       "p-1": { _id: "p-1", short_id: "op-1", author: { kind: "session", id: "c" }, title: "Old", summary_md: "", mode: "review", status: "open", created_at: 1, superseded_by: { id: "p-2", short_id: "op-2", status: "open", created_at: 2 } },
       "p-2": { _id: "p-2", short_id: "op-2", author: { kind: "session", id: "c" }, title: "New", summary_md: "", mode: "review", status: "open", created_at: 2, supersedes: { id: "p-1", short_id: "op-1", status: "open", created_at: 1 } },
@@ -162,7 +166,7 @@ describe("org intents", () => {
     const intent = st.orgIntents[0] as Extract<OrgIntent, { kind: "withdraw" }>;
     // A list push that predates the mutation still says open: the replay flips it back.
     const stale = rows() as any;
-    applyOrgWithdrawIntent(stale, intent);
+    applyOrgProposalIntent(stale, intent);
     expect(stale["p-1"].status).toBe("withdrawn");
     // The server's resolved_at stamp is the echo: the intent leaves the journal.
     const echoed = { ...st, orgProposals: { ...rows(), "p-1": { ...rows()["p-1"], status: "withdrawn", resolved_at: 3 } } as any };
@@ -209,6 +213,122 @@ describe("org intents", () => {
     expect(plain).toHaveLength(2);
     expect(plain[0]).toMatch(/^Accepting "retire @ops" was refused; the change is back to proposed\.$/);
     expect(orgVerdictRevisedNotice(new Error("Uncaught Error: op-1 is resolved"))).toBeNull();
+  });
+
+  it("a reply (S39) flips approvals and rejections with their stamps, notes stamp only, a stale push is replayed, the server's stamp settles it, and a refusal puts every row back", async () => {
+    const { pruneOrgIntents, applyOrgChangeIntent } = await import("../orgSlice");
+    let st = staffing();
+    st = run(st, "replyOnOrgProposal", "p-1", [
+      { verdict: "approve", change_ids: ["ch-1"], seqs: [1] },
+      { verdict: "reject", change_ids: ["ch-2"], seqs: [2], text: "handle stays" },
+      { verdict: "note", change_ids: ["ch-3"], seqs: [3], text: "already done" },
+      { verdict: "note", change_ids: [], seqs: [], text: "the whole thing" },
+    ], { revised_at: 0, seqs: [1, 2] });
+    // An approval with no words carries no stamp; a rejection always does; a note stamps and leaves the status.
+    expect(st.orgProposalChanges["ch-1"]).toMatchObject({ status: "accepted" });
+    expect(st.orgProposalChanges["ch-1"].reply).toBeUndefined();
+    expect(st.orgProposalChanges["ch-2"]).toMatchObject({ status: "skipped", reply: { verdict: "reject", text: "handle stays" } });
+    expect(st.orgProposalChanges["ch-3"]).toMatchObject({ status: "applied", reply: { verdict: "note", text: "already done" } });
+    expect(st.orgProposalChanges["ch-9"].status).toBe("proposed");
+    const kinds = st.orgIntents.map((i) => i.kind === "decideChange" ? [i.change_id, i.to, i.via] : [i.change_id, i.kind]);
+    expect(kinds).toEqual([["ch-1", "accepted", "reply"], ["ch-2", "skipped", "reply"], ["ch-3", "noteChange"]]);
+    // A push that predates the mutation replaced the rows with the server's copies: the replay puts the stamps back.
+    const stale = CHANGES() as any;
+    for (const i of st.orgIntents) if (i.kind === "decideChange" || i.kind === "noteChange") applyOrgChangeIntent(stale, i);
+    expect(stale["ch-2"]).toMatchObject({ status: "skipped", reply: { verdict: "reject", text: "handle stays" } });
+    expect(stale["ch-3"].reply).toMatchObject({ verdict: "note" });
+    // The server's own stamp names who answered: the note settles; a decided_by settles the verdicts.
+    const echoed = mutate(st, (d) => {
+      d.orgProposalChanges["ch-3"].reply = { verdict: "note", text: "already done", at: 999, by: "u1" };
+      d.orgProposalChanges["ch-1"].decided_by = "u1";
+      d.orgProposalChanges["ch-2"].decided_by = "u1";
+      pruneOrgIntents(d);
+    });
+    expect(echoed.orgIntents).toEqual([]);
+    // A refusal of the reply reverts every row of it, and only it.
+    st = run(st, "decideOrgProposalChange", "ch-9", "accept");
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: st.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "replyOnOrgProposal", ["p-1", [], { revised_at: 0 }]);
+    expect(reverted).toHaveLength(3);
+    expect(notices[0]).toMatch(/^Approving "retire @ops" was refused; the change is back to proposed\.$/);
+    expect(notices[2]).toMatch(/^Your note on "retire @qa" was refused; say it again\.$/);
+    for (const id of reverted) st = run(st, "revertOrgIntent", id);
+    expect(st.orgProposalChanges["ch-1"].status).toBe("proposed");
+    expect(st.orgProposalChanges["ch-2"]).toMatchObject({ status: "failed" });
+    expect(st.orgProposalChanges["ch-2"].reply).toBeUndefined();
+    expect(st.orgProposalChanges["ch-3"].reply).toBeUndefined();
+    expect(st.orgProposalChanges["ch-9"].status).toBe("accepted");
+    expect(st.orgIntents.map((i) => i.kind === "decideChange" && i.change_id)).toEqual(["ch-9"]);
+    // A note over an earlier note keeps the earlier one for the revert.
+    let noted = run(staffing(), "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: ["ch-1"], seqs: [1], text: "first" }], { revised_at: 0 });
+    noted = mutate(noted, (d) => { d.orgProposalChanges["ch-1"].reply = { ...d.orgProposalChanges["ch-1"].reply!, by: "u1" }; d.orgIntents = []; });
+    noted = run(noted, "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: ["ch-1"], seqs: [1], text: "second" }], { revised_at: 0 });
+    expect(noted.orgProposalChanges["ch-1"].reply?.text).toBe("second");
+    noted = run(noted, "revertOrgIntent", noted.orgIntents[0].id);
+    expect(noted.orgProposalChanges["ch-1"].reply).toMatchObject({ text: "first", by: "u1" });
+    // A bare slice has no thread rows: `say` adds nothing and throws nothing.
+    expect(() => run(staffing(), "replyOnOrgProposal", "p-1", [{ verdict: "approve", change_ids: ["ch-1"], seqs: [1] }], { revised_at: 0 }, { say: { thread: "t", client_id: "c" } })).not.toThrow();
+    // With thread rows, the words the agent will read appear in the thread at once, under the client id the server's message carries.
+    // The thread has messages already, so the store's first-send hold (holdInNew) does not arm a timer here.
+    const withThread = { ...staffing(), orgProposals: { "p-1": { _id: "p-1", short_id: "op-1", title: "Tidy ops" } }, pendingMessages: {}, sessions: { t: { updated_at: 5, thread_state: "waiting", message_count: 3 } } } as any;
+    const said = run(withThread, "replyOnOrgProposal", "p-1", [{ verdict: "approve", change_ids: ["ch-1"], seqs: [1] }, { verdict: "reject", change_ids: ["ch-2"], seqs: [2], text: "no" }], { revised_at: 0 }, { say: { thread: "t", body: "thanks", client_id: "c-1" } }) as any;
+    expect(said.pendingMessages.t).toHaveLength(1);
+    expect(said.pendingMessages.t[0]).toMatchObject({ _id: "c-1", _clientId: "c-1", role: "user", _isOptimistic: true, _sentBaselineTs: 5 });
+    expect(said.pendingMessages.t[0].content).toBe('On op-1 ("Tidy ops"):\n- Approved, and applied: op-1#1.\n- Rejected op-1#2 (retire @ops): no\n\nthanks'.replace("retire @ops", "@growth starts work on its own"));
+    expect(said.sessions.t.thread_state).toBeUndefined();
+  });
+
+  it("a note on the whole proposal (S39) stamps the list row, replays over a stale list push, settles on the server's stamp, and a refusal puts the earlier words back", async () => {
+    const { pruneOrgIntents, applyOrgProposalIntent } = await import("../orgSlice");
+    const rows = () => ({ "p-1": { _id: "p-1", short_id: "op-1", author: { kind: "session", id: "c" }, title: "Tidy ops", summary_md: "", mode: "review", status: "open", created_at: 1 } });
+    // No list row in the store (the test above): nothing to stamp, no intent, no throw.
+    const bare = run(staffing(), "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: [], seqs: [], text: "the whole thing" }], { revised_at: 0 });
+    expect(bare.orgIntents).toEqual([]);
+    let st: OrgSliceData = { ...staffing(), orgProposals: rows() as any };
+    st = run(st, "replyOnOrgProposal", "p-1", [
+      { verdict: "approve", change_ids: ["ch-1"], seqs: [1] },
+      { verdict: "note", change_ids: [], seqs: [], text: "  looks right, do the plans next  " },
+      // Wordless, or with changes: not a whole-proposal note.
+      { verdict: "note", change_ids: [], seqs: [], text: "   " },
+      { verdict: "approve", change_ids: [], seqs: [], text: "stray" },
+    ], { revised_at: 0, seqs: [1] });
+    expect(st.orgProposals["p-1"].reply).toEqual({ verdict: "note", text: "looks right, do the plans next", at: expect.any(Number) });
+    expect(st.orgProposalChanges["ch-1"].status).toBe("accepted");
+    expect(st.orgProposalChanges["ch-1"].reply).toBeUndefined();
+    expect(st.orgIntents.map((i) => i.kind === "noteProposal" ? [i.kind, i.proposal_id, i.short_id, i.from] : i.kind)).toEqual(["decideChange", ["noteProposal", "p-1", "op-1", undefined]]);
+    const intent = st.orgIntents[1] as Extract<OrgIntent, { kind: "noteProposal" }>;
+    // A list push that predates the mutation carries no stamp: the replay puts it back.
+    const stale = rows() as any;
+    applyOrgProposalIntent(stale, intent);
+    expect(stale["p-1"].reply).toEqual(intent.reply);
+    // The server's own stamp names who wrote it: the intent leaves the journal, and the words stay.
+    const echoed = mutate(st, (d) => {
+      d.orgProposals["p-1"].reply = { verdict: "note", text: "looks right, do the plans next", at: 999, by: "u1" };
+      d.orgProposalChanges["ch-1"].decided_by = "u1";
+      pruneOrgIntents(d);
+    });
+    expect(echoed.orgIntents).toEqual([]);
+    expect(echoed.orgProposals["p-1"].reply?.text).toBe("looks right, do the plans next");
+    // A second note over the server's keeps the earlier one for the revert; a refusal of the reply reverts it with the rows.
+    let again = run(echoed, "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: [], seqs: [], text: "on second thought" }], { revised_at: 0 });
+    expect(again.orgProposals["p-1"].reply?.text).toBe("on second thought");
+    const reverted: string[] = [];
+    const notices = dropRejectedOrgIntent({ orgIntents: again.orgIntents, dropOrgIntent: () => {}, revertOrgIntent: (id) => reverted.push(id) }, "replyOnOrgProposal", ["p-1", [], { revised_at: 0 }]);
+    expect(reverted).toEqual([again.orgIntents[0].id]);
+    expect(notices).toEqual(["Your note on op-1 was refused; say it again."]);
+    again = run(again, "revertOrgIntent", reverted[0]);
+    expect(again.orgProposals["p-1"].reply).toMatchObject({ text: "looks right, do the plans next", by: "u1" });
+    expect(again.orgIntents).toEqual([]);
+    // A first note refused leaves no stamp at all.
+    let first = run({ ...staffing(), orgProposals: rows() as any }, "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: [], seqs: [], text: "first" }], { revised_at: 0 });
+    first = run(first, "revertOrgIntent", first.orgIntents[0].id);
+    expect(first.orgProposals["p-1"].reply).toBeUndefined();
+    // Aged out with no echo: reverted and the person is told.
+    let aged: OrgSliceData = run({ ...staffing(), orgProposals: rows() as any }, "replyOnOrgProposal", "p-1", [{ verdict: "note", change_ids: [], seqs: [], text: "late" }], { revised_at: 0 });
+    aged = mutate(aged, (d) => { pruneOrgIntents(d, Date.now() + ORG_INTENT_TTL_MS + 1); });
+    expect(aged.orgIntents).toEqual([]);
+    expect(aged.orgProposals["p-1"].reply).toBeUndefined();
+    expect(aged.orgIntentNotice?.text).toBe("Your note on op-1 did not reach the server after a minute; say it again.");
   });
 
   it("accept all flips every decidable row of that proposal, and a refusal reverts them all", () => {
