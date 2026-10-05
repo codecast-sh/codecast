@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import {
-  AGENT_CLIENTS,
+  LOCAL_AGENT_CLIENTS,
   InvalidExecutionAgentTypeError,
   parseExecutionAgentClientId,
   toConvexAgentType,
@@ -17,7 +17,7 @@ import { c, fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 
-const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
+const AGENT_NAMES = Object.keys(LOCAL_AGENT_CLIENTS).join(", ");
 
 /** Accept "claude", "claude_code", "Codex", etc. */
 export function parseSwitchAgentArg(raw: string): ConvexAgentType {

@@ -23,6 +23,14 @@ test("the repo's [host] and the person's own merge; a zsh laptop asks for zsh", 
   expect(hostSpecHash(spec, "/home/ubuntu/work/r")).not.toBe(hostSpecHash({ ...spec, run: ["make db"] }, "/home/ubuntu/work/r"));
 });
 
+test("[host] simulators merge from both files; an unknown platform is refused", () => {
+  write("repo/.codecast/workspace.toml", '[host]\nsimulators = ["iOS"]\n');
+  write("home/.codecast/host.toml", '[host]\nsimulators = ["iOS"]\n');
+  expect(resolveHostSpec({ repoRoot: path.join(dir, "repo"), home: path.join(dir, "home"), shell: "/bin/bash" }).simulators).toEqual(["iOS"]);
+  write("bad/.codecast/workspace.toml", '[host]\nsimulators = ["Android"]\n');
+  expect(() => resolveHostSpec({ repoRoot: path.join(dir, "bad"), home: dir })).toThrow(/must be one of iOS/);
+});
+
 test("a [host] entry that is not a package or unit name is refused", () => {
   write("repo/.codecast/workspace.toml", '[host]\npackages = ["redis; rm -rf /"]\n');
   expect(() => resolveHostSpec({ repoRoot: path.join(dir, "repo"), home: dir })).toThrow(/not a package or unit name/);

@@ -3,6 +3,7 @@
 //
 //   bun scripts/stamp-daemon-build-id.ts           rewrite the constant
 //   bun scripts/stamp-daemon-build-id.ts --check   fail when it is stale
+//   bun scripts/stamp-daemon-build-id.ts --print   print the id the source hashes to
 //
 // The release paths only run --check. They cannot stamp: the finalize workflow
 // rejects a release whose packages/cli tree differs from the commit it built,
@@ -18,6 +19,12 @@ import {
 import { BUILD_ID_RE } from "../src/daemonBuildGate.js";
 
 const check = process.argv.includes("--check");
+// --print: the id the source on disk hashes to, and nothing else (a source
+// daemon compares it with the code it booted on; see sourceRestart.ts).
+if (process.argv.includes("--print")) {
+  console.log(computeDaemonBuildId(findRepoRoot()).id);
+  process.exit(0);
+}
 const repoRoot = findRepoRoot();
 const target = path.join(repoRoot, "packages/cli/src/daemonBuildId.ts");
 

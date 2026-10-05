@@ -59,7 +59,7 @@ export function withAgentConfigCopies(
   root: string,
   opts: { isInputRoot: boolean; warn?: (m: string) => void },
 ): WorkspaceManifest {
-  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false });
+  const context = collectProjectContext({ root, includeTracked: opts.isInputRoot, includeAncestors: false, tolerateMissing: true });
   for (const skipped of context.skipped) opts.warn?.(`agent config ${skipped.path} skipped: ${skipped.reason}`);
   const existing = manifest.setup.copy;
   const additions = context.files.filter((f) => f.scope === "project")

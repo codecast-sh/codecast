@@ -5,7 +5,7 @@
 // multiline prompt into multiple submissions. Verified clients receive a
 // bracketed paste, while unverified clients receive one flattened prompt.
 
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, type AgentClientId, localAgentClient } from "@codecast/shared/contracts";
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
@@ -59,17 +59,32 @@ export async function pasteAndSubmitText(
 }
 
 /**
- * The tmux key that enters a literal newline in this client's composer, for a
- * client that must be typed rather than pasted. Null for every other client.
+ * The tmux key that enters a literal newline in this client's composer when
+ * this text should be typed, or null when it should be pasted.
+ *
+ * A client that must be typed always is. An `idleOnly` client is typed only at
+ * an idle composer, and only text typing carries whole: Claude's composer drops
+ * a typed tab, and a lone character is the one write a dialog could take as
+ * its answer, so both of those still paste.
  */
-export function composerNewlineKey(agentType?: AgentClientId): string | null {
-  return AGENT_CLIENTS[agentType ?? "claude"].typedComposerInput?.newlineKey ?? null;
+export function typedNewlineKey(agentType: AgentClientId | undefined, text: string, idle: boolean): string | null {
+  const typed = localAgentClient(agentType ?? "claude").typedComposerInput;
+  if (!typed) return null;
+  if (typed.idleOnly && (!idle || text.includes("\t") || text.trim().length < 2)) return null;
+  return typed.newlineKey;
 }
 
-// One `send-keys -l` per chunk of a line. A whole message would otherwise ride
-// in a single argv, and a long one (a pasted diff, a quoted transcript) is the
-// case that would hit the argv limit rather than the common short message.
-const TYPED_CHUNK_CHARS = 1024;
+// One `send-keys -l` per chunk, small ones. Claude Code reads a single input
+// burst of roughly 500 characters or more as a paste even without bracket
+// markers, and wraps it in <pasted_content> like any other (2.1.289: 450 typed
+// clean, 512 wrapped). 128 keeps a pane that reads slowly under load clear of
+// that even when it takes three writes in one read.
+const TYPED_CHUNK_CHARS = 128;
+
+// Newline keys whose byte can ride inside a literal chunk: tmux sends the "\n"
+// in `send-keys -l` as the same 0x0a byte C-j sends, so a multi-line message
+// goes in a few writes instead of one write per line.
+const LITERAL_NEWLINE: Record<string, string> = { "C-j": "\n" };
 
 /**
  * Type text into a pane key by key, with `newlineKey` between lines.
@@ -86,28 +101,35 @@ export async function typeTextIntoPane(
   text: string,
   newlineKey: string,
 ): Promise<void> {
-  const lines = prepareInjectedContent(text, { bracketed: true }).split("\n");
+  const prepared = prepareInjectedContent(text, { bracketed: true });
+  const literalNewline = LITERAL_NEWLINE[newlineKey];
+  const lines = literalNewline === undefined ? prepared.split("\n") : [prepared.replace(/\n/g, literalNewline)];
   for (const [index, line] of lines.entries()) {
     if (index > 0) await exec(["send-keys", "-t", target, newlineKey]);
-    for (let at = 0; at < line.length; at += TYPED_CHUNK_CHARS) {
-      await exec(["send-keys", "-t", target, "-l", line.slice(at, at + TYPED_CHUNK_CHARS)]);
+    for (let at = 0; at < line.length;) {
+      // Never leave a lone character for the last write: that is the one write
+      // a dialog could read as a keypress.
+      const end = line.length - (at + TYPED_CHUNK_CHARS) === 1 ? at + TYPED_CHUNK_CHARS - 1 : at + TYPED_CHUNK_CHARS;
+      // `--` ends tmux's option parsing, so a chunk that starts with "-" is text.
+      await exec(["send-keys", "-t", target, "-l", "--", line.slice(at, end)]);
+      at = end;
     }
   }
 }
 
 /**
  * Put message text in a pane's composer the way that client accepts it: typed
- * for a client whose composer reads the machine's clipboard on a paste, pasted
- * through a tmux buffer for everyone else. One entry point, so a caller never
- * has to know which clients those are.
+ * when typedNewlineKey says so, pasted through a tmux buffer otherwise. One
+ * entry point, so a caller never has to know which clients those are; `idle`
+ * is the caller's word that the composer is idle with no dialog on screen.
  */
 export async function deliverTextIntoPane(
   exec: TmuxExec,
   target: string,
   text: string,
-  opts: { bracketed?: boolean; agentType?: AgentClientId } = {},
+  opts: { bracketed?: boolean; agentType?: AgentClientId; idle?: boolean } = {},
 ): Promise<void> {
-  const newlineKey = composerNewlineKey(opts.agentType);
+  const newlineKey = typedNewlineKey(opts.agentType, text, opts.idle === true);
   if (newlineKey) return typeTextIntoPane(exec, target, text, newlineKey);
   return pasteTextIntoPane(exec, target, text, opts.bracketed ?? true);
 }

@@ -373,7 +373,7 @@ export async function runRemoteSide<T = unknown>(host: RemoteHost, req: SideRequ
     return JSON.parse(stdout.trim().split("\n").pop() || "null") as T;
   } catch (e) {
     const err = e as { stderr?: string; message?: string };
-    const detail = (err.stderr?.trim().split("\n").filter(Boolean).pop() || err.message || String(e)).slice(0, 300);
+    const detail = (proc.lastErrorLine(err.stderr) || err.message || String(e)).slice(0, 300);
     throw new Error(`on the host: ${detail}`);
   }
 }

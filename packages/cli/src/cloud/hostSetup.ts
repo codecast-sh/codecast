@@ -49,6 +49,7 @@ export function resolveHostSpec(opts: { repoRoot?: string; home?: string; shell?
     services: uniq([...(personal?.services ?? []), ...(repo?.services ?? [])]),
     run: [...(personal?.run ?? []), ...(repo?.run ?? [])],
     ...(shell ? { shell } : {}),
+    ...(personal?.simulators?.length || repo?.simulators?.length ? { simulators: uniq([...(personal?.simulators ?? []), ...(repo?.simulators ?? [])]) } : {}),
   };
 }
 

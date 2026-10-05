@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveLocalDestination, sameOrigin } from "./io.js";
+import { isWriteConflict, resolveLocalDestination, sameOrigin } from "./io.js";
 
 // Where a session coming back from the cloud lands, and how two origins are
 // judged to be one repository. Pure functions; the SSH/git around them are
@@ -77,4 +77,9 @@ describe("resolveLocalDestination", () => {
       worktreeName: "w", recordedLocalCwd: null, localRoots: roots, exists: exists([]),
     })).toThrow(/no local checkout of git@github.com:acme\/unknown.git/);
   });
+});
+
+test("a lost optimistic-concurrency race is a write conflict worth sending again; other failures are not", () => {
+  expect(isWriteConflict(new Error('{"code":"OptimisticConcurrencyControlFailure","message":"Documents read from or written to the \\"sync_heads\\" table changed"}'))).toBe(true);
+  expect(isWriteConflict(new Error("row is queued"))).toBe(false);
 });

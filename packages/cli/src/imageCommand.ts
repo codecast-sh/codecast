@@ -110,9 +110,10 @@ export function downscaleWithSips(bytes: Buffer, mediaType: string): Buffer | nu
   }
 }
 
-/** Exported so `cast browser shot --share` reuses the whole pipeline — hash
- *  dedupe, downscaling, upload, markdown — instead of growing a second one. */
-export async function uploadOne(deps: PublishDeps, target: string, alt?: string): Promise<SharedImage> {
+/** The bytes of one image ready to upload: read, shrunk past the size cap
+ *  where it can be, and refused unless it is a raster type the inline image
+ *  pipeline renders. The half of the upload every sharer runs. */
+export async function prepareImage(target: string): Promise<{ bytes: Buffer; mediaType: string; downscaledFrom?: number }> {
   let bytes = await loadTargetBytes(target);
   let mediaType = detectImageMediaType(bytes);
   let downscaledFrom: number | undefined;
@@ -130,6 +131,35 @@ export async function uploadOne(deps: PublishDeps, target: string, alt?: string)
   if (!mediaType || !UPLOADABLE_TYPES.has(mediaType)) {
     throw new Error(`not an uploadable image (${mediaType ?? "unrecognized bytes"}) — png, jpg, gif, webp, avif, or bmp`);
   }
+  return { bytes, mediaType, downscaledFrom };
+}
+
+/** `cast call snap --share`: a frame becomes a public image the server
+ *  stores itself, tied to the recording file it came from so deleting the
+ *  recording deletes it. Not uploadOne: its upload cache hands back the
+ *  storage id of any earlier upload with the same bytes, and a recording's
+ *  delete must only ever remove an object made for it. */
+export async function shareCallFrame(
+  post: (route: string, body: Record<string, unknown>) => Promise<any>,
+  file: string,
+  recordingId: string,
+  alt: string,
+  atMs?: number,
+): Promise<{ url: string; markdown: string }> {
+  const { bytes } = await prepareImage(file);
+  const res = await post("/cli/calls/frame-share", {
+    recording_id: recordingId,
+    image_base64: bytes.toString("base64"),
+    ...(atMs !== undefined ? { at_ms: atMs } : {}),
+  });
+  if (typeof res?.url !== "string") throw new Error("the server returned no image URL");
+  return { url: res.url, markdown: markdownFor({ source: file, url: res.url, alt }) };
+}
+
+/** Exported so `cast browser shot --share` reuses the whole pipeline — hash
+ *  dedupe, downscaling, upload, markdown — instead of growing a second one. */
+export async function uploadOne(deps: PublishDeps, target: string, alt?: string): Promise<SharedImage> {
+  const { bytes, mediaType, downscaledFrom } = await prepareImage(target);
 
   const absPath = isRemoteTarget(target) ? undefined : path.resolve(target);
   const hash = hashImageBytes(bytes);

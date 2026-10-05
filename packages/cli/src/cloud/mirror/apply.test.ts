@@ -7,7 +7,7 @@ import { REFERENCES_SNIPPET, SNIPPET_CATALOG } from "@codecast/shared/contracts"
 import { findOwnedSections } from "@platform/snippets";
 import {
   GITCONFIG_BLOCK_END, GITCONFIG_BLOCK_START, MIRROR_LOCK_REL, MIRROR_RECEIVER_CAPABILITIES, MIRROR_STAMP_REL, applyMirrorBundle, applyStagingBundle,
-  adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
+  adoptFeatureSwitches, composeInstructionFile, featureSwitches, mergeClaudeSettings, mergeCodexHooks, mergeCodexToml, mergeGitconfig, mirrorUntouchedInCheckoutScript, readStamp, stripGitconfigBlock, verifyMirrorStamp, withMirrorLock,
 } from "./apply";
 import { buildMirrorBundle, parseMirrorBundle, sha256, type BundleInput } from "./bundle";
 import { ownedSectionSpecs, stripOwnedSections } from "./transform";
@@ -1036,6 +1036,17 @@ test("a project the next bundle does not name is released, its files kept; a hom
   expect(read("work/app/docs/guide.md")).toBe("guide\n");
 });
 
+test("a home cache the laptop now leaves out is the host's own: its edit is no conflict and the file stays", async () => {
+  const bundleOf = (entries: BundleInput[]) => parseMirrorBundle(buildMirrorBundle(entries, { source: source(), target_home: home, managed_roots: [".claude"] }).bytes);
+  const cache = ".claude/mcp-needs-auth-cache.json";
+  await apply(await bundleOf([{ path: cache, kind: "verbatim", mode: "0600", bytes: Buffer.from("{}") }]));
+  write(cache, '{"host":"edited"}', 0o600);
+  const r = await apply(await bundleOf([]));
+  expect(r.host_edited).toEqual([]);
+  expect(read(cache)).toBe('{"host":"edited"}');
+  expect(readStamp(home)?.files[cache]).toBeUndefined();
+});
+
 test("a file sent under a linked directory and its real path is written once, at the real path, even when neither exists yet", async () => {
   const root = "work/app";
   fs.mkdirSync(path.join(home, root, "packages/convex/convex"), { recursive: true });
@@ -1050,4 +1061,40 @@ test("a file sent under a linked directory and its real path is written once, at
   expect(read(`${root}/packages/convex/convex/allowlist.txt`)).toBe("allow\n");
   expect(fs.lstatSync(path.join(home, root, "convex")).isSymbolicLink()).toBe(true);
   expect(readStamp(home)?.files[`${root}/convex/allowlist.txt`]?.satisfied_alias?.target).toBe(`${root}/packages/convex/convex/allowlist.txt`);
+});
+
+test("an instruction alias into a subdirectory of its own project writes through; one leaving the project is refused", async () => {
+  const root = "work/union";
+  write(`${root}/outreach/CLAUDE.md`, "# outreach\n", 0o600);
+  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "AGENTS.md"));
+  fs.symlinkSync("outreach/CLAUDE.md", path.join(home, root, "CLAUDE.md"));
+  const bundle = (paths: string[]) => parseMirrorBundle(buildMirrorBundle(paths.map((p) => ({ path: p, kind: p.endsWith("AGENTS.md") ? "agents-md" as const : "claude-md" as const, mode: "0600" as const, bytes: Buffer.from("# outreach\n") })), { source: source(), target_home: home, managed_roots: [root], project_roots: [root] }).bytes);
+  const applied = await apply(await bundle([`${root}/AGENTS.md`, `${root}/CLAUDE.md`, `${root}/outreach/CLAUDE.md`]));
+  expect(applied.errors).toEqual([]);
+  expect(fs.readlinkSync(path.join(home, root, "AGENTS.md"))).toBe("outreach/CLAUDE.md");
+  expect(read(`${root}/outreach/CLAUDE.md`)).toContain("# outreach");
+  expect(verifyMirrorStamp(home)?.complete).toBe(true);
+
+  write("work/other/CLAUDE.md", "# other\n", 0o600);
+  fs.symlinkSync("../other/CLAUDE.md", path.join(home, root, "GEMINI.md"));
+  const escaped = await apply(await bundle([`${root}/GEMINI.md`]));
+  expect(escaped.errors.map((e) => e.error)).toEqual(["instruction alias leaves its directory"]);
+});
+
+test("on the host, the files the mirror wrote into a checkout and nobody edited since are listed; edited, removed and outside files are not", () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "mirror-untouched-"));
+  const write = (rel: string, body: string) => { fs.mkdirSync(path.dirname(path.join(home, rel)), { recursive: true }); fs.writeFileSync(path.join(home, rel), body); };
+  write("work/repo/AGENTS.md", "as written");
+  write("work/repo/CLAUDE.md", "edited on the host");
+  write("work/repo/.claude/gone.md", "x");
+  write("work/repo-mv-1/AGENTS.md", "as written");
+  write(".codecast/mirror.json", JSON.stringify({ version: 1, hash: "h", files: {
+    "work/repo/AGENTS.md": { written: sha256(Buffer.from("as written")) },
+    "work/repo/CLAUDE.md": { written: sha256(Buffer.from("as written")) },
+    "work/repo/.claude/gone.md": { written: sha256(Buffer.from("x")), removed: true },
+    "work/repo-mv-1/AGENTS.md": { written: sha256(Buffer.from("as written")) },
+    "work/repo/missing.md": { written: "0" },
+  } }));
+  const out = Bun.spawnSync(["python3", "-c", mirrorUntouchedInCheckoutScript(), path.join(home, "work/repo")], { env: { ...process.env, HOME: home } });
+  expect(out.stdout.toString().split("\n").filter(Boolean)).toEqual(["AGENTS.md"]);
 });

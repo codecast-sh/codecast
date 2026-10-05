@@ -32,7 +32,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "../proc.js";
+import { lastErrorLine, spawnSync } from "../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../codecastOwned.js";
 import { INSTALLABLE_CLIENTS, parseClientVersion, readInstalledClientVersions, type InstallableClient } from "../remote/agentAuth.js";
 import { remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
@@ -1058,7 +1058,7 @@ export function runHostTools(host: RemoteHost, required: RequiredHostTools, opts
   const label = `${host.user}@${host.address}`;
   if (r.error) throw new Error(`host tools check on ${label} failed (${(r.error as NodeJS.ErrnoException).code ?? r.error.message})`);
   if (r.status !== 0) {
-    const detail = r.stderr.trim().split("\n").filter(Boolean).pop();
+    const detail = lastErrorLine(r.stderr);
     throw new Error(`host tools check on ${label} failed (exit ${r.status})${detail ? `: ${detail}` : ""}`);
   }
   const report = parseHostToolsOutput(r.stdout);

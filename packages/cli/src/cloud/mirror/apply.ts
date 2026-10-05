@@ -9,7 +9,7 @@ import { installAllStableHooks } from "../../stableContext.js";
 import { maskPins, readHostMcpOverrides, writeHostMcpOverrides, type HostMcpOverrides, type McpSourceServer } from "../hostMcpOverrides.js";
 import { assertMirrorFileContent, assertSafePath, sha256, type ParsedBundle, type ParsedFile } from "./bundle.js";
 import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
-import { isAgentRuntimePath } from "./discovery.js";
+import { isAgentRuntimePath, isDefaultExcluded } from "./discovery.js";
 import {
   dropCodecastHooks, filterHookItem, findAllOwnedSections, joinTomlTables, splitTomlTables, stripOwnedSections, tableFirstSegment,
   type HookGroup, type MirrorKind, type TomlTable,
@@ -109,6 +109,27 @@ async function trackedPaths(root: string): Promise<Set<string> | null> {
 }
 
 export const MIRROR_STAMP_REL = ".codecast/mirror.json";
+
+/**
+ * A python3 program, run on a host with a checkout as its one argument, that
+ * prints every file the mirror wrote under that checkout which still holds
+ * exactly the bytes it wrote, as a path relative to the checkout. Those files
+ * are the laptop's (agent instructions, settings), so bringing a session home
+ * must not treat them as host edits.
+ */
+export function mirrorUntouchedInCheckoutScript(): string {
+  return [
+    "import hashlib,json,os,sys",
+    "home=os.path.expanduser('~');rel=os.path.relpath(sys.argv[1],home)",
+    `try: files=json.load(open(os.path.join(home,${JSON.stringify(MIRROR_STAMP_REL)}))).get('files',{})`,
+    "except Exception: files={}",
+    "for k,v in files.items():",
+    " if not k.startswith(rel+'/') or not isinstance(v,dict) or v.get('removed'): continue",
+    " try: h=hashlib.sha256(open(os.path.join(home,k),'rb').read()).hexdigest()",
+    " except OSError: continue",
+    " if h==v.get('written'): print(k[len(rel)+1:])",
+  ].join("\n");
+}
 export const MIRROR_LOCK_REL = ".codecast/mirror.lock";
 export const MIRRORED_ENV_MANIFEST_REL = ".codecast/mirrored-claude-env.json";
 export const GITCONFIG_BLOCK_START = "# >>> codecast mirror";
@@ -449,14 +470,22 @@ function checkDestination(home: string, rel: string): void {
   }
 }
 
-function destinationRelative(home: string, rel: string, kind?: MirrorKind): string {
+/**
+ * Where an instruction file is written. A link to another instruction file
+ * writes through to it: beside it in the same directory, or anywhere inside
+ * the registered project that holds it (a checkout that tracks
+ * `AGENTS.md -> outreach/CLAUDE.md`).
+ */
+function destinationRelative(home: string, rel: string, kind: MirrorKind | undefined, projectRoots: readonly string[]): string {
   assertSafePath(rel);
   if (kind !== "claude-md" && kind !== "agents-md") { checkDestination(home, rel); return rel; }
   const file = path.join(home, rel);
   if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) { checkDestination(home, rel); return rel; }
   const target = path.relative(home, path.resolve(path.dirname(file), fs.readlinkSync(file)));
   assertSafePath(target);
-  if (path.dirname(target) !== path.dirname(rel) || !/^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i.test(path.basename(target))) throw new Error("instruction alias leaves its directory");
+  const project = projectRoots.find((root) => rel.startsWith(`${root}/`));
+  const withinProject = !!project && target.startsWith(`${project}/`);
+  if (path.dirname(target) !== path.dirname(rel) && !withinProject || !/^(?:AGENTS(?:\.override)?|CLAUDE(?:\.local)?|GEMINI|GROK|OPENCODE)\.md$/i.test(path.basename(target))) throw new Error("instruction alias leaves its directory");
   checkDestination(home, target);
   return target;
 }
@@ -512,7 +541,7 @@ export function verifyMirrorStamp(home: string): MirrorStamp | null {
         if (fs.lstatSync(path.join(home, rel), { throwIfNoEntry: false })) complete = false;
         continue;
       }
-      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind, stamp.project_roots ?? []);
       if (info.alias && info.alias !== dest) complete = false;
       const hash = info.kind === "claude-mcp" && info.mcp_fields
         ? claudeMcpWritten(fs.readFileSync(path.join(home, dest)), info)
@@ -879,7 +908,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
         result.unchanged++;
         continue;
       }
-      const dest = destinationRelative(home, file.path, file.kind);
+      const dest = destinationRelative(home, file.path, file.kind, projectRoots);
       const abs = path.join(home, dest);
       const current = VERBATIM_KINDS.includes(file.kind) && hashIfRegular(abs) === file.sha256 ? file.bytes : readIfRegular(abs);
       if (before && before.source === undefined && !VERBATIM_KINDS.includes(file.kind) && before.sha !== file.sha256) {
@@ -958,6 +987,9 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
       && (prev.project_roots ? under(rel, prev.project_roots) : !rel.startsWith(".") && rel.includes("/"));
     for (const [rel, info] of Object.entries(prev.files)) {
       if (manifest.has(rel) || isCodecastOwnedHomePath(rel) || isAgentRuntimePath(rel)) continue;
+      // A file the laptop now leaves out by default (a cache each machine
+      // rewrites for itself) was not deleted there: the host's copy is its own.
+      if (isDefaultExcluded(rel)) continue;
       if (bundle.header.unmanaged_roots?.some((root) => rel === root || rel.startsWith(`${root}/`))) continue;
       if (releasedProject(rel)) continue;
       // A file git tracks in a project checkout is part of that session's
@@ -1018,7 +1050,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
           result.pruned.push(rel);
           continue;
         }
-        dest = destinationRelative(home, rel, info.kind);
+        dest = destinationRelative(home, rel, info.kind, [...projectRoots, ...(prev.project_roots ?? [])]);
         if (info.alias) {
           const entry = fs.lstatSync(abs, { throwIfNoEntry: false });
           if (!entry) stampFiles[rel] = { ...info, removed: true };
@@ -1108,7 +1140,7 @@ export async function applyMirrorBundle(bundle: ParsedBundle, opts: ApplyOptions
   for (const [rel, info] of Object.entries(stampFiles)) {
     if (info.host_edited || info.removed) continue;
     try {
-      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind);
+      const dest = info.satisfied_alias ? projectAliasDestination(home, rel, info.satisfied_alias.project, info.satisfied_alias.target) : destinationRelative(home, rel, info.kind, projectRoots);
       if ((fs.statSync(path.join(home, dest)).mode & 0o777) !== Number.parseInt(info.mode, 8)) throw new Error("mode changed during refresh");
       if (VERBATIM_KINDS.includes(info.kind ?? "verbatim")) {
         if (hashIfRegular(path.join(home, dest)) !== info.written) throw new Error("file changed during refresh");
