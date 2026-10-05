@@ -17,7 +17,7 @@
 // split a lead is the Head of People's reading.
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
-import { initiativeChain, initiativeStanding, metricReadings, metricTrends, nextMilestone, openQuestions, trendWords, type InitiativeLink, type InitiativeRow, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
+import { initiativeChain, initiativeStanding, intentSourceAddress, metricReadings, metricTrends, nextMilestone, openQuestions, orderedMilestones, trendWords, type InitiativeLink, type InitiativeRow, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
 import { isOnProjectBoard } from "@codecast/shared/tasks";
 import { isClosedPlan, type ActivityArea } from "./orgActivity";
 
@@ -26,7 +26,7 @@ export type CoverageProject = { _id: unknown; short_id?: string | null; title: s
 export type CoveragePlan = { _id: unknown; short_id: string; title: string; status: string; project_id?: unknown };
 /** The fields the board rule reads, beside the two links; a raw task row satisfies it. */
 export type CoverageTask = Parameters<typeof isOnProjectBoard>[0] & { status?: string | null; project_id?: unknown; plan_id?: unknown };
-export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard" | "description" | "score_history" | "why" | "done_when" | "milestones" | "questions" | "sources">;
+export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard" | "description" | "score_history" | "why" | "done_when" | "milestones" | "questions" | "decisions" | "sources">;
 
 export type CoverageInputs = {
   projects: CoverageProject[];
@@ -67,17 +67,24 @@ export type InitiativeCoverage = {
   standing: MetricStanding;
   /** Which way each metric is moving, by metric key, in words ("up from 380, toward the target"); a metric with fewer than two reports has no entry. */
   trends: Record<string, string>;
-  // The intent record (I5), as much of it as a review reads to say what the goal still lacks.
+  // The intent record (I5): what a review reads to say what the goal still
+  // lacks, and every entry the record holds, so it adds none a second time.
   /** Why it matters, in its author's words. */
   why?: string;
   /** What done looks like: the sentence a result is checked against. */
   done_when?: string;
   /** The first milestone not reached, earliest day first; absent when every one is reached or none is set. */
   next_milestone?: { title: string; date?: number };
+  /** Every milestone in reading order, the reached ones marked. */
+  milestones: Array<{ title: string; date?: number; done?: true }>;
   /** What is still undecided, as asked. */
   open_questions: string[];
-  /** How many sources say where the goal was stated; none means nobody can check who said it. */
-  sources: number;
+  /** The questions already answered, as asked. */
+  answered_questions: string[];
+  /** What was decided, in the words on the record. */
+  decisions: string[];
+  /** Where the goal was stated: each source as the address a change would write for it ("call:cl-42:14", "ct-12", a URL), a note by its words. None means nobody can check who said it. */
+  sources: string[];
   projects: Array<LeadFacts & { id: string; short_id?: string; title: string; has_work: boolean }>;
   /** Of its projects with work, how many have no lead. */
   projects_without_lead: number;
@@ -105,6 +112,8 @@ const INITIATIVE_OPEN: ReadonlySet<string> = new Set(["active", "planned", "prop
 const bump = (m: Map<string, number>, k: string) => m.set(k, (m.get(k) ?? 0) + 1);
 
 const INITIATIVE_DESCRIPTION_CHARS = 1500;
+/** An entry of a record list is shown to be recognized, not read whole: enough of it to tell it is already there. */
+const INITIATIVE_ENTRY_CHARS = 200;
 export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const openByProject = new Map<string, number>();
   const openByPlan = new Map<string, number>();
@@ -161,8 +170,10 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const initiatives: InitiativeCoverage[] = [...open].sort((a, b) => rank(a.status) - rank(b.status)).map((i) => {
     const rows = i.project_ids.map((id) => projectById.get(String(id))).filter((p): p is CoverageProject => !!p)
       .map((p) => ({ id: String(p._id), short_id: p.short_id ?? undefined, title: p.title, has_work: hasWork(p), ...leadFacts(p) }));
-    const words = (text: string | undefined) => (text?.trim() ? text.trim().slice(0, INITIATIVE_DESCRIPTION_CHARS) : undefined);
+    const words = (text: string | undefined, max = INITIATIVE_DESCRIPTION_CHARS) => (text?.trim() ? text.trim().slice(0, max) : undefined);
+    const entry = (text: string | undefined) => words(text, INITIATIVE_ENTRY_CHARS) ?? "";
     const next = nextMilestone(i);
+    const open = openQuestions(i);
     return {
       short_id: i.short_id,
       title: i.title,
@@ -180,8 +191,11 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
       why: words(i.why),
       done_when: words(i.done_when),
       next_milestone: next ? { title: next.title, ...(next.date ? { date: next.date } : {}) } : undefined,
-      open_questions: openQuestions(i).map((q) => q.text),
-      sources: i.sources?.length ?? 0,
+      milestones: orderedMilestones(i.milestones).map((m) => ({ title: entry(m.title), ...(m.date ? { date: m.date } : {}), ...(m.done_at ? { done: true as const } : {}) })),
+      open_questions: open.map((q) => entry(q.text)),
+      answered_questions: (i.questions ?? []).filter((q) => !open.includes(q)).map((q) => entry(q.text)),
+      decisions: (i.decisions ?? []).map((d) => entry(d.text)),
+      sources: (i.sources ?? []).map((s) => intentSourceAddress(s) || entry(s.quote)),
       projects: rows,
       projects_without_lead: rows.filter((p) => p.has_work && !p.lead).length,
     };

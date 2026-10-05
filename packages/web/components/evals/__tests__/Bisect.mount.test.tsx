@@ -39,7 +39,10 @@ const { AttributionView } = await import("../AttributionView");
 const { BisectView } = await import("../BisectView");
 const { isStalled } = await import("../bisectModel");
 const { BisectListView } = await import("../BisectListView");
-const { commitSessionId } = await import("../bisectModel");
+const { CommitPanelView } = await import("../CommitPanel");
+const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
+type EvalsHost = import("../host").EvalsHost;
+type CommitResponse = import("@codecast/shared/contracts/evalsApi").CommitResponse;
 const { BisectPlanPanel } = await import("../BisectPlanPanel");
 const { canStart } = await import("../bisectModel");
 const { BisectNewPage } = await import("../pages/BisectNewPage");
@@ -367,8 +370,8 @@ describe("one bisect", () => {
     expect(container.querySelector("[data-evb-ruler]")).toBeTruthy();
     expect(container.querySelectorAll('[data-evb-control]').length).toBe(2);
     expect(container.querySelector('[data-evb-wells="probe"]')).toBeTruthy();
-    expect(container.querySelector(".evb-bracket--good")).toBeTruthy();
-    expect(container.querySelector(".evb-bracket--bad")).toBeTruthy();
+    expect(container.querySelector(".ev-b-bracket--good")).toBeTruthy();
+    expect(container.querySelector(".ev-b-bracket--bad")).toBeTruthy();
     expect(container.querySelector("[data-evb-stop]")).toBeTruthy();
     expect(container.querySelector("[data-evb-stalled]")).toBeNull();
     expect(container.textContent).toContain(`tmux attach -t evals-bisect-b-settle-1003`);
@@ -383,7 +386,7 @@ describe("one bisect", () => {
     expect(tallies.some((t) => /^\d+ pass \d+ fail$/.test(t))).toBe(true);
     expect(tallies.some((t) => /^\d+ of \d+ landed$/.test(t))).toBe(true);
     const roles = (xs: Array<string | null>) => [...new Set(xs)].sort();
-    expect(roles([...container.querySelectorAll(".evb-wells-role")].map((r) => r.textContent))).toEqual(roles(data.state.plan.freezes.map((f) => (f.role === "flipped" ? "f" : "c"))));
+    expect(roles([...container.querySelectorAll(".ev-b-wells-role")].map((r) => r.textContent))).toEqual(roles(data.state.plan.freezes.map((f) => (f.role === "flipped" ? "f" : "c"))));
     expect(container.querySelector('[data-evb-wells] a[href^="/evals/r/"]')).toBeTruthy();
     await unmount();
   });
@@ -392,7 +395,7 @@ describe("one bisect", () => {
     const data = bisect("b-settle-0927");
     const steps = [...data.steps, { seq: 99, at: data.state.updatedAt, kind: "narrow" as const, sha: null, text: "Recorded batch 2026-10-01T20:52:00.000Z reads class 1 good" }];
     const { container, unmount } = await mount(<BisectView data={data} steps={steps} now={NOW} onStop={() => {}} stopping={false} />);
-    const link = [...container.querySelectorAll(".evb-step-text a")].find((a) => a.getAttribute("href")?.includes("2026-10-01T20%3A52%3A00.000Z"))!;
+    const link = [...container.querySelectorAll(".ev-b-step-text a")].find((a) => a.getAttribute("href")?.includes("2026-10-01T20%3A52%3A00.000Z"))!;
     expect(link.getAttribute("href")).toBe(`/evals/s/settle?batch=${encodeURIComponent("2026-10-01T20:52:00.000Z")}`);
     expect(link.textContent).not.toContain("T20:52");
     await unmount();
@@ -446,7 +449,7 @@ describe("one bisect", () => {
     const result = container.querySelector('[data-evb-result="culprit"]')!;
     expect(result.querySelector('[data-ev-separation="worse"]')).toBeTruthy();
     expect(result.textContent).toContain("Tier 2");
-    expect(container.querySelector(".evb-tile--culprit")).toBeTruthy();
+    expect(container.querySelector(".ev-b-tile--culprit")).toBeTruthy();
     // The trailer shows as the session pill, never as a raw line or link in the body.
     const commitText = result.querySelector("[data-evb-commit]")!.textContent ?? "";
     expect(commitText).not.toContain("Codecast-Session");
@@ -456,22 +459,42 @@ describe("one bisect", () => {
 
   it("reads a commit's session from its trailer value as git log hands it over", () => {
     const id = "jx747bn5qcccdv5asr8jrk3n9d8fj2j0";
-    expect(commitSessionId({ session: `https://codecast.sh/conversation/${id}` })).toBe(id);
-    expect(commitSessionId({ session: id })).toBe(id);
+    const read = codecastEvalsHost.commitSession!;
+    expect(read.id(`https://codecast.sh/conversation/${id}`)).toBe(id);
+    expect(read.id(id)).toBe(id);
     // A short id is a prefix that can collide, so it names nothing, as blame reads it.
-    expect(commitSessionId({ session: "jx747bn" })).toBeNull();
-    expect(commitSessionId({ session: null })).toBeNull();
+    expect(read.id("jx747bn")).toBeNull();
+    expect(read.strip(`Fix it\n\nCodecast-Session: ${id}`)).toBe("Fix it");
+  });
+
+  it("names a commit's session only through a host that reads one, and shows the message whole otherwise", async () => {
+    const data = world.answer("GET /commit/:sha", { sha: "28a65ba1d0a91b5a0a2f1536cd86e6a554e4dc8d" }, {}) as CommitResponse;
+    expect(data.commit.session).toBeTruthy();
+    const render = (commitSession: EvalsHost["commitSession"]) =>
+      mount(
+        <EvalsHostProvider host={{ ...codecastEvalsHost, commitSession, ui: { ...codecastEvalsHost.ui, SessionPill: ({ id }) => <span data-test-pill={id} /> } }}>
+          <CommitPanelView data={data} whole={false} onWhole={() => {}} />
+        </EvalsHostProvider>,
+      );
+    const reading = await render(codecastEvalsHost.commitSession);
+    expect(reading.container.querySelector("[data-test-pill]")!.getAttribute("data-test-pill")).toBe(codecastEvalsHost.commitSession!.id(data.commit.session!));
+    expect(reading.container.textContent).not.toContain("Codecast-Session");
+    await reading.unmount();
+    const plain = await render(undefined);
+    expect(plain.container.querySelector("[data-test-pill]")).toBeNull();
+    expect(plain.container.textContent).toContain("Codecast-Session");
+    await plain.unmount();
   });
 
   it("reads a range when the replay could not tell commits apart", async () => {
     const data = bisect("b-call-summary-0929");
     const { container, unmount } = await mount(<BisectView data={data} steps={data.steps} now={NOW} onStop={() => {}} stopping={false} />);
     expect(container.querySelector('[data-evb-result="range"] [data-evb-candidates]')).toBeTruthy();
-    expect(container.querySelector(".evb-span")).toBeTruthy();
+    expect(container.querySelector(".ev-b-span")).toBeTruthy();
     // The headline names why it is a range, counts candidates (the edits are not a commit), and a finished run offers no tmux to attach to.
-    expect(container.querySelector('[data-evb-result="range"] .evb-answer-say')!.textContent).toBe(answerStepText(data.steps));
+    expect(container.querySelector('[data-evb-result="range"] .ev-b-answer-say')!.textContent).toBe(answerStepText(data.steps));
     expect(answerStepText(data.steps)).toContain("did not separate");
-    expect(container.querySelector('[data-evb-result="range"] .evb-answer-num')!.textContent).toMatch(/candidates?$/);
+    expect(container.querySelector('[data-evb-result="range"] .ev-b-answer-num')!.textContent).toMatch(/candidates?$/);
     expect(container.textContent).not.toContain("tmux attach");
     // Each candidate opens its diff in place: a commit its CommitPanel, the uncommitted edits their patch.
     const row = container.querySelector<HTMLElement>('[data-evb-result="range"] [data-evb-candidate]')!;

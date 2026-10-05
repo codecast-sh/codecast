@@ -3,7 +3,7 @@ import { extractFilePaths } from "../lib/conversationProcessor";
 import { resolveSessionSkills } from "../lib/sessionSkills";
 import { useInboxStore } from "../store/inboxStore";
 import type { MentionItem } from "../components/editor/MentionList";
-import { buildMentionItems } from "./useMentionQuery";
+import { buildMentionItems, sessionMentionTeamId } from "./useMentionQuery";
 import type { ConversationData } from "../components/conversation/types";
 
 export function useSessionMentions({ currentUser, conversation, managedSession }: {
@@ -28,13 +28,15 @@ export function useSessionMentions({ currentUser, conversation, managedSession }
   // Mention items are computed lazily (on dropdown open) to avoid subscribing
   // ConversationView to s.sessions, mentionIndex, and teamMembers — those
   // change on every heartbeat and would re-render this 10K-line component.
+  const conversationId = conversation?._id ? String(conversation._id) : "";
   const refreshMentionItems = useCallback(() => {
     const state = useInboxStore.getState();
-    const scope = convTeamId
-      ? { kind: "team" as const, teamId: convTeamId }
+    const teamId = convTeamId ?? sessionMentionTeamId(state, state.sessions[conversationId]);
+    const scope = teamId
+      ? { kind: "team" as const, teamId }
       : { kind: "personal" as const, userId: String(state.currentUser?._id ?? "") };
     mentionItemsRef.current = buildMentionItems(state, scope);
-  }, [convTeamId]);
+  }, [convTeamId, conversationId]);
   const handleMentionQuery = useCallback((_q: string) => { refreshMentionItems(); }, [refreshMentionItems]);
 
   return { sessionSkills, sessionFilePaths, mentionItemsRef, handleMentionQuery };

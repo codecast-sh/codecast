@@ -8,7 +8,7 @@ import { findEntityInStore, entityTypeInStore } from '@codecast/web/lib/liveEnti
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
-import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
+import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { usePersonifyAll } from '@codecast/web/hooks/usePersonifyAll';
@@ -155,12 +155,15 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // object's NAME.
   const resolvedTitle: string | undefined =
     (type === 'trigger' ? entity?.display_title : undefined) || entity?.title || entity?.display_title || entity?.name;
+  // One change of a proposal (`op-55#3`) reads as the proposal's name and the
+  // change's number. A proposal this phone does not hold has no name, so the
+  // pill shows the reference as written, which already carries the number.
   const refLabel = entityReferenceLabel({
     title: resolvedTitle,
     shortId: entity?.short_id,
     rawId,
     typeLabel: TYPE_LABEL[type],
-  }) + callRefLabelSuffix(callRef);
+  }) +callRefLabelSuffix(callRef) + proposalChangeLabelSuffix(type === 'proposal' && entity ? parseProposalChangeRef(rawId) : null);
   // A session that wears a character or a role is named as that person, the
   // same rule as the web pill: its face in place of the glyph, its name as the
   // label. A session nobody personified reads exactly as it did before.

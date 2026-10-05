@@ -60,11 +60,11 @@ Desktop only. In Chrome, skip to Act 4.
 | # | Who presses what | Both should hear | Both should see | Done |
 |---|---|---|---|---|
 | 8 | **A** clicks **Float the team over your work** (the pop out button at the end of the header's faces). | Nothing new. | The row leaves the header and floats over A's other windows, with the call's line under it: no title bar, no traffic lights, no grey OS rectangle. The header keeps one chip that docks it back. **B** sees no change. | [ ] |
-| 9 | **A** hovers the float. | Nothing. | A small toolbar: a grip (**Hold to move**), **Smaller faces**, **Larger faces**, **Open the call window**, and a close button. | [ ] |
+| 9 | **A** hovers the float. | Nothing. | A small toolbar: a grip (**Hold to move**), **Smaller faces**, **Larger faces**, **Expand**, and a close button. | [ ] |
 | 10 | **B** speaks for five seconds. | **A** hears B. | **A**: a ring appears around B's face while B speaks, and goes when B stops. | [ ] |
 | 11 | **A** presses **Smaller faces**, then **Larger faces**. | Nothing. | The faces shrink and grow. The float stays on top of other windows. | [ ] |
 | 12 | **A** holds the grip and drags the float to another corner of the screen. | Nothing. | It follows the mouse and stays where it is dropped. It stays on top. | [ ] |
-| 13 | **A** clicks **Open the call window**, then **shrink** on the stage. | Nothing. | The stage opens with the same call in it, and **shrink** puts it back to the float. Nobody rejoins, nobody drops. | [ ] |
+| 13 | **A** clicks **Expand**, clicks back into the app, then clicks **Expand** on the header card, then **shrink** on the stage. | Nothing. | The stage opens with the same call in it; the second Expand brings it back in front of the app; **shrink** puts it back to the faces. Nobody rejoins, nobody drops. | [ ] |
 | 14 | **A** clicks the chip in the header to dock the faces back. | Nothing. | The float goes and the row is back in the header, call line and all. | [ ] |
 
 ### Act 4: hang up (3:00 to 3:20)

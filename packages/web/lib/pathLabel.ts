@@ -42,6 +42,10 @@ export function pathLabel(path: string): string {
   if (clean.startsWith("/chat/")) return "Chat";
   if (clean.startsWith("/community/")) return "Community";
   if (clean.startsWith("/tasks/")) return "Task";
+  // A project or a run is named from the store (tabTitle recordTabTitle);
+  // the address alone gives its kind, never its id.
+  if (clean.startsWith("/workflows/runs/")) return "Run";
+  if (clean.startsWith("/projects/") && clean.split("/")[2] && !/^pj-\d+$/i.test(clean.split("/")[2])) return "Project";
   if (clean.startsWith("/docs/")) return "Doc";
   if (clean.startsWith("/plans/")) return "Plan";
   // An initiative titles by its `in-N`, the handle people quote (initiatives-projects-role-page.md I1).

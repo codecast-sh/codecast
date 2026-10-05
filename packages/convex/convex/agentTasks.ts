@@ -29,7 +29,8 @@ import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
-import { hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
+import { armedTriggers } from "./lib/triggerMatch";
+import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -64,13 +65,6 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
   }
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
-}
-
-// The agent_tasks.hosted_home stamp for a routine whose home is `homeId`:
-// true when the home is a hosted conversation, else absent.
-async function hostedHomeStamp(ctx: TaskCtx, homeId: Id<"conversations"> | string | null | undefined): Promise<true | undefined> {
-  const home = homeId ? await ctx.db.get(homeId as Id<"conversations">) : null;
-  return home && isHostedAgentType(home.agent_type) ? true : undefined;
 }
 
 // A recurring trigger keeps a cadence: slots one interval apart. run_at is when
@@ -933,7 +927,7 @@ async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) 
 // card when the trigger belongs to a role, the waiting session when one fired
 // it, and a note when the session is stashed out of the person's sight.
 
-async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Promise<RoleCard | null> {
+export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Promise<RoleCard | null> {
   const role: any = roleId ? await ctx.db.get(roleId) : null;
   if (!role || role.status === "retired") return null;
   const to = role.reports_to;
@@ -2043,6 +2037,29 @@ export const backfillArmedTriggerKind = internalMutation({
   },
 });
 
+// Stamps hosted_home on routines armed before the stamp existed. With no cloud
+// wake host configured the dispatcher reads only stamped rows, so an unstamped
+// hosted routine would never fire there, and the plan limit counts stamps.
+// Pages the whole table and reschedules itself; idempotent, so re-running
+// writes nothing new.
+export const backfillHostedHome = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ scanned: number; stamped: number; done: boolean }> => {
+    const page = await ctx.db.query("agent_tasks").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    let stamped = 0;
+    for (const task of page.page) {
+      if (!task.originating_conversation_id) continue;
+      const stamp = await hostedHomeStamp(ctx, task.originating_conversation_id);
+      if (task.hosted_home === stamp) continue;
+      await ctx.db.patch(task._id, { hosted_home: stamp });
+      stamped++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.agentTasks.backfillHostedHome, { cursor: page.continueCursor });
+    if (stamped > 0) console.log("backfill_hosted_home", { scanned: page.page.length, stamped });
+    return { scanned: page.page.length, stamped, done: page.isDone };
+  },
+});
+
 // Every past run of one schedule, newest first — the browseable run history on
 // every schedule surface (strip, dock, /schedules). Each entry names the
 // conversation to open AND the message that triggered the run, so the UI can
@@ -2671,8 +2688,7 @@ export const matchTaskTriggers = internalMutation({
     // scheduled trigger of every user. A running one is read too when the
     // firing carries an event: its run never sees it, so it is held for the
     // run after (nextArmingAfterRun) rather than lost.
-    const armed = (status: "scheduled" | "running") =>
-      ctx.db.query("agent_tasks").withIndex("by_status_event_type", (q) => q.eq("status", status).eq("event_filter.event_type", args.event_type)).collect();
+    const armed = (status: "scheduled" | "running"): Promise<Doc<"agent_tasks">[]> => armedTriggers(ctx, status, args.event_type).collect();
     const tasks = [...(await armed("scheduled")), ...(args.event_ref ? await armed("running") : [])];
 
     // One lookup per distinct owner, not per task: a user with several armed

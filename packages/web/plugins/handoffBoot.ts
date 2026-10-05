@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { transformWithEsbuild, type Plugin, type ResolvedConfig } from "vite";
+import type { Plugin, ResolvedConfig } from "vite";
 import type { OutputBundle, OutputChunk } from "rollup";
+import { inlineIife } from "./inlineIife";
 
 /**
  * Inlines the browser → desktop hand-off gate into index.html's <head>.
@@ -37,17 +36,8 @@ export function handoffBootPlugin(): Plugin {
       // already in place.
       order: "post",
       async handler(_html, ctx) {
-        const source = path.resolve(config.root, GATE_SOURCE);
         const preload = ctx.bundle ? bootChunkUrls(ctx.bundle, ctx.chunk, config.base) : { app: [], share: [], conversation: [] };
-        const gate = await fs.readFile(source, "utf8");
-        const { code } = await transformWithEsbuild(gate, source, {
-          format: "iife",
-          globalName: GLOBAL_NAME,
-          minify: true,
-          target: "es2020",
-          // The inline script is not a module and has no source map of its own.
-          sourcemap: false,
-        });
+        const code = await inlineIife(config.root, GATE_SOURCE, GLOBAL_NAME);
         return [
           {
             tag: "script",

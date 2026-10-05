@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { installWindowRoleTracker } from '../../desktop';
-import { focusExistingHuddle } from '../../calls/huddleWindow';
+import { expandCall, focusExistingHuddle } from '../../calls/huddleWindow';
 import { bindConvex, joinCall, startHuddle, knockRoom } from '../../calls/callManager';
 import { useInboxStore } from '../../../store/inboxStore';
 let pushRole: (role: any) => void;
@@ -31,5 +31,17 @@ assert.equal(await focusExistingHuddle(), false);
 role(false);
 (globalThis as any).window = {};
 assert.equal(await focusExistingHuddle(), false);
-console.log('huddle focus, own walkie, panel, and browser scenarios passed');
+// Expand with a voice host elsewhere goes to the host whatever this window
+// mirrors of the call: no mirror at all here, which is what left the expand
+// button dead when the mirror lagged or the call lived in another window.
+const sent: string[] = [];
+(globalThis as any).window = { __CODECAST_ELECTRON__: {
+  voiceCommand: async (cmd: string) => { sent.push(cmd); return true; },
+  showCallPanel: async () => { throw Error('expand must not ask the shell when a host decides'); },
+} };
+pushRole({ leader: true, appFocused: true, callPanel: false, anyInCall: false, voiceWindow: true });
+useInboxStore.getState().setCallState({ phase: 'idle' });
+assert.equal(await expandCall(), true);
+assert.deepEqual(sent, ['expandCall']);
+console.log('huddle focus, own walkie, panel, browser and expand scenarios passed');
 process.exit(0);

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test"
 import { useInboxStore } from "../inboxStore";
 import { LINE_PROFILE_DEFAULTS, lineProfileNotes, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { lineEditRows, lineEditStates, liveLineProfile } from "../../lib/lineSettings";
+import { DISPATCH_REFUSED, settleSessionCommand } from "../../lib/sessionCommands";
 
 const s = () => useInboxStore.getState() as any;
 const PID = "p".repeat(32);
@@ -64,7 +65,13 @@ describe("editLineProfile", () => {
     echo("r1", { executed_at: Date.now(), error: "/repo/.codecast/line.toml: [line] size_budget must be a positive integer" });
     const lp = s().projects[PID].line_profile;
     expect(liveLineProfile(lp, rows(), Date.now())).toBe(lp);
-    expect(lineEditStates(rows(), lp, Date.now()).size_budget).toMatchObject({ state: "refused", message: "[line] size_budget must be a positive integer" });
+    expect(lineEditStates(rows(), lp, Date.now()).size_budget).toMatchObject({ state: "refused", message: "size_budget must be a positive integer" });
+  });
+
+  it("a refusal from the server reads as its own message, not the client's error text", () => {
+    s().editLineProfile("r1", PID, [{ op: "set", key: "size_budget", value: 250 }]);
+    settleSessionCommand("r1", { result: DISPATCH_REFUSED, error: String(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught ConvexError: The checkout is on a teammate's machine: its owner can edit this file")) });
+    expect(lineEditStates(rows(), s().projects[PID].line_profile, Date.now()).size_budget).toMatchObject({ state: "refused", message: "The checkout is on a teammate's machine: its owner can edit this file" });
   });
 
   it("edits in flight on one project all stand, in the order they were made", () => {

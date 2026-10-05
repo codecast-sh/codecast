@@ -1,8 +1,9 @@
 // The lane's small parts on the phone, each the native twin of a simple.css
-// class: the page with its atmosphere (.sl-frame and its corner light), the
+// class: the page with its atmosphere (.sl-frame and its lamplight), the
 // staggered rise every block enters with (.sl-rise), buttons (.sl-btn), the
-// state dot (.sl-dot), pills, callouts and section heads.
-import { useEffect, type ReactNode } from 'react';
+// state dot (.sl-dot), pills, callouts, section heads, and Reading, which
+// sets what the assistant writes in the reading face (.sl-said, .sl-draft).
+import { useContext, useEffect, type ReactNode } from 'react';
 import { Pressable, ScrollView, StyleSheet, View, type ScrollViewProps, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { Easing, FadeInDown, useAnimatedStyle, useSharedValue, withDelay, withRepeat, withTiming } from 'react-native-reanimated';
 import Svg, { Defs, RadialGradient, Rect, Stop } from 'react-native-svg';
@@ -10,52 +11,70 @@ import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { mixColor } from '@/lib/solColor';
 import { Text } from '@/components/Themed';
+import { FaceContext } from '@/constants/fonts';
 import type { ConversationState } from '@codecast/web/components/simple/lane';
-import { useLaneTheme, type LaneColors } from './laneTheme';
+import { PALETTE } from '@platform/design';
+import { LANE_TOKENS } from '@codecast/web/components/simple/laneTokens';
+import { LANE_EASE, LANE_READ_FACES, LANE_RADIUS_SM, useLaneTheme } from './laneTheme';
+import type { ColorScheme } from '@/constants/Theme';
 
-/** One block entering: up and in, each a beat after the one before. */
+/** One block entering: up and in, each a beat after the one before, on
+ *  simple.css's .sl-rise timing (520ms, 70ms apart). */
 export function Rise({ i = 0, style, children }: { i?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   return (
-    <Animated.View entering={FadeInDown.duration(420).delay(Math.min(i, 8) * 55).easing(Easing.bezier(0.2, 0.7, 0.2, 1))} style={style}>
+    <Animated.View entering={FadeInDown.duration(520).delay(Math.min(i, 8) * 70).easing(LANE_EASE)} style={style}>
       {children}
     </Animated.View>
   );
 }
 
-/** A tide pool of light in one corner, a warm blush in the other. */
-function Atmosphere({ c }: { c: LaneColors }) {
+/** A glow token's centre as an SVG stop: its base colour at the token's
+ *  percentage. A Stop paints stopColor without its alpha, so the rgba the
+ *  token resolves to (c.lamp) would glow at full strength. */
+function glowStop(scheme: ColorScheme, name: 'lamp' | 'lampGold') {
+  const [base, pct] = LANE_TOKENS[name];
+  return { stopColor: PALETTE[scheme][base], stopOpacity: pct / 100 };
+}
+
+/** Lamplight on paper: a warm glow from above, a faint gold in the far corner. */
+function Atmosphere({ scheme }: { scheme: ColorScheme }) {
+  const lamp = glowStop(scheme, 'lamp');
+  const gold = glowStop(scheme, 'lampGold');
   return (
     <View pointerEvents="none" style={StyleSheet.absoluteFill}>
       <Svg width="100%" height="100%">
         <Defs>
-          <RadialGradient id="tide" cx="0%" cy="0%" rx="95%" ry="45%">
-            <Stop offset="0" stopColor={c.tide} stopOpacity={0.14} />
-            <Stop offset="1" stopColor={c.tide} stopOpacity={0} />
+          <RadialGradient id="lamp" cx="50%" cy="-8%" rx="120%" ry="34%">
+            <Stop offset="0" {...lamp} />
+            <Stop offset="1" stopColor={lamp.stopColor} stopOpacity={0} />
           </RadialGradient>
-          <RadialGradient id="sun" cx="105%" cy="100%" rx="85%" ry="40%">
-            <Stop offset="0" stopColor={c.sun} stopOpacity={0.1} />
-            <Stop offset="1" stopColor={c.sun} stopOpacity={0} />
-          </RadialGradient>
-          <RadialGradient id="hay" cx="88%" cy="0%" rx="55%" ry="22%">
-            <Stop offset="0" stopColor={c.yellow} stopOpacity={0.07} />
-            <Stop offset="1" stopColor={c.yellow} stopOpacity={0} />
+          <RadialGradient id="gold" cx="108%" cy="104%" rx="80%" ry="34%">
+            <Stop offset="0" {...gold} />
+            <Stop offset="1" stopColor={gold.stopColor} stopOpacity={0} />
           </RadialGradient>
         </Defs>
-        <Rect width="100%" height="100%" fill="url(#tide)" />
-        <Rect width="100%" height="100%" fill="url(#sun)" />
-        <Rect width="100%" height="100%" fill="url(#hay)" />
+        <Rect width="100%" height="100%" fill="url(#lamp)" />
+        <Rect width="100%" height="100%" fill="url(#gold)" />
       </Svg>
     </View>
   );
 }
 
+/** Sets its words in the reading face (Newsreader), bold and italic included:
+ *  what the assistant says and every draft, like a letter in Whisk. Where the
+ *  lane's faces did not load, the app's own face stays. */
+export function Reading({ children }: { children: ReactNode }) {
+  const loaded = useContext(FaceContext) !== null;
+  return <FaceContext.Provider value={loaded ? LANE_READ_FACES : null}>{children}</FaceContext.Provider>;
+}
+
 /** A lane page: the paper, its light, and a scroller with the lane's margins. */
 export function LanePage({ children, bottomInset = 0, ...scroll }: ScrollViewProps & { bottomInset?: number }) {
-  const { c, s } = useLaneTheme();
+  const { c, s, scheme } = useLaneTheme();
   const top = useSafeAreaInsets().top;
   return (
     <View style={s.screen}>
-      <Atmosphere c={c} />
+      <Atmosphere scheme={scheme} />
       <ScrollView
         keyboardShouldPersistTaps="handled"
         {...scroll}
@@ -71,10 +90,10 @@ export function LanePage({ children, bottomInset = 0, ...scroll }: ScrollViewPro
 
 /** The page's background alone, for screens that lay out their own scroller. */
 export function LanePaper({ children }: { children: ReactNode }) {
-  const { c, s } = useLaneTheme();
+  const { c, s, scheme } = useLaneTheme();
   return (
     <View style={s.screen}>
-      <Atmosphere c={c} />
+      <Atmosphere scheme={scheme} />
       {children}
     </View>
   );
@@ -102,10 +121,10 @@ export function LaneButton({
 }) {
   const { c } = useLaneTheme();
   const look = {
-    yes: { bg: c.tideSolid, fg: c.onTide, border: 'transparent' },
-    plain: { bg: c.sheet, fg: c.ink, border: c.lineStrong },
-    no: { bg: 'transparent', fg: c.soft, border: 'transparent' },
-    danger: { bg: 'transparent', fg: c.rose, border: 'transparent' },
+    yes: { bg: c.accent, fg: c.onSolid, border: 'transparent', pressed: c.accentPressed },
+    plain: { bg: c.sheet, fg: c.ink, border: c.lineStrong, pressed: c.hover },
+    no: { bg: 'transparent', fg: c.soft, border: 'transparent', pressed: c.wash },
+    danger: { bg: 'transparent', fg: c.danger, border: 'transparent', pressed: c.dangerWash },
   }[tone];
   return (
     <Pressable
@@ -122,10 +141,10 @@ export function LaneButton({
         {
           minHeight: small ? 36 : 44,
           paddingHorizontal: small ? 14 : 18,
-          borderRadius: 999,
+          borderRadius: LANE_RADIUS_SM,
           borderWidth: 1,
           borderColor: look.border,
-          backgroundColor: !pressed ? look.bg : tone === 'yes' ? c.tideSolidPressed : c.inkWash,
+          backgroundColor: pressed ? look.pressed : look.bg,
           alignItems: 'center',
           justifyContent: 'center',
           opacity: disabled ? 0.45 : 1,
@@ -141,30 +160,30 @@ export function LaneButton({
   );
 }
 
-/** A conversation's state as a dot: apricot waits on you, teal works and ripples. */
+/** A conversation's state as a dot: the accent waits on you, quiet ink works and ripples. */
 export function StateDot({ state }: { state: ConversationState }) {
   const { c } = useLaneTheme();
   const ripple = useSharedValue(0);
   useEffect(() => {
-    ripple.value = state === 'working' ? withRepeat(withTiming(1, { duration: 1800, easing: Easing.bezier(0.2, 0.7, 0.2, 1) }), -1, false) : 0;
+    ripple.value = state === 'working' ? withRepeat(withTiming(1, { duration: 1800, easing: LANE_EASE }), -1, false) : 0;
   }, [state, ripple]);
   const ring = useAnimatedStyle(() => ({ opacity: state === 'working' ? 0.55 * (1 - ripple.value) : 0, transform: [{ scale: 1 + ripple.value * 0.9 }] }));
-  const color = state === 'waiting' ? c.sun : state === 'working' ? c.tide : c.lineStrong;
+  const color = state === 'waiting' ? c.accent : state === 'working' ? c.working : c.lineStrong;
   return (
     <View style={{ width: 18, height: 18, alignItems: 'center', justifyContent: 'center' }}>
-      {state === 'waiting' ? <View style={{ position: 'absolute', width: 18, height: 18, borderRadius: 9, backgroundColor: c.sunWash }} /> : null}
-      <Animated.View style={[{ position: 'absolute', width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: c.tide }, ring]} />
+      {state === 'waiting' ? <View style={{ position: 'absolute', width: 18, height: 18, borderRadius: 9, backgroundColor: c.accentWash }} /> : null}
+      <Animated.View style={[{ position: 'absolute', width: 10, height: 10, borderRadius: 5, borderWidth: 2, borderColor: c.working }, ring]} />
       <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: color }} />
     </View>
   );
 }
 
-/** "On it": three teal dots hopping in turn. */
+/** "On it": three quiet ink dots hopping in turn. */
 export function WorkingDots() {
   const { c } = useLaneTheme();
   return (
     <View style={{ flexDirection: 'row', gap: 4 }}>
-      {[0, 1, 2].map((n) => <Hop key={n} delay={n * 150} color={c.tide} />)}
+      {[0, 1, 2].map((n) => <Hop key={n} delay={n * 150} color={c.working} />)}
     </View>
   );
 }
@@ -178,19 +197,21 @@ function Hop({ delay, color }: { delay: number; color: string }) {
   return <Animated.View style={[{ width: 6, height: 6, borderRadius: 3, backgroundColor: color }, style]} />;
 }
 
-export function Pill({ label, off = false, sun = false }: { label: string; off?: boolean; sun?: boolean }) {
+/** A small state word (.sl-pill); `accent` when it needs the person (.is-sun). */
+export function Pill({ label, off = false, accent = false }: { label: string; off?: boolean; accent?: boolean }) {
   const { c, s } = useLaneTheme();
   return (
-    <View style={[s.pill, off && s.pillOff, sun && { backgroundColor: c.sunWash }]}>
-      <Text style={[s.pillText, off && s.pillOffText, sun && { color: c.sunInk }]}>{label}</Text>
+    <View style={[s.pill, off && s.pillOff, accent && { backgroundColor: c.accentWash }]}>
+      <Text style={[s.pillText, off && s.pillOffText, accent && { color: c.accentText }]}>{label}</Text>
     </View>
   );
 }
 
-export function Callout({ icon, sun = false, children, style }: { icon?: ReactNode; sun?: boolean; children: ReactNode; style?: StyleProp<ViewStyle> }) {
+/** A note in the page (.sl-callout); `accent` when it needs the person (.is-sun). */
+export function Callout({ icon, accent = false, children, style }: { icon?: ReactNode; accent?: boolean; children: ReactNode; style?: StyleProp<ViewStyle> }) {
   const { s } = useLaneTheme();
   return (
-    <View style={[s.callout, sun && s.calloutSun, style]}>
+    <View style={[s.callout, accent && s.calloutAccent, style]}>
       {icon ? <View style={{ marginTop: 1 }}>{icon}</View> : null}
       <Text style={s.calloutText}>{children}</Text>
     </View>
@@ -230,7 +251,7 @@ export function LaneRow({ first, onPress, children, label }: { first: boolean; o
       accessibilityRole="link"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [s.row, !first && s.rowRule, pressed && { backgroundColor: c.tideWash }]}
+      style={({ pressed }) => [s.row, !first && s.rowRule, pressed && { backgroundColor: c.hover }]}
     >
       {children}
     </Pressable>

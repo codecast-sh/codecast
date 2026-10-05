@@ -18,6 +18,19 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Mail and calendar go through Whisk
+
+Decided 2026-10-05. Codecast never holds Gmail or Calendar tokens. Whisk
+(`~/src/mail`, whisk.email) is the family's mail and calendar engine, and its
+Google verification (project `mailones`, `gmail.modify`, CASA assessment due
+Nov 29 2026) is the only one the product needs. A person connects mail from
+codecast through `whisk.email/connect`; Whisk mints a revocable app token,
+codecast stores it encrypted and calls the same Whisk functions the `whisk`
+CLI calls. Codecast keeps Google sign-in with basic scopes only. Whisk's
+design tokens live in `@platform/design`, and the simple lane is built on
+them so the lane and Whisk read as one product; Whisk remains a complete app
+on its own.
+
 ## Pieces and who owns which files
 
 Parallel implementers own disjoint files. Shared files (schema, registry,
@@ -73,7 +86,11 @@ A hosted conversation is an ordinary `conversations` row with
    running turn picks it up before it stops.
 3. **Reserve.** The same mutation reserves the turn's ceiling from the
    wallet. No room: the turn ends at once with reason `budget`, and the
-   person sees why and what to do.
+   person sees why and what to do. A card this turn would have taken up ends
+   the way `begin` ends it (`turns.settleParked`: the answer is read, a card
+   still up is withdrawn when the person moved on, an Always allow still
+   writes its rule), and its call is answered as not run right after the
+   call's message, so it never runs later on a stale answer.
 4. **Run** (internal action). Load history, convert to pi messages, build the
    tool set for this user (only connectors they have), run the loop with the
    reservation as its cost ceiling and an 8 minute deadline. Stream text into
@@ -97,13 +114,16 @@ How the engine (`assistant/turns.ts`, `assistant/history.ts`) does it:
 
 - **Lease** is `leaseTurn`, called by `wake` and at the end of every turn. It
   reserves the plan's `turn_ceiling_usd`, or whatever room is left above
-  `MIN_TURN_USD`. The run's ceiling keeps one web search's estimate of that
-  aside (`runCeiling`), because a tool's own spend is checked only before the
-  next model call. The lease also schedules `expire` for the deadline plus a
+  `MIN_TURN_USD`. The run's ceiling is the whole reservation: a paid tool
+  (search_web) reserves its own estimate through `ctx.remainingUsd` and
+  `ctx.charge` before it spends. The lease also schedules `expire` for the deadline plus a
   margin: a turn whose action died is ended there and charged the cost it
   recorded as it went (`record` keeps `cost_usd` current).
 - **Input.** `begin` writes queued pending rows into the transcript as the
-  person's rows and marks them delivered. A pending row that answers a
+  person's rows and marks them delivered. It first refuses a conversation
+  safety-blocked since its lease: the turn ends before the run starts.
+  The model reads text only, so `enqueuePendingMessage` refuses an image
+  sent to a hosted conversation with a plain error rather than drop it. A pending row that answers a
   decision (client id `decisionAnswerClientId(id)`, or the web's tagged
   "Decision:" text) is a wake only: it is marked delivered and never
   written, because the decision row is the answer.
@@ -132,7 +152,14 @@ How the engine (`assistant/turns.ts`, `assistant/history.ts`) does it:
   `update_event` that emails the guests, an `update_event` that removes a
   guest, or any tool the map does not list.
   The gate applies an allow rule only when it covers exactly what the call's
-  scope would write; refuse rules always apply.
+  scope would write; refuse rules always apply. While content the person did
+  not write is anywhere in the rows the model reads (`ToolSet.readOutside`,
+  the same check `remember` uses, over the whole replayed history), an allow
+  rule never waives a call that reaches other people: a mail from an address
+  the person always allows could otherwise steer the model into sending that
+  address their private mail with no card. Rules for calls that stay in the
+  account, or that reach no one, still apply. Always allow writes a rule
+  once; the same answer given again writes nothing.
 - **Input around a card.** If the person writes again after the card went
   up, the card is withdrawn and the call (and the rest of its batch) is
   answered as not run. A routine firing while the card is open does not
@@ -220,13 +247,24 @@ On a deployment with no Google OAuth client (`googleConfigured()` is false)
 no Google tool is offered and the note says mail and calendar are not
 available there, rather than offering a connect flow that cannot work.
 
+- **Mail and calendar seam.** The mail tools (`mail.ts`) are written against
+  a `Mailbox` and the calendar tools (`calendar.ts`) against a `Calendar`:
+  the few thread and event verbs any engine offers. The tool definitions,
+  their wording, their risk and the gate rules live there and do not depend
+  on the engine. `gmail.ts` (`gmailMailbox`) and `googleCalendar.ts`
+  (`googleCalendar`) are today's implementations over Google tokens. Moving
+  to Whisk (above, ct-57102) adds a Whisk `Mailbox` and `Calendar` and swaps
+  them in `toolsFor`; nothing new should be built on the Google-token path.
 - **Gmail** (`gmail.ts`): what a connection allows is `googleCapabilities`,
   the same rule the Connections screen shows. `search_mail` and `read_thread`
   need any confirmed connection; `draft_reply`, `create_draft`, `archive` and
   `label` need gmail.modify; `send_mail` needs gmail.send (or modify). Drafts
   are risk `read`; send, archive and label are `write`. A reply answers the
   thread's last sent message, never a draft in it, and each recipient entry
-  must be exactly one address. `read_thread` marks a draft in a thread
+  must be exactly one address. A `send_mail` reply goes out under the
+  thread's own subject (mail engines file a reply into its thread only when
+  the subject matches), so a reworded subject is refused. `subject` is always
+  required, so the approval card shows the subject that goes out. `read_thread` marks a draft in a thread
   "Draft (not sent)", keeps the newest messages whole within
   `THREAD_MAX_CHARS` (under the fence's cap, which cuts a block's end),
   shortens older ones to sender, date and snippet, and leaves out the
@@ -237,7 +275,10 @@ available there, rather than offering a connect flow that cannot work.
   `create_event` derives the event id from the call id, so a create that lands
   twice is one event. All-day events cover their day in the calendar's own
   zone. `list_events` says when more events follow; `find_free_time` reads up
-  to four pages and stops its search where reading stopped.
+  to four pages and stops its search where reading stopped. In
+  `update_event` a new start alone moves the event and keeps its length, a
+  new end alone keeps its start, and an all-day event changes time only with
+  both edges given; edges keep the event's own time zone.
 - **Codecast** (`codecast.ts` over the internal functions in `workspace.ts`):
   `list_tasks`, `create_task`, `update_task`, `read_doc`, `write_doc` (create
   or append), `remember`, `recall`, `list_routines`, `cancel_routine` are
@@ -254,14 +295,24 @@ available there, rather than offering a connect flow that cannot work.
   `write_doc` an append to a doc shared by link, or the body doc of a plan
   shared by link (`replace_doc` asks, so it still works); `remember` a memory
   doc shared by link. Text read from mail or the web cannot leave through a
-  tool that never asks. `remember` also asks once the turn has called a mail,
-  calendar or web tool (`index.readOutsideContent`), so a fact steered by an
-  email or page never enters lasting memory unseen. Memory is one personal doc, "What I know about you",
+  tool that never asks. `remember` also asks whenever any row in front of the
+  model, earlier turns' history included, called a tool whose result can hold
+  text the person did not write or approve: mail, calendar, web, `list_tasks`
+  and `read_doc` (a task can be a synced issue, and a doc can hold a line the
+  assistant added while mail was in view). Only `recall` and `list_routines`
+  are left out (`codecast.PERSON_APPROVED_TOOLS`, `index.readOutsideContent`),
+  so a fact steered by an email or page never enters lasting memory unseen,
+  not even by way of a task or doc. `write_doc` refuses to append to the memory
+  doc, which leaves `remember` and the approved `replace_doc` as the only ways
+  to change it. Memory is one personal doc, "What I know about you",
   found by its `source_file` among the person's own docs
   (`docs.ownDocsBySourceFile`); archiving it makes the assistant forget, and
   the next `remember` starts a fresh doc. Routines are triggers on this
   conversation, `once` or `recurring`, at least an hour apart and within the
-  plan's rules.
+  plan's rules. Both rules live in `routineRefusal`
+  (`ROUTINE_MIN_INTERVAL_MS` holds on every plan; a plan's own floor can only
+  raise it), and any interval at all makes a routine recurring, so one too
+  short is refused rather than run once.
 - **Web** (`web.ts`): `fetch_page` (public hosts on every redirect hop,
   1 MB, text only) and `search_web` (one Messages API call on the
   deployment key with the web_search server tool, offered only when the key
@@ -321,12 +372,21 @@ These are starting values pending the founder's call; nothing else in the
 code hardcodes them.
 
 Billing (`convex/billing.ts`) maps each subscription as Stripe holds it now,
-read fresh for every event, so delivery order never moves a plan back. A plan
+read fresh for every event, so delivery order never moves a plan back. Two
+deliveries can read in one order and commit in the other, so each read is
+stamped when it returns (`wallets.subscription_read_at`): an older read of the
+same subscription is skipped, and a subscription the wallet holds as ended
+(`canceled`, `incomplete_expired`) never maps back to live. A plan
 change on a paid-up subscription counts for the rest of the period only
 (`proratedCap`, floored at zero, not at the usage, so going down and back up
 mints nothing); a new subscription buys its period whole. A renewal that is
 failing (`past_due`) keeps the plan's name but rolls into the free allowance
-until the payment lands. A second live subscription for the same person is
+until the payment lands. So does every period that ends after the last one
+Stripe confirmed paid (`wallets.paid_through`, set by `invoice.paid` and by a
+subscription paid in full): a period opens at its boundary before Stripe
+charges the renewal, and its paid allowance arrives with `invoice.paid`, so a
+renewal that is never paid, or whose events stop arriving, grants nothing. A
+plan granted by hand has no `paid_through` and keeps its allowance. A second live subscription for the same person is
 refunded, then canceled.
 
 Because the wallet grants a plan's allowance the moment a period opens and
@@ -382,6 +442,49 @@ How the web lane is wired (`packages/web/components/simple/`):
   the settings switch's words, with no router in it, so the full app and
   the phone use them without loading the lane; `useSetLane.ts` is the web
   gesture that writes the preference and moves the view.
+- **Look.** The lane is Whisk's sibling. `@platform/design`
+  (`~/src/platform/packages/design`) is the one home of the family's
+  palette (light and dark), faces (Instrument Sans for the interface,
+  Newsreader for reading and titles, Fragment Mono for counts), shape and
+  motion: `src/tokens.ts`, rendered by its build into `tokens.css` as
+  `--pd-*` properties (dark under `:root[data-theme="dark"], :root.dark`,
+  so both apps' theme switches reach it). Whisk's `--m-*` and the lane's
+  `--sl-*` are names for those tokens, never their own values.
+  `laneLook.ts` imports the sheet and `@platform/design/fonts` (the three
+  faces, bundled from fontsource as Whisk bundles them, so they come from
+  this origin with the lane's chunk), so every lane surface (the shell and
+  /welcome) carries the family. Shape is the family's two radii:
+  `--sl-radius-sm` is `--pd-radius` (buttons, tabs, menu rows, drafts) and
+  `--sl-radius` is `--pd-radius-lg` (cards, lists, sheets, the composer,
+  bubbles); the phone reads the same two as `LANE_RADIUS_SM` and
+  `LANE_RADIUS`. Fully round is kept for what is round by nature or a chip
+  in Whisk too: the ring mark, dots, the send and icon buttons, idea chips,
+  pills, badges, notes and the meter. Vermilion is spent
+  on what needs the person and on the yes; the assistant at work moves in
+  quiet ink; what the assistant writes and every draft are set in
+  Newsreader, like a letter in Whisk.
+  Motion is the family's one curve: `--sl-ease` is `--pd-t-ease`, and the
+  phone draws on `LANE_EASE` (`Easing.bezier(...MOTION_CURVE)`, the same
+  control points as numbers). /welcome names its three deliberate
+  departures once at its top (`--wl-leave`, `--wl-spring`, `--wl-glide`),
+  on `:root` because view transition pseudo-elements read only what html
+  carries.
+  The lane's `--sl-*` names say what a colour means, one name per meaning:
+  `--sl-accent` (with `-wash`, `-line`, and `--sl-on-solid` for text on a
+  fill) for what needs the person and the yes, `--sl-working` for the
+  assistant at work, `--sl-mark` for quiet ornament (checks, the current
+  tab, link text), `--sl-wash` for neutral fills, `--sl-ok` for done.
+  Lane CSS uses only these; `--pd-*` appears only in the alias block.
+- **Boot.** A cold load of a lane page opens on the family's paper with the
+  lane's ring mark, never the full app's splash. `plugins/laneBoot.ts`
+  injects the `--pd-*` sheet (`tokensStyleTag()` from `@platform/design/vite`,
+  the same head tag Whisk's vite config adds with `designTokens()`, so both
+  apps paint the family's paper before a bundle loads) and an inline copy of
+  `components/simple/laneBoot.ts` into index.html's head, which flags
+  `<html data-lane>` on `/simple` and `/welcome` and swaps index.html's
+  marketing title for `LANE_BOOT_TITLE` ("Codecast") until the page's own
+  title (`useLaneDocumentTitle`) replaces it; index.html's boot rules
+  and `AppLoader` (and `BootFallback`) take the lane form from that flag.
 - **Reads.** Conversations are `sessions` rows with a hosted `agent_type`;
   approvals are pending `sessionDecisions` on them; routines are
   `agentTasks` whose `originating_conversation_id` is one of them.
@@ -397,7 +500,13 @@ How the web lane is wired (`packages/web/components/simple/`):
   `topup` can be bought) and calls `billing.startCheckout` with `{ plan }`
   or `{ topup_usd }`. It gets back a `BillingRedirect` (`{ ok: true, url,
   via }` or `{ ok: false, code, error }`) and opens `url`; Stripe returns
-  the person to `/simple/plan?billing=done|topup|canceled`.
+  the person to `/simple/plan?billing=done|topup|canceled` (`BILLING_RETURN`
+  in `@codecast/shared/contracts/assistant`, which the server's return URLs,
+  the lane's plan path and the return note all read). `useBillingReturn`
+  (web only, its own file: it uses the web's router, and `billing.ts` is
+  shared with the phone, whose bundle cannot load the router) reads the
+  parameter once, takes it off the URL, and says the payment is on its way
+  until the wallet shows it.
   `useBilling().manage()` opens the billing portal (`billing.openPortal`)
   through the same redirect; the plan screen shows "Manage billing" when
   billing is available and `WalletSummary.billing_account` is true. A
@@ -434,7 +543,7 @@ How the phone lane is wired (`packages/mobile`):
 - **Shared rules and words.** The lane's sections, row sublines, draft and
   step folds, home's ideas and counts, and each page's rules live in
   `lane.ts` (`LANE_SECTIONS`, `conversationSubline`, `draftIsLong`,
-  `visibleSteps`, `HOME_IDEAS`, `homeView`, `planCard`, `meterLegend`,
+  `visibleSteps`, `homeIdeas`, `homeView`, `planCard`, `meterLegend`,
   `topupLabel`, `workedTimes`, `connectionControls`), every fixed line the
   pages say is `LANE_COPY`, and a conversation screen's model is
   `useLane.ts useLaneConversation(id, onRealId)`; each platform keeps its
@@ -450,14 +559,27 @@ How the phone lane is wired (`packages/mobile`):
   model (`useLane.ts`, `lane.ts`, `startConversation.ts`, `useLaneGoogle.ts`,
   `connectionWords.ts`, `usePlanFigures.ts`, `billing.ts`); only the views
   are native.
-- **Look.** Bricolage Grotesque ships as four static faces under
-  `assets/fonts`; the lane layout loads them and provides them through
-  `constants/fonts.ts FaceContext`, which the Themed `Text` reads, so every
-  unstyled word in the lane, markdown included, is set in it.
-  `components/simple/laneTheme.ts` derives simple.css's tokens from the app
-  palette, including the deepened `tideSolid` behind words (yes buttons,
-  send) and `sunSolid` behind the approvals badge (simple.css
-  `--sl-sun-solid`), so both read at about 5:1.
+- **Look.** The phone reads the family look from `@platform/design`, as the
+  web lane and Whisk do. `components/simple/laneTheme.ts laneColors(scheme)`
+  takes `PALETTE.light` or `PALETTE.dark` (the app's appearance switch) and
+  computes every colour from web `components/simple/laneTokens.ts
+  LANE_TOKENS`, the one table of the lane's colour names over the palette
+  (`accent`, `accentText`, `wash`, `quiet`, `lamp` and the rest, each a
+  palette colour or a mix of two). simple.css declares the same table as
+  `--sl-*` properties, and `laneTokens.test.ts` fails when the two disagree
+  or a rule repeats a token's mix inline, so a new lane colour is one line
+  in the table plus its declaration. Its radii come from `SHAPE`. The
+  sheet is `constants/Theme.ts schemedStyles`, the per scheme form of
+  `themedStyles`. Instrument Sans (400, 500, 600), Newsreader (400, 500,
+  600, italic, medium italic) and Fragment Mono ship as static faces under
+  `assets/fonts`; the lane layout loads them (useFonts, so an update can
+  ship them) and provides the interface faces through
+  `constants/fonts.ts FaceContext`, which the Themed `Text` reads. LaneUI's
+  `Reading` provides the Newsreader faces to a subtree: what the assistant
+  says and every draft are set in it, bold and italic included. Titles,
+  the approval question, the meter headline and prices name
+  `LANE_READ_FACES` directly; counts are `LANE_MONO_FACE`; the wordmark is
+  `LANE_BRAND_FACE` beside the accent ring mark.
 - **Google and Stripe.** A Google connect must finish in a signed-in browser
   session (the confirm token), so Connect opens the web Connections page in
   the browser; the phone's screen updates when the connection lands.
@@ -478,20 +600,38 @@ How onboarding is wired (`packages/web/app/welcome/`):
 - **The promise** follows what the deployment can do:
   `components/simple/assistantPromise.ts` words the sign in line and the
   entry links once, and promises mail and calendar only where
-  `googleOAuth.connectAvailable` is true. Where it is false, the first ask
-  says once that email and calendar are on their way.
+  `googleOAuth.connectAvailable` is true. Where it is false, /welcome's first
+  ask and the Connections card both say `MAIL_COMING`. `useLaneGoogleAbilities`
+  decides once what an unanswered question means (a failed one counts as
+  able), and every signed-in surface reads `available` from it, /welcome
+  included. `connectionControls` offers Connect only on an explicit yes, and
+  until the deployment answers Connections shows neither Connect nor the
+  coming line. The sign in line ends on the same ask-before-acting promise
+  as every other screen.
+- **The ask-before-acting promise** is worded once in
+  `components/simple/askFirst.ts`, a leaf with no imports so the lane (web
+  and phone) and the public pages share it: `askFirst(act)` frames it and
+  `ASK_FIRST` is the mail and calendar wording that sign in and Connect say.
+  `askFirstFor(can)`, in the same file, names only what the person's Google
+  grant can change, so a lane with no Google says "I always ask before I act
+  for you." Home's and Connections' ledes and the sign in line all end on
+  it. `lane.test.ts` fails if a surface drifts from it.
 - **Connect** reads `useLaneGoogle(LANE_PATHS.welcome)`, the same hook the
   Connections screen uses, and renders the same `Service` rows with
-  `connectionWords`. Google's consent screen opens in the same tab (a tab
+  `connectionWords`. Every line it shares with Connections comes from one
+  place: `LANE_COPY.connections`, `disconnectNote`, and `ASK_FIRST`. Google's consent screen opens in the same tab (a tab
   opened after the URL is minted is outside the tap, and phone browsers
   block it) and returns to /welcome, which mounts `ConnectNotice`. The
   desktop app still hands it to the system browser. `useLaneGoogle().known`
-  waits for both the connection and what its grant allows, and a failed
-  read counts as answered, so no screen waits on it for good.
+  waits for the connection, what its grant allows and, for someone not
+  connected, whether the deployment can connect Google; a failed read counts
+  as answered, so no screen waits on it for good.
 - **First ask** is `lane.ts firstAsks(can)` from what the grant allows, and
   starts through `startConversationWith`, then lands in `/simple/c/<id>`.
   Every first ask works as tapped: none names a person the asker may not
-  know. Signed in, the page mounts `LaneSync` (the lane's store wiring) so
+  know. Home's ideas (`homeIdeas(can)`, through `useLaneGoogleAbilities`)
+  are the first three of the same asks, so home never suggests what is not
+  connected. Signed in, the page mounts `LaneSync` (the lane's store wiring) so
   these writes go out. Acting on any screen (connect, Not now, an ask)
   writes `ui.lane = "simple"` (`lanePref.writeLane`).
 - **Ways in.** The signup page and the marketing home page each carry one

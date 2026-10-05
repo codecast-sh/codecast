@@ -61,11 +61,25 @@
 //     run dir excepted, while TMPDIR and CLAUDE_CODE_TMPDIR (Claude Code's
 //     own scratch, which ignores TMPDIR and defaults to /tmp) point at
 //     <run>/tmp. A write to /tmp fails with "Operation not permitted" and the
-//     agent moves to $TMPDIR or its cwd. Where sandbox-exec cannot apply
-//     (another OS, an already sandboxed parent), the run goes ahead unisolated
-//     and args.json says so; `--isolation-check` answers that question alone
-//     (exit 0 isolated, 3 not), and `./evals check` runs agent reps in
-//     parallel only on a yes.
+//     agent moves to $TMPDIR or its cwd.
+//  6. The same sandbox hides every sign-in a run could write with: the
+//     codecast state directory (its token, the daemon's loopback token) and
+//     the convex CLI's login are unreadable, the guard cannot be rewritten,
+//     and nothing outside the run can be driven from it (a tmux socket, Apple
+//     events). So a route around the guard (unsetting CODECAST_DIR, `bun
+//     main.ts`, curl) finds nothing to sign in with. Live reads go to a
+//     broker in this process (DRY_RUN_BROKER), which runs the guard outside
+//     the sandbox; it classifies the argv again and runs only reads. On
+//     2026-10-05 two agents left running after their harness was killed read
+//     the guard's source, went around it with the real state directory, and
+//     wrote proposals to prod; every layer here answers one step of that.
+//  7. Before the agent starts, the guard must answer a help call in the
+//     agent's own sandbox and env, or the run does not start. An agent run
+//     where sandbox-exec cannot apply (another OS, an already sandboxed
+//     parent) does not start either; `--isolation-check` answers that alone
+//     (exit 0 isolated, 3 not). A run dir holds one live run (harness.pid),
+//     and the agent's process group dies with the harness: on a signal, and
+//     through a watchdog when the harness is killed outright.
 //
 // Output, in the run directory: out.json (the claude result), reply.txt (its
 // final message and cost), said.txt and said.json (every assistant message of
@@ -88,6 +102,7 @@
 // later wakes are replayed after its opening. A turn that fails ends the run.
 // The config dir is removed after the last turn.
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { ccKeychainReadArgs, ccKeychainReadItems } from "../src/ccKeychain.ts";
@@ -98,22 +113,48 @@ function arg(name: string, fallback?: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : fallback;
 }
 
+/** The directories that hold a sign-in a run must never use: the codecast
+ *  state directory (its token, the daemon's loopback token) and the convex
+ *  CLI's login. A run's agent cannot read them, so no route it finds around
+ *  the guard (unsetting CODECAST_DIR, a direct `bun main.ts`, curl with a
+ *  token) can write anywhere; its live reads go through the broker below. */
+function credentialDirs(): string[] {
+  const home = process.env.HOME || os.homedir();
+  return [...new Set([process.env.CODECAST_DIR || path.join(home, ".codecast"), path.join(home, ".codecast"), path.join(home, ".convex")])];
+}
+
 /** Every file under the shared temp dirs is off limits; the run dir and the
  *  directories the run reads from stay reachable even when they sit there.
- *  Paths arrive as -D parameters, so no path is ever quoted into the profile. */
-const SCRATCH_PROFILE = `(version 1)
-(allow default)
-(deny file-read* file-write* (regex #"^/private/(var/)?tmp/"))
-(allow file-read* file-write* (subpath (param "RUN_DIR")))
-(allow file-read* (subpath (param "GUARD_DIR")) (subpath (param "SERVE_DIR")))`;
+ *  The credential dirs are unreadable, the guard cannot be rewritten, and no
+ *  process outside the run can be driven from it (a tmux server's socket
+ *  under /tmp, Apple events to Terminal). Paths arrive as -D parameters, so no
+ *  path is ever quoted into the profile. */
+function scratchProfile(hidden: number): string {
+  return [
+    "(version 1)",
+    "(allow default)",
+    '(deny file-read* file-write* (regex #"^/private/(var/)?tmp/"))',
+    '(deny network-outbound (remote unix-socket (path-regex #"^/private/(var/)?tmp/")))',
+    "(deny appleevent-send)",
+    '(allow file-read* file-write* (subpath (param "RUN_DIR")))',
+    '(allow file-read* (subpath (param "GUARD_DIR")) (subpath (param "SERVE_DIR")))',
+    '(deny file-write* (subpath (param "GUARD_DIR")))',
+    ...Array.from({ length: hidden }, (_, i) => `(deny file-read* file-write* (subpath (param "HIDDEN_${i}")))`),
+  ].join("\n");
+}
 
 /** The argv prefix that runs a command with private scratch, and the env it needs. */
 function scratchSandbox(run: string, readable: { guard: string; serve?: string }) {
   const scratch = path.join(run, "tmp");
   fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
   const real = (p: string) => (fs.existsSync(p) ? fs.realpathSync(p) : p);
-  const prefix = ["sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`, "-p", SCRATCH_PROFILE];
-  return { prefix, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch } };
+  const hidden = credentialDirs().map(real);
+  const prefix = [
+    "sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`,
+    ...hidden.flatMap((dir, i) => ["-D", `HIDDEN_${i}=${dir}`]),
+    "-p", scratchProfile(hidden.length),
+  ];
+  return { prefix, hidden, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch } };
 }
 
 /** Whether the sandbox applies here and does what it claims: a write to /tmp
@@ -121,11 +162,12 @@ function scratchSandbox(run: string, readable: { guard: string; serve?: string }
 function scratchIsolationGap(run: string, guard: string): string | null {
   if (process.platform !== "darwin") return `no sandbox-exec on ${process.platform}`;
   const sb = scratchSandbox(run, { guard });
-  const probe = `p=/tmp/.dry-run-probe-$$; if ( : > "$p" ) 2>/dev/null; then rm -f "$p"; exit 3; fi; : > "$TMPDIR/probe" || exit 4; rm -f "$TMPDIR/probe"`;
-  const r = spawnSync(sb.prefix[0], [...sb.prefix.slice(1), "/bin/sh", "-c", probe], { env: { ...process.env, ...sb.env }, encoding: "utf8" });
+  const probe = `p=/tmp/.dry-run-probe-$$; if ( : > "$p" ) 2>/dev/null; then rm -f "$p"; exit 3; fi; : > "$TMPDIR/probe" || exit 4; rm -f "$TMPDIR/probe"; for d in "$@"; do [ -e "$d" ] && ls "$d" >/dev/null 2>&1 && exit 5; done; exit 0`;
+  const r = spawnSync(sb.prefix[0], [...sb.prefix.slice(1), "/bin/sh", "-c", probe, "probe", ...sb.hidden], { env: { ...process.env, ...sb.env }, encoding: "utf8" });
   if (r.status === 0) return null;
   if (r.status === 3) return "sandbox-exec ran but /tmp stayed writable";
   if (r.status === 4) return "sandbox-exec refused the run's own scratch dir";
+  if (r.status === 5) return "sandbox-exec ran but the sign-in directories stayed readable";
   return `sandbox-exec would not apply: ${(r.stderr || r.error?.message || `exit ${r.status}`).trim()}`;
 }
 
@@ -191,17 +233,27 @@ function loginToken(): string {
 }
 
 fs.mkdirSync(runDir, { recursive: true });
+// One run per run dir. A run started over a live one deletes the live one's
+// config dir and env file, and that agent goes on with no guard first on its
+// PATH (2026-10-05: two such agents wrote proposals to prod).
+const pidFile = path.join(runDir, "harness.pid");
+const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch (err: any) { return err?.code === "EPERM"; } };
+const holder = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8").trim()) : 0;
+if (holder && holder !== process.pid && alive(holder)) refuse(`${runDir} belongs to a run still alive (harness pid ${holder}); stop it or pick another --run`);
+fs.writeFileSync(pidFile, `${process.pid}\n`);
 const configDir = path.join(runDir, ".claude");
 const noCast = path.join(runDir, ".nocast");
 fs.rmSync(configDir, { recursive: true, force: true });
 fs.mkdirSync(configDir, { recursive: true });
 fs.mkdirSync(noCast, { recursive: true });
 
-// A --call run has no tools, so nothing in it can write scratch.
+// A --call run has no tools, so nothing in it can write scratch or reach a
+// sign-in. An agent run without its sandbox could read the codecast sign-in
+// and write around the guard, so it does not start.
 const isolationGap = call ? null : scratchIsolationGap(runDir, guardDir);
-const sandbox = call || isolationGap ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir });
-if (isolationGap) console.error(`scratch not isolated (${isolationGap}): this run shares /tmp with every other run on the machine`);
-const isolation = call ? null : sandbox ? "sandbox-exec" : `none: ${isolationGap}`;
+if (isolationGap) { fs.rmSync(pidFile, { force: true }); refuse(`an agent run needs its sandbox, and this machine cannot give it one (${isolationGap}): without it the agent could read the codecast sign-in and write around the guard`); }
+const sandbox = call ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir });
+const isolation = call ? null : "sandbox-exec";
 
 fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation }, null, 1) + "\n");
 
@@ -214,7 +266,6 @@ env.CLAUDE_CONFIG_DIR = configDir;
 env.CLAUDE_CODE_OAUTH_TOKEN = arg("account") ? profileToken(arg("account")!) : loginToken();
 env.CODECAST_DIR = noCast;
 env.RUN_DIR = runDir;
-env.DRY_RUN_REAL_CODECAST_DIR = process.env.CODECAST_DIR ?? "";
 if (serveDir) env.DRY_RUN_SERVE_DIR = serveDir;
 env.PATH = `${guardDir}:${env.PATH ?? ""}`;
 // The Bash tool runs each command over a snapshot of the user's shell, and a
@@ -232,6 +283,53 @@ env.DRY_RUN_GUARD = path.join(guardDir, "cast");
 env.DRY_RUN_EMPTY_CODECAST_DIR = noCast;
 if (maxOutputTokens) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOutputTokens;
 if (sandbox) Object.assign(env, sandbox.env);
+
+/**
+ * Live reads, run outside the sandbox. The agent cannot read the sign-in, so
+ * its guard hands each live read here (DRY_RUN_BROKER) and this runs the
+ * guard again with the real state directory. That guard classifies the argv
+ * itself, so only a read ever runs with the sign-in, whoever calls the broker.
+ * The broker lives as long as this process: an agent that outlives its
+ * harness reaches nothing live at all.
+ */
+function startBroker(): string {
+  const brokerEnv = { ...env, DRY_RUN_LIVE_READ: "1", DRY_RUN_BROKER: "", DRY_RUN_REAL_CODECAST_DIR: process.env.CODECAST_DIR ?? "" };
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port: 0,
+    idleTimeout: 0,
+    async fetch(req) {
+      const argv = Buffer.from(await req.arrayBuffer()).toString("utf8").split("\0");
+      if (argv[argv.length - 1] === "") argv.pop();
+      const p = Bun.spawn(["bash", path.join(guardDir, "cast"), ...argv], { env: brokerEnv, cwd: runDir, stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+      const said = await new Response(p.stderr).text();
+      await p.exited;
+      return new Response(said);
+    },
+  });
+  return `http://127.0.0.1:${server.port}/read`;
+}
+if (!call) env.DRY_RUN_BROKER = startBroker();
+
+/**
+ * The guard answers before any agent starts. A guard that cannot reach the
+ * real CLI (a here-string the sandbox refused, 2026-10-05) leaves an agent
+ * with nothing that works but routes around it, so the run stops here: the
+ * guard must answer a help call, in the agent's own sandbox and environment.
+ */
+function guardPreflight(): string | null {
+  const dir = path.join(runDir, ".preflight");
+  fs.rmSync(dir, { recursive: true, force: true });
+  fs.mkdirSync(dir, { recursive: true });
+  const probe = 'cast task --help >/dev/null || exit 10; grep -q "^HELP task --help" "$RUN_DIR/calls.log" || exit 11';
+  const r = spawnSync(sandbox!.prefix[0], [...sandbox!.prefix.slice(1), "bash", "-c", probe], { env: { ...env, RUN_DIR: dir }, encoding: "utf8", timeout: 120_000 });
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (r.status === 0) return null;
+  if (r.status === 11) return "a cast call did not reach the guard";
+  return `the guard could not answer cast task --help: ${(r.stderr || r.error?.message || `exit ${r.status}`).trim().slice(0, 400)}`;
+}
+const guardGap = call ? null : guardPreflight();
+if (guardGap) { fs.rmSync(pidFile, { force: true }); refuse(`the dry run's guard is not usable, so no agent starts: ${guardGap}`); }
 // A prod call has no thinking, no CLAUDE.md and no memory. What claude still
 // adds on a subscription login is fixed: an SDK identity line in the system
 // prompt and three short reminders (environment, model, date) before the
@@ -240,6 +338,28 @@ if (sandbox) Object.assign(env, sandbox.env);
 if (call) Object.assign(env, { CLAUDE_CODE_DISABLE_THINKING: "1", CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1", CLAUDE_CODE_DISABLE_ATTACHMENTS: "1" });
 
 const started = Date.now();
+
+// The agent runs in a process group of its own (detached), so stopping this
+// harness never stops it by itself: killing the harness's bun on 2026-10-05
+// left two agents running, and both wrote to prod. A signal to the harness
+// takes the agent's group down with it, and a watchdog outside the harness
+// does the same when the harness dies by SIGKILL.
+let liveChild: number | null = null;
+const killGroup = (pid: number, sig: NodeJS.Signals) => { try { process.kill(-pid, sig); } catch { /* gone */ } };
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+  process.on(sig, () => {
+    if (liveChild) killGroup(liveChild, "SIGTERM");
+    fs.rmSync(pidFile, { force: true });
+    process.exit(sig === "SIGINT" ? 130 : 143);
+  });
+}
+const WATCHDOG = 'while kill -0 "$1" 2>/dev/null; do sleep 2; done; kill -TERM -"$2" 2>/dev/null; sleep 5; kill -KILL -"$2" 2>/dev/null';
+function watchChild(pid: number | undefined) {
+  if (!pid) return null;
+  const w = spawn("/bin/sh", ["-c", WATCHDOG, "watchdog", String(process.pid), String(pid)], { detached: true, stdio: "ignore" });
+  w.unref();
+  return w;
+}
 
 /** The system prompt of a --call run with no --system file: prod calls without
  *  a system prompt send none, and claude always sends one, so it is one short
@@ -284,7 +404,11 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
       "--output-format", "stream-json", "--verbose",
       ...(call ? ["--include-partial-messages"] : []),
     ], { cwd: runDir, env, stdio: [stdin, out, err], detached: true });
+    const watchdog = watchChild(child.pid);
+    liveChild = child.pid ?? null;
     child.on("exit", (exitCode) => {
+      liveChild = null;
+      try { watchdog?.kill(); } catch { /* already gone */ }
       fs.closeSync(out); fs.closeSync(err);
       if (typeof stdin === "number") fs.closeSync(stdin);
       let code = exitCode ?? 1;
@@ -349,5 +473,6 @@ fs.writeFileSync(path.join(runDir, "took.txt"), `${Math.round((Date.now() - star
 // The transcript and everything else claude wrote for this run go with the
 // private config dir; nothing of it ever sat under ~/.claude/projects.
 fs.rmSync(configDir, { recursive: true, force: true });
+fs.rmSync(pidFile, { force: true });
 console.log(`done ${path.basename(runDir)} (${Math.round((Date.now() - started) / 1000)}s, exit ${code})`);
 process.exit(code);

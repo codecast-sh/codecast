@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireUser } from "./lib/auth";
 import { canAccessConversation, canAccessPullRequest } from "./lib/access";
 import { insertTask, patchTask } from "./agentTasks";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { recordExternalEvent } from "./externalEvents";
 import { foldChecksState, foldShepherdState, prUrl, shortSha } from "./lib/gitRefs";
 import { checkLabel, inlineForeignText } from "@codecast/shared/contracts";
@@ -35,11 +36,11 @@ type PR = Doc<"pull_requests">;
  * names a pr_number only fires for that one.
  */
 export async function firePrTrigger(
-  ctx: { scheduler: { runAfter: (ms: number, fn: any, args: any) => Promise<any> } },
+  ctx: Parameters<typeof scheduleTriggerMatch>[0],
   eventType: string,
   pr: Doc<"pull_requests">,
 ): Promise<void> {
-  await ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+  await scheduleTriggerMatch(ctx, {
     event_type: eventType,
     repository: pr.repository,
     pr_number: pr.number,

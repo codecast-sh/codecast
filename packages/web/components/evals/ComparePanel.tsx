@@ -7,8 +7,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import type { BatchStats, BatchesResponse, EvalRoute } from "@codecast/shared/contracts/evalsApi";
-import { ExamplePair } from "../decisions/ChangeCardView";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useEvalsHost } from "./host";
 import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
 import { plural, score2, shortModel, usd, batchLabel } from "./format";
@@ -56,6 +55,7 @@ function SetColumn({ label, set }: { label: string; set: BatchStats }) {
 }
 
 export function ComparePanel({ surface, route, a, b, res, loading, error, onClose }: ComparePanelProps) {
+  const { KeyCap, ExamplePair } = useEvalsHost().ui;
   const [freezeIdx, setFreezeIdx] = useState(0);
   const flips = res?.flips.ok ? res.flips.flips : [];
   const pick = flips[Math.min(freezeIdx, flips.length - 1)] ?? null;
@@ -75,7 +75,7 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
         <span className="ev-sf-compare-actions">
           <EvalsLink
             href={evalsHref.bisectNew({ surface, good: a.batch, bad: b.batch })}
-            className={unseparated ? "ev-btn ev-btn--lg" : "ev-btn ev-btn--lg ev-btn--go sol-btn-solid"}
+            className={unseparated ? "ev-btn ev-btn--lg" : "ev-btn ev-btn--lg ev-btn--go"}
             data-ev-attribute={unseparated ? "anyway" : "separated"}
             title={unseparated ? "Batch 2 against batch 1 alone did not separate; attribution weighs this pair anyway" : undefined}
           >
@@ -83,7 +83,7 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
             <KeyCap size="xs">b</KeyCap>
           </EvalsLink>
           <button type="button" className="ev-sf-iconbtn" onClick={onClose} aria-label="Close the comparison">
-            <X className="w-3.5 h-3.5" />
+            <X className="ev-icon" />
           </button>
         </span>
       </header>
@@ -132,7 +132,7 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
             {!res.flips.ok ? (
               <p className="ev-sf-note ev-quiet">{res.flips.reason}</p>
             ) : (
-              <div className="ev-sf-examples cc-inline">
+              <div className="ev-sf-examples ev-cmp-examples">
                 {res.examples.map((ex) => {
                   const f = flips.find((x) => x.freezeId === ex.freeze);
                   return (

@@ -207,21 +207,23 @@ export function rowsToMessages(rows: readonly MessageRow[]): RowMessage[] {
         callNames.set(call.id, call.name);
         content.push({ type: "toolCall", id: call.id, name: call.name, arguments: parseInput(call.input) });
       }
-      if (content.length > 0) {
-        const message: RowMessage = {
-          role: "assistant",
-          content,
-          ...apiOf(row.model),
-          model: row.model ?? "",
-          ...(row.api_message_id ? { responseId: row.api_message_id } : {}),
-          usage: usageFromRow(row.usage),
-          stopReason: row.tool_calls?.length ? "toolUse" : "stop",
-          timestamp,
-          rowKey,
-          ...origin(row.usage === undefined ? [...noTimestamp, "usage"] : noTimestamp),
-        };
-        out.push(message);
-      }
+      // A row with no content is a model call that failed or was cut off
+      // before it wrote anything (runAssistant stores it for its usage). It
+      // is kept, so the round trip loses no row, and reads back as an error;
+      // prepareContext keeps it from the model, and the run looks past it.
+      const message: RowMessage = {
+        role: "assistant",
+        content,
+        ...apiOf(row.model),
+        model: row.model ?? "",
+        ...(row.api_message_id ? { responseId: row.api_message_id } : {}),
+        usage: usageFromRow(row.usage),
+        stopReason: content.length === 0 ? "error" : row.tool_calls?.length ? "toolUse" : "stop",
+        timestamp,
+        rowKey,
+        ...origin(row.usage === undefined ? [...noTimestamp, "usage"] : noTimestamp),
+      };
+      out.push(message);
       pushResults();
       return;
     }

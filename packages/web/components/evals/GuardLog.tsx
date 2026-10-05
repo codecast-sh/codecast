@@ -5,7 +5,22 @@
 
 import { useState } from "react";
 import { GUARD_STATUSES, type GuardCounts, type GuardEntry, type GuardStatus } from "@codecast/shared/contracts/evalsApi";
-import { GUARD_WORDS, guardCounts } from "./runModel";
+
+export const GUARD_WORDS: Record<GuardStatus, string> = {
+  SERVED: "answered from the frozen world",
+  UNSERVED: "a read the frozen world did not capture",
+  LIVE: "read the live workspace: not reproducible",
+  REFUSED: "an attempted write, refused",
+  UNKNOWN: "a command the CLI does not have",
+  HELP: "asked for help text",
+};
+
+/** Counts per status from the entries, so the strip agrees with the table under it. */
+export function guardCounts(entries: readonly GuardEntry[]): Record<GuardStatus, number> {
+  const out = Object.fromEntries(GUARD_STATUSES.map((s) => [s, 0])) as Record<GuardStatus, number>;
+  for (const e of entries) if (e.status) out[e.status]++;
+  return out;
+}
 
 const countKey = (s: GuardStatus) => s.toLowerCase() as keyof GuardCounts;
 
@@ -35,7 +50,7 @@ export function GuardLog({ entries, counts }: { entries: readonly GuardEntry[]; 
               key={s}
               type="button"
               className={`ev-guard-count ev-gs--${s}`}
-              style={{ background: "var(--sol-card)" }}
+              style={{ background: "var(--ev-card)" }}
               aria-pressed={only === s}
               disabled={!c}
               title={`${GUARD_WORDS[s]}${indexed !== undefined && indexed !== c ? ` (the index counted ${indexed})` : ""}`}
