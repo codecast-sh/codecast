@@ -84,9 +84,7 @@ import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
-import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
-import { useSyncMentionPlans } from "../hooks/useSyncPlans";
-import { useSyncMentionTasks } from "../hooks/useSyncTasks";
+import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
@@ -382,7 +380,7 @@ function useWindowTitle(path: string) {
     // the URL's ?s= deep link is the fallback inside tabTitle.
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
     const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
-    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels);
+    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels, undefined, undefined, undefined, undefined, s);
     return appDocumentTitle(label, rest);
   });
   useWatchEffect(() => {

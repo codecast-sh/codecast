@@ -486,6 +486,29 @@ describe("a transcript promotes a staffing proposal alone", () => {
     expect(html).toContain("entity-ref");
     expect(html).toContain("Rich object preview cards in chat");
   });
+
+  // One change of a proposal (`op-5#2`) is a proposal reference too: alone on
+  // its line it is that change's card, and the payload keeps the number.
+  test("op-N#seq on its own line is a card row that carries the whole reference", () => {
+    const html = renderTranscript("Start with this one.\n\nop-5#2\n\nSay the word.");
+    expect(html).toContain('class="entity-card-row"');
+    expect(html).toContain('data-card-count="1"');
+    expect(html).toContain("Start with this one.");
+    // With no renderer the plugin's own output shows: one link, payload whole.
+    const raw = renderToStaticMarkup(<ReactMarkdown remarkPlugins={TRANSCRIPT}>{"op-5#2"}</ReactMarkdown>);
+    expect(raw).toContain(">card:1:op-5#2</a>");
+    expect(raw.match(/<a/g)?.length).toBe(1);
+  });
+
+  test("op-N#seq inside a sentence stays one inline pill", () => {
+    const html = renderTranscript("Start with op-5#2 and it waits on you.");
+    expect(html).not.toContain("entity-card-row");
+    expect(html.match(/entity-ref/g)?.length).toBe(html.match(/class="not-prose entity-ref/g)?.length);
+    expect(html.match(/class="not-prose entity-ref/g)?.length).toBe(1);
+    expect(html).toMatch(/<p>Start with .*and it waits on you\.<\/p>/);
+    // The number is part of the reference, never loose text after the pill.
+    expect(html).not.toMatch(/<\/a>#2|<\/span>#2/);
+  });
 });
 
 describe("web link previews", () => {

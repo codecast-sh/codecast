@@ -8,8 +8,8 @@
 // their history, and a doc is only created or added to. A row someone else can
 // see (a task synced with an issue, a task or doc shared by link, or in a plan
 // or project shared by link) is refused by those tools (workspace.publicCopy).
-// remember asks instead once the turn has read mail, calendar or the web
-// (index.readOutsideContent). Replacing a doc's text keeps no copy
+// remember asks instead once mail, calendar, the web, or a task or doc is in
+// front of the model (index.readOutsideContent). Replacing a doc's text keeps no copy
 // of the old one, so replace_doc is "write" and asks.
 // Scheduling a routine is "write": it spends the person's usage later,
 // unattended. Cancelling one only stops spending, so it is "read".
@@ -19,11 +19,20 @@
 // tools that return them declare source "workspace" and the harness fences
 // that text as data.
 import { defineTool, Type, type Tool } from "@platform/agent";
+import { ROUTINE_MIN_INTERVAL_MS } from "@codecast/shared/contracts/assistant";
 import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks";
 import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { MEMORY_DOC_TITLE, TASK_LIST_FILTERS } from "./workspace";
 import { instant } from "./calendar";
+
+/** The sourced codecast tools whose results hold only text the person
+ *  approved: the memory doc, which grows through remember's gate or an
+ *  approved replace_doc, and routine titles, set through schedule_routine's
+ *  gate. Every other sourced tool counts as outside content: a task or doc
+ *  can hold text others wrote (a synced issue, a pasted email) or that the
+ *  assistant wrote without asking while mail was in front of it. */
+export const PERSON_APPROVED_TOOLS: ReadonlySet<string> = new Set(["recall", "list_routines"]);
 
 /** What the codecast tools need from the turn action. */
 export interface CodecastDeps {
@@ -37,9 +46,6 @@ const ops = internal.assistant.tools.workspace;
 
 const json = (value: unknown) => JSON.stringify(value, null, 1);
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((v) => Type.Literal(v)));
-
-/** The shortest a routine may repeat at: an hour. A plan may set a longer floor. */
-export const ROUTINE_MIN_HOURS = 1;
 
 export function codecastTools(deps: CodecastDeps): Tool[] {
   const user = { user_id: deps.userId };
@@ -179,7 +185,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
         instruction: Type.String({ description: "What to do each time, written as a request to yourself." }),
         title: Type.Optional(Type.String({ description: "A short name the person sees." })),
         first_run: Type.String({ description: "When it first runs, ISO 8601 with its UTC offset, like 2026-10-06T08:00:00-07:00." }),
-        repeat_every_hours: Type.Optional(Type.Number({ minimum: ROUTINE_MIN_HOURS, description: "Repeat this often; 24 is daily, 168 weekly. Leave out for once." })),
+        repeat_every_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: `Repeat this often; 24 is daily, 168 weekly. Leave out for once. At least ${ROUTINE_MIN_INTERVAL_MS / 3_600_000}; the person's plan may set a longer floor.` })),
       }),
       risk: "write",
       run: async ({ instruction, title, first_run, repeat_every_hours }) => {
@@ -188,7 +194,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
           prompt: instruction,
           ...(title ? { title } : {}),
           run_at: instant(first_run, "first_run"),
-          ...(repeat_every_hours ? { interval_ms: Math.round(repeat_every_hours * 3_600_000) } : {}),
+          ...(repeat_every_hours !== undefined ? { interval_ms: Math.round(repeat_every_hours * 3_600_000) } : {}),
         });
         return { content: `Routine set: ${json(routine)}`, details: { routine_id: routine.id } };
       },

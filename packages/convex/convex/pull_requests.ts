@@ -270,8 +270,7 @@ export const listPRsForTeam = query({
 async function pullRequestByNumber(ctx: any, repository: string, number: number) {
   return await ctx.db
     .query("pull_requests")
-    .withIndex("by_repository", (q: any) => q.eq("repository", normalizeRepository(repository)))
-    .filter((q: any) => q.eq(q.field("number"), number))
+    .withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(repository)).eq("number", number))
     .first();
 }
 

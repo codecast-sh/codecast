@@ -22,7 +22,8 @@ const causeSig = (t: TaskItem & LineCauseTask) =>
 const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}|${p.line_profile?.published_at ?? 0}`;
 const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${d.task_id ?? ""}|${d.workflow_run_id ?? ""}`;
 
-export function useLineFloor() {
+/** `project` pins the floor to one project's line (the project's Line tab). */
+export function useLineFloor(project?: string | null) {
   useSyncSignals();
   useSyncRuns(RUNS_FEED);
   const now = useCoarseNow(30_000);
@@ -37,6 +38,6 @@ export function useLineFloor() {
   // picks one.
   const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
   const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
-  const line = useLineProject(rollup, projects);
+  const line = useLineProject(rollup, projects, project);
   return { now, tasks, projects, lineRows, rollup, line };
 }

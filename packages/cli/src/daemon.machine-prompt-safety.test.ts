@@ -10,7 +10,7 @@ import { isClaudeAutoContinueLine, isRecoveryContinueClientId, isUsageLimitDialo
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission";
 import { LaunchPromptCarriedError, transcriptHasUserPrompt } from "./launchPrompt";
 import { clearPromptHolds, holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold";
-import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END } from "./tmuxPaste";
+import { clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, PASTE_START, PASTE_END } from "./tmuxPaste";
 import { blockAt, functionBlock } from "./test-helpers/sourceRegion";
 import { TmuxDeliveryUncertainError } from "./tmuxDeliveryJournal";
 import { typedPollAnswer } from "./typedPollAnswer";
@@ -143,7 +143,7 @@ function fixture(transport = "tmux", cached = true) {
     isMachineDeliveredMessage, AGENT_CLIENTS, authorizesTeardown, PendingDeliveryHeldError, createDeliveryAdmission,
     LaunchPromptCarriedError, transcriptHasUserPrompt, launchPromptCarries,
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer,
-    clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, PASTE_START, PASTE_END,
+    clientAcceptsBracketedPaste, deliverTextIntoPane, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, PASTE_START, PASTE_END,
     tmuxExec, execAsync,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
@@ -232,7 +232,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "stripComposerChrome", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "TMUX_ONLY_TERMINALS", "DELIVERY_TIMEOUT_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts",
       "ANSI_ESCAPE_RE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS",
     ].map(name => {

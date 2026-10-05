@@ -1,24 +1,25 @@
-import { SquareArrowOutUpRight } from "lucide-react";
+import { Maximize2 } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { canPopOutCall } from "../../lib/desktop";
-import { focusExistingHuddle } from "../../lib/calls/huddleWindow";
+import { expandCall } from "../../lib/calls/huddleWindow";
 import { popOutCall } from "../../lib/calls/popOutCall";
 import { openCallStage, requestCallThread } from "../../lib/calls/callStage";
 import { useRoomThreadUnread } from "../../hooks/useRoomThreadUnread";
 import { UnreadCount } from "./UnreadCount";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 
-/** Open the call: the full stage (video, screen share, transcript) opens
- *  only when asked; on the desktop the call already has a window, so this
- *  raises it, or gives it one. */
+/**
+ * EXPAND: the full stage (video, screen share, transcript), opened only when
+ * asked. One of the call's two moves (the other is pop out / dock, between
+ * the header and the float): expand goes to the stage from wherever the row
+ * is, and the stage's shrink goes back. In a browser the stage is an overlay
+ * in this page; on the desktop it is the call window (lib/calls/huddleWindow).
+ */
 export function openTheCall(): void {
-  if (canPopOutCall()) {
-    void focusExistingHuddle().then((shown) => {
-      if (!shown) void popOutCall();
-    });
-    return;
-  }
-  openCallStage();
+  if (!canPopOutCall()) return openCallStage();
+  void expandCall().then((shown) => {
+    if (!shown) void popOutCall();
+  });
 }
 
 /** The door to the stage on a call's card (the header's face row, a phone's
@@ -29,7 +30,7 @@ export function openTheCall(): void {
 export function OpenCallButton() {
   const roomKey = useInboxStore((s) => s.call.roomKey ?? null);
   const { unread, latest } = useRoomThreadUnread(roomKey);
-  const label = canPopOutCall() ? "Pop out the call" : "Open the call";
+  const label = "Expand the call";
   return (
     <ShortcutTooltip label={label}>
       <span className="engagement-card-toggles">
@@ -44,7 +45,7 @@ export function OpenCallButton() {
           className="engagement-card-toggle relative"
           aria-label={unread > 0 ? `${label}, ${unread} new in its chat` : label}
         >
-          <SquareArrowOutUpRight className="h-3.5 w-3.5" />
+          <Maximize2 className="h-3.5 w-3.5" />
           <UnreadCount count={unread} agent={!!latest?.agent} className="absolute -right-1.5 -top-1.5" />
         </button>
       </span>

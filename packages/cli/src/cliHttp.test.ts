@@ -23,6 +23,22 @@ describe("cliFetch", () => {
     expect(calls).toBe(1);
   });
 
+  test("a lost write race is sent again even for a create, since nothing was applied; another error is not", async () => {
+    const conflict = JSON.stringify({ error: 'Documents read from or written to the "sync_heads" table changed while this mutation was being run and on every subsequent retry' });
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return calls < 3 ? new Response(conflict, { status: 500 }) : new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const res = await cliFetch("https://x/cli/spawn", { method: "POST" });
+    expect([res.status, calls]).toEqual([200, 3]);
+
+    calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 500 }); }) as unknown as typeof fetch;
+    expect((await cliFetch("https://x/cli/spawn", { method: "POST" })).status).toBe(500);
+    expect(calls).toBe(1);
+  }, 30_000);
+
   test("does NOT retry by default (retries=0) on timeout", async () => {
     let calls = 0;
     globalThis.fetch = (async () => {

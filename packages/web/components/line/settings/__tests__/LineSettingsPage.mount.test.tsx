@@ -146,7 +146,7 @@ test("the sections read in order, each value says where it came from, and the St
   expect(finders.map((f) => f.getAttribute("data-lset-finder"))).toEqual(["sentry-web", "evals"]);
   expect(finders[0].querySelector("[data-lset-finder-health]")!.textContent).toMatch(/1 today · last (1h|59m) ago/);
   expect(finders[1].getAttribute("data-silent")).toBe("true");
-  expect(finders[1].querySelector("[data-lset-finder-health]")!.textContent).toBe("silent 14d");
+  expect(finders[1].querySelector("[data-lset-finder-health]")!.textContent).toBe("silent 14d+");
   expect(host.querySelector("[data-stations-slot]")!.getAttribute("data-stations-slot")).toBe("p1");
   expect(host.querySelector("[data-lset-gate]")!.getAttribute("data-lset-gate")).toBe("writable");
   expect(host.querySelector("[data-lset-plate]")!.textContent).toMatch(/Studio/);

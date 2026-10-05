@@ -51,7 +51,28 @@ export function initiativeTabTitle(path: string, initiatives: Record<string, { s
   return row && inWorkspace(row, workspaceKey) ? row.title || null : null;
 }
 
-export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string, initiatives?: Record<string, any>, workspaceKey?: WorkspaceKey | null): string {
+/** The records a tab can be titled by, read by key only (never a scan, so
+ *  the window title can derive on every store tick). */
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any> };
+
+/** A task, project or run tab reads its record's name once the store holds
+ *  the row: the task's title, the project's title, and a run as its cause
+ *  ("ct-56750 run"). Until then pathLabel names the kind, never the id. */
+export function recordTabTitle(path: string, records: TabRecords | undefined): string | null {
+  if (!records) return null;
+  const [, kind, ref, sub] = path.split("?")[0].split("#")[0].split("/");
+  if (!ref) return null;
+  if (kind === "tasks") return records.tasks?.[ref]?.title || null;
+  if (kind === "projects") return records.projects?.[ref]?.title || null;
+  if (kind === "workflows" && ref === "runs" && sub) {
+    const run = records.workflowRuns?.[sub];
+    if (!run) return null;
+    return run.task_short_id ? `${run.task_short_id} run` : run.workflow_name ? `${run.workflow_name} run` : null;
+  }
+  return null;
+}
+
+export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: Record<string, any>, members?: any[], viewerId?: string, initiatives?: Record<string, any>, workspaceKey?: WorkspaceKey | null, records?: TabRecords): string {
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
@@ -63,6 +84,8 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   if (chat) return chat;
   const initiative = initiativeTabTitle(tab.path, initiatives, workspaceKey);
   if (initiative) return initiative;
+  const record = recordTabTitle(tab.path, records);
+  if (record) return record;
   // A vault note is titled by its own H1 or frontmatter title when the index
   // knows one — the filename is the fallback, not the identity (Obsidian's
   // rule). Read lazily so no vault code loads for anyone who never opens one.

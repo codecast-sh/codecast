@@ -30,6 +30,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { sendToSession } from "../../lib/sendToSession";
 import { compressImage } from "../../lib/compressImage";
@@ -549,8 +550,7 @@ function useCardKeys(h: { onClose: () => void; onPrev?: () => void; onNext?: () 
   const onKey = useCallback((e: KeyboardEvent) => {
     const k = ref.current;
     if (e.key === "Escape") { e.preventDefault(); k.onClose(); return; }
-    const t = e.target as HTMLElement | null;
-    if (t && (t.isContentEditable || t.tagName === "TEXTAREA" || t.tagName === "INPUT")) return;
+    if (keyBelongsElsewhere(e.target)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = e.key.toLowerCase();
     if (key === "j") k.onPrev?.();
