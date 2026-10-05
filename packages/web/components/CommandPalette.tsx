@@ -272,6 +272,7 @@ const NAV_PAGES: ReadonlyArray<{
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
   { label: "Team Directory", path: "/team", icon: "grid", keywords: "members people profiles directory roster" },
   { label: "Initiatives", path: "/initiatives", icon: "grid", keywords: "initiative goals objectives company strategy roadmap health progress owner" },
+  { label: "Company document", path: "/company", icon: "file", keywords: "company document goals projects people roles purpose overview read structure org" },
   { label: "Org", path: "/org", icon: "grid", keywords: "organization org chart roles reporting structure hierarchy people sessions tree reparent", feature: "org" },
   { label: "Changes", path: "/changes", icon: "newspaper", keywords: "open changes edition shipped released landed today commits stories what changed changelog", feature: "changes" },
   { label: "Changes: yesterday", path: () => `/changes?d=${localDay(-1)}`, icon: "newspaper", keywords: "edition shipped landed commits stories what changed", feature: "changes", secondary: true },

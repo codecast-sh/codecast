@@ -6,6 +6,7 @@
 // store nor the lane's model.
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { ASK_FIRST, askFirst } from "./askFirst";
 
 export type ConnectAvailability = {
   /** True or false once the deployment has answered; undefined while it loads or after it failed. */
@@ -24,11 +25,12 @@ export function assistantInvite(mail: boolean): string {
   return mail ? "Get an assistant for your email and calendar" : "Get a personal assistant";
 }
 
-/** The one line under the sign in heading. */
+/** The one line under the sign in heading, in the assistant's own voice and
+ *  ending on the same promise the lane makes. */
 export function assistantPromise(mail: boolean): string {
   return mail
-    ? "It reads your mail, finds time on your calendar and handles the follow-ups, and it asks you before anything goes out."
-    : "Ask for help with plans, notes and decisions, and it checks with you before acting.";
+    ? `I read your mail, find time on your calendar and handle the follow-ups. ${ASK_FIRST}`
+    : `Ask me for help with plans, notes and decisions. ${askFirst("act for you")}`;
 }
 
 /** Said on the first ask where Google cannot be connected yet, so the gap reads as planned. */

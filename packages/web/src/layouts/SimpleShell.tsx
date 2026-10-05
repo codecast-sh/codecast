@@ -9,13 +9,14 @@ import { AuthGuard } from "@/components/AuthGuard";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useTheme } from "@/components/ThemeProvider";
-import { useInboxStore } from "@/store/inboxStore";
-import { LANE_COPY, LANE_PATHS, LANE_SECTIONS, conversationTitle, type LaneSectionKey } from "@/components/simple/lane";
+import { LANE_CONVERSATION_ROUTE, LANE_COPY, LANE_PATHS, LANE_SECTIONS, type LaneSectionKey } from "@/components/simple/lane";
+import { useLaneConversationTitle, useLaneDocumentTitle } from "@/components/simple/useLaneTitle";
 import { useLaneData } from "@/components/simple/useLane";
 import { useSetLane } from "@/components/simple/useSetLane";
-import { useLaneFont } from "@/components/simple/useLaneFont";
+import "@/components/simple/laneLook";
 import { LaneSync } from "@/components/simple/LaneSync";
 import { UndoReach } from "@/components/undo/UndoTimeline";
+import { useLaneUndoFrame } from "@/components/simple/useLaneUndoFrame";
 import "@/components/simple/simple.css";
 
 const ICONS: Record<LaneSectionKey, typeof House> = { home: House, approvals: Hand, routines: CalendarClock, connections: Plug, plan: CircleGauge };
@@ -50,16 +51,7 @@ function LaneMenu() {
   );
 }
 
-function ThreadTitle({ id }: { id: string }) {
-  const title = useInboxStore((s) => {
-    const live = s.resolveLiveSessionId(id);
-    const row = s.sessions[live] ?? (s.conversations[live] as any);
-    return conversationTitle(row);
-  });
-  return <span className="sl-convo-title">{title}</span>;
-}
-
-function TopBar({ approvals, threadId }: { approvals: number; threadId: string | null }) {
+function TopBar({ approvals, threadId, threadTitle }: { approvals: number; threadId: string | null; threadTitle: string | null }) {
   const navigate = useNavigate();
   return (
     <header className="sl-top">
@@ -68,7 +60,7 @@ function TopBar({ approvals, threadId }: { approvals: number; threadId: string |
           <button type="button" className="sl-icon-btn" aria-label={LANE_COPY.conversation.back} onClick={() => (window.history.length > 1 ? navigate(-1) : navigate(LANE_PATHS.home))}>
             <ArrowLeft size={19} />
           </button>
-          <ThreadTitle id={threadId} />
+          <span className="sl-convo-title">{threadTitle}</span>
         </div>
       ) : (
         <Link to={LANE_PATHS.home} className="sl-brand" aria-label={LANE_COPY.menu.home}>
@@ -106,14 +98,15 @@ function TabBar({ approvals }: { approvals: number }) {
 }
 
 function LaneChrome() {
-  useLaneFont();
   const { approvals } = useLaneData();
-  const thread = useMatch("/simple/c/:id");
+  const thread = useMatch(LANE_CONVERSATION_ROUTE);
   const threadId = thread?.params.id ?? null;
+  const threadTitle = useLaneConversationTitle(threadId);
+  useLaneDocumentTitle(threadTitle);
   return (
     <div data-simple-lane data-in-thread={threadId ? "" : undefined}>
       <div className="sl-frame">
-        <TopBar approvals={approvals.length} threadId={threadId} />
+        <TopBar approvals={approvals.length} threadId={threadId} threadTitle={threadTitle} />
         <ErrorBoundary name="SimpleLanePage" level="panel">
           <Outlet />
         </ErrorBoundary>
@@ -124,6 +117,7 @@ function LaneChrome() {
 }
 
 export default function SimpleShell() {
+  const undoFrame = useLaneUndoFrame();
   return (
     <AuthGuard signedOutPath={LANE_PATHS.welcome}>
       <LaneSync />
@@ -131,7 +125,7 @@ export default function SimpleShell() {
       {/* The lane's gestures record undo history (a routine paused from its
           page takes an Undo toast), so the lane reaches it the way the
           dashboard does. */}
-      <UndoReach />
+      <UndoReach frame={undoFrame} />
     </AuthGuard>
   );
 }

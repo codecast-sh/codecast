@@ -1,4 +1,3 @@
-import { ArrowRightLeft, Split, Send } from "lucide-react";
 import { canSessionBecomeAgent, fromConvexAgentType, pinnedLaunchOptions, cloudAgentProviderOfConversation, type ConvexAgentType } from "@codecast/shared/contracts";
 
 // ── Moving a session ──────────────────────────────────────────────────────────
@@ -18,10 +17,10 @@ export interface AgentOption {
 
 export type MoveVerb = "switch" | "fork" | "handoff";
 
-export const MOVE_VERBS: Record<MoveVerb, { label: string; hint: string; icon: typeof Split }> = {
-  switch: { label: "Switch agent", hint: "Same session, another agent", icon: ArrowRightLeft },
-  fork: { label: "Fork as", hint: "A copy of this session on another agent", icon: Split },
-  handoff: { label: "Hand off to", hint: "A fresh session, seeded with a brief", icon: Send },
+export const MOVE_VERBS: Record<MoveVerb, { label: string; hint: string }> = {
+  switch: { label: "Switch agent", hint: "Same session, another agent" },
+  fork: { label: "Fork as", hint: "A copy of this session on another agent" },
+  handoff: { label: "Hand off to", hint: "A fresh session, seeded with a brief" },
 };
 
 /**

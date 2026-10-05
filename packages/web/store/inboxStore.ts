@@ -262,7 +262,7 @@ import {
   selectChannelReadMarker,
   type ChatSliceState,
 } from "./chatSlice";
-import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
+import { bindOptimisticMessageWriter, createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFieldsIntent, type OrgSliceState } from "./orgSlice";
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
@@ -6227,7 +6227,7 @@ function lastTimelineMessage(draft: Draft, convId: string): Message | undefined 
   return pending ?? draft.messages[convId]?.at(-1);
 }
 
-function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
+export function appendOptimisticMessage(draft: Draft, convId: string, content: string, images?: OptimisticImage[], clientId?: string): string {
   // A caller-supplied clientId lets a DIFFERENT window (the compose popup) seed
   // an optimistic bubble in this window that still dedupes against the server
   // echo of the send the popup already dispatched — the echo's client_id matches
@@ -6256,6 +6256,10 @@ function appendOptimisticMessage(draft: Draft, convId: string, content: string, 
   draft.pendingMessages[convId].push(msg);
   return id;
 }
+// The org slice's reply bubble (orgSlice sayInThread) is this same row; the
+// slice cannot import this module (it is spread into the store below), so it
+// takes the writer here.
+bindOptimisticMessageWriter(appendOptimisticMessage);
 
 // How long a just-started session stays in NEW after its first send before it
 // moves to the section its state names. Long enough to add a thought or fix

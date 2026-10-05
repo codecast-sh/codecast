@@ -9,10 +9,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Lock, Globe } from "lucide-react";
 import { flipCounts, type BatchStats, type BatchVerdict, type BatchesResponse, type EpochResponse, type SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
-import { SegmentedToggle } from "../SegmentedToggle";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { useContainerWidth } from "../ActivityHeatmap";
-import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { Seismograph } from "./Seismograph";
 import { CostTrack } from "./CostTrack";
 import { FreezeLedger } from "./FreezeLedger";
@@ -20,7 +16,7 @@ import { ComparePanel } from "./ComparePanel";
 import { EpochDiffSheet } from "./EpochDiffSheet";
 import { EvalsLink, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
-import "./surface.css";
+import { useEvalsHost } from "./host";
 import { score2, shortModel, usd, batchLabel } from "./format";
 import { baselineWords, newestBaseline, noiseFlipWords, noiseFlipsShort, separationTitle, verdictOfSet } from "./verdictModel";
 import { surfaceColumns, type SurfaceAxis } from "./seismographModel";
@@ -119,12 +115,14 @@ function Toggle({ on, onClick, children, title }: { on: boolean; onClick: () => 
 export function SurfaceView(props: SurfaceViewProps) {
   const { data, models, filters, onFilters, pinned, compare, onPins, batches, epoch, onEpoch, onNavigate, keysActive, refreshing } = props;
   const { surface } = data;
+  const host = useEvalsHost();
+  const { KeyCap, SegmentedToggle } = host.ui;
   const [axis, setAxis] = useState<SurfaceAxis>("time");
   const [facet, setFacet] = useState(false);
   const [zoom, setZoom] = useState<{ from: number; to: number } | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const [criteriaOpen, setCriteriaOpen] = useState(false);
-  const { ref: chartRef, width } = useContainerWidth(960);
+  const { ref: chartRef, width } = host.useContainerWidth(960);
 
   const inWindow = useMemo(() => {
     const sorted = [...data.batches].sort((a, b) => Date.parse(a.batchAt) - Date.parse(b.batchAt));
@@ -168,7 +166,7 @@ export function SurfaceView(props: SurfaceViewProps) {
   useEffect(() => {
     if (!keysActive) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || isEditableTarget(e.target) || hasOpenModal()) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented || host.keysBusy(e.target)) return;
       const step = (d: number) => {
         if (!graded.length) return;
         const target = compare ?? pinned;
@@ -204,7 +202,7 @@ export function SurfaceView(props: SurfaceViewProps) {
         <div className="ev-sf-head-main">
           <nav className="ev-sf-crumb" aria-label="Breadcrumb">
             <EvalsLink href={evalsHref.home()}>Surfaces</EvalsLink>
-            <ChevronRight className="w-3 h-3" />
+            <ChevronRight />
             <span className="ev-mono">{surface.id}</span>
           </nav>
           <h1 className="ev-page-title">
@@ -228,14 +226,14 @@ export function SurfaceView(props: SurfaceViewProps) {
           {surface.criteria && (
             <div className="ev-sf-criteria">
               <button type="button" onClick={() => setCriteriaOpen((o) => !o)} aria-expanded={criteriaOpen} className="ev-sf-criteria-toggle">
-                <ChevronRight className={`w-3 h-3 transition-transform ${criteriaOpen ? "rotate-90" : ""}`} />
+                <ChevronRight />
                 Criteria
               </button>
               {criteriaOpen ? (
                 <div className="ev-sf-criteria-body">
                   <p>{surface.criteria}</p>
                   {surface.sources.length > 0 && (
-                    <div className="ev-chips mt-2">
+                    <div className="ev-chips">
                       {surface.sources.map((s) => (
                         <span key={s} className="ev-chip">{s}</span>
                       ))}
@@ -380,7 +378,7 @@ export function SurfaceView(props: SurfaceViewProps) {
               <h2 className="ev-title">
                 <VerdictGlyph state={data.ledger.some((r) => r.flips) ? "mixed" : "pass"} size={12} />
                 Freezes
-                <span className="ev-quiet font-normal text-[12px] ev-tabular">
+                <span className="ev-quiet ev-tabular ev-sf-count">
                   {data.ledger.length} {data.ledger.length === 1 ? "freeze" : "freezes"}, {totalFlips} {totalFlips === 1 ? "flip" : "flips"} on the same footing
                   {pairFlips && pairFlips.size > 0 ? `, ${pairFlips.size} between the pinned pair` : ""}
                 </span>

@@ -12,17 +12,18 @@ import { openWebPage } from '@/lib/links';
 import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { LANE_COPY, LANE_PATHS, connectionControls, plainConnectError } from '@codecast/web/components/simple/lane';
 import { useLaneGoogle } from '@codecast/web/components/simple/useLaneGoogle';
+import { MAIL_COMING } from '@codecast/web/components/simple/assistantPromise';
 import { calendarAbility, disconnectNote, emailAbility } from '@codecast/web/components/simple/connectionWords';
 import { LaneTop, useTabBarClearance } from '@/components/simple/LaneChrome';
 import { Callout, LaneButton, LanePage, Pill, Rise } from '@/components/simple/LaneUI';
-import { useLaneTheme } from '@/components/simple/laneTheme';
+import { LANE_RADIUS, useLaneTheme } from '@/components/simple/laneTheme';
 
 function Service({ icon, title, on, children }: { icon: React.ComponentProps<typeof Feather>['name']; title: string; on: boolean; children: string }) {
   const { c, s } = useLaneTheme();
   return (
     <View style={[{ flexDirection: 'row', gap: 14, paddingVertical: 15, paddingHorizontal: 17 }, s.rowRule]}>
-      <View style={{ width: 40, height: 40, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: on ? c.tideWash : c.sunWash }}>
-        <Feather name={icon} size={19} color={on ? c.tideInk : c.sun} />
+      <View style={{ width: 40, height: 40, borderRadius: LANE_RADIUS, alignItems: 'center', justifyContent: 'center', backgroundColor: on ? c.wash : c.accentWash }}>
+        <Feather name={icon} size={19} color={on ? c.mark : c.accent} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
@@ -56,7 +57,7 @@ export default function SimpleConnections() {
       <LaneTop />
       <Rise><Text style={s.pageTitle} accessibilityRole="header">{WORDS.title}</Text></Rise>
       <Rise i={1}>
-        <Text style={s.lede}>{WORDS.lede}</Text>
+        <Text style={s.lede}>{WORDS.lede(can)}</Text>
       </Rise>
 
       <Rise i={2} style={[s.card, { overflow: 'hidden' }]}>
@@ -69,12 +70,13 @@ export default function SimpleConnections() {
         <Service icon="mail" title={WORDS.email} on={!!can?.read_mail}>{emailAbility(can)}</Service>
         <Service icon="calendar" title={WORDS.calendar} on={!!can?.calendar}>{calendarAbility(can)}</Service>
         {error ? (
-          <Callout sun icon={<Feather name="alert-circle" size={17} color={c.sun} />} style={{ marginHorizontal: 17, marginBottom: 14 }}>
+          <Callout accent icon={<Feather name="alert-circle" size={17} color={c.accent} />} style={{ marginHorizontal: 17, marginBottom: 14 }}>
             {error}
           </Callout>
         ) : null}
         {known ? (
           <View style={[{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingHorizontal: 17, paddingTop: 14, paddingBottom: 16 }, s.rowRule]}>
+            {controls.coming ? <Text style={[s.muted, { fontSize: 14, lineHeight: 20 }]}>{MAIL_COMING}</Text> : null}
             {controls.connect ? <LaneButton tone="yes" label={WORDS.connect} onPress={openConnect} /> : null}
             {controls.allow ? <LaneButton tone="yes" label={WORDS.allow} onPress={openConnect} /> : null}
             {controls.confirm ? (
@@ -108,9 +110,11 @@ export default function SimpleConnections() {
         </Rise>
       ) : null}
 
-      <Rise i={4}>
-        <Text style={[s.faint, { fontSize: 13.5, lineHeight: 20, marginTop: 16 }]}>{disconnectNote(connected, email, others)}</Text>
-      </Rise>
+      {controls.coming ? null : (
+        <Rise i={4}>
+          <Text style={[s.faint, { fontSize: 13.5, lineHeight: 20, marginTop: 16 }]}>{disconnectNote(connected, email, others)}</Text>
+        </Rise>
+      )}
     </LanePage>
   );
 }

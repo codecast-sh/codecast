@@ -1,5 +1,6 @@
 import { LogoMark } from "./Logo";
 import { cn } from "../lib/utils";
+import { onLanePage } from "./simple/laneBoot";
 
 /**
  * Holding state for app boot / auth gates and full-page route/data loads:
@@ -16,6 +17,10 @@ import { cn } from "../lib/utils";
  * bar for states with meaningful copy ("Redirecting to GitHub..."). This is
  * the single loader for any holding state — don't hand-roll
  * `<div>Loading...</div>` fallbacks or spinner SVGs.
+ *
+ * On a simple lane page it takes the lane's form instead (the family paper
+ * and the lane's ring mark, styled beside #boot-shell in index.html), so
+ * someone opening the lane never sees the full app's splash.
  */
 export function AppLoader({
   className,
@@ -28,18 +33,26 @@ export function AppLoader({
   label?: string;
   deferIndicator?: boolean;
 }) {
+  const lane = onLanePage();
   return (
     <div
       className={cn(
-        "min-h-screen flex flex-col items-center justify-center gap-5 bg-sol-bg text-sol-text-dim",
+        "app-loader min-h-screen flex flex-col items-center justify-center gap-5 bg-sol-bg text-sol-text-dim",
         className,
       )}
+      data-lane={lane ? "" : undefined}
       role="status"
       aria-label={label ?? "Loading"}
     >
       <div className={cn("flex flex-col items-center gap-5", deferIndicator && "app-loader-indicator-delayed")}>
-        <LogoMark size={size} monochrome className="opacity-45" />
-        <div className="app-loader-bar" />
+        {lane ? (
+          <span className="lane-mark" aria-hidden />
+        ) : (
+          <>
+            <LogoMark size={size} monochrome className="opacity-45" />
+            <div className="app-loader-bar" />
+          </>
+        )}
       </div>
       {label && <div className="text-sm text-sol-text-dim">{label}</div>}
     </div>

@@ -23,6 +23,7 @@ import {
   type AppConnectionStatus,
   type TokenConfigField,
 } from "@codecast/shared/contracts";
+import { describeConnectorError } from "@codecast/shared/contracts/connectorReasons";
 import { commandGroup } from "./commandGroups.js";
 import { ago, fail, optionKey } from "./externalDataCli.js";
 import { promptHiddenSecret } from "./hiddenSecret.js";
@@ -130,6 +131,9 @@ function printSource(s: any): void {
 
 export function registerIntegrationsCommand(program: Command, deps: IntegrationsDeps): void {
   const post = (urlPath: string, body: Record<string, unknown> = {}) => apiPost(deps, urlPath, body);
+  // Connect and disconnect refusals read in the words every web surface uses.
+  const postConnection = (urlPath: string, body: Record<string, unknown>) =>
+    apiPost(deps, urlPath, body, { describeError: describeConnectorError });
 
   const integrations = program
     .command("integrations")
@@ -211,7 +215,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
         if (!token && !options.signed) {
           fail(`No token given. Pipe it in or paste it at the prompt: cast integrations connect ${provider}${descriptor.tokenOptional ? ` (or --signed for none: codecast signs every request)` : ""}`);
         }
-        const result = await post("/cli/integrations/connect-token", {
+        const result = await postConnection("/cli/integrations/connect-token", {
           provider,
           token,
           config: parsed.config,
@@ -224,7 +228,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
       // A browser-flow app takes none of the token settings.
       const stray = tokenConfigFromOptions(descriptor, options);
       if (!stray.ok) fail(stray.error);
-      const result = await post("/cli/integrations/connect-url", { provider, scope: scopeOption(options) });
+      const result = await postConnection("/cli/integrations/connect-url", { provider, scope: scopeOption(options) });
       if (!result?.ok || !result.url) {
         fail(result?.error || `No connect flow available for ${appName(provider)}.`);
       }
@@ -246,7 +250,7 @@ export function registerIntegrationsCommand(program: Command, deps: Integrations
     .option("--team", "Revoke your active team's connection")
     .action(async (providerRaw: string, options: { personal?: boolean; team?: boolean }) => {
       const provider = requireProvider(providerRaw, Object.keys(APP_DESCRIPTORS) as AppId[]);
-      const result = await post("/cli/integrations/disconnect", { provider, scope: scopeOption(options) });
+      const result = await postConnection("/cli/integrations/disconnect", { provider, scope: scopeOption(options) });
       if (!result?.ok) fail(result?.error || `Could not disconnect ${appName(provider)}.`);
       console.log(`${c.green}ok${c.reset} Disconnected ${c.bold}${appName(provider)}${c.reset}`);
     });

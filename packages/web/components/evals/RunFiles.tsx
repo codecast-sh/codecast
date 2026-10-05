@@ -1,11 +1,31 @@
 // The run folder as it sits on disk: a tree of its files, each opening
-// read-only beside it. The page fetches the open file (GET /run/:id/file);
-// this view only draws the tree and what it was handed.
+// read-only beside it. Its panel (runPanels.tsx) fetches the open file
+// (GET /run/:id/file); this view only draws the tree and what it was handed.
 
 import { File, Folder } from "lucide-react";
 import type { RunFileEntry, RunFileResponse } from "@codecast/shared/contracts/evalsApi";
 import { CodeBlock } from "../CodeBlock";
-import { fileLanguage, fileTree } from "./runModel";
+
+const LANGUAGES: Record<string, string> = { json: "json", jsonl: "json", md: "markdown", ts: "typescript", log: "text", txt: "text", patch: "diff" };
+
+export const fileLanguage = (path: string) => LANGUAGES[path.split(".").pop() ?? ""] ?? "text";
+
+/** Files under their folders, folders in path order, a folder's own files before its subfolders. */
+export function fileTree(files: readonly RunFileEntry[]): Array<{ dir: string; files: RunFileEntry[] }> {
+  const groups = new Map<string, RunFileEntry[]>();
+  for (const f of files) {
+    if (f.kind === "dir") {
+      if (!groups.has(f.path)) groups.set(f.path, []);
+      continue;
+    }
+    const cut = f.path.lastIndexOf("/");
+    const dir = cut < 0 ? "" : f.path.slice(0, cut);
+    groups.set(dir, [...(groups.get(dir) ?? []), f]);
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
+    .map(([dir, list]) => ({ dir, files: list.sort((a, b) => a.path.localeCompare(b.path)) }));
+}
 
 const kb = (size: number) => (size >= 1024 ? `${(size / 1024).toFixed(size >= 10_240 ? 0 : 1)} KB` : `${size} B`);
 

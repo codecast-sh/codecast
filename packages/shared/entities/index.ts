@@ -157,6 +157,9 @@ export function entityRoute(type: string, id: string): string | null {
     if (ref?.at_ms != null) return callFrameHref(ref.call, ref.at_ms);
     if (ref) return callAnchorHref(ref.call, ref.turns && { kind: "turns", ...ref.turns });
   }
+  // One change of a proposal opens the proposal's page with that change in focus.
+  const change = norm === "proposal" ? parseProposalChangeRef(id) : null;
+  if (change) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${change.proposal}&focus=${change.seq}`;
   if (QUERY_ONLY.has(norm)) return `${ENTITY_ROUTE[norm]}?${QUERY_PARAM[norm]}=${encodeURIComponent(id)}`;
   return `${ENTITY_ROUTE[norm]}/${id}`;
 }
@@ -201,6 +204,7 @@ export function entityTypeFromId(id: string): EntityType | null {
   if (/^jx[a-z0-9]{5,}$/i.test(s)) return "session";
   const repoObject = parseRepoObjectId(s);
   if (repoObject) return repoObject.type;
+  if (parseProposalChangeRef(s)) return "proposal";
   return inferEntityTypeFromShortId(s);
 }
 
@@ -555,6 +559,39 @@ export function callRefLabelSuffix(ref: { turns?: { from_seq: number; to_seq: nu
   return t ? ` #${t.from_seq}${t.to_seq !== t.from_seq ? `–${t.to_seq}` : ""}` : "";
 }
 
+// ---------------------------------------------------------------------------
+// One change of a proposal
+//
+// A proposal's changes are numbered, and a person or an agent names one the
+// way the server's errors already print it: `op-55#3`. The reference is still
+// a proposal reference (its type, its row in the store, its page); the number
+// says which change the reader is pointed at.
+// ---------------------------------------------------------------------------
+
+/** One change of a proposal, as prose writes it: `op-55#3` (3 is the change's seq). */
+export const PROPOSAL_CHANGE_REF_SOURCE = "op-\\d+#\\d+";
+
+export type ProposalChangeRef = { proposal: string; seq: number };
+
+/** A change reference split into its proposal (lower case) and the change's
+ *  number. Null for a whole proposal (`op-55`) and for anything else. */
+export function parseProposalChangeRef(id: string | null | undefined): ProposalChangeRef | null {
+  const m = /^(op-\d+)#(\d+)$/i.exec((id || "").trim());
+  return m ? { proposal: m[1].toLowerCase(), seq: Number(m[2]) } : null;
+}
+
+/** The prose form of a change reference: `op-55#3`. */
+export function proposalChangeRefId(proposal: string, seq: number): string {
+  return `${proposal}#${seq}`;
+}
+
+/** ` #3`: what a change reference adds to the proposal's name in a pill (the
+ *  way callRefLabelSuffix does for a stretch of a call). Web and mobile pills
+ *  both read it. */
+export function proposalChangeLabelSuffix(ref: ProposalChangeRef | null | undefined): string {
+  return ref ? ` #${ref.seq}` : "";
+}
+
 /**
  * The registered short ids as a regex source: `(?:ct|pl|tr)-<tail>|(?:in)-\d+`.
  * `tail` is what follows a prefix that is not an English word. Exported so a
@@ -574,10 +611,10 @@ export function shortIdSource(tail = "[a-z0-9]+"): string {
  * alternation — mobile's markdown tokenizer scans every inline form in one
  * pass, so it needs the branch, not a standalone matcher.
  */
-export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
+export const BARE_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource()}|jx[a-z0-9]{5,}|doc:[a-z0-9]{20,}|[a-z0-9]{32}`;
 
 /** Ids as they appear inside an `@[Title id]` mention (a label is not an object). */
-export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
+export const MENTION_ID_SOURCE = `${PR_REF_SOURCE}|${COMMIT_REF_SOURCE}|${CALL_TURNS_REF_SOURCE}|${CALL_MOMENT_REF_SOURCE}|${PROPOSAL_CHANGE_REF_SOURCE}|${shortIdSource("\\w+")}|jx\\w+|doc:\\w+|label:\\w+|date:\\d{4}-\\d{2}-\\d{2}|[a-z0-9]{32}`;
 
 /** Scans prose for bare object ids. Word-bounded so it can't split a longer token. */
 export function bareEntityIdRegex(): RegExp {
@@ -786,8 +823,13 @@ export function parseEntityUrl(
   const param = QUERY_PARAM[type];
   if (param && (segs.length < 2 || QUERY_ONLY.has(type))) {
     if (segs.length >= 2) return null;
-    const qId = search ? new URLSearchParams(search).get(param)?.trim() : null;
-    return qId ? { type, id: qId } : null;
+    const params = search ? new URLSearchParams(search) : null;
+    const qId = params?.get(param)?.trim();
+    if (!qId) return null;
+    // A proposal's page with a change in focus (`&focus=3`) is that change. A
+    // focus on a goal or a role (`in-4`, `@handle`) is still the whole proposal.
+    const change = type === "proposal" ? parseProposalChangeRef(`${qId}#${params?.get("focus")?.trim() ?? ""}`) : null;
+    return { type, id: change ? proposalChangeRefId(change.proposal, change.seq) : qId };
   }
 
   if (segs.length < 2) return null;

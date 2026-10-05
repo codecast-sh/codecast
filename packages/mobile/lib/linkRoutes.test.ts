@@ -150,3 +150,11 @@ describe('redirectSystemPath (+native-intent)', () => {
     expect(redirectSystemPath({ path: 'exp://192.168.1.5:8081/--/session/x', initial: true })).toBe('exp://192.168.1.5:8081/--/session/x');
   });
 });
+
+describe('pull request links', () => {
+  test('both web forms open the phone PR screen', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/pr/codecast-sh/codecast/412')).toBe('/pr/codecast-sh/codecast/412');
+    expect(mobileRouteForUrl('https://codecast.sh/r/codecast-sh/codecast/pull/412')).toBe('/pr/codecast-sh/codecast/412');
+    expect(mobileRouteForUrl('https://github.com/codecast-sh/codecast/pull/412')).toBe('/pr/codecast-sh/codecast/412');
+  });
+});

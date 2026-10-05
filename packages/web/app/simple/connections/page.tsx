@@ -8,6 +8,7 @@ import { CalendarDays, CircleAlert, Mail } from "lucide-react";
 import { ConnectNotice } from "../../../components/simple/ConnectNotice";
 import { Service } from "../../../components/simple/Service";
 import { LANE_COPY, LANE_PATHS, connectionControls, plainConnectError } from "../../../components/simple/lane";
+import { MAIL_COMING } from "../../../components/simple/assistantPromise";
 import { useLaneGoogle } from "../../../components/simple/useLaneGoogle";
 import { calendarAbility, disconnectNote, emailAbility } from "../../../components/simple/connectionWords";
 
@@ -24,7 +25,7 @@ export default function SimpleConnections() {
     <main>
       <h1 className="sl-page-title sl-rise">{WORDS.title}</h1>
       <p className="sl-lede sl-rise" style={{ ["--i" as any]: 1 }}>
-        {WORDS.lede}
+        {WORDS.lede(can)}
       </p>
 
       <ConnectNotice success={WORDS.success} />
@@ -49,6 +50,7 @@ export default function SimpleConnections() {
           </div>
         ) : null}
         <div className="sl-actions">
+          {controls.coming ? <span className="sl-muted" style={{ alignSelf: "center", fontSize: "0.9rem" }}>{MAIL_COMING}</span> : null}
           {controls.connect ? (
             <button type="button" className="sl-btn is-yes" disabled={actions.busy} onClick={() => void actions.connect()}>
               {WORDS.connect}
@@ -80,9 +82,11 @@ export default function SimpleConnections() {
         </div>
       </section>
 
-      <p className="sl-faint sl-rise" style={{ ["--i" as any]: 3, fontSize: "0.86rem", marginTop: "1rem" }}>
-        {disconnectNote(connected, email, others)}
-      </p>
+      {controls.coming ? null : (
+        <p className="sl-faint sl-rise" style={{ ["--i" as any]: 3, fontSize: "0.86rem", marginTop: "1rem" }}>
+          {disconnectNote(connected, email, others)}
+        </p>
+      )}
     </main>
   );
 }

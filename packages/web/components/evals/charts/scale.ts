@@ -68,7 +68,7 @@ export function nearestIndex(xs: readonly number[], x: number): number {
   return Math.abs(xs[lo] - x) <= Math.abs(xs[hi] - x) ? lo : hi;
 }
 
-/** Local `YYYY-MM-DD` for every day from `from` to `to`, the shape ActivityCharts' timeAxisLabels reads. */
+/** Local `YYYY-MM-DD` for every day from `from` to `to`, the shape timeAxisLabels reads. */
 export function dayList(from: number, to: number): string[] {
   const out: string[] = [];
   const d = new Date(from);
@@ -87,3 +87,30 @@ export const dayStart = (day: string) => {
 
 /** How dense the ink is for a mean score: never fully clear, so a scored 0 still reads as a well. */
 export const wellInk = (mean: number | null) => (mean === null ? 0 : 0.08 + 0.72 * Math.max(0, Math.min(1, mean)));
+
+export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+// X-axis ticks for a continuous day series: weekly on short ranges, month
+// starts otherwise, suppressing labels that would crowd the previous one.
+// The app's activity charts draw their day axes with it too.
+/** `minGap` is the least distance between two labels' centres, in px: a caller whose labels are wider than the default's passes their width plus a gutter. */
+export function timeAxisLabels(dates: string[], toX: (i: number) => number, minGap = 28): { label: string; x: number }[] {
+  const labels: { label: string; x: number }[] = [];
+  const mn = MONTHS;
+  // Under ten days a Monday-only axis leaves one label or none, so every day ticks.
+  const daily = dates.length <= 10;
+  const weekly = dates.length <= 45;
+  let lastM = -1;
+  let lastX = -Infinity;
+  for (let i = 0; i < dates.length; i++) {
+    const [y, m, d] = dates[i].split("-").map(Number);
+    const isTick = daily || (weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM);
+    if (!isTick) continue;
+    lastM = m - 1;
+    const x = toX(i);
+    if (x - lastX < minGap) continue;
+    lastX = x;
+    labels.push({ label: weekly ? `${mn[m - 1]} ${d}` : mn[m - 1], x });
+  }
+  return labels;
+}

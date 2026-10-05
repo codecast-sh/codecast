@@ -5,7 +5,7 @@ import { X, Plus, XCircle, ArrowRightToLine, Copy as CopyIcon, ExternalLink, App
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { useShortcutAction, formatShortcutLabel } from "../shortcuts";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
-import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle } from "../lib/tabTitle";
+import { tabTitle, tabSessionId, chatTabTitle, initiativeTabTitle, recordTabTitle } from "../lib/tabTitle";
 import { pathLabel } from "../lib/pathLabel";
 import { detachTab } from "../lib/openIntent";
 import { bridge, isDesktop, isDetachedTabWindow } from "../lib/desktop";
@@ -37,6 +37,8 @@ export function TabBar() {
     (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id) ?? "").join("\x1f"),
     // And for an initiative's tab: its title, once the row is in the store.
     (s) => s.tabs.map((t) => initiativeTabTitle(t.path, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id)) ?? "").join("\x1f"),
+    // And for a task, project or run tab: its record's name, by key.
+    (s) => s.tabs.map((t) => recordTabTitle(t.path, s) ?? "").join("\x1f"),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -202,7 +204,7 @@ export function TabBar() {
       >
         {tabs.map((tab: AppTab, i: number) => {
           const isActive = tab.id === activeTabId;
-          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id));
+          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id), s);
           const sid = tabSessionId(tab);
           const sessionRow = sid ? s.sessions[sid] : null;
           const prevActive = i > 0 && tabs[i - 1].id === activeTabId;

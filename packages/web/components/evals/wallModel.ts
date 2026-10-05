@@ -3,8 +3,7 @@
 // beside SurfaceWallView.
 
 import type { OverviewResponse, SurfaceOverview, MovedEvent } from "@codecast/shared/contracts/evalsApi";
-import { timeAxisLabels } from "../ActivityCharts";
-import { DAY_MS, dayList, dayStart, linear } from "./charts/scale";
+import { DAY_MS, dayList, dayStart, linear, timeAxisLabels } from "./charts/scale";
 import { evalsHref } from "./evalsPaths";
 import { newestBaseline } from "./verdictModel";
 import { plural, shortModel, shortRuler } from "./format";

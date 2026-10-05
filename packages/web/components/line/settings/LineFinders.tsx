@@ -52,7 +52,7 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
       {lp.finders.length === 0 && (
         <p className="lset-empty">Nothing files into this line on its own yet. A person can still file with <code>cast signal add</code>; a finder files for you.</p>
       )}
-      {lp.finders.map((f) => {
+      {lp.finders.map((f, i) => {
         const health = bySource.get(f.source.toLowerCase());
         const key = `finders.${f.id}`;
         const last = health?.newest ? `${ageShort(now - health.newest.created_at)} ago` : null;
@@ -77,7 +77,8 @@ export function LineFinders({ lp, sense, now, writable, readOnlyWhy, states, dev
                 const text = key === "kind" ? kindText(f.kind) : (f[key] ?? "");
                 return (
                   <div key={ff.key} className="lset-finder-field">
-                    <dt>{ff.key}<span className="lset-what">{ff.what}</span></dt>
+                    {/* The first card explains each part; the rest just name it. */}
+                    <dt title={ff.what}>{ff.key}{i === 0 && <span className="lset-what">{ff.what}</span>}</dt>
                     <dd>
                       <InlineEdit
                         text={text}

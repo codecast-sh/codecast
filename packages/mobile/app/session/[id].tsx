@@ -1,9 +1,12 @@
 import { captureError } from '@/lib/analytics';
+import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from '@codecast/web/lib/sessionControl';
+import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast/web/lib/sessionAgentActions';
+import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
 import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { optionalNative } from '@/lib/optionalNative';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
-import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
@@ -205,6 +208,8 @@ type Message = {
   files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
+  /** A synthetic pull request row: the PR it opens. */
+  pr?: { repository: string; number: number };
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -2344,13 +2349,20 @@ function SystemMessage({ message }: { message: Message }) {
     const prMatch = prContent.match(/^#(\d+)\s+(.*)/);
     const prNum = prMatch ? prMatch[1] : '';
     const prTitle = prMatch ? prMatch[2] : prContent;
+    const pr = message.pr;
     return (
-      <RNView style={styles.prCard}>
+      <TouchableOpacity
+        style={styles.prCard}
+        disabled={!pr}
+        activeOpacity={0.6}
+        onPress={() => pr && router.push(`/pr/${pr.repository}/${pr.number}` as any)}
+        accessibilityRole="button"
+      >
         <FontAwesome name="code-fork" size={11} color={Theme.violet} style={{ marginRight: 6 }} />
         <RNText style={styles.prNumber}>#{prNum}</RNText>
         <RNText style={styles.prTitle} numberOfLines={1}>{prTitle}</RNText>
         <RNText style={styles.commitTime}>{formatTimestamp(message.timestamp)}</RNText>
-      </RNView>
+      </TouchableOpacity>
     );
   }
 
@@ -3679,7 +3691,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     _id: string; sha: string; message: string; timestamp: number;
   }>;
   const pullRequests = useConversationPullRequests(gitLinkConversationId) as Array<{
-    _id: string; number: number; title: string;
+    _id: string; number: number; title: string; repository?: string;
     created_at: number; merged_at?: number;
   }>;
 
@@ -3723,6 +3735,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           content: `#${pr.number} ${pr.title}`,
           timestamp: pr.merged_at || pr.created_at,
           message_uuid: `pr-${pr.number}`,
+          pr: pr.repository ? { repository: pr.repository, number: pr.number } : undefined,
         });
       }
     }
@@ -4382,6 +4395,37 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // Ordered by how often a phone user reaches for each: a live huddle first
   // (time-sensitive), then the everyday reads and shares, then recovery, then
   // the rare ones behind "More…" so the first sheet stays short.
+  // Switch agent / fork as: web's session menu rules (lib/sessionControl) and
+  // actions (lib/sessionAgentActions). An agent that cannot take this session
+  // over is left off the list.
+  const pinnedAgents = usePinnedAgentIds();
+  const moveVerbs = conversation ? sessionMoveVerbs(conversation.agent_type, conversation.session_id, conversation.model) : [];
+  const pickAgentFor = (verb: 'switch' | 'fork') => {
+    if (!conversation) return;
+    const agentType = conversation.agent_type;
+    const options = moveAgentOptions(agentType, conversation.message_count, pinnedAgents)[verb].filter((o) => !o.disabledReason || o.current);
+    showActionSheet(MOVE_VERBS[verb].label, options.map((o) => ({
+      label: o.label,
+      selected: o.current,
+      onPress: () => {
+        if (o.current) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        const row = sessionRowFor(conversation._id as string, agentType);
+        if (verb === 'switch') {
+          void switchSessionAgent(row, o.type).catch((err) => Alert.alert('Could not switch agent', err instanceof Error ? err.message : undefined));
+          return;
+        }
+        try {
+          const fork = forkSessionAsAgent(row, o.type);
+          router.push(`/session/${fork.sessionId}` as any);
+          void fork.ready.catch((err) => Alert.alert('Could not fork', err instanceof Error ? err.message : undefined));
+        } catch (err) {
+          Alert.alert('Could not fork', err instanceof Error ? err.message : undefined);
+        }
+      },
+    })));
+  };
+
   const handleMoreActions = useCallback(() => {
     const items: SheetItem[] = [];
     if (huddle.enabled && huddle.inRoom > 0) items.push({ label: `Join Huddle (${huddle.inRoom})`, onPress: huddle.press });
@@ -4401,12 +4445,14 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     if (boardHref) items.push({ label: 'Open Board', onPress: () => router.push(boardHref as never) });
     if (huddle.enabled && huddle.inRoom === 0 && !huddle.pressDisabled) items.push({ label: 'Start Huddle', onPress: huddle.press });
     items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
+    if (moveVerbs.includes('switch')) items.push({ label: 'Switch Agent…', onPress: () => pickAgentFor('switch') });
     items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
     if (conversation && isConvexId(conversation._id)) {
       items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
     }
     const rare: SheetItem[] = [];
     if (hasForkFamily) rare.push({ label: 'Fork Tree', onPress: () => setTreeModalVisible(true) });
+    if (moveVerbs.includes('fork') && conversation && isConvexId(conversation._id)) rare.push({ label: 'Fork as…', onPress: () => pickAgentFor('fork') });
     rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
     if (conversation?.session_id) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
     items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });

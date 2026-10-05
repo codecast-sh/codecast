@@ -55,7 +55,9 @@ logged_argv() {
 }
 LOGGED="$(logged_argv "$@")"
 CLASSIFY="${DRY_RUN_CLASSIFY:-}"
-[ -n "$CLASSIFY" ] || printf '%s\n' "$LOGGED" >> "$LOG"
+# Set when the harness's broker runs a live read this guard already logged.
+LIVE_READ="${DRY_RUN_LIVE_READ:-}"
+[ -n "$CLASSIFY" ] || [ -n "$LIVE_READ" ] || printf '%s\n' "$LOGGED" >> "$LOG"
 SERVE="${DRY_RUN_SERVE_DIR:-}"
 [ -z "$CLASSIFY" ] || SERVE=""
 mark() { printf '%s %s\n' "$1" "$LOGGED" >> "$LOG"; }
@@ -136,6 +138,8 @@ is_read() {
     # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
     stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
+    # A project's expectations; propose, apply and drop write.
+    expectations) [ "${2:-}" = show ] ;;
     *) return 1 ;;
   esac
 }
@@ -148,7 +152,9 @@ frozen() {
 real_bin() {
   local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local dir
-  IFS=: read -ra dirs <<< "$PATH"
+  # Process substitution, not a here-string: a here-string needs a temp file,
+  # which the run's sandbox refuses.
+  IFS=: read -ra dirs < <(printf '%s\n' "$PATH")
   for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/cast" ] && { printf '%s' "$dir/cast"; return 0; }; done
   echo "dry run: no real cast on PATH for a read" >&2; exit 1
 }
@@ -156,10 +162,27 @@ real_bin() {
 # CODECAST_DIR is an empty directory on purpose). Its output and exit code are
 # kept under $RUN_DIR/live-reads/<key>, the served-read layout, so a run that
 # read the live workspace shows what it saw.
+#
+# Under prompt-dry-run.ts the agent's sandbox cannot read that state directory,
+# so the read goes to the harness's broker (DRY_RUN_BROKER), which runs this
+# guard again outside the sandbox with DRY_RUN_LIVE_READ set; that run
+# classifies the argv on its own and writes the same live-reads files, which
+# this side then answers from. With the harness gone the read reaches nothing.
 real() {
-  local bin dir key code; bin="$(real_bin)" || exit 1
-  mark LIVE
-  dir="${RUN_DIR:-$PWD}/live-reads"; mkdir -p "$dir"; key="$(read_key "$@")"
+  local bin dir key code
+  dir="${RUN_DIR:-$PWD}/live-reads"; key="$(read_key "$@")"
+  if [ -n "${DRY_RUN_BROKER:-}" ]; then
+    mark LIVE
+    rm -f "$dir/$key.out" "$dir/$key.exit"
+    printf '%s\0' "$@" | curl -sS --max-time 900 --data-binary @- "$DRY_RUN_BROKER" >&2 \
+      || { echo "dry run: the harness that runs this run's live reads is gone, so 'cast $ARGV' reaches nothing" >&2; exit 1; }
+    [ -f "$dir/$key.exit" ] || exit 1
+    cat "$dir/$key.out"
+    exit "$(tr -dc 0-9 < "$dir/$key.exit")"
+  fi
+  bin="$(real_bin)" || exit 1
+  [ -n "$LIVE_READ" ] || mark LIVE
+  mkdir -p "$dir"
   if [ -n "${DRY_RUN_REAL_CODECAST_DIR:-}" ]; then CODECAST_DIR="$DRY_RUN_REAL_CODECAST_DIR" "$bin" "$@" > "$dir/$key.out"
   else env -u CODECAST_DIR "$bin" "$@" > "$dir/$key.out"; fi
   code=$?

@@ -31,13 +31,15 @@ export function readProjectRegistrations(host?: RemoteHost, file = projectRegist
   return host ? rows.filter((r) => r.host === `${host.user}@${host.address}` || (id && r.hostId === id)) : rows;
 }
 
-export async function registerProjectContext(host: RemoteHost, sourceRoot: string, targetRoot: string, opts: { file?: string; hostId?: string; previousAddress?: string } = {}): Promise<void> {
+/** Record that `targetRoot` on the host mirrors `sourceRoot` here. True when that changed the registrations. */
+export async function registerProjectContext(host: RemoteHost, sourceRoot: string, targetRoot: string, opts: { file?: string; hostId?: string; previousAddress?: string } = {}): Promise<boolean> {
   const file = opts.file ?? projectRegistrationsFile();
   sourceRoot = await fs.promises.realpath(sourceRoot);
   targetRoot = path.posix.normalize(targetRoot);
   assertSafePath(path.posix.relative(remoteHome(host), targetRoot));
   const key = `${host.user}@${host.address}`;
   const hostId = opts.hostId ?? registeredHostId(host);
+  let changed = false;
   await withMirrorLock(path.join(path.dirname(file), "registrations-lock"), async () => {
     const rows = readProjectRegistrations(undefined, file);
     let migrated = false;
@@ -52,7 +54,9 @@ export async function registerProjectContext(host: RemoteHost, sourceRoot: strin
     rows.sort((a, b) => `${a.host}:${a.targetRoot}`.localeCompare(`${b.host}:${b.targetRoot}`));
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
     atomicWriteFile(file, JSON.stringify(rows, null, 2) + "\n", { mode: 0o600 });
+    changed = true;
   });
+  return changed;
 }
 
 export async function unregisterProjectContext(host: RemoteHost, targetRoot: string, opts: { file?: string; hostId?: string } = {}): Promise<void> {

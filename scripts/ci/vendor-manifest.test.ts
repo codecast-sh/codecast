@@ -10,9 +10,13 @@ import { join } from "node:path";
 
 const REPO = new URL("../..", import.meta.url).pathname;
 const SCRIPT = join(REPO, "scripts/vendor-platform.sh");
+// The wrapper above names codecast's mirror; the checks themselves are the
+// shared script a vendor run leaves in the mirror, committed beside the
+// manifest because a runner has no canonical repo to fetch it from.
+const SHARED = "platform/vendor-platform.sh";
 
 /** The script's own environment stripped of every pointer to a canonical repo. */
-const NO_CANONICAL_REPO = { ...Bun.env, HOME: "/nonexistent", PLATFORM_SRC: undefined };
+const NO_CANONICAL_REPO = { ...Bun.env, HOME: "/nonexistent", PLATFORM_DIR: undefined, PLATFORM_SRC: undefined };
 
 async function run(script: string, mode: string, env: Record<string, any> = NO_CANONICAL_REPO) {
   const proc = Bun.spawn(["bash", script, mode], { env, stdout: "pipe", stderr: "pipe" });
@@ -53,8 +57,9 @@ describe("the committed mirror", () => {
   });
 });
 
-// A fixture repo laid out like the real one, with the real script copied in so
-// it resolves the fixture as its root. Nothing here touches the checkout.
+// A fixture repo laid out like the real one, with the real wrapper and the
+// shared script it runs copied in so they resolve the fixture as their root.
+// Nothing here touches the checkout.
 const fixtures: string[] = [];
 afterEach(() => {
   for (const dir of fixtures.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -64,6 +69,7 @@ async function fixture(): Promise<{ root: string; script: string }> {
   const root = mkdtempSync(join(tmpdir(), "vendor-manifest-"));
   fixtures.push(root);
   await Bun.write(join(root, "scripts/vendor-platform.sh"), await Bun.file(SCRIPT).text());
+  await Bun.write(join(root, SHARED), await Bun.file(join(REPO, SHARED)).text());
   await Bun.write(
     join(root, "packages/app/package.json"),
     JSON.stringify(
@@ -79,6 +85,18 @@ async function fixture(): Promise<{ root: string; script: string }> {
   await Bun.write(join(root, "platform/packages/foo/src/index.ts"), "export const foo = 1;\n");
   return { root, script: join(root, "scripts/vendor-platform.sh") };
 }
+
+describe("a clone that lacks the shared script", () => {
+  test("says which file is missing instead of passing or vendoring", async () => {
+    // The wrapper and platform/vendor-platform.sh ship together. A commit that
+    // carries only the wrapper must fail the runner's check out loud.
+    const { root, script } = await fixture();
+    rmSync(join(root, SHARED));
+    const result = await run(script, "--check-manifest");
+    expect(result.code).toBe(2);
+    expect(result.out).toContain("platform/vendor-platform.sh is not committed");
+  });
+});
 
 describe("--check-manifest", () => {
   test("fails until a manifest exists, then passes", async () => {

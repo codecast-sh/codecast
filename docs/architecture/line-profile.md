@@ -161,7 +161,7 @@ cast org template install packages/cli/org-templates/line --instance <name> \
   approved. A manifest without `role.line` leaves the role on the default,
   the shipped `line`. An upgrade cannot change either; that is a separate org
   decision, as for the other caps.
-- **Two routines, both created paused and gated** like every template
+- **Three routines, all created paused and gated** like every template
   routine. `lessons-weekly` runs the cast-lessons skill over the project's
   sessions and files `lesson:<rule>` signals into it (LP5).
   `finder-health` reads the profile's finders and each one's newest signal
@@ -170,6 +170,9 @@ cast org template install packages/cli/org-templates/line --instance <name> \
   cause. A finder is silent past the input `finders.silent_days` (default 3),
   or past one interval of its own schedule when it runs less often. It
   requires the evidence check `profile`.
+  `expectations-daily` reads the team's context since the expectations
+  cursor (decisions, tasks, calls, chat) and proposes changes to the
+  project's expectations, each quoting its source (the-line-model.md LM5).
 - **The starter profile.** The role's one setup item reads the repository's
   `.codecast/line.toml`. When there is none it shows the person the output of
   `cast line profile --starter --project <name>` (the defaults of LP2 written

@@ -28,7 +28,8 @@ export class EvalsRequestError extends Error {
 
 /** Sends one bridge request and returns the status and body, never throwing on a status. */
 export interface EvalsTransport {
-  readonly kind: "loopback" | "fixture";
+  /** What answers: codecast's are "loopback" and "fixture"; another host names its own. */
+  readonly kind: string;
   send(req: EvalsBridgeRequest): Promise<{ status: number; body: unknown }>;
 }
 
