@@ -54,6 +54,17 @@
         }
       })();
     </script>
+    <script>
+      // A see-through desktop window (the shell's --transparent-window: the
+      // palette, the rings, the agent dock) paints nothing while it boots.
+      if (window.__CODECAST_ELECTRON__ && window.__CODECAST_ELECTRON__.isTransparentWindow) {
+        document.documentElement.classList.add('transparent-window');
+      }
+    </script>
+    <style>
+      html.transparent-window, html.transparent-window body { background: transparent !important; }
+      html.transparent-window #boot-shell { display: none; }
+    </style>
     <style>
       /* Mirrors AppLoader.tsx (monochrome mark + hairline shimmer on sol-bg) so
          the static → React handoff is invisible — change them together. */

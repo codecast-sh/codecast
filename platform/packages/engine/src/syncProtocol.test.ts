@@ -204,6 +204,16 @@ describe("exclude / include lifecycle", () => {
     expect(next["items:a"]).toBeDefined();
     expect(next["items:stub"]).toBeDefined();
   });
+
+  // A delta batch that carries the included row is the server listing it: the
+  // acknowledgement the include waits for. Kept, it would outlive the row and
+  // block the server's later deletion of it.
+  it("clears an include when a delta batch carries the row", () => {
+    const pending: Record<string, PendingEntry> = { "items:a": { type: "include", ts: 1 } };
+    const prev = { a: row("a"), b: row("b") };
+    const { pending: next } = applySyncTable("items", [row("a")], pending, prev, { isDelta: true });
+    expect(next["items:a"]).toBeUndefined();
+  });
 });
 
 describe("identity reuse and nested fields", () => {

@@ -35,7 +35,8 @@ const { MemoryRouter } = await import("react-router");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { freezeFixture } = await import("../__fixtures__/freeze");
-const { FreezeView, FreezeRepStrip, defaultFreezePair, batchColumns, shownRep, promptFilePairs, attributionEnds, pairStory, tickLabel } = await import("../FreezeView");
+const { FreezeView, FreezeRepStrip } = await import("../FreezeView");
+const { defaultFreezePair, batchColumns, shownRep, promptFilePairs, attributionEnds, pairStory, tickLabel } = await import("../freezeModel");
 const { FreezePage } = await import("../pages/FreezePage");
 type FreezePair = import("../FreezeView").FreezePair;
 
@@ -157,8 +158,8 @@ describe("the view", () => {
     const shown = fx.freeze.runs.filter(shownRep);
     expect(container.querySelectorAll("[data-ev-rep]").length).toBe(shown.length);
     expect(container.querySelectorAll('[data-ev-strip-flip="broke"]').length).toBe(Object.values(fx.cells).filter((c) => c.flip === "broke").length);
-    expect(container.querySelector(`[data-ev-rep="${fx.pick.a}"] [data-ev-rep-selected]`)?.textContent).toBe("A");
-    expect(container.querySelector(`[data-ev-rep="${fx.pick.b}"] [data-ev-rep-selected]`)?.textContent).toBe("B");
+    expect(container.querySelector(`[data-ev-selected-rep="${fx.pick.a}"]`)?.textContent).toBe("A");
+    expect(container.querySelector(`[data-ev-selected-rep="${fx.pick.b}"]`)?.textContent).toBe("B");
     expect(container.querySelectorAll("[data-ev-epoch-band]").length).toBe(fx.freeze.epochs.length);
     await unmount();
   });
@@ -276,7 +277,8 @@ describe("the view", () => {
     const href = container.querySelector("[data-ev-attribute]")!.getAttribute("href")!;
     const q = new URLSearchParams(href.split("?")[1]);
     expect(href.startsWith("/evals/bisect/new?")).toBe(true);
-    expect(q.get("freeze")).toBe(fx.freeze.freeze.id);
+    // Addresses carry a freeze by its 8-character prefix (the tab list persists them); the api resolves the prefix.
+    expect(q.get("freeze")).toBe(fx.freeze.freeze.id.slice(0, 8));
     expect(q.get("surface")).toBe("settle");
     expect(q.get("good")).toBe(fx.pick.flip!.before);
     expect(q.get("bad")).toBe(fx.pick.flip!.batch);

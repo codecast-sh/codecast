@@ -589,6 +589,25 @@ describe("a permanent refusal lifts the refused action's locks", () => {
     expect(h.state.items[SERVER_ID].title).toBe("server");
   });
 
+  // A follower's refused write already reached its host as a mut, held there
+  // under a mirrored lock no echo will retire: the rollback rides the same tee,
+  // field by field, naming the refused locks.
+  it("offers the rollback to the replication tee with the refused locks", async () => {
+    const h = makeHarness();
+    h.wireDispatch(async () => ({}));
+    h.wrapped.seedRow(SERVER_ID, { title: "server" });
+    await waitFor(() => h.outbox.size === 0);
+    const teed: Array<{ name: string; patches: any[]; refused?: any[] }> = [];
+    (h.wrapped as any)._setActionTee((name: string, patches: any[], _s: any, meta?: any) => teed.push({ name, patches, refused: meta?.refused }));
+    h.wireDispatch(async () => { throw new Error("Uncaught Error: not yours"); });
+    h.wrapped.rename(SERVER_ID, "refused");
+    await waitFor(() => h.state.pending[`items:${SERVER_ID}:title`] === undefined);
+    const rollback = teed.find((t) => t.refused);
+    expect(rollback?.name).toBe("rename");
+    expect(rollback?.patches).toEqual([{ op: "replace", path: ["items", SERVER_ID, "title"], value: "server" }]);
+    expect(rollback?.refused?.map((l: any) => [l.key, l.value])).toEqual([[`items:${SERVER_ID}:title`, "refused"]]);
+  });
+
   it("leaves a field a later write owns", async () => {
     const h = makeHarness();
     h.wireDispatch(async () => ({}));

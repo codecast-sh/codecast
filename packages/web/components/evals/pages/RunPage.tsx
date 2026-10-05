@@ -14,7 +14,8 @@ import { useShortcutAction, useShortcutContext } from "../../../shortcuts";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useEvalsStore } from "../../../store/evalsStore";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import { RunView, runTabs, seedNeighbours, tabOfHash, type RunTab } from "../RunView";
+import { RunView } from "../RunView";
+import { runTabs, seedNeighbours, tabOfHash, type RunTab } from "../runModel";
 
 /** Sticky chrome above a gate or check when the page lands on it: the tab bar. */
 const LAND_MARGIN = 52;
@@ -78,9 +79,10 @@ export function RunPage({ view }: { view: Extract<EvalsView, { view: "run" }> })
     if (run.status === 404) {
       return <EmptyState title="No run by that id" description={`${view.runId} is not in the index. It may have been pruned, or the address was cut short.`} action={{ label: "Open the wall", href: evalsHref.home() }} />;
     }
+    if (run.error) return <EmptyState title="This run could not be read" description={run.error} />;
     return (
       <div className="ev-page text-[12px] ev-quiet" data-evals-page="run" data-evals-loading>
-        {run.error ?? "Reading the run folder..."}
+        Reading the run folder...
       </div>
     );
   }

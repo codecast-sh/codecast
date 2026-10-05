@@ -57,11 +57,11 @@ afterEach(async () => {
   document.body.innerHTML = "";
 });
 
-function key(type: "keydown" | "keyup", k: string, mods: { ctrlKey?: boolean; shiftKey?: boolean } = {}) {
+function key(type: "keydown" | "keyup", k: string, mods: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) {
   const code = /^[a-z]$/.test(k) ? `Key${k.toUpperCase()}` : k;
   act(() => { document.body.dispatchEvent(new KeyboardEvent(type, { key: k, code, bubbles: true, cancelable: true, ...mods })); });
 }
-const press = (k: string, mods: { ctrlKey?: boolean; shiftKey?: boolean } = {}) => key("keydown", k, mods);
+const press = (k: string, mods: { ctrlKey?: boolean; shiftKey?: boolean; altKey?: boolean } = {}) => key("keydown", k, mods);
 const holdControl = () => key("keydown", "Control", { ctrlKey: true });
 const releaseControl = () => key("keyup", "Control");
 const undoable = (label: string) => pushUndo({ label, undo: () => {}, redo: () => {} });
@@ -76,6 +76,22 @@ function walkIntoPeek() {
   press("z", { ctrlKey: true });
   expect(card()).toBe("peek");
 }
+
+test("the history chord during a peek pins the card instead of closing it", () => {
+  walkIntoPeek();
+  press("z", { ctrlKey: true, altKey: true });
+  expect(card()).toBe("interactive");
+  // The walk ended pinned: releasing the modifier leaves the card up.
+  releaseControl();
+  expect(card()).toBe("interactive");
+});
+
+test("the history chord with no card opens it, and again closes it", () => {
+  press("z", { ctrlKey: true, altKey: true });
+  expect(card()).toBe("interactive");
+  press("z", { ctrlKey: true, altKey: true });
+  expect(card()).toBe("closed");
+});
 
 test("H during the fade pins the card and leaves the page's H alone", () => {
   walkIntoPeek();
@@ -127,6 +143,21 @@ test("Ctrl+H pins the card from a focused empty composer", () => {
   const typed = send("keydown", "h", { ctrlKey: true });
   expect(card()).toBe("interactive");
   expect(typed.defaultPrevented).toBe(true);
+});
+
+// A pointer resting on the card after the modifier went up holds it open as
+// a peek that takes no keys: H typed into the composer is the composer's, and
+// ends the walk like any other key.
+test("in the hovered peek, H from a focused field is typing, not a pin", () => {
+  const send = inEmptyComposer();
+  const cardEl = document.body.appendChild(document.createElement("div"));
+  cardEl.setAttribute("data-undo-timeline", "");
+  send("keyup", "Control");
+  act(() => { cardEl.dispatchEvent(new Event("pointerover", { bubbles: true })); });
+  expect(card()).toBe("peek");
+  const typed = send("keydown", "h");
+  expect(typed.defaultPrevented).toBe(false);
+  expect(card()).toBe("closed");
 });
 
 test("with no walk, H is the page's again", () => {
@@ -259,4 +290,87 @@ test("a chord the field declines reaches the app once the field's history is spe
   expect(undone).toBe(1);
   chord();
   expect(undone).toBe(2);
+});
+
+// A rich editor (TipTap over ProseMirror) keeps its own history and edits its
+// DOM itself: select-all+Backspace runs in its keymap and fires no input
+// event, and neither does its own undo. The editor hangs off its DOM as
+// `.editor` (TipTap sets it), with `on("update")` and `can().undo()`.
+function richEditor(opts: { undoable: boolean }) {
+  const el = document.body.appendChild(document.createElement("div"));
+  el.className = "ProseMirror";
+  el.tabIndex = 0;
+  Object.defineProperty(el, "isContentEditable", { value: true });
+  const updates = new Set<() => void>();
+  const done: string[] = [];
+  const editor = {
+    on: (ev: string, fn: () => void) => { if (ev === "update") updates.add(fn); return editor; },
+    can: () => ({ undo: () => done.length > 0, redo: () => false }),
+  };
+  (el as any).editor = editor;
+  const change = (text: string, record: boolean) => {
+    if (record) done.push(el.textContent ?? "");
+    el.textContent = text;
+    for (const fn of [...updates]) fn();
+  };
+  // Its keymap: the chord the app leaves alone is the editor's undo, and a
+  // key press applies the edit the test queued (typing, select-all+Backspace).
+  let queued: string | null = null;
+  el.addEventListener("keydown", (e) => {
+    if (queued !== null) {
+      e.preventDefault();
+      change(queued, opts.undoable);
+      queued = null;
+      return;
+    }
+    if (e.key !== "z" || !e.ctrlKey || e.defaultPrevented || !done.length) return;
+    e.preventDefault();
+    change(done.pop()!, false);
+  });
+  el.focus();
+  const keydown = (key: string, ctrlKey = false) => act(() => { el.dispatchEvent(new KeyboardEvent("keydown", { key, code: /^[a-z]$/.test(key) ? `Key${key.toUpperCase()}` : key, ctrlKey, bubbles: true, cancelable: true })); });
+  return {
+    el,
+    /** The user edits, through a key the editor's keymap handles. */
+    type: (text: string) => { queued = text; keydown("Backspace"); },
+    /** A change no key made: a draft seeded from the store, a collaborator's edit. */
+    remote: (text: string) => change(text, opts.undoable),
+    chord: () => keydown("z", true),
+  };
+}
+
+test("a rich editor cleared after the app's entry gets its draft back on the first chord", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: true });
+  ed.type("abc");
+  ed.type("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(ed.el.textContent).toBe("abc");
+  expect(undone).toBe(0);
+});
+
+test("a rich editor with nothing of its own to take back hands the chord to the app", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: false });
+  ed.type("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(undone).toBe(1);
+});
+
+test("a change no key made in a rich editor is not the user's edit: the chord stays the app's", async () => {
+  let undone = 0;
+  pushUndo({ label: "app", undo: () => { undone += 1; }, redo: () => {} });
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  const ed = richEditor({ undoable: true });
+  ed.remote("seeded");
+  ed.remote("");
+  ed.chord();
+  await act(() => new Promise((r) => setTimeout(r, 5)));
+  expect(undone).toBe(1);
 });

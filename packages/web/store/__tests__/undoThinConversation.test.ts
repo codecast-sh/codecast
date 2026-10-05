@@ -33,7 +33,12 @@ const captureUndoPatches = () => {
     if (action === "applyUndoPatches") patches.push(sent ?? {});
     return null;
   }, { owner });
-  return { patches, stop: () => state()._clearDispatch(owner) };
+  // The undo of a thin row writes back less than its forward sent (the spell
+  // keeps the row and restores fields), so it waits for that send to settle.
+  const until = async (n: number) => {
+    for (let i = 0; i < 200 && patches.length < n; i++) await Bun.sleep(2);
+  };
+  return { patches, until, stop: () => state()._clearDispatch(owner) };
 };
 
 const expectMetaLoads = () => {
@@ -64,7 +69,7 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
   // With neither an inbox row nor loaded meta, nothing here knows what the
   // fields held before, so the undo could only write a clear: unpin then undo
   // would send the unpin again. Such a gesture is not recorded.
-  test("a gesture on a row with no inbox row either records nothing", () => {
+  test("a gesture on a row with no inbox row either records nothing", async () => {
     seed(false);
     const sent = captureUndoPatches();
     try {
@@ -78,6 +83,7 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
       state().toggleFavorite(ID);
       expect(getUndoHistory().items).toEqual([]);
       expect(performUndo()).toBe(false);
+      await sent.until(1);
       expect(sent.patches).toEqual([]);
       expect(conv().inbox_pinned_at).toBe(123);
       expect(conv().inbox_stashed_at).toBe(9);
@@ -86,13 +92,14 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     }
   });
 
-  test("a loaded conversation with no inbox row stays undoable: the field was absent", () => {
+  test("a loaded conversation with no inbox row stays undoable: the field was absent", async () => {
     seed(false);
     state().syncRecord("conversations", ID, { ...META, _creationTime: 5 });
     const sent = captureUndoPatches();
     try {
       state().toggleFavorite(ID);
       expect(performUndo()).toBe(true);
+      await sent.until(1);
       expect(sent.patches.map((p) => p.conversations?.[ID])).toEqual([{ is_favorite: null }]);
     } finally {
       sent.stop();
@@ -101,7 +108,7 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
 
   // The thin row says nothing about what the field held; the inbox row's cell
   // does. Both reach one server row, so the undo must send the prior value.
-  test("unfavorite then undo sends the prior value, and loaded meta keeps it", () => {
+  test("unfavorite then undo sends the prior value, and loaded meta keeps it", async () => {
     useInboxStore.setState({
       sessions: { [ID]: { _id: ID, title: "Twinless", updated_at: 1, is_favorite: true } } as any,
       favorites: [{ _id: ID }] as any,
@@ -111,6 +118,7 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
       state().toggleFavorite(ID);
       expect(conv().is_favorite).toBe(false);
       expect(performUndo()).toBe(true);
+      await sent.until(1);
       expect(sent.patches.map((p) => p.conversations?.[ID])).toEqual([{ is_favorite: true }]);
     } finally {
       sent.stop();
@@ -124,13 +132,14 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expect(convLocks()).toEqual([]);
   });
 
-  test("a favorite known only from the favorites list comes back as a favorite", () => {
+  test("a favorite known only from the favorites list comes back as a favorite", async () => {
     useInboxStore.setState({ favorites: [{ _id: ID }] as any });
     const sent = captureUndoPatches();
     try {
       state().toggleFavorite(ID);
       expect(state().sessions[ID].is_favorite).toBe(false);
       expect(performUndo()).toBe(true);
+      await sent.until(1);
       expect(sent.patches.map((p) => p.conversations?.[ID])).toEqual([{ is_favorite: true }]);
     } finally {
       sent.stop();
@@ -141,7 +150,7 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expect(conv().is_favorite).toBe(true);
   });
 
-  test("unpin and restore through patchConversation undo to the prior stamps", () => {
+  test("unpin and restore through patchConversation undo to the prior stamps", async () => {
     useInboxStore.setState({
       sessions: { [ID]: { _id: ID, title: "Twinless", updated_at: 1, inbox_pinned_at: 77, inbox_stashed_at: 55 } } as any,
     });
@@ -151,10 +160,12 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
       expect(performUndo()).toBe(true);
       state().patchConversation(ID, { inbox_dismissed_at: null, inbox_stashed_at: null });
       expect(performUndo()).toBe(true);
+      await sent.until(2);
       const [unpin, restore] = sent.patches.map((p) => p.conversations?.[ID]);
       expect(unpin).toEqual({ inbox_pinned_at: 77 });
       expect(restore.inbox_stashed_at).toBe(55);
       expect(restore.inbox_dismissed_at ?? null).toBe(null);
+      await sent.until(1);
       expect(sent.patches.length).toBe(2);
     } finally {
       sent.stop();
@@ -198,11 +209,12 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     }
   });
 
-  test("the undo's server half clears the field", () => {
+  test("the undo's server half clears the field", async () => {
     const sent = captureUndoPatches();
     try {
       state().toggleFavorite(ID);
       performUndo();
+      await sent.until(1);
       const fields = sent.patches.map((p) => p.conversations?.[ID]).find(Boolean);
       expect(fields).toBeDefined();
       expect("is_favorite" in fields!).toBe(true);
@@ -271,12 +283,14 @@ describe("undo of a gesture whose conversations copy held a stale stamp", () => 
     });
   });
 
-  test("snooze then undo sends no inbox_dismissed_at and keeps the copies clear", () => {
+  test("snooze then undo sends no inbox_dismissed_at and keeps the copies clear", async () => {
     const sent = captureUndoPatches();
     try {
       state().snoozeSession(SID, Date.now() + 3_600_000);
       expect(performUndo()).toBe(true);
+      await sent.until(1);
       expect(sent.patches.length).toBeGreaterThan(0);
+      await sent.until(1);
       expect(JSON.stringify(sent.patches)).not.toContain("inbox_dismissed_at");
       expect(state().sessions[SID].inbox_dismissed_at ?? null).toBe(null);
       expect(state().conversations[SID].inbox_dismissed_at ?? null).toBe(null);

@@ -84,3 +84,6 @@ export const dayStart = (day: string) => {
   const [y, m, d] = day.split("-").map(Number);
   return new Date(y, m - 1, d).getTime();
 };
+
+/** How dense the ink is for a mean score: never fully clear, so a scored 0 still reads as a well. */
+export const wellInk = (mean: number | null) => (mean === null ? 0 : 0.08 + 0.72 * Math.max(0, Math.min(1, mean)));

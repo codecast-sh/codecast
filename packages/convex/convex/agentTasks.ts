@@ -19,7 +19,7 @@ import { armedTriggerKindFor } from "./dormancy";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { isHostedAgentType, triggerFiringSource, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
@@ -29,6 +29,7 @@ import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
+import { hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -58,8 +59,18 @@ export async function refreshArmedTriggerKind(
 
 // Patch a trigger and keep its home's armed_trigger_kind in step.
 export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: Record<string, any>) {
+  if ("originating_conversation_id" in patch) {
+    patch = { ...patch, hosted_home: await hostedHomeStamp(ctx, patch.originating_conversation_id) };
+  }
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+}
+
+// The agent_tasks.hosted_home stamp for a routine whose home is `homeId`:
+// true when the home is a hosted conversation, else absent.
+async function hostedHomeStamp(ctx: TaskCtx, homeId: Id<"conversations"> | string | null | undefined): Promise<true | undefined> {
+  const home = homeId ? await ctx.db.get(homeId as Id<"conversations">) : null;
+  return home && isHostedAgentType(home.agent_type) ? true : undefined;
 }
 
 // A recurring trigger keeps a cadence: slots one interval apart. run_at is when
@@ -98,6 +109,55 @@ export async function getManageableTask(
   return task;
 }
 
+// Every verb that writes or arms a routine anchored on a hosted conversation
+// is that conversation's owner's (getArmableTask, applyTaskUpdate, through
+// hostedOwnerRefusal); anyone who may manage it keeps pause and cancel, the
+// off switches.
+const taskAnchors = (task: Pick<Doc<"agent_tasks">, "originating_conversation_id" | "created_by_conversation_id" | "target_conversation_id">) =>
+  [task.originating_conversation_id, task.created_by_conversation_id, task.target_conversation_id];
+
+/** getManageableTask for a verb that arms a routine or feeds it input
+ *  (resume, activate, reactivate, run now): throws for anyone but the owner
+ *  of a hosted conversation the routine is anchored on. */
+export async function getArmableTask(
+  ctx: TaskCtx,
+  taskId: Id<"agent_tasks">,
+  userId: Id<"users">
+): Promise<Doc<"agent_tasks"> | null> {
+  const task = await getManageableTask(ctx, taskId, userId);
+  if (!task) return null;
+  const refusal = await hostedOwnerRefusal(ctx, userId, taskAnchors(task));
+  if (refusal) throw new Error(refusal);
+  return task;
+}
+
+// Every path that creates or arms a routine (create, an edit to its home or
+// schedule, resume, activate, run now on a paused one) refuses one a hosted
+// conversation does not allow: a routine its owner did not set, or one the
+// owner's plan does not cover (assistant/routines.ts). Arming paths pass the
+// status the routine is moving to.
+async function assertRoutineAllowed(ctx: TaskCtx, routine: HostedRoutine & HostedThreads) {
+  const refusal = await hostedRoutineRefusal(ctx, routine) ?? await hostedThreadRefusal(ctx, routine);
+  if (refusal) throw new Error(refusal);
+}
+
+type HostedThreads = {
+  target_conversation_id?: Id<"conversations"> | string | null;
+  created_by_conversation_id?: Id<"conversations"> | string | null;
+};
+
+// A hosted conversation's transcript is written by its turn engine alone
+// (messages.refuseHostedTranscriptWrite), so a trigger never names one as the
+// thread its results are posted to, and names one as its creator (whose run
+// outcomes it is woken with) only when the trigger's owner owns it.
+async function hostedThreadRefusal(ctx: TaskCtx, routine: HostedThreads & { user_id: Id<"users"> }): Promise<string | null> {
+  const target = routine.target_conversation_id ? await ctx.db.get(routine.target_conversation_id as Id<"conversations">) : null;
+  if (target && isHostedAgentType(target.agent_type)) {
+    return "A run's result cannot be posted into a hosted assistant conversation";
+  }
+  return hostedOwnerRefusal(ctx, routine.user_id, [routine.created_by_conversation_id]);
+}
+
 export async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
   // A pause by hand clears any role's stamp; a role pause stamps after this.
@@ -107,6 +167,7 @@ export async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
 
 export async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
+  await assertRoutineAllowed(ctx, { ...task, status: "scheduled" });
   // An event trigger stays disarmed until its event: a run_at here would
   // fire it once on resume with nothing behind it.
   await patchTask(ctx, task, {
@@ -125,6 +186,7 @@ export async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
  */
 export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "paused") return false;
+  await assertRoutineAllowed(ctx, { ...task, status: "scheduled" });
   const interval = task.interval_ms;
   await patchTask(ctx, task, {
     status: "scheduled",
@@ -139,6 +201,7 @@ export async function applyActivate(ctx: TaskCtx, task: Doc<"agent_tasks">) {
  *  row into the run's frame and clears when the run completes; a plain run
  *  now clears a focus still waiting. */
 export async function applyRunNow(ctx: TaskCtx, task: Doc<"agent_tasks">, focus?: OrgReviewFocusKey) {
+  if (task.status === "paused") await assertRoutineAllowed(ctx, { ...task, status: "scheduled" });
   await patchTask(ctx, task, { status: "scheduled", ...offCadence(task, Date.now()), requested_run_source: "manual", requested_run_focus: focus });
   return true;
 }
@@ -515,6 +578,15 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
   // the first run one interval out, so nothing fires until a person acts.
   const paused = args.status === "paused";
   const run_at = args.schedule_type === "event" || paused ? undefined : (args.run_at || now);
+  await assertRoutineAllowed(ctx, {
+    user_id: userId,
+    originating_conversation_id: args.originating_conversation_id,
+    target_conversation_id: args.target_conversation_id,
+    created_by_conversation_id: args.created_by_conversation_id,
+    schedule_type: args.schedule_type,
+    interval_ms: args.interval_ms,
+    status: paused ? "paused" : "scheduled",
+  });
 
   const event_filter = await storedEventFilter(ctx, userId, args.project_path, args.event_filter);
   const short_id = await nextShortId(ctx.db, "tr");
@@ -528,6 +600,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     originating_conversation_id: args.originating_conversation_id
       ? args.originating_conversation_id as Id<"conversations">
       : undefined,
+    hosted_home: await hostedHomeStamp(ctx, args.originating_conversation_id),
     target_conversation_id: args.target_conversation_id
       ? args.target_conversation_id as Id<"conversations">
       : undefined,
@@ -576,25 +649,29 @@ export async function logVerb(ctx: TaskCtx, task: Doc<"agent_tasks">, actor: { u
   return ok;
 }
 
-const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>) =>
+// `get` is getArmableTask for a verb that arms, getManageableTask for an off
+// switch (pause, cancel).
+type TaskGetter = typeof getManageableTask;
+
+const cliTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>, get: TaskGetter) =>
   mutation({
     args: { api_token: v.string(), task_id: v.id("agent_tasks") },
     handler: async (ctx, args) => {
       const auth = await verifyApiToken(ctx, args.api_token);
       if (!auth) throw new Error("Unauthorized");
-      const task = await getManageableTask(ctx, args.task_id, auth.userId);
+      const task = await get(ctx, args.task_id, auth.userId);
       if (!task) return false;
       return logVerb(ctx, task, { userId: auth.userId, source: "cli" }, apply);
     },
   });
 
-const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>) =>
+const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promise<boolean>, get: TaskGetter) =>
   mutation({
     args: { task_id: v.id("agent_tasks") },
     handler: async (ctx, args) => {
       const userId = await getAuthUserId(ctx);
       if (!userId) throw new Error("Unauthorized");
-      const task = await getManageableTask(ctx, args.task_id, userId);
+      const task = await get(ctx, args.task_id, userId);
       if (!task) return false;
       return logVerb(ctx, task, { userId, source: "web" }, apply);
     },
@@ -834,10 +911,19 @@ export const resolveTask = query({
   },
 });
 
+// The conversation a trigger fires into from the server rather than from a
+// daemon: a hosted conversation (agent_type "codecast", whose turn engine the
+// enqueue wakes), or one a configured cloud wake host serves. Null leaves the
+// trigger to the owner's daemon (getDueTasks / claimTask).
 async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) {
-  if (!task.originating_conversation_id || configuredCloudWakeHosts().length === 0) return null;
+  if (!task.originating_conversation_id) return null;
   const conversation = await ctx.db.get(task.originating_conversation_id);
-  if (!conversation || task.user_id !== conversation.user_id) return null;
+  if (!conversation) return null;
+  // A hosted conversation never reaches a daemon, whoever armed the routine:
+  // the dispatcher pauses one its owner did not set (hostedRoutineRefusal).
+  if (isHostedAgentType(conversation.agent_type)) return conversation;
+  if (task.user_id !== conversation.user_id) return null;
+  if (configuredCloudWakeHosts().length === 0) return null;
   return await getCloudWakeHostForConversation(ctx, conversation) ? conversation : null;
 }
 
@@ -1017,17 +1103,35 @@ export async function ensureRoleEventTriggers(ctx: TaskCtx, role: { _id: Id<"org
 export const dispatchCloudTriggers = internalMutation({
   args: { cursor: v.optional(v.string()) },
   handler: async (ctx, args): Promise<{ scanned: number; dispatched: number; done: boolean }> => {
-    if (configuredCloudWakeHosts().length === 0) return { scanned: 0, dispatched: 0, done: true };
+    // Hosted conversations take their routines through this path on every
+    // deployment. With no cloud wake host configured they are the only rows
+    // it can fire, so it reads just those (hosted_home); otherwise it reads
+    // every due row, the hosted ones included.
     const now = Date.now();
-    const page = await ctx.db
-      .query("agent_tasks")
-      .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
-      .order("asc")
-      .paginate({ cursor: args.cursor ?? null, numItems: 50 });
+    const page = configuredCloudWakeHosts().length === 0
+      ? await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_hosted_status_run_at", (q) => q.eq("hosted_home", true).eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
+        .order("asc")
+        .paginate({ cursor: args.cursor ?? null, numItems: 50 })
+      : await ctx.db
+        .query("agent_tasks")
+        .withIndex("by_status_run_at", (q) => q.eq("status", "scheduled").gt("run_at", 0).lte("run_at", now))
+        .order("asc")
+        .paginate({ cursor: args.cursor ?? null, numItems: 50 });
     let dispatched = 0;
     for (const task of page.page) {
       const conversation = await cloudTriggerConversation(ctx, task);
       if (!conversation) continue;
+      // Armed before the owner's plan shrank, before limits existed, or by
+      // someone other than the owner: the routine pauses instead of waking a
+      // turn. Only older routines count, so the newest pause first.
+      const refusal = await hostedRoutineRefusal(ctx, task, { olderOnly: true });
+      if (refusal) {
+        await applyPause(ctx, task);
+        console.warn("hosted_routine_paused", { task_id: task._id, reason: refusal });
+        continue;
+      }
       const clientId = `cloud-trigger:${task._id}:${task.run_count}`;
       const updates: Record<string, any> = { ...completedTaskRunFields(task, now, { conversation_id: conversation._id }), ...claimRunSourceFields(task) };
       const pendingMessageId = await enqueuePendingMessage(ctx, conversation, task.user_id, {
@@ -1258,7 +1362,11 @@ export async function settleRunConversation(
   let posted = await wakeRunOwner(ctx, task, runConv, outcome, reported ? args.summary : undefined, now);
   const threadId = posted ? undefined : runResultThreadOf(task);
   const thread = threadId && args.summary ? await ctx.db.get(threadId) : null;
-  if (thread) {
+  // Never into a hosted transcript, which only its turn engine writes: a run's
+  // summary may carry what the run read (mail, web pages), and the model would
+  // replay a line here as its own words. Creation refuses such a thread
+  // (hostedThreadRefusal); this holds for rows armed before that rule.
+  if (thread && !isHostedAgentType(thread.agent_type)) {
     // A spawned run names its trigger and its own session, so the line in the
     // thread is one click from the transcript behind it.
     const runRef = runConv ? runConv.short_id ?? runConv._id.toString().slice(0, 7) : null;
@@ -1635,9 +1743,9 @@ export const linkRunConversation = mutation({
   },
 });
 
-export const cancelTask = cliTaskAction(applyCancel);
-export const pauseTask = cliTaskAction(applyPause);
-export const resumeTask = cliTaskAction(applyResume);
+export const cancelTask = cliTaskAction(applyCancel, getManageableTask);
+export const pauseTask = cliTaskAction(applyPause, getManageableTask);
+export const resumeTask = cliTaskAction(applyResume, getArmableTask);
 // Run now from the CLI, optionally with a review focus: the same act as the
 // web's webRunNow, so `cast trigger run --focus goal_tree` and the Head of
 // People's "Plan the goal tree" button fire one trigger the same way.
@@ -1647,7 +1755,7 @@ export const runTaskNow = mutation({
     const auth = await verifyApiToken(ctx, args.api_token);
     if (!auth) throw new Error("Unauthorized");
     if (args.focus !== undefined && !isOrgReviewFocusKey(args.focus)) throw new Error(`Unknown review focus: ${args.focus}`);
-    const task = await getManageableTask(ctx, args.task_id, auth.userId);
+    const task = await getArmableTask(ctx, args.task_id, auth.userId);
     if (!task) return false;
     const focus = args.focus as OrgReviewFocusKey | undefined;
     return logVerb(ctx, task, { userId: auth.userId, source: "cli" }, (c, t) => applyRunNow(c, t, focus));
@@ -2084,9 +2192,9 @@ export const webCreate = mutation({
   },
 });
 
-export const webPause = webTaskAction(applyPause);
-export const webResume = webTaskAction(applyResume);
-export const webReactivate = webTaskAction(applyReactivate);
+export const webPause = webTaskAction(applyPause, getManageableTask);
+export const webResume = webTaskAction(applyResume, getArmableTask);
+export const webReactivate = webTaskAction(applyReactivate, getArmableTask);
 // Run now from the web, with an optional focus for this one run (the Head
 // of People's "Plan the goal tree"): the same verb, logged the same way.
 export const webRunNow = mutation({
@@ -2095,13 +2203,13 @@ export const webRunNow = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     if (args.focus !== undefined && !isOrgReviewFocusKey(args.focus)) throw new Error(`Unknown review focus: ${args.focus}`);
-    const task = await getManageableTask(ctx, args.task_id, userId);
+    const task = await getArmableTask(ctx, args.task_id, userId);
     if (!task) return false;
     const focus = args.focus as OrgReviewFocusKey | undefined;
     return logVerb(ctx, task, { userId, source: "web" }, (c, t) => applyRunNow(c, t, focus));
   },
 });
-export const webCancel = webTaskAction(applyCancel);
+export const webCancel = webTaskAction(applyCancel, getManageableTask);
 
 // Delete a trigger row with its revision history, then restamp the old home:
 // deleting an armed trigger is a lifecycle transition like cancel, and the
@@ -2167,6 +2275,10 @@ type TaskUpdateArgs = {
   project_path?: string;
   max_runtime_ms?: number;
   precheck?: string;
+  // A role's own tuning of its check (org-staffing.md S38), written only by
+  // orgRoles.performTuneRoutine: "" clears the focus.
+  role_focus?: string;
+  tune_why?: string;
   // Routing. Editable so a trigger bound the wrong way is repaired in place
   // rather than cancelled and recreated, which loses its history and its id.
   // null clears the field: originating_conversation_id null IS `--spawn`.
@@ -2192,6 +2304,8 @@ const EDITABLE_FIELDS = [
   "project_path",
   "max_runtime_ms",
   "precheck",
+  "role_focus",
+  "tune_why",
   "originating_conversation_id",
   "target_conversation_id",
   "wake_creator",
@@ -2213,6 +2327,8 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     status: task.status,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
+    role_focus: task.role_focus,
+    tune_why: task.tune_why,
     originating_conversation_id: task.originating_conversation_id,
     target_conversation_id: task.target_conversation_id,
     wake_creator: task.wake_creator,
@@ -2226,13 +2342,25 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
 // appends an agent_task_revisions row (pre-edit snapshot + who/where/what),
 // so `cast trigger history` can show both the audit trail and any prior
 // version. A no-op edit (nothing actually differs) writes neither.
+//
+// A role tunes its check from inside the run that check started (S38), when
+// the row is "running". The cadence, the gate, the focus and the reason touch
+// nothing the live run reads, so an edit of those alone is taken then too: the
+// arming after the run (nextArmingAfterRun) counts the next slot with the new
+// interval.
+// The edits assertRoutineAllowed rechecks: the ones that can take an armed
+// routine past its plan's limits, and a result thread that may be hosted.
+const ROUTINE_LIMIT_FIELDS: ReadonlySet<string> = new Set(["originating_conversation_id", "target_conversation_id", "schedule_type", "interval_ms"]);
+const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "role_focus", "tune_why"]);
+
 export async function applyTaskUpdate(
   ctx: TaskCtx,
   task: Doc<"agent_tasks">,
   args: TaskUpdateArgs,
   actor: { userId: Id<"users">; source: "cli" | "web" },
 ): Promise<{ ok: boolean; changed: string[] }> {
-  if (task.status !== "scheduled" && task.status !== "paused") return { ok: false, changed: [] };
+  const whileRunning = task.status === "running" && Object.entries(args).every(([k, value]) => value === undefined || RUNNING_SAFE_FIELDS.has(k));
+  if (task.status !== "scheduled" && task.status !== "paused" && !whileRunning) return { ok: false, changed: [] };
 
   const patch: Record<string, unknown> = {};
   if (args.title !== undefined) patch.title = args.title.trim() || task.title;
@@ -2253,6 +2381,8 @@ export async function applyTaskUpdate(
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
   // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
   if (args.precheck !== undefined) patch.precheck = args.precheck.trim() || undefined;
+  if (args.role_focus !== undefined) patch.role_focus = args.role_focus.trim() || undefined;
+  if (args.tune_why !== undefined) patch.tune_why = args.tune_why.trim() || undefined;
 
   // Routing. Clearing the binding (null) turns an inject trigger into a spawn
   // trigger and back; --wake rides along. The old home's armed_trigger_kind is
@@ -2302,6 +2432,17 @@ export async function applyTaskUpdate(
       JSON.stringify((patch as any)[k] ?? null) !== JSON.stringify((task as any)[k] ?? null)
   );
   if (changed.length === 0) return { ok: true, changed };
+  // Any edit, the prompt included, is the hosted owner's (hostedOwnerRefusal),
+  // on the anchors the routine has now and the ones this edit moves it to.
+  const anchorRefusal = await hostedOwnerRefusal(ctx, actor.userId, [
+    ...taskAnchors(task),
+    patch.originating_conversation_id as Id<"conversations"> | undefined,
+    patch.target_conversation_id as Id<"conversations"> | undefined,
+  ]);
+  if (anchorRefusal) throw new Error(anchorRefusal);
+  if (changed.some((k) => ROUTINE_LIMIT_FIELDS.has(k))) {
+    await assertRoutineAllowed(ctx, { ...task, ...patch } as HostedRoutine & HostedThreads);
+  }
 
   await appendRevision(ctx, task, actor, changed);
 

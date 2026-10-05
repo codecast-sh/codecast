@@ -74,7 +74,7 @@ or newlines, so tool deny rules and the prompt cannot ride `buildLaunchArgs`.
 allowlist: tool flags shell escaped, the prompt written to a 0600 file under
 `~/.codecast/agent-prompts/` and read with `$(cat …)`. That is the door grok's
 stable rules already use. A client with no system prompt flag (codex, cursor,
-gemini, opencode, grok) gets the prompt prefixed to the seeded first turn by
+gemini, opencode, grok, muse) gets the prompt prefixed to the seeded first turn by
 `resolveSpawnDefinition` instead; a web compose create has no seeded turn, so
 the prompt is dropped with a daemon log line.
 

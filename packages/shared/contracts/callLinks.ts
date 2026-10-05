@@ -24,11 +24,21 @@ export type CallAnchor =
   | { kind: "summary" }
   | { kind: "action"; index: number };
 
-/** The call page path for an anchor, or the whole call without one. Turns
- *  ride `?turns=<from>-<to>` (they open selected); the recap's parts ride
- *  `?part=summary` and `?part=action-<n>` (1-based, as people count them). */
-export function callAnchorHref(transcriptId: string, anchor?: CallAnchor | null): string {
-  const base = `/calls/${transcriptId}`;
+/** What a call is called in a URL: its short id (`cl-42`) when it has one,
+ *  else its full id. The short id is the one the page header shows, agents
+ *  cite and `cast call` prints, so the address bar and a copied link name the
+ *  call the way everything else does. The page reads either. */
+export function callPathRef(call: { _id: string; short_id?: string | null }): string {
+  return call.short_id || String(call._id);
+}
+
+/** The call page path for an anchor, or the whole call without one. `call`
+ *  is callPathRef's answer where the caller has the record, a full id where
+ *  it has only that. Turns ride `?turns=<from>-<to>` (they open selected);
+ *  the recap's parts ride `?part=summary` and `?part=action-<n>` (1-based,
+ *  as people count them). */
+export function callAnchorHref(call: string, anchor?: CallAnchor | null): string {
+  const base = `/calls/${call}`;
   if (!anchor) return base;
   if (anchor.kind === "turns") return `${base}?turns=${anchor.from_seq}-${anchor.to_seq}`;
   return `${base}?part=${anchor.kind === "summary" ? "summary" : `action-${anchor.index + 1}`}`;
@@ -58,8 +68,16 @@ export function parseCallAnchor(params: { get(name: string): string | null } | n
 export function callMomentHref(transcriptId: string, atMs: number, anchor?: CallAnchor | null, view?: CallView | null): string {
   const base = callAnchorHref(transcriptId, anchor);
   const at = `${base}${base.includes("?") ? "&" : "?"}t=${Math.max(0, Math.floor(atMs / 1000))}`;
-  if (!view?.screen) return at;
-  return `${at}&view=screen${view.identity ? `:${encodeURIComponent(view.identity)}` : ""}`;
+  const v = callViewParam(view);
+  return v ? `${at}&view=${v}` : at;
+}
+
+/** A view as the `view` param spells it (parseCallViewParam reads it back),
+ *  or null for the room, which needs no word. One spelling for a link built
+ *  whole (callMomentHref) and for the page writing its own address. */
+export function callViewParam(view?: CallView | null): string | null {
+  if (!view?.screen) return null;
+  return `screen${view.identity ? `:${encodeURIComponent(view.identity)}` : ""}`;
 }
 
 /**
@@ -78,6 +96,19 @@ export function callFrameHref(
 ): string {
   const screen = shown ? shown.kind === "screen" : CALL_FRAME_PREFER === "screen";
   return callMomentHref(transcriptId, atMs, null, screen ? { screen: true, identity: shown?.participant_identity ?? null } : null);
+}
+
+/** The call page with its share control open (`?share=open`): where anyone
+ *  who may read the call sees who can open its link and takes it, or its
+ *  video, down. The room's thread links here from the lines that say the
+ *  call went public. */
+export function callShareHref(call: string): string {
+  return `${callAnchorHref(call)}?share=open`;
+}
+
+/** Does a call page URL ask for its share control open (callShareHref)? */
+export function parseCallShareParam(params: { get(name: string): string | null } | null | undefined): boolean {
+  return params?.get("share") === "open";
 }
 
 /** The moment a call page URL names (`?t=754`, also `754s`), in ms, or null. */

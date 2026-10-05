@@ -42,7 +42,7 @@ export {
   type KeydownOptions,
 } from "./dispatch";
 
-export { setShortcutHandler } from "./listener";
+export { setShortcutHandler, claimKeys, type KeyClaim } from "./listener";
 
 export {
   createShortcutProvider,

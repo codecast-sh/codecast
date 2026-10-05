@@ -370,7 +370,9 @@ export function buildHostCast(onProgress: (m: string) => void, platform: "linux"
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), `cast-${platform}-dist-`));
   let built = false;
   try {
-    execFileSync("bun", ["run", "build", "--outdir", distDir], {
+    // Through run-interactive: started from an agent shell, the build inherits
+    // the daemon's utility QoS clamp and ran past its timeout under load.
+    execFileSync("bun", [path.join(cliRoot, "scripts", "run-interactive.ts"), "--", "bun", "run", "build", "--outdir", distDir], {
       cwd: cliRoot,
       env: { ...process.env, CODECAST_BUNDLE_PLATFORM: platform },
       stdio: ["ignore", "ignore", "pipe"],

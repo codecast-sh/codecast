@@ -6,7 +6,7 @@ import {
   chooseClaudeTailMessagesForTokenBudget,
   type ExportResult,
 } from "./jsonlGenerator.js";
-import { AGENT_CLIENTS, findModelOption, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, findModelOption, type AgentClientId, localAgentClient } from "@codecast/shared/contracts";
 import { appendModelEffortFlags } from "./launchCommand.js";
 
 import { CLAUDE_UUID_RE } from "./syncScope.js";
@@ -253,7 +253,7 @@ export function buildNonClaudeResumeCommand(
   } = {},
 ): string | null {
   if (agentType === "claude") return null;
-  const client = AGENT_CLIENTS[agentType];
+  const client = localAgentClient(agentType);
   let base: string;
   if (opts.forkFromSessionId) {
     if (!client.forkCmd) throw new Error(`${agentType} has no native fork command`);
@@ -337,7 +337,7 @@ export function isReconstitutionTarget(agent: string | undefined | null): boolea
  * registry (AGENT_CLIENTS[agentType].tmuxPrefix) so the prefixes live in one place.
  */
 export function resumeTmuxPrefix(agentType: AgentClientId): string {
-  return AGENT_CLIENTS[agentType].tmuxPrefix;
+  return localAgentClient(agentType).tmuxPrefix;
 }
 
 /**
@@ -392,7 +392,7 @@ export function resumeTmuxName(agentType: AgentClientId, sessionId: string, titl
  * recovered or reused.
  */
 export const MANAGED_TMUX_PREFIXES: string[] = [
-  ...Object.values(AGENT_CLIENTS).map((d) => `${d.tmuxPrefix}-`),
+  ...Object.values(LOCAL_AGENT_CLIENTS).map((d) => `${d.tmuxPrefix}-`),
   "ct-",
 ];
 

@@ -17,7 +17,7 @@ import { Maximize2, Square } from "lucide-react";
 import { stopRecording } from "../../lib/calls/recorder";
 import { useRecorderLevelVar, useRecorderStatus } from "../../hooks/useRecorder";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { fmtClock } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import "./recorder.css";
 
 export function RecordingPill() {
@@ -66,7 +66,7 @@ export function RecordingPill() {
       <div className="rec-pill-body">
         <div className="rec-pill-head">
           <span className="rec-pill-clock">
-            {fmtClock(status.startedAt ? now - status.startedAt : 0)}
+            {formatCallTime(status.startedAt ? now - status.startedAt : 0)}
           </span>
           {/* Where the sound comes from, in the words the feature actually
               delivers: the microphone always, and on the desktop the

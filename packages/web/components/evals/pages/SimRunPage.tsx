@@ -11,6 +11,7 @@ import { useTabVisible } from "../../../hooks/usePagePresence";
 import { useEvalsStore } from "../../../store/evalsStore";
 import { evalsHref, type EvalsView } from "../evalsPaths";
 import { SimRunView, type ShrinkState } from "../SimRunView";
+import { jobLive, jobState, shownJobState } from "../simJobState";
 
 export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run" }> }) {
   const res = useEvalsResource("GET /sim/run/:session/:run", { params: { session: view.session, run: view.run } });
@@ -19,14 +20,15 @@ export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run
   const visible = useTabVisible();
   const { reload } = res;
 
-  const live = shrink.state === "starting" || shrink.state === "running" || !!res.data?.shrinking;
+  // A reload forgets this page's job; the run's newest shrink job says how it went (or that it still runs).
+  const shown = shownJobState(shrink, res.data?.lastShrink);
+  const live = jobLive(shown) || !!res.data?.shrinking;
 
   const onChanges = useCallback(
     (changes: ChangesResponse) => {
       const job = changes.jobs.find((j) => j.id === jobId.current) ?? changes.jobs.find((j) => j.kind === "shrink" && j.session === view.session && j.run === view.run);
       if (!job) return;
-      if (job.status === "running") setShrink({ state: "running", job });
-      else setShrink(job.status === "done" ? { state: "idle" } : { state: "failed", error: `The shrink ${job.status}${job.progress.text ? `: ${job.progress.text}` : ""}` });
+      setShrink(jobState(job));
       reload();
     },
     [view.session, view.run, reload],
@@ -61,5 +63,5 @@ export function SimRunPage({ view }: { view: Extract<EvalsView, { view: "sim-run
       </div>
     );
   }
-  return <SimRunView data={res.data} shrink={shrink} onShrink={() => void onShrink()} />;
+  return <SimRunView data={res.data} shrink={shown} onShrink={() => void onShrink()} />;
 }

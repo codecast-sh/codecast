@@ -1,8 +1,13 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { Loader2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { BELOW_SM, useMediaQuery } from "../../hooks/useIsPhone";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { fmtClock } from "./speakers";
+import { usePressOutside } from "../../hooks/usePressOutside";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { formatCallTime } from "@codecast/shared/entities";
+import { KeyCap } from "../KeyCap";
+import { RECORDING_SHARED_WORDS, STOP_RECORDING_ASK } from "../../lib/calls/roomRecordingEnd";
 import "./recorder.css";
 
 // THE RED MARK: a huddle is being recorded. One look on every call surface
@@ -35,12 +40,11 @@ export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | nu
   return `This call is being recorded.${who}${where} Anyone in the call can stop it`;
 }
 
-/** What the room is told when the run's video will be on the call's public
- *  link (callRecordings: a link whose video was chosen before this press):
- *  faces and screens, guests' included, then reach anyone with the link. */
-export const RECORDING_SHARED_WORDS = "The video is shared by the call's public link.";
-
-const SAVING_DOT = "h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim";
+/** The color of a run that is only being saved: still and grey, never red.
+ *  The mark's dot and the Record button's (while the last run saves) both
+ *  wear it, so the saving look has one home. */
+export const SAVING_DOT_COLOR = "bg-sol-text-dim";
+const SAVING_DOT = `h-[7px] w-[7px] shrink-0 rounded-full ${SAVING_DOT_COLOR}`;
 
 export function RecordingMark({
   status = "recording",
@@ -115,33 +119,40 @@ export function RecordingMark({
  *  shared with every other one in the app, so only this span re-renders. */
 function RecordingClock({ startedAt }: { startedAt: number }) {
   const now = useCoarseNow(1000);
-  return <span className="tabular-nums">{fmtClock(Math.max(0, now - startedAt))}</span>;
+  return <span className="tabular-nums">{formatCallTime(Math.max(0, now - startedAt))}</span>;
 }
 
 // ── Stopping, asked once more ────────────────────────────────────────────
 
-/** The question every Stop asks, in the words every surface uses (the toast
- *  that cannot draw this component says the same two lines). */
-export const STOP_RECORDING_ASK = {
-  title: "Stop recording for everyone?",
-  body: "The video so far is kept with the call.",
-} as const;
+// The question every Stop asks lives with the phone's words
+// (lib/calls/roomRecordingEnd); re-exported for this file's importers.
+export { STOP_RECORDING_ASK };
+
+/** The type of the two questions about the room's recording (Record's
+ *  first press, and Stop): one title size and one body size, so the two read
+ *  as the same component side by side. */
+export const QUESTION_TITLE = "font-mono text-[12.5px] text-sol-text";
+export const QUESTION_BODY = "text-[12px] leading-relaxed";
 
 /** The question and its two answers. `dense` is one line for a face row
  *  card: the question, Stop, Keep. Focus is the host's to place; Stop is
- *  never the default, so a stray Enter cannot end the room's recording. */
+ *  never the default, so a stray Enter cannot end the room's recording.
+ *  `escKeeps`: the host closes the question on Esc (RecordingQuestionBox),
+ *  so Keep shows the key. */
 export function StopRecordingQuestion({
   onStop,
   onKeep,
   busy = false,
   error = null,
   dense = false,
+  escKeeps = false,
 }: {
   onStop: () => void;
   onKeep: () => void;
   busy?: boolean;
   error?: string | null;
   dense?: boolean;
+  escKeeps?: boolean;
 }) {
   const stop = (
     <button
@@ -153,18 +164,19 @@ export function StopRecordingQuestion({
       }`}
     >
       {busy && <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />}
-      Stop
+      {dense ? "Stop" : STOP_RECORDING_ASK.stop}
     </button>
   );
   const keep = (
     <button
       type="button"
       onClick={onKeep}
-      className={`flex shrink-0 items-center gap-1.5 rounded-md font-mono text-sol-text-muted transition-colors hover:bg-white/[0.06] hover:text-sol-text ${
+      className={`flex shrink-0 items-center gap-1.5 rounded-md font-mono text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${
         dense ? "px-1.5 py-0.5 text-[10px]" : "px-2.5 py-1.5 text-[11.5px]"
       }`}
     >
-      {dense ? "Keep" : "Keep recording"}
+      {dense ? "Keep" : STOP_RECORDING_ASK.keep}
+      {!dense && escKeeps && <KeyCap size="xs">Esc</KeyCap>}
     </button>
   );
   if (dense) {
@@ -180,13 +192,13 @@ export function StopRecordingQuestion({
   }
   return (
     <>
-      <div className="flex items-center gap-2 font-mono text-[12px] text-sol-text">
+      <div className={`flex items-center gap-2 ${QUESTION_TITLE}`}>
         <span className="h-2 w-2 shrink-0 rounded-full bg-sol-red" aria-hidden="true" />
         {STOP_RECORDING_ASK.title}
       </div>
-      <p className="mt-1.5 text-[11.5px] leading-relaxed text-sol-text-muted">Anyone in the call can stop it. {STOP_RECORDING_ASK.body}</p>
-      {error && <p className="mt-1.5 text-[11.5px] leading-relaxed text-sol-orange">{error}</p>}
-      <div className="mt-3 flex items-center justify-end gap-2">
+      <p className={`mt-2 ${QUESTION_BODY} text-sol-text-muted`}>Anyone in the call can stop it. {STOP_RECORDING_ASK.body}</p>
+      {error && <p className={`mt-1.5 ${QUESTION_BODY} text-sol-orange`}>{error}</p>}
+      <div className="mt-3.5 flex items-center justify-end gap-2">
         {keep}
         {stop}
       </div>
@@ -194,14 +206,117 @@ export function StopRecordingQuestion({
   );
 }
 
-const PLACE = {
+// On a phone a box hung from its control runs off an edge whenever the
+// control is off the screen's centre (the guest's REC pill sits near the
+// right, the stage's badge near the left), so below `sm` every placement is
+// pinned to the screen's sides instead: under the guest's bar for a control
+// at the top, over the stage's control bar for one at the bottom. The same
+// rule the guest's devices popover uses. Each placement's own width gives way
+// to the screen's (`max-sm:w-auto`). The offsets here are the guest page's
+// bars; a question opened from a control measures where that control sits
+// (usePhonePin) and lands just past it, since the member's stage header and
+// the strip under the app's header put theirs at other heights.
+const PHONE_BELOW = "max-sm:fixed max-sm:inset-x-3 max-sm:top-[calc(env(safe-area-inset-top)+56px)] max-sm:mt-0 max-sm:w-auto";
+const PHONE_ABOVE =
+  "max-sm:fixed max-sm:inset-x-3 max-sm:bottom-[calc(76px+env(safe-area-inset-bottom))] max-sm:top-auto max-sm:mb-0 max-sm:w-auto max-sm:translate-x-0";
+
+export const PLACE = {
   /** Under the control, its right edge on the control's. */
-  below: "right-0 top-full mt-2",
+  below: `right-0 top-full mt-2 ${PHONE_BELOW}`,
   /** Under the control, its left edge on the control's. */
-  "below-start": "left-0 top-full mt-2",
+  "below-start": `left-0 top-full mt-2 ${PHONE_BELOW}`,
   /** Over the control, centred on it (a control bar at the bottom). */
-  above: "bottom-full left-1/2 mb-3 -translate-x-1/2",
+  above: `bottom-full left-1/2 mb-3 -translate-x-1/2 ${PHONE_ABOVE}`,
 } as const;
+
+/**
+ * Where a question pinned to the screen's sides (PLACE's phone classes) sits
+ * on a phone: just past the control it opened from, under it for a `below`
+ * placement and over it for `above`, with PLACE's own gap. Measured before
+ * paint while the question is open (and again on a resize or rotation), so
+ * one control at the top of the guest's bar, the stage's header or the strip
+ * under the app's header each get a question at their own edge rather than
+ * at one height that covered some of them. Nothing above `sm`, where the box
+ * hangs from its control.
+ */
+export function usePhonePin(anchorRef: RefObject<HTMLElement | null>, place: keyof typeof PLACE, open: boolean): CSSProperties | undefined {
+  const phone = useMediaQuery(BELOW_SM);
+  const [edge, setEdge] = useState<number | null>(null);
+  const above = place === "above";
+  useLayoutEffect(() => {
+    if (!open || !phone) return setEdge(null);
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (r) setEdge(above ? window.innerHeight - r.top + 12 : r.bottom + 8);
+    };
+    measure();
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [open, phone, above, anchorRef]);
+  if (!phone || edge === null) return undefined;
+  return above ? { bottom: edge } : { top: edge };
+}
+
+/**
+ * The box both questions about the room's recording open in (Record's first
+ * press, RoomRecording's RecordConfirm, and Stop): hung from its control at
+ * `place` (pinned to the screen's sides on a phone), one width, one look,
+ * rising from its control's side. Focus lands on the box, never on a
+ * button, so a stray Space answers nothing. Esc closes it (and only it: a
+ * stage collapses on Esc), and so does a press outside `insideRef` (the
+ * control and the box together). `onEnter` makes Enter on the box itself an
+ * answer, for a question whose deliberate second step is its default
+ * (Record); without it Enter does nothing, so Stop is never a stray Enter.
+ * A held Enter (the press that opened it, repeating) is not an answer.
+ */
+export function RecordingQuestionBox({
+  label,
+  place,
+  insideRef,
+  onClose,
+  onEnter,
+  children,
+}: {
+  /** The question, for screen readers. */
+  label: string;
+  place: keyof typeof PLACE;
+  insideRef: RefObject<HTMLElement | null>;
+  onClose: () => void;
+  onEnter?: () => void;
+  children: ReactNode;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  const pin = usePhonePin(insideRef, place, true);
+  useMountEffect(() => boxRef.current?.focus());
+  usePressOutside(insideRef, true, onClose, { escape: true });
+  return (
+    <div
+      ref={boxRef}
+      role="dialog"
+      aria-label={label}
+      tabIndex={-1}
+      onKeyDown={(e) => {
+        if (onEnter && e.key === "Enter" && !e.repeat && e.target === e.currentTarget) {
+          e.preventDefault();
+          e.stopPropagation();
+          onEnter();
+        }
+      }}
+      className={`absolute z-20 w-[min(300px,calc(100vw-24px))] outline-none ${PLACE[place]}`}
+      style={pin}
+    >
+      {/* The rise is on an inner box: the enter animation writes
+          `transform`, which would drop a centring translate above. */}
+      <div
+        className={`rounded-xl bg-sol-bg-alt p-3.5 text-left shadow-2xl ring-1 ring-sol-border/40 animate-in fade-in ${
+          place === "above" ? "slide-in-from-bottom-1" : "slide-in-from-top-1"
+        } duration-150 motion-reduce:animate-none`}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
 
 /**
  * A control that stops the room's recording: whatever it draws (the mark, a
@@ -243,19 +358,10 @@ export function RecordingStopControl({
   const asking = askingProp ?? own;
   const setAsking = onAsk ?? setOwn;
   const rootRef = useRef<HTMLSpanElement>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useWatchEffect(() => {
-    if (!asking) return setError(null);
-    // On the question, not on Stop: ending the room's recording is a
-    // deliberate press, never a stray Enter or Space.
-    boxRef.current?.focus();
-    const onDown = (e: PointerEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setAsking(false);
-    };
-    document.addEventListener("pointerdown", onDown, true);
-    return () => document.removeEventListener("pointerdown", onDown, true);
+    if (!asking) setError(null);
   }, [asking]);
   const stop = () => {
     setError(null);
@@ -281,25 +387,11 @@ export function RecordingStopControl({
         {children}
       </button>
       {asking && (
-        <div
-          ref={boxRef}
-          role="dialog"
-          aria-label={STOP_RECORDING_ASK.title}
-          tabIndex={-1}
-          onKeyDown={(e) => {
-            if (e.key !== "Escape") return;
-            // A stage collapses on Esc; this Esc only closes the question.
-            e.stopPropagation();
-            setAsking(false);
-          }}
-          className={`absolute z-20 w-[min(280px,calc(100vw-24px))] outline-none ${PLACE[place]}`}
-        >
-          {/* The rise is on an inner box: the enter animation writes
-              `transform`, which would drop a centring translate above. */}
-          <div className="rounded-xl bg-sol-bg-alt p-3 text-left shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in duration-150 motion-reduce:animate-none">
-            <StopRecordingQuestion onStop={stop} onKeep={() => setAsking(false)} busy={busy} error={error} />
-          </div>
-        </div>
+        // On the question, not on Stop, and no onEnter: ending the room's
+        // recording is a deliberate press, never a stray Enter or Space.
+        <RecordingQuestionBox label={STOP_RECORDING_ASK.title} place={place} insideRef={rootRef} onClose={() => setAsking(false)}>
+          <StopRecordingQuestion onStop={stop} onKeep={() => setAsking(false)} busy={busy} error={error} escKeeps />
+        </RecordingQuestionBox>
       )}
     </span>
   );

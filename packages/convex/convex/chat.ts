@@ -40,7 +40,7 @@ import {
   mentionUserIds,
   threadFaceKey,
 } from "@codecast/shared/chat";
-import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, parseRoomKey } from "@codecast/shared/contracts";
+import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, isHostedAgentType, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
 import { agentPosterKey, dayBucket, hourBucket, reserveQuotas, takeQuota, takeQuotas } from "./lib/chatQuota";
@@ -3898,8 +3898,12 @@ async function maybeRelayToOriginSession(
   // session solicited exactly this answer, and the mention only resolved
   // because the asker could send into the replying session — the trust runs
   // the other way, and the replier is proven to BE the mentioned session
-  // (origin_session_id is ownership-checked at post time).
-  if (!mentionReply && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
+  // (origin_session_id is ownership-checked at post time). A hosted
+  // conversation takes input from its owner alone, mention or not, so a
+  // teammate's reply into one is skipped here rather than refused (and the
+  // post lost) by enqueuePendingMessage.
+  const needsSendGrant = !mentionReply || isHostedAgentType(conversation.agent_type);
+  if (needsSendGrant && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
 
   const key = chatRelayClientId(opts.message._id);
   const shortId = (conversation as any).short_id ?? conversation._id.toString().slice(0, 7);

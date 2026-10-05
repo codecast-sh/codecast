@@ -6,7 +6,8 @@ import {
   getConnection, updateStoredTokens, getFreshAccessToken, claimRefresh, REFRESH_LEASE_MS, connectionForWork,
 } from "./oauthConnectors";
 import { stampOf, stampMatches } from "./lib/tokenRefresh";
-import { signStateWith, verifyStateWith, encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
+import { encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
+import { signStateWith, verifyStateWith } from "./lib/hmac";
 
 // The generic connector shares Google's security design; these tests pin the
 // PROVIDER TABLE (a new connector must be a config, not a fork) and the

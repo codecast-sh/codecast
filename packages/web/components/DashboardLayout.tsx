@@ -47,6 +47,7 @@ import { DaemonStatusChip } from "./DaemonStatusChip";
 import { AccountUsageChip } from "./AccountUsageChip";
 import { TopbarButton, TopbarChip, TopbarTray } from "./TopbarButton";
 import { TopbarRow } from "./TopbarRow";
+import { PhoneCallStrip } from "./calls/PhoneCallStrip";
 import { HeaderPins, AnchorPanel } from "./anchor/AnchorPanel";
 import { useSyncAnchors } from "../hooks/useSyncAnchors";
 import { useSyncTeamExternalEvents } from "../hooks/useSyncExternalEvents";
@@ -105,6 +106,8 @@ import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
 import { useLocalAuth } from "../lib/localAuth";
+import { ModRuntimes } from "./mods/ModRuntimes";
+import { useSyncMods } from "../lib/mods/useMods";
 
 const CommandPalette = lazy(() =>
   import("./CommandPalette").then((module) => ({ default: module.CommandPalette })),
@@ -248,9 +251,15 @@ export function DashboardLayout(props: DashboardLayoutProps) {
       </>
     );
   }
+  // The undo card's host sits above DashboardLayoutInner's branch returns:
+  // its doorways (⌘⌥Z, the held peek, a toast's History) are installed by
+  // useGlobalShortcutActions in every branch, a browser pane's page and the
+  // guest frame included, and an open card with nothing on screen silences
+  // every undo toast.
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
+      <UndoTimelineHost />
     </DashboardNestCtx.Provider>
   );
 }
@@ -295,6 +304,8 @@ function HostFeeders() {
   // integrations panel and any project surface that shows where its tasks
   // came from — one subscription rather than one per opened card.
   useSyncIssueSyncSources();
+  // Codecast mods: every mod the viewer can see; ModRuntimes runs the enabled ones.
+  useSyncMods();
   // A profile with no timezone takes this device's (team day cuts, local clocks).
   useAdoptTimezone();
   // The workspace's agent definitions and chains: the compose "as" chooser,
@@ -309,7 +320,11 @@ function HostFeeders() {
   return null;
 }
 
-function DashboardSyncEffects() {
+/** The store's feeders and write wiring for one window. Every shell that
+ *  renders store data mounts this: the dashboard, and the simple lane
+ *  (layouts/SimpleShell), which passes `windowEffects={false}` because call
+ *  rings, chat toasts and mods belong to the full app's window. */
+export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEffects?: boolean } = {}) {
   // Cross-window replication: elect a sync host, follow one, or run solo.
   // Everything below the feeder gate still runs in every window — toasts,
   // calls and badges READ the store, which replication keeps fed.
@@ -328,7 +343,7 @@ function DashboardSyncEffects() {
         since it rewrites the document title the pane reads for its strip.
         A component boundary rather than a conditional hook: PANE_EMBED cannot
         change while the document lives, but the rule stays visible. */}
-    {PANE_EMBED ? null : <WindowOnlyEffects />}
+    {windowEffects ? <WindowOnlyEffects /> : null}
     <SessionCommandResultsFeeder />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
@@ -348,7 +363,7 @@ function SessionCommandResultsFeeder() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /></>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /><ModRuntimes /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,
@@ -521,6 +536,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const isOnRepoPage = pathname === "/repo" || (pathname?.startsWith("/repo/") ?? false);
   // The org tree and a scope page each own their canvas: graph plus panel, tabs plus feed.
   const isOnOrgPage = pathname === "/org" || (pathname?.startsWith("/org/") ?? false);
+  // A mod's pane owns its header and scroll (components/mods/ModPanePage).
+  const isOnModPage = pathname?.startsWith("/m/") ?? false;
+  const isOnModObjectsPage = pathname?.startsWith("/objects/") ?? false;
+  const isOnModObjectPage = pathname?.startsWith("/o/") ?? false;
   // The daily edition sets its own 1180px column (changes-page.md 4).
   const isOnChangesPage = pathname === "/changes";
   // Settings is a modal-like surface, not a working surface — selecting a session
@@ -530,7 +549,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // isFullWidthRoute folds in the self-contained full-bleed pages (sessions,
   // admin) so the non-tab path matches the tab shell; the inbox check stays
   // explicit because it is source-aware, not just path-based.
-  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isFullWidthRoute(pathname ?? "");
+  const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
 
   // The teammate comment rail is a conversation-scoped overlay, so its header
   // toggle only makes sense when a conversation is actually on screen.
@@ -871,7 +890,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // window. Isolated-worktree creation lives as a toggle inside the compose surface.
   useShortcutAction('session.create', handleNewFullSession);
 
-  useShortcutAction('session.compose', openCompose);
+  // Handlers receive the dispatch source ("key" | "named"); never let it reach
+  // openCompose's initialQuery.
+  useShortcutAction('session.compose', () => openCompose());
   useShortcutAction('session.composeDock', useInboxStore.getState().toggleComposeDock);
 
   // Persist user-driven resizes only, once, at drag end (useDragGatedLayoutPersist).
@@ -1251,6 +1272,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </>}
         />
       </header>
+      {/* A phone's top bar has no face row, so a call's card has its own line. */}
+      <PhoneCallStrip />
 
       {/* Status notices (connection, storage, CLI offline, tmux missing) render
           nothing here — they publish to StatusNoticeStack, fixed to the
@@ -1466,7 +1489,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <FindBar />
       </ErrorBoundary>
       <RecentSwitcherHost />
-      <UndoTimelineHost />
     </div>
   );
 }

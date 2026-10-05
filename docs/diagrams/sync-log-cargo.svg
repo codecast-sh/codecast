@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" role="img" aria-labelledby="t d">
+  <title id="t">Sync log cargo: a change reaches an open client once, as the fields that changed</title>
+  <desc id="d">A tracked write passes through makeChangeTrackedDb, which reads the post-write document once and appends one coalesced sync_actions row per access scope: the owner's user scope, the workspace's team when the key is a team key, and each grantee's user scope. The row carries the merge patch and the access stamp, and the scope's sync_heads position is bumped. In the browser, the tiny getHeads subscription rings when a head moves, and a one-shot getRange read with cargo true returns the page projected for this caller: the row with cargo for an owner, grantee or holder of the key, a bare upsert for a row without a stamp, and a bare delete for anyone else. applyLogPage writes a patch onto a held row directly with applyCargoFields and sends everything else to a byIds fetch.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .okLbl { fill: #859900 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+      .okLbl { fill: #859900 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="560" rx="12"/>
+
+  <text class="k" x="24" y="40">CONVEX</text>
+  <text class="k" x="600" y="40">BROWSER, useSyncChangeFeed</text>
+
+  <!-- Tracked write -->
+  <rect class="card" x="24" y="56" width="200" height="264" rx="8"/>
+  <text class="h" x="40" y="82">Tracked write</text>
+  <rect class="inset" x="40" y="96" width="168" height="44" rx="5"/>
+  <text class="n" x="50" y="114">ctx.db.patch(task,</text>
+  <text class="n" x="50" y="130">  { status: "done" })</text>
+  <text class="l" x="40" y="168">makeChangeTrackedDb</text>
+  <text class="n" x="40" y="186">wraps every mutation's</text>
+  <text class="n" x="40" y="202">db in functions.ts</text>
+  <text class="n" x="40" y="230">reads the post-write</text>
+  <text class="n" x="40" y="246">document once for:</text>
+  <text class="n" x="40" y="266">  fan-out scopes</text>
+  <text class="n" x="40" y="282">  the access stamp</text>
+  <text class="n" x="40" y="298">  the self-heal cargo</text>
+
+  <!-- write -> heads / actions -->
+  <path class="data" d="M224 84 H260" marker-end="url(#aData)"/>
+  <path class="data" d="M224 210 H260" marker-end="url(#aData)"/>
+
+  <!-- sync_heads -->
+  <rect class="card" x="264" y="56" width="296" height="56" rx="8"/>
+  <text class="l" x="280" y="80">sync_heads</text>
+  <text class="n" x="280" y="98">position and floor per scope, bumped</text>
+
+  <!-- sync_actions -->
+  <rect class="core" x="264" y="136" width="296" height="292" rx="10"/>
+  <text class="h" x="280" y="162">sync_actions</text>
+  <text class="k" x="280" y="180">ONE COALESCED ROW PER ENTITY, PER SCOPE</text>
+  <rect class="inset" x="280" y="192" width="264" height="24" rx="5"/>
+  <text class="n" x="290" y="208">position: moved to the scope head</text>
+  <rect class="inset" x="280" y="222" width="264" height="24" rx="5"/>
+  <text class="n" x="290" y="238">patch: { status: "done" }</text>
+  <rect class="inset" x="280" y="252" width="264" height="24" rx="5"/>
+  <text class="n" x="290" y="268">unset, full, partial, omitted</text>
+  <rect class="inset" x="280" y="282" width="264" height="40" rx="5"/>
+  <text class="n" x="290" y="298">access_owner, access_key,</text>
+  <text class="n" x="290" y="314">access_grants</text>
+  <text class="n" x="280" y="346">fans out by access, not routing:</text>
+  <rect class="card" x="280" y="358" width="120" height="24" rx="6"/>
+  <text class="n" x="290" y="374">user:&lt;owner&gt;</text>
+  <rect class="card" x="408" y="358" width="136" height="24" rx="6"/>
+  <text class="n" x="418" y="374">team:&lt;id&gt;</text>
+  <rect class="card" x="280" y="390" width="160" height="24" rx="6"/>
+  <text class="n" x="290" y="406">user:&lt;assignee&gt;</text>
+
+  <!-- server -> client -->
+  <path class="data" d="M560 84 H596" marker-end="url(#aData)"/>
+  <path class="data" d="M560 224 H596" marker-end="url(#aData)"/>
+
+  <!-- Client zone -->
+  <rect class="zone" x="584" y="48" width="352" height="404" rx="12"/>
+
+  <!-- getHeads -->
+  <rect class="card" x="600" y="56" width="320" height="56" rx="8"/>
+  <text class="l" x="616" y="80">getHeads, live subscription</text>
+  <text class="n" x="616" y="98">a few integers: the doorbell</text>
+
+  <path class="cmd" d="M760 112 V146" marker-end="url(#aCmd)"/>
+  <text class="l cmdLbl" x="770" y="134">head moved</text>
+
+  <!-- getRange -->
+  <rect class="core" x="600" y="150" width="320" height="140" rx="10"/>
+  <text class="l" x="616" y="174">getRange({ cargo: true })</text>
+  <text class="n" x="616" y="192">one-shot read, projectAction per caller</text>
+  <rect class="inset" x="616" y="204" width="288" height="24" rx="5"/>
+  <text class="n" x="626" y="220">owner, grantee, held key: cargo</text>
+  <rect class="inset" x="616" y="232" width="288" height="24" rx="5"/>
+  <text class="n" x="626" y="248">no access stamp: bare upsert</text>
+  <rect class="inset" x="616" y="260" width="288" height="24" rx="5"/>
+  <text class="n" x="626" y="276">anyone else: bare delete</text>
+
+  <path class="data" d="M760 290 V318" marker-end="url(#aData)"/>
+
+  <!-- applier -->
+  <rect class="card" x="600" y="322" width="320" height="114" rx="8"/>
+  <text class="l" x="616" y="346">applyLogPage</text>
+  <text class="l okLbl" x="616" y="372">patch + held row:</text>
+  <text class="n" x="616" y="388">applyCargoFields, no round trip</text>
+  <text class="l" x="616" y="412">no base, partial, enrich field,</text>
+  <text class="n" x="616" y="428">delete: one byIds fetch</text>
+
+  <!-- Takeaway -->
+  <text class="n" x="24" y="372">Open client cost: one</text>
+  <text class="n" x="24" y="388">doorbell and one range</text>
+  <text class="n" x="24" y="404">read, sized by the</text>
+  <text class="n" x="24" y="420">fields that changed.</text>
+
+  <!-- Legend -->
+  <path class="data" d="M40 500 H80" marker-end="url(#aData)"/><text class="n" x="90" y="504">data: log rows, positions, cargo</text>
+  <path class="cmd" d="M40 526 H80" marker-end="url(#aCmd)"/><text class="n" x="90" y="530">control: a moved head starts a range read</text>
+  <text class="l okLbl" x="520" y="504">green</text><text class="n" x="566" y="504">the direct path the log exists for</text>
+</svg>

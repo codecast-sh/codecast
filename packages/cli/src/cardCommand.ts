@@ -36,6 +36,8 @@ interface BuildOptions {
   task: string;
   evalResult?: string;
   proof?: string;
+  headline?: string;
+  context?: string;
   wrong?: string;
   change?: string;
   recommend?: string;
@@ -71,9 +73,17 @@ export function parseShortstat(line: string): { files: number; added: number; re
   };
 }
 
-async function branchDiff(base: string): Promise<{ files: number; added: number; removed: number } | null> {
+/**
+ * The change's own size: its line branch (codecast/line-<task>) against the
+ * base, so a card built from any checkout measures the change and never the
+ * checkout's unrelated work. HEAD is the fallback for a change built by hand.
+ */
+async function branchDiff(base: string, task: string): Promise<{ files: number; added: number; removed: number } | null> {
+  const cwd = process.cwd();
+  const lineBranch = `codecast/line-${task}`;
+  const head = await runGit(cwd, ["rev-parse", "--verify", "--quiet", lineBranch]).then(() => lineBranch, () => "HEAD");
   try {
-    return parseShortstat(await runGit(process.cwd(), ["diff", "--shortstat", `${base}...HEAD`]));
+    return parseShortstat(await runGit(cwd, ["diff", "--shortstat", `${base}...${head}`]));
   } catch {
     return null;
   }
@@ -139,8 +149,10 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
     evidence: evidence && Array.isArray(evidence.files_changed) ? (evidence as CardEvidenceInput) : null,
     evalResult,
     proof,
-    diff: await branchDiff(base),
+    diff: await branchDiff(base, task.short_id),
     cost: runCost(Array.isArray(runs?.runs) ? runs.runs : []),
+    headline: options.headline,
+    context: options.context,
     wrong: options.wrong,
     change: options.change,
     recommend: options.recommend ? { verdict: options.recommend as ChangeVerdict, why: options.why?.trim() ?? "" } : null,
@@ -193,6 +205,8 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
     .requiredOption("--task <ct-N>", "The cause the card is for")
     .option("--eval-result <file>", "The eval station's eval-result.json: verdicts, proven freezes, flipped examples")
     .option("--proof <file>", "A proof recorded outside evals: { before: Check[], after: Check[] }, red then green")
+    .option("--headline <text>", stdinText("The card's title in plain words, under 80 characters"))
+    .option("--context <text>", stdinText("One sentence: what the affected part of the product is and who sees it"))
     .option("--wrong <text>", stdinText("What is wrong, in the user's terms, one or two sentences"))
     .option("--change <text>", stdinText("What behaves differently after this change, one or two sentences"))
     .option("--recommend <verdict>", `${CHANGE_VERDICTS.join(" | ")}`)

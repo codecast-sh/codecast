@@ -6,6 +6,7 @@ import type { CSSProperties } from "react";
 import type { SimMinimal } from "@codecast/shared/contracts/evalsApi";
 import { feedTone, parseChannel, shrinkCaption } from "./simLanes";
 import "./sim.css";
+import { chipText } from "./simModel";
 
 export interface OrderStripProps {
   channels: readonly string[];
@@ -16,29 +17,6 @@ export interface OrderStripProps {
   playhead: number | null;
   onPick: (i: number) => void;
   feeds: readonly string[];
-}
-
-/** A channel in a few characters: `conn laptop-host`, `live laptop-host/inbox`, `repl a > b`. */
-export function chipText(channel: string): string {
-  const p = parseChannel(channel);
-  switch (p.kind) {
-    case "conn":
-      return `conn ${p.window}`;
-    case "live":
-      return `live ${p.window}/${p.feed}`;
-    case "repl":
-      return `repl ${p.from} > ${p.to}`;
-    case "bridge":
-      return `bridge ${p.device}${p.from ? `/${p.from}` : ""}`;
-    case "timer":
-      return `timer ${p.owner}`;
-    case "sched":
-      return "sched";
-    case "actor":
-      return `actor ${p.name}`;
-    default:
-      return p.raw;
-  }
 }
 
 function chipTone(channel: string, feeds: readonly string[]): string {

@@ -10,7 +10,7 @@ import { buildPlan, type PlanArgs } from '../bisect/plan';
 import { treeEnv } from '../bisect/probe';
 import { budgetRefusal, runBisect, startRefusal } from '../bisect/runner';
 import { listSimBisects, newSimBisectId, planSimBisect, readSimBisect, runSimBisect, simAnswerWords, simTreeEnv, type SimBisectPlan, type SimBisectRecord } from '../bisect/simProbe';
-import { bisectPaths, BISECT_ID_RE, listBisects, LIVE_STATUSES, newBisectId, readBisectState, readSteps, requestStop } from '../bisect/state';
+import { bisectPaths, BISECT_ID_RE, listBisects, LIVE_STATUSES, newBisectId, readBisectState, readSteps, recordedState, requestStop } from '../bisect/state';
 import { indexedRuns } from '../history/runIndex';
 import { surfaceMeta } from '../registry';
 import { bisectSignal, reportSignals } from '../signals';
@@ -54,7 +54,7 @@ const argsOf = (surface: string, f: PlanFlags): PlanArgs => {
   return { surface, good: f.good, bad: f.bad, freezes: f.freeze?.length ? f.freeze : undefined, reps: f.reps, budgetUsd: f.budget, maxMinutes: f.maxMinutes, allCommits: f.allCommits };
 };
 
-/** The terminal, when there is one: a detached start writes its stdout into log.txt, which the journal already writes. */
+/** The terminal, when there is one: a detached start's stdout goes to job.log, and the journal writes log.txt itself. */
 const tty = (line: string) => (process.stdout.isTTY ? console.log(fmt.muted(line)) : undefined);
 
 /** The tmux session this process runs in, or null. */
@@ -216,7 +216,7 @@ export async function bisectStart(surface: string, flags: StartFlags): Promise<n
   const args = argsOf(surface, flags);
   const id = flags.id ?? newBisectId(surface);
   if (!BISECT_ID_RE.test(id)) throw new Error(`--id ${id}: lowercase letters, digits and dashes only`);
-  if (readBisectState(id)) throw new Error(`bisect ${id} already exists: ./evals bisect resume ${id} goes on with it`);
+  if (recordedState(id)) throw new Error(`bisect ${id} already exists: ./evals bisect resume ${id} goes on with it`);
   const env = treeEnv(surface, { out: tty, log: bisectPaths(id).log });
   console.log(`bisect ${id}: ./evals bisect watch ${id} follows it, ./evals bisect stop ${id} cancels it between reps`);
   const s = await runBisect(id, args, env, { yes: flags.yes, noRender: flags.render === false, tmux: tmuxSession(), echo: tty });
@@ -234,8 +234,8 @@ function fileFinding(s: BisectState): void {
 export async function bisectResume(id: string): Promise<number> {
   const sim = readSimBisect(id);
   if (sim) return simBisectResume(sim);
-  const s0 = readBisectState(id);
-  if (!s0) throw new Error(`no bisect ${id}; ./evals bisect ls lists them`);
+  const s0 = recordedState(id);
+  if (!s0) throw new Error(`no bisect ${id} has started; ./evals bisect ls lists them`);
   const env = treeEnv(s0.surface, { out: tty, log: bisectPaths(id).log });
   const s = await runBisect(id, { surface: s0.surface }, env, { resume: true, yes: true, tmux: tmuxSession(), echo: tty });
   printState(s);
@@ -325,10 +325,10 @@ export function registerBisect(program: Command): void {
     });
   bisect
     .command('stop <id>')
-    .description('cancel a bisect between reps (resume goes on with it)')
+    .description('cancel a bisect between reps, or between probes for a Multiplayer sim bisect (resume goes on with it)')
     .action((id: string) => {
       if (!requestStop(id)) throw new Error(`no bisect ${id}`);
-      console.log(`asked ${id} to stop; it stops before its next rep`);
+      console.log(`asked ${id} to stop; it stops before its next ${readSimBisect(id) ? 'probe' : 'rep'}`);
     });
   bisect
     .command('ls')

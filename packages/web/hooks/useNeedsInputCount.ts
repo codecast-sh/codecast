@@ -6,6 +6,7 @@ import {
   resolveShowOld,
   sessionsWakeSig,
   useTrackedStore,
+  type PlacedInbox,
 } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
 
@@ -22,6 +23,13 @@ import { useCoarseNow } from "./useCoarseNow";
 // only need the count on some platforms (DesktopProvider in a plain browser
 // tab), where running it would double the sidebar badge's identical work.
 export function useNeedsInputCount(enabled = true): number {
+  const placed = useMinePlacement(enabled);
+  return placed ? placed.needsInput.length + placed.questions.length : 0;
+}
+
+// The mine-scoped placement itself, for a surface that renders more than the
+// count (the agent dock's dots and card). Same wake signatures, same clock.
+export function useMinePlacement(enabled = true): PlacedInbox | null {
   const s = useTrackedStore([
     // Wake on STRUCTURAL session change only — the raw s.sessions ref flips on
     // every ~1s liveness heartbeat. pendingMessages likewise: only the
@@ -36,7 +44,7 @@ export function useNeedsInputCount(enabled = true): number {
     s => placementDecisionsSig(s.sessionDecisions),
     s => s.questionResolutions,
   ]);
-  // Mine-scoped: this is your personal attention count, so a teammate row cached
+  // Mine-scoped: this is your personal attention, so a teammate row cached
   // from a team-board visit must not inflate it.
   const meId = s.currentUser?._id;
   // The chokepoint's time-driven flips (trust TTL, revive expiry, the epoch)
@@ -44,11 +52,7 @@ export function useNeedsInputCount(enabled = true): number {
   // timer, so extra subscribers are free).
   const coarseNow = useCoarseNow(15_000);
   return useMemo(
-    () => {
-      if (!enabled) return 0;
-      const placed = placeInboxRows(s, { scope: "mine", now: coarseNow });
-      return placed.needsInput.length + placed.questions.length;
-    },
+    () => (enabled ? placeInboxRows(s, { scope: "mine", now: coarseNow }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [enabled, sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), placementDecisionsSig(s.sessionDecisions), s.questionResolutions, coarseNow],
   );

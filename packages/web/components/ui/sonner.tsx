@@ -2,6 +2,8 @@ import { Check, Info, TriangleAlert, X } from "lucide-react";
 import { Toaster as Sonner, toast } from "sonner";
 import { useTheme } from "../ThemeProvider";
 import { persistentToast } from "../../lib/persistentToast";
+import { useUndoCardToasterLift } from "../../lib/undoCardToasterLift";
+import "./button.css";
 import "./sonner.css";
 
 // An error stays until the person closes it: it is often the only word that
@@ -22,6 +24,8 @@ const GLYPH = { size: 13, strokeWidth: 2.5, "aria-hidden": true } as const;
  *  every error does by default. */
 const Toaster = (props: ToasterProps) => {
   const { theme } = useTheme();
+  // Above the undo card while it is open: the two share the corner.
+  const lift = useUndoCardToasterLift();
 
   return (
     <Sonner
@@ -29,6 +33,7 @@ const Toaster = (props: ToasterProps) => {
       theme={theme}
       className="cc-toaster"
       closeButton
+      toastOptions={{ classNames: { actionButton: "cc-btn cc-btn-fill cc-btn-cyan" } }}
       icons={{
         success: <Check {...GLYPH} />,
         error: <X {...GLYPH} />,
@@ -37,6 +42,7 @@ const Toaster = (props: ToasterProps) => {
         close: <X size={13} strokeWidth={2.25} aria-hidden />,
       }}
       {...props}
+      {...(lift ? { offset: lift, mobileOffset: lift } : {})}
     />
   );
 };

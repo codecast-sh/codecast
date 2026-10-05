@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // codecast's convex program loads these sources with lib ES2021; checking
+    // against the same lib keeps newer built-ins (findLastIndex) out.
+    "lib": ["ES2021", "DOM"]
+  },
+  "include": ["src"]
+}

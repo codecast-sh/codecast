@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import { toast } from "sonner";
 import { _resetUndoStacks, getUndoHistory, setUndoNotifier } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
-import { CODECAST_UNDO_NOTIFIER, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
+import { CODECAST_UNDO_NOTIFIER, gestureToast, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
 import * as undoTimeline from "../../lib/undoTimelineOpen";
 import { undoAsOne } from "../undoActions";
 
@@ -155,6 +155,27 @@ describe("undo announcements", () => {
     mark = toast.getHistory().length;
     performUndo();
     useInboxStore.getState().renameSession(B, "Renamed");
+    expect(since()).toHaveLength(0);
+    undoTimeline.close();
+  });
+
+  test("a gesture made while the held peek shows keeps its own Undo toast", () => {
+    // The peek narrates the steps it takes, not a new gesture: that card is
+    // on its way out (the gesture's key or click ends the walk), so the
+    // entry's Undo toast is the only place the new change can be taken back.
+    useInboxStore.getState().stashSession(A);
+    undoTimeline.open("peek");
+    mark = toast.getHistory().length;
+    gestureToast("Stashed", () => useInboxStore.getState().stashSession(B));
+    const head = getUndoHistory().head!;
+    expect(latest(undoEntryToastId(head))?.action?.label).toBe("Undo");
+    undoTimeline.close();
+  });
+
+  test("a gesture made while the interactive card is open shows no toast over it", () => {
+    undoTimeline.open("interactive");
+    mark = toast.getHistory().length;
+    gestureToast("Stashed", () => useInboxStore.getState().stashSession(B));
     expect(since()).toHaveLength(0);
     undoTimeline.close();
   });

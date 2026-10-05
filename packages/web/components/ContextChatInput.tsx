@@ -7,7 +7,7 @@ import { resolveContextRow, resolveContextProjectPath } from "../lib/contextProj
 import { soundNewSession } from "../lib/sounds";
 import { AgentTypeIcon } from "./AgentTypeIcon";
 import { usePinnedAgentIds } from "../hooks/usePinnedAgents";
-import { AGENT_LAUNCH_OPTIONS, fromConvexAgentType, type AgentClientId } from "@codecast/shared/contracts";
+import { AGENT_LAUNCH_OPTIONS, fromConvexAgentType, type AgentClientId, type LocalAgentClientId } from "@codecast/shared/contracts";
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -16,7 +16,7 @@ const escapeContext = (value: string) =>
 // edit strings) while preventing body content from closing the envelope.
 const protectContextBody = (value: string) =>
   value.replace(/<\/context>/gi, "<\\/context>");
-const AGENT_ACTIVE_CLASS: Record<AgentKey, string> = {
+const AGENT_ACTIVE_CLASS: Record<LocalAgentClientId, string> = {
   claude: "bg-sol-yellow/20 text-sol-yellow border-sol-yellow/50",
   codex: "bg-emerald-500/20 text-emerald-400 border-emerald-500/50",
   cursor: "bg-purple-500/20 text-purple-400 border-purple-500/50",

@@ -5,6 +5,8 @@
 import { useInboxStore, type TaskItem } from "../store/inboxStore";
 import { MAX_TASK_DEPTH, isCountableSubtask, taskDepth, wouldCreateTaskCycle } from "@codecast/shared/tasks";
 import { undoGroup } from "@platform/engine";
+import { counted, undoAsOne } from "../store/undo/labels";
+import { taskEditLabel } from "../store/undo/policies/work";
 
 // This module is shared by web AND mobile (which has no sonner), so it can't
 // import a toast lib. Surfaces that want a toast on a create refusal pass a
@@ -44,12 +46,40 @@ export function closeTaskWithGuard(
   if (task && !resolution) {
     const open = openSubtasksOf(task._id);
     if (open.length > 0) {
-      s.setTaskCloseGuard({ shortId, status, open, statusId } as any);
+      // A gesture over several parents asks once: each guarded parent joins
+      // the dialog already waiting for the same close.
+      const waiting = s.taskCloseGuard;
+      const joins = waiting && waiting.status === status && waiting.statusId === statusId;
+      const parents = joins ? waiting.parents.filter((p) => p.shortId !== shortId) : [];
+      s.setTaskCloseGuard({ status, statusId, parents: [...parents, { shortId, open }] });
       return { needsConfirm: true };
     }
   }
   s.updateTask(shortId, { status, ...(statusId !== undefined ? { status_id: statusId } : {}), subtask_resolution: resolution });
   return { needsConfirm: false };
+}
+
+/**
+ * Write the same fields to several tasks as one undo, named for what changed
+ * ("Moved 3 tasks to Done", "Assigned 3 tasks to Sam"): the context menu and
+ * the palette both land here. A terminal status goes through the close
+ * gateway; returns whether any close waits on its dialog.
+ */
+export function updateTasksAsOne(shortIds: string[], fields: Record<string, any>): { needsConfirm: boolean } {
+  const closing = fields.status === "done" || fields.status === "dropped";
+  const label = (entries: unknown[]) => {
+    const s = useInboxStore.getState();
+    const first = (Object.values(s.tasks) as TaskItem[]).find((t) => t.short_id === shortIds[0]);
+    return taskEditLabel(s, first, counted(entries.length, "task"), fields);
+  };
+  return undoAsOne(label, () => {
+    let needsConfirm = false;
+    for (const id of shortIds) {
+      if (closing) needsConfirm = closeTaskWithGuard(id, fields.status, undefined, fields.status_id).needsConfirm || needsConfirm;
+      else useInboxStore.getState().updateTask(id, fields);
+    }
+    return { needsConfirm };
+  });
 }
 
 /**
@@ -80,13 +110,25 @@ export function applyTaskDrop(shortId: string, updates: Record<string, any>): { 
   );
 }
 
-/** Resolve the pending close-guard dialog with the user's choice. */
+/** Resolve the pending close-guard dialog with the user's choice: every
+ *  parent it holds closes, as one undo named for the count. */
 export function resolveTaskCloseGuard(resolution: "cascade" | "only_parent") {
   const s = useInboxStore.getState();
-  const g = s.taskCloseGuard as any;
+  const g = s.taskCloseGuard;
   if (!g) return;
   s.setTaskCloseGuard(null);
-  s.updateTask(g.shortId, { status: g.status, ...(g.statusId !== undefined ? { status_id: g.statusId } : {}), subtask_resolution: resolution });
+  const fields = { status: g.status, ...(g.statusId !== undefined ? { status_id: g.statusId } : {}) };
+  const shortIds = g.parents.map((p) => p.shortId);
+  undoAsOne(
+    () => {
+      const st = useInboxStore.getState();
+      const first = (Object.values(st.tasks) as TaskItem[]).find((t) => t.short_id === shortIds[0]);
+      return taskEditLabel(st, first, counted(shortIds.length, "task"), fields);
+    },
+    () => {
+      for (const id of shortIds) useInboxStore.getState().updateTask(id, { ...fields, subtask_resolution: resolution });
+    },
+  );
 }
 
 /**

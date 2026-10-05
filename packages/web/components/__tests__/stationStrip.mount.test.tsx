@@ -142,6 +142,37 @@ describe("StationStrip", () => {
     await act(() => root.unmount());
   });
 
+  test("a line run's node links to that station in line settings; a customized line says so", async () => {
+    // Shipped line: the node names the task's project.
+    useInboxStore.setState({ workflowRuns: { [RUN_ID]: run } } as any);
+    let m = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID, project_id: "p1" }) as any} />);
+    let link = m.container.querySelector("a[data-station-settings]") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/line/settings?project=p1&section=stations&station=review");
+    expect(m.container.querySelector("[data-line-customized]")).toBeNull();
+    await act(() => m.root.unmount());
+
+    // The project's customized copy: the link names the project it forks for, with the chip.
+    const forkRun = { ...run, workflow_id: WF_ID, workflow_name: "Line for Codecast" };
+    useInboxStore.setState({
+      workflowRuns: { [RUN_ID]: forkRun },
+      workflows: { [WF_ID]: { _id: WF_ID, slug: "line-pr-1", name: "Line for Codecast", nodes: [{ id: "review", label: "Review" }] } },
+      projects: { p1: { _id: "p1", short_id: "pr-1", title: "Codecast", workspace: "user:u1" } },
+      currentUser: { _id: "u1" },
+    } as any);
+    m = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID }) as any} />);
+    link = m.container.querySelector("a[data-station-settings]") as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe("/line/settings?project=pr-1&section=stations&station=review");
+    expect(m.container.querySelector("[data-line-customized]")?.textContent).toBe("customized");
+    await act(() => m.root.unmount());
+
+    // Any other workflow: the node stays plain text.
+    useInboxStore.setState({ workflowRuns: { [RUN_ID]: { ...run, workflow_name: "release" } }, workflows: {} } as any);
+    m = await mount(<StationStrip task={task({ workflow_run_id: RUN_ID }) as any} />);
+    expect(m.container.querySelector("[data-live-node]")).not.toBeNull();
+    expect(m.container.querySelector("a[data-station-settings]")).toBeNull();
+    await act(() => m.root.unmount());
+  });
+
   test("a review verdict renders as a chip even with no run", async () => {
     const { container, root } = await mount(<StationStrip task={task({ review_verdict: { verdict: "changes", at: 1, note: "tests" } }) as any} />);
     expect(container.querySelector("[data-review-verdict]")?.getAttribute("data-review-verdict")).toBe("changes");

@@ -13,6 +13,7 @@ export type { Persistence, PersistenceHooks, StoreLike } from "./persistence";
 
 export {
   action,
+  afterCommit,
   sync,
   asyncAction,
   receiptAsyncAction,
@@ -86,7 +87,10 @@ export {
   undoKeyboardSince,
   markUndoOutboxRefused,
   rekeyUndoIds,
+  suspendUndoRecording,
   _resetUndoStacks,
+  onUndoReset,
+  resetUndoHistory,
   DEFAULT_UNDO_KEYBOARD_WINDOW_MS,
   DEFAULT_UNDO_STACK_LIMIT,
   DEFAULT_UNDO_HISTORY_LIMIT,
@@ -132,6 +136,7 @@ export type {
   PendingEntry,
   OutboxEntry,
   ActionFieldLock,
+  ActionTeeMeta,
   MergeSpec,
   MergeSpecMap,
   MergePolicy,

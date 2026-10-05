@@ -16,7 +16,7 @@ import {
 import { forwardRef } from 'react';
 
 import { Theme, useActiveScheme, useTheme } from '@/constants/Theme';
-import { monoStyle } from '@/constants/fonts';
+import { monoStyle, useLateFacesLoaded } from '@/constants/fonts';
 
 type ThemeProps = {
   lightColor?: string;
@@ -39,19 +39,21 @@ export function useThemeColor(
 export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref) {
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
-  return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style])} />;
+  const late = useLateFacesLoaded();
+  return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late)} />;
 });
 
 export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function TextInput(props, ref) {
   const Theme = useTheme();
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
+  const late = useLateFacesLoaded();
   return (
     <DefaultTextInput
       ref={ref}
       placeholderTextColor={Theme.inputPlaceholder}
       {...otherProps}
-      style={monoStyle([{ color }, style])}
+      style={monoStyle([{ color }, style], late)}
     />
   );
 });

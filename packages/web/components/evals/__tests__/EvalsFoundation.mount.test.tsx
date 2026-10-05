@@ -67,6 +67,7 @@ describe("the fixture world", () => {
     "GET /commit/:sha": { params: { sha: settle[0].gitHead!.slice(0, 9) } },
     "GET /patch/:sha": { params: { sha: settle.find((r) => r.treePatch)!.treePatch! } },
     "GET /changes": { query: { since: "0" } },
+    "GET /search": { query: { q: callRun.freezeId.slice(0, 6) } },
     "POST /bisect/plan": { body: { surface: "settle", good: batches[batches.length - 6], bad: batches[batches.length - 1] } },
     "POST /bisect": { body: { surface: "settle", good: batches[0], bad: batches[1] } },
     "GET /bisects": {},
@@ -198,6 +199,21 @@ describe("the chart parts", () => {
     expect(container.querySelector(".ev-strip-mark")).not.toBeNull();
     expect(container.querySelectorAll("[data-ev-epoch]").length).toBe(title.epochs.length - 1);
     expect(container.querySelectorAll('[data-ev-footing="judge"]').length).toBe(1);
+    await unmount();
+  });
+
+  it("draws a batch the model was never asked about as a crash cross on the axis, off the median line and without dots", async () => {
+    const last = title.strip[title.strip.length - 1]!;
+    const unasked = { ...last, batch: "2026-10-02T10:49:25.950Z~line-branch", batchAt: new Date(Date.parse(last.batchAt) + 3_600_000).toISOString(), median: 0, mean: 0, passed: 0, unasked: true };
+    const dots = [...title.dots, { batch: unasked.batch, at: unasked.batchAt, score: 0, status: "fail" as const }];
+    const plain = await mount(<ScoreStrip strip={title.strip} dots={title.dots} from={NOW - 30 * 86_400_000} to={NOW + 7_200_000} width={480} />);
+    const median = plain.container.querySelector(".ev-strip-median")?.getAttribute("d");
+    const dotCount = plain.container.querySelectorAll("circle").length;
+    await plain.unmount();
+    const { container, unmount } = await mount(<ScoreStrip strip={[...title.strip, unasked]} dots={dots} from={NOW - 30 * 86_400_000} to={NOW + 7_200_000} width={480} />);
+    expect(container.querySelector(`[data-ev-strip-unasked="${unasked.batch}"]`)).not.toBeNull();
+    expect(container.querySelector(".ev-strip-median")?.getAttribute("d")).toBe(median);
+    expect(container.querySelectorAll("circle").length).toBe(dotCount);
     await unmount();
   });
 

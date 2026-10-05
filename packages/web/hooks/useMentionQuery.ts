@@ -3,6 +3,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../lib/mentionItem";
 import { memberHandle } from "@codecast/shared/chat";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
@@ -161,10 +162,12 @@ export function channelMentionItems(s: {
 
 // The one predicate every mention surface filters by: a query hits an item
 // through its label, its sublabel (handle, path, project), its short id, or a
-// session's idle summary. Empty query matches everything.
+// session's idle summary. Empty query matches everything but closed tasks and workers.
 export function mentionItemMatches(m: MentionItem, query: string): boolean {
   const q = query.trim().toLowerCase();
-  if (!q) return true;
+  // A closed task is history: it answers only to its short id.
+  if (m.type === "task" && isTerminalTaskStatus(m.status)) return !!q && !!m.shortId && m.shortId.toLowerCase().includes(q);
+  if (!q) return !m.worker;
   // A personified session answers to its NAME as well as its title: the
   // dropdown shows "Dune", so typing "dune" has to find it (session-characters
   // .md S3). The name it wears depends on the workspace switch, so this asks
@@ -226,13 +229,13 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       id: p._id, type: "plan", label: p.title, sublabel: p.short_id, shortId: p.short_id,
       status: p.status, goal: p.goal, updatedAt: p.updated_at,
     })),
-    ...Object.values(s.sessions).filter((sess) => !sess.is_subagent && inScope(sess, scope)).map((sess) => ({
+    ...Object.values(s.sessions).filter((sess) => inScope(sess, scope)).map((sess) => ({
       id: sess._id, type: "session", label: sess.title || "Untitled Session",
       sublabel: sess.idle_summary || undefined, shortId: sess._id.slice(0, 7).toLowerCase(),
       messageCount: sess.message_count, projectPath: sess.git_root || sess.project_path,
       status: sess.agent_status ?? undefined, agentType: sess.agent_type,
       model: sess.model ?? undefined, updatedAt: sess.updated_at, idleSummary: sess.idle_summary,
-      identity: identityRowOf(sess as never),
+      identity: identityRowOf(sess as never), worker: !!sess.is_subagent || undefined,
     })),
   ];
   return mergeMentionSuggestions(items, [], mentionViewTimes(s), Infinity, "", personifyAllNow());

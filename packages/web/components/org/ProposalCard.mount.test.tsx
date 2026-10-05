@@ -121,7 +121,9 @@ test("a proposed proposal draws its tree with faces and its three verdicts", () 
   expect(groups[0].querySelector("[data-tree-parent] [data-face='person']")).not.toBeNull();
   expect(rows[0].querySelector("[data-tree-node='role']")!.textContent).toContain("Head of Platform");
   expect(rows[0].querySelector("[data-ghost-tag='new role']")).not.toBeNull();
-  expect(groups[1].querySelector("[data-tree-parent]")!.getAttribute("data-tree-parent")).toBe("c1-role");
+  // The move lands under the role this card creates: it hangs off that row, with no second parent line.
+  expect(groups[1].getAttribute("data-tree-under")).toBe("c1-role");
+  expect(groups[1].querySelector("[data-tree-parent]")).toBeNull();
   expect(rows[1].querySelector("[data-tree-node='role']")!.textContent).toContain("Head of Growth");
   expect(rows[1].querySelector("[data-ghost-tag='move']")).not.toBeNull();
   expect(rows[1].querySelector("[data-tree-from]")!.textContent).toContain("was under");

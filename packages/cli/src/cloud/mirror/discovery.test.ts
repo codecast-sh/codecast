@@ -191,7 +191,8 @@ test("audio and video a doc links to stay home; an active config that requires o
 
 test("marketplace clones, bundled skills, install staging and trashed skills stay home; installed plugins and live skills travel", async () => {
   const runtime = [".grok/marketplace-cache/11f3bbe6/demo.gif", ".grok/marketplace-cache/11f3bbe6/.claude-plugin/marketplace.json", ".grok/bundled/skills/a/SKILL.md",
-    ".codex/plugins/.remote-plugin-install-staging/x/SKILL.md", ".claude/skills/.trash/1789952314586-77452/setup/SKILL.md", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json"];
+    ".codex/plugins/.remote-plugin-install-staging/x/SKILL.md", ".claude/skills/.trash/1789952314586-77452/setup/SKILL.md", ".claude/plugins/plugin-catalog-cache.json", ".cursor/statsig-cache.json",
+      ".claude/plugins/plugin-directory-cache-v2.json", ".claude/mcp-needs-auth-cache.json", ".config/opencode/package-lock.json", ".opencode/package.json"];
   for (const file of runtime) write(file, "runtime");
   write(".claude/skills/live/SKILL.md", "portable skill");
   write(".codex/plugins/cache/org/plugin/skills/a/SKILL.md", "installed plugin");
@@ -220,6 +221,9 @@ test("missing executable dependencies fail while prose and output directories re
   await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("missing active context reference");
   write("src/repo/.mcp.json", JSON.stringify({ mcpServers: { local: { command: "node", args: [`${root}/missing-server.js`] } } }));
   expect(() => collectProjectContext({ root, home })).toThrow("missing active context reference");
+  // A worktree's copy list (workspace/resolver.ts) only reports it: a dangling
+  // dependency must not refuse every worktree on the machine.
+  expect(collectProjectContext({ root, home, tolerateMissing: true }).skipped).toContainEqual({ path: `${root}/missing-server.js`, reason: "referenced path not found" });
   write("src/repo/.mcp.json", "{ broken");
   expect(() => collectProjectContext({ root, home })).toThrow("cannot parse active context config");
 });
@@ -421,4 +425,46 @@ test("Claude state contributes only scrubbed MCP definitions and malformed sourc
   expect(entry.bytes.toString()).not.toContain("oauthAccount");
   write(".claude.json", "{malformed");
   await expect(collectMirrorFiles({ home, hostHome: "/home/u" })).rejects.toThrow("cannot parse Claude MCP source");
+});
+
+test("a nested checkout inside the project is its own project: its agent folders and files stay out", async () => {
+  write("src/repo/CLAUDE.md", "root");
+  write("src/repo/.agents/worktrees/agent-a/.git", "gitdir: /elsewhere\n");
+  write("src/repo/.agents/worktrees/agent-a/CLAUDE.md", "copy");
+  write("src/repo/.agents/worktrees/agent-a/docs/big.md", "x".repeat(4096));
+  write("src/repo/.wt-copy/.git", "gitdir: /elsewhere\n");
+  write("src/repo/.wt-copy/AGENTS.md", "copy");
+  write("src/repo/.agents/skills/a/SKILL.md", "kept");
+  const ctx = await collectProjectContextAsync({ root, home, maxBytes: 2048 });
+  expect(ctx.files.map((f) => f.relativePath).sort()).toEqual([".agents/skills/a/SKILL.md", "CLAUDE.md"]);
+  expect(ctx.skipped.filter((s) => s.reason === "nested git checkout").map((s) => path.relative(root, s.path)).sort()).toEqual([".agents/worktrees/agent-a", ".wt-copy"]);
+});
+
+test("a unix socket in the project is skipped, not fatal (Bun's realpath refuses one)", async () => {
+  write("src/repo/CLAUDE.md", "root");
+  const server = (await import("node:net")).createServer();
+  await new Promise<void>((resolve) => server.listen(path.join(root, "list-sessions"), resolve));
+  try {
+    const ctx = await collectProjectContextAsync({ root, home });
+    expect(ctx.files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+  } finally { server.close(); }
+});
+
+test("files read only for their references do not count against the cap", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  write("src/repo/CLAUDE.md", "root");
+  write("src/repo/docs/huge.md", "x".repeat(8192));
+  const ctx = await collectProjectContextAsync({ root, home, agentContextOnly: true, maxBytes: 4096 });
+  expect(ctx.files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
+});
+
+test("a socket named by a home instruction file is skipped by the home walk, not fatal", async () => {
+  const sock = path.join(home, "src/repo/list-sessions");
+  write(".claude/CLAUDE.md", `The daemon listens on ${sock}.\n`);
+  const server = (await import("node:net")).createServer();
+  await new Promise<void>((resolve) => server.listen(sock, resolve));
+  try {
+    const inv = await collectMirrorFiles({ home, hostHome: "/home/u" });
+    expect(inv.entries.map((e) => e.path)).toEqual([".claude/CLAUDE.md"]);
+  } finally { server.close(); }
 });

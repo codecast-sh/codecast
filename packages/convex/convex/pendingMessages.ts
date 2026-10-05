@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import { HOSTED_INPUT_MAX_CHARS, type WakeCause } from "@codecast/shared/contracts/assistant";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
@@ -13,7 +14,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
 import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
@@ -44,6 +45,10 @@ export async function canSendProductMessage(
   conversation: any,
 ): Promise<boolean> {
   const access = await checkConversationAccess(ctx, userId, conversation);
+  // A hosted conversation runs its owner's connectors and spends its owner's
+  // wallet on every turn, so only its owner may give it input, whoever can
+  // read it.
+  if (isHostedAgentType(conversation.agent_type)) return access === "owner";
   if (access === "owner" || access === "team") return true;
   return access === "shared"
     && await hasGrantedSendAccess(ctx, conversation._id, userId);
@@ -112,6 +117,23 @@ export function isControlMessage(content: string): boolean {
   } catch {
     return false;
   }
+}
+
+type WakeScheduler = { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> };
+
+/** The one wake rule for a hosted conversation: a row became pending, so the
+ *  turn engine runs (assistant/entry.ts wake). A safety stop never starts a
+ *  turn. Returns false for any other conversation, which a daemon serves. */
+export async function wakeHostedConversation(
+  ctx: { scheduler?: WakeScheduler },
+  conversation: any,
+  cause: WakeCause,
+): Promise<boolean> {
+  if (!isHostedAgentType(conversation?.agent_type)) return false;
+  if (isConversationSafetyBlocked(conversation)) return true;
+  if (!ctx.scheduler) throw new Error("A hosted conversation needs a scheduler to wake");
+  await ctx.scheduler.runAfter(0, internal.assistant.entry.wake, { conversation_id: conversation._id, cause });
+  return true;
 }
 
 type PendingStatus = "pending" | "injected" | "delivered" | "failed" | "undeliverable" | "cancelled" | "held";
@@ -197,6 +219,10 @@ export function canDaemonSeePendingMessage(
   // destination does not own it yet. Nobody delivers; the message waits as
   // pending and rides the resume on the destination once the fence clears.
   if ((conversation as any).migration) return false;
+  // A hosted conversation (agent_type "codecast") is run by this backend's
+  // turn engine, which consumes its pending rows itself (assistant/entry.ts).
+  // No daemon delivers into it, resumes it or launches it.
+  if (isHostedAgentType((conversation as any).agent_type)) return false;
   // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
@@ -322,7 +348,9 @@ export async function updatePendingMessageStatusForDaemon(
 // session sends (sendSessionMessage) funnel through here so the wake-up rules
 // stay in one place.
 export async function enqueuePendingMessage(
-  ctx: { db: any },
+  // `scheduler` is required for a hosted conversation, whose turn engine is
+  // woken from here; tests driving a daemon conversation may pass `{ db }`.
+  ctx: { db: any; scheduler?: { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> } },
   conversation: any,
   fromUserId: Id<"users">,
   fields: {
@@ -357,8 +385,23 @@ export async function enqueuePendingMessage(
     // caused, such as a role's own escalation divider, so the role is not
     // woken to read what it just wrote.
     hold?: boolean;
+    // Why a hosted conversation wakes for this row, when the caller knows
+    // better than the origin says (an answered approval). Ignored for every
+    // other conversation.
+    wake_cause?: WakeCause;
   }
 ): Promise<Id<"pending_messages">> {
+  // Every producer reaches this point, not only the ones that check
+  // canSendProductMessage (session-to-session sends, role messages), so the
+  // owner-only rule for hosted input is enforced here as well.
+  if (isHostedAgentType(conversation.agent_type) && String(fromUserId) !== String(conversation.user_id)) {
+    throw new Error("Only the owner can send to a hosted conversation");
+  }
+  // Machine frames (a routine firing, a run outcome) are built here and bounded
+  // by their writers; what a person sends is bounded here.
+  if (isHostedAgentType(conversation.agent_type) && fields.origin !== "scheduler" && fields.content.length > HOSTED_INPUT_MAX_CHARS) {
+    throw new Error(`A message to the assistant can be at most ${HOSTED_INPUT_MAX_CHARS.toLocaleString("en-US")} characters`);
+  }
   if (fields.client_id) {
     const existing = await ctx.db
       .query("pending_messages")
@@ -433,6 +476,12 @@ export async function enqueuePendingMessage(
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
   if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
+
+  // A hosted conversation has no daemon to poll for this row: wake its turn
+  // engine, which consumes the pending rows itself. A turn already running
+  // picks the row up before it stops (assistant/entry.ts wake).
+  await wakeHostedConversation(ctx, conversation,
+    fields.wake_cause ?? (fields.origin === "scheduler" ? "routine" : "message"));
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").
@@ -981,7 +1030,7 @@ export const updateMessageStatus = mutation({
 });
 
 export async function retryPendingMessageForUser(
-  ctx: { db: any },
+  ctx: { db: any; scheduler?: WakeScheduler },
   userId: Id<"users">,
   conversationId: Id<"conversations">,
   ref: { messageId?: string; clientId?: string },
@@ -1005,7 +1054,7 @@ export async function retryPendingMessageForUser(
   if ((message.kill_generation ?? 0) < (conversation.pending_kill_generation ?? 0)) {
     throw new Error("This message was stopped when the session was killed");
   }
-  await rependPendingMessage(ctx, message, 0);
+  if (await rependPendingMessage(ctx, message, 0)) await wakeHostedConversation(ctx, conversation, "message");
   await ctx.db.patch(conversationId, { has_pending_messages: true });
   return "pending";
 }
@@ -1657,11 +1706,12 @@ export const retryStuckMessages: RegisteredMutation<"internal", Record<string, n
 // The cron's work, extracted so it can be driven deterministically in tests with a fixed `now`.
 // Two jobs: (1) revive stranded messages once their session is idle (the never-drop backstop),
 // and (2) tell the sending session when a cross-user message is stuck past the deadline.
-export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number): Promise<{
+export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: WakeScheduler }, now: number): Promise<{
   revived: number;
   controlsAcked: number;
   notified: number;
   waiting: number;
+  rewoken: number;
 }> {
   {
     // Scan every non-terminal state. `delivered`/`cancelled` are terminal so they're skipped.
@@ -1693,6 +1743,11 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
     const reflag = new Set<Id<"conversations">>();
     const safetyBlocked = new Map<string, boolean>();
     const gone = new Set<string>();
+    // Hosted conversations are served by their turn engine, not a daemon: a
+    // stale row there means a wake was lost, so the backstop wakes the
+    // conversation again (once per pass) instead of re-pending for a daemon.
+    const hosted = new Map<string, any>();
+    const rewoken = new Set<string>();
     for (const msg of candidates) {
       // Fenced rows use delivery attempts and permits; legacy elapsed-time
       // healing must never reinterpret their state or synthesize a retry.
@@ -1701,6 +1756,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
       if (!safetyBlocked.has(conversationId)) {
         const conversation = await ctx.db.get(msg.conversation_id);
         safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
+        if (conversation && isHostedAgentType(conversation.agent_type)) hosted.set(conversationId, conversation);
         if (!conversation) {
           gone.add(conversationId);
           ready.delete(conversationId);
@@ -1709,6 +1765,14 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
       }
       if (safetyBlocked.get(conversationId)) {
         waiting++;
+        continue;
+      }
+      const hostedConversation = hosted.get(conversationId);
+      if (hostedConversation) {
+        if (planStuckMessageHeal(msg, now).kind !== "skip" && !rewoken.has(conversationId)) {
+          rewoken.add(conversationId);
+          await wakeHostedConversation(ctx, hostedConversation, "continue");
+        }
         continue;
       }
       // Cross-user feedback runs regardless of the target's readiness: a teammate's message stuck
@@ -1743,10 +1807,10 @@ export async function healAndNotifyStuckMessages(ctx: { db: any }, now: number):
       await ctx.db.patch(convId, { has_pending_messages: true });
     }
 
-    if (revived > 0 || controlsAcked > 0 || notified > 0) {
-      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), notified ${notified} stuck cross-user send(s), ${waiting} waiting on a busy/offline session`);
+    if (revived > 0 || controlsAcked > 0 || notified > 0 || rewoken.size > 0) {
+      console.log(`retryStuckMessages: revived ${revived} for idle sessions, acked ${controlsAcked} control msg(s), notified ${notified} stuck cross-user send(s), rewoke ${rewoken.size} hosted conversation(s), ${waiting} waiting on a busy/offline session`);
     }
-    return { revived, controlsAcked, notified, waiting };
+    return { revived, controlsAcked, notified, waiting, rewoken: rewoken.size };
   }
 }
 

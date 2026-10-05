@@ -9,12 +9,13 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMutation, useQuery } from "convex/react";
-import { captureException } from "@sentry/react";
+import { captureError } from "./analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { CLOUD_AGENT_ACTIONS, cloudAgentPageUrl, getProviderKeySpec, type CloudAgentActionName, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { encryptProviderKey } from "./providerKeyCrypto";
-import type { Device } from "../components/DeviceBadge";
+/** The fields of a machine these hooks read (listDevices' row is one); kept structural so the phone can call them without the web's device badge. */
+type Device = { device_id: string; online?: boolean; label?: string };
 
 // The two managed-key fields listDevices now returns per device. They aren't in the
 // committed convex codegen yet (regenerating requires a prod push), so we read them
@@ -110,7 +111,7 @@ export function useVerifiedKeySubmit(keyProvider: string, device: Device | null,
       watch(id ?? null);
       setKeyText("");
     } catch (err) {
-      captureException(err);
+      captureError(err instanceof Error ? err : new Error(String(err)));
       setSendError(err instanceof Error ? err.message : "Couldn't send the key");
     } finally {
       setSending(false);
@@ -165,14 +166,14 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
   // A started sign-in the wait ran out on, so the dialog says so rather than quietly offering it again.
   const [timedOut, setTimedOut] = useState(false);
 
-  const send = useCallback(async (op: "check" | "start"): Promise<string | null> => {
+  const send = useCallback(async (op: "check" | "start", deviceCode = false): Promise<string | null> => {
     if (!deviceId) return null;
     try {
-      const res = await enqueue({ device_id: deviceId, provider, op });
+      const res = await enqueue({ device_id: deviceId, provider, op, ...(deviceCode ? { device_code: true } : {}) });
       setSendError(null);
       return (res as { command_id?: string } | undefined)?.command_id ?? null;
     } catch (err) {
-      captureException(err);
+      captureError(err instanceof Error ? err : new Error(String(err)));
       setSendError(err instanceof Error ? err.message : "Couldn't reach codecast");
       return null;
     }
@@ -211,9 +212,10 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
     return () => clearTimeout(t);
   }, [waitingSince, checkCmd.commandId, settled, signedIn, start?.state, recheck]);
 
-  const signIn = useCallback(async () => {
+  // `deviceCode`: the person finishes on this device (a phone), with the page and code the machine answers (`prompt`).
+  const signIn = useCallback(async (opts?: { deviceCode?: boolean }) => {
     setTimedOut(false);
-    const id = await send("start");
+    const id = await send("start", opts?.deviceCode === true);
     if (!id) return;
     startCmd.watch(id);
     setWaitingSince(Date.now());
@@ -227,7 +229,8 @@ export function useCloudAgentLogin(provider: string, device: Device | null) {
   else if (check.state === "failed") view = { state: "failed", error: check.error };
   else view = { state: check.login ?? "unreachable", account: check.account, plan: check.plan, detail: check.detail };
 
-  return { view, waiting: waitingSince !== null, timedOut: timedOut && !signedIn, signIn, recheck: checkAgain };
+  const prompt = start?.state === "done" && start.url && start.detail ? { url: start.url, code: start.detail } : null;
+  return { view, waiting: waitingSince !== null, timedOut: timedOut && !signedIn, signIn, recheck: checkAgain, prompt };
 }
 
 /** How long an action waits for the hosting machine's answer (Create PR waits up to a minute for Codex to open the pull request). */
@@ -255,7 +258,7 @@ export function useCloudAgentAction(conversationId: string, onResult: (outcome: 
       setAction(next);
       watch(res.command_id);
     } catch (err) {
-      captureException(err);
+      captureError(err instanceof Error ? err : new Error(String(err)));
       report.current({ action: next, ok: false, text: err instanceof Error ? err.message : `${CLOUD_AGENT_ACTIONS[next].label} could not be sent` });
     }
   }, [conversationId, enqueue, watch]);

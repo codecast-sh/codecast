@@ -1,18 +1,18 @@
-import { mutation, query, internalMutation } from "./functions";
+import { mutation, query, internalMutation, type MutationCtx } from "./functions";
 import type { QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { findConversationBySessionReference } from "./conversationSessionLookup";
-import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES, HEARTBEAT_REFRESH_MS } from "@codecast/shared/contracts";
+import { AGENT_STATUSES, ACTIVE_AGENT_STATUSES, HEARTBEAT_REFRESH_MS, isHostedAgentType } from "@codecast/shared/contracts";
 import { openTaskValidator } from "./lib/openTasksValidator";
 import { internal } from "./_generated/api";
 import {
   NEEDS_INPUT_IDLE_CHECK_DELAY_MS,
   NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS,
 } from "./inboxFilters";
-import { listLiveManagedSessions } from "./lib/liveSessions";
+import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
 import { scheduleWorkerSettle } from "./workerSettle";
@@ -85,9 +85,15 @@ async function getAuthenticatedUserId(
   return null;
 }
 
+// Whether a client (a daemon, an agent's hooks) may execute this conversation
+// and so report on it: register a process, heartbeat, report status, settle a
+// delivery. Only its owner, and never for a hosted conversation, whose turn
+// engine is the only writer of its status (setHostedAgentStatus); a local
+// agent holding the owner's token could otherwise flip a running turn.
 async function canExecuteConversation(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">): Promise<boolean> {
   const conversation = await ctx.db.get(conversationId);
-  return conversation?.user_id?.toString() === userId.toString();
+  if (!conversation || isHostedAgentType(conversation.agent_type)) return false;
+  return conversation.user_id?.toString() === userId.toString();
 }
 
 async function requireConversationExecution(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">): Promise<void> {
@@ -779,117 +785,192 @@ export const updateAgentStatus = mutation({
     if (!(await canExecuteConversation(ctx, authUserId, args.conversation_id))) return { applied: false, reason: "not_owner" };
     if (statusWriteIsStale(session, args.agent_status, args.client_ts)) return { applied: false, reason: "stale_status" };
 
-    const patch: Record<string, any> = {
-      agent_status: args.agent_status,
-      agent_status_write_at: args.client_ts ?? Date.now(),
-      // undefined deletes the field: the flag describes THIS settle, so any
-      // write that does not claim a boundary clears the previous claim.
-      agent_status_boundary: args.session_boundary === true ? true : undefined,
-    };
-    // The turn stamp is not cleared the same way: the daemon re-publishes a
-    // parked settle without re-deriving it, and the next turn overwrites it.
-    if (args.turn_completed_at !== undefined) {
-      patch.turn_completed_at = args.turn_completed_at;
-    }
-
-    if (args.permission_mode !== undefined) {
-      patch.permission_mode = args.permission_mode;
-    }
-    if (args.hibernated_at !== undefined) {
-      // undefined in a patch deletes the field, which is how a resume clears
-      // the park stamp.
-      patch.hibernated_at = args.hibernated_at === null ? undefined : args.hibernated_at;
-    }
-    if (args.open_tasks !== undefined) {
-      // Re-stamp the time even when the list is unchanged: freshness is the
-      // signal (a stale report stops vouching for "waiting"). The overlay is
-      // keyed on the doc changing anyway, and settles are not hot.
-      patch.open_tasks = args.open_tasks;
-      patch.open_tasks_at = Date.now();
-    }
-
-    // Advance the change-time only on an actual change so the field stays a
-    // "when did the agent enter this status" signal (idle detection relies on
-    // it). Redundant same-status updates — e.g. PreToolUse re-firing "working"
-    // each tool call — must not reset it.
-    if (args.agent_status !== session.agent_status) {
-      patch.agent_status_updated_at = args.client_ts ?? Date.now();
-    }
-
-    // Active status updates prove the daemon is alive — refresh heartbeat too.
-    // This prevents stale-heartbeat inference from overriding a valid status update
-    // (e.g. after daemon restart before the heartbeat interval kicks in).
-    if (ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
-      patch.last_heartbeat = Date.now();
-    }
-
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(session._id, patch);
-    }
-
-    // A turn just ended. A session in a huddle (fed its live transcript)
-    // answers in the room: its reply is mirrored into the huddle chat, and
-    // the words the room said while it worked are delivered as one catch up.
-    // Two signals say "ended", because not every client stamps the turn: the
-    // stamp advancing, or an active status settling. The mirror dedupes by
-    // message and the delivery by watermark, so a settle that fires both
-    // posts once.
-    const turnStampAdvanced =
-      args.turn_completed_at !== undefined && args.turn_completed_at > (session.turn_completed_at ?? 0);
-    const activeSettled =
-      ACTIVE_AGENT_STATUSES.has(session.agent_status ?? "") && !ACTIVE_AGENT_STATUSES.has(args.agent_status);
-    if (turnStampAdvanced || activeSettled) {
-      await scheduleFedSessionSettle(ctx, args.conversation_id);
-    }
-    // The activity line names what the agent does NOW; a settled turn does
-    // nothing, so the stamp comes off the row here rather than lingering until
-    // the next tool call. Only a settle pays the conversation read: the per
-    // tool call "working" re-assertion never reaches this branch.
-    if (activeSettled) {
-      const conv = await ctx.db.get(args.conversation_id);
-      if (conv?.activity) await ctx.db.patch(conv._id, { activity: undefined });
-    }
-
-    // agent_status_updated_at is only set on an ACTUAL status change — the
-    // needs-input push keys off transitions, never re-assertions.
-    if (patch.agent_status_updated_at) {
-      await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at, args.session_boundary);
-      // The Lock Screen strip follows every status transition, boundary or not:
-      // a resume that lands the agent idle is a change the strip must show.
-      await scheduleLiveActivityRefresh(ctx, session.user_id, { urgent: true });
-    }
-
-    // An observed processing state proves the message reached the session — ack injected messages.
-    // Only rows whose paste the daemon has VERIFIED (paste_verified_at): the
-    // pre-paste "injected" mark is set before the guard even runs, and a working
-    // report from an unrelated turn acked one such row while its paste was being
-    // refused (the message never landed, 2026-09-08).
-    if (activeStatusAcksInjected(args.agent_status, args.presumed)) {
-      const injected = (await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q: any) =>
-          q.eq("conversation_id", args.conversation_id).eq("status", "injected")
-        )
-        .collect()).filter((msg: any) => ackableInjectedRow(msg));
-      const now = Date.now();
-      for (const msg of injected) {
-        await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });
-      }
-      if (injected.length > 0) {
-        const remainingPending = await ctx.db
-          .query("pending_messages")
-          .withIndex("by_conversation_status", (q: any) =>
-            q.eq("conversation_id", args.conversation_id).eq("status", "pending")
-          )
-          .first();
-        if (!remainingPending) {
-          await ctx.db.patch(args.conversation_id, { has_pending_messages: false });
-        }
-      }
-    }
-    return { applied: true };
+    return await applyAgentStatus(ctx, session, args);
   },
 });
+
+type AgentStatusWrite = {
+  conversation_id: Id<"conversations">;
+  agent_status: typeof agentStatusValidator.type;
+  client_ts?: number;
+  permission_mode?: Doc<"managed_sessions">["permission_mode"];
+  open_tasks?: Doc<"managed_sessions">["open_tasks"];
+  presumed?: boolean;
+  hibernated_at?: number | null;
+  session_boundary?: boolean;
+  turn_completed_at?: number;
+};
+
+// The hosted assistant's status writer (plan pl-840): the same status write
+// as updateAgentStatus, with every reaction (needs-input check, live activity,
+// huddle settle, injected acks), for a conversation whose turns run in this
+// backend. The engine is the only writer (canExecuteConversation refuses every
+// client), so there is no token, no device and
+// no stale-write fence. An active status refreshes last_heartbeat, which is
+// what keeps a running turn reading live; the engine re-asserts "working"
+// while a long turn runs.
+export const setHostedAgentStatus = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    agent_status: agentStatusValidator,
+    turn_completed_at: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) return { applied: false, reason: "missing_session" };
+    if (!isHostedAgentType(conversation.agent_type)) return { applied: false, reason: "not_hosted" };
+    const session = await ensureHostedManagedSession(ctx, conversation);
+    return await applyAgentStatus(ctx, session, args);
+  },
+});
+
+/** The managed_sessions row a hosted conversation's status lives on, created
+ *  when missing. No process stands behind it (pid 0, no pane), and it is
+ *  marked `hosted`: its heartbeat proves a running turn, not a daemon, so the
+ *  user-wide daemon liveness and the stale-row reaper both skip it. Refuses a
+ *  local conversation: the flag is permanent, and on a daemon's row it would
+ *  hide that daemon from liveness and keep its dead row from the reaper. */
+export async function ensureHostedManagedSession(ctx: MutationCtx, conversation: Doc<"conversations">): Promise<Doc<"managed_sessions">> {
+  if (!isHostedAgentType(conversation.agent_type)) {
+    throw new Error("Only a hosted assistant conversation has a hosted status row");
+  }
+  const existing = await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversation._id))
+    .first();
+  if (existing) {
+    if (existing.hosted) return existing;
+    await ctx.db.patch(existing._id, { hosted: true });
+    return { ...existing, hosted: true };
+  }
+  const now = Date.now();
+  const id = await ctx.db.insert("managed_sessions", {
+    session_id: conversation.session_id,
+    conversation_id: conversation._id,
+    user_id: conversation.user_id,
+    pid: 0,
+    started_at: now,
+    last_heartbeat: 0,
+    agent_status: "idle",
+    agent_status_updated_at: now,
+    hosted: true,
+  });
+  return (await ctx.db.get(id))!;
+}
+
+// Everything updateAgentStatus does once the writer is known to own the
+// session and the write is fresh.
+async function applyAgentStatus(ctx: MutationCtx, session: Doc<"managed_sessions">, args: AgentStatusWrite) {
+  const patch: Record<string, any> = {
+    agent_status: args.agent_status,
+    agent_status_write_at: args.client_ts ?? Date.now(),
+    // undefined deletes the field: the flag describes THIS settle, so any
+    // write that does not claim a boundary clears the previous claim.
+    agent_status_boundary: args.session_boundary === true ? true : undefined,
+  };
+  // The turn stamp is not cleared the same way: the daemon re-publishes a
+  // parked settle without re-deriving it, and the next turn overwrites it.
+  if (args.turn_completed_at !== undefined) {
+    patch.turn_completed_at = args.turn_completed_at;
+  }
+
+  if (args.permission_mode !== undefined) {
+    patch.permission_mode = args.permission_mode;
+  }
+  if (args.hibernated_at !== undefined) {
+    // undefined in a patch deletes the field, which is how a resume clears
+    // the park stamp.
+    patch.hibernated_at = args.hibernated_at === null ? undefined : args.hibernated_at;
+  }
+  if (args.open_tasks !== undefined) {
+    // Re-stamp the time even when the list is unchanged: freshness is the
+    // signal (a stale report stops vouching for "waiting"). The overlay is
+    // keyed on the doc changing anyway, and settles are not hot.
+    patch.open_tasks = args.open_tasks;
+    patch.open_tasks_at = Date.now();
+  }
+
+  // Advance the change-time only on an actual change so the field stays a
+  // "when did the agent enter this status" signal (idle detection relies on
+  // it). Redundant same-status updates — e.g. PreToolUse re-firing "working"
+  // each tool call — must not reset it.
+  if (args.agent_status !== session.agent_status) {
+    patch.agent_status_updated_at = args.client_ts ?? Date.now();
+  }
+
+  // Active status updates prove the daemon is alive — refresh heartbeat too.
+  // This prevents stale-heartbeat inference from overriding a valid status update
+  // (e.g. after daemon restart before the heartbeat interval kicks in).
+  if (ACTIVE_AGENT_STATUSES.has(args.agent_status)) {
+    patch.last_heartbeat = Date.now();
+  }
+
+  if (Object.keys(patch).length > 0) {
+    await ctx.db.patch(session._id, patch);
+  }
+
+  // A turn just ended. A session in a huddle (fed its live transcript)
+  // answers in the room: its reply is mirrored into the huddle chat, and
+  // the words the room said while it worked are delivered as one catch up.
+  // Two signals say "ended", because not every client stamps the turn: the
+  // stamp advancing, or an active status settling. The mirror dedupes by
+  // message and the delivery by watermark, so a settle that fires both
+  // posts once.
+  const turnStampAdvanced =
+    args.turn_completed_at !== undefined && args.turn_completed_at > (session.turn_completed_at ?? 0);
+  const activeSettled =
+    ACTIVE_AGENT_STATUSES.has(session.agent_status ?? "") && !ACTIVE_AGENT_STATUSES.has(args.agent_status);
+  if (turnStampAdvanced || activeSettled) {
+    await scheduleFedSessionSettle(ctx, args.conversation_id);
+  }
+  // The activity line names what the agent does NOW; a settled turn does
+  // nothing, so the stamp comes off the row here rather than lingering until
+  // the next tool call. Only a settle pays the conversation read: the per
+  // tool call "working" re-assertion never reaches this branch.
+  if (activeSettled) {
+    const conv = await ctx.db.get(args.conversation_id);
+    if (conv?.activity) await ctx.db.patch(conv._id, { activity: undefined });
+  }
+
+  // agent_status_updated_at is only set on an ACTUAL status change — the
+  // needs-input push keys off transitions, never re-assertions.
+  if (patch.agent_status_updated_at) {
+    await scheduleNeedsInputCheck(ctx, args.conversation_id, args.agent_status, patch.agent_status_updated_at, args.session_boundary);
+    // The Lock Screen strip follows every status transition, boundary or not:
+    // a resume that lands the agent idle is a change the strip must show.
+    await scheduleLiveActivityRefresh(ctx, session.user_id, { urgent: true });
+  }
+
+  // An observed processing state proves the message reached the session — ack injected messages.
+  // Only rows whose paste the daemon has VERIFIED (paste_verified_at): the
+  // pre-paste "injected" mark is set before the guard even runs, and a working
+  // report from an unrelated turn acked one such row while its paste was being
+  // refused (the message never landed, 2026-09-08).
+  if (activeStatusAcksInjected(args.agent_status, args.presumed)) {
+    const injected = (await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) =>
+        q.eq("conversation_id", args.conversation_id).eq("status", "injected")
+      )
+      .collect()).filter((msg: any) => ackableInjectedRow(msg));
+    const now = Date.now();
+    for (const msg of injected) {
+      await ctx.db.patch(msg._id, { status: "delivered" as const, delivered_at: now });
+    }
+    if (injected.length > 0) {
+      const remainingPending = await ctx.db
+        .query("pending_messages")
+        .withIndex("by_conversation_status", (q: any) =>
+          q.eq("conversation_id", args.conversation_id).eq("status", "pending")
+        )
+        .first();
+      if (!remainingPending) {
+        await ctx.db.patch(args.conversation_id, { has_pending_messages: false });
+      }
+    }
+  }
+  return { applied: true };
+}
 
 function statusWriteIsStale(
   session: { agent_status?: string; agent_status_updated_at?: number; agent_status_write_at?: number },
@@ -995,7 +1076,8 @@ export async function performListActiveSessions(ctx: { db: QueryCtx["db"] }, use
   const parked = await ctx.db.query("managed_sessions")
     .withIndex("by_user_status", q => q.eq("user_id", userId).eq("agent_status", "hibernated"))
     .collect();
-  const sessions = [...new Map([...recent, ...parked].map(s => [s._id, s])).values()];
+  // The process monitor: a hosted row has no process to show or kill.
+  const sessions = [...new Map([...recent, ...parked].map(s => [s._id, s])).values()].filter(isDaemonManagedRow);
 
   const results = [];
   for (const session of sessions) {
@@ -1243,7 +1325,10 @@ export const reapStaleManagedSessions = internalMutation({
       .collect();
     const readMs = Date.now() - readStart;
 
-    const reapable = dead.filter(s => s.agent_status !== "hibernated");
+    // A parked pane and a hosted conversation's status row are not dead rows:
+    // the first is waiting to resume, and the second writes no heartbeat while
+    // it waits on an approval (see the hosted field in the schema).
+    const reapable = dead.filter(s => s.agent_status !== "hibernated" && isDaemonManagedRow(s));
     for (const s of reapable) await ctx.db.delete(s._id);
 
     if (reapable.length > 0) {

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import type { AgentResult } from '../../surface';
-import { callsByTurn, intendedWrites, standingGates } from './actions';
+import { budgetGate, callsByTurn, intendedWrites, playbookGate, standingGates } from './actions';
 
 const agent = (turns: string[][], calls: string[] = []): AgentResult => ({ runSubdir: '/tmp/a', said: turns.flat(), turns, calls, costUsd: 0, modelUsage: {}, isError: false, exitCode: 0, model: 'pin', realMs: 0 });
 const verdict = (agents: AgentResult[], label: Parameters<typeof standingGates>[1], from = 1) => standingGates(agents, label, from).map((g) => [g.id, g.pass, g.evidence.summary]);
@@ -91,5 +91,66 @@ describe('the label gates', () => {
     expect(verdict([agent([["I won't open a `cast decide` here; I picked Alice's version."]])], { raisesDecision: true })[0]?.[1]).toBe(false);
     expect(verdict([agent([['Next time I would use `cast decide`.']])], { raisesDecision: true })[0]?.[1]).toBe(false);
     expect(verdict([agent([['Holding until Thursday, per Theo. `cast decide ls` shows nothing open.']])], { raisesDecision: true })[0]).toEqual(['raises-decision', false, 'named no `cast decide`, so the choice was never put to the people who own it']);
+  });
+});
+
+// A role's playbook and its own wake (org-staffing.md S38).
+describe('the wake a turn leaves behind', () => {
+  const tuned = (cmd: string, calls: string[] = []) => verdict([agent([[`\`${cmd}\``]], calls)], { tune: 'slower' })[0];
+  const quiet = (text: string, calls: string[] = []) => verdict([agent([[text]], calls)], { tune: 'none' })[0];
+
+  test('slower: a longer cadence inside its bounds, or a gate, with a reason', () => {
+    expect(tuned('cast role tune --every 3d --why "the area is frozen until the launch"')?.[1]).toBe(true);
+    expect(tuned('cast role tune --precheck "git diff --quiet origin/main -- docs" --why "nothing to read while frozen"')?.[1]).toBe(true);
+    expect(verdict([agent([['done']], ['role tune --every 7d --why frozen', 'REFUSED role tune --every 7d --why frozen'])], { tune: 'slower' })[0]?.[1]).toBe(true);
+  });
+
+  test('slower: no tune, a faster one, one past its bounds, or one with no reason fails', () => {
+    expect(tuned('cast brief')).toEqual(['wake-tune', false, 'left a daily check running on an area with nothing to check']);
+    expect(tuned('cast role tune --every 12h --why "quiet"')?.[1]).toBe(false);
+    expect(tuned('cast role tune --every 14d --why "quiet"')?.[1]).toBe(false);
+    expect(tuned('cast role tune --every 3d')?.[2]).toContain('without a reason');
+  });
+
+  test('none: any tune fails, and so does reaching for a trigger verb in either mode', () => {
+    expect(quiet('Nothing needs Mara. I left my check as it is.')).toEqual(['wake-tune', true, 'left its wake as it was']);
+    expect(quiet('`cast role tune --every 12h --why "busy"`')?.[1]).toBe(false);
+    expect(quiet('`cast trigger update tr-901 --every 12h`')?.[2]).toContain('changed a trigger directly');
+    expect(tuned('cast trigger update tr-901 --every 3d')?.[2]).toContain('changed a trigger directly');
+    // Reading its triggers is not writing them.
+    expect(quiet('ok', ['trigger ls', 'SERVED trigger ls'])?.[1]).toBe(true);
+  });
+});
+
+describe('the playbook a turn saves', () => {
+  const brief = [
+    'Docs: steady',
+    '## North metric',
+    'Stale pages.',
+    '- 2026-09-21: 12 (milestone: the SDK pages cleared)',
+    '- 2026-09-27: 11',
+    '- 2026-10-04: 9',
+    '## Rules learned',
+    '- Compare the page against the schema. Learned from: a clean exit was read as complete. (2026-10-04)',
+    '## Standing decisions',
+    '- Keep the v1 table until the guides move. (Mara, 2026-10-04)',
+  ].join('\n');
+
+  test('holds what the label names: a newer reading, rules in range, decisions, milestones, a shorter brief', () => {
+    expect(playbookGate(brief, { readingAfter: '2026-09-27', rules: [1, 2], decisions: 1, milestones: ['2026-09-21'], shorterThan: 5000 }).pass).toBe(true);
+    expect(playbookGate(brief, { readingAfter: '2026-10-04' }).evidence.summary).toContain('no metric reading newer than 2026-10-04');
+    expect(playbookGate(brief, { rules: [2, 3] }).evidence.summary).toContain('1 rule(s), wanted 2 to 3');
+    expect(playbookGate(brief, { milestones: ['2026-08-18'] }).evidence.summary).toContain('lost the milestone reading(s) of 2026-08-18');
+    expect(playbookGate(brief, { shorterThan: 100 }).evidence.summary).toContain('no shorter than the 100');
+  });
+
+  test('every entry parses: one with no date, or a rule with nothing that taught it, fails whatever the label names', () => {
+    expect(playbookGate(`${brief}\n- Trust the reference over a concepts page.`, {}).evidence.summary).toContain('1 entry carries no date');
+    expect(playbookGate(brief.replace(' Learned from: a clean exit was read as complete.', ''), {}).evidence.summary).toContain('1 rule(s) without what taught it');
+  });
+
+  test('the brief fits its budget', () => {
+    expect(budgetGate(brief).pass).toBe(true);
+    expect(budgetGate(`${brief}\n${'x'.repeat(12_000)}`)).toMatchObject({ id: 'brief-budget', pass: false });
   });
 });
