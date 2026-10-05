@@ -1,0 +1,118 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a web change whose session captured product screenshots (context from the agent's words and the capture command), a person pasted the bug, a terminal capture, and a published comparison page; the article should show the product and embed the page",
+ "snapshot": {
+  "story": {
+   "area": "web",
+   "branch": "main",
+   "commit_shas": [
+    "f60718293a4b5c6d7e8f901234567890123456ab"
+   ],
+   "area_counts": {
+    "web": 9
+   },
+   "risks": [],
+   "conversation_ids": [
+    "k27e5f6g7h8j9k0m1n2p3q4"
+   ],
+   "kind": "feature",
+   "importance": 3
+  },
+  "commits": [
+   {
+    "sha": "f60718293a4b5c6d7e8f901234567890123456ab",
+    "subject": "feat(web): every marketing page gets its own social card",
+    "body": "Shared links to the pricing, features and blog pages all showed the home page card. Each page now renders its own card with its title and a preview of the page.",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768388400000,
+    "branch": "main",
+    "conversation_id": "k27e5f6g7h8j9k0m1n2p3q4",
+    "insertions": 420,
+    "deletions": 60,
+    "areas": {
+     "web": {
+      "touches": 9,
+      "insertions": 420,
+      "deletions": 60
+     }
+    },
+    "top_paths": [
+     "packages/web/app/og/[page]/route.tsx",
+     "packages/web/app/pricing/page.tsx"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "k27e5f6g7h8j9k0m1n2p3q4",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Each marketing page gets its own social card",
+    "summary": "Pricing, features and blog links shared on social showed the home page card. Built a card per page with its title and a preview, checked each card render and the pages at desktop and phone widths, and published a before and after comparison.",
+    "turns": [
+     {
+      "ask": "[Image 1] sharing the pricing page shows the homepage card, fix it for every page",
+      "did": [
+       "card per marketing page with its title and preview"
+      ]
+     },
+     {
+      "ask": "show me them all",
+      "did": [
+       "published a comparison page of every card before and after"
+      ]
+     }
+    ],
+    "media": {
+     "images": [
+      {
+       "url": "https://convex.example/api/storage/pasted-bug",
+       "timestamp": 1768384800000,
+       "origin": "pasted by a person",
+       "context": "[Image 1] sharing the pricing page shows the homepage card, fix it for every page"
+      },
+      {
+       "url": "https://convex.example/api/storage/term",
+       "timestamp": 1768386600000,
+       "origin": "captured during the work",
+       "context": "Build passes and the card route answers 200 for all four pages. (taken with: bun run build && curl -sI localhost:3200/og/pricing)"
+      },
+      {
+       "url": "https://convex.example/api/storage/pricing-card",
+       "timestamp": 1768387200000,
+       "origin": "captured during the work",
+       "context": "The pricing page card now shows its own title, Pricing for teams, with a preview of the plan table. (taken with: cast browser shot https://example.app/og/pricing)"
+      },
+      {
+       "url": "https://convex.example/api/storage/features-page",
+       "timestamp": 1768387800000,
+       "origin": "captured during the work",
+       "context": "The features page at 390px wide: no sideways scrolling, and its card matches. (taken with: cast browser shot https://example.app/features)"
+      }
+     ],
+     "edits": [],
+     "artifacts": [
+      {
+       "kind": "page",
+       "url": "https://codecast.sh/a/social-cards",
+       "title": "Social cards for every marketing page, before and after",
+       "timestamp": 1768388100000
+      }
+     ]
+    }
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek"
+  ]
+ },
+ "label": {
+  "why": [
+   "commit",
+   "session"
+  ]
+ }
+}

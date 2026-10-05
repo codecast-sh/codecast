@@ -109,9 +109,17 @@ const FAKE_PAGE = {
   user: { name: "Ashot", image: null },
 };
 
+// What the proposal feeder asked the server for. A proposal is store-fed, so
+// this fake never answers it: the pill paints from the seeded row.
+const PROPOSAL_GETS: string[] = [];
+
 function fakeQuery(fn: unknown, args: any) {
   if (args === "skip") return undefined;
   const name = getFunctionName(fn as any);
+  if (name === "orgProposals:get") {
+    PROPOSAL_GETS.push(args?.proposal);
+    return undefined;
+  }
   if (name === "entities:resolveIdType") return TYPE_OF_CONVEX_ID[args?.id] ?? null;
   if (name === "artifacts:getShared") return args?.slug === PAGE_SLUG ? FAKE_PAGE : null;
   const rows = ROWS[name];
@@ -644,5 +652,45 @@ describe("codecast route links", () => {
       expect(html).toContain(`href="${url}"`);
       expect(html).toContain('target="_blank"');
     }
+  });
+});
+
+// One change of a proposal, as the head of people writes it in a sentence
+// (`op-55#3`): still a proposal reference, pointed at one change.
+describe("one change of a proposal (op-N#seq)", () => {
+  const PROPOSAL = { _id: "tx72qtvpbmmrmwcjqmhzawejsx8bq9gm", short_id: "op-55", title: "Rank the projects by their goals", status: "open" };
+  useInboxStore.setState({ orgProposals: { [PROPOSAL._id]: PROPOSAL } } as any);
+
+  test("the pill reads as the proposal's name and the change's number", () => {
+    PROPOSAL_GETS.length = 0;
+    const html = render("Start with op-55#3 and the rest can wait.");
+    expect(pillTexts(html)).toEqual(["Rank the projects by their goals #3"]);
+    // It opens the org page with that change in focus.
+    expect(html).toContain('href="/org?proposal=op-55&amp;focus=3"');
+    // The number is the reference's, never loose text after the pill (where it read as a pull request).
+    expect(html).toMatch(/<p>Start with .*<\/a> and the rest can wait\.<\/p>/);
+    // The feeder is asked for the proposal: the server knows nothing called `op-55#3`.
+    expect(new Set(PROPOSAL_GETS)).toEqual(new Set(["op-55"]));
+  });
+
+  test("the whole proposal beside it keeps its plain name and its own page", () => {
+    const html = render("Proposed in op-55, and op-55#1 is the one to read first.");
+    expect(pillTexts(html)).toEqual(["Rank the projects by their goals", "Rank the projects by their goals #1"]);
+    expect(html).toContain('href="/org?proposal=op-55"');
+    expect(html).toContain('href="/org?proposal=op-55&amp;focus=1"');
+  });
+
+  test("a repeat mention keeps the number on the short name", () => {
+    const html = render("See op-55#3 first. Then accept op-55#3 if it holds.");
+    const [first, repeat] = pillTexts(html);
+    expect(first).toBe("Rank the projects by their goals #3");
+    expect(repeat).not.toBe(first);
+    expect(repeat.endsWith(" #3")).toBe(true);
+  });
+
+  test("a change of a proposal this client does not hold reads as written", () => {
+    const html = render("Ask about op-77#2 when it lands.");
+    expect(pillTexts(html)).toEqual(["op-77#2"]);
+    expect(html).toContain('href="/org?proposal=op-77&amp;focus=2"');
   });
 });

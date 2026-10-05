@@ -382,6 +382,27 @@ export type UndoEntry = {
    * only if it is refused.
    */
   replayDeferred?: CellChange[];
+  /**
+   * The replayDeferred of replays a later step superseded, by the replay's
+   * outbox ids. A later step recorded the value such a replay wrote as its
+   * before (a re-invoke captures the screen), so if the replay is refused,
+   * whenever that is and whatever steps came since, the moves apply to the
+   * entry's cells.
+   */
+  lapsedDeferred?: Array<{ ids: string[]; moves: CellChange[] }>;
+  /**
+   * The forward ids a redo's re-invoke replaced (outboxIds holds the newest
+   * forward's). The state the redo's undo replay wrote over is theirs, so a
+   * refusal of one is judged when that redo settles (forwardRefused).
+   */
+  priorOutboxIds?: string[];
+  /**
+   * The forward this entry's current step builds on was refused while the
+   * step was out (a redo replay re-sending the after values, or a re-invoke).
+   * What stands is that step's alone: if it is refused too, or rolls back
+   * past an undo replay it overtook, nothing of the entry stands.
+   */
+  forwardRefused?: boolean;
 };
 
 export type UndoConfig = {

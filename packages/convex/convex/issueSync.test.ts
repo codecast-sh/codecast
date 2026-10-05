@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { GITHUB_EVENT_KINDS, linearEventKind } from "./issueSync";
 import { linearDeliveryId, verifyLinearSignature } from "./linearWebhooks";
 import { markSourceSynced, stampInboundHealth } from "./issueSync";
-import { makeFakeDb } from "./testDb";
+import { armedTriggerRows, makeFakeDb } from "./testDb";
 import {
   normalizeGithubComment,
   normalizeGithubIssue,
@@ -364,6 +364,7 @@ describe("applyRemote on an existing task", () => {
   test("a real edit patches the fields, writes history, and derives its kind", async () => {
     const { ctx, db, scheduled, tables } = engineCtx({
       tasks: [structuredClone(TASK)], issue_sync_sources: [SOURCE], users: [ADA], task_history: [], task_comments: [],
+      agent_tasks: armedTriggerRows("issues"),
     });
     const res = await apply(ctx, {
       source_id: "src_1",

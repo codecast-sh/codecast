@@ -8,6 +8,7 @@ import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { SITE_LINKS } from "@/lib/siteLinks";
 import { AppBadge, AndroidSoonBadge } from "@/components/marketing/AppBadges";
+import { PhoneFrame } from "../productMocks";
 import { BROWSER_EXTENSION_SETUP_COMMAND } from "@codecast/shared/contracts";
 
 const SOL = {
@@ -103,9 +104,9 @@ function CmdTable({ children }: { children: React.ReactNode }) {
   return <div className="my-4">{children}</div>;
 }
 
-function Screenshot({ src, alt, caption }: { src: string; alt: string; caption?: string }) {
+function Screenshot({ src, alt, caption, wide }: { src: string; alt: string; caption?: string; wide?: boolean }) {
   return (
-    <figure className="my-8">
+    <figure className={wide ? "my-8 xl:-mx-16" : "my-8"}>
       <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${SOL.base2}`, boxShadow: `0 4px 24px ${SOL.base01}18` }}>
         <div className="flex items-center gap-1.5 px-4 py-2.5" style={{ backgroundColor: SOL.base2 }}>
           <div className="w-3 h-3 rounded-full" style={{ backgroundColor: `${SOL.red}90` }} />
@@ -114,7 +115,7 @@ function Screenshot({ src, alt, caption }: { src: string; alt: string; caption?:
           <span className="ml-2 text-xs font-mono" style={{ color: SOL.base01 }}>codecast.sh</span>
         </div>
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={src} alt={alt} className="w-full block" style={{ backgroundColor: SOL.base03 }} />
+        <img src={src} alt={alt} loading={wide ? "eager" : "lazy"} className="w-full block" style={{ backgroundColor: SOL.base03 }} />
       </div>
       {caption && (
         <figcaption className="mt-3 text-center text-sm font-mono" style={{ color: SOL.base01 }}>{caption}</figcaption>
@@ -138,28 +139,67 @@ function Callout({ type, children }: { type: "info" | "tip" | "warn"; children: 
   );
 }
 
-const TOC = [
-  { id: "getting-started", label: "Getting Started", children: [
-    { id: "installation", label: "Installation" },
+/** One numbered setup step: a big numeral in the gutter, the step's content beside it. */
+function Step({ n, id, title, children }: { n: number; id: string; title: string; children: React.ReactNode }) {
+  return (
+    <section id={id} className="relative pl-14 pb-8 mb-2" style={{ scrollMarginTop: "6rem" }}>
+      <div className="absolute left-0 top-0 w-9 h-9 rounded-full flex items-center justify-center font-mono font-bold" style={{ backgroundColor: SOL.base03, color: SOL.base3 }}>{n}</div>
+      <div className="absolute left-[17px] top-10 bottom-0 w-px" style={{ backgroundColor: SOL.base2 }} />
+      <h3 className="text-lg font-semibold font-mono mb-3 pt-1" style={{ color: SOL.base03 }}>{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/** The thumbnail tour under the hero: each card jumps to its section. */
+const TOUR = [
+  { id: "inbox", label: "Inbox", line: "Every agent, grouped by what it needs from you", src: "/docs/app/inbox.webp", focus: "100% 0%" },
+  { id: "conversations", label: "Conversations", line: "Watch and steer a session live", src: "/docs/app/conversation.webp", focus: "30% 20%" },
+  { id: "command-palette", label: "Command palette", line: "Jump to anything with one key", src: "/docs/app/palette.webp", focus: "50% 25%" },
+  { id: "changes", label: "Changes", line: "What shipped, as a story", src: "/docs/app/changes.webp", focus: "35% 0%" },
+  { id: "dashboard-plans", label: "Tasks & plans", line: "One board for people and agents", src: "/docs/app/tasks.webp", focus: "35% 0%" },
+  { id: "mobile-app", label: "Mobile", line: "Answer an agent from your phone", src: "/docs/app/mobile.webp", focus: "50% 30%" },
+];
+
+const INBOX_GROUPS: [string, string, string][] = [
+  ["Pinned", SOL.magenta, "Sessions you keep at the top"],
+  ["Needs input", SOL.yellow, "Waiting on an answer or a permission"],
+  ["Working", SOL.green, "Running right now"],
+  ["Dormant", SOL.blue, "Asleep until a scheduled wake"],
+  ["Snoozed", SOL.base01, "Out of the way until a time you chose"],
+  ["Stashed", SOL.base01, "Done for now, one click to bring back"],
+];
+
+const TOC: { id: string; label: string; group?: string; children: { id: string; label: string }[] }[] = [
+  { id: "getting-started", label: "Getting Started", group: "Using codecast", children: [
+    { id: "open-app", label: "Open codecast" },
+    { id: "installation", label: "Connect your computer" },
     { id: "chrome-extension", label: "Chrome Extension" },
-    { id: "authentication", label: "Authentication" },
-    { id: "daemon", label: "The Daemon" },
   ]},
-  { id: "guides", label: "Deep Dive Guides", children: [] },
-  { id: "desktop-app", label: "Desktop App", children: [
-    { id: "inbox", label: "Inbox & Orchestration" },
-    { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
-    { id: "command-palette", label: "Command Palette" },
-    { id: "activity-feed", label: "Activity Feed" },
+  { id: "desktop-app", label: "The App", children: [
+    { id: "inbox", label: "Inbox" },
     { id: "conversations", label: "Conversations" },
-    { id: "dashboard-plans", label: "Plans & Tasks" },
+    { id: "command-palette", label: "Command Palette" },
+    { id: "changes", label: "Changes" },
+    { id: "dashboard-plans", label: "Tasks & Plans" },
     { id: "documents", label: "Documents" },
+    { id: "chat", label: "Chat & Calls" },
+    { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
     { id: "desktop-download", label: "Download" },
   ]},
   { id: "mobile-app", label: "Mobile App", children: [
     { id: "mobile-features", label: "Features" },
     { id: "mobile-download", label: "Download" },
   ]},
+  { id: "teams", label: "Teams", children: [
+    { id: "team-setup", label: "Setup" },
+    { id: "team-sharing", label: "Sharing & Privacy" },
+  ]},
+  { id: "integrations", label: "Integrations", children: [
+    { id: "supported-tools", label: "Supported Tools" },
+    { id: "github-integration", label: "GitHub" },
+  ]},
+  { id: "guides", label: "Deep Dive Guides", group: "Agents & the CLI", children: [] },
   { id: "agent-memory", label: "Agent Memory", children: [
     { id: "memory-setup", label: "Setup" },
     { id: "memory-commands", label: "Commands" },
@@ -200,17 +240,13 @@ const TOC = [
     { id: "trigger-commands", label: "Commands" },
     { id: "trigger-events", label: "Event Triggers" },
   ]},
-  { id: "teams", label: "Teams", children: [
-    { id: "team-setup", label: "Setup" },
-    { id: "team-sharing", label: "Sharing & Privacy" },
-  ]},
   { id: "knowledge", label: "Knowledge", children: [
     { id: "decisions", label: "Decisions" },
     { id: "bookmarks", label: "Bookmarks" },
   ]},
-  { id: "integrations", label: "Integrations", children: [
-    { id: "supported-tools", label: "Supported Tools" },
-    { id: "github-integration", label: "GitHub" },
+  { id: "daemon", label: "Background Sync", children: [
+    { id: "authentication", label: "Authentication" },
+    { id: "daemon-commands", label: "The Daemon" },
   ]},
   { id: "reference", label: "CLI Reference", children: [] },
 ];
@@ -235,6 +271,9 @@ function Sidebar({ activeId }: { activeId: string }) {
     <nav className="space-y-1">
       {TOC.map((section) => (
         <div key={section.id}>
+          {section.group && (
+            <div className="text-[10px] font-mono font-bold uppercase tracking-wider pt-5 pb-1.5 first:pt-0" style={{ color: SOL.base1 }}>{section.group}</div>
+          )}
           <a
             href={`#${section.id}`}
             className="block py-1.5 text-sm font-medium transition-colors"
@@ -302,85 +341,405 @@ export default function DocsPage() {
         <div className="flex-1 min-w-0 max-w-4xl px-6 lg:px-12 py-8 pb-32">
 
           {/* Hero */}
-          <div className="mb-12">
+          <div className="mb-10">
             <h1 className="text-4xl font-bold font-mono mb-4" style={{ color: SOL.base03 }}>Documentation</h1>
             <p className="text-lg leading-relaxed" style={{ color: SOL.base00 }}>
-              Plans, tasks, orchestration, memory, and the CLI. Everything you need to manage
-              AI agents at the project level. Works with Claude Code, Codex, Cursor, and Gemini.
+              Codecast is where you and your team run coding agents. Every Claude Code, Codex, Cursor
+              and Gemini session lands in one inbox you can watch, answer and search, in the browser,
+              on the Mac and on your phone.
             </p>
+          </div>
+          <Screenshot
+            src="/docs/app/inbox.webp"
+            alt="The codecast app: navigation on the left, a running agent conversation in the middle, and the inbox of live sessions on the right"
+            caption="One window for every agent: the conversation you are in, and the inbox of everything else that is running"
+            wide
+          />
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-8 mb-4">
+            {TOUR.map((t) => (
+              <a
+                key={t.id}
+                href={`#${t.id}`}
+                className="group rounded-lg overflow-hidden block transition-transform hover:-translate-y-0.5"
+                style={{ border: `1px solid ${SOL.base2}`, backgroundColor: `${SOL.base2}55` }}
+              >
+                <div className="aspect-[16/9] overflow-hidden" style={{ backgroundColor: SOL.base03 }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={t.src} alt="" loading="lazy" className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-[1.03]" style={{ objectPosition: t.focus }} />
+                </div>
+                <div className="px-3 py-2.5">
+                  <div className="font-mono text-sm font-semibold" style={{ color: SOL.base03 }}>{t.label}</div>
+                  <div className="text-xs leading-snug mt-0.5" style={{ color: SOL.base01 }}>{t.line}</div>
+                </div>
+              </a>
+            ))}
           </div>
 
           {/* Getting Started */}
           <Heading id="getting-started" level={2}>Getting Started</Heading>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            Codecast is a CLI daemon that runs in the background, syncing your AI coding sessions to a shared database.
-            Once installed, every Claude Code, Codex, Cursor, or Gemini session is automatically captured -- searchable, shareable, and accessible from any device.
+          <p className="mb-6" style={{ color: SOL.base00 }}>
+            Two minutes, three steps. Codecast reads the sessions your agents already keep on your computer,
+            so nothing changes about how you run them.
           </p>
-          <Callout type="tip">
-            <p className="mb-3">
-              The CLI is what syncs your sessions. To watch and steer them, codecast runs in any browser, as a native Mac app, and on iPhone and iPad.
-              The apps add what a browser tab cannot: native notifications, a menu bar presence and global shortcuts on the Mac, and a push to your phone when an agent needs you.
+
+          <Step n={1} id="open-app" title="Open codecast">
+            <p className="mb-4" style={{ color: SOL.base00 }}>
+              Sign up at <a href="/signup" className="underline underline-offset-2" style={{ color: SOL.blue }}>codecast.sh</a> and
+              use it in any browser, or get the apps. The Mac app adds native notifications, a menu bar
+              presence and global shortcuts; the iPhone app pushes to your phone when an agent needs you.
             </p>
             <div className="flex flex-wrap gap-3">
               <AppBadge app="mac" location="documentation_intro" />
               <AppBadge app="ios" location="documentation_intro" />
             </div>
-          </Callout>
+          </Step>
 
-          <Heading id="installation" level={3}>Installation</Heading>
-          <p className="mb-2" style={{ color: SOL.base00 }}>One command. Works on macOS, Linux, and WSL.</p>
-          <InstallTabs location="documentation" />
-          <p className="mt-4 text-sm" style={{ color: SOL.base01 }}>
-            This installs the <InlineCode>cast</InlineCode> CLI and background daemon. No root access required.
+          <Step n={2} id="installation" title="Connect your computer">
+            <p className="mb-2" style={{ color: SOL.base00 }}>
+              Your empty inbox shows an install command with your sign-in built in. Paste it into a terminal on
+              each computer you code on. It installs a small background app that picks up new sessions as they
+              happen, so they appear in the inbox within a second or two. Works on macOS, Linux and Windows, with no
+              root access.
+            </p>
+            <InstallTabs location="documentation" />
+            <p className="mt-3 text-sm" style={{ color: SOL.base01 }}>
+              Running it without the token from your inbox opens the browser to sign in instead.
+              The <a href="#daemon" className="underline underline-offset-2" style={{ color: SOL.cyan }}>background sync</a> section
+              covers what it runs and how to manage it.
+            </p>
+          </Step>
+
+          <Step n={3} id="chrome-extension" title="Let agents use your Chrome (optional)">
+            <p style={{ color: SOL.base00 }}>
+              For agents to work in your Chrome with your existing logins,{" "}
+              <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" style={{ color: SOL.cyan }}>install Codecast from the Chrome Web Store</a>.
+              Then run this in a terminal on the same computer and click Pair in the extension:
+            </p>
+            <Code>{`$ ${BROWSER_EXTENSION_SETUP_COMMAND}\n$ cast browser extension status`}</Code>
+            <p className="text-sm" style={{ color: SOL.base01 }}>
+              Set this up once on each computer, in the Chrome profile you want agents to use. Chrome updates the extension automatically.{" "}
+              <Link href="/documentation/browser" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Browser setup and troubleshooting</Link>.
+            </p>
+          </Step>
+
+          {/* The App */}
+          <Heading id="desktop-app" level={2}>The App</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            The same app runs at <a href="https://codecast.sh" className="font-mono underline" style={{ color: SOL.blue }}>codecast.sh</a>,
+            as a native Mac app and on iPhone. Navigation sits on the left, the page you are on in the middle, and
+            the inbox of your sessions on the right, so whatever you open, the agents that need you stay in view.
           </p>
 
-          <Heading id="chrome-extension" level={3}>Chrome Extension</Heading>
-          <p style={{ color: SOL.base00 }}>
-            For agents to work in your Chrome with your existing logins,{" "}
-            <a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2" style={{ color: SOL.cyan }}>install Codecast from the Chrome Web Store</a>.
-            Then run this in a terminal on the same computer and click Pair in the extension:
+          <Heading id="inbox" level={3}>Inbox</Heading>
+          <p className="mb-3" style={{ color: SOL.base00 }}>
+            Every session you run, on any computer, gets a card in the inbox: its title, a one-line summary of where
+            it stands, the last thing you said to it, its project and how long ago it moved. Cards are grouped by what
+            they need from you:
           </p>
-          <Code>{`$ ${BROWSER_EXTENSION_SETUP_COMMAND}\n$ cast browser extension status`}</Code>
-          <p className="text-sm" style={{ color: SOL.base01 }}>
-            Set this up once on each computer, in the Chrome profile you want agents to use. Chrome updates the extension automatically.{" "}
-            <Link href="/documentation/browser" className="underline underline-offset-2" style={{ color: SOL.cyan }}>Browser setup and troubleshooting</Link>.
-          </p>
-
-          <Heading id="authentication" level={3}>Authentication</Heading>
+          <div className="grid sm:grid-cols-2 gap-x-6 gap-y-2 mb-4">
+            {INBOX_GROUPS.map(([name, color, desc]) => (
+              <div key={name} className="flex gap-3 items-baseline text-sm">
+                <span className="font-mono text-xs font-bold uppercase tracking-wider shrink-0 w-24" style={{ color }}>{name}</span>
+                <span style={{ color: SOL.base00 }}>{desc}</span>
+              </div>
+            ))}
+          </div>
           <p className="mb-2" style={{ color: SOL.base00 }}>
-            Authenticate via browser OAuth. This links your machine to your codecast account.
-          </p>
-          <Code>{`$ cast auth
-Opening browser for authentication...
-Authenticated as you@example.com`}</Code>
-          <p className="text-sm" style={{ color: SOL.base01 }}>
-            Alternatively, generate a setup token on the web dashboard at <InlineCode>Settings &gt; CLI</InlineCode> and run <InlineCode>cast login &lt;token&gt;</InlineCode>.
+            The chips across the top filter the inbox by label or project. Click a card to open its conversation.
+            Stash a card once you are done with it and the inbox moves you to the next one.
           </p>
 
-          <Heading id="daemon" level={3}>The Daemon</Heading>
+          <Heading id="conversations" level={3}>Conversations</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
-            The daemon watches your local session files and syncs them in real-time. It runs quietly in the background with no impact on your workflow.
+            A conversation is the agent&apos;s whole session, live. Its replies render as formatted text, and the work
+            between them folds into one line (&ldquo;ran 3 commands&rdquo;, &ldquo;read 2 files&rdquo;) that opens on a click. Background
+            commands, monitors and scheduled wakeups show where they run and what they are waiting on.
           </p>
-          <Code>{`$ cast start
-Daemon started (pid 42891)
-Watching for sessions...
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The header carries the agent, model, branch and the task, plan or workflow the session is working on.
+            The files-changed pill opens the diff. Type into the composer to steer the agent mid-run; when it is
+            waiting on you, a suggested reply appears that <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Tab</kbd> accepts.
+          </p>
+          <Screenshot
+            src="/docs/app/conversation.webp"
+            alt="A conversation: the agent's replies, collapsed command runs, a background command and a scheduled wakeup, with the task and plan in the header"
+            caption="A live session: replies, folded tool work, background jobs, and the task it serves in the header"
+          />
 
-$ cast status
-Daemon: running (pid 42891)
-Sessions: 847 synced, 0 pending
-Latency: 38ms avg
-Uptime: 4d 12h`}</Code>
-          <CmdTable>
-            <CmdRow cmd="cast start" desc="Start the background daemon" />
-            <CmdRow cmd="cast stop" desc="Stop the daemon" />
-            <CmdRow cmd="cast restart" desc="Restart (also checks for updates)" />
-            <CmdRow cmd="cast status" desc="Show daemon status, sync info" />
-            <CmdRow cmd="cast logs -f" desc="Tail daemon logs" />
-            <CmdRow cmd="cast setup" desc="Auto-start daemon on login" />
-          </CmdTable>
+          <Heading id="command-palette" level={3}>Command Palette</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Press <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+K</kbd> to
+            open a Linear-style command palette that searches across sessions, tasks, plans, docs, and built-in actions.
+            Results are ranked by recency and relevance, with separate groups for each entity type.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The palette supports quick actions directly on search results: pin, stash, defer, kill, or rename sessions
+            without leaving the palette. Type a slash prefix to filter by entity type
+            (<InlineCode>/task</InlineCode>, <InlineCode>/plan</InlineCode>, <InlineCode>/doc</InlineCode>) or use it
+            as a launcher for built-in navigation (inbox, tasks, plans, docs, settings).
+          </p>
+          <Screenshot
+            src="/docs/app/palette.webp"
+            alt="Command palette showing recent sessions, quick actions, and entity search"
+            caption="Cmd+K palette -- jump to anything, run actions, search across all entities"
+          />
           <Callout type="tip">
-            Run <InlineCode>cast setup</InlineCode> after install to auto-start the daemon on login. You won&apos;t need to think about it again.
+            On the desktop app, <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+Shift+Space</kbd> opens
+            a global floating palette from any app -- no need to switch to codecast first.
           </Callout>
+
+          <Heading id="changes" level={3}>Changes</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Changes is the story of what shipped. It opens with a summary of the week, then groups each day&apos;s commits
+            into a handful of headlines with their size and the releases that carried them.
+            The strip at the top shows which version of each part is live right now.
+          </p>
+          <Screenshot
+            src="/docs/app/changes.webp"
+            alt="The Changes page: a weekly summary card above a day's headlines, each with line counts and the releases that shipped them"
+            caption="Changes: the week in one paragraph, then every day's work as headlines"
+          />
+
+          <Heading id="dashboard-plans" level={3}>Tasks &amp; Plans</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Tasks are the work, whoever does it: you, a teammate or an agent. The board groups them by status and
+            shows who holds each one, its priority and how long it has been open. Filters live in the URL, so a view
+            is a link you can share or pin to the sidebar.
+          </p>
+          <Screenshot
+            src="/docs/app/tasks.webp"
+            alt="The task board grouped into In progress and Open, with assignees, priorities and ages"
+            caption="Tasks: one board for people and agents"
+          />
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            A plan holds a larger goal across many sessions: its tasks, a progress bar, the sessions bound to it,
+            and a timeline of the decisions and findings agents posted along the way.
+          </p>
+          <Screenshot
+            src="/docs/app/plan.webp"
+            alt="A plan page showing its goal, progress, tasks and comment timeline"
+            caption="A plan: the goal, the tasks under it, and what every session learned"
+          />
+
+          <Heading id="documents" level={3}>Documents</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            A collaborative document editor for specs, designs, investigations, handoffs, and notes.
+            Documents are TipTap-powered with rich formatting: headings, lists, code blocks, and images.
+          </p>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The key feature is entity mentions -- type <InlineCode>@</InlineCode> to reference sessions, tasks, plans,
+            or other docs inline. Mentions are resolved and rendered as rich links with status badges. Slash commands
+            (<InlineCode>/</InlineCode>) provide quick formatting and entity insertion.
+          </p>
+          <p style={{ color: SOL.base00 }}>
+            Documents can be created from the web UI, CLI (<InlineCode>cast doc create</InlineCode>), or promoted
+            from plan bodies. Types include <InlineCode>note</InlineCode>, <InlineCode>plan</InlineCode>,
+            {" "}<InlineCode>design</InlineCode>, <InlineCode>spec</InlineCode>, <InlineCode>investigation</InlineCode>,
+            and <InlineCode>handoff</InlineCode>. All documents are searchable via the command palette and CLI.
+          </p>
+
+          <Heading id="chat" level={3}>Chat &amp; Calls</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Teams talk in channels and direct messages next to their sessions. Share a session, task or doc into a
+            channel and it renders as a live card. Huddles are transcribed with who said what, and each call ends
+            with a summary and its action items.
+          </p>
+          <Screenshot
+            src="/docs/app/chat.webp"
+            alt="A team chat channel with messages and a live session card"
+            caption="Chat: the team's channels, beside the work they talk about"
+          />
+
+          <Heading id="inbox-shortcuts" level={3}>Keyboard Shortcuts</Heading>
+          <p className="mb-3" style={{ color: SOL.base00 }}>
+            The inbox is designed for keyboard-first orchestration. Navigate, triage, and respond to
+            agents without leaving the keyboard.
+          </p>
+          <div className="rounded-lg overflow-hidden my-4" style={{ border: `1px solid ${SOL.base2}` }}>
+            {[
+              ["Ctrl+J / K", "Navigate sessions", "Move up/down in the session queue"],
+              ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
+              ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
+              ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
+              ["Ctrl+L", "Label session", "File the session under a label (type to filter or create)"],
+              ["Ctrl+,", "Cycle view", "Cycle inbox grouping: status / time / label"],
+              ["Ctrl+Backspace", "Stash", "Remove session from queue"],
+              ["Shift+Backspace", "Defer & advance", "Defer session and move to next"],
+              ["Ctrl+Shift+Bksp", "Kill agent", "Kill the session's agent process"],
+              ["Ctrl+N", "New session", "Create a new agent session"],
+              ["Cmd+K", "Command palette", "Jump to any session, task, or page"],
+              ["Cmd+/", "Search", "Open global search"],
+              ["D / T", "Diff / Tree", "Toggle diff or file tree panel"],
+              ["Alt+J / K", "Navigate messages", "Jump between user messages"],
+              ["Alt+F", "Fork", "Fork conversation from current message"],
+              ["Ctrl+M", "Focus compose", "Focus the message input"],
+              ["Ctrl+.", "Zen mode", "Hide sidebars for focused reading"],
+              ["Ctrl+[ / ]", "Toggle sidebars", "Toggle left/right sidebars"],
+              ["?", "Shortcuts help", "Show the keyboard shortcut overlay"],
+            ].map(([key, action, desc], i) => (
+              <div
+                key={key}
+                className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
+                style={{
+                  backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
+                  borderBottom: i < 18 ? `1px solid ${SOL.base2}` : undefined,
+                }}
+              >
+                <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>
+                <span className="font-medium" style={{ color: SOL.base03 }}>{action}</span>
+                <span style={{ color: SOL.base00 }}>{desc}</span>
+              </div>
+            ))}
+          </div>
+          <Callout type="tip">
+            The inbox remembers your position. Dismiss a session with <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Ctrl+Backspace</kbd> and
+            it automatically advances to the next one -- perfect for triaging a queue of agent sessions.
+          </Callout>
+
+          <Heading id="desktop-download" level={3}>Download</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            The desktop app provides native macOS integration with system notifications, menu bar access,
+            and a dedicated window. Everything in the web app works identically in the desktop app.
+          </p>
+          <AppBadge app="mac" location="documentation_desktop" />
+
+          {/* Mobile App */}
+          <Heading id="mobile-app" level={2}>Mobile App</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Your AI coding sessions, always in your pocket. The iOS app gives you full access
+            to your sessions, agents, and team activity from anywhere.
+          </p>
+
+          <Heading id="mobile-features" level={3}>Features</Heading>
+          <div className="flex flex-col sm:flex-row gap-8 items-start">
+          <div className="space-y-3 mb-4 flex-1 sm:pt-4">
+            {[
+              ["Live session streaming", "Watch your agents work in real-time with push notifications when they need input"],
+              ["Send messages", "Send prompts and messages to running agents directly from your phone"],
+              ["Review diffs", "Review code changes and approve permissions remotely"],
+              ["Full search", "Search your entire session history on the go"],
+            ].map(([title, desc]) => (
+              <div key={title} className="flex gap-3 items-start">
+                <svg className="w-5 h-5 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" style={{ color: SOL.green }}>
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                </svg>
+                <div>
+                  <div className="font-medium text-sm" style={{ color: SOL.base03 }}>{title}</div>
+                  <div className="text-sm" style={{ color: SOL.base00 }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <PhoneFrame className="w-[250px] shrink-0 mx-auto sm:mx-0">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/docs/app/mobile.webp" alt="codecast on a phone: the inbox of sessions with their status and latest reply" loading="lazy" className="w-full block" />
+          </PhoneFrame>
+          </div>
+
+          <Heading id="mobile-download" level={3}>Download</Heading>
+          <div className="flex flex-wrap gap-3">
+            <AppBadge app="ios" location="documentation_mobile" />
+            <AndroidSoonBadge />
+          </div>
+
+          {/* Teams */}
+          <Heading id="teams" level={2}>Teams</Heading>
+
+          <Heading id="team-setup" level={3}>Setup</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Create a team from <InlineCode>Settings &gt; Team</InlineCode>: name it, pick the repositories it works in,
+            and invite your first teammate. Teammates join from their invite or with the team&apos;s invite code.
+            Once you are in a team, the workspace switcher at the top left moves you between it and your personal
+            workspace, and the team&apos;s people, channels and shared sessions show up in the sidebar.
+          </p>
+          <p className="mb-2 text-sm" style={{ color: SOL.base01 }}>The same from a terminal:</p>
+          <Code>{`# Create a team
+$ cast teams create "acme-eng" --icon "🚀"
+
+# Invite members
+$ cast teams invite sarah@acme.com -r admin
+$ cast teams invite mike@acme.com
+
+# Join with invite code
+$ cast teams join abc123
+
+# See and change what syncs and what each team sees
+$ cast sharing
+$ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
+
+          <Heading id="team-sharing" level={3}>Sharing & Privacy</Heading>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            Sessions are private by default. Sharing is controlled at three levels:
+          </p>
+          <div className="space-y-3 mb-4">
+            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
+              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Directory mappings</div>
+              <p className="text-sm" style={{ color: SOL.base00 }}>
+                Map project directories to teams with <InlineCode>auto_share: true</InlineCode>. Every session in that directory is shared, past ones included, unless the mapping carries a share start (<InlineCode>share_since</InlineCode>): then only sessions started after it are visible. Each share control shows the session count and date range before it writes.
+              </p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
+              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Team share paths</div>
+              <p className="text-sm" style={{ color: SOL.base00 }}>
+                Configure paths that auto-share with your active team via user settings.
+              </p>
+            </div>
+            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
+              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Manual sharing</div>
+              <p className="text-sm" style={{ color: SOL.base00 }}>
+                Share individual sessions or messages via link with <InlineCode>cast links</InlineCode>.
+                Mark sessions private with <InlineCode>cast private</InlineCode>.
+              </p>
+            </div>
+          </div>
+          <p className="mb-4" style={{ color: SOL.base00 }}>
+            <InlineCode>cast sharing</InlineCode> reads and changes all of it without prompts, so an agent can do it for you:
+            the Sync &amp; Privacy settings page has a Decide with an agent button that starts one, briefed to look through your
+            folders, recommend a setting for each, and change nothing until you agree.
+          </p>
+          <Callout type="warn">
+            Setting an <InlineCode>active_team_id</InlineCode> alone does NOT share sessions. You must also
+            configure directory mappings or team share paths for sessions to be visible to teammates.
+          </Callout>
+
+          {/* Integrations */}
+          <Heading id="integrations" level={2}>Integrations</Heading>
+
+          <Heading id="supported-tools" level={3}>Supported Tools</Heading>
+          <div className="grid grid-cols-2 gap-3 my-4">
+            {[
+              { name: "Claude Code", color: SOL.orange, desc: "Full sync with live status" },
+              { name: "OpenAI Codex", color: SOL.green, desc: "Session sync and memory" },
+              { name: "Cursor", color: SOL.blue, desc: "Session sync and memory" },
+              { name: "Gemini CLI", color: SOL.magenta, desc: "Session sync and memory" },
+            ].map((tool) => (
+              <div key={tool.name} className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80`, borderLeft: `3px solid ${tool.color}` }}>
+                <div className="font-mono text-sm font-medium" style={{ color: SOL.base03 }}>{tool.name}</div>
+                <div className="text-xs mt-0.5" style={{ color: SOL.base01 }}>{tool.desc}</div>
+              </div>
+            ))}
+          </div>
+
+          <Heading id="github-integration" level={3}>GitHub</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            Install the GitHub app to link PRs with sessions, process webhook events,
+            and fire agent triggers on repository activity.
+          </p>
+          <p style={{ color: SOL.base00 }}>
+            Configure at <InlineCode>Settings &gt; Integrations &gt; GitHub App</InlineCode> on the web dashboard.
+            Once installed, PRs are automatically linked to the sessions that created them,
+            and you can set up triggers that fire on repository events.
+          </p>
+
+          {/* For agents and the terminal */}
+          <div id="cli" className="mt-24 mb-2 rounded-xl px-6 py-7" style={{ backgroundColor: SOL.base03, scrollMarginTop: "6rem" }}>
+            <div className="font-mono text-2xl font-bold mb-2" style={{ color: SOL.base3 }}>Agents &amp; the CLI</div>
+            <p className="text-sm leading-relaxed" style={{ color: SOL.base1 }}>
+              Everything in the app is also a <code className="font-mono" style={{ color: SOL.green }}>cast</code> command, and
+              that is how your agents use codecast: they search past sessions, file tasks, post to plans and set
+              triggers from their own terminal. The rest of this page is that reference.
+            </p>
+          </div>
 
           {/* Deep dive guides */}
           <Heading id="guides" level={2}>Deep Dive Guides</Heading>
@@ -915,261 +1274,6 @@ $ cast trigger add "Check for broken tests" --on push`}</Code>
             <Param name="--max-runtime <dur>" desc="Override max runtime (default: 10m)" />
           </CmdTable>
 
-          {/* Desktop App */}
-          <Heading id="desktop-app" level={2}>Desktop App</Heading>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            The codecast desktop app is your command center for managing sessions, orchestrating agents,
-            and staying on top of team activity. Available as a native macOS app and at{" "}
-            <a href="https://codecast.sh" className="font-mono underline" style={{ color: SOL.blue }}>codecast.sh</a>.
-          </p>
-
-          <Screenshot
-            src="/docs/dashboard.png"
-            alt="Codecast dashboard showing the session feed with live agent status, sidebar navigation, team members, and project bookmarks"
-            caption="The dashboard feed -- all your sessions with live status, summaries, and team activity"
-          />
-
-          <Heading id="inbox" level={3}>Inbox & Orchestration</Heading>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            The inbox is where you orchestrate your agents. It shows all running and recent sessions with
-            live status updates -- <InlineCode>working</InlineCode>, <InlineCode>idle</InlineCode>, <InlineCode>permission_blocked</InlineCode>, <InlineCode>thinking</InlineCode>, <InlineCode>compacting</InlineCode> -- organized
-            by priority: sessions needing your input float to the top, pinned sessions stay accessible,
-            and working sessions update in real-time.
-          </p>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            From the inbox you can send messages to agents, approve pending permissions, pin important sessions,
-            defer sessions for later, and dismiss completed work. The keyboard-driven workflow lets you
-            fly through a queue of active sessions without touching the mouse.
-          </p>
-
-          <Screenshot
-            src="/docs/inbox.png"
-            alt="Codecast inbox showing live agent sessions with status indicators, pinned sessions, and working/needs-input categories"
-            caption="The inbox -- orchestrate multiple agents with live status, summaries, and direct messaging"
-          />
-
-          <Heading id="inbox-shortcuts" level={3}>Keyboard Shortcuts</Heading>
-          <p className="mb-3" style={{ color: SOL.base00 }}>
-            The inbox is designed for keyboard-first orchestration. Navigate, triage, and respond to
-            agents without leaving the keyboard.
-          </p>
-          <div className="rounded-lg overflow-hidden my-4" style={{ border: `1px solid ${SOL.base2}` }}>
-            {[
-              ["Ctrl+J / K", "Navigate sessions", "Move up/down in the session queue"],
-              ["Ctrl+I", "Jump to needs input", "First session waiting for your input"],
-              ["Ctrl+P", "Jump to pinned", "Jump to first pinned session"],
-              ["Ctrl+Shift+P", "Pin/unpin", "Pin or unpin the current session"],
-              ["Ctrl+L", "Label session", "File the session under a label (type to filter or create)"],
-              ["Ctrl+,", "Cycle view", "Cycle inbox grouping: status / time / label"],
-              ["Ctrl+Backspace", "Stash", "Remove session from queue"],
-              ["Shift+Backspace", "Defer & advance", "Defer session and move to next"],
-              ["Ctrl+Shift+Bksp", "Kill agent", "Kill the session's agent process"],
-              ["Ctrl+N", "New session", "Create a new agent session"],
-              ["Cmd+K", "Command palette", "Jump to any session, task, or page"],
-              ["Cmd+/", "Search", "Open global search"],
-              ["D / T", "Diff / Tree", "Toggle diff or file tree panel"],
-              ["Alt+J / K", "Navigate messages", "Jump between user messages"],
-              ["Alt+F", "Fork", "Fork conversation from current message"],
-              ["Ctrl+M", "Focus compose", "Focus the message input"],
-              ["Ctrl+.", "Zen mode", "Hide sidebars for focused reading"],
-              ["Ctrl+[ / ]", "Toggle sidebars", "Toggle left/right sidebars"],
-              ["?", "Shortcuts help", "Show the keyboard shortcut overlay"],
-            ].map(([key, action, desc], i) => (
-              <div
-                key={key}
-                className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
-                style={{
-                  backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
-                  borderBottom: i < 18 ? `1px solid ${SOL.base2}` : undefined,
-                }}
-              >
-                <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>
-                <span className="font-medium" style={{ color: SOL.base03 }}>{action}</span>
-                <span style={{ color: SOL.base00 }}>{desc}</span>
-              </div>
-            ))}
-          </div>
-          <Callout type="tip">
-            The inbox remembers your position. Dismiss a session with <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Ctrl+Backspace</kbd> and
-            it automatically advances to the next one -- perfect for triaging a queue of agent sessions.
-          </Callout>
-
-          <Heading id="command-palette" level={3}>Command Palette</Heading>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            Press <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+K</kbd> to
-            open a Linear-style command palette that searches across sessions, tasks, plans, docs, and built-in actions.
-            Results are ranked by recency and relevance, with separate groups for each entity type.
-          </p>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            The palette supports quick actions directly on search results: pin, stash, defer, kill, or rename sessions
-            without leaving the palette. Type a slash prefix to filter by entity type
-            (<InlineCode>/task</InlineCode>, <InlineCode>/plan</InlineCode>, <InlineCode>/doc</InlineCode>) or use it
-            as a launcher for built-in navigation (inbox, tasks, plans, docs, settings).
-          </p>
-          <Screenshot
-            src="/docs/command-palette.png"
-            alt="Command palette showing recent sessions, quick actions, and entity search"
-            caption="Cmd+K palette -- jump to anything, run actions, search across all entities"
-          />
-          <Callout type="tip">
-            On the desktop app, <kbd className="font-mono text-xs px-1.5 py-0.5 rounded" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>Cmd+Shift+Space</kbd> opens
-            a global floating palette from any app -- no need to switch to codecast first.
-          </Callout>
-
-          <Heading id="activity-feed" level={3}>Activity Feed</Heading>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            The activity feed is a daily digest view organized by project. Each day shows a narrative summary
-            of what happened across all agent sessions, with individual session cards showing titles, status,
-            message counts, and the agent that was used.
-          </p>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            Filter by project to focus on one codebase, or view the global feed to see everything.
-            Team activity feeds show what your teammates&apos; agents are working on -- useful for standups
-            and avoiding duplicate work.
-          </p>
-          <Screenshot
-            src="/docs/activity-feed.png"
-            alt="Activity feed showing daily session digest grouped by project"
-            caption="Activity feed -- daily digest with project grouping, session cards, and narrative summaries"
-          />
-
-          <Heading id="conversations" level={3}>Conversations</Heading>
-          <p style={{ color: SOL.base00 }}>
-            The conversation view shows the full message history with syntax-highlighted code blocks,
-            inline tool calls (Read, Edit, Bash, etc.), file diffs, and screenshots. You can share
-            specific messages via link, bookmark important moments, and view the session timeline.
-          </p>
-
-          <Screenshot
-            src="/docs/conversation.png"
-            alt="Codecast conversation view showing message history with code blocks, tool calls, and file diffs"
-            caption="Conversation view -- full session history with syntax highlighting, tool calls, and inline diffs"
-          />
-
-          <Heading id="dashboard-plans" level={3}>Plans & Tasks</Heading>
-          <p style={{ color: SOL.base00 }}>
-            The Plans page shows all plans with status filters (draft, active, paused, done).
-            Each plan displays its goal, acceptance criteria, progress bar, linked sessions,
-            unified comment timeline with decisions, discoveries, and references. Tasks are visible within their
-            parent plan or as a standalone list with priority and status filtering.
-          </p>
-
-          <Screenshot
-            src="/docs/plans.png"
-            alt="Codecast plans page showing active plans with status badges, task counts, and plan IDs"
-            caption="Plans view -- track multi-session features with goals, tasks, and decision history"
-          />
-
-          <Heading id="documents" level={3}>Documents</Heading>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            A collaborative document editor for specs, designs, investigations, handoffs, and notes.
-            Documents are TipTap-powered with rich formatting: headings, lists, code blocks, and images.
-          </p>
-          <p className="mb-2" style={{ color: SOL.base00 }}>
-            The key feature is entity mentions -- type <InlineCode>@</InlineCode> to reference sessions, tasks, plans,
-            or other docs inline. Mentions are resolved and rendered as rich links with status badges. Slash commands
-            (<InlineCode>/</InlineCode>) provide quick formatting and entity insertion.
-          </p>
-          <p style={{ color: SOL.base00 }}>
-            Documents can be created from the web UI, CLI (<InlineCode>cast doc create</InlineCode>), or promoted
-            from plan bodies. Types include <InlineCode>note</InlineCode>, <InlineCode>plan</InlineCode>,
-            {" "}<InlineCode>design</InlineCode>, <InlineCode>spec</InlineCode>, <InlineCode>investigation</InlineCode>,
-            and <InlineCode>handoff</InlineCode>. All documents are searchable via the command palette and CLI.
-          </p>
-
-          <Heading id="desktop-download" level={3}>Download</Heading>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            The desktop app provides native macOS integration with system notifications, menu bar access,
-            and a dedicated window. Everything in the web app works identically in the desktop app.
-          </p>
-          <AppBadge app="mac" location="documentation_desktop" />
-
-          {/* Mobile App */}
-          <Heading id="mobile-app" level={2}>Mobile App</Heading>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            Your AI coding sessions, always in your pocket. The iOS app gives you full access
-            to your sessions, agents, and team activity from anywhere.
-          </p>
-
-          <Heading id="mobile-features" level={3}>Features</Heading>
-          <div className="space-y-3 mb-4">
-            {[
-              ["Live session streaming", "Watch your agents work in real-time with push notifications when they need input"],
-              ["Send messages", "Send prompts and messages to running agents directly from your phone"],
-              ["Review diffs", "Review code changes and approve permissions remotely"],
-              ["Full search", "Search your entire session history on the go"],
-            ].map(([title, desc]) => (
-              <div key={title} className="flex gap-3 items-start">
-                <svg className="w-5 h-5 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20" style={{ color: SOL.green }}>
-                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                </svg>
-                <div>
-                  <div className="font-medium text-sm" style={{ color: SOL.base03 }}>{title}</div>
-                  <div className="text-sm" style={{ color: SOL.base00 }}>{desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <Heading id="mobile-download" level={3}>Download</Heading>
-          <div className="flex flex-wrap gap-3">
-            <AppBadge app="ios" location="documentation_mobile" />
-            <AndroidSoonBadge />
-          </div>
-
-          {/* Teams */}
-          <Heading id="teams" level={2}>Teams</Heading>
-
-          <Heading id="team-setup" level={3}>Setup</Heading>
-          <Code>{`# Create a team
-$ cast teams create "acme-eng" --icon "🚀"
-
-# Invite members
-$ cast teams invite sarah@acme.com -r admin
-$ cast teams invite mike@acme.com
-
-# Join with invite code
-$ cast teams join abc123
-
-# See and change what syncs and what each team sees
-$ cast sharing
-$ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
-
-          <Heading id="team-sharing" level={3}>Sharing & Privacy</Heading>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            Sessions are private by default. Sharing is controlled at three levels:
-          </p>
-          <div className="space-y-3 mb-4">
-            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
-              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Directory mappings</div>
-              <p className="text-sm" style={{ color: SOL.base00 }}>
-                Map project directories to teams with <InlineCode>auto_share: true</InlineCode>. Every session in that directory is shared, past ones included, unless the mapping carries a share start (<InlineCode>share_since</InlineCode>): then only sessions started after it are visible. Each share control shows the session count and date range before it writes.
-              </p>
-            </div>
-            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
-              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Team share paths</div>
-              <p className="text-sm" style={{ color: SOL.base00 }}>
-                Configure paths that auto-share with your active team via user settings.
-              </p>
-            </div>
-            <div className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80` }}>
-              <div className="font-mono text-sm font-medium mb-1" style={{ color: SOL.base03 }}>Manual sharing</div>
-              <p className="text-sm" style={{ color: SOL.base00 }}>
-                Share individual sessions or messages via link with <InlineCode>cast links</InlineCode>.
-                Mark sessions private with <InlineCode>cast private</InlineCode>.
-              </p>
-            </div>
-          </div>
-          <p className="mb-4" style={{ color: SOL.base00 }}>
-            <InlineCode>cast sharing</InlineCode> reads and changes all of it without prompts, so an agent can do it for you:
-            the Sync &amp; Privacy settings page has a Decide with an agent button that starts one, briefed to look through your
-            folders, recommend a setting for each, and change nothing until you agree.
-          </p>
-          <Callout type="warn">
-            Setting an <InlineCode>active_team_id</InlineCode> alone does NOT share sessions. You must also
-            configure directory mappings or team share paths for sessions to be visible to teammates.
-          </Callout>
-
           {/* Knowledge */}
           <Heading id="knowledge" level={2}>Knowledge</Heading>
 
@@ -1202,34 +1306,43 @@ $ cast bookmark --list
 # Delete
 $ cast bookmark --delete auth-pattern`}</Code>
 
-          {/* Integrations */}
-          <Heading id="integrations" level={2}>Integrations</Heading>
-
-          <Heading id="supported-tools" level={3}>Supported Tools</Heading>
-          <div className="grid grid-cols-2 gap-3 my-4">
-            {[
-              { name: "Claude Code", color: SOL.orange, desc: "Full sync with live status" },
-              { name: "OpenAI Codex", color: SOL.green, desc: "Session sync and memory" },
-              { name: "Cursor", color: SOL.blue, desc: "Session sync and memory" },
-              { name: "Gemini CLI", color: SOL.magenta, desc: "Session sync and memory" },
-            ].map((tool) => (
-              <div key={tool.name} className="p-3 rounded-lg" style={{ backgroundColor: `${SOL.base2}80`, borderLeft: `3px solid ${tool.color}` }}>
-                <div className="font-mono text-sm font-medium" style={{ color: SOL.base03 }}>{tool.name}</div>
-                <div className="text-xs mt-0.5" style={{ color: SOL.base01 }}>{tool.desc}</div>
-              </div>
-            ))}
-          </div>
-
-          <Heading id="github-integration" level={3}>GitHub</Heading>
+          {/* Background sync */}
+          <Heading id="daemon" level={2}>Background Sync</Heading>
+          <Heading id="authentication" level={3}>Authentication</Heading>
           <p className="mb-2" style={{ color: SOL.base00 }}>
-            Install the GitHub app to link PRs with sessions, process webhook events,
-            and fire agent triggers on repository activity.
+            Authenticate via browser OAuth. This links your machine to your codecast account.
           </p>
-          <p style={{ color: SOL.base00 }}>
-            Configure at <InlineCode>Settings &gt; Integrations &gt; GitHub App</InlineCode> on the web dashboard.
-            Once installed, PRs are automatically linked to the sessions that created them,
-            and you can set up triggers that fire on repository events.
+          <Code>{`$ cast auth
+Opening browser for authentication...
+Authenticated as you@example.com`}</Code>
+          <p className="text-sm" style={{ color: SOL.base01 }}>
+            Alternatively, generate a setup token on the web dashboard at <InlineCode>Settings &gt; CLI</InlineCode> and run <InlineCode>cast login &lt;token&gt;</InlineCode>.
           </p>
+
+          <Heading id="daemon-commands" level={3}>The Daemon</Heading>
+          <p className="mb-2" style={{ color: SOL.base00 }}>
+            The daemon watches your local session files and syncs them in real-time. It runs quietly in the background with no impact on your workflow.
+          </p>
+          <Code>{`$ cast start
+Daemon started (pid 42891)
+Watching for sessions...
+
+$ cast status
+Daemon: running (pid 42891)
+Sessions: 847 synced, 0 pending
+Latency: 38ms avg
+Uptime: 4d 12h`}</Code>
+          <CmdTable>
+            <CmdRow cmd="cast start" desc="Start the background daemon" />
+            <CmdRow cmd="cast stop" desc="Stop the daemon" />
+            <CmdRow cmd="cast restart" desc="Restart (also checks for updates)" />
+            <CmdRow cmd="cast status" desc="Show daemon status, sync info" />
+            <CmdRow cmd="cast logs -f" desc="Tail daemon logs" />
+            <CmdRow cmd="cast setup" desc="Auto-start daemon on login" />
+          </CmdTable>
+          <Callout type="tip">
+            Run <InlineCode>cast setup</InlineCode> after install to auto-start the daemon on login. You won&apos;t need to think about it again.
+          </Callout>
 
           {/* CLI Reference */}
           <Heading id="reference" level={2}>CLI Reference</Heading>

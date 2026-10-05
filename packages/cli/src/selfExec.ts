@@ -3,7 +3,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const ext = /[/\\](?:dist|build)[/\\]/.test(fileURLToPath(import.meta.url)) ? ".js" : ".ts";
+// This module's own extension says whether it runs from source (.ts) or a bundle (.js). Guessing
+// from a dist/ or build/ directory missed host builds (~/.local/share/codecast/builds/cast-darwin-dist-X/),
+// so every daemon re-exec there (browser reap, sim reap) ran a nonexistent index.ts.
+const ext = path.extname(fileURLToPath(import.meta.url)) === ".js" ? ".js" : ".ts";
 
 /**
  * How to run this same codecast build again with `argv`: the compiled binary

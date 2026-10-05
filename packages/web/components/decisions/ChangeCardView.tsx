@@ -18,13 +18,14 @@ import {
   type ChangeCard,
   type ChangeVerdict,
 } from "@codecast/shared/contracts/changeCard";
-import type { DecisionAnswerInput, SessionDecisionItem } from "../../store/inboxStore";
+import type { DecisionAnswerInput, DecisionDetailItem, SessionDecisionItem } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useGoalChip } from "../../hooks/useGoalChip";
 import "./changeCard.css";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -116,18 +117,22 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
     );
   }
   const hasGoal = card.goal.ref && card.goal.ref !== "none";
-  const sources = card.cause.sources.length ? `from ${listLabel(card.cause.sources)}` : "";
+  // "signal" is the kind every signal filed task carries, not a source: it says nothing.
+  const named = card.cause.sources.filter((src) => src !== "signal");
+  const sources = named.length ? `from ${listLabel(named)}` : "";
   const signals = card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "";
   const seen = card.cause.first_seen ? `first seen ${formatTimeAgo(card.cause.first_seen, now)}` : "";
-  const goal = hasGoal ? <>serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span></> : null;
+  // A card written before its goal was named carries the key as the name.
+  const goalName = card.goal.name && card.goal.name !== card.goal.ref ? card.goal.name : null;
+  const goal = hasGoal ? <>serves <span className="text-sol-text-muted">{goalName ?? <GoalName goalRef={card.goal.ref} />}</span></> : null;
   const meta: SepItem[] = [];
   if (signals || sources) meta.push({ key: "signals", node: [signals, sources].filter(Boolean).join(" ") });
   // Age and goal share one fact, so a narrow card spends one line on them.
-  // The goal's ref and why wait on hover.
+  // Why it serves the goal waits on hover.
   if (seen || goal) meta.push({
     key: "seen",
     className: goal ? "cc-goal" : "cc-nowrap",
-    title: hasGoal ? [card.goal.name ? card.goal.ref : "", card.goal.why].filter(Boolean).join(": ") || undefined : undefined,
+    title: hasGoal ? card.goal.why || undefined : undefined,
     node: (
       <span data-card-goal={goal ? "" : undefined}>
         {seen && <span className="cc-nowrap">{seen}</span>}
@@ -146,6 +151,11 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
       <SepRow items={meta} className="cc-cause-facts" />
     </div>
   );
+}
+
+/** A goal the card names only by its key, in words (never the key itself). */
+function GoalName({ goalRef }: { goalRef: string }) {
+  return <>{useGoalChip(goalRef).label}</>;
 }
 
 /** The asker's own question beside a card, or null when it only repeats the change. */
@@ -238,6 +248,15 @@ export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "opti
     pill: `${head} ${tail}`,
     line: outcomeLine(VERDICT_TONE[verdict], head, tail, note),
   };
+}
+
+/** Who answered a decision, in the words a card's outcome line uses: a person's name ("you" for the viewer), a role's, or "policy". */
+export function answererNameOf(detail: Pick<DecisionDetailItem, "decision" | "asked_users" | "holder_role" | "ladder">, meId: string | null | undefined): string {
+  const by = detail.decision.answered_by;
+  if (!by) return "a person";
+  if (by.kind === "policy") return "policy";
+  if (by.kind === "role") return detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === by.id)?.role?.name ?? "a role";
+  return detail.asked_users.find((u) => u._id === by.id)?.name ?? (by.id === meId ? "you" : "a person");
 }
 
 function outcomeLine(tone: string, head: string, tail: string, note?: string) {
@@ -536,8 +555,10 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
             <dd>
               <span className="cc-nowrap">${card.cost.usd.toFixed(2)}</span>
               <SepRow className="cc-fact-sub" items={[
-                { key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` },
-                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} min` },
+                // A card that recorded no tokens says nothing rather than "0 tokens".
+                ...(card.cost.tokens > 0 ? [{ key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` }] : []),
+                // Agent time summed over the run's sessions, not the run's wall time.
+                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` },
               ]} />
             </dd>
           </div>

@@ -1,7 +1,7 @@
 // The lane's one composer on the phone: home's "What can I take off your
 // plate?" and the reply box at the foot of a conversation (web
 // components/simple/Composer.tsx). Return breaks the line, as a phone
-// keyboard expects; the round teal button sends.
+// keyboard expects; the round accent button sends.
 import { useRef, useState } from 'react';
 import { Pressable, View, type TextInput as RNTextInput } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
@@ -54,10 +54,10 @@ export function Composer({
         paddingVertical: hero ? 10 : 8,
         paddingLeft: hero ? 20 : 17,
         paddingRight: hero ? 10 : 8,
-        borderRadius: hero ? 28 : 26,
+        borderRadius: hero ? 20 : 18,
         backgroundColor: c.sheet,
         borderWidth: 1,
-        borderColor: focused ? c.tideWash2 : c.line,
+        borderColor: focused ? c.lineStrong : c.line,
         shadowColor: c.ink,
         shadowOffset: { width: 0, height: focused ? 14 : 8 },
         shadowOpacity: focused ? 0.14 : 0.08,
@@ -100,12 +100,12 @@ export function Composer({
           borderRadius: 21,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: pressed ? c.tideSolidPressed : c.tideSolid,
-          opacity: ready ? 1 : 0.32,
+          // Disabled, it steps back to a quiet wash (web .sl-send:disabled).
+          backgroundColor: !ready ? c.wash : pressed ? c.accentPressed : c.accent,
           transform: [{ scale: pressed ? 0.94 : 1 }],
         })}
       >
-        <Feather name="arrow-up" size={20} color={c.onTide} />
+        <Feather name="arrow-up" size={20} color={ready ? c.onSolid : c.faint} />
       </Pressable>
     </View>
   );

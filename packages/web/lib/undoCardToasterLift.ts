@@ -13,6 +13,22 @@ export function toasterLiftFor(cardTop: number, viewportHeight: number): number 
   return Math.max(0, Math.ceil(viewportHeight - cardTop + GAP_PX));
 }
 
+/**
+ * The lift for a mounted card, read from its layout box rather than its
+ * painted rect. The card enters with a scale and slide transform, and a
+ * transform moves the painted rect without resizing the box, so nothing would
+ * measure again once the animation settles: a rect read mid-entry leaves the
+ * toaster short of the card's header. The card is fixed to the bottom edge, so
+ * its top is the viewport height less its bottom inset and its layout height.
+ */
+export function cardToasterLift(
+  card: HTMLElement,
+  view: { innerHeight: number; getComputedStyle: (el: Element) => { bottom: string } },
+): number {
+  const inset = parseFloat(view.getComputedStyle(card).bottom) || 0;
+  return toasterLiftFor(view.innerHeight - inset - card.offsetHeight, view.innerHeight);
+}
+
 /** Sonner offsets for the current card, or undefined while it is closed. */
 export function useUndoCardToasterLift(): { bottom: number } | undefined {
   const open = useSyncExternalStore(undoTimeline.subscribe, () => undoTimeline.isOpen(), () => false);
@@ -21,7 +37,7 @@ export function useUndoCardToasterLift(): { bottom: number } | undefined {
     if (!open) { setLift(null); return; }
     let observer: ResizeObserver | null = null;
     let frame = 0;
-    const measure = (card: Element) => setLift(toasterLiftFor(card.getBoundingClientRect().top, window.innerHeight));
+    const measure = (card: Element) => setLift(cardToasterLift(card as HTMLElement, window));
     const attach = () => {
       const card = document.querySelector("[data-undo-timeline]");
       if (!card) { frame = requestAnimationFrame(attach); return; }

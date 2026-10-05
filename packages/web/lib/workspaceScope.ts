@@ -81,3 +81,21 @@ export function filterToWorkspace<T extends WorkspaceScoped>(
 export function activeWorkspaceKeyOf(s: { clientState: { ui?: { active_team_id?: string | null } }; currentUser?: { _id?: unknown } | null }): WorkspaceKey | null {
   return activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id ? String(s.currentUser._id) : null);
 }
+
+/** A workspace's name for a person: the team's name, "your personal
+ *  workspace" for the viewer's own, "another workspace" otherwise. */
+export function workspaceDisplayName(
+  ws: { kind: "team" | "user"; id: string },
+  teams: ReadonlyArray<{ _id?: string; name?: string }> | null | undefined,
+  viewerId: string | null | undefined,
+): string {
+  if (ws.kind === "team") return (teams ?? []).find((t) => t?._id === ws.id)?.name ?? "another team";
+  return ws.id === viewerId ? "your personal workspace" : "another workspace";
+}
+
+/** A row's workspace as a ref, from its stored key (or the legacy team tag). */
+export function workspaceRefOf(row: WorkspaceScoped): { kind: "team" | "user"; id: string } | null {
+  const key = row.workspace ?? (row.team_id ? `team:${row.team_id}` : null);
+  const m = key?.match(/^(team|user):(.+)$/);
+  return m ? { kind: m[1] as "team" | "user", id: m[2] } : null;
+}

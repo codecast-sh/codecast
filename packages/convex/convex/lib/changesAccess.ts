@@ -161,7 +161,7 @@ export async function teamVisibleRecentInsights(
 
 /** What a story may show from one session: images it posted, its edits to instruction text, and the pages and canvases it made. */
 export type ChangesMedia = {
-  images: Array<{ url: string; timestamp: number; context: string }>;
+  images: Array<{ url: string; timestamp: number; context: string; origin: ImageOrigin }>;
   edits: InstructionEdit[];
   /** Pages it published and canvases it drew. */
   artifacts?: SessionArtifact[];
@@ -172,11 +172,63 @@ const MEDIA_EDITS_PER_SESSION = 3;
 const MEDIA_EDIT_CHARS = 900;
 const MEDIA_ARTIFACTS_PER_SESSION = 3;
 const MEDIA_CONTEXT_CHARS = 220;
+/**
+ * How far from a story's commits a session's media still belongs to it. A
+ * screenshot checking the work is taken close to it, either side. A page, a
+ * canvas or an edit to instructions comes first (a design, a proposal, the
+ * prompt change) and rarely long after. Measured on 14 days of Codecast:
+ * placed screenshots sat within 3h of the commits; most skipped ones did not.
+ */
+const SHOT_REACH_MS = 3 * 60 * 60 * 1000;
+const MADE_BEFORE_MS = 6 * 60 * 60 * 1000;
+const MADE_AFTER_MS = 60 * 60 * 1000;
 
 /** A message's words around an image: its text with image markup and links dropped, clipped. */
 function imageContext(content: string | undefined): string {
   const text = (content ?? "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
   return text.length > MEDIA_CONTEXT_CHARS ? `${text.slice(0, MEDIA_CONTEXT_CHARS - 1)}…` : text;
+}
+
+/** Who made an image: a person pasted it (often the problem, before the fix), or the work captured it (often the result). */
+export type ImageOrigin = "pasted by a person" | "captured during the work";
+
+/** How long after a wordless capture the agent's next words still describe it. */
+const CAPTION_REACH_MS = 15 * 60 * 1000;
+
+/**
+ * The words that say what an image shows. A capture from a tool (a browser
+ * screenshot) arrives in a message with no text of its own; the agent's next
+ * words, else its last ones, say what it was looking at.
+ */
+async function wordsAround(ctx: DbCtx, message: Doc<"messages"> | null, conversationId: Id<"conversations">, at: number): Promise<string> {
+  const own = imageContext(message?.content);
+  if (own) return own;
+  const after: Doc<"messages">[] = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) => q.eq("conversation_id", conversationId).eq("role", "assistant").gte("timestamp", at).lte("timestamp", at + CAPTION_REACH_MS))
+    .take(6);
+  for (const m of after) if (imageContext(m.content)) return imageContext(m.content);
+  const before: Doc<"messages">[] = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) => q.eq("conversation_id", conversationId).eq("role", "assistant").gte("timestamp", at - CAPTION_REACH_MS).lt("timestamp", at))
+    .order("desc")
+    .take(6);
+  for (const m of before) if (imageContext(m.content)) return imageContext(m.content);
+  return "";
+}
+
+/** The input of the tool call that returned an image (a screenshot command and its URL), clipped. */
+async function toolCallInput(ctx: DbCtx, conversationId: Id<"conversations">, toolUseId: string, at: number): Promise<string> {
+  const calls: Doc<"messages">[] = await ctx.db
+    .query("messages")
+    .withIndex("by_conversation_role_timestamp", (q: any) => q.eq("conversation_id", conversationId).eq("role", "assistant").gte("timestamp", at - CAPTION_REACH_MS).lte("timestamp", at))
+    .order("desc")
+    .take(8);
+  for (const m of calls) {
+    const call = m.tool_calls?.find((c) => c.id === toolUseId);
+    if (call) return imageContext(call.input).slice(0, 160);
+  }
+  return "";
 }
 
 /**
@@ -187,19 +239,30 @@ function imageContext(content: string | undefined): string {
 export async function teamVisibleMedia(
   ctx: DbCtx & { storage?: { getUrl: (id: any) => Promise<string | null> } },
   inputs: ReadonlyArray<Pick<TeamVisibleInput, "conversation_id" | "mode">>,
-  window: { since: number; until: number },
+  work: { first_at: number; last_at: number },
 ): Promise<Map<string, ChangesMedia>> {
+  const shots = { since: work.first_at - SHOT_REACH_MS, until: work.last_at + SHOT_REACH_MS };
+  const made = { since: work.first_at - MADE_BEFORE_MS, until: work.last_at + MADE_AFTER_MS };
   const out = new Map<string, ChangesMedia>();
   for (const input of inputs) {
     if (input.mode !== "full") continue;
-    const found = await sessionImages(ctx, input.conversation_id, { ...window, max: MEDIA_IMAGES_PER_SESSION });
+    const found = await sessionImages(ctx, input.conversation_id, { ...shots, max: MEDIA_IMAGES_PER_SESSION });
     const images = [];
     for (const img of found) {
       const message: Doc<"messages"> | null = await ctx.db.get(img.message_id);
-      images.push({ url: img.url, timestamp: img.timestamp, context: imageContext(message?.content) });
+      const toolUse = message?.images?.[img.seq]?.tool_use_id;
+      const captured = !!toolUse || (!!message && message.role !== "user") || !!message?.tool_results?.length;
+      const words = await wordsAround(ctx, message, input.conversation_id, img.timestamp);
+      const call = toolUse ? await toolCallInput(ctx, input.conversation_id, toolUse, img.timestamp) : "";
+      images.push({
+        url: img.url,
+        timestamp: img.timestamp,
+        context: [words, call && `(taken with: ${call})`].filter(Boolean).join(" "),
+        origin: (captured ? "captured during the work" : "pasted by a person") as ImageOrigin,
+      });
     }
-    const edits = await sessionInstructionEdits(ctx, input.conversation_id, { ...window, max: MEDIA_EDITS_PER_SESSION, chars: MEDIA_EDIT_CHARS });
-    const artifacts = await sessionArtifacts(ctx, input.conversation_id, { ...window, max: MEDIA_ARTIFACTS_PER_SESSION });
+    const edits = await sessionInstructionEdits(ctx, input.conversation_id, { ...made, max: MEDIA_EDITS_PER_SESSION, chars: MEDIA_EDIT_CHARS });
+    const artifacts = await sessionArtifacts(ctx, input.conversation_id, { ...made, max: MEDIA_ARTIFACTS_PER_SESSION });
     if (images.length || edits.length || artifacts.length) {
       out.set(String(input.conversation_id), { images: images.reverse(), edits, ...(artifacts.length ? { artifacts } : {}) });
     }

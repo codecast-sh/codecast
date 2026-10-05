@@ -539,6 +539,52 @@ describe("initiatives: the intent record (I5)", () => {
     expect(gone.row.sources.map((s: any) => s.kind)).toEqual(["call", "session"]);
   });
 
+  test("a different entry under a key already on the list is kept, and a retry is still one entry", async () => {
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    // Two teammates' questions slug to one key before either has synced.
+    const first = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { key: "entry", text: "Сколько стоит место?", at: 5, by: "@me" } });
+    const second = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { key: "entry", text: "Кто владеет запуском?", at: 6, by: "@mate" } }, MATE);
+    expect(second.entry).toEqual({ key: "entry_2", text: "Кто владеет запуском?", at: 6, by: "@mate" });
+    expect(second.row.questions).toEqual([first.entry, second.entry]);
+    const before = logCount(db);
+    const retried = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { key: "entry", text: "Сколько стоит место?", at: 5, by: "@me" } });
+    expect(retried.entry).toEqual(first.entry);
+    expect(retried.row.questions).toHaveLength(2);
+    expect(logCount(db)).toBe(before);
+  });
+
+  test("an answer said twice is one answer, a time is a real one, and an entry put back lands where it sat", async () => {
+    tickingClock();
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { key: "q1", text: "Per seat?", at: 42 } });
+    const answered = await run(record, db, { id: "in-1", list: "questions", action: "close", key: "q1", answer: "Per seat" });
+    const before = logCount(db);
+    const again = await run(record, db, { id: "in-1", list: "questions", action: "close", key: "q1", answer: "Per seat" });
+    expect(again.entry.answered_at).toBe(answered.entry.answered_at);
+    expect(logCount(db)).toBe(before);
+
+    await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { key: "b", title: "B" } });
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "close", key: "b", at: NaN })).rejects.toThrow("When a milestone was reached is a time");
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "close", key: "b", at: 0 })).rejects.toThrow("When a milestone was reached is a time");
+    // Clearing the date of a question keeps the one it had.
+    expect((await run(record, db, { id: "in-1", list: "questions", action: "edit", key: "q1", entry: { at: null, text: "Per seat, or flat?" } })).entry.at).toBe(42);
+    const back = await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { key: "a", title: "A" }, index: 0 });
+    expect(back.row.milestones.map((m: any) => m.key)).toEqual(["a", "b"]);
+    // An entry put back unsigned stays unsigned: null says nobody, where no `by` is signed by the caller.
+    expect((await run(record, db, { id: "in-1", list: "decisions", action: "add", entry: { key: "d", text: "D", at: 9, by: null } })).entry).toEqual({ key: "d", text: "D", at: 9 });
+  });
+
+  test("a stored source follows the address rules the text reader follows", async () => {
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "add", entry: { kind: "link", ref: "javascript:alert(1)" } })).rejects.toThrow("A link is an http or https address");
+    await expect(run(record, db, { id: "in-1", list: "decisions", action: "add", entry: { text: "D", source: { kind: "link", ref: "/settings" } } })).rejects.toThrow("A link is an http or https address");
+    expect((await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { kind: "call", ref: "CL-42#14" } })).entry).toEqual({ kind: "call", ref: "cl-42:14" });
+    expect((await db.get((await run(get, db, { id: "in-1" }))._id)).sources).toHaveLength(1);
+  });
+
   test("each list holds its limit and no more", async () => {
     const db = fixtures();
     const made = await run(create, db, { ...inTeam, title: "Reach 1k teams" });
@@ -602,8 +648,11 @@ describe("initiatives: the intent record (I5)", () => {
     const say = (entries: string[], observed_at: number) => run(report, db, { id: "in-1", entries, source: "https://x.ai/dash", observed_at });
     await say(["weekly_active_teams=380"], 2000);
     await say(["weekly_active_teams=412", "paying_teams=9"], 3000);
-    // An earlier observation lands in its place; a second report for one moment replaces the first.
-    await say(["weekly_active_teams=350"], 1000);
+    // An earlier observation lands in its place and never rewinds the current
+    // number: the scoreboard is the latest of the history, whatever was reported last.
+    const backfilled = await say(["weekly_active_teams=350"], 1000);
+    expect(backfilled.row.scoreboard.weekly_active_teams).toEqual({ value: "412", observed_at: 3000, source: "https://x.ai/dash" });
+    // A second report for one moment replaces the first.
     const r = await say(["weekly_active_teams=415"], 3000);
     expect(r.row.score_history.weekly_active_teams.map((s: any) => [s.value, s.observed_at])).toEqual([["350", 1000], ["380", 2000], ["415", 3000]]);
     expect(r.row.score_history.paying_teams).toEqual([{ value: "9", observed_at: 3000, source: "https://x.ai/dash" }]);
@@ -620,6 +669,14 @@ describe("initiatives: the intent record (I5)", () => {
 
     // A metric that goes takes its history; the one that stays keeps it.
     await say(["weekly_active_teams=420"], 5000);
+    // A renamed metric keeps its number and its history under the key its new name reads as.
+    const renamed = await run(update, db, { id: "in-1", metrics: [{ name: "Weekly active teems", target: "1,000" }, { key: "paying_teams", name: "Paying teams", target: "40" }] });
+    expect(renamed.row.metrics.map((m: any) => m.key)).toEqual(["weekly_active_teems", "paying_teams"]);
+    expect(renamed.row.scoreboard.weekly_active_teems.value).toBe("420");
+    expect(renamed.row.score_history.weekly_active_teems.map((s: any) => s.value)).toEqual(["415", "420"]);
+    expect(Object.keys(renamed.row.score_history).sort()).toEqual(["paying_teams", "weekly_active_teems"]);
+    await run(update, db, { id: "in-1", metrics: [{ name: "Weekly active teams", target: "1,000" }, { name: "Paying teams", target: "40" }] });
+    expect((await db.get(made.id)).score_history.weekly_active_teams).toHaveLength(2);
     await run(update, db, { id: "in-1", metrics: [{ name: "Paying teams", target: "50" }] });
     const row = await db.get(made.id);
     expect(Object.keys(row.score_history)).toEqual(["paying_teams"]);

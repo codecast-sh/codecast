@@ -84,6 +84,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./workspace/cli.js").then((m) => m.registerWorkspaceCommand),
   },
   {
+    token: "land",
+    description: `Find the work every worktree and cloud host holds that main does not, and release finished trees`,
+    load: () => import("./land/cli.js").then((m) => m.registerLandCommand),
+  },
+  {
     token: "dev",
     args: ["[service...]"],
     hasOptions: true,
@@ -250,6 +255,19 @@ Short ids render as live pills wherever codecast shows prose.`,
 --brief is the compact shape a prompt reads. Each metric prints with its goal_ref
 (in-N:key); a project's goal_ref is its short id.`,
     load: () => import("./goalsCommand.js").then((m) => m.registerGoalsCommand),
+  },
+  {
+    token: "expectations",
+    description: `Expectations: how a project should behave, each line with its sources, versioned and changed only through proposals
+
+  cast expectations show [--project <ref>] [--at <version>] [--brief] [--json]
+  cast expectations propose <file|-> [--project <ref>] [--hold]
+  cast expectations apply|drop <xp-N>
+
+--brief is what a judge reads: the active lines with ids under the version a
+finding cites. A proposal that only adds lines with quoted, dated sources
+applies on its own; edits and retirements wait for the project's person.`,
+    load: () => import("./expectationsCommand.js").then((m) => m.registerExpectationsCommand),
   },
   {
     token: "card",

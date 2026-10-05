@@ -183,15 +183,24 @@ export function searchWebTool(deps: WebDeps = {}, searches = { made: 0 }): Tool 
     parameters: Type.Object({ query: Type.String({ description: "What to find out, in plain words." }) }),
     risk: "read",
     source: "web",
-    run: async ({ query }, { signal, charge }) => {
+    run: async ({ query }, { signal, charge, remainingUsd }) => {
+      // The estimate is reserved before the request leaves, so searches running
+      // in parallel see each other's spend, and trued up to the real cost once
+      // the usage is read. It is a cautious estimate, not a bound: search
+      // results are billed as input tokens, so a search that reads more than
+      // the estimate passes the ceiling by the difference (a few cents), and
+      // the wallet settles on the run's real cost.
+      const reserve = SEARCH_ESTIMATE_USD();
+      if (remainingUsd() < reserve) throw new Error("Not enough of this turn's budget is left for a web search");
       if (++searches.made > SEARCH_MAX_PER_TURN) throw new Error(`No more than ${SEARCH_MAX_PER_TURN} web searches in one turn`);
+      charge(reserve);
       // Ends with the turn, and on its own after a minute.
       const abort = new AbortController();
       const timer = setTimeout(() => abort.abort(), SEARCH_TIMEOUT_MS);
       const onAbort = () => abort.abort();
       signal?.addEventListener("abort", onAbort);
-      // Once the request leaves, it may be billed: charge its real cost, or an
-      // estimate when the call ends before its usage is read.
+      // Once the request leaves, it may be billed: the real cost, or the
+      // reserved estimate when the call ends before its usage is read.
       let sent = false;
       let cost: number | undefined;
       let data: any;
@@ -214,10 +223,8 @@ export function searchWebTool(deps: WebDeps = {}, searches = { made: 0 }): Tool 
       } finally {
         clearTimeout(timer);
         signal?.removeEventListener("abort", onAbort);
-        if (sent) {
-          const charged = cost ?? SEARCH_ESTIMATE_USD();
-          if (charged > 0) charge(charged);
-        }
+        const owed = sent ? (cost ?? reserve) : 0;
+        if (owed !== reserve) charge(owed - reserve);
       }
       const used = Number(data?.usage?.server_tool_use?.web_search_requests ?? 0);
       const content: any[] = Array.isArray(data?.content) ? data.content : [];

@@ -49,6 +49,7 @@ import { extractMentionHandles } from "@codecast/shared/chat";
 import { resolveTeamForPath } from "./privacy";
 import { watchUntilFor } from "./lib/lineWatch";
 import { isLineRun } from "@codecast/shared/contracts/changeCard";
+import { cancelCore } from "./workflow_runs";
 import { webBaseUrl } from "./slack";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
@@ -492,8 +493,14 @@ async function liveLineRun(ctx: any, task: any): Promise<any | null> {
   return run && (run.status === "pending" || run.status === "running" || run.status === "paused") && isLineRun(run.node_statuses) ? run : null;
 }
 
+/** The line's own stations that close their cause (line.cast): their close is the run's, not a person's. */
+const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"]);
+
 /** What a status move does after its patch, for every writer: the plan's
- *  progress and the status notice. A move that changes nothing does neither. */
+ *  progress, the status notice, and (LE16) a person's close of a cause
+ *  stopping its live line run, so the person's decision wins. A move that
+ *  changes nothing does none of it. A move with a conversation is a
+ *  session's, never a person's. */
 export async function afterStatusMove(
   ctx: any,
   task: any,
@@ -504,6 +511,10 @@ export async function afterStatusMove(
   if (!next || next === task.status) return;
   if (task.plan_id) await recalcPlanProgress(ctx, task.plan_id, task._id, next);
   await notifyTaskStatus(ctx, actorUserId, task, next, conversationId);
+  if (!conversationId && isTerminalTaskStatus(next)) {
+    const run = await liveLineRun(ctx, task);
+    if (run && !LINE_CLOSING_STATIONS.has(run.current_node_id)) await cancelCore(ctx, run, Date.now(), `Stopped: the cause was ${next === "dropped" ? "dropped" : "closed"} by a person`);
+  }
 }
 
 /**

@@ -31,8 +31,31 @@ if (dryRunGuard && process.env.CODECAST_DIR && process.env.CODECAST_DIR === proc
   process.stderr.write("worker CLI recursion refused\n");
   process.exit(64);
 } else if (!runFastPath(process.argv)) {
-  import("./index.js").catch((err) => {
+  runInteractiveIfClamped().then((ran) => ran || import("./index.js")).catch((err) => {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
   });
+}
+
+/**
+ * Heavy cloud verbs started from an agent's shell re-run themselves at
+ * Interactive priority (interactiveJob.ts), or they starve for tens of
+ * minutes looking hung. A prompt given on stdin travels in a file.
+ */
+async function runInteractiveIfClamped(): Promise<boolean> {
+  const { priorityClamped, runAsInteractiveJob, wantsInteractivePriority } = await import("./interactiveJob.js");
+  if (!wantsInteractivePriority(workerArgs) || !priorityClamped()) return false;
+  const { selfExecInfo } = await import("./selfExec.js");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  let stdin: string | undefined;
+  if (!process.stdin.isTTY && workerArgs.includes("-")) {
+    stdin = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-stdin-")), "in");
+    fs.writeFileSync(stdin, fs.readFileSync(0));
+  }
+  const self = selfExecInfo(...workerArgs);
+  const code = await runAsInteractiveJob([self.executablePath, ...self.args], { stdin });
+  if (stdin) fs.rmSync(path.dirname(stdin), { recursive: true, force: true });
+  process.exit(code);
 }

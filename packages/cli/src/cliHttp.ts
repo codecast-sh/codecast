@@ -27,6 +27,18 @@ export interface CliFetchOptions {
 export const DEFAULT_CLI_TIMEOUT_MS = 45_000;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/**
+ * A Convex write that lost an optimistic-concurrency race on every server
+ * retry. Nothing was applied, so even a create can be sent again. A busy
+ * account's message traffic keeps its sync head hot, and a spawn's insert
+ * failed on it after six minutes of host preparation (2026-10-05).
+ */
+export function isWriteConflict(err: unknown): boolean {
+  const text = err instanceof Error ? err.message : String(err);
+  return /OptimisticConcurrencyControlFailure|changed while this mutation was being run/.test(text);
+}
+const WRITE_CONFLICT_RETRIES = 5;
 const backoffMs = (attempt: number) => 400 * (attempt + 1);
 
 function isTimeoutError(err: unknown): boolean {
@@ -56,7 +68,14 @@ export async function cliFetch(
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      let response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      // A lost write race applied nothing: send it again, whatever the request.
+      for (let conflict = 0; !response.ok && conflict < WRITE_CONFLICT_RETRIES && isWriteConflict(await response.clone().text().catch(() => "")); conflict++) {
+        await response.body?.cancel().catch(() => {});
+        notifyRetry(attempt, "write conflict");
+        await delay(500 * 2 ** conflict);
+        response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+      }
       // Retry server-side faults (overloaded/contended backend), not 4xx.
       if (response.status >= 500 && attempt < retries) {
         await response.body?.cancel().catch(() => {});

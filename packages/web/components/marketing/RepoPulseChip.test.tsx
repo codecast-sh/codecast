@@ -28,9 +28,12 @@ describe("RepoPulseChip", () => {
     expect(html).toContain('href="/r/codecast-sh/codecast/sessions"');
     expect(html).not.toContain("github.com");
   });
-  test("before the read answers it is the octocat alone", () => {
+  test("before the read answers it shows the octocat alone, holding its width with a hidden stand-in", () => {
     const html = renderToStaticMarkup(<RepoPulseChip />);
-    expect(html.replace(/<[^>]+>/g, "")).toBe("");
+    const shown = html.replace(/<span class="flex opacity-0" aria-hidden="true">.*<\/span><\/a>$/, "</a>");
+    expect(shown.replace(/<[^>]+>/g, "")).toBe("");
+    expect(html).toContain('aria-hidden="true"');
+    expect(html).toContain("agents now");
   });
   test("with an answer it shows stars and the live count", () => {
     answer = { data: { stargazers_count: 1234, live: 4 } };
