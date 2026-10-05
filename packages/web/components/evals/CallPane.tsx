@@ -8,7 +8,7 @@ import { Check, Copy, GitCompare } from "lucide-react";
 import type { CallDetail, TokenUsage } from "@codecast/shared/contracts/evalsApi";
 import { PromptDiff } from "./parts";
 import { usd } from "./format";
-import { useCopy } from "./useCopy";
+import { useCopy } from "./host";
 
 export function Caret() {
   return (

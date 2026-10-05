@@ -4,16 +4,9 @@
 // `#gate-no-leak`), so a link lands exactly there.
 
 import { useCallback, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import { EmptyState } from "../../EmptyState";
-import { useRepoLocation } from "../../repo/useRepoFamily";
-import { landOn } from "../../../hooks/useDiffAddress";
-import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useTabActive } from "../../../hooks/usePagePresence";
-import { useShortcutAction, useShortcutContext } from "../../../shortcuts";
-import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { useEvalsStore } from "../../../store/evalsStore";
+import { useEvalsChanges, useEvalsHealth, useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
+import { useEvalsHost } from "../host";
 import { RunView } from "../RunView";
 import { runTabs, seedNeighbours, tabOfHash, type RunTab } from "../runModel";
 
@@ -21,14 +14,16 @@ import { runTabs, seedNeighbours, tabOfHash, type RunTab } from "../runModel";
 const LAND_MARGIN = 52;
 
 export function RunPage({ view }: { view: Extract<EvalsView, { view: "run" }> }) {
-  const router = useRouter();
-  const loc = useRepoLocation();
+  const host = useEvalsHost();
+  const { EmptyState } = host.ui;
+  const navigate = host.useNavigate();
+  const hash = host.useHash();
   const rootRef = useRef<HTMLDivElement>(null);
   const run = useEvalsResource("GET /run/:id", { params: { id: view.runId } });
   const data = run.data?.row.id === view.runId ? run.data : null;
   const freezeId = data?.row.freezeId ?? null;
   const freeze = useEvalsResource("GET /freeze/:id", freezeId ? { params: { id: freezeId } } : null);
-  const evalsHome = useEvalsStore((s) => s.health?.evalsHome ?? null);
+  const evalsHome = useEvalsHealth().health?.evalsHome ?? null;
 
   // UI state that belongs to one run: a different run starts clean.
   const [ui, setUi] = useState<{ run: string; file: string | null; picking: boolean; overlay: boolean }>({ run: view.runId, file: null, picking: false, overlay: false });
@@ -37,19 +32,17 @@ export function RunPage({ view }: { view: Extract<EvalsView, { view: "run" }> })
   const file = useEvalsResource("GET /run/:id/file", local.file ? { params: { id: view.runId }, query: { path: local.file } } : null);
 
   const tabs = data ? runTabs(data) : [];
-  const { tab, target } = tabOfHash(loc.hash, tabs);
+  const { tab, target } = tabOfHash(hash, tabs);
   const base = evalsHref.run(view.runId);
-  const setHash = useCallback((h: string | null) => router.replace(h ? `${base}#${h}` : base, { scroll: false }), [router, base]);
+  const setHash = useCallback((h: string | null) => navigate(h ? `${base}#${h}` : base, { replace: true }), [navigate, base]);
 
   // Land on the gate or check the address names, once its row is drawn.
-  useWatchEffect(() => {
-    if (!target || !data) return;
-    return landOn(
-      () => rootRef.current?.closest<HTMLElement>(".ev-body") ?? rootRef.current,
-      (root) => root.querySelector<HTMLElement>(`[id="${CSS.escape(target)}"]`),
-      () => LAND_MARGIN,
-    );
-  }, [target, !!data]);
+  host.useLandOn(
+    target && data ? target : null,
+    () => rootRef.current?.closest<HTMLElement>(".ev-body") ?? rootRef.current,
+    (root, id) => root.querySelector<HTMLElement>(`[id="${CSS.escape(id)}"]`),
+    LAND_MARGIN,
+  );
 
   // A rep still being written fills in as it lands.
   const landing = !!data && data.row.status === "unscored" && !data.logTail;
@@ -57,23 +50,23 @@ export function RunPage({ view }: { view: Extract<EvalsView, { view: "run" }> })
     if (changes.runs.some((r) => r.id === view.runId)) run.reload();
   });
 
-  const active = useTabActive() && !!data;
-  useShortcutContext("evalsRun", active);
+  const active = host.useActive() && !!data;
   const go = (id: string | null | undefined) => {
-    if (!active || !id) return false;
-    router.push(evalsHref.run(id));
+    if (!id) return false;
+    navigate(evalsHref.run(id));
     return true;
   };
   const seeds = data ? seedNeighbours(data.row, data.siblings) : null;
-  useShortcutAction("evalsRun.nextSeed", () => go(seeds?.next));
-  useShortcutAction("evalsRun.prevSeed", () => go(seeds?.prev));
-  useShortcutAction("evalsRun.prevBatch", () => go(data?.adjacent.previous));
-  useShortcutAction("evalsRun.nextBatch", () => go(data?.adjacent.next));
-  useShortcutAction("evalsRun.compare", () => {
-    if (!active) return false;
-    patch({ picking: !local.picking });
-    return true;
-  });
+  host.useShortcuts(
+    {
+      "evalsRun.nextSeed": { keys: "j", label: "Next seed of this freeze in the batch", run: () => go(seeds?.next) },
+      "evalsRun.prevSeed": { keys: "k", label: "Previous seed of this freeze in the batch", run: () => go(seeds?.prev) },
+      "evalsRun.prevBatch": { keys: "[", label: "The same freeze in the previous batch", run: () => go(data?.adjacent.previous) },
+      "evalsRun.nextBatch": { keys: "]", label: "The same freeze in the next batch", run: () => go(data?.adjacent.next) },
+      "evalsRun.compare": { keys: "c", label: "Pick a second rep to compare with", run: () => (patch({ picking: !local.picking }), true) },
+    },
+    active,
+  );
 
   if (!data) {
     if (run.status === 404) {
@@ -81,7 +74,7 @@ export function RunPage({ view }: { view: Extract<EvalsView, { view: "run" }> })
     }
     if (run.error) return <EmptyState title="This run could not be read" description={run.error} />;
     return (
-      <div className="ev-page text-[12px] ev-quiet" data-evals-page="run" data-evals-loading>
+      <div className="ev-page ev-note" data-evals-page="run" data-evals-loading>
         Reading the run folder...
       </div>
     );

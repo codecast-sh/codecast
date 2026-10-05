@@ -47,4 +47,19 @@ describe("the voice window's float", () => {
     const float = src.slice(src.indexOf("<FloatingFaceRow"), src.indexOf("</FloatingFaceRow>"));
     expect(float).toContain("docks: floating.floating");
   });
+
+  test("expand from any window is the float's own Expand, and it raises the stage", () => {
+    // The call card's expand reaches the host as a command. It runs openCall,
+    // so a call this window does not hold is taken over the same way, and it
+    // bumps the raise: expanding a stage already open behind the app changed
+    // no state, so nothing moved and the button read as dead (2026-10-05).
+    expect(src).toContain("onHostExpand(() => openCallRef.current())");
+    const open = src.slice(src.indexOf("const openCall"), src.indexOf("const ringIn"));
+    expect(open).toContain("setRaised((n) => n + 1)");
+    expect(src).toMatch(/if \(raised && view === "panel"\) void showCallPanel\(\);\n  \}, \[view, raised\]\);/);
+  });
+
+  test("the stage has one way back, shrink", () => {
+    expect(src).toContain("<CallStage panel onShrink={shrink} />");
+  });
 });

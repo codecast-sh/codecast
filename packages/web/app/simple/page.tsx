@@ -8,8 +8,9 @@ import { useInboxStore } from "../../store/inboxStore";
 import { ApprovalCard } from "../../components/simple/ApprovalCard";
 import { Composer } from "../../components/simple/Composer";
 import { ConversationRow } from "../../components/simple/ConversationRow";
-import { HOME_APPROVALS, HOME_IDEAS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeView, routineLastRun, routineSchedule, runsToday } from "../../components/simple/lane";
+import { HOME_APPROVALS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeIdeas, homeView, routineLastRun, routineSchedule, runsToday } from "../../components/simple/lane";
 import { useLaneData, useLaneRoutines } from "../../components/simple/useLane";
+import { useLaneGoogleAbilities } from "../../components/simple/useLaneGoogle";
 import { useStartConversation } from "../../components/simple/startConversation";
 import { taskDisplayTitle } from "../../components/triggerTasks";
 
@@ -21,6 +22,7 @@ export default function SimpleHome() {
   const bands = useMemo(() => homeBands(conversations, approvalCounts, now), [conversations, approvalCounts, now]);
   const today = useMemo(() => routines.filter((r) => runsToday(r, now)), [routines, now]);
   const start = useStartConversation();
+  const google = useLaneGoogleAbilities();
   const navigate = useNavigate();
   const [seed, setSeed] = useState<{ text: string; at: number } | null>(null);
   const [allDone, setAllDone] = useState(false);
@@ -42,9 +44,9 @@ export default function SimpleHome() {
           seed={seed}
           onSend={(text) => navigate(conversationPath(start(text)))}
         />
-        {nothingYet ? (
+        {nothingYet && google.known ? (
           <div className="sl-ideas">
-            {HOME_IDEAS.map((idea) => (
+            {homeIdeas(google.can).map((idea) => (
               <button key={idea} type="button" className="sl-idea" onClick={() => setSeed({ text: idea, at: Date.now() })}>
                 {idea}
               </button>

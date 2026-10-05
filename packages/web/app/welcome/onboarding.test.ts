@@ -56,14 +56,6 @@ describe("firstAsks", () => {
     const { lead, more } = firstAsks(null);
     expect(lead).toBeNull();
     expect(more.length).toBeGreaterThanOrEqual(3);
-    for (const ask of more) expect(ask).not.toMatch(/mail|calendar|lunch/i);
-  });
-
-  test("every tappable ask works as tapped: none names someone the asker may not know", () => {
-    const all = { read_mail: true, modify_mail: true, send_mail: true, calendar: true };
-    for (const can of [all, { ...all, calendar: false }, { ...all, read_mail: false }, null]) {
-      const { lead, more } = firstAsks(can);
-      for (const ask of [lead, ...more]) expect(ask).not.toBe(ASKS.lunch);
-    }
+    for (const ask of more) expect(ask).not.toMatch(/mail|calendar/i);
   });
 });

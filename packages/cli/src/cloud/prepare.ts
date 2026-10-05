@@ -249,12 +249,14 @@ async function mirrorProjectContext(
   localGitRoot: string,
   targetRoot: string,
   log: Progress,
-  opts: { cloudId?: string; previousAddress?: string } = {},
+  opts: { cloudId?: string; previousAddress?: string; mirroredAlready?: boolean } = {},
 ): Promise<void> {
   if (!isCloudMirrorEnabled(readLocalConfig())) return;
   const { registerProjectContext } = await import("./mirror/projectRefresh.js");
-  await registerProjectContext(host, localGitRoot, targetRoot, { hostId: opts.cloudId, previousAddress: opts.previousAddress });
-  await mirrorForPrepare(host, opts.cloudId ?? host.address, log, { localGitRoot });
+  const changed = await registerProjectContext(host, localGitRoot, targetRoot, { hostId: opts.cloudId, previousAddress: opts.previousAddress });
+  // An already registered target was in the push readyHostHome just made; a
+  // second full collect and sync of the home only repeats it.
+  if (changed || !opts.mirroredAlready) await mirrorForPrepare(host, opts.cloudId ?? host.address, log, { localGitRoot });
 }
 
 // ---------------------------------------------------------------------------
@@ -631,7 +633,7 @@ export async function prepareCloudHost(opts: PrepareCloudHostOptions): Promise<P
   const log = opts.onProgress ?? (() => {});
   const prepared = await wakeCloudHost(opts);
   refreshCloudCheckout(prepared, { moveHead: false }, log);
-  await mirrorProjectContext(prepared.host, opts.repoRoot, prepared.repoPath, log, { cloudId: prepared.cloud.id, previousAddress: prepared.previousAddress });
+  await mirrorProjectContext(prepared.host, opts.repoRoot, prepared.repoPath, log, { cloudId: prepared.cloud.id, previousAddress: prepared.previousAddress, mirroredAlready: true });
   return prepared;
 }
 

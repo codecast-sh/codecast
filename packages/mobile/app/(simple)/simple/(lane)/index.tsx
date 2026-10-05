@@ -8,8 +8,9 @@ import { Text } from '@/components/Themed';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { taskDisplayTitle } from '@codecast/web/components/triggerTasks';
-import { HOME_APPROVALS, HOME_IDEAS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeView, routineLastRun, routineSchedule, runsToday } from '@codecast/web/components/simple/lane';
+import { HOME_APPROVALS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeIdeas, homeView, routineLastRun, routineSchedule, runsToday } from '@codecast/web/components/simple/lane';
 import { useLaneData, useLaneRoutines } from '@codecast/web/components/simple/useLane';
+import { useLaneGoogleAbilities } from '@codecast/web/components/simple/useLaneGoogle';
 import { useStartConversation } from '@codecast/web/components/simple/startConversation';
 import { ApprovalCard } from '@/components/simple/ApprovalCard';
 import { Composer } from '@/components/simple/Composer';
@@ -27,6 +28,7 @@ export default function SimpleHome() {
   const bands = useMemo(() => homeBands(conversations, approvalCounts, now), [conversations, approvalCounts, now]);
   const today = useMemo(() => routines.filter((r) => runsToday(r, now)), [routines, now]);
   const start = useStartConversation();
+  const google = useLaneGoogleAbilities();
   const [seed, setSeed] = useState<{ text: string; at: number } | null>(null);
   const [allDone, setAllDone] = useState(false);
   const clearance = useTabBarClearance();
@@ -51,9 +53,9 @@ export default function SimpleHome() {
           seed={seed}
           onSend={(text) => router.push(conversationPath(start(text)) as never)}
         />
-        {nothingYet ? (
+        {nothingYet && google.known ? (
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 13 }}>
-            {HOME_IDEAS.map((idea) => (
+            {homeIdeas(google.can).map((idea) => (
               <Pressable
                 key={idea}
                 accessibilityRole="button"
@@ -63,8 +65,8 @@ export default function SimpleHome() {
                   paddingHorizontal: 14,
                   borderRadius: 999,
                   borderWidth: 1,
-                  borderColor: pressed ? c.tideWash2 : c.line,
-                  backgroundColor: pressed ? c.tideWash : c.sheet,
+                  borderColor: pressed ? c.lineStrong : c.line,
+                  backgroundColor: pressed ? c.hover : c.sheet,
                   transform: [{ scale: pressed ? 0.97 : 1 }],
                 })}
               >

@@ -19,6 +19,12 @@ describe("the pointer a message carries", () => {
     expect(chartPointerOfText("Here is what I would change.\n\nop-12\n\nTell me what you think.")).toEqual({ proposal: "op-12" });
     expect(chartPointerOfText("I revised op-12 after your note.")).toBeNull();
   });
+  test("op-N#seq on its own line is that change; in a sentence it is prose", () => {
+    expect(chartPointerOfText("One change for you:\n\nop-55#3\n\nSay the word.")).toEqual({ proposal: "op-55", focus: "3" });
+    expect(chartPointerOfText("  op-55#3  ")).toEqual({ proposal: "op-55", focus: "3" });
+    expect(chartPointerOfText("Rejected op-55#2 (make it P2): too high.")).toBeNull();
+    expect(chartPointerOfText("op-55#3\n\nop-55")).toEqual({ proposal: "op-55" });
+  });
   test("a link to the org page carries a focus and a lens, with or without a host", () => {
     expect(chartPointerOfText("Look at the owner: https://codecast.sh/org?proposal=op-12&focus=3")).toEqual({ proposal: "op-12", focus: "3" });
     expect(chartPointerOfText("[the goal](/org?view=chart&proposal=op-12&focus=in-4&lens=goals).")).toEqual({ proposal: "op-12", focus: "in-4", lens: "goals" });

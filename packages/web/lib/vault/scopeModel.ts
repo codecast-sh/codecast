@@ -122,6 +122,31 @@ export function deriveTeamForRoot(
   };
 }
 
+type SessionScopeRow = { git_root?: string | null; project_path?: string | null; team_id?: string | null; is_private?: boolean | null };
+
+/** The sessions cache as scope evidence, identical verdicts collapsed into weighted rows. */
+export function sessionScopeEvidence(sessions: Readonly<Record<string, SessionScopeRow | undefined>>): ScopeEvidence[] {
+  const byVerdict = new Map<string, ScopeEvidence>();
+  for (const id in sessions) {
+    const s = sessions[id];
+    const path = s?.git_root || s?.project_path;
+    if (!path) continue;
+    const teamId = s.team_id ? String(s.team_id) : null;
+    const isPrivate = !!s.is_private;
+    const key = `${path}|${teamId ?? ""}|${isPrivate ? 1 : 0}`;
+    const seen = byVerdict.get(key);
+    if (seen) seen.weight = (seen.weight ?? 1) + 1;
+    else byVerdict.set(key, { path, teamId, isPrivate, weight: 1 });
+  }
+  return [...byVerdict.values()];
+}
+
+/** The team a directory files into per the sessions cache, or null for personal. */
+export function teamIdForPath(path: string, sessions: Readonly<Record<string, SessionScopeRow | undefined>>): string | null {
+  const scope = deriveTeamForRoot(path, sessionScopeEvidence(sessions), {});
+  return scope.kind === "team" ? scope.teamId : null;
+}
+
 export function vaultPresence(opts: { remote: boolean; mirror?: boolean }): VaultPresence {
   if (opts.remote) return "other-machine";
   return opts.mirror ? "both" : "this-machine";

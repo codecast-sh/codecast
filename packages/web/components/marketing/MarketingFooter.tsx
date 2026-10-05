@@ -2,12 +2,13 @@ import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { SITE_LINKS } from "@/lib/siteLinks";
 import { FEATURE_DEEP_DIVES, featureHref } from "@/app/(marketing)/features/catalog";
+import { COMPARISONS, compareHref } from "@/app/(marketing)/compare/comparisons";
 
 export function MarketingFooter() {
   return (
     <footer className="border-t border-[#eee8d5] bg-[#fdf6e3] text-[#657b83]">
       <div className="max-w-6xl mx-auto px-6 py-12">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-8">
           <div>
             <Link href="/" aria-label="Codecast home" className="inline-block mb-4">
               <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
@@ -34,6 +35,14 @@ export function MarketingFooter() {
             <ul className="space-y-2 text-sm">
               {FEATURE_DEEP_DIVES.map((f) => (
                 <li key={f.slug}><Link href={featureHref(f.slug)} className="hover:text-[#073642]">{f.name}</Link></li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <h2 className="font-semibold text-[#002b36] mb-3 text-sm">Compare</h2>
+            <ul className="space-y-2 text-sm">
+              {COMPARISONS.map((c) => (
+                <li key={c.slug}><Link href={compareHref(c.slug)} className="hover:text-[#073642]">vs {c.competitor}</Link></li>
               ))}
             </ul>
           </div>

@@ -7,6 +7,7 @@ import { resolveOrgAsks, type OrgAskNames, isOrgQuietChange } from "@codecast/sh
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk } from "./staffingModel";
+import { refMatches, refResolves } from "./orgLayout";
 
 /** Where one ask stands. `open` = something in it still waits on the person
  *  (a failed row does, the server takes it again); the other two are decided. */
@@ -28,24 +29,38 @@ export type AskView = {
   /** What the fold says it holds: "105 records", "3 changes". */
   foldLabel: string;
   /** The line a touched ask carries under its title, null while untouched:
-   *  "Accepted", "Accepted, 1 skipped", "12 of 105 changes decided" (the
- *  header counts asks, so the card names its unit), "2 changes failed". */
+   *  "Approved", "Approved, 1 rejected", "12 of 105 changes answered" (the
+   *  header counts asks, so the card names its unit), "2 changes failed". */
   verdictLine: string | null;
 };
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** A row a ref can name: a project, a plan, a goal. */
+type NamedRow = { id: string; title: string; short_id?: string };
+
 /** The chart's names for a derived ask's words (S19): an agent by handle, a
- *  project or plan by the id, short id or title a change carries. */
-export function askNames(tree: OrgTree | null | undefined): OrgAskNames | undefined {
-  if (!tree) return undefined;
-  const roles = new Map(tree.roles.map((r) => [r.handle.toLowerCase(), r.name]));
+ *  project or plan by the id, short id or title a change carries. `extra` is
+ *  what a card has in hand beyond the tree: the workspace's projects, plans
+ *  and goals (a project in no role's area, a goal by its `in-N` or title),
+ *  roles the proposal itself creates, and a session's title by its short id. */
+export function askNames(tree: OrgTree | null | undefined, extra?: { projects?: readonly NamedRow[]; plans?: readonly NamedRow[]; goals?: readonly NamedRow[]; roles?: readonly { handle: string; name: string }[]; sessions?: (ref: string) => string | undefined }): OrgAskNames | undefined {
+  if (!tree && !extra) return undefined;
+  const roles = new Map([...(extra?.roles ?? []), ...(tree?.roles ?? [])].map((r) => [r.handle.replace(/^@/, "").toLowerCase(), r.name]));
   const projects = new Map<string, string>(), plans = new Map<string, string>();
-  for (const r of tree.roles) {
+  for (const r of tree?.roles ?? []) {
     for (const x of r.scope_names.projects) for (const k of [x.id, x.short_id, x.title]) if (k) projects.set(k, x.title);
     for (const x of r.scope_names.plans) for (const k of [x.id, x.short_id, x.title]) if (k) plans.set(k, x.title);
   }
-  return { role: (h) => roles.get(h), project: (ref) => projects.get(ref), plan: (ref) => plans.get(ref) };
+  // A project resolves the way the server reads one (refResolves); a plan and a goal by id, short id or title.
+  const named = (rows: readonly NamedRow[] | undefined, ref: string) => rows?.find((row) => refMatches(ref, row))?.title;
+  return {
+    role: (h) => roles.get(h),
+    project: (ref) => (extra?.projects && refResolves(ref, extra.projects)?.title) || projects.get(ref),
+    plan: (ref) => named(extra?.plans, ref) ?? plans.get(ref),
+    ...(extra?.goals ? { initiative: (ref: string) => named(extra.goals, ref) } : {}),
+    ...(extra?.sessions ? { session: extra.sessions } : {}),
+  };
 }
 
 /** The asks of a proposal joined to its rows. A proposal whose change rows
@@ -60,10 +75,10 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
     const decided = changes.length - remaining;
     const state: AskState = remaining > 0 ? "open" : skipped === changes.length ? "skipped" : "accepted";
     const verdictLine =
-      state === "skipped" ? "Skipped"
-      : state === "accepted" ? (skipped > 0 ? `Accepted, ${skipped} skipped` : "Accepted")
-      : failed > 0 ? `${plural(failed, "change", "changes")} failed. Accept tries ${failed === 1 ? "it" : "them"} again`
-      : decided > 0 ? `${decided} of ${changes.length} changes decided`
+      state === "skipped" ? "Rejected"
+      : state === "accepted" ? (skipped > 0 ? `Approved, ${skipped} rejected` : "Approved")
+      : failed > 0 ? `${plural(failed, "change", "changes")} failed. Approve tries ${failed === 1 ? "it" : "them"} again`
+      : decided > 0 ? `${decided} of ${changes.length} changes answered`
       : null;
     const records = changes.every((c) => isSyncChange(c.change));
     // A quiet kind (a limit, S23.2) is not a row in the fold; an ask of quiet
@@ -82,11 +97,12 @@ export function proposalAsks(p: Pick<OrgProposalRow, "asks" | "changes">, names?
  */
 export function asksBarWords(toDecide: number, total: number): { count: string; action: string } {
   return toDecide === 0
-    ? { count: `All ${total} decided`, action: "See them" }
+    ? { count: `All ${total} answered`, action: "See them" }
     : { count: `${toDecide} to decide`, action: "Open them" };
 }
 
-/** The header's count: an ask is decided once nothing in it waits. */
+/** The header's count: an ask is answered once nothing in it waits (a note
+ *  alone leaves it open). */
 export function asksProgress(asks: AskView[]): { decided: number; total: number; remaining: number } {
   const decided = asks.filter((a) => a.state !== "open").length;
   return { decided, total: asks.length, remaining: asks.length - decided };
@@ -160,7 +176,7 @@ export function letterParts(summaryMd: string | null | undefined): { lead: strin
  *  what it does, and that the person decides. */
 export function letterIntro(authorName: string, named: boolean): string {
   const who = named ? `I am your ${authorName}. I look at how the work here is organized and suggest changes.` : "I looked at how the work here is organized, and these are the changes I suggest.";
-  return `${who} You decide each one, and nothing changes until you accept it.`;
+  return `${who} You decide each one, and nothing changes until you approve it.`;
 }
 
 
@@ -173,9 +189,9 @@ export function letterIntro(authorName: string, named: boolean): string {
  * on purpose: every line added to this column is a line a person reads
  * before they find what to press.
  */
-/** "2 of 3 decided", or "loading" while the changes are still on their way. */
+/** "2 of 3 answered", or "loading" while the changes are still on their way. */
 export function asksProgressLine(progress: { decided: number; total: number }, loading: boolean): string {
-  return loading ? "loading" : `${progress.decided} of ${progress.total} decided`;
+  return loading ? "loading" : `${progress.decided} of ${progress.total} answered`;
 }
 
 /** The changes are still on their way: the counts say there are some and none has arrived. */

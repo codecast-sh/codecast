@@ -25,13 +25,14 @@ import { useInboxStore } from "../../store/inboxStore";
 import { MAIL_COMING, assistantPromise, useConnectAvailable } from "../../components/simple/assistantPromise";
 import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
-import { calendarAbility, emailAbility } from "../../components/simple/connectionWords";
+import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
-import { LANE_PATHS, conversationPath, firstAsks, plainConnectError, type GoogleAbilities } from "../../components/simple/lane";
+import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type GoogleAbilities } from "../../components/simple/lane";
 import { laneOf, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
 import { startConversationWith } from "../../components/simple/startConversation";
-import { useLaneFont } from "../../components/simple/useLaneFont";
+import "../../components/simple/laneLook";
+import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneGoogle } from "../../components/simple/useLaneGoogle";
 import { SKIP_PARAM, SKIP_VALUE, stepDirection, welcomeStep, welcomeTrail, type WelcomeStep } from "./onboarding";
 import "../../components/simple/simple.css";
@@ -44,6 +45,8 @@ const SEND_OFF_MS = 260;
 
 const STEP_NAMES: Record<WelcomeStep, string> = { signin: "Sign in", connect: "Connect", start: "Start" };
 const GOOGLE = oauthProviderButton("google");
+/** Connect says what Connections says, so the two screens never disagree. */
+const CONNECT_WORDS = LANE_COPY.connections;
 const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
 
 /** Whether to offer the connect screen. A backend that cannot answer is
@@ -98,7 +101,7 @@ function useShownStep(target: WelcomeStep | null, hold: boolean): WelcomeStep | 
 }
 
 export default function Welcome() {
-  useLaneFont();
+  useLaneDocumentTitle();
   const signedIn = useLocalAuth();
   return (
     <div data-simple-lane data-welcome>
@@ -249,12 +252,12 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
       <h1 id="wl-connect-title" className="sl-page-title sl-rise" style={rise(1)}>Bring in your mail and calendar</h1>
       <p className="sl-lede sl-rise" style={rise(2)}>One step with Google, and I can start on your week right away.</p>
       <div className="sl-card wl-services sl-rise" style={rise(3)}>
-        <Service icon={<Mail size={19} />} title="Email">{emailAbility(null)}</Service>
-        <Service icon={<CalendarDays size={19} />} title="Calendar">{calendarAbility(null)}</Service>
+        <Service icon={<Mail size={19} />} title={CONNECT_WORDS.email}>{emailAbility(null)}</Service>
+        <Service icon={<CalendarDays size={19} />} title={CONNECT_WORDS.calendar}>{calendarAbility(null)}</Service>
       </div>
       <p className="wl-promise sl-rise" style={rise(4)}>
         <ShieldCheck size={18} aria-hidden />
-        <span>I ask before I send an email or change your calendar. Nothing goes out without your yes.</span>
+        <span>{ASK_FIRST}</span>
       </p>
       {error ? (
         <p className="sl-callout is-sun wl-error" role="alert">{error}</p>
@@ -278,7 +281,7 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
               }}
             >
               {GOOGLE ? <span className="wl-g" aria-hidden><ProviderGlyph button={GOOGLE} className="wl-g-mark" /></span> : null}
-              Connect Google
+              {CONNECT_WORDS.connect}
             </button>
             <button type="button" className="sl-btn is-no" onClick={onSkip}>Not now</button>
           </>
@@ -286,12 +289,10 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
       </div>
       {opened && !connected && !error ? (
         <p className="wl-aside sl-rise" role="status">
-          {isDesktopShell()
-            ? "Finish in your browser. This page moves on by itself once you're done."
-            : "Taking you to Google. You'll come straight back here."}
+          {isDesktopShell() ? CONNECT_WORDS.browserNote : "Taking you to Google. You'll come straight back here."}
         </p>
       ) : (
-        <p className="wl-aside sl-rise" style={rise(6)}>You can disconnect any time from Connections.</p>
+        <p className="wl-aside sl-rise" style={rise(6)}>{disconnectNote(false, undefined, [])}</p>
       )}
     </section>
   );

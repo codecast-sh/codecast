@@ -55,11 +55,11 @@
   transition: width 420ms var(--sl-ease), background-color 420ms var(--sl-ease);
 }
 
-.wl-rail li.is-done::before { background: color-mix(in srgb, var(--sl-tide) 55%, transparent); }
+.wl-rail li.is-done::before { background: color-mix(in srgb, var(--sl-working) 55%, transparent); }
 
 .wl-rail li.is-here::before {
   width: 2.2rem;
-  background: var(--sl-tide);
+  background: var(--sl-working);
   transform-origin: left center;
   animation: wl-fill 700ms var(--sl-ease) 120ms both;
 }
@@ -93,6 +93,8 @@
 
 .wl-screen .sl-hello { margin-top: 0; }
 .wl-screen .sl-page-title { margin-top: 0; }
+/* No line of a promise, a note or an ask ends on one stranded word at phone width. */
+.wl-screen :is(p, .wl-ask) { text-wrap: pretty; }
 
 .wl-wait {
   margin: 0;
@@ -116,7 +118,7 @@
   position: absolute;
   inset: -0.2rem;
   border-radius: 999px;
-  border: 2px solid color-mix(in srgb, var(--sl-tide) 55%, transparent);
+  border: 2px solid color-mix(in srgb, var(--sl-working) 55%, transparent);
   opacity: 0;
 }
 
@@ -126,8 +128,8 @@
   position: absolute;
   inset: 0;
   border-radius: 999px;
-  background: conic-gradient(from 210deg, var(--sl-tide), color-mix(in srgb, var(--sl-tide) 40%, var(--sl-sun)), var(--sl-sun), var(--sl-tide));
-  box-shadow: 0 16px 36px -16px color-mix(in srgb, var(--sl-tide) 75%, transparent);
+  background: conic-gradient(from 210deg, var(--sl-accent), color-mix(in srgb, var(--sl-accent) 45%, var(--sl-star)), var(--sl-star), var(--sl-accent));
+  box-shadow: 0 16px 36px -16px color-mix(in srgb, var(--sl-accent) 60%, transparent);
   animation: wl-spin 18s linear infinite, sl-pop 520ms var(--sl-ease) both;
 }
 
@@ -144,7 +146,7 @@
 
 /* Something to start: the ring thickens and glows. */
 .wl-orb[data-mood="start"] .wl-orb-core {
-  box-shadow: 0 0 0 7px var(--sl-tide-wash), 0 18px 44px -14px color-mix(in srgb, var(--sl-tide) 85%, transparent);
+  box-shadow: 0 0 0 7px var(--sl-accent-wash), 0 18px 44px -14px color-mix(in srgb, var(--sl-accent) 70%, transparent);
 }
 .wl-orb[data-mood="start"] .wl-orb-core::after { inset: 1.25rem; }
 
@@ -162,7 +164,7 @@
   background: var(--sl-sheet);
   border: 1px solid var(--sl-line-strong);
   box-shadow: var(--sl-shadow);
-  color: var(--sl-tide-ink);
+  color: var(--sl-mark);
   opacity: 0;
   transform: scale(0.3);
   transition: background-color 360ms var(--sl-ease), color 360ms var(--sl-ease), border-color 360ms var(--sl-ease);
@@ -179,9 +181,9 @@
 }
 
 .wl-orb[data-connected] .wl-orb-moon {
-  background: var(--sl-tide-solid);
-  border-color: var(--sl-tide-solid);
-  color: var(--sl-on-tide);
+  background: var(--sl-ok);
+  border-color: var(--sl-ok);
+  color: var(--sl-on-solid);
 }
 
 /* ── Sign in ─────────────────────────────────────────────────────────── */
@@ -202,7 +204,7 @@
   min-height: 3.25rem;
   padding: 0 1.1rem;
   border: 1px solid var(--sl-line-strong);
-  border-radius: 999px;
+  border-radius: var(--sl-radius-sm);
   background: var(--sl-sheet);
   color: var(--sl-ink);
   font: inherit;
@@ -213,7 +215,7 @@
   transition: transform 180ms var(--sl-ease), box-shadow 180ms var(--sl-ease), border-color 180ms var(--sl-ease), background-color 180ms var(--sl-ease);
 }
 
-.wl-auth:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sl-shadow-lift); border-color: color-mix(in srgb, var(--sl-tide) 40%, transparent); }
+.wl-auth:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sl-shadow-lift); border-color: color-mix(in srgb, var(--sl-soft) 40%, transparent); }
 .wl-auth:active:not(:disabled) { transform: scale(0.98); }
 .wl-auth:disabled { opacity: 0.5; cursor: default; }
 
@@ -254,13 +256,13 @@
   padding: 0;
   border: 0;
   background: none;
-  color: var(--sl-tide-ink);
+  color: var(--sl-mark);
   font: inherit;
   font-weight: 560;
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
-  text-decoration-color: color-mix(in srgb, var(--sl-tide) 45%, transparent);
+  text-decoration-color: var(--sl-accent-line);
   cursor: pointer;
 }
 
@@ -284,7 +286,7 @@
   line-height: 1.45;
 }
 
-.wl-promise svg { flex: none; margin-top: 0.1rem; color: var(--sl-tide-ink); }
+.wl-promise svg { flex: none; margin-top: 0.1rem; color: var(--sl-mark); }
 
 .wl-error { margin: 0 0 1rem; }
 
@@ -316,7 +318,7 @@
   margin: 0;
   padding: 0.45rem 1.1rem 0.45rem 0.45rem;
   border-radius: 999px;
-  background: var(--sl-tide-wash);
+  background: color-mix(in srgb, var(--sl-ok) 12%, transparent);
   color: var(--sl-ink);
   font-size: 0.95rem;
   animation: sl-pop 360ms var(--sl-ease) both;
@@ -330,8 +332,8 @@
   width: 2.1rem;
   height: 2.1rem;
   border-radius: 999px;
-  background: var(--sl-tide-solid);
-  color: var(--sl-on-tide);
+  background: var(--sl-ok);
+  color: var(--sl-on-solid);
   animation: wl-tick 560ms cubic-bezier(0.34, 1.5, 0.5, 1) 80ms both;
 }
 
@@ -345,9 +347,9 @@
   width: 100%;
   padding: 1.25rem 1.3rem 1.15rem;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--sl-tide) 38%, transparent);
-  border-radius: 24px;
-  background: linear-gradient(155deg, var(--sl-tide-wash-2), var(--sl-sheet) 62%);
+  border: 1px solid color-mix(in srgb, var(--sl-soft) 38%, transparent);
+  border-radius: var(--sl-radius);
+  background: linear-gradient(155deg, var(--sl-wash), var(--sl-sheet) 62%);
   box-shadow: var(--sl-shadow-lift);
   color: var(--sl-ink);
   font: inherit;
@@ -362,12 +364,12 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--sol-card) 55%, transparent) 50%, transparent 65%);
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--sl-sheet) 55%, transparent) 50%, transparent 65%);
   transform: translateX(-110%);
   animation: wl-sheen 1.3s var(--sl-ease) 700ms both;
 }
 
-.wl-lead:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--sl-tide) 60%, transparent); }
+.wl-lead:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--sl-soft) 60%, transparent); }
 .wl-lead:active { transform: scale(0.985); }
 
 .wl-lead-text {
@@ -378,8 +380,8 @@
   text-wrap: balance;
 }
 
-.wl-lead-text::before { content: "\201C"; color: var(--sl-tide-ink); }
-.wl-lead-text::after { content: "\201D"; color: var(--sl-tide-ink); }
+.wl-lead-text::before { content: "\201C"; color: var(--sl-faint); }
+.wl-lead-text::after { content: "\201D"; color: var(--sl-faint); }
 
 .wl-lead-go {
   display: inline-flex;
@@ -389,8 +391,8 @@
   min-height: 2.5rem;
   padding: 0 1rem;
   border-radius: 999px;
-  background: var(--sl-tide-solid);
-  color: var(--sl-on-tide);
+  background: var(--sl-accent);
+  color: var(--sl-on-solid);
   font-size: 0.95rem;
   font-weight: 600;
 }
@@ -412,7 +414,7 @@
   width: 100%;
   padding: 0.85rem 0.95rem 0.85rem 1.05rem;
   border: 1px solid var(--sl-line);
-  border-radius: 16px;
+  border-radius: var(--sl-radius);
   background: color-mix(in srgb, var(--sl-sheet) 80%, transparent);
   color: var(--sl-ink-2);
   font: inherit;
@@ -424,8 +426,8 @@
 }
 
 .wl-ask svg { flex: none; color: var(--sl-faint); transition: transform 180ms var(--sl-ease), color 180ms var(--sl-ease); }
-.wl-ask:hover { background: var(--sl-tide-wash); border-color: color-mix(in srgb, var(--sl-tide) 35%, transparent); color: var(--sl-ink); }
-.wl-ask:hover svg { color: var(--sl-tide-ink); transform: translate(2px, -2px); }
+.wl-ask:hover { background: var(--sl-wash); border-color: color-mix(in srgb, var(--sl-soft) 35%, transparent); color: var(--sl-ink); }
+.wl-ask:hover svg { color: var(--sl-mark); transform: translate(2px, -2px); }
 .wl-ask:active { transform: scale(0.985); }
 
 .wl-own { margin-top: 1.25rem; }

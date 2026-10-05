@@ -6,22 +6,19 @@
 // said this and where. Every section edits in place: the row moves in the
 // store in the same tick (`updateInitiative` for the two written fields,
 // `recordInitiativeEntry` for one entry of a list, named by its key) and the
-// page paints from the store.
+// page paints from the store. An entry is added, edited, closed and removed
+// from its own row. The record is keyed by its goal, so a draft or an open
+// form never follows the page to another goal.
 import { useCallback, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, Circle, CircleHelp, Flag, Pencil, Plus, Undo2, X, type LucideIcon } from "lucide-react";
-import { INITIATIVE_RECORD_MAX, intentSourceKey, milestoneCounts, nextMilestone, orderedMilestones, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type InitiativeRecordList, type InitiativeRow, type IntentSource } from "@codecast/shared/contracts/initiative";
-import { memberHandle } from "@codecast/shared/chat";
-import { targetDayStamp } from "@codecast/shared/time";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, intentSourceAddress, intentSourceKey, milestoneCounts, nextMilestone, orderedMilestones, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type InitiativeRecordList, type InitiativeRow, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { formatTargetDay, targetDayOf, targetDayPassed, targetDayStamp } from "@codecast/shared/time";
+import { useInboxStore } from "../../store/inboxStore";
 import type { InitiativeRecordOp } from "../../store/initiativeRecord";
-import { useOrgRoles } from "../../hooks/useOrgRoles";
-import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
-import { memberDisplayName, resolveAssigneeInfo } from "../../lib/liveEntities";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 import { cn } from "../../lib/utils";
-import { AssigneeFace } from "../identity/AssigneeFace";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
-import { SourceLink, shortDate } from "./InitiativeAtoms";
+import { ByChip, SourceLink, shortDate } from "./InitiativeAtoms";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const FIELD = "h-7 min-w-0 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-magenta/60";
@@ -44,23 +41,32 @@ export function RecordSection({ name, label, count, action, children }: { name: 
   );
 }
 
-export function InitiativeRecord({ initiative, now }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number }) {
-  const who = useWho();
+/** `part` splits the record where the goal's numbers go on its page: the
+ *  intent (why, done when) reads before them, the progress (milestones,
+ *  questions, decisions, sources) after. Without it, the whole record. */
+export function InitiativeRecord({ initiative, now, part }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number; part?: "intent" | "progress" }) {
   const record = useCallback((op: InitiativeRecordOp) => useInboxStore.getState().recordInitiativeEntry(initiative._id, op), [initiative._id]);
   return (
-    <div className="space-y-7" data-initiative-record={initiative.short_id || initiative._id}>
-      <Written initiative={initiative} field="why" label="Why it matters" rows={4} markdown placeholder="What changes for the company when this is reached, and what it costs to miss it." empty="Nobody has said why this matters yet." />
-      <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." empty="Nobody has said what done looks like yet." />
-      <Milestones initiative={initiative} now={now} record={record} />
-      <Questions initiative={initiative} now={now} record={record} who={who} />
-      <Decisions initiative={initiative} now={now} record={record} who={who} />
-      <Sources initiative={initiative} now={now} record={record} />
+    <div key={initiative._id} className="space-y-7" data-initiative-record={initiative.short_id || initiative._id} data-initiative-record-part={part}>
+      {part !== "progress" && (
+        <>
+          <Written initiative={initiative} field="why" label="Why it matters" rows={4} markdown placeholder="What changes for the company when this is reached, and what it costs to miss it." empty="Nobody has said why this matters yet." />
+          <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." empty="Nobody has said what done looks like yet." />
+        </>
+      )}
+      {part !== "intent" && (
+        <>
+          <Milestones initiative={initiative} now={now} record={record} />
+          <Questions initiative={initiative} now={now} record={record} />
+          <Decisions initiative={initiative} now={now} record={record} />
+          <Sources initiative={initiative} now={now} record={record} />
+        </>
+      )}
     </div>
   );
 }
 
 type Record1 = (op: InitiativeRecordOp) => void;
-type Who = (by: string | undefined) => ReturnType<typeof resolveAssigneeInfo>;
 type DataProps = { [K in `data-${string}`]?: string };
 
 // ------------------------------------------------------------- small parts
@@ -103,10 +109,10 @@ function FormButtons({ submit, onCancel, onSubmit, disabled }: { submit: string;
 
 type FormField = { name: string; placeholder: string; label: string; type?: "text" | "date"; grow?: boolean };
 
-/** One line of fields that adds an entry: the first is its words and must be
- *  filled; the rest are optional. */
-function EntryForm({ name, fields, submit, onSubmit, onCancel }: { name: string; fields: FormField[]; submit: string; onSubmit: (values: Record<string, string>) => void; onCancel: () => void }) {
-  const [values, setValues] = useState<Record<string, string>>({});
+/** One line of fields that adds an entry, or edits the one `initial` holds:
+ *  the first is its words and must be filled; the rest are optional. */
+function EntryForm({ name, fields, submit, initial, onSubmit, onCancel }: { name: string; fields: FormField[]; submit: string; initial?: Record<string, string>; onSubmit: (values: Record<string, string>) => void; onCancel: () => void }) {
+  const [values, setValues] = useState<Record<string, string>>(initial ?? {});
   const first = (values[fields[0].name] ?? "").trim();
   const save = () => { if (first) onSubmit(Object.fromEntries(fields.map((f) => [f.name, (values[f.name] ?? "").trim()]))); };
   return (
@@ -131,33 +137,36 @@ function EntryForm({ name, fields, submit, onSubmit, onCancel }: { name: string;
   );
 }
 
-/** Who asked, decided or said it: the roster's face when `by` names a person
- *  or a role here (an @handle, or a name), and the words as written when not. */
-function useWho(): Who {
-  const { roles } = useOrgRoles();
-  const roster = useTeamRosterIdentity();
-  const s = useTrackedStore([(st) => st.currentUser?._id]);
-  return useCallback((by) => {
-    const text = (by ?? "").trim();
-    if (!text) return null;
-    const handle = text.startsWith("@") ? text.slice(1).toLowerCase() : null;
-    const name = text.toLowerCase();
-    const person = roster.find((m) => (handle ? memberHandle(m) === handle : memberDisplayName(m, "").toLowerCase() === name));
-    const role = person ? undefined : roles.find((r) => (handle ? r.handle === handle : r.name.toLowerCase() === name));
-    const id = person?._id ?? role?._id;
-    return id ? resolveAssigneeInfo(String(id), undefined, roster as any, s.currentUser as any, roles as any) : null;
-  }, [roles, roster, s.currentUser]);
+/** An entry's own form, in its row's place: Enter saves what changed as one
+ *  edit op, Escape leaves the entry as it was. A day reads through the shared
+ *  pair and clears when emptied; words are never cleared by an edit, so an
+ *  emptied field stays as it was. */
+function EditEntry({ list, entryKey, fields, initial, record, onClose }: { list: Exclude<InitiativeRecordList, "sources">; entryKey: string; fields: FormField[]; initial: Record<string, string>; record: Record1; onClose: () => void }) {
+  return (
+    <EntryForm
+      name={`edit-${list}`}
+      submit="Save"
+      fields={fields}
+      initial={initial}
+      onCancel={onClose}
+      onSubmit={(values) => {
+        const entry: Record<string, unknown> = {};
+        for (const f of fields) {
+          const value = values[f.name];
+          if (value === initial[f.name]) continue;
+          if (f.type !== "date") { if (value) entry[f.name] = value; continue; }
+          const day = value ? targetDayStamp(value) : null;
+          if (!value || day) entry[f.name] = day;
+        }
+        if (Object.keys(entry).length) record({ list, action: "edit", key: entryKey, entry });
+        onClose();
+      }}
+    />
+  );
 }
 
-function ByChip({ by, who }: { by?: string; who: Who }) {
-  if (!by) return null;
-  const info = who(by);
-  return (
-    <span className="inline-flex items-center gap-1 min-w-0" style={{ color: "var(--sol-text-muted)" }} data-initiative-by={info ? "face" : "text"}>
-      {info && <AssigneeFace info={info} size={13} />}
-      <span className="truncate">{info?.name ?? by}</span>
-    </span>
-  );
+function EditAction({ list, onClick }: { list: InitiativeRecordList; onClick: () => void }) {
+  return <RowAction icon={Pencil} label={`Edit this ${INITIATIVE_RECORD_NOUN[list]}`} onClick={onClick} data-initiative-edit-entry="" />;
 }
 
 // ------------------------------------------------------- why and done when
@@ -204,9 +213,15 @@ function Written({ initiative, field, label, rows, markdown, placeholder, empty 
 
 // -------------------------------------------------------------- milestones
 
+const MILESTONE_FIELDS: FormField[] = [{ name: "title", label: "Milestone", placeholder: "Private beta open", grow: true }, { name: "date", label: "Its day", placeholder: "", type: "date" }];
+const QUESTION_FIELDS: FormField[] = [{ name: "text", label: "Question", placeholder: "Do we price per seat?", grow: true }];
+const ANSWER_FIELDS: FormField[] = [{ name: "answer", label: "Answer", placeholder: "What was decided", grow: true }];
+const DECISION_FIELDS: FormField[] = [{ name: "text", label: "Decision", placeholder: "Ship to brokers first", grow: true }];
+const SOURCE_FIELDS: FormField[] = [{ name: "text", label: "Source", placeholder: "ct-12, a link, or the words said", grow: true }, { name: "by", label: "Who said it", placeholder: "Who said it" }];
+
 type MilestoneState = "reached" | "late" | "next" | "ahead";
 const milestoneState = (m: InitiativeMilestone, next: InitiativeMilestone | null, now: number): MilestoneState =>
-  m.done_at ? "reached" : m.date && m.date < now ? "late" : next?.key === m.key ? "next" : "ahead";
+  m.done_at ? "reached" : m.date && targetDayPassed(m.date, now) ? "late" : next?.key === m.key ? "next" : "ahead";
 
 const canAdd = (initiative: InitiativeRow, list: InitiativeRecordList) => (initiative[list]?.length ?? 0) < INITIATIVE_RECORD_MAX[list];
 
@@ -232,7 +247,7 @@ function Milestones({ initiative, now, record }: { initiative: InitiativeRow; no
         <EntryForm
           name="milestones"
           submit="Add"
-          fields={[{ name: "title", label: "Milestone", placeholder: "Private beta open", grow: true }, { name: "date", label: "Its day", placeholder: "", type: "date" }]}
+          fields={MILESTONE_FIELDS}
           onCancel={() => setAdding(false)}
           onSubmit={(v) => { record({ list: "milestones", action: "add", entry: { title: v.title, date: (v.date && targetDayStamp(v.date)) || undefined } }); setAdding(false); }}
         />
@@ -242,8 +257,16 @@ function Milestones({ initiative, now, record }: { initiative: InitiativeRow; no
 }
 
 function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { milestone: InitiativeMilestone; state: MilestoneState; isNext: boolean; last: boolean; now: number; record: Record1 }) {
+  const [editing, setEditing] = useState(false);
   const Icon = state === "reached" ? Check : isNext || state === "late" ? Flag : Circle;
   const tone = state === "late" ? HEALTH_COLOR.off_track : state === "reached" ? "var(--sol-text-dim)" : isNext ? INITIATIVE_ACCENT : "var(--sol-text-dim)";
+  if (editing) {
+    return (
+      <li className="pl-[26px] pb-2" data-initiative-milestone-row={m.key} data-milestone-state={state} data-milestone-next={isNext ? "1" : undefined}>
+        <EditEntry list="milestones" entryKey={m.key} fields={MILESTONE_FIELDS} initial={{ title: m.title, date: targetDayOf(m.date) ?? "" }} record={record} onClose={() => setEditing(false)} />
+      </li>
+    );
+  }
   return (
     <li className="group relative flex items-center gap-2 min-h-[28px] pl-[2px]" data-initiative-milestone-row={m.key} data-milestone-state={state} data-milestone-next={isNext ? "1" : undefined}>
       {/* The rail the steps hang on. */}
@@ -260,10 +283,11 @@ function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { mile
         {state === "reached"
           ? <RowAction icon={Undo2} label="Not reached yet" onClick={() => record({ list: "milestones", action: "edit", key: m.key, entry: { done_at: null } })} data-initiative-milestone-reopen="" />
           : <RowAction icon={Check} label="Mark reached" onClick={() => record({ list: "milestones", action: "close", key: m.key })} data-initiative-milestone-reach="" />}
+        <EditAction list="milestones" onClick={() => setEditing(true)} />
         <RowAction icon={X} label="Remove this milestone" onClick={() => record({ list: "milestones", action: "remove", key: m.key })} data-initiative-remove="" />
       </RowActions>
       <span className="shrink-0 text-[11.5px] tabular-nums whitespace-nowrap text-right" style={{ color: state === "late" ? HEALTH_COLOR.off_track : "var(--sol-text-dim)" }} data-initiative-milestone-date>
-        {m.done_at ? `reached ${shortDate(m.done_at, now)}` : m.date ? shortDate(m.date, now) : ""}
+        {m.done_at ? `reached ${shortDate(m.done_at, now)}` : m.date ? formatTargetDay(m.date, now) : ""}
       </span>
     </li>
   );
@@ -273,7 +297,7 @@ function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { mile
 
 /** What is still undecided, open ones first. An answer closes a question and
  *  it stays on the record, folded away under the open ones. */
-function Questions({ initiative, now, record, who }: { initiative: InitiativeRow; now: number; record: Record1; who: Who }) {
+function Questions({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
   const [adding, setAdding] = useState(false);
   const all = initiative.questions ?? [];
   const open = all.filter((q) => !q.answer);
@@ -281,12 +305,12 @@ function Questions({ initiative, now, record, who }: { initiative: InitiativeRow
   return (
     <RecordSection name="questions" label="Open questions" count={open.length} action={!adding && canAdd(initiative, "questions") ? <Ghost icon={Plus} onClick={() => setAdding(true)} data-initiative-add="questions">Ask</Ghost> : undefined}>
       {open.length === 0 && !adding && <p className={EMPTY} style={{ color: "var(--sol-text-dim)" }}>Nothing is waiting on an answer.</p>}
-      {open.length > 0 && <ul className="space-y-2">{open.map((q) => <OpenQuestion key={q.key} question={q} now={now} record={record} who={who} />)}</ul>}
+      {open.length > 0 && <ul className="space-y-2">{open.map((q) => <OpenQuestion key={q.key} question={q} now={now} record={record} />)}</ul>}
       {adding && (
         <EntryForm
           name="questions"
           submit="Ask"
-          fields={[{ name: "text", label: "Question", placeholder: "Do we price per seat?", grow: true }]}
+          fields={QUESTION_FIELDS}
           onCancel={() => setAdding(false)}
           onSubmit={(v) => { record({ list: "questions", action: "add", entry: { text: v.text } }); setAdding(false); }}
         />
@@ -297,20 +321,7 @@ function Questions({ initiative, now, record, who }: { initiative: InitiativeRow
             <Check className="w-3 h-3" aria-hidden /> {answered.length} answered
           </summary>
           <ul className="mt-2 space-y-2.5">
-            {answered.map((q) => (
-              <li key={q.key} className="group flex items-start gap-2" data-initiative-question={q.key} data-question-state="answered">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{q.text}</p>
-                  <p className="mt-1 pl-2.5 border-l text-[12.5px] leading-snug" style={{ borderColor: HAIRLINE, color: "var(--sol-text)" }} data-initiative-answer>{q.answer}</p>
-                  <div className={cn(META, "mt-1")} style={{ color: "var(--sol-text-dim)" }}>
-                    <ByChip by={q.by} who={who} />
-                    {q.answered_at ? <span className="tabular-nums">answered {shortDate(q.answered_at, now)}</span> : null}
-                    {q.source && <SourceLink source={q.source} now={now} />}
-                  </div>
-                </div>
-                <RowActions><RowAction icon={X} label="Remove this question" onClick={() => record({ list: "questions", action: "remove", key: q.key })} data-initiative-remove="" /></RowActions>
-              </li>
-            ))}
+            {answered.map((q) => <AnsweredQuestion key={q.key} question={q} now={now} record={record} />)}
           </ul>
         </details>
       )}
@@ -318,8 +329,44 @@ function Questions({ initiative, now, record, who }: { initiative: InitiativeRow
   );
 }
 
-function OpenQuestion({ question: q, now, record, who }: { question: InitiativeQuestion; now: number; record: Record1; who: Who }) {
+function AnsweredQuestion({ question: q, now, record }: { question: InitiativeQuestion; now: number; record: Record1 }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <li data-initiative-question={q.key} data-question-state="answered">
+        <EditEntry list="questions" entryKey={q.key} fields={[...QUESTION_FIELDS, ...ANSWER_FIELDS]} initial={{ text: q.text, answer: q.answer ?? "" }} record={record} onClose={() => setEditing(false)} />
+      </li>
+    );
+  }
+  return (
+    <li className="group flex items-start gap-2" data-initiative-question={q.key} data-question-state="answered">
+      <div className="min-w-0 flex-1">
+        <p className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text-muted)" }}>{q.text}</p>
+        <p className="mt-1 pl-2.5 border-l text-[12.5px] leading-snug" style={{ borderColor: HAIRLINE, color: "var(--sol-text)" }} data-initiative-answer>{q.answer}</p>
+        <div className={cn(META, "mt-1")} style={{ color: "var(--sol-text-dim)" }}>
+          <ByChip by={q.by} />
+          {q.answered_at ? <span className="tabular-nums">answered {shortDate(q.answered_at, now)}</span> : null}
+          {q.source && <SourceLink source={q.source} now={now} />}
+        </div>
+      </div>
+      <RowActions>
+        <EditAction list="questions" onClick={() => setEditing(true)} />
+        <RowAction icon={X} label="Remove this question" onClick={() => record({ list: "questions", action: "remove", key: q.key })} data-initiative-remove="" />
+      </RowActions>
+    </li>
+  );
+}
+
+function OpenQuestion({ question: q, now, record }: { question: InitiativeQuestion; now: number; record: Record1 }) {
   const [answering, setAnswering] = useState(false);
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <li className="pl-5" data-initiative-question={q.key} data-question-state="open">
+        <EditEntry list="questions" entryKey={q.key} fields={QUESTION_FIELDS} initial={{ text: q.text }} record={record} onClose={() => setEditing(false)} />
+      </li>
+    );
+  }
   return (
     <li className="group" data-initiative-question={q.key} data-question-state="open">
       <div className="flex items-start gap-2">
@@ -327,7 +374,7 @@ function OpenQuestion({ question: q, now, record, who }: { question: InitiativeQ
         <div className="min-w-0 flex-1">
           <p className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{q.text}</p>
           <div className={cn(META, "mt-0.5")} style={{ color: "var(--sol-text-dim)" }}>
-            <ByChip by={q.by} who={who} />
+            <ByChip by={q.by} />
             <span className="tabular-nums">asked {shortDate(q.at, now)}</span>
             {q.source && <SourceLink source={q.source} now={now} />}
           </div>
@@ -335,6 +382,7 @@ function OpenQuestion({ question: q, now, record, who }: { question: InitiativeQ
         {!answering && (
           <RowActions>
             <Ghost icon={Check} onClick={() => setAnswering(true)} data-initiative-answer-open="">Answer</Ghost>
+            <EditAction list="questions" onClick={() => setEditing(true)} />
             <RowAction icon={X} label="Remove this question" onClick={() => record({ list: "questions", action: "remove", key: q.key })} data-initiative-remove="" />
           </RowActions>
         )}
@@ -344,7 +392,7 @@ function OpenQuestion({ question: q, now, record, who }: { question: InitiativeQ
           <EntryForm
             name="answer"
             submit="Answer"
-            fields={[{ name: "answer", label: "Answer", placeholder: "What was decided", grow: true }]}
+            fields={ANSWER_FIELDS}
             onCancel={() => setAnswering(false)}
             onSubmit={(v) => { record({ list: "questions", action: "close", key: q.key, answer: v.answer }); setAnswering(false); }}
           />
@@ -357,7 +405,7 @@ function OpenQuestion({ question: q, now, record, who }: { question: InitiativeQ
 // --------------------------------------------------------------- decisions
 
 /** What was decided, newest first, each with who decided it, when and where. */
-function Decisions({ initiative, now, record, who }: { initiative: InitiativeRow; now: number; record: Record1; who: Who }) {
+function Decisions({ initiative, now, record }: { initiative: InitiativeRow; now: number; record: Record1 }) {
   const [adding, setAdding] = useState(false);
   const rows = (initiative.decisions ?? []).map((d, i) => ({ d, i })).sort((a, b) => b.d.at - a.d.at || b.i - a.i).map((x) => x.d);
   return (
@@ -368,30 +416,41 @@ function Decisions({ initiative, now, record, who }: { initiative: InitiativeRow
           <EntryForm
             name="decisions"
             submit="Record"
-            fields={[{ name: "text", label: "Decision", placeholder: "Ship to brokers first", grow: true }, { name: "source", label: "Where it was decided", placeholder: "Where: ct-12, a link" }]}
+            fields={[...DECISION_FIELDS, { name: "source", label: "Where it was decided", placeholder: "Where: ct-12, a link" }]}
             onCancel={() => setAdding(false)}
             onSubmit={(v) => { record({ list: "decisions", action: "add", entry: { text: v.text, source: v.source ? { text: v.source } : undefined } }); setAdding(false); }}
           />
         </div>
       )}
-      {rows.length > 0 && <ul className="space-y-2">{rows.map((d) => <DecisionRow key={d.key} decision={d} now={now} record={record} who={who} />)}</ul>}
+      {rows.length > 0 && <ul className="space-y-2">{rows.map((d) => <DecisionRow key={d.key} decision={d} now={now} record={record} />)}</ul>}
     </RecordSection>
   );
 }
 
-function DecisionRow({ decision: d, now, record, who }: { decision: InitiativeDecision; now: number; record: Record1; who: Who }) {
+function DecisionRow({ decision: d, now, record }: { decision: InitiativeDecision; now: number; record: Record1 }) {
+  const [editing, setEditing] = useState(false);
+  if (editing) {
+    return (
+      <li className="pl-5" data-initiative-decision={d.key}>
+        <EditEntry list="decisions" entryKey={d.key} fields={DECISION_FIELDS} initial={{ text: d.text }} record={record} onClose={() => setEditing(false)} />
+      </li>
+    );
+  }
   return (
     <li className="group flex items-start gap-2" data-initiative-decision={d.key}>
       <span className="mt-[7px] w-[5px] h-[5px] rounded-full shrink-0 ml-[3.5px] mr-[3.5px]" style={{ background: "var(--sol-text-dim)" }} aria-hidden />
       <div className="min-w-0 flex-1">
         <p className="text-[12.5px] leading-snug" style={{ color: "var(--sol-text)" }}>{d.text}</p>
         <div className={cn(META, "mt-0.5")} style={{ color: "var(--sol-text-dim)" }}>
-          <ByChip by={d.by} who={who} />
+          <ByChip by={d.by} />
           <span className="tabular-nums">{shortDate(d.at, now)}</span>
           {d.source && <SourceLink source={d.source} now={now} />}
         </div>
       </div>
-      <RowActions><RowAction icon={X} label="Remove this decision" onClick={() => record({ list: "decisions", action: "remove", key: d.key })} data-initiative-remove="" /></RowActions>
+      <RowActions>
+        <EditAction list="decisions" onClick={() => setEditing(true)} />
+        <RowAction icon={X} label="Remove this decision" onClick={() => record({ list: "decisions", action: "remove", key: d.key })} data-initiative-remove="" />
+      </RowActions>
     </li>
   );
 }
@@ -410,7 +469,7 @@ function Sources({ initiative, now, record }: { initiative: InitiativeRow; now: 
         <EntryForm
           name="sources"
           submit="Add"
-          fields={[{ name: "text", label: "Source", placeholder: "ct-12, a link, or the words said", grow: true }, { name: "by", label: "Who said it", placeholder: "Who said it" }]}
+          fields={SOURCE_FIELDS}
           onCancel={() => setAdding(false)}
           onSubmit={(v) => { record({ list: "sources", action: "add", entry: { text: v.text, by: v.by || undefined } }); setAdding(false); }}
         />
@@ -419,15 +478,45 @@ function Sources({ initiative, now, record }: { initiative: InitiativeRow; now: 
   );
 }
 
+/** Who said it, when and where on one line, the way a question and a decision
+ *  say it, with the words as said under it. A note has no address: its words
+ *  are the row. */
 function SourceRow({ source, now, record }: { source: IntentSource; now: number; record: Record1 }) {
+  const [editing, setEditing] = useState(false);
   const key = intentSourceKey(source);
+  if (editing) {
+    // A source is read whole from its text, the way it was added: its address, then the words.
+    const initial = { text: [intentSourceAddress(source), source.quote].filter(Boolean).join(" "), by: source.by ?? "" };
+    return (
+      <li data-initiative-source={key}>
+        <EntryForm
+          name="edit-sources"
+          submit="Save"
+          fields={SOURCE_FIELDS}
+          initial={initial}
+          onCancel={() => setEditing(false)}
+          onSubmit={(v) => { if (v.text !== initial.text || v.by !== initial.by) record({ list: "sources", action: "edit", key, entry: { text: v.text, by: v.by } }); setEditing(false); }}
+        />
+      </li>
+    );
+  }
+  const addressed = source.kind !== "note";
   return (
     <li className="group flex items-start gap-2" data-initiative-source={key}>
       <div className="min-w-0 flex-1 pl-2.5 border-l" style={{ borderColor: HAIRLINE }}>
-        <SourceLink source={source} now={now} />
+        {(addressed || source.by || source.at) && (
+          <div className={META} style={{ color: "var(--sol-text-dim)" }}>
+            <ByChip by={source.by} />
+            {source.at ? <span className="tabular-nums">{shortDate(source.at, now)}</span> : null}
+            {addressed && <SourceLink source={source} now={now} bare />}
+          </div>
+        )}
         {source.quote && <p className="mt-0.5 text-[12.5px] leading-snug" style={{ color: "var(--sol-text-secondary)" }} data-initiative-source-quote>{source.quote}</p>}
       </div>
-      <RowActions><RowAction icon={X} label="Remove this source" onClick={() => record({ list: "sources", action: "remove", key })} data-initiative-remove="" /></RowActions>
+      <RowActions>
+        <EditAction list="sources" onClick={() => setEditing(true)} />
+        <RowAction icon={X} label="Remove this source" onClick={() => record({ list: "sources", action: "remove", key })} data-initiative-remove="" />
+      </RowActions>
     </li>
   );
 }

@@ -6,22 +6,15 @@
 // names any bisect already over this range, and the one holding the lock.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { attributionSearchable, EVALS_BATCH_TOKEN_RE, resolveEvalsBatchRef, type Attribution, type BisectPlan, type BisectPlanRequest, type BisectSummary } from "@codecast/shared/contracts/evalsApi";
-import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { useTabActive } from "../../../hooks/usePagePresence";
-import { formatTimeAgo } from "../../../lib/messageNavigator";
-import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { useEvalsStore } from "../../../store/evalsStore";
-import { usePaneShortcutAction, useShortcutContext } from "../../../shortcuts";
-import { EmptyState } from "../../EmptyState";
+import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
 import { AttributionView, EndpointsBar, type EndpointsValue } from "../AttributionView";
 import { BisectPlanPanel, type PlanSettings } from "../BisectPlanPanel";
 import { bisectsOverRange, bisectSummaryWord, endpointLabel, isBisectLive, canStart } from "../bisectModel";
 import { EvalsLink, VerdictGlyph } from "../parts";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import "../bisect.css";
 import { usd } from "../format";
+import { useEvalsHost } from "../host";
 
 const PRICE_DEBOUNCE_MS = 350;
 
@@ -32,6 +25,7 @@ function usePlan(surface: string, good: string, bad: string, onlyFreeze: string 
   const [plan, setPlan] = useState<BisectPlan | null>(null);
   const [pending, setPending] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { call } = useEvalsClient();
   const seq = useRef(0);
   const seeded = useRef(false);
   /** The settings the plan on screen was priced for, so seeding the defaults costs no second request. */
@@ -60,7 +54,7 @@ function usePlan(surface: string, good: string, bad: string, onlyFreeze: string 
       async () => {
         try {
           // The first plan is the engine's default set (flipped plus two controls), which becomes the freeze list.
-          const p = await useEvalsStore.getState().call("POST /bisect/plan", { body: request(settings, !first) });
+          const p = await call("POST /bisect/plan", { body: request(settings, !first) });
           if (mine !== seq.current) return;
           if (first) {
             seeded.current = true;
@@ -86,13 +80,15 @@ function usePlan(surface: string, good: string, bad: string, onlyFreeze: string 
       first ? 0 : PRICE_DEBOUNCE_MS,
     );
     return () => clearTimeout(t);
-  }, [settings, request, onlyFreeze]);
+  }, [settings, request, onlyFreeze, call]);
 
   return { settings, setSettings, options, plan, pending, error, request };
 }
 
 function PlanSide({ surface, good, bad, onlyFreeze, allCommits, blockedBy }: { surface: string; good: string; bad: string; onlyFreeze: string | null; allCommits: boolean; blockedBy: { id: string; surface: string | null; listed: boolean } | null }) {
-  const router = useRouter();
+  const host = useEvalsHost();
+  const navigate = host.useNavigate();
+  const { call, invalidate } = useEvalsClient();
   const { settings, setSettings, options, plan, pending, error, request } = usePlan(surface, good, bad, onlyFreeze, allCommits);
   const [confirm, setConfirm] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -104,26 +100,33 @@ function PlanSide({ surface, good, bad, onlyFreeze, allCommits, blockedBy }: { s
     setStarting(true);
     setStartError(null);
     try {
-      const res = await useEvalsStore.getState().call("POST /bisect", { body: { ...request(settings, true), ...(plan?.needsConfirm ? { confirm: true } : {}) } });
-      useEvalsStore.getState().invalidate("GET /bisects");
-      router.push(evalsHref.bisect(res.id));
+      const res = await call("POST /bisect", { body: { ...request(settings, true), ...(plan?.needsConfirm ? { confirm: true } : {}) } });
+      invalidate("GET /bisects");
+      navigate(evalsHref.bisect(res.id));
     } catch (e) {
       setStartError(e instanceof Error ? e.message : String(e));
       setStarting(false);
     }
-  }, [go, request, settings, plan, router]);
+  }, [go, request, settings, plan, call, invalidate, navigate]);
 
   // Enter starts it, the way the list chord opens an item. A focused control
   // keeps its own Enter; nothing starts while the plan cannot.
-  const active = useTabActive();
-  useShortcutContext("list", active);
-  usePaneShortcutAction("list.open", () => {
-    if (!go) return false;
-    const el = document.activeElement;
-    if (el && el !== document.body && el.closest("button, a, select, input, textarea, label") && !el.closest("[data-evb-start]")) return false;
-    void start();
-    return true;
-  });
+  host.useShortcuts(
+    {
+      "list.open": {
+        keys: "enter",
+        label: "Start the bisect",
+        run: () => {
+          if (!go) return false;
+          const el = document.activeElement;
+          if (el && el !== document.body && el.closest("button, a, select, input, textarea, label") && !el.closest("[data-evb-start]")) return false;
+          void start();
+          return true;
+        },
+      },
+    },
+    host.useActive(),
+  );
 
   return (
     <BisectPlanPanel
@@ -145,6 +148,7 @@ function PlanSide({ surface, good, bad, onlyFreeze, allCommits, blockedBy }: { s
 
 /** The bisects already over this range: what they answered, so nobody pays twice for an answer on record. */
 function PriorBisects({ bisects, now }: { bisects: Array<BisectSummary & { same: boolean }>; now: number }) {
+  const { timeAgo } = useEvalsHost().format;
   if (!bisects.length) return null;
   return (
     <section className="ev-card evb-prior" data-evb-prior={bisects.length}>
@@ -160,7 +164,7 @@ function PriorBisects({ bisects, now }: { bisects: Array<BisectSummary & { same:
             {b.same ? "these same ends" : `${endpointLabel(b.good)} to ${endpointLabel(b.bad)}`}
           </span>
           <span className="evb-prior-when">
-            {isBisectLive(b.status) ? `running, started ${formatTimeAgo(Date.parse(b.startedAt), now)} ago` : `${formatTimeAgo(Date.parse(b.finishedAt ?? b.updatedAt), now)} ago, ${usd(b.spentUsd)}`}
+            {isBisectLive(b.status) ? `running, started ${timeAgo(Date.parse(b.startedAt), now)} ago` : `${timeAgo(Date.parse(b.finishedAt ?? b.updatedAt), now)} ago, ${usd(b.spentUsd)}`}
           </span>
         </EvalsLink>
       ))}
@@ -169,8 +173,10 @@ function PriorBisects({ bisects, now }: { bisects: Array<BisectSummary & { same:
 }
 
 export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bisect-new" }> }) {
-  const router = useRouter();
-  const now = useCoarseNow(60_000);
+  const host = useEvalsHost();
+  const { EmptyState } = host.ui;
+  const navigate = host.useNavigate();
+  const now = host.useNow(60_000);
   const allCommits = !!view.all;
   const overview = useEvalsResource("GET /overview", {});
   const surfaces = useMemo(() => overview.data?.surfaces.map((s) => s.id) ?? (view.surface ? [view.surface] : []), [overview.data, view.surface]);
@@ -201,7 +207,7 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
   const held = holder ? list.data?.bisects.find((b) => b.id === holder) : undefined;
   const blockedBy = holder ? { id: holder, surface: held?.surface ?? null, listed: !!held } : null;
 
-  const widen = (on: boolean) => router.push(evalsHref.bisectNew({ surface: view.surface, good: view.good, bad: view.bad, freeze: view.freeze, all: on }));
+  const widen = (on: boolean) => navigate(evalsHref.bisectNew({ surface: view.surface, good: view.good, bad: view.bad, freeze: view.freeze, all: on }));
   const answer = (x: Attribution) => <AttributionView attribution={x} now={now} allCommits={{ on: allCommits, onChange: widen }} />;
 
   return (
@@ -218,8 +224,8 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
           {view.freeze && <span className="ev-chip">limited to freeze {view.freeze.slice(0, 8)}</span>}
           {allCommits && <span className="ev-chip">every commit</span>}
           <span className="evb-sub">The records answer first, for free. A bisect is offered only when they leave candidates they cannot pin.</span>
-          <span className="flex-1" />
-          <EvalsLink className="evb-link text-[12px]" href={evalsHref.bisectList()}>
+          <span className="ev-grow" />
+          <EvalsLink className="evb-link ev-small" href={evalsHref.bisectList()}>
             All bisects
           </EvalsLink>
         </header>
@@ -228,7 +234,7 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
           batches={batches}
           value={value}
           resolved={a ? { good: a.good, bad: a.bad } : null}
-          onSubmit={(v) => router.push(evalsHref.bisectNew({ ...v, freeze: view.freeze, all: allCommits }))}
+          onSubmit={(v) => navigate(evalsHref.bisectNew({ ...v, freeze: view.freeze, all: allCommits }))}
         />
         {a && <PriorBisects bisects={prior} now={now} />}
         {!ready ? (
@@ -251,7 +257,7 @@ export function BisectNewPage({ view }: { view: Extract<EvalsView, { view: "bise
         ) : attr.error ? (
           <EmptyState title="The records could not be read" description={attr.error} />
         ) : (
-          <div className="text-[12px] ev-quiet" data-evals-loading>
+          <div className="ev-note" data-evals-loading>
             {view.good && view.bad ? "Walking the records between the two ends..." : "Finding the red batch and its baseline in the records..."}
           </div>
         )}

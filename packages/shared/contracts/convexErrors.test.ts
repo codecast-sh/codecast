@@ -56,3 +56,8 @@ describe("cliErrorMessage", () => {
     expect(cliErrorMessage("")).toBe("Unknown error");
   });
 });
+
+test("String(err) of a wrapped server error, with its own name first", () => {
+  const text = String(new Error("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error\nUncaught ConvexError: That machine is not yours"));
+  expect(humanizeConvexError(text)).toBe("That machine is not yours");
+});

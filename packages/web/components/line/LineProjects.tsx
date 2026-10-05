@@ -22,25 +22,29 @@ const paramOf = (key: string, projects: LineProject[]) => {
  * repo the viewer is in, else the line with the most open causes. A ref the
  * viewer cannot see falls back to the default rather than an empty page.
  */
-export function useLineProject(rollup: RollupRow[], projects: LineProject[]) {
+/** `fixed` pins the line to one project (its Line tab): the URL is not read
+ *  and nothing switches it. */
+export function useLineProject(rollup: RollupRow[], projects: LineProject[], fixed?: string | null) {
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
   const repoPath = useInboxStore((s) => s.activeProjectPath || s.currentConversation?.gitRoot || s.currentConversation?.projectPath || null);
   const asked = search?.get("project") ?? null;
   const key = useMemo(() => {
+    if (fixed) return fixed;
     if (asked === ALL_PROJECTS || asked === NO_PROJECT) return asked;
     const named = asked ? projects.find((p) => p.short_id === asked || p._id === asked) : undefined;
     if (named) return named._id;
     return defaultLineKey(rollup, projects, repoPath);
-  }, [asked, projects, rollup, repoPath]);
+  }, [fixed, asked, projects, rollup, repoPath]);
   const select = useCallback((next: string) => {
+    if (fixed) return;
     const params = new URLSearchParams(search?.toString() ?? "");
     params.set("project", paramOf(next, projects));
     router.replace(`${pathname ?? "/line"}?${params.toString()}`, { scroll: false });
-  }, [router, pathname, search, projects]);
+  }, [fixed, router, pathname, search, projects]);
   const param = paramOf(key, projects);
-  return { key, select, param, href: `${pathname ?? "/line"}?project=${encodeURIComponent(param)}` };
+  return { key, select, param, href: `${fixed ? "/line" : pathname ?? "/line"}?project=${encodeURIComponent(param)}` };
 }
 
 /** The order the switcher and its keys walk: the roll-up, then each line. */

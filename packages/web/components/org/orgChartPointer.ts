@@ -34,12 +34,14 @@ export function chartPointerOfParams(q: URLSearchParams): ChartPointer {
 }
 
 const LINK_RE = /\/org\?([^\s)\]>"'`]+)/g;
-const CARD_RE = /^[ \t]*(op-\d+)[ \t]*$/gim;
+/** `op-7` or `op-7#3` alone on a line: the proposal, and the change in focus. */
+const CARD_RE = /^[ \t]*(op-\d+)(?:#(\d+))?[ \t]*$/gim;
 
 /**
  * The LAST pointer a message's text carries, null when it carries none:
  * - a link to the org page that names a proposal (`/org?proposal=op-7&focus=3`),
- * - `op-7` on its own line (the line that draws the proposal card),
+ * - `op-7` on its own line (the line that draws the proposal card), or
+ *   `op-7#3` on its own line (the line that draws one change's card): that change,
  * - a person's "About op-7 change 3" header (the card's Ask): that change.
  */
 export function chartPointerOfText(text: string | null | undefined): ChartPointer | null {
@@ -51,7 +53,7 @@ export function chartPointerOfText(text: string | null | undefined): ChartPointe
     if (pointer.proposal && (!best || m.index! >= best.at)) best = { at: m.index!, pointer };
   }
   for (const m of text.matchAll(CARD_RE)) {
-    if (!best || m.index! > best.at) best = { at: m.index!, pointer: { proposal: m[1].toLowerCase() } };
+    if (!best || m.index! > best.at) best = { at: m.index!, pointer: { proposal: m[1].toLowerCase(), ...(m[2] ? { focus: m[2] } : {}) } };
   }
   return best?.pointer ?? null;
 }

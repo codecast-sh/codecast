@@ -108,16 +108,17 @@ export function workspaceRows<T = any>(table: WorkspaceScopedTable, coll: Record
 export function useWorkspaceCollection<T = any>(
   table: WorkspaceScopedTable,
   sig?: ((row: T) => string) | null,
+  /** A record's own workspace key, for a surface that reads where the record
+   *  lives (a project opened from another team) instead of the active one. */
+  workspace?: WorkspaceKey | null,
 ): T[] {
   const fieldSig = sig === null ? null : (sig ?? (defaultFieldSig as (row: T) => string));
+  const keyOf = (st: Parameters<typeof activeWorkspaceKeyOf>[0]) => workspace || activeWorkspaceKeyOf(st);
   const s = useTrackedStore([
-    (st) => activeWorkspaceKeyOf(st),
-    (st) => {
-      const key = activeWorkspaceKeyOf(st);
-      return membershipSig((st as any)[table], key, fieldSig, table);
-    },
+    (st) => keyOf(st),
+    (st) => membershipSig((st as any)[table], keyOf(st), fieldSig, table),
   ]);
-  const key = activeWorkspaceKeyOf(s);
+  const key = keyOf(s);
   const coll = (s as any)[table] as Record<string, T>;
   const memberSig = membershipSig(coll, key, fieldSig, table);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- memberSig stands in for the churny collection ref

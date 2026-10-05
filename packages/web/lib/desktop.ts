@@ -509,8 +509,10 @@ export function borrowsTabShell(): boolean {
 export const PEOPLE_ROUTE = "/people";
 
 /** What every surface calls the gesture, so three of them cannot call it three
- *  different things. */
-export const POP_OUT_PEOPLE_TITLE = "Float the team over your work";
+ *  different things. Pop out and dock are one pair (header and float), as
+ *  expand and shrink are the other (the row and the call's stage). */
+export const POP_OUT_PEOPLE_TITLE = "Pop out the faces, over your work";
+export const DOCK_FACES_TITLE = "Dock the faces back in the header";
 
 // This renderer IS the people window. It draws the panel, mounts the call,
 // walkie and ring pumps, and (on the desktop) is the shell's notification
@@ -573,9 +575,6 @@ export async function closePeopleWindow(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 export const CALL_PANEL_ROUTE = "/call-panel";
-
-/** What every surface calls the gesture, so they cannot call it three things. */
-export const POP_OUT_CALL_TITLE = "Pop the call out";
 
 /**
  * The panel's own URL. The room is in the query string rather than the path

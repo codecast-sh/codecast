@@ -23,7 +23,7 @@ export type Person = { key: string; name: string; userIds: string[]; authorNames
 export const PROSE_STATUSES = new Set(["written", "final"]);
 
 /** Whether an edition (day or week) has written prose to show. */
-export const hasProse = (e: Pick<EditionRow, "headline" | "status"> | undefined) => !!e?.headline && PROSE_STATUSES.has(e.status ?? "");
+export const hasProse = (e: Pick<EditionRow, "headline" | "status" | "scope"> | undefined) => !!e?.headline && PROSE_STATUSES.has(e.status ?? "");
 
 const lines = (s: Pick<StoryRow, "insertions" | "deletions">) => s.insertions + s.deletions;
 
