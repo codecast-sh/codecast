@@ -1,37 +1,41 @@
-import { asksProgressLine, asksLoading } from "./staffingAsks";
-import { MetricReadingLine } from "../initiatives/InitiativeAtoms";
 "use client";
 // The staffing pane (docs/architecture/org-staffing.md S5): the "Staffing"
 // mode of the org page's right sheet. With a proposal open it is the asks
-// column (S19): one line of header, one card per ask with its changes folded
-// inside, one line of cost; the conversation with the author is the page's
-// own column beside it. With no proposal it is the health summary and the
-// composer to the head of people. With no head of people it is two buttons.
-// Everything it shows arrives through props from the store (OrgPage owns the
-// reads and the actions); it computes nothing beyond what staffingModel.ts
-// hands it.
-import { useMemo, useState } from "react";
+// column (S19): one line of header and one card per ask, with its changes
+// folded inside as ledger entries (S39), one per goal, project, role or
+// record. A proposal that is a single ask has nothing to fold: its entries
+// sit straight under the title and one row closes them. The conversation
+// with the author is the page's own column beside it. With no proposal it is
+// the health summary and the composer to the head of people. With no head of
+// people it is two buttons. Everything it shows arrives through props from
+// the store (OrgPage owns the reads and the actions); it computes nothing
+// beyond what staffingModel.ts and proposalSubjects.ts hand it.
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, Check, ChevronDown, ChevronRight, CornerDownRight, ExternalLink, MessageSquareText, Pause, Pencil, Play, RefreshCw, Send, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
+import { ArrowRight, Check, ChevronDown, ChevronRight, ExternalLink, MessageSquareText, Pause, Play, RefreshCw, Send, Sparkles, Undo2, UserRoundPlus, X } from "lucide-react";
 import { agoOf } from "../../lib/threadState";
 import { cn } from "../../lib/utils";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { AnchorConversation } from "../anchor/AnchorConversation";
+import { MetricReadingLine } from "../initiatives/InitiativeAtoms";
 import { OrgButton } from "./OrgButton";
-import { amendedMoves, revisedLine, revisionWord } from "./staffingRevise";
-import { isOrgGoalChange, isOrgQuietChange, latestOrgRevisionAt, recordChangeParts, type OrgChange, type OrgGoalChange, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
+import { revisedLine } from "./staffingRevise";
+import { latestOrgRevisionAt, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
 import { RoleFace } from "./RoleFace";
-import { AssigneeFace } from "../identity/AssigneeFace";
 import type { TakeoverPreview } from "../../hooks/useTakeoverPreviews";
 import { TakeoverEdit } from "./TakeoverEdit";
-import { askNames, askOfChange, asksProgress, proposalAsks, type AskView } from "./staffingAsks";
+import { askNames, askOfChange, asksLoading, asksProgress, asksProgressLine, proposalAsks, type AskView } from "./staffingAsks";
 import { SectionLabel } from "./OrgScopePanel";
 import { rolePausedSentence, SEVERITY_META } from "./orgMeta";
 import type { QueueItem } from "../../lib/decisionQueue";
 import { reachedBreakdown, reachedTotal, type AreaCheck } from "@codecast/shared/contracts/orgAreas";
-import { QuietLines, StatusPill } from "./ghostChrome";
-export { StatusPill };
+export { StatusPill } from "./ghostChrome";
+import { decideTogether } from "./proposalDecide";
+import { proposalProgressWords, proposalSubjects, type SubjectCard, type SubjectLive } from "./proposalSubjects";
+import { closingWords } from "./ProposalLedger";
+import { LEDGER_HAIR, LEDGER_INKS, LedgerClosingRow, LedgerWord, ProposalSubjectCard } from "./ProposalSubjectCard";
 import type { OrgRole, OrgTree } from "./orgTypes";
-import type { OrgChangeStatus, OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
+import type { OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import {
   CHANGE_STATUS_META,
   CHECK_CADENCES,
@@ -39,15 +43,9 @@ import {
   cadenceLabel,
   changeEdits,
   changeFields,
-  changeLine,
-  changeTenure,
   isDecidable,
-  isSyncChange,
   openProposals,
   staffingMode,
-  syncEvidence,
-  syncGroupSummary,
-  tenureLine,
   type AreaRow,
   type ChangeField,
 } from "./staffingModel";
@@ -64,6 +62,11 @@ export type StaffingPaneProps = {
   proposals: OrgProposalRow[];
   /** The proposal open in the pane; null = the health summary. */
   proposal: OrgProposalRow | null;
+  /** The live records an entry reads what was there before from (S39): the
+   *  goals, projects, plans and tasks the page holds (useSubjectLive). Absent
+   *  or null, an entry still names people and roles from `tree` and shows
+   *  each field's new value alone. */
+  live?: SubjectLive | null;
   /** The change the chart is focused on (the `orgFocusChangeId` scalar). */
   selectedChangeId: string | null;
   head: OrgRole | null;
@@ -80,7 +83,8 @@ export type StaffingPaneProps = {
    *  S18): the latest revise among the rows it painted and, for an ask, the
    *  seqs the card held. The server reads the verdict against that and
    *  refuses one the author revised under the reader; the page then shows
-   *  the revised list, marked, instead of applying anything. */
+   *  the revised list, marked, instead of applying anything. An entry that
+   *  holds several changes sends one of these per change, in apply order. */
   onDecide: (changeId: string, verdict: "accept" | "skip", edits: Record<string, unknown> | undefined, seen: OrgVerdictSeen) => void;
   /** Accept or skip one ask whole (S19): every change in it that still waits.
    *  `opts.leave_sessions` is the person's one edit on the accept (R1). */
@@ -112,13 +116,13 @@ export type StaffingPaneProps = {
    *  round 12). Unset, the pane carries its own header: the phone's sheet
    *  and the asks tab beside a selected node. */
   titleInPageHeader?: boolean;
-  /** A row's "Ask about this": select the change and bring the composer to it. */
+  /** An entry's "Ask about this": select the change and bring the composer to it. */
   onAskAbout?: (change: OrgProposalChange) => void;
   /** A card's "Ask about this": the next message is about that ask. */
   onAskAboutAsk?: (ask: AskView) => void;
   /** Changes the author revised since the reader last looked
    *  (staffingRevise.revisedSince): the card that holds them says so, each
-   *  row is marked, and `onSeen` clears both. */
+   *  entry is marked, and `onSeen` clears both. */
   revised?: { rows: OrgProposalChange[]; who: string; onSeen: () => void };
   /** The loop (org-staffing.md S29). The person's open decisions, as the
    *  decision queue holds them; the pane keeps the ones the org routed. */
@@ -188,12 +192,39 @@ function LinkLine({ link }: { link: ProposalLinkLine }) {
   );
 }
 
+// ---------------------------------------------------------------- a proposal: its asks, and the entries inside them
+
+const NO_CARDS: SubjectCard[] = [];
+
+/** One ask's changes as ledger entries (S39), one per goal, project, role or
+ *  record. An entry never crosses an ask, so the ask's verdict and its count
+ *  stay whole. Null: nothing to draw yet (a closed fold). */
+function useAskCards(changes: readonly OrgProposalChange[], live: SubjectLive | null, ask: AskView | null): SubjectCard[] {
+  return useMemo(
+    () => (ask ? proposalSubjects(changes, live, { seqs: new Set(ask.changes.map((c) => c.seq)) }) : NO_CARDS),
+    [changes, live, ask],
+  );
+}
+
+/** The sentence of every change in `rows` that still waits and would move a
+ *  session (R1); null when accepting them moves nothing. */
+function movingPhrase(rows: readonly OrgProposalChange[], takeovers: Record<string, TakeoverPreview> | undefined): string | null {
+  const phrases = rows.flatMap((c) => (isDecidable(c.status) && takeovers?.[c._id] ? [takeovers[c._id].phrase] : []));
+  return phrases.length > 0 ? phrases.join(". ") : null;
+}
+
 function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   const { proposal, tree, now, selectedChangeId } = props;
   const asks = useMemo(() => proposalAsks(proposal, askNames(tree)), [proposal.asks, proposal.changes, tree]); // eslint-disable-line react-hooks/exhaustive-deps
   const progress = asksProgress(asks);
   const loading = asksLoading(proposal);
   const others = openProposals(props.proposals).filter((p) => p._id !== proposal._id);
+  // What an entry reads a before from. Without the page's records the tree
+  // still names people and roles, and every field shows its new value alone.
+  const live = useMemo<SubjectLive | null>(() => props.live ?? (tree ? { tree, goals: [], projects: [], plans: [], tasks: [] } : null), [props.live, tree]);
+  // A proposal that is one ask has no card to open: its entries are the column.
+  const lone = !loading && asks.length === 1 ? asks[0] : null;
+  const loneCards = useAskCards(proposal.changes, live, lone);
   // One fold open at a time. A change focused from the chart opens the card
   // that holds it; closing that card lets go of the change.
   const focusedAsk = askOfChange(asks, selectedChangeId)?.index ?? null;
@@ -206,13 +237,28 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   const revisedIds = useMemo(() => new Set(props.revised?.rows.map((r) => r._id) ?? []), [props.revised?.rows]);
   // What this render read: the verdicts it sends say so (onDecide, onDecideAsk).
   const revisedAt = latestOrgRevisionAt(proposal.changes);
+  const ask = (a: AskView) => ({
+    ask: a,
+    changes: proposal.changes,
+    selectedChangeId,
+    revisedIds,
+    revised: props.revised,
+    takeovers: props.takeovers,
+    onDecideAsk: (verdict: "accept" | "skip", opts?: { leave_sessions?: boolean }) => props.onDecideAsk(proposal._id, a.index, verdict, { revised_at: revisedAt, seqs: a.changes.map((c) => c.seq) }, opts),
+    onAskAboutAsk: props.onAskAboutAsk ? () => props.onAskAboutAsk!(a) : undefined,
+    onAskAboutChange: props.onAskAbout,
+    onSelectChange: props.onSelectChange,
+    onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => props.onDecide(changeId, verdict, edits, { revised_at: revisedAt }),
+    onEditRole: props.onEditRole,
+  });
   return (
     <>
       {!props.titleInPageHeader && (
-        <div className="flex items-baseline gap-3" data-asks-header>
-          <h2 className="min-w-0 flex-1 text-[17px] leading-snug font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
-          <span className="shrink-0 text-[12px] tabular-nums" style={{ color: progress.remaining === 0 && !loading ? "var(--sol-green)" : "var(--sol-text-muted)" }} data-progress>
-            {asksProgressLine(progress, loading)}
+        <div className={cn("flex gap-x-3", lone ? "flex-col gap-y-1" : "items-baseline")} data-asks-header>
+          <h2 className={cn("min-w-0 text-[17px] leading-snug font-semibold tracking-tight", !lone && "flex-1")} style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{proposal.title}</h2>
+          {/* One ask: the count is its entries, as the conversation's card counts them. */}
+          <span className={cn("shrink-0 tabular-nums", lone ? "text-[11px]" : "text-[12px]")} style={{ color: progress.remaining === 0 && !loading ? "var(--sol-green)" : "var(--sol-text-muted)" }} data-progress>
+            {lone ? proposalProgressWords(loneCards) : asksProgressLine(progress, loading)}
           </span>
         </div>
       )}
@@ -238,26 +284,9 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
       <div className={cn("flex flex-col gap-2", !props.titleInPageHeader && "mt-2.5")} data-asks>
         {loading && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }} data-changes-loading>Loading the proposal…</p>}
         {!loading && asks.length === 0 && <p className="text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>This proposal changes nothing.</p>}
-        {asks.map((ask) => (
-          <AskCard
-            key={ask.index}
-            ask={ask}
-            number={ask.index + 1}
-            tree={tree}
-            open={openIndex === ask.index}
-            onToggle={() => toggleFold(ask.index)}
-            selectedChangeId={selectedChangeId}
-            revisedIds={revisedIds}
-            revised={props.revised}
-            takeovers={props.takeovers}
-            onDecideAsk={(verdict, opts) => props.onDecideAsk(proposal._id, ask.index, verdict, { revised_at: revisedAt, seqs: ask.changes.map((c) => c.seq) }, opts)}
-            onAskAboutAsk={props.onAskAboutAsk ? () => props.onAskAboutAsk!(ask) : undefined}
-            onAskAboutChange={props.onAskAbout}
-            onSelectChange={props.onSelectChange}
-            onDecide={(changeId, verdict, edits) => props.onDecide(changeId, verdict, edits, { revised_at: revisedAt })}
-            onEditRole={props.onEditRole}
-          />
-        ))}
+        {lone
+          ? <LoneAsk {...ask(lone)} cards={loneCards} />
+          : asks.map((a) => <AskCard key={a.index} {...ask(a)} number={a.index + 1} live={live} open={openIndex === a.index} onToggle={() => toggleFold(a.index)} />)}
       </div>
 
 
@@ -273,20 +302,12 @@ function ProposalBody(props: StaffingPaneProps & { proposal: OrgProposalRow }) {
   );
 }
 
-/** How many rows a fold shows before "Show all": a records ask runs past a
- *  hundred, and the person who opened it is looking for one row. */
-const FOLD_PAGE = 25;
-
-/**
- * One ask (S19): a title a person can read cold, one sentence of why, one
- * line of what accepting changes, and Accept, Skip, Ask about this. The
- * changes are inside, folded, with the count on the fold; open, they are the
- * same rows and per row controls the pane always had, and a single skipped
- * row inside an accepted ask is the exception the fold is for. A decided ask
- * keeps its title and says its verdict; Accept and Skip go, the question stays.
- */
-function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedIds, revised, takeovers, onDecideAsk, onAskAboutAsk, onAskAboutChange, onSelectChange, onDecide, onEditRole }: {
-  ask: AskView; number: number; tree: OrgTree | null; open: boolean; onToggle: () => void;
+/** What an ask and the entries inside it are handed: the same for a card
+ *  with a fold and for a lone ask drawn straight under the title. */
+type AskProps = {
+  ask: AskView;
+  /** The whole proposal's rows: an entry's verdict orders its changes against them. */
+  changes: readonly OrgProposalChange[];
   selectedChangeId: string | null;
   revisedIds: Set<string>;
   revised?: StaffingPaneProps["revised"];
@@ -297,32 +318,147 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
   onSelectChange: (id: string | null) => void;
   onDecide: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
   onEditRole: (c: OrgProposalChange) => void;
+};
+
+/** The author revised changes of this ask since the reader last looked (S18). */
+function RevisedStrip({ ask, revised, className }: Pick<AskProps, "ask" | "revised"> & { className?: string }) {
+  const here = revised ? revised.rows.filter((r) => ask.changes.some((c) => c._id === r._id)) : [];
+  if (here.length === 0 || !revised) return null;
+  return (
+    <p className={cn("text-[12px] leading-snug org-pop-in", className)} style={{ color: "var(--sol-text-secondary)" }} data-ask-revised={here.length}>
+      <Sparkles className="inline w-3 h-3 mr-1 align-[-1px]" style={{ color: "var(--sol-violet)" }} />
+      {revisedLine(here, revised.who)} <button type="button" onClick={revised.onSeen} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }} data-revised-seen>Got it</button>
+    </p>
+  );
+}
+
+/** How many entries a list shows before "Show all": a records ask runs past a
+ *  hundred, and the person who opened it is looking for one of them. */
+const FOLD_PAGE = 25;
+/** Past this many, a list draws one line an entry; the one in hand opens in full. */
+const DENSE_FOLD = 6;
+
+/**
+ * An ask's entries (S39): each change it holds, grouped by the goal, project,
+ * role or record it changes, with that entry's own Accept and Skip. An entry's
+ * verdict is the page's single change verdict for every change it holds that
+ * still waits, in apply order (decideTogether), so a role lands before what
+ * rides on it. The entry in hand (picked here or focused from the chart) is
+ * the one that offers Edit and "Ask about this"; Edit is offered where there
+ * is one change to edit, and on a role it is the hire dialog.
+ */
+function AskEntries({ cards, changes, lone, selectedChangeId, revisedIds, takeovers, onAskAboutChange, onSelectChange, onDecide, onEditRole }: Omit<AskProps, "ask" | "revised" | "onDecideAsk" | "onAskAboutAsk"> & {
+  cards: readonly SubjectCard[];
+  /** The list is the whole column, not a fold inside an ask's card: an entry alone in it carries the one filled Accept. */
+  lone?: boolean;
 }) {
   const [editing, setEditing] = useState<string | null>(null);
+  // The person's one edit on a takeover (R1) while the edit form is open: the form's accept and the entry's own both carry it.
+  const [editLeave, setEditLeave] = useState(false);
   const [all, setAll] = useState(false);
+  const selectedAt = selectedChangeId ? cards.findIndex((card) => card.change_ids.includes(selectedChangeId)) : -1;
+  const shown = all || selectedAt >= FOLD_PAGE ? cards : cards.slice(0, FOLD_PAGE);
+  const dense = cards.length > DENSE_FOLD;
+  const alone = cards.length === 1;
+  // The entry a link or the chart focused may sit far down the list.
+  const list = useRef<HTMLOListElement>(null);
+  useWatchEffect(() => { list.current?.querySelector<HTMLElement>("[data-selected]")?.scrollIntoView?.({ block: "nearest" }); }, [selectedChangeId]);
+  return (
+    <>
+      <ol ref={list} className="m-0 list-none p-0" data-ask-rows>
+        {shown.map((card, i) => {
+          const selected = i === selectedAt;
+          const lead = card.changes[0] as OrgProposalChange | undefined;
+          const editable = lead && isDecidable(lead.status) && (lead.change.kind === "role" || (card.changes.length === 1 && changeFields(lead.change).length > 0)) ? lead : null;
+          const inEdit = !!editable && editing === editable._id;
+          const phrase = movingPhrase([...card.changes, ...card.carried, ...card.riders], takeovers);
+          const inHand = selected || alone;
+          return (
+            <li key={card.key} className="m-0 p-0">
+              <ProposalSubjectCard
+                card={card}
+                variant={dense && !selected ? "row" : "full"}
+                layout="narrow"
+                {...(alone ? { lead: lone, className: "border-t pt-[13px] pb-[14px]" } : { ordinal: i + 1 })}
+                selected={selected}
+                onPick={() => onSelectChange(selected ? null : card.changes[0]?._id ?? card.change_ids[0])}
+                onDecide={(ids, verdict, opts) => decideTogether(changes, ids, verdict, onDecide, inEdit && phrase ? (editLeave ? { leave_sessions: true } : undefined) : opts)}
+                takeover={phrase && !inEdit ? { phrase } : undefined}
+                onAsk={inHand && lead && onAskAboutChange ? () => onAskAboutChange(lead) : undefined}
+                onEdit={inHand && editable && !inEdit ? () => {
+                  if (editable.change.kind === "role") return onEditRole(editable);
+                  onSelectChange(editable._id);
+                  setEditLeave(false);
+                  setEditing(editable._id);
+                } : undefined}
+                editor={inEdit ? (
+                  <>
+                    {phrase && <TakeoverEdit className="mb-2" phrase={phrase} leave={editLeave} onLeave={setEditLeave} />}
+                    <EditChangeForm change={editable} onCancel={() => setEditing(null)} onAccept={(edits) => { setEditing(null); onDecide(editable._id, "accept", { ...edits, ...(phrase && editLeave ? { leave_sessions: true } : null) }); }} />
+                  </>
+                ) : undefined}
+                revisedNew={card.change_ids.some((id) => revisedIds.has(id))}
+              />
+            </li>
+          );
+        })}
+      </ol>
+      {shown.length < cards.length && (
+        <div className="border-t py-1.5" style={{ borderColor: LEDGER_HAIR }}>
+          <LedgerWord className="-ml-2" onClick={() => setAll(true)} data-ask-show-all>Show all {cards.length}</LedgerWord>
+        </div>
+      )}
+    </>
+  );
+}
+
+/**
+ * A proposal that is one ask (S39): no card and no fold. The ask's entries
+ * sit straight under the title, and one row closes them: "Ask about this" at
+ * the left, the column's one filled button and Skip at the right, which are
+ * the ask's verdict, sent once (apply order is the server's). The row stays
+ * at the foot of the column while the entries scroll. An ask that is a single
+ * entry has no closing row: the entry's own Accept is the whole decision.
+ */
+function LoneAsk({ ask, cards, revised, onDecideAsk, onAskAboutAsk, ...entries }: AskProps & { cards: readonly SubjectCard[] }) {
+  const [leave, setLeave] = useState(false);
+  const phrase = movingPhrase(ask.changes, entries.takeovers);
+  const words = closingWords(cards);
+  return (
+    <section className={cn("min-w-0", LEDGER_INKS)} data-ask={ask.index} data-ask-state={ask.state}>
+      <RevisedStrip ask={ask} revised={revised} className="mb-2" />
+      <AskEntries {...entries} cards={cards} lone />
+      {cards.length > 1 && (
+        <div className="sticky bottom-0 bg-[var(--sol-bg)] pb-1" data-ask-close>
+          {words && phrase && <TakeoverEdit className="mb-2" phrase={phrase} leave={leave} onLeave={setLeave} />}
+          <LedgerClosingRow
+            left={onAskAboutAsk && <LedgerWord onClick={onAskAboutAsk} data-ask-about>Ask about this</LedgerWord>}
+            accept={words ? { label: words.accept, onClick: () => onDecideAsk("accept", leave && phrase ? { leave_sessions: true } : undefined) } : undefined}
+            skip={words ? { label: words.skip, onClick: () => onDecideAsk("skip") } : undefined}
+            outcome={words ? undefined : proposalProgressWords(cards)}
+          />
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * One ask (S19): a title a person can read cold, one sentence of why, one
+ * line of what accepting changes, and Accept, Skip, Ask about this. The
+ * changes are inside, folded, with the count on the fold; open, they are the
+ * ask's entries with their own Accept and Skip, and a single skipped entry
+ * inside an accepted ask is the exception the fold is for. A decided ask
+ * keeps its title and says its verdict; Accept and Skip go, the question stays.
+ */
+function AskCard({ ask, number, live, open, onToggle, revised, onDecideAsk, onAskAboutAsk, ...entries }: AskProps & { number: number; live: SubjectLive | null; open: boolean; onToggle: () => void }) {
   // What accepting this ask whole would take over (R1): the sentence of each
   // change in it that still waits and would move a session, and the one edit.
   const [leave, setLeave] = useState(false);
-  const moving = ask.changes.filter((c) => isDecidable(c.status) && takeovers?.[c._id]);
+  const phrase = movingPhrase(ask.changes, entries.takeovers);
   const decided = ask.state !== "open";
   const tone = ask.state === "accepted" ? "var(--sol-green)" : ask.state === "skipped" ? "var(--sol-text-dim)" : "var(--sol-violet)";
-  // A plan change that closes its tasks carries them under its own row (S9).
-  const sync = useMemo(() => ask.changes.some((c) => isSyncChange(c.change)) ? syncGroupSummary(ask.changes) : null, [ask.changes]);
-  // A quiet kind (a limit, S23.2) is never a row: the ask still carries it,
-  // so the ask's verdict decides it with the rest.
-  const rows = useMemo(() => {
-    const drawn = ask.changes.filter((c) => !isOrgQuietChange(c.change));
-    if (!sync) return drawn;
-    const nested = new Set(Object.values(sync.nested).flat().map((c) => c._id));
-    return drawn.filter((c) => !nested.has(c._id));
-  }, [ask.changes, sync]);
-  const revisedHere = revised ? revised.rows.filter((r) => ask.changes.some((c) => c._id === r._id)) : [];
-  const selectedAt = rows.findIndex((c) => c._id === selectedChangeId);
-  const shown = all || selectedAt >= FOLD_PAGE ? rows : rows.slice(0, FOLD_PAGE);
-  const edit = (c: OrgProposalChange) => {
-    if (c.change.kind === "role") onEditRole(c);
-    else { onSelectChange(c._id); setEditing(c._id); }
-  };
+  const cards = useAskCards(entries.changes, live, open ? ask : null);
   return (
     <section className={cn("rounded-xl border transition-colors", decided && "opacity-80")} data-ask={ask.index} data-ask-state={ask.state} style={{ borderColor: decided ? BORDER : "color-mix(in srgb, var(--sol-violet) 32%, transparent)", background: decided ? "transparent" : "var(--sol-card)" }}>
       <div className="flex items-start gap-3 px-3.5 pt-2 pb-2">
@@ -343,11 +479,9 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
               <p className="mt-0.5 text-[12.5px] leading-normal" style={{ color: "var(--sol-text)" }} data-ask-effect>
                 <span style={{ color: "var(--sol-text-dim)" }}>If you accept: </span>{ask.effect}
               </p>
-              {moving.length > 0 && (
-                <TakeoverEdit className="mt-2" phrase={moving.map((c) => takeovers![c._id].phrase).join(". ")} leave={leave} onLeave={setLeave} />
-              )}
+              {phrase && <TakeoverEdit className="mt-2" phrase={phrase} leave={leave} onLeave={setLeave} />}
               <div className="mt-1.5 flex items-center gap-1.5 flex-wrap" data-ask-controls>
-                <OrgButton primary size="sm" onClick={() => onDecideAsk("accept", leave && moving.length > 0 ? { leave_sessions: true } : undefined)} data-ask-accept>Accept</OrgButton>
+                <OrgButton primary size="sm" onClick={() => onDecideAsk("accept", leave && phrase ? { leave_sessions: true } : undefined)} data-ask-accept>Accept</OrgButton>
                 <OrgButton size="sm" onClick={() => onDecideAsk("skip")} data-ask-skip>Skip</OrgButton>
                 {onAskAboutAsk && (
                   <button type="button" onClick={onAskAboutAsk} className="ml-auto inline-flex items-center gap-1 h-7 px-1.5 rounded-md text-[12px] font-medium hover:bg-sol-bg-highlight/70" style={{ color: "var(--sol-violet)" }} data-ask-about>
@@ -357,12 +491,7 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
               </div>
             </>
           )}
-          {revisedHere.length > 0 && revised && (
-            <p className="mt-2 text-[12px] leading-snug org-pop-in" style={{ color: "var(--sol-text-secondary)" }} data-ask-revised={revisedHere.length}>
-              <Sparkles className="inline w-3 h-3 mr-1 align-[-1px]" style={{ color: "var(--sol-violet)" }} />
-              {revisedLine(revisedHere, revised.who)} <button type="button" onClick={revised.onSeen} className="font-medium hover:underline" style={{ color: "var(--sol-violet)" }} data-revised-seen>Got it</button>
-            </p>
-          )}
+          <RevisedStrip ask={ask} revised={revised} className="mt-2" />
         </div>
       </div>
       <button type="button" onClick={onToggle} aria-expanded={open} className="w-full flex items-center gap-1.5 px-3.5 h-6 border-t text-[12px] rounded-b-xl hover:bg-sol-bg-highlight/50" style={{ borderColor: BORDER, color: "var(--sol-text-muted)" }} data-ask-fold>
@@ -370,251 +499,11 @@ function AskCard({ ask, number, tree, open, onToggle, selectedChangeId, revisedI
         <span className="tabular-nums">{ask.foldLabel}</span>
       </button>
       {open && (
-        <div className="px-1.5 pb-2 flex flex-col gap-1" data-ask-rows>
-          {rows.length === 0 && <QuietLines tree={tree} changes={ask.changes} className="px-2 py-1" />}
-          {shown.map((c) => (
-            <ChangeRow
-              key={c._id}
-              change={c}
-              tree={tree}
-              nested={sync?.nested[c._id]}
-              selected={c._id === selectedChangeId}
-              revisedNew={revisedIds.has(c._id)}
-              takeover={takeovers?.[c._id]}
-              onAsk={onAskAboutChange ? () => onAskAboutChange(c) : undefined}
-              editing={editing === c._id}
-              onPick={() => onSelectChange(c._id === selectedChangeId ? null : c._id)}
-              onAccept={() => onDecide(c._id, "accept")}
-              onSkip={() => onDecide(c._id, "skip")}
-              onEdit={() => edit(c)}
-              onCancelEdit={() => setEditing(null)}
-              onAcceptWithEdits={(edits) => { setEditing(null); onDecide(c._id, "accept", edits); }}
-            />
-          ))}
-          {shown.length < rows.length && (
-            <button type="button" onClick={() => setAll(true)} className="self-start text-[12px] px-2 h-7 rounded-md hover:bg-sol-bg-highlight" style={{ color: "var(--sol-violet)" }} data-ask-show-all>Show all {rows.length}</button>
-          )}
+        <div className="px-3.5 pb-1">
+          <AskEntries {...entries} cards={cards} />
         </div>
       )}
     </section>
-  );
-}
-
-
-function Fact({ k, v, tone }: { k: string; v: string; tone?: string }) {
-  return (
-    <div className="mt-1.5 text-[12px] leading-snug">
-      <span className="uppercase tracking-[0.08em] text-[10px] mr-1.5" style={{ color: tone ?? "var(--sol-text-dim)" }}>{k}</span>
-      <span style={{ color: "var(--sol-text-secondary)" }}>{v}</span>
-    </div>
-  );
-}
-
-
-/**
- * A change's line as the row shows it. A record change that carries its
- * record's title (S9) reads "Mark done: <title>" with the id as a pill, so a
- * person learns what the record is without opening it; every other change,
- * and a record change without a title, is `changeLine` as one string. The
- * words are the contract's (recordChangeParts): the tooltip, the log and the
- * chart's chips say the same line.
- */
-export function ChangeLineText({ change }: { change: OrgChange }) {
-  const parts = recordChangeParts(change);
-  if (!parts?.title) return <>{changeLine(change)}</>;
-  const act = parts.act.charAt(0).toUpperCase() + parts.act.slice(1);
-  return (
-    <span data-record-line={parts.ref}>
-      <span style={{ color: "var(--sol-text-muted)" }}>{act}: </span>
-      <span className="font-medium" data-record-title>{parts.title}</span>
-      <span className="inline-flex items-center h-[16px] px-1 ml-1.5 rounded text-[10px] align-[1px] tabular-nums" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }} data-record-ref>{parts.ref}</span>
-    </span>
-  );
-}
-
-/**
- * One change. Unselected: status pill, the line on up to two rows (the pane
- * is 380px wide; one truncated row hid the role, the owner or the number the
- * line exists to say), the icon trio when it is still decidable, and on a
- * failed row the reason under the line.
- * Selected: the full line, then the rationale, expected effect, risk, note
- * and evidence inline with worded Accept, Edit and Skip, so one change is
- * decided without leaving its row (the phone sheet shows the list several
- * screens tall).
- */
-function ChangeRow({ change, tree, nested, selected, editing, revisedNew, takeover, onAsk, onPick, onAccept: acceptAsProposed, onSkip, onEdit, onCancelEdit, onAcceptWithEdits: acceptWithEdits }: {
-  change: OrgProposalChange; tree: OrgTree | null; selected: boolean; editing: boolean;
-  /** What accepting this row would take over (R1); absent when nothing moves. */
-  takeover?: TakeoverPreview;
-  /** Task changes this plan change closes along with the plan (S9): shown
-   *  under the row, applied by the plan's own accept. */
-  nested?: OrgProposalChange[];
-  /** The author revised this row since the reader last looked (S18). */
-  revisedNew?: boolean;
-  /** "Ask about this": the conversation's next message names this row. */
-  onAsk?: () => void;
-  onPick: () => void; onAccept: () => void; onSkip: () => void; onEdit: () => void; onCancelEdit: () => void; onAcceptWithEdits: (edits: Record<string, unknown>) => void;
-}) {
-  const open = isDecidable(change.status);
-  const failed = change.status === "failed";
-  const removed = change.status === "removed";
-  // The person's one edit on this row (R1) rides whichever accept they press.
-  const [leave, setLeave] = useState(false);
-  const left = leave && !!takeover ? { leave_sessions: true } : null;
-  const onAccept = () => (left ? acceptWithEdits(left) : acceptAsProposed());
-  const onAcceptWithEdits = (edits: Record<string, unknown>) => acceptWithEdits({ ...edits, ...left });
-  // S10: a role change says whether the seat is standing or a program with
-  // its end. S9: a record change says what the evidence is, on the row itself.
-  const tenure = tenureLine(changeTenure(change), tree);
-  const evidence = syncEvidence(change.change);
-  return (
-    <div className={cn("rounded-lg border transition-colors", selected ? "bg-sol-bg-highlight/70" : "hover:bg-sol-bg-highlight/40", revisedNew && "org-pop-in")} style={{ borderColor: selected ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "transparent", ...(revisedNew ? { boxShadow: "inset 3px 0 0 var(--sol-violet)", background: "color-mix(in srgb, var(--sol-violet) 6%, transparent)" } : {}) }} data-change-row={change._id} data-change-status={change.status} data-revised={change.revision?.kind} data-revised-new={revisedNew || undefined}>
-      <div className="flex items-start gap-2 px-2 py-1.5">
-        <button type="button" onClick={onPick} className="flex-1 min-w-0 flex items-start gap-2 text-left" aria-pressed={selected} aria-expanded={selected}>
-          {/* Inside an open fold every row waits by default; the pill speaks only when a row has moved. */}
-          {change.status !== "proposed" && <StatusPill status={change.status} />}
-          <span className="min-w-0 flex-1">
-            <span className={cn("block text-[12.5px] leading-snug", selected ? "break-words" : "line-clamp-2", (change.status === "skipped" || removed) && "line-through opacity-60")} style={{ color: "var(--sol-text)" }} title={changeLine(change.change)}>
-              {change.revision?.kind === "added" && <span className="inline-flex items-center h-[15px] px-1 mr-1.5 rounded text-[9.5px] font-semibold uppercase tracking-[0.06em] align-[1px] no-underline" style={{ background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" }} data-revised-tag>new</span>}
-              <ChangeLineText change={change.change} />
-            </span>
-            {change.revision && <RevisionNote change={change} selected={selected} />}
-            {change.depends && <span className="block text-[11px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-change-depends>{change.depends}</span>}
-            {tenure && <TenureChip line={tenure} />}
-            {isOrgGoalChange(change.change) && <GoalChangeDetails change={change.change} tree={tree} />}
-            {evidence && (
-              <span className={cn("block text-[11px] leading-snug mt-0.5", selected ? "break-words" : "line-clamp-2")} style={{ color: "var(--sol-text-muted)" }} data-sync-evidence title={evidence}>
-                <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1" style={{ color: "var(--sol-green)" }}>evidence</span>{evidence}
-              </span>
-            )}
-            {nested && nested.length > 0 && (
-              <span className="block mt-1" data-nested-tasks={nested.length}>
-                <span className="block text-[10.5px] uppercase tracking-[0.08em]" style={{ color: "var(--sol-green)" }}>closes {nested.length} {nested.length === 1 ? "task" : "tasks"} with it</span>
-                {(selected ? nested : nested.slice(0, 3)).map((t) => (
-                  <span key={t._id} className="flex items-start gap-1 text-[11px] leading-snug mt-0.5" style={{ color: "var(--sol-text-muted)" }} data-nested-task={t._id}>
-                    <CornerDownRight className="w-3 h-3 shrink-0 mt-[1px]" style={{ color: "var(--sol-text-dim)" }} />
-                    <span className={cn("min-w-0 flex-1", selected ? "break-words" : "truncate")} title={changeLine(t.change)}><ChangeLineText change={t.change} /></span>
-                  </span>
-                ))}
-                {!selected && nested.length > 3 && <span className="block text-[10.5px] mt-0.5 pl-4" style={{ color: "var(--sol-text-dim)" }}>and {nested.length - 3} more</span>}
-              </span>
-            )}
-            {failed && !selected && change.applied_note && (
-              <span className="block truncate text-[11px] leading-snug mt-0.5" style={{ color: CHANGE_STATUS_META.failed.color }} data-failed-note>{change.applied_note}</span>
-            )}
-          </span>
-        </button>
-        {open && !selected && (
-          <span className="flex items-center gap-0.5 shrink-0">
-            <IconButton label="Accept" tone="var(--sol-cyan)" onClick={onAccept}><Check className="w-3.5 h-3.5" /></IconButton>
-            <IconButton label="Edit" onClick={onEdit}><Pencil className="w-3.5 h-3.5" /></IconButton>
-            <IconButton label="Skip" onClick={onSkip}><X className="w-3.5 h-3.5" /></IconButton>
-          </span>
-        )}
-      </div>
-      {open && takeover && <TakeoverEdit className="mx-2 mb-1.5" phrase={takeover.phrase} leave={leave} onLeave={setLeave} />}
-      {selected && (
-        <div className="mx-2 mb-2 rounded-lg border p-2.5 org-pop-in" data-rationale style={{ borderColor: BORDER, background: "var(--sol-card)" }}>
-          <p className="text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary)" }}>{change.rationale}</p>
-          {change.expected_effect && <Fact k="expected" v={change.expected_effect} />}
-          {change.risk && <Fact k="risk" v={change.risk} tone="var(--sol-orange)" />}
-          {change.applied_note && <Fact k={failed ? "failed" : "applied"} v={change.applied_note} tone={failed ? CHANGE_STATUS_META.failed.color : "var(--sol-green)"} />}
-          {change.evidence.length > 0 && (
-            <div className="mt-2.5 flex flex-wrap gap-1.5">
-              {change.evidence.map((e, i) => e.href ? (
-                <Link key={i} href={e.href} className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md text-[11px] font-medium hover:underline" style={{ background: "color-mix(in srgb, var(--sol-blue) 12%, transparent)", color: "var(--sol-blue)" }}>
-                  {e.label} <ExternalLink className="w-3 h-3" />
-                </Link>
-              ) : (
-                <span key={i} className="inline-flex items-center h-[22px] px-2 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: "var(--sol-text-muted)" }}>{e.label}</span>
-              ))}
-            </div>
-          )}
-          {open && !editing && (
-            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap" data-verdicts>
-              <OrgButton primary size="sm" onClick={onAccept} aria-label="Accept"><Check className="w-3 h-3" /> {failed ? "Retry" : "Accept"}</OrgButton>
-              <OrgButton size="sm" onClick={onEdit} aria-label="Edit"><Pencil className="w-3 h-3" /> Edit</OrgButton>
-              <OrgButton size="sm" onClick={onSkip} aria-label="Skip"><X className="w-3 h-3" /> Skip</OrgButton>
-              {onAsk && <OrgButton size="sm" onClick={onAsk} aria-label="Ask about this" className="ml-auto" data-ask-about><MessageSquareText className="w-3 h-3" /> Ask about this</OrgButton>}
-            </div>
-          )}
-          {!open && onAsk && !removed && (
-            <div className="mt-2.5 flex items-center" data-verdicts>
-              <OrgButton size="sm" onClick={onAsk} aria-label="Ask about this" data-ask-about><MessageSquareText className="w-3 h-3" /> Ask about this</OrgButton>
-            </div>
-          )}
-        </div>
-      )}
-      {editing && open && <EditChangeForm change={change} onCancel={onCancelEdit} onAccept={onAcceptWithEdits} />}
-    </div>
-  );
-}
-
-/** What the author's revise did to this row (S18), under its line: the word,
- *  the author's note, and on an amend what moved, field by field. */
-function RevisionNote({ change, selected }: { change: OrgProposalChange; selected: boolean }) {
-  const r = change.revision!;
-  const moves = amendedMoves(change);
-  const tone = r.kind === "removed" ? "var(--sol-text-dim)" : "var(--sol-violet)";
-  return (
-    <span className="block mt-0.5 text-[11px] leading-snug" style={{ color: "var(--sol-text-muted)" }} data-revision={r.kind}>
-      <span className="uppercase tracking-[0.08em] text-[9.5px] mr-1 font-semibold" style={{ color: tone }}>{revisionWord(r)}</span>
-      <span className={cn(selected ? "break-words" : "line-clamp-2")} title={r.note}>{r.note}</span>
-      {moves.length > 0 && (
-        <span className="block mt-0.5" data-revision-moves>
-          {moves.map((m) => (
-            <span key={m.key} className="block">
-              <span style={{ color: "var(--sol-text-dim)" }}>{m.label}: </span>
-              {m.from !== null && <>was {m.from}, </>}
-              now <span className="font-medium" style={{ color: "var(--sol-text)" }}>{m.to ?? "nothing"}</span>
-            </span>
-          ))}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/**
- * What a goal change carries, under its line (initiatives-projects-role-page.md
- * "I1, revised"): the projects as chips, named from the chart where it knows
- * them, and the owner as a role's face or a person's face, resolved from the
- * chart's roles and people. A ref the chart does not know stands as written,
- * so the row still says what the author meant.
- */
-export function GoalChangeDetails({ change, tree }: { change: OrgGoalChange; tree: OrgTree | null }) {
-  const projectName = (ref: string) => {
-    for (const r of tree?.roles ?? []) for (const p of r.scope_names.projects) if (p.id === ref || p.short_id === ref || p.title === ref) return p.title;
-    return ref;
-  };
-  const owner = change.kind === "initiative_projects" || change.kind === "initiative_shape" ? undefined : change.owner;
-  const role = owner?.startsWith("@") ? tree?.roles.find((r) => r.handle.toLowerCase() === owner.slice(1).toLowerCase()) ?? null : null;
-  const person = owner && !role ? tree?.people.find((p) => (owner.toLowerCase() === "me" ? p.is_me : p.name.toLowerCase() === owner.toLowerCase())) ?? null : null;
-  const projects = change.kind === "initiative_owner" || change.kind === "initiative_shape" ? [] : change.projects;
-  return (
-    <span className="flex flex-wrap items-center gap-1 mt-1" data-goal-details>
-      {projects.map((ref) => (
-        <span key={ref} className="inline-flex items-center h-[16px] px-1.5 rounded text-[10px] font-medium" style={{ background: "color-mix(in srgb, var(--sol-border) 35%, transparent)", color: "var(--sol-text-muted)" }} data-goal-project={ref}>{projectName(ref)}</span>
-      ))}
-      {owner && (
-        <span className="inline-flex items-center gap-1 h-[16px] text-[10.5px]" style={{ color: "var(--sol-text-secondary)" }} data-goal-owner={role ? `role:${role.handle}` : person ? `person:${person.name}` : `ref:${owner}`}>
-          {role ? <RoleFace role={role} size={14} /> : person ? <AssigneeFace info={{ name: person.name, image: person.image }} size={14} hover={false} /> : null}
-          <span>{role ? role.name : person ? (person.is_me ? "you" : person.name) : owner}</span>
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** "standing" or "program · ends with pl-3, then retire" (S10), as a chip on
- *  a role change; the same words the node chip and the hire form use. */
-export function TenureChip({ line }: { line: string }) {
-  const program = line.startsWith("program");
-  const tone = program ? "var(--sol-orange)" : "var(--sol-blue)";
-  return (
-    <span className="inline-flex items-center gap-1 max-w-full mt-1 h-[16px] px-1.5 rounded text-[10px] font-medium" style={{ background: `color-mix(in srgb, ${tone} 12%, transparent)`, color: tone }} data-tenure={program ? "program" : "standing"} title={line}>
-      <span className="truncate">{line}</span>
-    </span>
   );
 }
 

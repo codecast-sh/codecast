@@ -58,10 +58,8 @@ import { useStageRoster } from "../../hooks/useStageRoster";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
 import { useRoomLock } from "../../hooks/useLiveRooms";
 import {
-  POP_OUT_CALL_TITLE,
   SMALL_CALL_WINDOW_SIZES,
   attachTitlebarHead,
-  canPopOutCall,
   canResizeCallWindow,
   closeCallPanel,
   navigateMainWindow,
@@ -69,7 +67,6 @@ import {
   type DesktopDisplaySource,
   type SmallCallWindowSize,
 } from "../../lib/desktop";
-import { popOutCall } from "../../lib/calls/popOutCall";
 import { useOsPermissions } from "../../hooks/useOsPermissions";
 import { permissionActionLabel, requestOsPermission, type AppPermissionKind } from "../../lib/osPermissions";
 import { LivePulseDot } from "../SessionActivityLine";
@@ -192,18 +189,14 @@ export function CallStage({
   panel = false,
   onSetSize,
   onShrink,
-  onHide,
 }: {
   onCollapse?: () => void;
   panel?: boolean;
   /** Panel only, older shell: shrink the window to a row of circles, or to one. */
   onSetSize?: (size: CallWindowSize) => void;
-  /** Panel only, voice host: shrink the window to the float, its one small
-   *  shape. One button, because one shape. */
+  /** Panel only, voice host: fold the stage back into the face row. One
+   *  button, the only way out, because there is one row. */
   onShrink?: () => void;
-  /** Panel only: put the call away. The voice host keeps the call and shows
-   *  the team (or nothing) instead; without this the shell hides the window. */
-  onHide?: () => void;
 }) {
   // Memoized because it feeds an effect's dependency list: a fresh no-op every
   // render would re-bind the key listener on every render.
@@ -491,21 +484,12 @@ export function CallStage({
 
         <HeaderRule />
 
-        {/* Give the call a window of its own. Desktop only, and deliberately
-            absent in a browser rather than degraded: the ladder behind this
-            has no browser rung, because a call in a Chrome popup is the bug
-            this panel exists to make impossible. */}
-        {canPopOutCall() && (
-          <StageChromeButton onClick={() => void popOutCall()} title={POP_OUT_CALL_TITLE}>
-            <AppWindow className="h-3.5 w-3.5" />
-            <span className="stage-word-tight">pop out</span>
-          </StageChromeButton>
-        )}
-        {/* The voice host's one small shape: the face row floating over the
-            work. The window keeps its media across the change — that is why
-            it is a shape and not a window — so this is only a reshape. */}
+        {/* Shrink, the way back from expand: the stage folds into the face
+            row, wherever the row lives (the float, or the app's header).
+            The window keeps its media across the change, so this is only a
+            reshape, and it is the stage's only way out on a voice host. */}
         {panel && onShrink && (
-          <StageChromeButton onClick={onShrink} title="Shrink this window to the faces floating over your work. The call keeps going">
+          <StageChromeButton onClick={onShrink} title="Shrink back to the faces. The call keeps going">
             <Minimize2 className="h-3.5 w-3.5" />
             shrink
           </StageChromeButton>
@@ -514,12 +498,13 @@ export function CallStage({
             control: everybody as a row of circles, one circle of whoever is
             talking, or that circle the size of a menu bar icon. */}
         {panel && onSetSize && <ShrinkMenu onSetSize={onSetSize} />}
-        {/* The window's own close. There is no traffic light to do it. Hide,
-            like the palette: the huddle stays in this window. Hang-up is the
-            red button on the control bar below. */}
-        {panel && chromeless && (
+        {/* The older shell's window close, which has no shrink to the row.
+            There is no traffic light to do it. Hide, like the palette: the
+            huddle stays in this window. Hang-up is the red button on the
+            control bar below. */}
+        {panel && chromeless && !onShrink && (
           <StageChromeButton
-            onClick={() => (onHide ? onHide() : void closeCallPanel({}))}
+            onClick={() => void closeCallPanel({})}
             title="Hide this window. The huddle keeps going"
             aria-label="Hide this window. The huddle keeps going"
           >

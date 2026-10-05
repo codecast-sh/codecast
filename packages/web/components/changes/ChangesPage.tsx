@@ -12,7 +12,7 @@
 import * as Accordion from "@radix-ui/react-accordion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { isoWeekOf, weekMonday } from "@codecast/shared/changes";
+import { isoWeekOf, topWeekStories, weekDates, weekMonday } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { localDate, normalizeTimezone } from "@codecast/convex/convex/lib/teamDay";
 import {
@@ -114,7 +114,7 @@ function DaySection({ day, today }: { day: TimelineDay; today: string }) {
  * opens the page; earlier ones sit where the timeline enters them.
  */
 function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label: string; byKey: ReadonlyMap<string, Story>; onOpen: (key: string) => void }) {
-  const top = week.top.map((k) => byKey.get(k)).filter((s): s is Story => !!s && hasProse(s));
+  const top = weekTop(week, byKey);
   return (
     <section className="chg-week grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label}>
       <h2 className="self-start pt-0.5 font-mono text-[12px] text-sol-text/55">{label}</h2>
@@ -139,6 +139,14 @@ function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label
 
 /** The calendar day `days` from `day` (YYYY-MM-DD), free of any clock or zone. */
 const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+
+/** The week's picks that still exist, else (keys move when a day is rebuilt) its heaviest written stories. */
+function weekTop(week: TimelineWeek, byKey: ReadonlyMap<string, Story>): Story[] {
+  const picked = week.top.map((k) => byKey.get(k)).filter((s): s is Story => !!s && hasProse(s));
+  if (picked.length) return picked;
+  const days = new Set(weekDates(week.week) ?? []);
+  return topWeekStories([...byKey.values()].filter((s) => days.has(s.date) && hasProse(s)));
+}
 
 const weekLabel = (week: string) => {
   const monday = weekMonday(week);

@@ -31,6 +31,7 @@ const modules = {
   "./sessionDecisions.ts": () => import("./sessionDecisions"),
   "./conversations.ts": () => import("./conversations"),
   "./dispatch.ts": () => import("./dispatch"),
+  "./pendingMessages.ts": () => import("./pendingMessages"),
 };
 
 const TOKEN = "hosted-assistant-test-token";
@@ -303,6 +304,20 @@ describe("client writers refuse a hosted conversation", () => {
     expect(messages).toHaveLength(0);
     expect(managed[0].agent_status).toBe("idle");
     expect(managed[0].last_heartbeat).toBe(0);
+  });
+
+  test("the owner's token cannot settle a hosted conversation's queued input", async () => {
+    const { t, authed } = await setup();
+    const started = await authed.mutation(api.assistant.entry.startConversation, { firstMessage: "Draft a reply to Ada." });
+    const [row] = await t.run((ctx) => ctx.db.query("pending_messages").collect());
+    for (const status of ["delivered", "injected", "failed", "undeliverable"] as const) {
+      await expect(t.mutation(api.pendingMessages.updateMessageStatus, { message_id: row._id, status, api_token: TOKEN }))
+        .rejects.toThrow(/settled by its turn engine/);
+      await expect(t.mutation(api.pendingMessages.updateMessageStatus, { message_id: row._id, status, api_token: TOKEN, device_id: "dev" }))
+        .rejects.toThrow(/settled by its turn engine/);
+    }
+    expect((await t.run((ctx) => ctx.db.get(row._id)))?.status).toBe("pending");
+    expect(row.conversation_id).toBe(started.conversation_id);
   });
 });
 
@@ -651,7 +666,63 @@ describe("a trigger never writes a hosted transcript", () => {
   });
 });
 
+describe("hosted_home has one definition", () => {
+  test("the backfill stamps a routine armed before the stamp, clears a stale one, and the dispatcher then fires it", async () => {
+    const { t, user, authed } = await setup();
+    const started = await authed.mutation(api.assistant.entry.startConversation, {});
+    const local = await t.run((ctx) => ctx.db.insert("conversations", {
+      user_id: user, agent_type: "claude_code", session_id: "local", status: "active", message_count: 0, started_at: Date.now(), updated_at: Date.now(), is_private: true,
+    }));
+    const row = (home: Id<"conversations">, extra: Record<string, unknown> = {}) => ({
+      user_id: user, originating_conversation_id: home, title: "Digest", prompt: "Read it.", schedule_type: "once",
+      status: "scheduled", run_at: Date.now() - 1_000, run_count: 0, mode: "apply", created_at: Date.now() - 60_000, ...extra,
+    });
+    const { unstamped, stale } = await t.run(async (ctx) => ({
+      unstamped: await ctx.db.insert("agent_tasks", row(started.conversation_id) as any),
+      stale: await ctx.db.insert("agent_tasks", row(local, { hosted_home: true, status: "paused" }) as any),
+    }));
+    expect((await t.mutation(internal.agentTasks.dispatchCloudTriggers, {})).dispatched).toBe(0);
+
+    expect(await t.mutation(internal.agentTasks.backfillHostedHome, {})).toEqual({ scanned: 2, stamped: 2, done: true });
+    expect(await t.mutation(internal.agentTasks.backfillHostedHome, {})).toEqual({ scanned: 2, stamped: 0, done: true });
+    const tasks = await t.run(async (ctx) => [await ctx.db.get(unstamped), await ctx.db.get(stale)]);
+    expect(tasks.map((task) => task?.hosted_home)).toEqual([true, undefined]);
+    expect((await t.mutation(internal.agentTasks.dispatchCloudTriggers, {})).dispatched).toBe(1);
+  });
+
+  test("the plan limit counts stamped routines, not homes it rereads", async () => {
+    const { t, user, authed } = await setup();
+    const started = await authed.mutation(api.assistant.entry.startConversation, {});
+    const DAY = 24 * 60 * 60 * 1000;
+    // Three armed rows on the hosted home, stamped as insertTask stamps them.
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 3; i++) await ctx.db.insert("agent_tasks", {
+        user_id: user, originating_conversation_id: started.conversation_id, hosted_home: true, title: "Digest", prompt: "Read it.",
+        schedule_type: "recurring", interval_ms: DAY, status: "scheduled", run_at: Date.now() + DAY, run_count: 0, mode: "apply", created_at: Date.now() - 60_000,
+      } as any);
+    });
+    await expect(t.run((ctx) => insertTask(ctx as any, user, {
+      title: "Digest", prompt: "Read it.", schedule_type: "recurring", interval_ms: DAY, originating_conversation_id: String(started.conversation_id),
+    }))).rejects.toThrow(/Free plan runs up to 3 routines/);
+  });
+});
+
 describe("hosted input is bounded", () => {
+  test("a public send cannot claim the scheduler's origin to pass the cap", async () => {
+    const { t, authed } = await setup();
+    const started = await authed.mutation(api.assistant.entry.startConversation, {});
+    for (const content of ["x".repeat(HOSTED_INPUT_MAX_CHARS + 1), "short"]) {
+      await expect(t.mutation(api.pendingMessages.sendMessageToSession, {
+        conversation_id: started.conversation_id, content, origin: "scheduler", api_token: TOKEN,
+      })).rejects.toThrow(/Only the server sends machine input/);
+    }
+    expect(await t.run((ctx) => ctx.db.query("pending_messages").collect())).toHaveLength(0);
+    expect(await wakes(t)).toHaveLength(0);
+    await t.mutation(api.pendingMessages.sendMessageToSession, { conversation_id: started.conversation_id, content: "hello", api_token: TOKEN });
+    expect(await t.run((ctx) => ctx.db.query("pending_messages").collect())).toHaveLength(1);
+  });
+
+
   test("startConversation refuses a long title or first message and creates nothing", async () => {
     const { t, authed } = await setup();
     await expect(authed.mutation(api.assistant.entry.startConversation, { title: "x".repeat(HOSTED_TITLE_MAX_CHARS + 1) }))

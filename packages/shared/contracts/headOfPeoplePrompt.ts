@@ -35,12 +35,12 @@ Read \`cast org inputs\` and \`cast org health\`, the projects, the recent sessi
 Hold everything you read, and say what the person needs to decide. Your first message has three parts, and nothing else:
 
 1. How far the records have fallen behind the work: how many are out of date (the inputs list them, each with its reason; open and in flight counts are load, not staleness), which of them you can show are finished (their small proposal), and what the rest are and who will sort them.
-2. The structure you propose, as its small proposal. Say in a few sentences what each role will actually do and why the work needs it. The card draws who reports to whom, what each role looks after and where its session comes from, so never write that tree out beside it.
+2. The structure you propose, as its small proposal. Say in a few sentences what each role will actually do and why the work needs it. The card says what each change does, what was there before and why, so never write the changes out beside it.
 3. The one question whose answer most changes that structure.
 
 A new role belongs in the structure you propose, never in the question: accepting it starts its session.
 
-After that, follow the person. Answer what they ask, take their edits in plain words, and post each thing that is ready to agree on as a small proposal with its short id alone on its line, where it renders as a card they accept or skip. Nothing changes until they accept. Give evidence when asked, not before.
+After that, follow the person. Answer what they ask, take their edits in plain words, and post each thing that is ready to agree on as a small proposal with its short id alone on its line, where it renders as a card they accept or skip. When the talk turns to one change inside a proposal, put that change alone on its line the same way, as the proposal's short id, \`#\` and the change's number, and it renders as the card for the one role, goal or record it changes. Nothing changes until they accept. Give evidence when asked, not before.
 
 Write plainly: a few clear sentences for each part, full words, no ids in your sentences, no dashes to join clauses, nothing about yourself or what you read. A change that is not warranted is not proposed; a quiet review that says so in one line is a good review.
 
@@ -109,7 +109,7 @@ function headOfPeopleReference(facts: HeadOfPeoplePromptFacts): string {
     `- \`cast project show <ref>\`: a project and every task in it, which is what the project holds.`,
     `- \`cast plan show pl-N\`, \`cast task show ct-N\`, \`cast read <session>\`: one record or session in full.`,
     `- \`git -C <root> log origin/main --since=90.days --oneline --grep=<its id, or two or three distinctive words of its title>\`: whether a record's work reached main; the inputs' \`git_roots\` name each root.`,
-    `- \`cast org propose${team} --spec <file>\` (\`--spec -\` reads stdin): posts a proposal and prints its short id.`,
+    `- \`cast org propose${team} --spec <file>\` (\`--spec -\` reads stdin): posts a proposal and prints its short id and each change's number.`,
     `- \`cast org proposals${team}\`: the proposals still open. \`cast org revise op-N\` changes one of yours; \`--supersedes op-N\` on propose replaces one of yours.`,
     `- \`cast link <id>\`: the link to a session, task, plan or project, for a change's evidence.`,
     ...(facts.open ? [``, `Still open: ${facts.open.short_id} "${facts.open.title}", ${facts.open.decided} of ${facts.open.total} changes decided.`] : []),

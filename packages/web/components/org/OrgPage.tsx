@@ -45,6 +45,7 @@ import { useTakeoverPreviews } from "../../hooks/useTakeoverPreviews";
 import { HireRoleDialog, type HireRoleInitial } from "./HireRoleDialog";
 import { HeadSeatDialog, type HeadSeatChoice } from "./HeadSeatDialog";
 import { StaffingPane, type ProposalLinkLine } from "./StaffingPane";
+import { useSubjectLive } from "./proposalHooks";
 import { HealthBoard, HEALTH_DRAWER_FRACTION } from "./HealthBoard";
 import { flowDays, flowMap, roleFlows } from "./orgFlow";
 import { DEFAULT_ROLE_CAPS } from "@codecast/shared/contracts/orgCapacity";
@@ -79,6 +80,8 @@ const PAGE = 8;
 const ORG_PREVIEW_DEV = !!import.meta.env.DEV;
 /** The desktop panel overlays the canvas; the graph fits to what is left. */
 const PANEL_W = 380;
+/** No proposal is open: nothing for a live read to name. One array, so the read is not redone every render. */
+const NO_CHANGES: OrgProposalChange[] = [];
 
 type MoveSubject = { kind: "session" | "role"; id: string; title: string };
 
@@ -260,6 +263,9 @@ export function OrgPageInner() {
     return t ? [{ key: c._id, ...t }] : [];
   }), [preview, proposal?.changes]);
   const takeovers = useTakeoverPreviews(tree?.workspace, takeoverAsks).byKey;
+  // What each entry of the open proposal read as before it (S39): the live
+  // goals, projects, plans and named tasks, gathered once for the pane.
+  const subjectLive = useSubjectLive(proposal ?? undefined, proposal?.changes ?? NO_CHANGES);
   // The linked proposal, whatever workspace it lives in: the get feeder fills
   // its row and changes, and the resolver names a foreign or unreadable link.
   const linkedRef = proposalShortId ?? proposal?.short_id ?? null;
@@ -332,6 +338,21 @@ export function OrgPageInner() {
   }, [healthIsPage, setHealthPage]);
   const focusChangeId = storeFocusChangeId;
   const setFocusChangeId = useCallback((id: string | null) => useInboxStore.getState().setOrgFocusChangeId(id), []);
+  // `?proposal=op-N&focus=<n>` is the link of one change (`op-N#n`): the
+  // proposal opens with that change in hand. Once per proposal and number, so
+  // a person who then picks another entry is not pulled back; a number whose
+  // row has not landed yet is tried again when the rows do.
+  const focusParam = new URLSearchParams(searchParams.toString()).get("focus");
+  const focusApplied = useRef<string | null>(null);
+  useWatchEffect(() => {
+    if (!proposal || proposal.short_id !== proposalShortId || !focusParam || !/^\d+$/.test(focusParam)) return;
+    const key = `${proposal._id}#${focusParam}`;
+    if (focusApplied.current === key) return;
+    const change = proposal.changes.find((c) => c.seq === Number(focusParam) && c.status !== "removed");
+    if (!change) return;
+    focusApplied.current = key;
+    setFocusChangeId(change._id);
+  }, [proposal?._id, proposal?.changes, proposalShortId, focusParam, setFocusChangeId]);
   // The compose text lands in the standing session's store draft, which is
   // what the embedded composer seeds from (MessageInput reads getDraft), then
   // the parameter leaves the URL so a reload does not seed it twice. A draft
@@ -828,6 +849,7 @@ export function OrgPageInner() {
       onRetryHealth={refreshHealth}
       proposals={workspaceProposals}
       proposal={proposal}
+      live={preview ? null : subjectLive}
       selectedChangeId={focusChangeId}
       head={head}
       reviewing={reviewing}

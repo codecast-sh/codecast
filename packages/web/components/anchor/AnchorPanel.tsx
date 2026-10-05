@@ -234,7 +234,7 @@ function PinChip({ pin }: { pin: ResolvedPin }) {
     : status.tone === "attention" ? "bg-sol-yellow"
     : status.tone === "working" ? "bg-sol-cyan animate-pulse"
     : status.tone === "online" ? "bg-sol-green"
-    : "bg-sol-text-dim/50";
+    : "bg-sol-text-dim";
   const label = status?.tone === "attention" ? `${pin.name} needs you`
     : status?.tone === "working" ? `${pin.name} is working`
     : `Talk to ${pin.name}`;

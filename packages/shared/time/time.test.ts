@@ -77,6 +77,27 @@ describe("a target day is a calendar day everywhere", () => {
     expect(targetDayStamp("2026-02-30")).toBeNull();
     expect(targetDayStamp("31/12/2026")).toBeNull();
   });
+  test("prints the stored day and turns late by the viewer's own calendar, east and west of UTC", async () => {
+    const { targetDayStamp, formatTargetDay, targetDayPassed, formatShortDate } = await import("./index");
+    const ts = targetDayStamp("2026-10-30")!;
+    const was = process.env.TZ;
+    try {
+      for (const zone of ["Europe/Berlin", "Asia/Tokyo", "America/New_York", "Pacific/Honolulu"]) {
+        process.env.TZ = zone;
+        expect(formatTargetDay(ts, Date.UTC(2026, 9, 1))).toBe("Oct 30");
+        expect(formatTargetDay(ts, Date.UTC(2027, 5, 1))).toBe("Oct 30, 2026");
+        // Noon on the day itself, where the viewer is: not late. Noon the day after: late.
+        expect(targetDayPassed(ts, new Date(2026, 9, 30, 12).getTime())).toBe(false);
+        expect(targetDayPassed(ts, new Date(2026, 9, 30, 23, 30).getTime())).toBe(false);
+        expect(targetDayPassed(ts, new Date(2026, 9, 31, 0, 30).getTime())).toBe(true);
+      }
+      // The plain formatter names the local day of the stamp, which is why a day needs its own.
+      process.env.TZ = "Europe/Berlin";
+      expect(formatShortDate(ts, Date.UTC(2026, 9, 1))).toBe("Oct 31");
+    } finally {
+      if (was === undefined) delete process.env.TZ; else process.env.TZ = was;
+    }
+  });
 });
 
 describe("parseDuration", () => {

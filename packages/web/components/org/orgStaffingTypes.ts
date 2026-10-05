@@ -4,6 +4,7 @@
 // on one definition here.
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import type { RoleArea } from "@codecast/shared/contracts/orgAreas";
+import type { OrgAppliedDiffRow } from "@codecast/shared/contracts/orgChange";
 import type { OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalMode, OrgProposalThread } from "@codecast/shared/contracts/orgProposal";
 
 export type { HealthFlag, RoleArea, OrgAsk, OrgChange, OrgChangeKind, OrgChangeRevision, OrgChangeStatus, OrgEvidenceLink, OrgProposalThread };
@@ -87,6 +88,10 @@ export type OrgProposalChange = {
   decided_at?: number;
   applied_note?: string;
   applied_at?: number;
+  /** What the accept moved (S39): the log's before and after, cut to the
+   *  fields a card draws. Absent on a row accepted before the field, on a
+   *  skip, on an apply that moved nothing and on a limit. */
+  applied_diff?: OrgAppliedDiffRow[];
   /** What this row needs from, or gives to, another row of the proposal (orgChangeDependencies). */
   depends?: string;
   /** What the author's revise did to this row (S18): removed (the row stays,

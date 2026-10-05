@@ -251,14 +251,15 @@ export function chatRoomKey(channel: {
   return channelRoomKey(channel.id);
 }
 
-// An agent's voice in a call: a live model with a Tavus face that joins the
-// LiveKit room and talks for the agent (convex/callFace.ts). People join under their
-// user id; a face joins under this prefix and the agent's conversation id, so
-// a client can tell a face from a person by identity alone.
+// An agent in a call (convex/callFace.ts, infra/call-face-worker): its Tavus
+// face joins the LiveKit room under this prefix and the agent's conversation
+// id, and the worker hosting it joins under LiveKit's own `agent-<job>`, which
+// carries the agent's voice when no face could be seated. People join under
+// their user id, so a client tells either apart from a person by identity alone.
 const AGENT_FACE_PREFIX = "agent:";
 export function agentFaceIdentity(conversationId: string): string {
   return `${AGENT_FACE_PREFIX}${conversationId}`;
 }
 export function isAgentFaceIdentity(identity: string): boolean {
-  return identity.startsWith(AGENT_FACE_PREFIX);
+  return /^agent[:-]/.test(identity);
 }

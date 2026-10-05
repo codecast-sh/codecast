@@ -14,7 +14,7 @@ import {
   type FrameToHost, type HostToFrame, type ModContext, type ModEventName, type ModManifest, type ModNode, type ModSurface,
 } from "@codecast/shared/contracts/mods";
 import { withoutUndo } from "@platform/engine";
-import { useInboxStore, sessionWorkState, placeInboxRows, type InboxSession } from "../../store/inboxStore";
+import { useInboxStore, sessionWorkState, placeInboxRows, isSub, type InboxSession } from "../../store/inboxStore";
 import { WORKSPACE_SCOPED_KEYS } from "../../store/clientSyncRegistry";
 import { filterByWorkspace } from "../workspaceScope";
 import { activeWorkspaceKeyOf } from "../workspaceScope";
@@ -87,24 +87,34 @@ function baseName(p?: string): string | undefined {
  * their sessions sits in. The same placement the sidebar draws (memoized
  * there), so a mod never re-derives "is this waiting on me" from raw fields.
  */
-function inboxPlacements(): Map<string, { bucket: string }> {
-  try { return placeInboxRows(useInboxStore.getState() as any, { scope: "mine" }).placements as any; } catch { return new Map(); }
+type InboxView = { visible: Record<string, unknown>; placements: Map<string, { bucket: string }> };
+function inboxPlacements(): InboxView {
+  try {
+    const placed = placeInboxRows(useInboxStore.getState() as any, { scope: "mine" });
+    return { visible: placed.visibleSessions, placements: placed.placements as any };
+  } catch {
+    return { visible: {}, placements: new Map() };
+  }
 }
 
 /** A row as a mod sees it: the store's row plus the derived facts every mod would otherwise recompute. */
-function present(collection: string, row: any, placements?: Map<string, { bucket: string }>): any {
+function present(collection: string, row: any, inbox?: InboxView): any {
   if (collection === "sessions") {
     const s = row as any;
     let state: string | undefined;
     try { state = sessionWorkState(s as InboxSession); } catch { state = undefined; }
     const me = String((useInboxStore.getState() as any).currentUser?._id ?? "");
-    const placed = placements?.get(String(s._id)) ?? placements?.get(String(s.session_id));
+    // Membership is the inbox's own row set; the section is its server-stamped
+    // bucket when one has arrived, else the work state it sorts by.
+    // Machine-started rows (subagents, workers, spawned fan-out) nest under their parent, never as the person's own card.
+    const shown = !!inbox && (String(s._id) in inbox.visible || String(s.session_id) in inbox.visible) && !isSub(s as InboxSession);
+    const bucket = inbox?.placements.get(String(s._id))?.bucket ?? inbox?.placements.get(String(s.session_id))?.bucket;
     return {
       ...row,
       state,
       // The section of the person's inbox the session sits in, or null when the inbox does not show it
       // (a subagent, a worker, a killed, stashed or filed session, someone else's).
-      inbox: placed && placed.bucket !== "hidden" ? placed.bucket : null,
+      inbox: shown && bucket !== "hidden" ? (bucket ?? state ?? null) : null,
       mine: !!me && String(s.user_id ?? "") === me,
       // When the session last came to rest (its turn ended), for "how long has it waited".
       waiting_since: state && state !== "working" ? (s.turn_completed_at ?? s.agent_status_updated_at ?? s.updated_at ?? null) : null,
@@ -141,8 +151,8 @@ function matchOne(value: unknown, cond: unknown): boolean {
 }
 
 export function queryCollection(collection: string, q: Query = {}): any[] {
-  const placements = collection === "sessions" ? inboxPlacements() : undefined;
-  let rows = rowsOf(collection).map((r) => present(collection, r, placements));
+  const inbox = collection === "sessions" ? inboxPlacements() : undefined;
+  let rows = rowsOf(collection).map((r) => present(collection, r, inbox));
   if (q.where) rows = rows.filter((r) => Object.entries(q.where!).every(([k, cond]) => matchOne(k.includes(".") ? k.split(".").reduce((v: any, part) => v?.[part], r) : r[k], cond)));
   if (q.search) {
     const needle = q.search.toLowerCase();

@@ -58,8 +58,8 @@ import {
   type OrgScopeChange,
   type OrgTaskStatusChange,
   type OrgTrustChange, authorityWords, type OrgAuthorityChange, type OrgHireChange, type OrgUpgradeChange,
-  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords } from "@codecast/shared/contracts/orgProposal";
-import { mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
+  type OrgInitiativeChange, type OrgInitiativeOwnerChange, type OrgInitiativeProjectsChange, type OrgInitiativeShapeChange, type OrgEvidenceLink, metricsWords, ORG_GOAL_KINDS } from "@codecast/shared/contracts/orgProposal";
+import { INITIATIVE_RECORD_MAX, INITIATIVE_RECORD_NOUN, mergeIntentSources, parseIntentSource, type IntentSource } from "@codecast/shared/contracts/initiative";
 import { performAddProjects, performCreateInitiative, performUpdateInitiative } from "./initiatives";
 import { findInitiative } from "./lib/initiativeRef";
 import { applyRoutineTune, performSetTrust, roleCheckOf, standingConversationOf } from "./orgRoles";
@@ -1360,7 +1360,8 @@ export type ApplyOpts = {
    *  with two root agents while the note claimed the anchor was adopted. */
   awaiting_adopt?: string;
   /** The accepted change row's evidence. A goal change persists it as the
-   *  goal's sources (initiatives-projects-role-page.md I5 "Proposals"). */
+   *  goal's sources, in a log row of their own, whether or not the change
+   *  moved anything else (initiatives-projects-role-page.md I5 "Proposals"). */
   evidence?: OrgEvidenceLink[];
 };
 
@@ -1638,7 +1639,8 @@ export async function applyTaskStatus(ctx: Ctx, userId: Id<"users">, boundary: B
 // short id, id or title through the scope resolver; an initiative by in-N,
 // id or its title; an owner the way a role's parent resolves ("@handle",
 // "me", a member's name). The core reports the log row and grows the owner
-// role's scope; nothing here writes an initiative itself.
+// role's scope; nothing here writes an initiative itself. Each change opens
+// its own rows (`acceptedRow`): what it moved, then the sources it brought.
 
 async function initiativeByRef(ctx: Ctx, userId: Id<"users">, boundary: Boundary, ref: string): Promise<any> {
   const key = workspaceKey(boundary.team_id ? { type: "team", teamId: boundary.team_id } : { type: "personal", userId });
@@ -1659,43 +1661,74 @@ async function projectIdsOf(ctx: Ctx, boundary: Boundary, refs: string[]): Promi
   return out;
 }
 
+/** One row of an accepted proposal change, whatever cores it runs through. */
+const acceptedRow = <T>(ctx: Ctx, userId: Id<"users">, kind: OrgChange["kind"], run: () => Promise<T>): Promise<T> =>
+  withOrgChange(ctx, userId, { kind, door: "proposal", gesture: "accept_change" }, run);
+
+/** A link of the accepted row as a source: its label is the words said and
+ *  its href the address, read by the one parser (a codecast link is the
+ *  object it opens). A label that is only an address adds no words, and an
+ *  href that is no address leaves the label as it reads alone. */
+function linkSource(e: OrgEvidenceLink): IntentSource {
+  const label = parseIntentSource(e.label);
+  const at = e.href ? parseIntentSource(e.href, label.ref && !label.quote ? {} : { quote: e.label }) : label;
+  return at.ref ? at : label;
+}
 /**
  * The sources a goal change brings that the goal does not hold yet (I5
- * "Proposals"): the ones the change names, then its evidence (the change's
- * own lines and the accepted row's links), each read the way a person writes
- * one. A source already on the record is skipped, and so is one the record
- * has no room for.
+ * "Proposals"): the ones the change names, each read the way a person writes
+ * one, then the accepted row's links. A source already on the record is
+ * skipped, and so is one the record has no room for.
  */
 function freshSources(goal: { sources?: IntentSource[] } | null, opts: ApplyOpts, named: readonly string[] = []): IntentSource[] {
   const prior = goal?.sources ?? [];
-  const said = [...named, ...(opts.evidence ?? []).map((e) => e.href ?? e.label)].map((text) => parseIntentSource(text));
+  const said = [...named.map((text) => parseIntentSource(text)), ...(opts.evidence ?? []).map(linkSource)];
   return mergeIntentSources(prior, said).slice(prior.length);
 }
-/** The entries of a list the goal does not hold yet, compared by their words; a repeat inside the change counts once. */
+/**
+ * Write the sources a goal change brought, after the change and in a log row
+ * of their own. Undoing the change is then judged on what it moved, and a
+ * source the goal gains later never blocks it. They are written whether or
+ * not the change moved anything else, so a goal a review read always says
+ * where. Answers how many joined; a second run finds them there and adds none.
+ */
+async function recordSources(ctx: Ctx, userId: Id<"users">, goalId: Id<"initiatives">, opts: ApplyOpts, named: readonly string[] = []): Promise<number> {
+  const goal = await ctx.db.get(goalId);
+  const sources = freshSources(goal, opts, named);
+  if (sources.length) await acceptedRow(ctx, userId, "initiative_shape", () => performUpdateInitiative(ctx, userId, goal, { sources }));
+  return sources.length;
+}
+/** The entries of a list the goal does not hold yet, compared by their words whatever their case and spacing; a repeat inside the change counts once. */
 function unheld<T>(given: readonly T[] | undefined, held: readonly string[], wordsOf: (e: T) => string): T[] {
-  const seen = new Set(held.map((w) => w.trim().toLowerCase()));
+  const read = (words: string) => words.trim().toLowerCase().replace(/\s+/g, " ");
+  const seen = new Set(held.map(read));
   return (given ?? []).filter((e) => {
-    const words = wordsOf(e).trim().toLowerCase();
+    const words = read(wordsOf(e));
     if (!words || seen.has(words)) return false;
     seen.add(words);
     return true;
   });
 }
 const milestoneEntry = (m: { title: string; date?: number }) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) });
+const textEntry = (text: string) => ({ text });
 const counted = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
 const sourcesNote = (k: number) => k ? `; its record names ${counted(k, "source")} for it` : "";
 
 export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeChange, opts: ApplyOpts): Promise<ApplyResult> {
+  const named = [...(p.sources ?? []), ...(p.evidence ?? [])];
   // Idempotent by title: a re-run after a crash must not set the goal twice.
   const existing = await initiativeByRef(ctx, userId, boundary, p.title).catch(() => null);
-  if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})` };
+  if (existing) return { status: "applied", note: `the goal "${existing.title}" already exists (${existing.short_id})${sourcesNote(await recordSources(ctx, userId, existing._id, opts, named))}` };
   const project_ids = await projectIdsOf(ctx, boundary, p.projects);
   const owner = p.owner?.trim() ? await resolveReportsTo(ctx, userId, boundary, p.owner) : undefined;
   // The top level goal it feeds: a goal that exists, or one set earlier in the same proposal (the apply order keeps the proposal's order within a kind).
   const parent = p.parent?.trim() ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
   const milestones = unheld(p.milestones, [], (m) => m.title).map(milestoneEntry);
-  const sources = freshSources(null, opts, [...(p.sources ?? []), ...(p.evidence ?? [])]);
-  const r = await performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), {
+  const questions = unheld(p.questions, [], (q) => q).map(textEntry);
+  const decisions = unheld(p.decisions, [], (d) => d).map(textEntry);
+  // A new goal's sources are part of its making: the create's undo cancels the goal whole, so they need no row of their own.
+  const sources = freshSources(null, opts, named);
+  const r = await acceptedRow(ctx, userId, "initiative", () => performCreateInitiative(ctx, userId, initiativeWorkspace(boundary), {
     title: p.title, description: p.description, project_ids,
     ...(owner ? { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any } : {}),
     ...(p.target_date ? { target_date: p.target_date } : {}),
@@ -1703,64 +1736,72 @@ export async function applyInitiative(ctx: Ctx, userId: Id<"users">, boundary: B
     ...(p.metrics?.length ? { metrics: p.metrics } : {}),
     ...(p.why?.trim() ? { why: p.why } : {}),
     ...(p.done_when?.trim() ? { done_when: p.done_when } : {}),
-    ...(milestones.length ? { milestones } : {}),
-    ...(sources.length ? { sources } : {}),
-  });
-  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${milestones.length ? `, with ${counted(milestones.length, "milestone")}` : ""}${sourcesNote(sources.length)}${coverNote(r.scope)}` };
+    ...Object.fromEntries(Object.entries({ milestones, questions, decisions, sources }).filter(([, entries]) => entries.length)),
+  }));
+  const record = [milestones.length ? counted(milestones.length, "milestone") : "", questions.length ? counted(questions.length, "open question") : "", decisions.length ? counted(decisions.length, "decision") : ""].filter(Boolean);
+  return { status: "applied", note: `set the goal "${r.row.title}" (${r.short_id}) with ${project_ids.length} project${project_ids.length === 1 ? "" : "s"}${owner ? `, owned by ${p.owner}` : ""}${parent ? `, under "${parent.title}" (${parent.short_id})` : ""}${p.metrics?.length ? `, measured by ${metricsWords(p.metrics)}` : ""}${record.length ? `, with ${andListOf(record)}` : ""}${sourcesNote(sources.length)}${coverNote(r.scope)}` };
 }
 
 // One call into the update core: the parent, the metrics and the words
-// replace what is there, and every list entry is an add, so a re-run finds
-// each one on the record and writes nothing twice.
+// replace what is there, and every list entry is an add the goal does not
+// hold and has room for, so a re-run finds each one on the record and writes
+// nothing twice. Whether the change moved anything is decided before its
+// sources are counted: they are a row of their own (recordSources).
 export async function applyInitiativeShape(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeShapeChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const parent = p.parent ? await initiativeByRef(ctx, userId, boundary, p.parent) : null;
   const sameParent = p.parent === undefined || String(initiative.parent_initiative_id ?? "") === String(parent?._id ?? "");
   const sameMetrics = p.metrics === undefined || JSON.stringify((initiative.metrics ?? []).map((m: any) => [m.name, m.target])) === JSON.stringify(p.metrics.map((m) => [m.name.trim(), m.target.trim()]));
-  const held = (list: string, words: string): string[] => (initiative[list] ?? []).map((e: any) => String(e[words] ?? ""));
-  const milestones = unheld(p.milestones, held("milestones", "title"), (m) => m.title).map(milestoneEntry);
-  const questions = unheld(p.questions, held("questions", "text"), (q) => q).map((text) => ({ text }));
-  const decisions = unheld(p.decisions, held("decisions", "text"), (d) => d).map((text) => ({ text }));
-  const sources = freshSources(initiative, opts, p.sources);
+  // What each list gains, and what it has no room for: a full list drops the entry, never the whole change.
+  const crowded: string[] = [];
+  const adds = <T>(list: "milestones" | "questions" | "decisions", words: "title" | "text", given: readonly T[] | undefined, wordsOf: (e: T) => string): T[] => {
+    const held: any[] = initiative[list] ?? [];
+    const fresh = unheld(given, held.map((e) => String(e[words] ?? "")), wordsOf);
+    const fit = fresh.slice(0, Math.max(0, INITIATIVE_RECORD_MAX[list] - held.length));
+    if (fit.length < fresh.length) crowded.push(counted(fresh.length - fit.length, INITIATIVE_RECORD_NOUN[list]));
+    return fit;
+  };
+  const milestones = adds("milestones", "title", p.milestones, (m) => m.title).map(milestoneEntry);
+  const questions = adds("questions", "text", p.questions, (q) => q).map(textEntry);
+  const decisions = adds("decisions", "text", p.decisions, (d) => d).map(textEntry);
   const fields: Record<string, any> = {};
   if (!sameParent) fields.parent_initiative_id = parent ? String(parent._id) : null;
   if (!sameMetrics) fields.metrics = p.metrics;
   if (p.why !== undefined && p.why.trim() !== (initiative.why ?? "")) fields.why = p.why;
   if (p.done_when !== undefined && p.done_when.trim() !== (initiative.done_when ?? "")) fields.done_when = p.done_when;
-  for (const [list, entries] of Object.entries({ milestones, questions, decisions, sources })) if (entries.length) fields[list] = entries;
-  if (!Object.keys(fields).length) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way` };
-  await performUpdateInitiative(ctx, userId, initiative, fields);
-  const gained = [milestones.length ? counted(milestones.length, "milestone") : "", questions.length ? counted(questions.length, "open question") : "", decisions.length ? counted(decisions.length, "decision") : "", sources.length ? counted(sources.length, "source") : ""].filter(Boolean);
+  for (const [list, entries] of Object.entries({ milestones, questions, decisions })) if (entries.length) fields[list] = entries;
+  if (Object.keys(fields).length) await acceptedRow(ctx, userId, "initiative_shape", () => performUpdateInitiative(ctx, userId, initiative, fields));
+  const sources = await recordSources(ctx, userId, initiative._id, opts, p.sources);
+  const gained = [milestones.length ? counted(milestones.length, "milestone") : "", questions.length ? counted(questions.length, "open question") : "", decisions.length ? counted(decisions.length, "decision") : "", sources ? counted(sources, "source") : ""].filter(Boolean);
   const said = [
-    p.parent !== undefined ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "",
-    p.metrics !== undefined ? (p.metrics.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : "",
+    "parent_initiative_id" in fields ? (parent ? `now feeds "${parent.title}" (${parent.short_id})` : "is now a top level goal") : "",
+    "metrics" in fields ? (p.metrics?.length ? `is measured by ${metricsWords(p.metrics)}` : "has no metric") : "",
     "why" in fields ? "says why it matters" : "",
     "done_when" in fields ? "says what done looks like" : "",
     gained.length ? `gained ${andListOf(gained)}` : "",
   ].filter(Boolean);
-  return { status: "applied", note: `the goal "${initiative.title}" (${initiative.short_id}) ${andListOf(said)}` };
+  const noRoom = crowded.length ? `; it has no room for ${andListOf(crowded)}` : "";
+  if (!said.length) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already reads that way${noRoom}` };
+  return { status: "applied", note: `the goal "${initiative.title}" (${initiative.short_id}) ${andListOf(said)}${noRoom}` };
 }
 
-// A change that moved nothing writes nothing, its evidence included: the
-// sources ride with the change that brought them, in its one log row.
 export async function applyInitiativeProjects(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeProjectsChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const project_ids = await projectIdsOf(ctx, boundary, p.projects);
-  const r = await performAddProjects(ctx, userId, initiative, project_ids);
-  if (!r.added) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already carries ${andListOf(p.projects)}` };
-  const sources = freshSources(r.row, opts);
-  if (sources.length) await performUpdateInitiative(ctx, userId, r.row, { sources });
-  return { status: "applied", note: `added ${andListOf(p.projects)} to the goal "${initiative.title}" (${initiative.short_id})${sourcesNote(sources.length)}${coverNote(r.scope)}` };
+  const r = await acceptedRow(ctx, userId, "initiative_projects", () => performAddProjects(ctx, userId, initiative, project_ids));
+  const sources = sourcesNote(await recordSources(ctx, userId, initiative._id, opts));
+  if (!r.added) return { status: "applied", note: `${initiative.short_id} "${initiative.title}" already carries ${andListOf(p.projects)}${sources}` };
+  return { status: "applied", note: `added ${andListOf(p.projects)} to the goal "${initiative.title}" (${initiative.short_id})${sources}${coverNote(r.scope)}` };
 }
 
 export async function applyInitiativeOwner(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgInitiativeOwnerChange, opts: ApplyOpts): Promise<ApplyResult> {
   const initiative = await initiativeByRef(ctx, userId, boundary, p.initiative);
   const owner = await resolveReportsTo(ctx, userId, boundary, p.owner);
   const same = initiative.owner && initiative.owner.kind === owner.kind && String(owner.kind === "role" ? initiative.owner.role_id : initiative.owner.user_id) === String(owner.kind === "role" ? owner.role_id : owner.user_id);
-  if (same) return { status: "applied", note: `${p.owner} already owns ${initiative.short_id} "${initiative.title}"` };
-  const sources = freshSources(initiative, opts);
-  const r = await performUpdateInitiative(ctx, userId, initiative, { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any, ...(sources.length ? { sources } : {}) });
-  return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${sourcesNote(sources.length)}${coverNote(r.scope)}` };
+  const r = same ? null : await acceptedRow(ctx, userId, "initiative_owner", () => performUpdateInitiative(ctx, userId, initiative, { owner: { ...owner, ...(owner.kind === "role" ? { role_id: String(owner.role_id) } : { user_id: String(owner.user_id) }) } as any }));
+  const sources = sourcesNote(await recordSources(ctx, userId, initiative._id, opts));
+  if (!r) return { status: "applied", note: `${p.owner} already owns ${initiative.short_id} "${initiative.title}"${sources}` };
+  return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${sources}${coverNote(r.scope)}` };
 }
 /** What the owner role's area gained, and the sessions it took over with it, as the core reported them. */
 const coverNote = (scope: { added: string[]; took_over?: string } | null | undefined) => `${scope?.added.length ? `; the owner now looks after ${scope.added.length} more project${scope.added.length === 1 ? "" : "s"}` : ""}${scope?.took_over ? `; ${scope.took_over}` : ""}`;
@@ -1769,7 +1810,9 @@ const andListOf = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0
 /** One change of any kind, applied. Throws on a refusal; the caller records it. */
 export async function applyOrgChange(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {
   if (change.kind === "projects") return applyProjects(ctx, userId, boundary, change.changes, note);
-  return withOrgChange(ctx, userId, { kind: change.kind, door: "proposal", gesture: "accept_change" }, () => applyOrgChangeCore(ctx, userId, boundary, change, opts, note));
+  // A goal change opens its own rows: what it moved, then the sources it brought.
+  if (ORG_GOAL_KINDS.includes(change.kind)) return applyOrgChangeCore(ctx, userId, boundary, change, opts, note);
+  return acceptedRow(ctx, userId, change.kind, () => applyOrgChangeCore(ctx, userId, boundary, change, opts, note));
 }
 
 async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Boundary, change: OrgChange, opts: ApplyOpts, note?: string): Promise<ApplyResult> {

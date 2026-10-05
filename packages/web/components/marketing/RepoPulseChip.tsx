@@ -12,8 +12,10 @@ import { type RepoPulse, REPO_PULSE_URL, pulseWords } from "../../lib/repoPulse"
 // it uses, refreshed once a minute.
 //
 // Before the read answers, and wherever it cannot (a prerendered page, a
-// blocked network), the chip is the plain octocat: a link that says less,
-// never one that says "0" for lack of an answer.
+// blocked network), the chip shows only the octocat: a link that says less,
+// never one that says "0" for lack of an answer. It still holds the width of
+// a typical answer with an invisible stand-in, so the nav does not shift when
+// the numbers arrive.
 import Link from "next/link";
 import { Star } from "lucide-react";
 import { usePublicRepoRead } from "@/lib/repoTransport";
@@ -40,14 +42,6 @@ export function GitHubIcon({ className = "w-5 h-5" }: { className?: string }) {
 export function RepoPulseChip({ className = "" }: { className?: string }) {
   const read = usePublicRepoRead<RepoPulse>(REPO_PULSE_URL);
   const pulse = read.data;
-  const words = pulse ? pulseWords(pulse.live) : null;
-  const live = (pulse?.live ?? 0) > 0;
-  const stars = pulse && pulse.stargazers_count !== null ? (
-    <span className="flex items-center gap-1 tabular-nums" style={{ color: INK }}>
-      {pulse.stargazers_count.toLocaleString()}
-      <Star className="w-3 h-3" style={{ color: DIM }} aria-hidden="true" />
-    </span>
-  ) : null;
 
   return (
     <Link
@@ -58,26 +52,46 @@ export function RepoPulseChip({ className = "" }: { className?: string }) {
       aria-label="Codecast's source, with the agent sessions working on it"
     >
       <GitHubIcon className="w-4 h-4 shrink-0" />
-      {pulse && (
-        <>
-          {/* Narrow: the stars alone. Wide: stars, dot and words, and on hover
-              the invitation in their place. The hover phrase is about as wide
-              as the run it replaces, and both share one cell, so the chip is
-              as wide as its content and nothing beside it moves. */}
-          <span className="lg:hidden">{stars}</span>
-          <span className="hidden lg:grid">
-            <span className="col-start-1 row-start-1 flex items-center gap-2 group-hover:invisible">
-              {stars}
-              <span className="relative flex h-2 w-2" aria-hidden="true">
-                {live && <span className="absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping" style={{ backgroundColor: GREEN }} />}
-                <span className="relative inline-flex h-2 w-2 rounded-full" style={{ backgroundColor: live ? GREEN : DIM }} />
-              </span>
-              <span style={{ color: live ? INK : MUTED }}>{words!.now}</span>
-            </span>
-            <span className="col-start-1 row-start-1 invisible group-hover:visible" style={{ color: INK }}>{words!.hover}</span>
-          </span>
-        </>
+      {pulse ? <PulseRun pulse={pulse} /> : (
+        <span className="flex opacity-0" aria-hidden="true">
+          <PulseRun pulse={STAND_IN} />
+        </span>
       )}
     </Link>
+  );
+}
+
+// The shape of a typical answer, rendered invisibly to hold the chip's width.
+const STAND_IN: RepoPulse = { stargazers_count: 10, live: 2 };
+
+function PulseRun({ pulse }: { pulse: RepoPulse }) {
+  const words = pulseWords(pulse.live);
+  const live = pulse.live > 0;
+  const stars = pulse.stargazers_count !== null ? (
+    <span className="flex items-center gap-1 tabular-nums" style={{ color: INK }}>
+      {pulse.stargazers_count.toLocaleString()}
+      <Star className="w-3 h-3" style={{ color: DIM }} aria-hidden="true" />
+    </span>
+  ) : null;
+
+  return (
+    <>
+      {/* Narrow: the stars alone. Wide: stars, dot and words, and on hover
+          the invitation in their place. The hover phrase is about as wide
+          as the run it replaces, and both share one cell, so the chip is
+          as wide as its content and nothing beside it moves. */}
+      <span className="lg:hidden">{stars}</span>
+      <span className="hidden lg:grid">
+        <span className="col-start-1 row-start-1 flex items-center gap-2 group-hover:invisible">
+          {stars}
+          <span className="relative flex h-2 w-2" aria-hidden="true">
+            {live && <span className="absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping" style={{ backgroundColor: GREEN }} />}
+            <span className="relative inline-flex h-2 w-2 rounded-full" style={{ backgroundColor: live ? GREEN : DIM }} />
+          </span>
+          <span style={{ color: live ? INK : MUTED }}>{words.now}</span>
+        </span>
+        <span className="col-start-1 row-start-1 invisible group-hover:visible" style={{ color: INK }}>{words.hover}</span>
+      </span>
+    </>
   );
 }

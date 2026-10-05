@@ -286,6 +286,7 @@ import {
   typedNewlineKey,
   pasteAndSubmitText,
   prepareInjectedContent,
+  stripComposerChrome,
 } from "./tmuxPaste.js";
 import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
 import { formatFeedResults } from "./formatter.js";
@@ -14706,12 +14707,13 @@ function tmuxComposerRegion(pane: string): string | null {
   return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
 }
 
+// Both checks read the whole capture: the caller sizes it to the payload. A
+// fixed window shorter than a long draft lost the prompt line above it, read
+// the unsent message as gone, and acked it as delivered (jx76c85, 2026-10-05).
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
-  const lines = paneContent.split("\n");
-  const recent = lines.slice(-80).join("\n");
-  const fromPrompt = tmuxComposerRegion(recent);
+  const fromPrompt = tmuxComposerRegion(paneContent);
   if (fromPrompt === null) return false;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
@@ -14724,8 +14726,7 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
 export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
-  const recent = paneContent.split("\n").slice(-80).join("\n");
-  const composer = tmuxComposerRegion(recent);
+  const composer = tmuxComposerRegion(paneContent);
   if (composer === null) return false;
   const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
   return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
@@ -17544,8 +17545,6 @@ export async function tmuxComposerDraft(
 // composer holds as real text only matches once the frame is out of the way
 // (ct-49607). Both sides go through this, so a payload containing box glyphs
 // still compares against itself.
-const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
-
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {

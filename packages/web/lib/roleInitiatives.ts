@@ -10,6 +10,8 @@ export type RoleInitiative = {
   ref: string;
   title: string;
   health: InitiativeRow["health"];
+  /** When the owner last said it. */
+  health_at?: number;
   /** The role drives it; otherwise its projects only contribute to it. */
   owned: boolean;
   /** How many of the role's projects carry it. */
@@ -31,7 +33,7 @@ export function roleInitiatives(roleId: string, projectIds: readonly string[], i
     if (CLOSED.has(i.status)) continue;
     const owned = i.owner?.kind === "role" && String(i.owner.role_id) === String(roleId);
     const projects = i.project_ids.filter((id) => mine.has(String(id))).length;
-    if (owned || projects > 0) rows.push({ id: String(i._id), ref: i.short_id, title: i.title, health: i.health, owned, projects });
+    if (owned || projects > 0) rows.push({ id: String(i._id), ref: i.short_id, title: i.title, health: i.health, health_at: i.health_at, owned, projects });
   }
   // Owned first; inside each group, the order the store holds them in.
   return rows.sort((a, b) => Number(b.owned) - Number(a.owned));

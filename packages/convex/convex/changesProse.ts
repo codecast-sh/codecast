@@ -122,7 +122,7 @@ export type StoryPromptSession = {
 };
 
 /** A screenshot the story may place, by ref; its URL stays out of the prompt. */
-export type StoryPromptImage = { ref: string; at: string; context: string };
+export type StoryPromptImage = { ref: string; at: string; context: string; origin?: string };
 
 /** An edit to instruction text (a prompt, a skill, an agent guide) from a session the team sees in full. */
 export type StoryPromptEdit = { path: string; before: string; after: string };
@@ -282,7 +282,7 @@ function storyMedia(sessions: readonly GatedSession[]): Pick<StoryPromptInput, "
   const image_urls: Record<string, string> = {};
   found.forEach((img, i) => {
     const ref = `img${i + 1}`;
-    images.push({ ref, at: new Date(img.timestamp).toISOString().slice(0, 16).replace("T", " "), context: img.context });
+    images.push({ ref, at: new Date(img.timestamp).toISOString().slice(0, 16).replace("T", " "), context: img.context, ...(img.origin ? { origin: img.origin } : {}) });
     image_urls[ref] = img.url;
   });
   const edits = full
@@ -364,7 +364,7 @@ function renderStoryInput(i: StoryPromptInput): string {
 
   if (i.images.length) {
     out.push("", "Screenshots from the sessions, by ref, with the words around each:");
-    for (const img of i.images) out.push(`- ${img.ref} (${img.at}): ${img.context || "(no words around it)"}`);
+    for (const img of i.images) out.push(`- ${img.ref} (${[img.at, img.origin].filter(Boolean).join(", ")}): ${img.context || "(no words around it)"}`);
   }
 
   if (i.risks.length) {
@@ -394,8 +394,8 @@ Fields:
 - dek: one short line, not a summary of the work (aim for under ${DEK_TARGET} characters): the stated reason when there is one, otherwise the one fact the headline most needs; "" when the headline says it all. Further detail belongs in the body.
 - body: markdown, "" when the headline and dek say it all, and never repeating them. A short article, at most about ${BODY_WORDS} words:
   - When the work has distinct parts, give each a short "###" heading that names the part; a single change reads as plain paragraphs, with no headings.
-  - Place a screenshot where it shows the change, as ![what it shows](img1) with a ref from the list and a caption a reader can take in without the image. A screenshot earns its place by showing the product as its users see it, or a result the words cannot carry; a terminal, a log or code shows the reader nothing new. Use only listed refs.
-  - When a session made a page or a canvas that shows the work better than words can (a report, a comparison, a diagram), embed it on a line of its own as embed: page1, after a sentence saying what it shows.
+  - Show the change: a change people can see reads best with its picture. Place a screenshot captured during the work where the article tells what it shows, as ![what it shows](img1) with a caption a reader can take in without the image. A screenshot a person pasted usually shows the problem before the fix; place it beside the sentence that tells that problem, or leave it out. Judge each by its words, and leave out one whose words point to a terminal, a log or code. Use only listed refs.
+  - A page or canvas a session made about this work (a report, a comparison, a diagram) is part of its story: embed it on a line of its own as embed: page1, after a sentence saying what it shows.
   - When the work changes how an agent behaves (an edit to a prompt, a skill or an agent guide), say what the agent now does differently, quote the instruction briefly as it read before and after, and give any measured result an input states.
 - kind: one of ${KINDS.join(", ")}.
 - importance: 1 to 5, how much a teammate needs to know this today. 5 is a change everyone will notice, 1 is housekeeping.
@@ -685,6 +685,40 @@ export type StoryRead = {
   sessions: GatedSession[];
   prs: Array<{ number: number; title: string; body: string }>;
 };
+
+/**
+ * What one team day's stories were offered and what their articles placed:
+ * per story, the gated sessions by mode, the screenshots, instruction edits
+ * and embeds storyMedia would hand the prompt, and the images and embeds the
+ * written body holds. Read-only, for measuring the media path.
+ */
+export const mediaAudit = internalQuery({
+  args: { team_id: v.id("teams"), date: v.string() },
+  handler: async (ctx, args) => {
+    const stories: Doc<"change_stories">[] = await ctx.db
+      .query("change_stories")
+      .withIndex("by_team_date", (q) => q.eq("team_id", args.team_id).eq("date", args.date))
+      .take(80);
+    const out = [];
+    for (const story of stories) {
+      if (!story.on_default_branch) continue;
+      const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, { since: story.first_at - MEDIA_MARGIN_MS, until: story.last_at + MEDIA_MARGIN_MS });
+      const media = storyMedia(sessions);
+      const body = story.body ?? "";
+      out.push({
+        key: story.story_key,
+        headline: story.headline,
+        sessions: story.conversation_ids.length,
+        gated: sessions.map((x) => x.mode),
+        offered: { images: media.images.length, edits: media.edits.length, embeds: media.embeds.length },
+        contexts: media.images.map((i) => i.context),
+        embeds: media.embeds.map((e) => `${e.ref}: ${e.title}`),
+        placed: { images: (body.match(/!\[/g) ?? []).length, embeds: (body.match(/```cast-canvas|codecast\.sh\/a\//g) ?? []).length },
+      });
+    }
+    return out;
+  },
+});
 
 /** A pending story with the sessions that pass the gate now and its pull requests; null once it is no longer pending. */
 export const readStory = internalQuery({

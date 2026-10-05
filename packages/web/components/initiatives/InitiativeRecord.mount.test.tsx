@@ -5,7 +5,10 @@
 // next and the late ones marked, and reaching one moves the mark; an answer
 // closes a question and folds it away; decisions read newest first with who
 // and where; a source typed as "ct-12 said so" lands as a task source with
-// its words; why saves on Cmd+Enter and Escape cancels; and a goal with no
+// its words; why saves on Cmd+Enter and Escape cancels; every entry is edited
+// in its own row (a milestone's day moves and keeps its key and source); a
+// source says who said it with a face and a note shows its words; a draft or
+// an open form never follows the page to another goal; and a goal with no
 // record says so in one quiet sentence a section.
 // Run: bun test components/initiatives/InitiativeRecord.mount.test.tsx
 import { test } from "bun:test";
@@ -154,6 +157,17 @@ async function verifyRecord() {
   // ── sources: who said it and where, the words under it ──
   assert.deepEqual(attrs("[data-initiative-source]", "data-initiative-source"), ["call:cl-42:15", "note:agents should run the routine work by the end of the year."]);
   assert.match(q("[data-initiative-source='call:cl-42:15'] [data-initiative-source-quote]")!.textContent!, /I read one page/);
+  // Who said it wears the roster's face, the way a question's asker does; the address is the link alone.
+  const callSource = q("[data-initiative-source='call:cl-42:15']")!;
+  assert.ok(callSource.querySelector("[data-initiative-by='face'] [data-face='person:Ashot']"));
+  assert.equal(callSource.querySelector("[data-intent-source]")!.textContent, "Call cl-42, line 15");
+  assert.match(callSource.textContent!, /Aug 21/);
+  // A note has no address: who said it, then its words, never the bare word "Note".
+  const noteSource = q("[data-initiative-source^='note:']")!;
+  assert.ok(noteSource.querySelector("[data-face='person:Sam']"));
+  assert.equal(noteSource.querySelector("[data-intent-source]"), null);
+  assert.doesNotMatch(noteSource.textContent!, /Note/);
+  assert.match(noteSource.querySelector("[data-initiative-source-quote]")!.textContent!, /Agents should run the routine work/);
   // One field takes an address or words; "ct-12 said so" is a task source with its words.
   await click(q("[data-initiative-add='sources']"));
   await type(q("[data-initiative-form='sources'] [data-field='text']"), "ct-12 said so");
@@ -166,6 +180,101 @@ async function verifyRecord() {
   assert.equal(added.querySelector("[data-intent-source]")!.getAttribute("data-intent-source"), "task");
   assert.equal(added.querySelector("[data-initiative-source-quote]")!.textContent, "said so");
   assert.deepEqual(rows.find((r) => r._id === "init-org")!.sources![2], { by: "Sam", kind: "task", quote: "said so", ref: "ct-12" });
+
+  // ── every entry is edited in its own row: Enter saves what changed, Escape cancels ──
+  // A milestone slips: its day moves, and it keeps its key, its title and where it was stated.
+  const withSource = () => rows.find((r) => r._id === "init-org")!.milestones!.find((m) => m.key === "org_chart_live")!;
+  await click(q("[data-initiative-milestone-row='org_chart_live'] [data-initiative-edit-entry]"));
+  const editTitle = q<HTMLInputElement>("[data-initiative-form='edit-milestones'] [data-field='title']")!;
+  assert.equal(editTitle.value, "Org chart live", "the form opens on the entry's own words");
+  assert.equal(q<HTMLInputElement>("[data-initiative-form='edit-milestones'] [data-field='date']")!.value, "2026-08-29", "and its own day");
+  await type(q("[data-initiative-form='edit-milestones'] [data-field='date']"), "2026-11-15");
+  await press(editTitle, "Enter");
+  assert.equal(last(), `record:init-org:${JSON.stringify({ list: "milestones", action: "edit", key: "org_chart_live", entry: { date: Date.UTC(2026, 10, 15, 23, 59, 59, 999) } })}`, "only what changed is sent");
+  await paint();
+  assert.equal(q("[data-initiative-form='edit-milestones']"), null, "the form closes");
+  assert.deepEqual({ ...withSource(), done_at: 0 }, { date: Date.UTC(2026, 10, 15, 23, 59, 59, 999), done_at: 0, key: "org_chart_live", source: { kind: "plan", ref: "pl-600" }, title: "Org chart live" });
+  // Escape leaves it as it was; an emptied day clears it; a save that changed nothing writes nothing.
+  let writes = calls.length;
+  await click(q("[data-initiative-milestone-row='org_chart_live'] [data-initiative-edit-entry]"));
+  await type(q("[data-initiative-form='edit-milestones'] [data-field='title']"), "Something else");
+  await press(q("[data-initiative-form='edit-milestones'] [data-field='title']"), "Escape");
+  assert.equal(q("[data-initiative-form='edit-milestones']"), null);
+  await click(q("[data-initiative-milestone-row='org_chart_live'] [data-initiative-edit-entry]"));
+  await press(q("[data-initiative-form='edit-milestones'] [data-field='title']"), "Enter");
+  assert.equal(calls.length, writes, "neither Escape nor an unchanged save writes");
+  await click(q("[data-initiative-milestone-row='org_chart_live'] [data-initiative-edit-entry]"));
+  await type(q("[data-initiative-form='edit-milestones'] [data-field='title']"), "The org chart is live");
+  await type(q("[data-initiative-form='edit-milestones'] [data-field='date']"), "");
+  await click(q("[data-initiative-form='edit-milestones'] [data-initiative-form-submit]"));
+  assert.equal(last(), `record:init-org:${JSON.stringify({ list: "milestones", action: "edit", key: "org_chart_live", entry: { title: "The org chart is live", date: null } })}`);
+  await paint();
+  assert.equal(withSource().date, undefined);
+  assert.match(q("[data-initiative-milestone-row='org_chart_live']")!.textContent!, /The org chart is live/);
+  // A question's words, open or answered, and a decision's.
+  await click(q("[data-initiative-question='does_the_review_run_weekly_or_daily'] [data-initiative-edit-entry]"));
+  assert.equal(q<HTMLInputElement>("[data-initiative-form='edit-questions'] [data-field='text']")!.value, "Does the review run weekly or daily?");
+  await type(q("[data-initiative-form='edit-questions'] [data-field='text']"), "Does the review run weekly?");
+  await press(q("[data-initiative-form='edit-questions'] [data-field='text']"), "Enter");
+  assert.equal(last(), `record:init-org:${JSON.stringify({ list: "questions", action: "edit", key: "does_the_review_run_weekly_or_daily", entry: { text: "Does the review run weekly?" } })}`);
+  await paint();
+  const reworded = q("[data-initiative-question='does_the_review_run_weekly_or_daily']")!;
+  assert.match(reworded.textContent!, /Does the review run weekly\?/);
+  assert.ok(reworded.querySelector("[data-face='role:growth']"), "who asked it stays");
+  assert.equal(reworded.querySelector("[data-intent-source]")!.getAttribute("data-intent-source"), "session", "and so does where");
+  await click(q("[data-initiative-question='do_agent_seats_bill_separately'] [data-initiative-edit-entry]"));
+  assert.equal(q<HTMLInputElement>("[data-initiative-form='edit-questions'] [data-field='answer']")!.value, "Not in this goal. Billing has its own.");
+  await type(q("[data-initiative-form='edit-questions'] [data-field='answer']"), "Billing has its own goal.");
+  await press(q("[data-initiative-form='edit-questions'] [data-field='answer']"), "Enter");
+  assert.equal(last(), `record:init-org:${JSON.stringify({ list: "questions", action: "edit", key: "do_agent_seats_bill_separately", entry: { answer: "Billing has its own goal." } })}`);
+  await paint();
+  assert.equal(q("[data-initiative-question='do_agent_seats_bill_separately'] [data-initiative-answer]")!.textContent, "Billing has its own goal.");
+  await click(q("[data-initiative-decision='roles_are_colleagues'] [data-initiative-edit-entry]"));
+  await type(q("[data-initiative-form='edit-decisions'] [data-field='text']"), "Roles are colleagues.");
+  await press(q("[data-initiative-form='edit-decisions'] [data-field='text']"), "Enter");
+  assert.equal(last(), `record:init-org:${JSON.stringify({ list: "decisions", action: "edit", key: "roles_are_colleagues", entry: { text: "Roles are colleagues." } })}`);
+  await paint();
+  assert.match(q("[data-initiative-decision='roles_are_colleagues']")!.textContent!, /Roles are colleagues\.Head of Growth/);
+  // A source is read whole from its text: the form opens on its address and words, and who said it can be put right.
+  await click(q("[data-initiative-source='call:cl-42:15'] [data-initiative-edit-entry]"));
+  assert.equal(q<HTMLInputElement>("[data-initiative-form='edit-sources'] [data-field='text']")!.value, "call:cl-42:15 Every area should have a lead that is an agent, and I read one page.");
+  await type(q("[data-initiative-form='edit-sources'] [data-field='by']"), "Sam");
+  await press(q("[data-initiative-form='edit-sources'] [data-field='by']"), "Enter");
+  await paint();
+  assert.deepEqual(rows.find((r) => r._id === "init-org")!.sources![0], { at: fx.FIXTURE_NOW - 28 * 86_400_000, by: "Sam", kind: "call", quote: "Every area should have a lead that is an agent, and I read one page.", ref: "cl-42:15" });
+  assert.ok(q("[data-initiative-source='call:cl-42:15'] [data-face='person:Sam']"));
+  // A decision whose "where" is plain words keeps them on the page.
+  await click(q("[data-initiative-add='decisions']"));
+  await type(q("[data-initiative-form='decisions'] [data-field='text']"), "Brokers go first");
+  await type(q("[data-initiative-form='decisions'] [data-field='source']"), "on the Monday standup");
+  await click(q("[data-initiative-form='decisions'] [data-initiative-form-submit]"));
+  await paint();
+  assert.equal(q("[data-initiative-decision='brokers_go_first'] [data-intent-source='note']")!.textContent, "on the Monday standup");
+
+  // ── the record belongs to its goal: nothing typed follows the page to another ──
+  // The page keeps one element across goals (the route is /initiatives/:id), so this paints the next goal over the first.
+  await click(q("[data-initiative-edit='why']"));
+  await type(q("[data-initiative-field='why']"), "A draft about the first goal");
+  await click(q("[data-initiative-add='milestones']"));
+  await type(q("[data-initiative-form='milestones'] [data-field='title']"), "A milestone of the first goal");
+  await click(q("[data-initiative-add='questions']"));
+  await click(q("[data-initiative-add='sources']"));
+  writes = calls.length;
+  shown = "init-org-sub";
+  await paint();
+  assert.equal(q("[data-initiative-record]")!.getAttribute("data-initiative-record"), "in-2");
+  assert.equal(q("[data-initiative-field='why']"), null, "the first goal's draft is not open on the second");
+  assert.deepEqual(attrs("[data-initiative-form]", "data-initiative-form"), [], "nor is any of its forms");
+  assert.equal(document.body.textContent!.includes("A draft about the first goal"), false);
+  // Writing on the second goal starts from the second goal's own words and lands on it.
+  await click(q("[data-initiative-edit='why']"));
+  assert.equal(q<HTMLTextAreaElement>("[data-initiative-field='why']")!.value, rows.find((r) => r._id === "init-org-sub")!.why ?? "");
+  await type(q("[data-initiative-field='why']"), "Why the second goal matters");
+  await press(q("[data-initiative-field='why']"), "Enter", { metaKey: true });
+  assert.equal(last(), `update:init-org-sub:${JSON.stringify({ why: "Why the second goal matters" })}`);
+  assert.equal(calls.length, writes + 1, "and nothing was written to the first");
+  shown = "init-org";
+  await paint();
 
   // ── why: edited in place; Cmd+Enter saves, Escape cancels ──
   await click(q("[data-initiative-edit='why']"));

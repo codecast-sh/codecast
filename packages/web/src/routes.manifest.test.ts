@@ -445,3 +445,13 @@ describe("(e) every param-free signed-in route is a cast app surface", () => {
     expect(wrong).toEqual([]);
   });
 });
+
+describe("the simple lane's paths are routes", () => {
+  it("every LANE_PATHS entry, Stripe's return page included, has a ROUTES entry", async () => {
+    const { LANE_PATHS } = await import("../components/simple/lanePaths");
+    const { BILLING_RETURN } = await import("@codecast/shared/contracts/assistant");
+    const hrefs = new Set(ROUTES.map((r) => routeHref(r.path)));
+    for (const path of Object.values(LANE_PATHS)) expect(hrefs.has(path)).toBe(true);
+    expect(hrefs.has(BILLING_RETURN.path)).toBe(true);
+  });
+});

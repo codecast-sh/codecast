@@ -2,8 +2,10 @@
 // I1), mounted in jsdom against the typed fixture of the contract's rows.
 // Proves: the list groups by status with owner, health, target and progress
 // derived from the tasks, the first number against its target and the next
-// milestone, and nests a sub initiative; the page's header wears the same
-// chips; the panel has two tabs, Goal (the record in the order of I5's test)
+// milestone, and nests a sub initiative; a row lays out by the list's own
+// width, so the title has its own line wherever columns would squeeze it; the
+// page's header wears the same chips, shows its title whole, and sets the
+// target day only on blur or Enter; the panel has two tabs, Goal (the record in the order of I5's test)
 // and Activity (the scope feed over the goal's projects and its sub goals',
 // selected by ?tab=activity); a page whose owner is a
 // role opens as that role's standing conversation with the initiative beside
@@ -31,6 +33,11 @@ async function verifyInitiatives() {
   const { mock } = await import("bun:test");
   const React = await import("react");
   const { act } = React;
+  // The DOM lays nothing out, so a width is whatever the test says it is:
+  // every live observer hears `resize(width)`.
+  const observers = new Set<(entries: any[]) => void>();
+  (globalThis as any).ResizeObserver = class { constructor(private cb: (entries: any[]) => void) {} observe() { observers.add(this.cb); } disconnect() { observers.delete(this.cb); } unobserve() {} };
+  const resize = (width: number) => act(async () => { for (const cb of [...observers]) cb([{ contentRect: { width, height: 0 } }]); });
 
   // ── the world the pages read ──
   const { ORG_FIXTURE } = await import("../org/orgFixture");
@@ -175,6 +182,22 @@ async function verifyInitiatives() {
   assert.equal(bareExtra.children.length, 2);
   assert.equal(bareExtra.querySelector("[data-metric], [data-initiative-milestone]"), null);
 
+  // A row lays out by the width of the list itself (it may sit in a split
+  // pane), and columns are chosen only where the title keeps its room beside
+  // them: narrower, the title has its own line and the facts wrap under it.
+  const layoutAt = async (width: number) => { await resize(width); return q("[data-initiative-layout]")!.getAttribute("data-initiative-layout"); };
+  assert.equal(await layoutAt(1180), "wide", "the number and the next milestone each get a column");
+  assert.equal(await layoutAt(900), "columns", "they share a second line under the columns");
+  assert.match(q("[data-initiatives-document]")!.textContent!, /Read as a document/);
+  assert.equal(await layoutAt(760), "stacked", "a pane this narrow would leave the title a few letters beside fixed columns");
+  assert.equal(await layoutAt(390), "stacked");
+  // One DOM for every layout: the same title, whole, and the same facts after it.
+  assert.equal(first.isConnected, true, "a resize re-lays the rows and remounts none");
+  assert.equal(first.querySelector("[data-initiative-row-title]")!.textContent, "Agents run the company's routine work");
+  assert.ok(first.querySelector(".initiative-facts [data-initiative-progress]"));
+  assert.equal(q("[data-initiatives-document]")!.getAttribute("href"), "/company");
+  assert.match(q("[data-initiatives-document]")!.textContent!, /Document$/);
+
   // On a cold cache the count is partial and says so, in the same component.
   state.syncMeta = {};
   await mount(React.createElement(InitiativesList));
@@ -213,7 +236,9 @@ async function verifyInitiatives() {
   assert.match(q("header [data-initiative-health]")!.textContent!, /At risk.*Sep 16/);
   assert.equal(q("header [data-initiative-progress]")!.getAttribute("data-initiative-progress"), "3/6");
   // The same chips the list row wears: the number against its target, and the next milestone.
-  assert.ok(q("[data-intent-header]") === q("header"), "the header a project's page wears too");
+  assert.ok(q("[data-intent-header]") === q("header"), "the page's header is the shared intent header");
+  // The page's own title reads whole: nothing clamps it beside the conversation.
+  assert.doesNotMatch(q("[data-initiative-title]")!.className, /line-clamp|truncate/);
   assert.match(q("header [data-intent-chips] [data-metric='weekly_active_teams'][data-metric-size='chip']")!.textContent!, /412\s*\/ 1,000/);
   assert.equal(q("header [data-intent-chips] [data-metric-trend]")!.getAttribute("data-metric-trend"), "up");
   assert.ok(q(`header [data-intent-chips] [data-initiative-milestone='${nextUpState}']`)!.textContent!.startsWith(nextUp.title));
@@ -225,7 +250,7 @@ async function verifyInitiatives() {
   // The goal, top to bottom in the order of I5's test: what it is for, the
   // number, why, done when, milestones, what is undecided, what was decided,
   // who said it; then what carries it, what the owner said, what is under it.
-  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "metrics", "why", "done_when", "milestones", "questions", "decisions", "sources", "projects", "updates", "sub"]);
+  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "why", "done_when", "metrics", "milestones", "questions", "decisions", "sources", "projects", "updates", "sub"]);
   assert.ok(q("[data-initiative-scroll] [data-initiative-record='in-1']"), "the record is the one component, mounted in the scroll");
   // Measured by: the tile every surface draws, now against the target, with its source.
   const tile = q("[data-initiative-metric='weekly_active_teams']")!;
@@ -294,6 +319,37 @@ async function verifyInitiatives() {
   assert.ok(qa("[data-initiative-update]")[0].querySelector("[data-face='person:Ashot']"), "said by the person who posted it");
   assert.equal(q("header [data-initiative-health]")!.getAttribute("data-initiative-health"), "on_track", "health is whatever was said last");
 
+  // The target day: a click opens a date field, and the day is written on blur
+  // or Enter. A date field reports a typed year one digit at a time, and a
+  // half typed year writes nothing; only Clear removes the day.
+  const targetCalls = () => calls.filter((c) => c.includes('"target_date"'));
+  const key = (el: Element, k: string) => act(async () => { el.dispatchEvent(new (dom.window as any).KeyboardEvent("keydown", { key: k, bubbles: true })); });
+  const blur = (el: Element) => act(async () => { el.dispatchEvent(new (dom.window as any).FocusEvent("focusout", { bubbles: true })); });
+  const { targetDayOf, targetDayStamp } = await import("@codecast/shared/time");
+  const targetBefore = collections.initiatives.find((r) => r._id === "init-org")!.target_date;
+  const targetField = () => q<HTMLInputElement>("[data-initiative-pick='target'] input[type='date']");
+  await click(q("button[data-initiative-pick='target']"));
+  assert.equal(targetField()!.value, targetDayOf(targetBefore), "the field opens on the day it holds");
+  await type(targetField(), "0002-11-01");
+  assert.deepEqual(targetCalls(), [], "a keystroke writes nothing");
+  await blur(targetField()!);
+  assert.deepEqual(targetCalls(), [], "and a half typed year is not a day to store");
+  assert.equal(targetField(), null, "the field closes");
+  await click(q("button[data-initiative-pick='target']"));
+  await type(targetField(), "2027-01-15");
+  await key(targetField()!, "Escape");
+  assert.deepEqual(targetCalls(), [], "Escape leaves the day as it was");
+  await click(q("button[data-initiative-pick='target']"));
+  await type(targetField(), "2027-01-15");
+  await key(targetField()!, "Enter");
+  assert.deepEqual(targetCalls(), [`update:init-org:${JSON.stringify({ target_date: targetDayStamp("2027-01-15") })}`], "Enter writes the day, once");
+  await act(async () => root.render(page("in-1")));
+  assert.equal(q("button[data-initiative-pick='target']")!.getAttribute("data-intent-target"), "2027-01-15", "and the chip shows it in the same tick");
+  await click(q("button[data-initiative-pick='target']"));
+  await click(q("[data-initiative-pick='target'] [data-intent-target-clear]"));
+  assert.equal(targetCalls().at(-1), `update:init-org:${JSON.stringify({ target_date: null })}`, "Clear is the one way to remove it");
+  patch("init-org", { target_date: targetBefore });
+
   // Owner, status and description are one gesture each, and ride the named action.
   await click([...qa("[data-initiative-pick='owner'] ~ [data-popover] button, [data-popover] button")].find((b) => b.textContent?.includes("Sam")) ?? null);
   assert.ok(calls.includes(`update:init-org:${JSON.stringify({ owner: { kind: "user", user_id: "fixture-user-sam" } })}`), calls.join("\n"));
@@ -315,10 +371,17 @@ async function verifyInitiatives() {
   assert.equal(q("[data-initiative-panel-toggle]"), null);
   assert.equal(q("[data-initiative-panel-close]"), null, "nothing to hand back to");
   assert.match(q("[data-initiative-section='projects']")!.textContent!, /No project carries this yet/);
-  // A link straight to its activity: a personal or a team goal with no project still asks for its own scope.
+  // A link straight to its activity: a goal with no project still asks for its own scope.
   env.search = "tab=activity";
   await mount(page("in-4"));
-  assert.deepEqual(JSON.parse(q("[data-initiative-alone] [data-scope-feed]")!.getAttribute("data-scope-feed")!), { scope: { project_ids: [], plan_ids: [], initiative_ids: ["init-orphan"] }, team_id: "fixture-team" });
+  const feedScope = () => JSON.parse(q("[data-initiative-alone] [data-scope-feed]")!.getAttribute("data-scope-feed")!);
+  assert.deepEqual(feedScope(), { scope: { project_ids: [], plan_ids: [], initiative_ids: ["init-orphan"] }, team_id: "fixture-team" });
+  // A personal workspace's goal names no team: the scope leaves team_id out,
+  // and the feed reads the viewer's own workspace.
+  collections.initiatives = collections.initiatives.map((r) => { if (r._id !== "init-orphan") return r; const { team_id: _team, ...personal } = r; return { ...personal, workspace: "user:fixture-user-me" }; });
+  await mount(page("in-4"));
+  assert.deepEqual(feedScope(), { scope: { project_ids: [], plan_ids: [], initiative_ids: ["init-orphan"] } });
+  assert.equal("team_id" in feedScope(), false, "no team_id key at all, not an empty one");
   env.search = "";
 
   // An id that names nothing here says so.
@@ -343,8 +406,14 @@ async function verifyInitiatives() {
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "sheet");
   assert.ok(q("[data-scope-aside] [data-scope-feed]"));
   env.search = "";
+  // The phone header holds the title to two lines, and the whole title is its
+  // tooltip: the rename hint never takes its place.
+  assert.match(q("[data-initiative-title]")!.className, /line-clamp-2/);
+  assert.equal(q("[data-initiative-title]")!.getAttribute("title"), q("[data-initiative-title]")!.textContent);
   // The list on the phone stacks each row's facts under its title.
   await mount(React.createElement(InitiativesList));
+  await resize(366);
+  assert.equal(q("[data-initiative-layout]")!.getAttribute("data-initiative-layout"), "stacked");
   assert.ok(q("[data-initiative-row='in-1'] [data-initiative-progress]"));
   assert.ok(q("[data-initiative-row='in-1'] [data-metric='weekly_active_teams']"), "the number wraps under the title with the rest");
   assert.ok(q(`[data-initiative-row='in-1'] [data-initiative-milestone='${nextUpState}']`));

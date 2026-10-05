@@ -268,7 +268,8 @@ export function goalChip(ref: string | null | undefined, initiatives: GoalRow[],
   const [head, metric] = raw.split(":");
   const initiative = initiatives.find((i) => i.short_id === head);
   if (initiative) return { ref: raw, label: metric ? `${initiative.title} · ${metric}` : initiative.title, kind: "initiative", priority: initiative.priority ?? "unranked" };
-  const project = projects.find((p) => p.short_id === head);
+  // A ground may name a project by its row id as well as its short id.
+  const project = projects.find((p) => p.short_id === head || (p as { _id?: string })._id === head);
   if (project) return { ref: raw, label: project.title, kind: "project", priority: project.priority ?? "unranked" };
   return { ref: raw, label: raw, kind: "unknown", priority: "unranked" };
 }
@@ -519,7 +520,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
 export function silentText(src: Pick<SenseSource, "newest" | "silent">, now: number): string {
   // Nothing in the window: silent at least that long, unless the finder may be newer than it.
   if (src.newest) return `silent ${ageShort(now - src.newest.created_at)}`;
-  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}` : "nothing filed yet";
+  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}+` : "nothing filed yet";
 }
 
 /** "3d", "5h", "12m": the largest unit, for a sentence. */

@@ -15,10 +15,12 @@ import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { googleAccount, googleCapabilities, googleConfigured, type GoogleCapabilities, type GoogleConnection } from "../../googleOAuth";
 import { googleDepsFor, sharedTokens, type GoogleDeps } from "./google";
-import { gmailTools } from "./gmail";
+import { gmailMailbox } from "./gmail";
+import { mailTools } from "./mail";
 import { calendarTools } from "./calendar";
-import { codecastTools } from "./codecast";
-import { pageAllowedWithoutAsking, SEARCH_MAX_PER_TURN, searchesBefore, turnRows, webTools } from "./web";
+import { googleCalendar } from "./googleCalendar";
+import { codecastTools, PERSON_APPROVED_TOOLS } from "./codecast";
+import { pageAllowedWithoutAsking, SEARCH_MAX_PER_TURN, searchesBefore, webTools } from "./web";
 
 export interface ToolsForOptions {
   /** Overrides for tests: a fake Google and a fake fetch. A fake Google
@@ -35,9 +37,9 @@ export interface ToolSet {
    * The gate for this turn's run: gateByRisk, except that fetch_page runs
    * without asking when its URL is one the person typed
    * (pageAllowedWithoutAsking), search_web is refused past
-   * SEARCH_MAX_PER_TURN (searchesBefore), and remember asks once the turn
-   * has read outside content (readOutsideContent). Pass the rows the run
-   * works from: the history plus every row the run appends.
+   * SEARCH_MAX_PER_TURN (searchesBefore), and remember asks once outside
+   * content is anywhere the model can see it (readOutsideContent). Pass the
+   * rows the run works from: the history plus every row the run appends.
    */
   gate: (rows: readonly MessageRow[]) => Gate;
 }
@@ -81,18 +83,27 @@ export function connectionNote(access: GoogleAccess, configured: boolean): strin
   ].filter(Boolean).join(" ");
 }
 
+/** The names of the tools whose results can bring in text the person did
+ *  not write or approve: mail, calendar, the web, and their tasks and docs.
+ *  Only the codecast tools in PERSON_APPROVED_TOOLS are left out. */
+export function outsideToolNames(tools: readonly Tool[]): Set<string> {
+  return new Set(tools.filter((t) => t.source && !PERSON_APPROVED_TOOLS.has(t.name)).map((t) => t.name));
+}
+
 /**
- * Whether the current turn (turnRows) has called a tool that brings in
- * content from outside: mail, calendar or the web. The person's own
- * workspace does not count. remember runs without asking only before that,
- * so a fact an email or page steered the model to never lands in the
- * person's lasting memory, where later turns would read it back as their own
+ * Whether any row the run works from calls a tool that brought in outside
+ * content. Every such row is in front of the model, earlier turns' replayed
+ * history included, so an instruction an email or page carried can steer it
+ * in any later turn. remember runs without asking only when there is none,
+ * so a fact outside text steered the model to never lands in the person's
+ * lasting memory, where later turns would read it back as their own
  * preference, without the person seeing it first.
  */
-export function readOutsideContent(rows: readonly MessageRow[], tools: readonly Tool[]): boolean {
-  const outside = new Set(tools.filter((t) => t.source && t.source !== "workspace").map((t) => t.name));
-  return turnRows(rows).some((row) => row.tool_calls?.some((call) => outside.has(call.name)));
+export function readOutsideContent(rows: readonly MessageRow[], outside: ReadonlySet<string>): boolean {
+  return rows.some((row) => row.tool_calls?.some((call) => outside.has(call.name)));
 }
+
+const ALL_MAIL = { read_mail: true, modify_mail: true, send_mail: true };
 
 /** Every tool the conversation's owner can use in this turn, and what they could still connect. */
 export async function toolsFor(
@@ -108,18 +119,24 @@ export async function toolsFor(
   const access = googleAccess(connections);
   const google = sharedTokens(options.google ?? googleDepsFor(ctx, userId, access.email));
   const googleWithFetch = options.fetch ? { ...google, fetch: options.fetch } : google;
+  const mailbox = gmailMailbox(googleWithFetch);
+  const calendar = googleCalendar(googleWithFetch);
   const tools = [
-    ...gmailTools(googleWithFetch, access),
-    ...(access.calendar ? calendarTools(googleWithFetch) : []),
+    ...mailTools(mailbox, access),
+    ...(access.calendar ? calendarTools(calendar) : []),
     ...codecastTools({ runQuery: ctx.runQuery, runMutation: ctx.runMutation, userId, conversationId }),
     ...webTools({ fetch: options.fetch }),
   ];
+  // Every outside tool, offered now or not: history read through a
+  // connection the person has since narrowed or removed is still in front
+  // of the model.
+  const outside = outsideToolNames([...mailTools(mailbox, ALL_MAIL), ...calendarTools(calendar), ...tools]);
   return {
     tools,
     note: connectionNote(access, configured),
     gate: (rows) => (call) => {
       if (call.name === "fetch_page" && pageAllowedWithoutAsking(call.input.url, rows)) return "allow";
-      if (call.name === "remember" && readOutsideContent(rows, tools)) return "ask";
+      if (call.name === "remember" && readOutsideContent(rows, outside)) return "ask";
       if (call.name === "search_web" && searchesBefore(rows, call.id) >= SEARCH_MAX_PER_TURN) {
         return { verdict: "refuse", reason: `No more than ${SEARCH_MAX_PER_TURN} web searches in one turn` };
       }

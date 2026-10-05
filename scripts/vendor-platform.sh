@@ -7,6 +7,7 @@
 # Edit the canonical copy in ~/src/platform, then run this to refresh.
 #
 #   scripts/vendor-platform.sh                   # refresh the mirror
+#   scripts/vendor-platform.sh vendor <name...>  # refresh only these packages (the rest stay as they are)
 #   scripts/vendor-platform.sh --check           # exit 1 if the mirror has drifted
 #   scripts/vendor-platform.sh --check-manifest  # exit 1 if the mirror is inconsistent (no canonical repo needed)
 #   scripts/vendor-platform.sh --write-manifest  # regenerate the manifest from the mirror
@@ -173,6 +174,14 @@ case "$MODE" in
 esac
 
 PACKAGES=$(list_packages)
+# A vendor run may name packages: adopting one then never carries another
+# package's unfinished canonical work into this tree.
+if [[ "$MODE" == "vendor" && $# -gt 1 ]]; then
+  for p in "${@:2}"; do
+    grep -qx "$p" <<<"$PACKAGES" || { echo "no workspace package depends on @platform/$p" >&2; exit 2; }
+  done
+  PACKAGES="${*:2}"
+fi
 
 # A file that differs only in mode is drift only when its executable bit
 # differs, the one mode bit git records. bun installs a package's bin target as
@@ -220,6 +229,7 @@ write_manifest
 for copy in "$ROOT"/node_modules/.bun/@platform+*/node_modules/@platform/*; do
   [ -d "$copy" ] || continue
   name=$(basename "$copy")
+  grep -qx "$name" <<<"$(echo $PACKAGES | tr ' ' '\n')" || continue
   [ -d "$ROOT/platform/packages/$name" ] && "${RSYNC[@]}" "$ROOT/platform/packages/$name/" "$copy/"
 done
 (cd "$ROOT" && bun install --silent)

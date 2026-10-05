@@ -17,11 +17,12 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight, FolderInput } from "lucide-react";
+import { HealthChip, ProgressBar } from "../initiatives/InitiativeAtoms";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { projectStatusOf } from "../../lib/projectStatus";
 import { cn } from "../../lib/utils";
 import { groupsLine, planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
-import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
 import { initiativeRelation, type RoleInitiative } from "../../lib/roleInitiatives";
-import { HEALTH_COLOR } from "../../lib/initiativeColors";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { RoleFace } from "../org/RoleFace";
 import { AssigneeFace } from "./AssigneeFace";
@@ -69,13 +70,15 @@ export function RoleScopeView({ model, density, renderLead, renderInitiative, on
   const hidden = model.projects.length - projects.length;
   const nothing = model.projects.length === 0 && model.loosePlans.length === 0;
   const fileTargets = model.projects.filter((p) => !p.partial);
+  // The clock a goal's health date is read against: a clock, not a store read.
+  const now = useCoarseNow(60_000);
 
   return (
     <div className={cn(card ? "grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-2.5 gap-y-2 text-[11px] leading-snug" : "space-y-5", className)} data-role-scope={density}>
       {model.initiatives.length > 0 && (
         <Section density={density} label="Initiatives" name="initiatives">
           <ul className={card ? "space-y-0.5" : "space-y-0.5"}>
-            {model.initiatives.map((i) => <li key={i.id}><InitiativeRowView i={i} density={density} /></li>)}
+            {model.initiatives.map((i) => <li key={i.id}><InitiativeRowView i={i} density={density} now={now} /></li>)}
           </ul>
         </Section>
       )}
@@ -178,9 +181,10 @@ function More({ onClick, children }: { onClick: () => void; children: ReactNode 
 
 /** A goal the role's work serves: whether the role drives it or its projects
  *  contribute, and what its owner last said about how it is going. */
-function InitiativeRowView({ i, density }: { i: RoleInitiative; density: RoleScopeDensity }) {
+function InitiativeRowView({ i, density, now }: { i: RoleInitiative; density: RoleScopeDensity; now: number }) {
   const part = initiativeRelation(i);
-  const health = i.health !== "none" ? <span style={{ color: HEALTH_COLOR[i.health] }}>{INITIATIVE_HEALTH_LABEL[i.health].toLowerCase()}</span> : null;
+  // The chip every goal surface draws; nothing while the owner has said nothing.
+  const health = i.health !== "none" ? <HealthChip health={i.health} at={i.health_at} now={now} className="align-middle text-[11px]" /> : null;
   if (density === "card") {
     return (
       <p className="truncate" data-scope-initiative={i.ref}>
@@ -252,29 +256,25 @@ function PlanLine({ p }: { p: ScopePlan }) {
 // ------------------------------------------------------------------ the page's cards
 
 const CARD = "rounded-xl border border-sol-border/40 bg-sol-card overflow-hidden";
-const STATUS_TONE: Record<string, string> = { active: "var(--sol-green)", paused: "var(--sol-yellow)", done: "var(--sol-cyan)", archived: "var(--sol-text-dim)" };
 
-function Bar({ done, total, className }: { done: number; total: number; className?: string }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  return (
-    <span className={cn("h-1 rounded-full overflow-hidden shrink-0 bg-sol-border/30", className)} aria-hidden>
-      <span className="block h-full bg-sol-green" style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
+/** Tasks done over tasks, the bar every goal and project page draws (InitiativeAtoms ProgressBar), without its count: the card prints its own. */
+const Bar = ({ done, total, className }: { done: number; total: number; className?: string }) =>
+  <ProgressBar bare progress={{ done, total, in_progress: 0, open: total - done }} className={cn("shrink-0", className)} />;
 
 /** A project as a card: its lead, the initiatives it belongs to, its open and
  *  done tasks, the plans inside it and the sessions at work in it. The role
  *  page draws one for each project in a scope, and the initiative page one for
  *  each project of an initiative, from the same rows (lib/roleScope). */
 export function ProjectCard({ p, lead, initiative }: { p: ScopeProject; lead?: ReactNode; initiative?: ReactNode }) {
-  const tone = STATUS_TONE[p.status ?? ""] ?? "var(--sol-text-dim)";
+  // The glyph, the word and the colour the project's own page draws (lib/projectStatus).
+  const status = projectStatusOf(p.status);
+  const StatusIcon = status.icon;
   return (
     <article className={CARD} data-scope-project={p.ref} data-scope-leads={p.leads ? "" : undefined} data-scope-partial={p.partial ? "" : undefined}>
       <header className="flex items-center gap-2 pl-3 pr-2.5 pt-2.5">
-        <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: tone }} title={p.status ?? undefined} />
+        <StatusIcon className={cn("w-3.5 h-3.5 shrink-0", status.color)} aria-label={status.label} />
         <Link href={`/projects/${p.ref}`} className="min-w-0 flex-1 truncate text-[13.5px] font-semibold tracking-tight text-sol-text no-underline hover:underline underline-offset-2">{p.title}</Link>
-        {p.status && p.status !== "active" && <span className="shrink-0 text-[10.5px]" style={{ color: tone }} data-scope-project-status>{p.status}</span>}
+        {p.status && p.status !== "active" && <span className={cn("shrink-0 text-[10.5px]", status.color)} data-scope-project-status={p.status}>{status.label}</span>}
         {/* The chip names whoever leads, this role or another; the word stands in until it has the rows. */}
         {lead ?? (p.leads ? <span className="shrink-0 text-[11px]">{leadWord}</span> : null)}
       </header>

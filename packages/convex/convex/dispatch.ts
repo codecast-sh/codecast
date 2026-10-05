@@ -1612,9 +1612,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await (ctx as any).runMutation(api.initiatives.postUpdate, { id, ...update });
   },
   // One entry of the intent record (I5). The store settles the entry it
-  // paints (its key, who and when) and hands that op back as the action's
-  // result, so the row stores the same entry and the echo equals the draft.
-  // A call with no result painted nothing; the caller's op goes as given.
+  // paints with the reducer the mutation runs (applyRecordOp) and hands that
+  // op back as the action's result, its key, who and when decided, so the row
+  // stores the entry the page shows. A call with no result painted nothing:
+  // the caller's op goes as given, and the mutation finds it moves nothing or
+  // refuses it in words.
   recordInitiativeEntry: async (ctx, userId, [id, op]: [string, Record<string, any>], result) => {
     return await (ctx as any).runMutation(api.initiatives.record, { id, ...((result as Record<string, any> | null | undefined) ?? op) });
   },

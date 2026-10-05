@@ -398,8 +398,10 @@ export async function enqueuePendingMessage(
   if (isHostedAgentType(conversation.agent_type) && String(fromUserId) !== String(conversation.user_id)) {
     throw new Error("Only the owner can send to a hosted conversation");
   }
-  // Machine frames (a routine firing, a run outcome) are built here and bounded
-  // by their writers; what a person sends is bounded here.
+  // Machine frames (a routine firing, a run outcome) are built by server code
+  // and bounded by their writers; what a person sends is bounded here. The
+  // public sendMessageToSession refuses `origin` for a hosted target, so on
+  // these conversations "scheduler" is a server-only signal.
   if (isHostedAgentType(conversation.agent_type) && fields.origin !== "scheduler" && fields.content.length > HOSTED_INPUT_MAX_CHARS) {
     throw new Error(`A message to the assistant can be at most ${HOSTED_INPUT_MAX_CHARS.toLocaleString("en-US")} characters`);
   }
@@ -594,6 +596,12 @@ export const sendMessageToSession = mutation({
 
     if (conversation.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized: can only send messages to your own conversations");
+    }
+    // On a hosted conversation `origin` lifts the input cap and wakes a turn
+    // as a routine, so only server code may set it there (routine firings and
+    // run outcomes call enqueuePendingMessage directly).
+    if (args.origin && isHostedAgentType(conversation.agent_type)) {
+      throw new Error("Only the server sends machine input to a hosted conversation");
     }
 
     return await enqueuePendingMessage(ctx, conversation, authUserId, {
@@ -1012,6 +1020,14 @@ export const updateMessageStatus = mutation({
 
     if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
       throw new Error("Unauthorized: can only update messages you sent or own");
+    }
+    // A hosted conversation's queue is settled by its turn engine
+    // (markPendingDelivered) and the owner's retry and cancel paths. A local
+    // agent holding the owner's token must not mark queued input delivered or
+    // failed before the engine reads it.
+    const conversation = await ctx.db.get(message.conversation_id);
+    if (conversation && isHostedAgentType(conversation.agent_type)) {
+      throw new Error("A hosted conversation's queued input is settled by its turn engine");
     }
 
     const patch = {

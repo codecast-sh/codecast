@@ -7,7 +7,7 @@
 // UndoTimelineHost mounts beside RecentSwitcherHost and renders nothing until
 // a doorway opens the card (lib/undoTimelineOpen): the palette row, the chord,
 // the "Undid" toast's History action, the held peek.
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { createContext, useCallback, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { redoTo, undoTo } from "../../store/undoStack";
@@ -39,17 +39,48 @@ function useCardChords(): (e: KeyboardEvent) => boolean {
   }, [dispatchAction]);
 }
 
-/** Opening a place, the org record, closing: shared by the live card and the preview. */
-function useCardActs(): Pick<UndoTimelineViewProps, "onOpen" | "onOpenOrg" | "onClose" | "onKey"> {
+/**
+ * Where the card's open acts lead in the frame that mounts it. The dashboard's
+ * (the default) opens sessions through its inbox and pages in its tabs. A
+ * frame outside the dashboard (the simple lane, the standalone /r pages)
+ * passes its own through UndoReach, because the dashboard's openers assume its
+ * tab shell. `openVisit` answers null where the frame has no place for the
+ * object: that row shows no title link and O does nothing. `openOrg` null =
+ * the frame has no org record, so org rows are inert there.
+ */
+export type UndoCardFrame = {
+  openVisit: (visit: ResolvedVisit) => (() => void) | null;
+  openOrg: (() => void) | null;
+};
+
+const UndoFrameContext = createContext<UndoCardFrame | null>(null);
+
+function useDashboardFrame(): UndoCardFrame {
   const router = useRouter();
   const openSession = useOpenSession();
   const openVisit = useOpenRecentVisit(openSession);
+  return useMemo(() => ({ openVisit: (visit) => () => openVisit(visit), openOrg: () => router.push(ORG_RECORD_PATH) }), [openVisit, router]);
+}
+
+type CardActs = Pick<UndoTimelineViewProps, "onOpen" | "canOpen" | "onOpenOrg" | "onClose" | "onKey">;
+
+/** Opening a place, the org record, closing: shared by the live card and the preview. */
+function useCardActs(): CardActs {
+  const dashboard = useDashboardFrame();
+  const frame = useContext(UndoFrameContext) ?? dashboard;
   // close() hands focus back to whatever held it before the card opened.
   const onClose = useCallback(() => undoTimeline.close(), []);
-  const onOpen = useCallback((visit: ResolvedVisit) => { undoTimeline.close(); openVisit(visit); }, [openVisit]);
-  const onOpenOrg = useCallback(() => { undoTimeline.close(); router.push(ORG_RECORD_PATH); }, [router]);
+  const canOpen = useCallback((visit: ResolvedVisit) => !!frame.openVisit(visit), [frame]);
+  const onOpen = useCallback((visit: ResolvedVisit) => {
+    const go = frame.openVisit(visit);
+    if (!go) return;
+    undoTimeline.close();
+    go();
+  }, [frame]);
+  const openOrg = frame.openOrg;
+  const onOpenOrg = useMemo(() => (openOrg ? () => { undoTimeline.close(); openOrg(); } : null), [openOrg]);
   const onKey = useCardChords();
-  return { onOpen, onOpenOrg, onClose, onKey };
+  return { onOpen, canOpen, onOpenOrg, onClose, onKey };
 }
 
 export function UndoTimeline({ mode }: { mode: undoTimeline.UndoTimelineMode }) {
@@ -107,8 +138,9 @@ export function UndoTimelineHost() {
 
 /** Both halves of a frame's way back to its history, for a frame outside the
  *  dashboard (which mounts them itself): the keys and the held peek
- *  (useUndoWalk) and the card a toast's History opens. */
-export function UndoReach() {
+ *  (useUndoWalk) and the card a toast's History opens. `frame` says where the
+ *  card's open acts lead there; without one they open the full app. */
+export function UndoReach({ frame }: { frame?: UndoCardFrame }) {
   useUndoWalk();
-  return <UndoTimelineHost />;
+  return <UndoFrameContext.Provider value={frame ?? null}><UndoTimelineHost /></UndoFrameContext.Provider>;
 }

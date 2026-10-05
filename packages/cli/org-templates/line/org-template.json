@@ -1,9 +1,9 @@
 {
   "schemaVersion": 2,
   "id": "line",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "name": "Line lead",
-  "description": "Owns one project's line: grounds the causes its finders raise in the project's goals, lets work start only as fast as a person answers cards, keeps every declared finder honest and filing, and runs the project's weekly lessons. It answers no protected decision.",
+  "description": "Owns one project's line: grounds the causes its finders raise in the project's goals, lets work start only as fast as a person answers cards, keeps every declared finder honest and filing, keeps the project's expectations current with what the team says, and runs the project's weekly lessons. It answers no protected decision.",
   "role": {
     "name": "Line lead",
     "handle": "{{instance}}-line",
@@ -15,7 +15,8 @@
   },
   "routines": [
     { "id": "lessons-weekly", "title": "Weekly lessons for {{project.name}}", "every": "7d", "prompt": "org/prompts/lessons-weekly.md", "mode": "apply" },
-    { "id": "finder-health", "title": "Finder health for {{project.name}}", "every": "1d", "prompt": "org/prompts/finder-health.md", "mode": "apply", "requires": { "evidence": ["profile"] } }
+    { "id": "finder-health", "title": "Finder health for {{project.name}}", "every": "1d", "prompt": "org/prompts/finder-health.md", "mode": "apply", "requires": { "evidence": ["profile"] } },
+    { "id": "expectations-daily", "title": "Expectations for {{project.name}}", "every": "1d", "prompt": "org/prompts/expectations-daily.md", "mode": "apply" }
   ],
   "inputs": [
     { "key": "finders.silent_days", "label": "Days without a signal before a declared finder counts as silent", "kind": "number", "default": 3, "help": "A finder that runs less often than this is judged by its own schedule instead." }

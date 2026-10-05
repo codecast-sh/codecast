@@ -44,8 +44,7 @@ import { applyHostedAgentStatus } from "../managedSessions";
 import { askCore, withdrawCore } from "../sessionDecisions";
 import { messageValidator } from "../messages";
 import { toolsFor, type ToolsForOptions } from "./tools";
-import { SEARCH_ESTIMATE_USD } from "./tools/web";
-import { deliveredAddress } from "./tools/gmail";
+import { deliveredAddress } from "./tools/mail";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import {
@@ -98,14 +97,6 @@ export const turnDeps: {
 /** The model a plan's turns run on: a paid plan's strong model, the free plan's default. */
 export function modelFor(plan: PlanSpec): string {
   return plan.price_usd > 0 ? plan.strong_model : plan.default_model;
-}
-
-/** What one run may spend of what its turn reserved. A tool's own spend
- *  (search_web) is checked only before the next model call, so one search
- *  can pass the ceiling; the run keeps a search's worth of the reservation
- *  aside, and never more than half of it. */
-export function runCeiling(reservedUsd: number): number {
-  return money(Math.max(reservedUsd / 2, reservedUsd - SEARCH_ESTIMATE_USD()));
 }
 
 // ---------------------------------------------------------------- the lease
@@ -629,7 +620,9 @@ export const begin = internalMutation({
       conversation_id: turn.conversation_id,
       user_id: conversation.user_id,
       model: turn.model ?? modelFor(await walletPlan(ctx, conversation.user_id)),
-      ceiling_usd: runCeiling(turn.cost_reserved_usd),
+      // The run may spend all its turn reserved: paid tools (search_web)
+      // reserve their own spend through ctx.remainingUsd and ctx.charge.
+      ceiling_usd: turn.cost_reserved_usd,
       history,
       resume,
       started_calls: started,

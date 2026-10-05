@@ -15,7 +15,7 @@ import type { Id } from "../_generated/dataModel";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "../pendingMessages";
 import { finalizeAnswer } from "../sessionDecisions";
 import { decisionAnswerClientId } from "@codecast/shared/contracts";
-import { ensureWallet, reserve } from "../lib/wallet";
+import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
 import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
@@ -482,6 +482,30 @@ describe("limits", () => {
     expect(line.content).toContain("upgrade or add usage");
     expect(s.pending.every((row) => row.status === "delivered")).toBe(true);
     expect(s.managed?.agent_status).toBe("idle");
+  });
+
+  test("a hold an ended turn leaked is freed for the next turn even when it is short of the ceiling", async () => {
+    const { t, user, conversationId } = await setup();
+    const crashed = await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      const turnId = await ctx.db.insert("assistant_turns", { conversation_id: conversationId, user_id: user, status: "running", cost_reserved_usd: 0 });
+      expect(await reserve(ctx, user, turnId, 0.1)).toBe(true);
+      // Its finish failed to settle; the wallet has no room beside the leak.
+      await ctx.db.patch(turnId, { status: "failed", ended_at: Date.now() - LEAK_GRACE_MS });
+      await ctx.db.patch(wallet._id, { period_cost_usd: wallet.period_cap_usd - 0.1 });
+      return turnId;
+    });
+    faux.setResponses([reply("Here is your week.")]);
+    await say(t, conversationId, user, "Plan my week");
+    const started = await state(t, conversationId, user);
+    const turn = started.turns.find((row) => row._id !== crashed)!;
+    expect(turn).toMatchObject({ status: "running", cost_reserved_usd: 0.1 });
+    expect(started.ledger.filter((row) => row.kind === "release").map((row) => row.turn_id)).toEqual([crashed]);
+    await settle(t);
+    const s = await state(t, conversationId, user);
+    expect(s.turns.find((row) => row._id === turn._id)).toMatchObject({ status: "done" });
+    expect(s.turns.find((row) => row._id === turn._id)!.reason).not.toBe("budget");
+    expect(s.wallet.period_reserved_usd).toBe(0);
   });
 
   test("a run that reaches its deadline is continued by a new turn", async () => {
