@@ -23,7 +23,7 @@
 // derived/enriched field for an entity that also lives in the store, route it
 // through these helpers.
 
-import { parseRepoObjectId, type EntityType } from "@codecast/shared/entities";
+import { parseProposalChangeRef, parseRepoObjectId, type EntityType } from "@codecast/shared/entities";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 
@@ -534,7 +534,8 @@ export function findEntityInStore(
       return lookup(state.initiatives, rawId);
     case "proposal":
       // The workspace's proposals (list rows, and any the org page opened).
-      return lookup(state.orgProposals, rawId);
+      // One change of a proposal (`op-55#3`) names the proposal's row.
+      return lookup(state.orgProposals, parseProposalChangeRef(rawId)?.proposal ?? rawId);
     case "decision":
       // The viewer's decision queue (open rows, and answered ones for a day).
       return lookup(state.sessionDecisions, rawId);

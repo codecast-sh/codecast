@@ -30,7 +30,7 @@ function RoutineRow({ routine, now, first }: { routine: TaskRow; now: number; fi
         <Feather name="clock" size={13} color={c.soft} />
         <Text style={{ flex: 1, fontSize: 14, color: c.soft }}>{routineSchedule(routine, now)}</Text>
       </View>
-      {last ? <Text style={{ marginTop: 6, fontSize: 13.5, lineHeight: 19, color: last.trouble ? c.sunInk : c.soft }}>{last.text}</Text> : null}
+      {last ? <Text style={{ marginTop: 6, fontSize: 13.5, lineHeight: 19, color: last.trouble ? c.accentText : c.soft }}>{last.text}</Text> : null}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 4, marginTop: 9, marginLeft: -8 }}>
         {confirming ? (
           <>

@@ -33,7 +33,8 @@ export async function apiPost(
   deps: PublishDeps,
   urlPath: string,
   body: Record<string, unknown>,
-  opts: { read?: boolean; exitOnError?: boolean } = {},
+  /** `describeError` turns a refusal code into words before it is shown. */
+  opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string } = {},
 ): Promise<any> {
   const { siteUrl, apiToken } = deps.getCliEndpoint();
   const doFetch = opts.read ? cliFetchRead : cliFetch;
@@ -54,8 +55,9 @@ export async function apiPost(
     process.exit(1);
   }
   if (result?.error) {
-    if (opts.exitOnError === false) throw new Error(String(result.error));
-    console.error(`Error: ${result.error}`);
+    const error = opts.describeError ? opts.describeError(String(result.error)) : String(result.error);
+    if (opts.exitOnError === false) throw new Error(error);
+    console.error(`Error: ${error}`);
     process.exit(1);
   }
   return result;

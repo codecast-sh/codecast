@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, GitPullRequest, X } from "lucide-react";
 import { toast } from "sonner";
@@ -18,13 +18,14 @@ import {
   type ChangeCard,
   type ChangeVerdict,
 } from "@codecast/shared/contracts/changeCard";
-import type { DecisionAnswerInput, SessionDecisionItem } from "../../store/inboxStore";
+import type { DecisionAnswerInput, DecisionDetailItem, SessionDecisionItem } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useGoalChip } from "../../hooks/useGoalChip";
 import "./changeCard.css";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
@@ -56,10 +57,10 @@ const prLabel = (url: string) => {
  * draws the head: the surface holding it does. `dots` is off where a full
  * proof strip reads on the same page.
  */
-export function ChangeCardView({ card, density = "full", recommend = true, change = true, outcome, story = false, summarized = false, folded, dots = true }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean; outcome?: ReactNode; story?: boolean; summarized?: boolean; folded?: boolean; dots?: boolean }) {
+export function ChangeCardView({ card, density = "full", recommend = true, change = true, outcome, story = false, summarized = false, folded, dots = true, diffAnchor }: { card: ChangeCard; density?: ChangeCardDensity; recommend?: boolean; change?: boolean; outcome?: ReactNode; story?: boolean; summarized?: boolean; folded?: boolean; dots?: boolean; diffAnchor?: string }) {
   const animate = useFirstSight(card.cause.task);
   if (density === "line") return <ChangeCardLine card={card} recommend={recommend && !outcome} story={story} folded={folded} dots={dots} />;
-  return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} summarized={summarized} />;
+  return <ChangeCardFull card={card} inline={density === "inline"} head={change} recommend={recommend} outcome={outcome} animate={animate} summarized={summarized} diffAnchor={diffAnchor} />;
 }
 
 /** "evals, judges and users" */
@@ -116,18 +117,22 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
     );
   }
   const hasGoal = card.goal.ref && card.goal.ref !== "none";
-  const sources = card.cause.sources.length ? `from ${listLabel(card.cause.sources)}` : "";
+  // "signal" is the kind every signal filed task carries, not a source: it says nothing.
+  const named = card.cause.sources.filter((src) => src !== "signal");
+  const sources = named.length ? `from ${listLabel(named)}` : "";
   const signals = card.cause.signals > 0 ? `${card.cause.signals} signal${card.cause.signals === 1 ? "" : "s"}` : "";
   const seen = card.cause.first_seen ? `first seen ${formatTimeAgo(card.cause.first_seen, now)}` : "";
-  const goal = hasGoal ? <>serves <span className="text-sol-text-muted">{card.goal.name || card.goal.ref}</span></> : null;
+  // A card written before its goal was named carries the key as the name.
+  const goalName = card.goal.name && card.goal.name !== card.goal.ref ? card.goal.name : null;
+  const goal = hasGoal ? <>serves <span className="text-sol-text-muted">{goalName ?? <GoalName goalRef={card.goal.ref} />}</span></> : null;
   const meta: SepItem[] = [];
   if (signals || sources) meta.push({ key: "signals", node: [signals, sources].filter(Boolean).join(" ") });
   // Age and goal share one fact, so a narrow card spends one line on them.
-  // The goal's ref and why wait on hover.
+  // Why it serves the goal waits on hover.
   if (seen || goal) meta.push({
     key: "seen",
     className: goal ? "cc-goal" : "cc-nowrap",
-    title: hasGoal ? [card.goal.name ? card.goal.ref : "", card.goal.why].filter(Boolean).join(": ") || undefined : undefined,
+    title: hasGoal ? card.goal.why || undefined : undefined,
     node: (
       <span data-card-goal={goal ? "" : undefined}>
         {seen && <span className="cc-nowrap">{seen}</span>}
@@ -146,6 +151,11 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
       <SepRow items={meta} className="cc-cause-facts" />
     </div>
   );
+}
+
+/** A goal the card names only by its key, in words (never the key itself). */
+function GoalName({ goalRef }: { goalRef: string }) {
+  return <>{useGoalChip(goalRef).label}</>;
 }
 
 /** The asker's own question beside a card, or null when it only repeats the change. */
@@ -238,6 +248,15 @@ export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "opti
     pill: `${head} ${tail}`,
     line: outcomeLine(VERDICT_TONE[verdict], head, tail, note),
   };
+}
+
+/** Who answered a decision, in the words a card's outcome line uses: a person's name ("you" for the viewer), a role's, or "policy". */
+export function answererNameOf(detail: Pick<DecisionDetailItem, "decision" | "asked_users" | "holder_role" | "ladder">, meId: string | null | undefined): string {
+  const by = detail.decision.answered_by;
+  if (!by) return "a person";
+  if (by.kind === "policy") return "policy";
+  if (by.kind === "role") return detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === by.id)?.role?.name ?? "a role";
+  return detail.asked_users.find((u) => u._id === by.id)?.name ?? (by.id === meId ? "you" : "a person");
 }
 
 function outcomeLine(tone: string, head: string, tail: string, note?: string) {
@@ -405,9 +424,44 @@ export function exampleInputAdds(input: string, before: string): boolean {
   return !!i && !(b && i.includes(b));
 }
 
-/** One before and after pair: two tiles of one height, the input as a small "for:" caption inside Before that opens in full, the note under both. The Evals pages show eval flips with it too. */
-export function ExamplePair({ ex }: { ex: ChangeCard["examples"][number] }) {
+// A reply split into its sentences and list items, separators kept, so the
+// text renders as written and a changed piece can be marked.
+const PIECE = /((?<=[.!?])\s+(?=\S)|\s+-\s+|\n+)/;
+
+/** The pieces of `text` with `changed` set on each one `other` does not say.
+ *  Nothing is marked when the two share no piece: a whole reply marked says
+ *  nothing a reader cannot see. */
+export function changedPieces(text: string, other: string): Array<{ text: string; changed: boolean }> {
+  const parts = text.split(PIECE);
+  const theirs = new Set(other.split(PIECE).filter((_, i) => i % 2 === 0).map(squash).filter(Boolean));
+  const out = parts.map((t, i) => ({ text: t, changed: i % 2 === 0 && !!squash(t) && !theirs.has(squash(t)) }));
+  const shared = out.some((p, i) => i % 2 === 0 && squash(p.text) && !p.changed);
+  return shared ? out : out.map((p) => ({ ...p, changed: false }));
+}
+
+/** A note cut short where it was stored ends at its last whole sentence, so it never stops mid-thought. */
+export function wholeSentences(note: string): string {
+  const t = note.trim();
+  if (!t.endsWith("…")) return t;
+  const end = Math.max(t.lastIndexOf(". "), t.lastIndexOf("! "), t.lastIndexOf("? "));
+  return end > 0 ? t.slice(0, end + 1) : t;
+}
+
+function SideText({ text, other, tone }: { text: string; other: string; tone: "before" | "after" }) {
+  const pieces = useMemo(() => changedPieces(text, other), [text, other]);
+  return <>{pieces.map((p, i) => (p.changed ? <mark key={i} className={`cc-changed cc-changed-${tone}`}>{p.text}</mark> : <span key={i}>{p.text}</span>))}</>;
+}
+
+/** Long enough that four lines would cut it. */
+const longSide = (t: string) => t.length > 220 || t.split("\n").length > 4;
+
+/** One before and after pair: two tiles of one height, the input as a small "for:" caption inside Before that opens in full, the note under both. What one side says that the other does not is marked. `clamp` holds each side to four lines with a toggle that opens both. The Evals pages show eval flips with it too. */
+export function ExamplePair({ ex, clamp = false }: { ex: ChangeCard["examples"][number]; clamp?: boolean }) {
   const [open, setOpen] = useState(false);
+  const [all, setAll] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const clamped = clamp && !all && (longSide(ex.before) || longSide(ex.after));
+  const note = ex.note ? wholeSentences(ex.note) : "";
   return (
     <div className="cc-example">
       <div className="cc-pair">
@@ -419,16 +473,29 @@ export function ExamplePair({ ex }: { ex: ChangeCard["examples"][number] }) {
               <span className="cc-example-for">for:</span> {ex.input}
             </button>
           )}
-          <span>{ex.before}</span>
+          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.before} other={ex.after} tone="before" /></span>
         </div>
-        <div className="cc-side cc-after"><span className="cc-side-label">After</span><span>{ex.after}</span></div>
+        <div className="cc-side cc-after">
+          <span className="cc-side-label">After</span>
+          <span className={`cc-side-text ${clamped ? "is-clamped" : ""}`}><SideText text={ex.after} other={ex.before} tone="after" /></span>
+        </div>
       </div>
-      {ex.note && <p className="cc-example-note">{ex.note}</p>}
+      {clamp && (longSide(ex.before) || longSide(ex.after)) && (
+        <button type="button" className="cc-more" onClick={() => setAll((a) => !a)} aria-expanded={all} data-cc-example-all>
+          {all ? "Show less" : "Show all"}
+          <ChevronRight className={`w-3 h-3 transition-transform ${all ? "-rotate-90" : "rotate-90"}`} />
+        </button>
+      )}
+      {note && (
+        <button type="button" className={`cc-example-note ${noteOpen ? "is-open" : ""}`} onClick={() => setNoteOpen((o) => !o)} aria-expanded={noteOpen} title={noteOpen ? undefined : "Show the whole note"} data-cc-example-note>
+          {note}
+        </button>
+      )}
     </div>
   );
 }
 
-function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summarized }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean; summarized: boolean }) {
+function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summarized, diffAnchor }: { card: ChangeCard; inline: boolean; head: boolean; recommend: boolean; outcome?: ReactNode; animate: boolean; summarized: boolean; diffAnchor?: string }) {
   const [allExamples, setAllExamples] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
   // Two pairs show at every width; the rest wait behind a toggle that names
@@ -471,7 +538,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
         <section className="cc-section">
           <div className="cc-label-row"><h3 className="cc-label">Examples</h3></div>
           <div className="space-y-4">
-            {examples.map((ex, i) => <ExamplePair key={i} ex={ex} />)}
+            {examples.map((ex, i) => <ExamplePair key={i} ex={ex} clamp={inline} />)}
           </div>
           {hidden > 0 && (
             <button type="button" onClick={() => setAllExamples(true)} className="cc-more" data-cc-more>
@@ -499,7 +566,7 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
               </dd>
             </div>
           )}
-          <div className="cc-fact">
+          <div className="cc-fact scroll-mt-4" id={diffAnchor}>
             <dt className="cc-label">Diff</dt>
             <dd>
               <DiffCounts diff={card.diff} />
@@ -536,8 +603,10 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
             <dd>
               <span className="cc-nowrap">${card.cost.usd.toFixed(2)}</span>
               <SepRow className="cc-fact-sub" items={[
-                { key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` },
-                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} min` },
+                // A card that recorded no tokens says nothing rather than "0 tokens".
+                ...(card.cost.tokens > 0 ? [{ key: "tokens", className: "cc-nowrap", node: `${tokensLabel(card.cost.tokens)} tokens` }] : []),
+                // Agent time summed over the run's sessions, not the run's wall time.
+                { key: "minutes", className: "cc-nowrap", node: `${card.cost.minutes} agent min` },
               ]} />
             </dd>
           </div>

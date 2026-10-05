@@ -6,6 +6,7 @@ import { runTool, type Tool } from "@platform/agent";
 import { CALENDAR_EVENTS_SCOPE } from "../../googleOAuth";
 import type { GoogleDeps } from "./google";
 import { calendarTools, eventIdFor, freeRanges, instant, isBusy, localMidnight, type CalendarEvent } from "./calendar";
+import { googleCalendar } from "./googleCalendar";
 
 type Call = { method: string; url: URL; body?: any };
 
@@ -31,7 +32,7 @@ function fakeCalendar(routes: Record<string, (call: Call) => Response | unknown>
   return { deps, calls, scopes };
 }
 
-const tool = (deps: GoogleDeps, name: string): Tool => calendarTools(deps).find((t) => t.name === name)!;
+const tool = (deps: GoogleDeps, name: string): Tool => calendarTools(googleCalendar(deps)).find((t) => t.name === name)!;
 const text = async (t: Tool, args: unknown, callId = "toolu_1") =>
   (await runTool(t, args, { callId })).content.map((c) => (c.type === "text" ? c.text : "")).join("");
 
@@ -187,20 +188,79 @@ describe("create_event and update_event", () => {
 
   test("update patches only what changed and merges attendees", async () => {
     const g = fakeCalendar({
-      "GET /events/e1": () => ({ id: "e1", attendees: [{ email: "me@example.com", self: true, responseStatus: "accepted" }, { email: "Old@x.com" }] }),
+      "GET /events/e1": () => ({
+        id: "e1",
+        start: { dateTime: "2026-10-09T18:00:00Z" },
+        end: { dateTime: "2026-10-09T19:30:00Z" },
+        attendees: [{ email: "me@example.com", self: true, responseStatus: "accepted" }, { email: "Old@x.com" }],
+      }),
       "PATCH /events/e1": (c) => ({ id: "e1", summary: "Dinner", ...c.body }),
     });
     await text(tool(g.deps, "update_event"), { event_id: "e1", start: "2026-10-09T20:00:00Z", add_attendees: ["new@x.com", "me@example.com"], remove_attendees: ["old@x.com"], notify: true });
-    const patch = g.calls.find((c) => c.method === "PATCH")!;
-    expect(patch.url.searchParams.get("sendUpdates")).toBe("all");
-    expect(patch.body).toEqual({
+    const patches = g.calls.filter((c) => c.method === "PATCH");
+    expect(patches).toHaveLength(1);
+    expect(g.calls.filter((c) => c.method === "GET")).toHaveLength(1);
+    expect(patches[0].url.searchParams.get("sendUpdates")).toBe("all");
+    expect(patches[0].body).toEqual({
       start: { dateTime: "2026-10-09T20:00:00Z" },
+      end: { dateTime: "2026-10-09T21:30:00.000Z" },
       attendees: [{ email: "me@example.com", self: true, responseStatus: "accepted" }, { email: "new@x.com" }],
     });
   });
 
+  const timed = (extra: Partial<CalendarEvent> = {}) => () => ({
+    id: "e2",
+    start: { dateTime: "2026-10-09T10:00:00-07:00", timeZone: "America/Los_Angeles" },
+    end: { dateTime: "2026-10-09T11:00:00-07:00", timeZone: "America/Los_Angeles" },
+    ...extra,
+  });
+  const patchOf = async (routes: Record<string, (call: Call) => unknown>, args: Record<string, unknown>) => {
+    const g = fakeCalendar({ ...routes, "PATCH /events/e2": (c) => ({ id: "e2", ...c.body }) });
+    await text(tool(g.deps, "update_event"), { event_id: "e2", ...args });
+    return g.calls.find((c) => c.method === "PATCH")?.body;
+  };
+
+  test("a new start alone moves the event and keeps its length and time zone", async () => {
+    expect(await patchOf({ "GET /events/e2": timed() }, { start: "2026-10-09T15:00:00-07:00" })).toEqual({
+      start: { dateTime: "2026-10-09T15:00:00-07:00", timeZone: "America/Los_Angeles" },
+      end: { dateTime: "2026-10-09T23:00:00.000Z", timeZone: "America/Los_Angeles" },
+    });
+  });
+
+  test("a new end alone keeps the start, and must come after it", async () => {
+    expect(await patchOf({ "GET /events/e2": timed() }, { end: "2026-10-09T12:30:00-07:00" })).toEqual({
+      end: { dateTime: "2026-10-09T12:30:00-07:00", timeZone: "America/Los_Angeles" },
+    });
+    const g = fakeCalendar({ "GET /events/e2": timed() });
+    await expect(runTool(tool(g.deps, "update_event"), { event_id: "e2", end: "2026-10-09T09:00:00-07:00" }, { callId: "c" }))
+      .rejects.toThrow("end must come after the event's start");
+    expect(g.calls.some((c) => c.method === "PATCH")).toBe(false);
+  });
+
+  test("both edges must be in order, and an all-day event moves only with both", async () => {
+    const g = fakeCalendar({ "GET /events/e2": timed() });
+    await expect(runTool(tool(g.deps, "update_event"), { event_id: "e2", start: "2026-10-09T15:00:00Z", end: "2026-10-09T14:00:00Z" }, { callId: "c" }))
+      .rejects.toThrow("end must come after start");
+    const allDay = { "GET /events/e2": () => ({ id: "e2", start: { date: "2026-10-09" }, end: { date: "2026-10-10" } }) };
+    const a = fakeCalendar(allDay);
+    await expect(runTool(tool(a.deps, "update_event"), { event_id: "e2", start: "2026-10-09T15:00:00Z" }, { callId: "c" }))
+      .rejects.toThrow("all-day event");
+    expect(a.calls.some((c) => c.method === "PATCH")).toBe(false);
+    expect(await patchOf(allDay, { start: "2026-10-09T15:00:00Z", end: "2026-10-09T16:00:00Z" })).toEqual({
+      // The PATCH merges into the stored edge, so the all-day date is cleared.
+      start: { dateTime: "2026-10-09T15:00:00Z", date: null },
+      end: { dateTime: "2026-10-09T16:00:00Z", date: null },
+    });
+  });
+
+  test("a change that leaves the time alone reads nothing first", async () => {
+    const g = fakeCalendar({ "PATCH /events/e2": (c) => ({ id: "e2", ...c.body }) });
+    await text(tool(g.deps, "update_event"), { event_id: "e2", title: "Lunch" });
+    expect(g.calls.map((c) => c.method)).toEqual(["PATCH"]);
+  });
+
   test("risk: reads run, creates and updates pass the gate", () => {
-    expect(calendarTools(fakeCalendar({}).deps).map((t) => `${t.name}:${t.risk}`)).toEqual([
+    expect(calendarTools(googleCalendar(fakeCalendar({}).deps)).map((t) => `${t.name}:${t.risk}`)).toEqual([
       "list_events:read", "find_free_time:read", "create_event:write", "update_event:write",
     ]);
   });

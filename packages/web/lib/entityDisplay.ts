@@ -2,11 +2,13 @@ import { createContext, useContext, useMemo } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useRepoObject } from "../hooks/useRepoObject";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, type EntityType } from "./entityLinks";
+import { entityRoute, isConvexId, entityTypeFromId, entityReferenceLabel, entityShortLabel, parseRepoObjectId, parseCallRef, callRefId, callRefLabelSuffix, parseProposalChangeRef, proposalChangeRefId, proposalChangeLabelSuffix, type EntityType } from "./entityLinks";
 import { repoObjectRefOf, repoObjectTitle } from "./repoObjects";
 import { findEntityInStore, entityTypeInStore, resolveAssigneeInfo } from "./liveEntities";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncOrgProposal } from "../hooks/useSyncOrgProposals";
+import { useCallPlaces } from "../hooks/useSyncCalls";
+import { callTitle } from "./calls/roomLabels";
 const api = _api as any;
 
 
@@ -152,6 +154,9 @@ export type EntityResolution = {
   shortLabel: string;
   /** In-app route for the object (falls back to the raw id pre-resolution). */
   href: string;
+  /** The change a proposal reference points at (`op-55#3` is 3); absent for a
+   *  whole proposal and for every other type. The row is still the proposal's. */
+  changeSeq?: number;
 };
 
 
@@ -222,8 +227,12 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // A staffing proposal (`op-N`) is store-fed: the feeder syncs
   // orgProposals.get into the orgProposals and orgProposalChanges collections
   // and the row is read back from the store, so the card's verdicts (store
-  // actions) paint on the same row the reference resolves to.
-  const proposalFeed = useSyncOrgProposal(live && type === "proposal" ? rawId : null);
+  // actions) paint on the same row the reference resolves to. One change of
+  // a proposal (`op-55#3`) is fed, read and named as its proposal: the number
+  // only says which change the reader is pointed at, so it is split off
+  // before the feeder (the server knows no proposal called `op-55#3`).
+  const changeRef = type === "proposal" ? parseProposalChangeRef(rawId) : null;
+  const proposalFeed = useSyncOrgProposal(live && type === "proposal" ? changeRef?.proposal ?? rawId : null);
   const proposalRow = useInboxStore((s) => (live && type === "proposal" ? findEntityInStore(s, "proposal", rawId) : undefined));
   const proposal = type === "proposal" ? (proposalFeed.ready ? proposalRow ?? null : undefined) : undefined;
   // A decision (`sd-N` or Convex id) seeds from the viewer's queue in the
@@ -255,13 +264,21 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     [live, type, rawId],
   );
   const entity: any = fixtures ? served : isRepoObject ? repoObject.entity ?? seed : served ?? seed;
+  // An untitled call is named by where it happened ("Huddle in <session>"),
+  // by the same rule the Calls list and its page use (callTitle).
+  const callRow = type === "call" && entity?.room_key ? entity : null;
+  const callRows = useMemo(() => (callRow ? [callRow] : []), [callRow]);
+  const callPlaces = useCallPlaces(callRows);
+  const callName = useInboxStore((s) =>
+    callRow ? callTitle({ ...callRow, place: callPlaces[String(callRow._id)] }, s as any) : undefined,
+  );
 
   // One label rule for every type, shared with mobile: the reference reads as
   // the object's NAME, and the id moves to the detail surfaces. A trigger
   // prefers its display_title — the generated short name, not the whole
   // prompt's first line.
   const resolvedTitle: string | undefined =
-    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
+    (isTrigger ? entity?.display_title : undefined) || (type === "decision" ? entity?.question : undefined) || callName || (isRepoObject && type ? repoObjectTitle(type, entity) : undefined) || entity?.title || entity?.display_title || entity?.name;
   const labelArgs = {
     title: resolvedTitle,
     shortId: entity?.short_id,
@@ -269,13 +286,16 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
     typeLabel: type ? TYPE_LABEL[type] : null,
   };
   // A stretch of a call reads as the call plus the transcript lines it names,
-  // and a moment of it as the call plus the time on the player.
-  const turnsSuffix = callRefLabelSuffix(callRef);
-  const label = entityReferenceLabel(labelArgs) + turnsSuffix;
-  const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + turnsSuffix : label;
+  // a moment of it as the call plus the time on the player, and one change of
+  // a proposal as the proposal plus the change's number. Mobile's rule for
+  // the last: until the row is in hand the reference reads as written, which
+  // already carries the number.
+  const partSuffix = callRefLabelSuffix(callRef) + proposalChangeLabelSuffix(entity ? changeRef : null);
+  const label = entityReferenceLabel(labelArgs) + partSuffix;
+  const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + partSuffix : label;
   // Sessions carry a generated short name (title generation writes
   // `short_title`); everything else derives one from its title.
-  const shortLabel = entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title }) + turnsSuffix;
+  const shortLabel = entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title }) + partSuffix;
 
   // Route that opens this entity. Prefer the resolved Convex id; fall back to
   // the raw id so the link still works in the brief window before the query
@@ -285,9 +305,10 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // the raw id was a Convex id. The commit page matches the sha exactly, so
   // the route carries the full one.
   // An initiative's page is addressed by its `in-N`, a proposal's by its
-  // `op-N` and a decision's by its `sd-N`: the form a person reads.
-  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
+  // `op-N` and a decision's by its `sd-N`: the form a person reads. One change
+  // of a proposal keeps its number, so the page opens with it in focus.
+  const routeId = isRepoObject && type ? repoObjectRefOf(type, entity, 40) ?? rawId : callRef ? callRefId(entity?._id ?? callRef.call, callRef.turns, callRef.at_ms) : changeRef ? proposalChangeRefId(entity?.short_id ?? changeRef.proposal, changeRef.seq) : ((type === "initiative" || type === "proposal" || type === "decision") && entity?.short_id) || (entity?._id ?? rawId);
   const href = entityRoute(type ?? "session", routeId) ?? "#";
 
-  return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href };
+  return { rawId, type, entity, served: fixtures ? true : isRepoObject ? repoObject.ready : served !== undefined, status: entity?.status, label, fullLabel, shortLabel, href, changeSeq: changeRef?.seq };
 }

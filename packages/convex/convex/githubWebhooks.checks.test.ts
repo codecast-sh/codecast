@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
+import { armedTriggerRows, makeFakeDb } from "./testDb";
 import { processCheckRunEvent, processStatusEvent, processCheckSuiteEvent, processReviewThreadEvent } from "./githubWebhooks";
 
 const TEAM = "team_1" as any;
@@ -60,6 +60,7 @@ function context(eventPayload: any, action: string, eventType: string, seed: Rec
         created_at: 0,
         mode: "apply",
       },
+      ...armedTriggerRows("pr_check_failed", "pr_checks_green"),
     ],
     external_events: [],
     reviews: [],
