@@ -36,12 +36,12 @@ beforeAll(async () => {
   ({ CallVideoPlayer } = await import("../CallVideoPlayer"));
 }, 120_000);
 
-function mount() {
+function mount(onViewPick?: (view: any) => void) {
   const host = document.getElementById("root")!;
   host.innerHTML = "";
   const root = createRoot(host);
   const handleRef = { current: null as any };
-  React.act(() => root.render(React.createElement(CallVideoPlayer, { files: FILES as any, callStartedAt: T, handleRef })));
+  React.act(() => root.render(React.createElement(CallVideoPlayer, { files: FILES as any, callStartedAt: T, handleRef, onViewPick })));
   return { root, handleRef };
 }
 
@@ -60,6 +60,18 @@ test("a moment linked on a screen opens on that screen, the room underneath", ()
   React.act(() => root.unmount());
 });
 
+test("a view the reader picks is handed to the host for its address; a view a link landed on is not", () => {
+  const picked: any[] = [];
+  const { root, handleRef } = mount((v) => picked.push(v));
+  React.act(() => void handleRef.current.seek(150_000, { play: false, view: { screen: true } }));
+  expect(picked).toEqual([]);
+  const radios = () => [...document.querySelectorAll('[role="radio"]')] as HTMLElement[];
+  React.act(() => radios().find((r) => !r.textContent?.includes("Ana"))!.click());
+  React.act(() => radios().find((r) => r.textContent?.includes("Ana"))!.click());
+  expect(picked).toEqual([null, { screen: true, identity: "u_ana" }]);
+  React.act(() => root.unmount());
+});
+
 test("by identity too, and a moment no screen covers stays on the room", () => {
   let { root, handleRef } = mount();
   React.act(() => void handleRef.current.seek(150_000, { play: false, view: { screen: true, identity: "u_ana" } }));
@@ -69,4 +81,32 @@ test("by identity too, and a moment no screen covers stays on the room", () => {
   React.act(() => void handleRef.current.seek(90_000, { play: false, view: { screen: true } }));
   expect(srcs()).toEqual(["https://b/c1.mp4"]);
   React.act(() => root.unmount());
+});
+
+test("a phone refusing the room's sound under a screen asks for a tap, and the tap plays it", async () => {
+  const proto = (globalThis as any).HTMLVideoElement.prototype;
+  const realPlay = proto.play;
+  let refuse = true;
+  const played: string[] = [];
+  proto.play = function (this: HTMLVideoElement) {
+    played.push(this.getAttribute("src") ?? "");
+    if (refuse) return Promise.reject(Object.assign(new Error("needs a gesture"), { name: "NotAllowedError" }));
+    return Promise.resolve();
+  };
+  try {
+    const { root, handleRef } = mount();
+    await React.act(async () => void handleRef.current.seek(150_000, { play: true, view: { screen: true } }));
+    const chip = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("Tap for sound"));
+    expect(chip()).toBeTruthy();
+    refuse = false;
+    played.length = 0;
+    await React.act(async () => chip()!.click());
+    expect(played).toEqual(["https://b/c1.mp4"]);
+    // The room's file playing is what clears it.
+    await React.act(async () => void document.querySelector("video")!.dispatchEvent(new (globalThis as any).Event("playing")));
+    expect(chip()).toBeUndefined();
+    React.act(() => root.unmount());
+  } finally {
+    proto.play = realPlay;
+  }
 });

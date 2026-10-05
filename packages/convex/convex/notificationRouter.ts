@@ -45,6 +45,11 @@ export const PREFERENCE_MAP: Record<string, string> = {
   goal_stall: "mention",
   // News about what the team can do, like a teammate starting a session.
   device_shared: "team_session_start",
+  // The line's news about a cause is task news, under the switch a person
+  // already has for their tasks.
+  card_waiting: "task_activity",
+  change_shipped: "task_activity",
+  cause_reopened: "task_activity",
 };
 
 function isNotificationEnabled(

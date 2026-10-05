@@ -5,9 +5,9 @@ import { verifyApiToken } from "./apiTokens";
 import { canReadSessionCommand, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, validateSessionCommandRequestId, sessionCommandRow, recentConversationCommands } from "./daemonCommandUtils";
 
 // The commands a web store action can bind a request id to (hibernate, a
-// restart's resume, a device move, an account switch), plus the kill that
-// opens a restart.
-const STORE_COMMANDS = new Set(["hibernate_session", "resume_session", "kill_session", "move_to_device", "switch_account"]);
+// restart's resume, a device move, an account switch, an edit of a line's
+// file), plus the kill that opens a restart.
+const STORE_COMMANDS = new Set(["hibernate_session", "resume_session", "kill_session", "move_to_device", "switch_account", "line_profile_edit"]);
 
 export const hibernate = mutation({
   args: { conversation_id: v.id("conversations"), session_id: v.string(), owner_device_id: v.string(), request_id: v.string() },

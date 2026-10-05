@@ -11,7 +11,7 @@ import { ROLE_NEEDS_INPUT_SPEC, roleRoutineFor } from '../../../../convex/convex
 import { apiConfig } from '../../adapters/convo';
 import { gate, type Captured, type CaptureCtx, type SurfaceImpl } from '../../surface';
 import { meta } from './meta';
-import { standingGates, type StandingLabel } from './actions';
+import { budgetGate, playbookGate, standingGates, type StandingLabel } from './actions';
 import { claudeModel, describeTurn, findSnapshot, servedDirFor, withHarnessNote, type SnapshotDir, type StandingWorld } from './world';
 
 // role-wake: one firing of a role's trigger in its standing session. The role
@@ -168,6 +168,7 @@ const impl: SurfaceImpl = {
     return [
       parses,
       gate('no-stale-lines', stale.length === 0, stale.length ? `older than a week at the wake: ${stale.map((l) => l.raw).join(' | ')}` : 'no standing line is older than a week at the wake'),
+      ...(brief === null ? [] : [budgetGate(brief), ...(label?.playbook ? [playbookGate(brief, label.playbook)] : [])]),
       ...standingGates(out.agents, label, 1, brief === null ? [] : [brief]),
     ];
   },

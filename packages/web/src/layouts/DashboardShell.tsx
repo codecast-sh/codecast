@@ -1,6 +1,8 @@
-import { Outlet, useLocation } from "react-router";
+import { Navigate, Outlet, useLocation } from "react-router";
 import { AuthGuard } from "@/components/AuthGuard";
 import { DashboardLayout } from "@/components/DashboardLayout";
+import { useInboxStore } from "@/store/inboxStore";
+import { LANE_HOME, laneOf } from "@/components/simple/lanePref";
 
 /**
  * Shared layout route for the dashboard's tab-routable pages.
@@ -24,6 +26,10 @@ export default function DashboardShell() {
   // in. Everything else in the shell is an authed surface and keeps the
   // redirect-home guard.
   const guestOk = /^\/(conversation\/|community(\/|$))/.test(location.pathname);
+  // Someone who lives in the simple lane lands on its home, not the inbox:
+  // the inbox is where sign-in, the app icon and old links all arrive.
+  const simpleLane = useInboxStore((s) => laneOf(s.clientState?.ui) === "simple");
+  if (simpleLane && location.pathname === "/inbox") return <Navigate to={LANE_HOME.simple} replace />;
   return (
     <AuthGuard guestOk={guestOk}>
       <DashboardLayout allowUnhydratedGuest={guestOk}>

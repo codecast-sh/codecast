@@ -6,9 +6,19 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 
-export function LoginCodePaste({ deviceId, flow }: { deviceId: string; flow: { url?: string; started_at: number } }) {
+export function LoginCodePaste({
+  deviceId,
+  flow,
+  defaultOpen = false,
+}: {
+  deviceId: string;
+  flow: { url?: string; started_at: number };
+  // The sign-in toast shows the steps from the start: it is the place the
+  // person comes back to, and a toggle inside it would change its height.
+  defaultOpen?: boolean;
+}) {
   const submit = useMutation(api.accountSwitch.submitLoginCode);
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [code, setCode] = useState("");
   const [sending, setSending] = useState(false);
   if (!flow.url) return null;

@@ -13,7 +13,7 @@ import * as os from "os";
 import * as path from "path";
 import type { AddressInfo } from "net";
 import { agentSpawnPath } from "../agentSpawnPath.js";
-import { EVALS_API_COMMAND, EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
+import { EVALS_API_COMMAND, EVALS_ENTRY, EVALS_SCRIPT_HEADER, createEvalsBridge, evalsHomeDir, lineReader, type EvalsBridge, type EvalsBridgeDeps } from "./evalsBridge.js";
 import { handleEvalsHttp } from "./evalsServer.js";
 
 // Every test spawns git and bun children; at a load average in the hundreds a
@@ -38,7 +38,8 @@ process.stdin.on("data", (chunk) => {
       setTimeout(() => process.exit(3), 30);
       return;
     }
-    const answer = () => process.stdout.write(JSON.stringify({ id: req.id, status: 200, body: { pid: process.pid, args: process.argv.slice(2), cwd: process.cwd(), req } }) + "\\n");
+    const body = req.query.big ? { blob: "x".repeat(Number(req.query.big)) } : { pid: process.pid, args: process.argv.slice(2), cwd: process.cwd(), req };
+    const answer = () => process.stdout.write(JSON.stringify({ id: req.id, status: 200, body }) + "\\n");
     if (req.query.slow) setTimeout(answer, Number(req.query.slow));
     else answer();
   }
@@ -305,6 +306,15 @@ describe("the api child", () => {
     expect(res.status).toBe(504);
   });
 
+  test("an answer over the size cap is refused by its id, and the child keeps serving", async () => {
+    const { api } = await use(makeHome("huge", goodRoot), { answerMax: 4096 });
+    const { pid } = await (await api("/evals/health")).json();
+    const res = await api("/evals/commit/abc1234?big=200000");
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toContain("GET /commit/abc1234");
+    expect((await (await api("/evals/health")).json()).pid).toBe(pid);
+  });
+
   test("stop ends the child", async () => {
     const { bridge, api } = await use(makeHome("stop", goodRoot));
     const { pid } = await (await api("/evals/health")).json();
@@ -379,6 +389,36 @@ describe("a checkout.json that moves under a running child", () => {
     expect(execs()).toHaveLength(2);
   });
 
+  test("a destroyed worktree that held the pointer ends its child and falls back to its main checkout", async () => {
+    const main = makeCheckout("wt-main");
+    git(main, "add", "-A");
+    git(main, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "checkout");
+    const wt = path.join(tmp, "wt-line");
+    git(main, "worktree", "add", "-q", wt);
+    const home = makeHome("wt", fs.realpathSync(wt));
+    const { bridge, api } = await use(home);
+    const first = await (await api("/evals/health")).json();
+    expect(first.cwd).toBe(fs.realpathSync(wt));
+    fs.rmSync(wt, { recursive: true, force: true });
+    const next = await api("/evals/health");
+    expect(next.status).toBe(200);
+    expect((await next.json()).cwd).toBe(main);
+    expect(await waitFor(() => !alive(first.pid))).toBe(true);
+    expect(bridge.pid()).not.toBe(first.pid);
+  });
+
+  test("a child whose own checkout is gone, with nothing to fall back to, is ended rather than left running", async () => {
+    const lone = makeCheckout("lone");
+    const { bridge, api } = await use(makeHome("lone", lone));
+    const first = await (await api("/evals/health")).json();
+    fs.rmSync(lone, { recursive: true, force: true });
+    const next = await api("/evals/health");
+    expect(next.status).toBe(503);
+    expect((await next.json()).reason).toBe("no-checkout");
+    expect(await waitFor(() => !alive(first.pid))).toBe(true);
+    expect(bridge.pid()).toBeNull();
+  });
+
   test("a child that ends while the pointer is read is replaced, not dereferenced", async () => {
     let bridge!: EvalsBridge;
     let endMidRead = false;
@@ -442,6 +482,36 @@ describe("the handler never blocks", () => {
     }
   });
 });
+describe("lineReader", () => {
+  test("a character split across two chunks is decoded whole", () => {
+    const lines: string[] = [];
+    const feed = lineReader((l) => lines.push(l));
+    const bytes = Buffer.from("café ✓\nnext\n");
+    for (let i = 0; i < bytes.length; i++) feed(bytes.subarray(i, i + 1));
+    expect(lines).toEqual(["café ✓", "next"]);
+  });
+
+  test("a line past max keeps its head and arrives flagged; the next line is whole", () => {
+    const got: [string, boolean][] = [];
+    const feed = lineReader((l, over) => got.push([l, over]), 8);
+    feed('{"id":7,"status":200');
+    feed(',"body":1}\nok\n');
+    expect(got).toEqual([['{"id":7,', true], ["ok", false]]);
+  });
+
+  test("a large line arriving in small chunks costs its length, not its length squared", () => {
+    // 16 MiB in 512 byte chunks: rebuilding the held text per chunk would copy about 2.7e11 bytes.
+    const chunk = Buffer.alloc(512, 120);
+    let len = -1;
+    const feed = lineReader((l) => (len = l.length));
+    const started = performance.now();
+    for (let i = 0; i < 32_768; i++) feed(chunk);
+    feed("\n");
+    expect(len).toBe(16 * 1024 * 1024);
+    expect(performance.now() - started).toBeLessThan(10_000);
+  });
+});
+
 describe("agreement with the eval tool", () => {
   test("the header matches the repo's own evals script", () => {
     const script = fs.readFileSync(path.join(import.meta.dir, "..", "..", "..", "..", "evals"), "utf8");

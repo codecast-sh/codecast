@@ -10,6 +10,7 @@ import { formatDateFull, formatRelative } from "../../lib/utils";
 import { useOpenLinkedSession } from "../../hooks/useOpenLinkedSession";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { SessionTag } from "../identity/SessionTag";
+import { useWorkingOwner } from "../../lib/workUnit";
 import { ChatNewDivider } from "../chat/ChatMessage";
 import { Badge } from "../ui/badge";
 import { APP_LOOK, ISSUE_PROVIDER_NAME } from "../../lib/integrations";
@@ -77,6 +78,9 @@ export function UserBadge({ name, image, username }: { name: string; image?: str
 
 // ── One comment ─────────────────────────────────────────────────────────────
 
+/** The session that owns a task, as a comment surface knows it. */
+export type TaskOwnerRef = { sessionId: string; here?: boolean };
+
 export type TaskCommentRow = {
   _id: string;
   author: string;
@@ -85,6 +89,9 @@ export type TaskCommentRow = {
   comment_type?: string;
   created_at: number;
   session_info?: { _id: string; agent_type?: string; title?: string } & Record<string, any>;
+  /** A person's comment that reached the task's owning session while it
+   *  worked (convex tasks.ts deliverCommentToOwner). */
+  delivered_to_info?: { _id: string; agent_type?: string; title?: string } & Record<string, any>;
   external?: TaskCommentExternal;
 };
 
@@ -171,6 +178,18 @@ export function TaskCommentItem({
       <div className="ml-[26px] border-l-2 border-sol-border/30 pl-3">
         {clamp ? <Clamp>{body}</Clamp> : body}
       </div>
+      {comment.delivered_to_info && (
+        <div className="ml-[26px] mt-1 pl-3 flex items-center gap-1.5 text-[10px] text-sol-text-dim" title="The session working on this task received this comment">
+          <span>Sent to</span>
+          <SessionTag
+            session={comment.delivered_to_info}
+            title={comment.delivered_to_info.title}
+            size="xs"
+            onClick={() => openLinkedSession(comment.delivered_to_info)}
+            className="min-w-0 max-w-[260px]"
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -187,8 +206,13 @@ export function TaskCommentComposer({
   dropFilesRef,
   autoOpen,
   autoFocus,
+  owner,
 }: {
   shortId: string | undefined;
+  /** The task's owning session: while it works, a comment reaches it, and
+   *  the box says so before the person writes. `here` when the box sits in
+   *  that session's own page. */
+  owner?: TaskOwnerRef | null;
   dropFilesRef?: MutableRefObject<((files: File[]) => void) | null>;
   /** Start with the box open and keep it open (the Threads card). */
   autoOpen?: boolean;
@@ -198,6 +222,7 @@ export function TaskCommentComposer({
   const addTaskComment = useInboxStore((s) => s.addTaskComment);
   const generateUploadUrl = useMutation(api.images.generateUploadUrl);
   const [comment, setComment] = useState("");
+  const working = useWorkingOwner(owner?.sessionId);
   const [commentImages, setCommentImages] = useState<PendingImage[]>([]);
   const [commentOpen, setCommentOpen] = useState(!!autoOpen);
   const commentRef = useRef<HTMLTextAreaElement>(null);
@@ -355,6 +380,18 @@ export function TaskCommentComposer({
             </button>
           </div>
         </div>
+        {working && (
+          <div className="flex items-center gap-1.5 pt-1 pl-6 text-[10px] text-sol-text-dim" title="A comment reaches the session working on this task">
+            {owner?.here ? (
+              <span>Also sends to this session</span>
+            ) : (
+              <>
+                <span>Also sends to</span>
+                <SessionTag session={working as any} size="xs" className="min-w-0 max-w-[240px]" />
+              </>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -370,8 +407,11 @@ export function TaskCommentStream({
   composerAutoFocus,
   newSince,
   clampComments,
+  owner,
 }: {
   shortId: string | undefined;
+  /** The task's owning session (TaskCommentComposer tells the writer it will see the comment). */
+  owner?: TaskOwnerRef | null;
   comments: TaskCommentRow[];
   composerAutoOpen?: boolean;
   composerAutoFocus?: boolean;
@@ -406,7 +446,7 @@ export function TaskCommentStream({
           ))}
         </div>
       )}
-      <TaskCommentComposer shortId={shortId} autoOpen={composerAutoOpen} autoFocus={composerAutoFocus} />
+      <TaskCommentComposer shortId={shortId} autoOpen={composerAutoOpen} autoFocus={composerAutoFocus} owner={owner} />
     </div>
   );
 }

@@ -52,7 +52,9 @@ function tableBody(name: string): string {
 }
 
 describe("every catalog snippet is wired into the CLI", () => {
-  const behavior = tableBody("SNIPPET_BEHAVIOR");
+  // The section snippets join the behavior table from SECTION_SNIPPET_VERSIONS
+  // (one generated entry per slug), so their wiring is a line there.
+  const behavior = tableBody("SNIPPET_BEHAVIOR") + tableBody("SECTION_SNIPPET_VERSIONS");
 
   test("the behavior table was located, not silently empty", () => {
     // A source-scraping test that finds nothing passes everything. The table

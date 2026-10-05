@@ -1,0 +1,144 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" role="img" aria-labelledby="t d">
+  <title id="t">How a scope becomes its feed</title>
+  <desc id="d">A role's scope is a set of project ids and plan ids. resolveScope turns it into rows: the listed projects, the listed plans plus every plan of a project in scope, and every task of those projects and plans, each access checked. sessionsInScope keeps the sessions from the org scan that carry the role, or are bound to a task or plan in scope; a project's folder decides nothing. org.scopeFeed reads nine sources, each newest first past its own cursor, merges them by updated_at, returns the newest page and a cursor that records each source's position.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    .human { fill: #ffffff; stroke: #cb4b16; stroke-width: 1.25 }
+    .done { fill: #ffffff; stroke: #859900; stroke-width: 1.25 }
+    .wait { fill: #ffffff; stroke: #b58900; stroke-width: 1.25 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .b { font-weight: 600 }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .waitLine { stroke: #b58900; stroke-width: 1.5; fill: none; stroke-dasharray: 2 3 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .waitLbl { fill: #b58900 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .ah-wait { fill: #b58900 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core, .human, .done, .wait { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+      .waitLbl { fill: #b58900 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aWait" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-wait" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="520" rx="12"/>
+  <text class="h" x="24" y="36">org.scopeFeed: what a role owns, read as one stream</text>
+
+  <!-- scope -->
+  <rect class="card" x="24" y="60" width="180" height="132" rx="8"/>
+  <text class="l b" x="38" y="84">scope</text>
+  <text class="l" x="38" y="106">org_roles.scope</text>
+  <text class="n" x="38" y="126">{ project_ids,</text>
+  <text class="n" x="38" y="142">  plan_ids }</text>
+  <text class="n" x="38" y="170">or a scope argument</text>
+
+  <!-- resolveScope -->
+  <rect class="core" x="236" y="60" width="324" height="132" rx="10"/>
+  <text class="l b" x="252" y="84">resolveScope</text>
+  <text class="l" x="252" y="106">projects: the listed ones</text>
+  <text class="l" x="252" y="126">plans: listed + by_project_id</text>
+  <text class="l" x="252" y="146">tasks: by_project_id + by_plan_id</text>
+  <text class="n" x="252" y="172">every row access checked (accessJudgeFor)</text>
+
+  <!-- sessionsInScope -->
+  <rect class="core" x="592" y="60" width="344" height="132" rx="10"/>
+  <text class="l b" x="608" y="84">sessionsInScope</text>
+  <text class="n" x="608" y="104">a session from the org scan is in when</text>
+  <text class="l" x="608" y="124">org_role_id is the role, or</text>
+  <text class="l" x="608" y="142">active_task_id is a scope task, or</text>
+  <text class="l" x="608" y="160">active_plan_id / plan_ids hit</text>
+  <text class="n" x="608" y="180">a project's folder decides nothing</text>
+
+  <path class="data" d="M204 126 H232" marker-end="url(#aData)"/>
+  <path class="data" d="M560 126 H588" marker-end="url(#aData)"/>
+
+  <!-- sources -->
+  <rect class="zone" x="24" y="222" width="628" height="256" rx="12"/>
+  <text class="k" x="40" y="242">SOURCES (FEED_KINDS), EACH NEWEST FIRST</text>
+  <path class="data" d="M398 192 V218" marker-end="url(#aData)"/>
+  <path class="data" d="M620 192 V218" marker-end="url(#aData)"/>
+
+  <g>
+    <rect class="card" x="40" y="254" width="192" height="64" rx="8"/>
+    <text class="l b" x="52" y="274">session</text>
+    <text class="n" x="52" y="292">sessionsInScope</text>
+
+    <rect class="card" x="242" y="254" width="192" height="64" rx="8"/>
+    <text class="l b" x="254" y="274">task</text>
+    <text class="n" x="254" y="292">resolveScope's tasks</text>
+
+    <rect class="card" x="444" y="254" width="192" height="64" rx="8"/>
+    <text class="l b" x="456" y="274">plan</text>
+    <text class="n" x="456" y="292">resolveScope's plans</text>
+
+    <rect class="card" x="40" y="328" width="192" height="64" rx="8"/>
+    <text class="l b" x="52" y="348">doc</text>
+    <text class="n" x="52" y="366">members' docs filed under</text>
+    <text class="n" x="52" y="381">a scope project or plan</text>
+
+    <rect class="card" x="242" y="328" width="192" height="64" rx="8"/>
+    <text class="l b" x="254" y="348">artifact</text>
+    <text class="n" x="254" y="366">pages of a scope session</text>
+    <text class="n" x="254" y="381">or attached to a task</text>
+
+    <rect class="card" x="444" y="328" width="192" height="64" rx="8"/>
+    <text class="l b" x="456" y="348">decision</text>
+    <text class="n" x="456" y="366">on a scope task, or open</text>
+    <text class="n" x="456" y="381">from a scope session</text>
+
+    <rect class="card" x="40" y="402" width="192" height="64" rx="8"/>
+    <text class="l b" x="52" y="422">update</text>
+    <text class="n" x="52" y="440">project_updates</text>
+    <text class="n" x="52" y="455">by_project_created</text>
+
+    <rect class="card" x="242" y="402" width="192" height="64" rx="8"/>
+    <text class="l b" x="254" y="422">commit</text>
+    <text class="n" x="254" y="440">repos of scope sessions,</text>
+    <text class="n" x="254" y="455">last 7 days</text>
+
+    <rect class="card" x="444" y="402" width="192" height="64" rx="8"/>
+    <text class="l b" x="456" y="422">run</text>
+    <text class="n" x="456" y="440">workflow runs bound to</text>
+    <text class="n" x="456" y="455">a scope task or plan</text>
+  </g>
+
+  <!-- merge -->
+  <path class="data" d="M652 350 H688" marker-end="url(#aData)"/>
+  <rect class="core" x="692" y="270" width="244" height="148" rx="10"/>
+  <text class="l b" x="708" y="294">computeScopeFeed</text>
+  <text class="l" x="708" y="318">merge by updated_at,</text>
+  <text class="l" x="708" y="336">keep the newest limit</text>
+  <text class="n" x="708" y="354">(default 40, max 200)</text>
+  <text class="n" x="708" y="378">next_cursor: the last row</text>
+  <text class="n" x="708" y="394">each source emitted</text>
+
+  <path class="data" d="M814 418 V442" marker-end="url(#aData)"/>
+  <rect class="inset" x="692" y="446" width="244" height="32" rx="6"/>
+  <text class="l" x="708" y="467">{ rows, next_cursor }</text>
+</svg>

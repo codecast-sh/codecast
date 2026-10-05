@@ -13,25 +13,9 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./triage/graduation"
 
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-const KEYCAP_FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif';
+import { KeyCap } from "./KeyCap";
 
-/** `onAccent` is a key on a filled accent button (white on red, say): the
- *  usual cap would read as a grey hole in it. */
-export function KeyCap({ children, size = "sm", tone = "default" }: { children: React.ReactNode; size?: "sm" | "xs"; tone?: "default" | "onAccent" }) {
-  const cls = size === "xs"
-    ? "inline-flex items-center justify-center min-w-[16px] h-[16px] px-[4px] text-[9px]"
-    : "inline-flex items-center justify-center min-w-[20px] h-[20px] px-[5px] text-[10px]";
-  const look = tone === "onAccent" ? "text-white bg-white/15 border border-white/30" : "text-sol-text-dim bg-sol-bg-alt border border-sol-border/50";
-  return (
-    <kbd
-      className={`${cls} leading-none ${look} rounded-[4px] shadow-[0_1px_0_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.04)]`}
-      style={{ fontFamily: KEYCAP_FONT }}
-    >
-      {children}
-    </kbd>
-  );
-}
-
+export { KeyCap };
 
 export function KeyboardShortcutsPanel() {
   const s = useTrackedStore([

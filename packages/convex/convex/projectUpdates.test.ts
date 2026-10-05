@@ -85,6 +85,16 @@ describe("project updates: posting", () => {
     expect(tables.projects[0].updated_at).toBe(row.created_at);
   });
 
+  test("a post carries the web stub's client_key, and a replay lands on the same row", async () => {
+    const tables = baseTables();
+    const args = { project_id: PROJECT, body: "Shipped.", client_key: "pustub-abc" };
+    const first = await (webPost as any)._handler(ctx(MEMBER, tables), args);
+    const replay = await (webPost as any)._handler(ctx(MEMBER, tables), args);
+    expect(tables.project_updates).toHaveLength(1);
+    expect(tables.project_updates[0].client_key).toBe("pustub-abc");
+    expect(String(replay.id)).toBe(String(first.id));
+  });
+
   test("a stranger cannot post", async () => {
     await expect(
       (webPost as any)._handler(ctx(STRANGER, baseTables()), {

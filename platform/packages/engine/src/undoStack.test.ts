@@ -18,6 +18,9 @@ import {
   subscribeUndoHistory,
   undoEntry,
   undoTo,
+  suspendUndoRecording,
+  isUndoSuppressed,
+  deferUndoGesture,
 } from "./undoStack";
 import type { UndoEntry, UndoOutcome } from "./types";
 
@@ -352,5 +355,98 @@ describe("undoRowCount", () => {
   it("counts a row held by two stores once", () => {
     const objects = ["a", "b"].flatMap((id) => [{ store: "sessions", id }, { store: "conversations", id }]);
     expect([undoRowCount(objects), undoRowCount([{ store: "conversations", id: "b" }]), undoRowCount(undefined)]).toEqual([2, 1, 0]);
+  });
+});
+
+describe("suspendUndoRecording", () => {
+  it("a window holding it records nothing until every hold is released", () => {
+    _resetUndoStacks();
+    const entry = () => ({ label: "x", undo: () => ({ ok: true as const, applied: 1, skipped: 0 }), redo: () => ({ ok: true as const, applied: 1, skipped: 0 }) });
+    const a = suspendUndoRecording();
+    const b = suspendUndoRecording();
+    expect(isUndoSuppressed()).toBe(true);
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(0);
+    a();
+    a();
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(0);
+    b();
+    expect(isUndoSuppressed()).toBe(false);
+    pushUndo(entry());
+    expect(getUndoHistory().items).toHaveLength(1);
+  });
+});
+
+describe("window slots", () => {
+  it("keep one history per window: a slot saved and loaded carries only its own entries", () => {
+    const { __undoStackWindowSlots } = require("./undoStack") as typeof import("./undoStack");
+    const seam = __undoStackWindowSlots();
+    _resetUndoStacks();
+    pushUndo({ label: "host", undo: () => {}, redo: () => {} });
+    const host = seam.get();
+    seam.set(seam.fresh());
+    expect(getUndoHistory().items).toHaveLength(0);
+    expect(performUndo()).toBe(false);
+    pushUndo({ label: "follower", undo: () => {}, redo: () => {} });
+    const follower = seam.get();
+    seam.set(host);
+    expect(getUndoHistory().items.map((i) => i.label)).toEqual(["host"]);
+    seam.set(follower);
+    expect(getUndoHistory().items.map((i) => i.label)).toEqual(["follower"]);
+    _resetUndoStacks();
+  });
+});
+
+// A gesture whose store write waits (a row's exit animation) is still the
+// newest thing the user did. A walk that arrives during the wait commits it
+// first and takes it back, instead of taking back an older entry and letting
+// the gesture land afterwards over the dropped redo branch.
+describe("deferUndoGesture", () => {
+  it("a walk during the wait commits the gesture and takes it back", () => {
+    generic("pin");
+    const commit = deferUndoGesture(() => generic("stash"));
+    expect(canUndo()).toBe(true);
+    expect(performUndo()).toBe(true);
+    expect(value).toEqual(["pin"]);
+    expect(getUndoHistory().items.map((i) => [i.label, i.status])).toEqual([["stash", "undone"], ["pin", "done"]]);
+    // The wait ends: the gesture already ran, so nothing lands twice.
+    commit();
+    expect(value).toEqual(["pin"]);
+    expect(getUndoHistory().items.length).toBe(2);
+  });
+
+  it("every walk commits it: redo, undoEntry, undoTo, redoTo", () => {
+    const pin = generic("pin");
+    performUndo();
+    deferUndoGesture(() => generic("stash"));
+    // The gesture drops the redo branch, as one recorded before the press would.
+    expect(canRedo()).toBe(false);
+    expect(performRedo()).toBe(false);
+    expect(pin.status).toBe("dropped");
+    expect(value).toEqual(["stash"]);
+    // undoTo walks from the committed gesture down to the entry it names.
+    const stashId = getUndoHistory().undoOrder[0]!;
+    deferUndoGesture(() => generic("kill"));
+    expect(undoTo(stashId)).toBe(2);
+    expect(value).toEqual([]);
+    // redoTo: the pending gesture drops the redo branch, so nothing is redone.
+    deferUndoGesture(() => generic("file"));
+    expect(redoTo(stashId)).toBe(0);
+    expect(value).toEqual(["file"]);
+    // undoEntry: a toast's own undo of an older entry still sees the gesture land first.
+    const fileId = getUndoHistory().undoOrder[0]!;
+    deferUndoGesture(() => generic("snooze"));
+    expect(undoEntry(fileId)).toBe(true);
+    expect(value).toEqual(["snooze"]);
+  });
+
+  it("an ordinary end of the wait records it once", () => {
+    const commit = deferUndoGesture(() => generic("stash"));
+    expect(value).toEqual([]);
+    commit();
+    commit();
+    expect(value).toEqual(["stash"]);
+    expect(getUndoHistory().items.length).toBe(1);
   });
 });

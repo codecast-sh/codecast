@@ -11,8 +11,6 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useTourAutoStart } from "../../../tours/useTourAutoStart";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Pin, PinOff, Play } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
@@ -53,7 +51,6 @@ import { usePanelLayout } from "../../../hooks/usePanelLayout";
 import { briefFirstLine } from "./scopeTypes";
 import { retireToastText } from "../../../lib/retireRole";
 
-const api = _api as any;
 
 const todayUtc = () => new Date().toISOString().slice(0, 10);
 
@@ -143,19 +140,19 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   }, [role, store, router]);
   // A seat never provisioned: the one gesture is to bring its agent online.
   // The tree re-syncs with the standing session when the server is done.
-  const provisionMutation = useMutation(api.orgRoles.provision);
+  const provisionRole = useInboxStore((s) => s.provisionOrgRole);
   const [provisioning, setProvisioning] = useState(false);
   const provision = useCallback(async () => {
     if (!role) return;
     setProvisioning(true);
     try {
-      await provisionMutation({ role_id: role._id });
+      await provisionRole(role._id);
       toast.success(`${role.name} is starting`);
     } catch (e: any) {
       toast.error(e?.message?.replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] ?? "Could not start the role");
       setProvisioning(false);
     }
-  }, [role, provisionMutation]);
+  }, [role, provisionRole]);
 
   // -------- the standing agent
   // The pointer is on the role (org.tree stamps `standing` from the

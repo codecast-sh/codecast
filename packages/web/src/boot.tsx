@@ -12,11 +12,16 @@ import { useInboxStore } from "../store/inboxStore";
 import { inHuddle } from "../lib/calls/huddlePresence";
 // Registers the session row entrance an undo of a hide plays (undo/onRevert).
 import "../store/undoActions";
+import { recordUndoOnlyWhereReachable } from "../hooks/useUndoUnreachable";
 import { stashSlackReturn } from "../lib/slackReturn";
 
 // Before anything mounts: a Slack OAuth return carries ?code=, which the auth
 // provider would otherwise redeem as its own and sign the person out.
 stashSlackReturn();
+
+// This window records undo history only while something mounted can reach it
+// (useUndoWalk): a page or window with no way back records nothing.
+recordUndoOnlyWhereReachable();
 
 // Everything here used to live in main.tsx, which is now a stub that loads this
 // module dynamically — see main.tsx for why (the desktop hand-off must be able

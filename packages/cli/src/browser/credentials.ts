@@ -292,9 +292,9 @@ export async function provisionCredentials(
   } catch {
     return { injected: 0, host: url, reason: "not a url" };
   }
-  if (!host || host === "localhost" || /^[\d.]+$/.test(host)) {
-    return { injected: 0, host, reason: "local address" };
-  }
+  // Loopback hosts carry too: cookies ignore the port, so a dev server's
+  // login on this laptop is the one an agent's browser elsewhere needs.
+  if (!host) return { injected: 0, host, reason: "no host in the address" };
   if (keepsOwnLogin(host)) return { injected: 0, host, reason: OWN_LOGIN_REASON };
 
   const { cookies, reason } = localCookiesForHost(userDataDir, host);
@@ -340,7 +340,7 @@ export async function provisionLocalLogins(
     } catch {
       return { injected: 0, host: url, reason: "not a url" };
     }
-    if (!host || host === "localhost" || /^[\d.]+$/.test(host)) return { injected: 0, host, reason: "local address" };
+    if (!host) return { injected: 0, host, reason: "no host in the address" };
     if (keepsOwnLogin(host)) return { injected: 0, host, reason: OWN_LOGIN_REASON };
   }
   const label = host ?? "every site";

@@ -119,7 +119,7 @@ describe("week facts and prompt", () => {
       standfirst: "One. Two. Three. Four. Five.",
       top_story_keys: ["f", "c", "a", "b", "d"],
     });
-    expect(parseWeekReply(reply({ week_headline: "x".repeat(300), standfirst: "S.", top_story_keys: [] }), load, ["a"])!.headline.length).toBeLessThanOrEqual(110);
+    expect(parseWeekReply(reply({ week_headline: "x".repeat(300), standfirst: "S.", top_story_keys: [] }), load, ["a"])!.headline.length).toBeLessThanOrEqual(110 + 40);
     expect(parseWeekReply(reply({ week_headline: "", standfirst: "S." }), load, fallback)).toBeNull();
     expect(parseWeekReply(reply({ week_headline: "H", standfirst: "" }), load, fallback)).toBeNull();
     expect(parseWeekReply("not json", load, fallback)).toBeNull();

@@ -48,3 +48,20 @@ describe("useWorkspaceCollection wake signature", () => {
     );
   });
 });
+
+// The sync log delivers a soft-deleted row (an archived doc, with archived_at
+// set) so the undo's tombstone check and other devices know its state; the
+// list channels drop such rows on the server. Enumeration applies the same
+// rule on the client, from the collection's registry entry, so every list
+// reader inherits it and an archived doc never comes back into a list.
+describe("rows the list channels would not deliver", () => {
+  it("an archived doc leaves the docs enumeration and its wake signature", async () => {
+    const { workspaceRows } = await import("../useWorkspaceCollection");
+    const live = { _id: "d1", workspace: KEY, title: "kept", updated_at: 1 };
+    const archived = { _id: "d2", workspace: KEY, title: "gone", updated_at: 2, archived_at: 3 };
+    const coll = { d1: live, d2: archived };
+    expect(workspaceRows("docs", coll, KEY).map((r: any) => r._id)).toEqual(["d1"]);
+    expect(membershipSig(coll, KEY, null, "docs")).toBe(membershipSig({ d1: live }, KEY, null, "docs"));
+    expect(workspaceRows("docs", { ...coll, d2: { ...archived, archived_at: undefined } }, KEY).map((r: any) => r._id)).toEqual(["d1", "d2"]);
+  });
+});

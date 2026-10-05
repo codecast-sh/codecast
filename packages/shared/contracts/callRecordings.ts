@@ -29,7 +29,7 @@
 // a message can never disagree about which picture a line points at.
 
 import { parseRoomKey } from "./callRoomKeys";
-import { isGuestIdentity, normalizeGuestName } from "./callGuests";
+import { isGuestIdentity, markedName, normalizeGuestName } from "./callGuests";
 
 export const CALL_RECORDING_KINDS = ["composite", "screen"] as const;
 export type CallRecordingKind = (typeof CALL_RECORDING_KINDS)[number];
@@ -47,9 +47,21 @@ export type CallRecordingKind = (typeof CALL_RECORDING_KINDS)[number];
 export const CALL_RECORDING_STATUSES = ["starting", "recording", "stopping", "ready", "failed"] as const;
 export type CallRecordingStatus = (typeof CALL_RECORDING_STATUSES)[number];
 
-/** A run is live while any of its files is still being written. */
+/** A run is live while any of its files is still being written. Active
+ *  includes "stopping": LiveKit is still finishing and uploading the file, so
+ *  the run holds its place (no second press, the loop keeps looking). */
 export function isRecordingActive(status: CallRecordingStatus): boolean {
   return status === "starting" || status === "recording" || status === "stopping";
+}
+
+/** Is this file filming the room right now? Unlike isRecordingActive, a
+ *  "stopping" file is not: somebody has already pressed stop, so what happens
+ *  in the room from here is not being kept. Every surface that tells people
+ *  they are on camera (the REC mark, a live frame, the CLI's "filming" note)
+ *  asks this, so a new status lands on all of them at once. No status (no
+ *  run) is not filming. */
+export function isRecordingFilming(status: CallRecordingStatus | null | undefined): boolean {
+  return status === "starting" || status === "recording";
 }
 
 // Why a file stopped. "pressed" is somebody in the room (a guest included);
@@ -57,9 +69,20 @@ export function isRecordingActive(status: CallRecordingStatus): boolean {
 // "room_empty" is the media room left with no teammate in it while the seat
 // leases agree (guests may still be there); "share_ended" ends a screen file
 // when its share stops while the run goes on; "limit" is a ceiling (ours or
-// LiveKit's); "ended" is LiveKit finishing a file without saying why.
-export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "room_empty", "share_ended", "limit", "ended", "failed"] as const;
+// LiveKit's); "ended" is LiveKit finishing a file without saying why;
+// "calls_off" is an admin turning calls off for the team, which takes the
+// room (and its REC mark, and every Stop) away from the people in it.
+export const CALL_RECORDING_STOP_REASONS = ["pressed", "huddle_ended", "room_empty", "share_ended", "limit", "ended", "failed", "calls_off"] as const;
 export type CallRecordingStopReason = (typeof CALL_RECORDING_STOP_REASONS)[number];
+
+// What kind of failure a failed file's `error` words describe, kept beside the
+// words so decisions never read copy: "minutes_spent" is the plan out of
+// recording minutes (no retry can succeed until someone raises it); "busy" is
+// no egress capacity this minute (passes on its own); "credentials" is LiveKit
+// refusing this server's keys; "server" is this server's own fault (storage,
+// configuration, an exception); "livekit" is anything else LiveKit did.
+export const CALL_RECORDING_ERROR_KINDS = ["minutes_spent", "busy", "credentials", "server", "livekit"] as const;
+export type CallRecordingErrorKind = (typeof CALL_RECORDING_ERROR_KINDS)[number];
 
 /** The fields of a recording row that alignment reads. Ids are strings so the
  *  web, the CLI and Convex all hand their own row shapes straight in. */
@@ -165,8 +188,8 @@ export function recordingSubject(
     return first ? `${first}'s screen` : "Screen";
   }
   if (rec.kind === "composite") return "the room";
-  if (guest) return name ? `${name}'s screen (guest)` : "a guest's shared screen";
-  return name ? `${name}'s screen` : "a shared screen";
+  if (name) return markedName(name, rec.participant_identity, null, "'s screen");
+  return guest ? "a guest's shared screen" : "a shared screen";
 }
 
 /** One stretch of the call a file covers, in call time (ms since the
@@ -218,6 +241,18 @@ export function formatCallTime(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${sec}` : `${m}:${sec}`;
 }
 
+/** A time into a call as prose writes it: `754s`, `12:34`, `1:02:03`. */
+export const CALL_TIME_SOURCE = "\\d+s|\\d+(?::[0-5]\\d){1,2}";
+
+/** A time into a call in ms (`754s`, `12:34`, `1:02:03`), or null: the
+ *  reader of what formatCallTime writes. */
+export function parseCallTime(text: string | null | undefined): number | null {
+  const s = (text || "").trim();
+  if (!new RegExp(`^(?:${CALL_TIME_SOURCE})$`, "i").test(s)) return null;
+  if (/s$/i.test(s)) return Number(s.slice(0, -1)) * 1000;
+  return s.split(":").reduce((acc, part) => acc * 60 + Number(part), 0) * 1000;
+}
+
 /** The whole second at or after `ms`, or before it when that would pass
  *  `limit`: a moment a citation (`cl-42@m:ss`, whole seconds) can name
  *  exactly. */
@@ -226,24 +261,89 @@ export function wholeSecond(ms: number, limit = Infinity): number {
   return up <= limit ? up : Math.floor(ms / 1000) * 1000;
 }
 
+/** A stretch of a call as a clock pair: `2:12-6:15`. The one way every
+ *  surface writes a range of call time (the CLI, the call page's header).
+ *  The start is the first whole second inside the stretch (spanStartSecond),
+ *  so a reader who snaps the printed start is answered, never refused for a
+ *  second the stretch began just after; the end rounds down as every clock
+ *  does. */
+export function describeClockSpan(span: { fromMs: number; toMs: number }): string {
+  return `${formatCallTime(spanStartSecond(span))}-${formatCallTime(span.toMs)}`;
+}
+
+/** The first whole second inside a stretch (wholeSecond, bounded by its last
+ *  millisecond): where its printed start points. A stretch shorter than its
+ *  first whole second keeps the second it began in. */
+export function spanStartSecond(span: { fromMs: number; toMs: number }): number {
+  return wholeSecond(span.fromMs, span.toMs - 1);
+}
+
+/** Several stretches as clock pairs: `2:12-6:15, 9:40-12:02`. */
+export function describeClockSpans(spans: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
+  return spans.map(describeClockSpan).join(", ");
+}
+
+/** The reader of describeClockSpans: `2:12-6:15, 9:40-12:02` back into
+ *  stretches, or null when any pair is not a clock pair. */
+export function parseClockSpans(text: string | null | undefined): Array<{ fromMs: number; toMs: number }> | null {
+  const parts = (text ?? "").split(",").map((p) => p.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const out: Array<{ fromMs: number; toMs: number }> = [];
+  for (const p of parts) {
+    const [a, b, extra] = p.split("-");
+    const fromMs = parseCallTime(a);
+    const toMs = parseCallTime(b);
+    if (extra !== undefined || fromMs === null || toMs === null) return null;
+    out.push({ fromMs, toMs });
+  }
+  return out;
+}
+
+/** The filmed stretches as a reader sees them: the union of every span, a
+ *  screen inside its room's run adding nothing, so a surface can say which
+ *  part of a call has video (the call page's header, a huddle's digest) and
+ *  the transcript can mark the lines in it. */
+export function videoStretches(spans: ReadonlyArray<{ fromMs: number; toMs: number }>): Array<{ fromMs: number; toMs: number }> {
+  const out: Array<{ fromMs: number; toMs: number }> = [];
+  for (const s of [...spans].sort((a, b) => a.fromMs - b.fromMs)) {
+    const last = out[out.length - 1];
+    if (last && s.fromMs <= last.toMs) last.toMs = Math.max(last.toMs, s.toMs);
+    else out.push({ fromMs: s.fromMs, toMs: s.toMs });
+  }
+  return out;
+}
+
+/** One recorded span in words: `1:02-3:30 Ana's screen (still saving)`.
+ *  `lead` replaces the clock pair when a caller has more to say before the
+ *  subject (`cast call`'s `lines 6-41 (2:12-6:15)`). */
+export function describeSpan(span: CallCoveredSpan, lead: string = describeClockSpan(span)): string {
+  return `${lead} ${recordingSubject(span)}${span.pending ? " (still saving)" : ""}`;
+}
+
 /** The recorded spans as one line: `0:00-4:10 the room, 1:02-3:30 Ana's
  *  screen`. What `cast call` prints and what the call page's header says. */
 export function describeSpans(spans: readonly CallCoveredSpan[]): string {
-  return spans
-    .map((s) => `${formatCallTime(s.fromMs)}-${formatCallTime(s.toMs)} ${recordingSubject(s)}${s.pending ? " (still saving)" : ""}`)
-    .join(", ");
+  return spans.map((s) => describeSpan(s)).join(", ");
 }
+
+/** How far inside a span's end nearestRecordedMs lands when the moment is
+ *  past it. A file's last second is where a share's stall or its ending
+ *  sits (LiveKit's black filler, the window closing), so a hint aimed at it
+ *  shows filler more often than the picture that was up. */
+export const NEAREST_END_INSET_MS = 2_000;
 
 /** The recorded moment nearest `atMs`, for a "try this instead" hint (the
  *  CLI's refusal, the call page's "the video starts at"): the moment itself
  *  when covered, else the closest edge of a finished span (a whole second
- *  inside it, since an end is exclusive), so the hint is a reference that
- *  will itself succeed. */
+ *  inside it), so the hint is a reference that will itself succeed. An end
+ *  is approached from NEAREST_END_INSET_MS inside it, never its last
+ *  keyframe, unless the span is shorter than that. */
 export function nearestRecordedMs(spans: readonly CallCoveredSpan[], atMs: number): number | null {
   let best: number | null = null;
   for (const s of spans) {
     if (s.pending) continue;
-    const at = wholeSecond(Math.min(Math.max(atMs, s.fromMs), s.toMs - 1), s.toMs - 1);
+    const end = Math.max(s.fromMs, Math.min(s.toMs - 1, s.toMs - NEAREST_END_INSET_MS));
+    const at = wholeSecond(atMs >= s.toMs ? end : Math.max(atMs, s.fromMs), s.toMs - 1);
     if (at < s.fromMs) continue;
     if (best === null || Math.abs(at - atMs) < Math.abs(best - atMs)) best = at;
   }
@@ -344,6 +444,45 @@ export function segmentAt(
   return atMs - Math.max(s.t0, s.t1 ?? s.t0) <= opts.holdMs ? { index: last, during: false } : null;
 }
 
+/** How long after its last word a line is still "what was being said" at a
+ *  silent moment of a call. Past it the moment has no line. */
+export const CALL_LAST_SAID_HOLD_MS = 20_000;
+/** A line whose words ended this close before a moment reads as said with
+ *  it; further back, a surface says when it was said, so words and picture
+ *  are never read as one moment when they are not. */
+export const CALL_JUST_SAID_MS = 3_000;
+
+/** The line a moment of a call is captioned with: the one being said then,
+ *  else the last one said a little before it (segmentAt held for
+ *  CALL_LAST_SAID_HOLD_MS). One rule for `cast call snap` and a `cl-42@12:34`
+ *  card, so both name the same line beside the same picture. */
+export function lineSaidAt(
+  segments: ReadonlyArray<{ t0: number; t1?: number | null }>,
+  atMs: number,
+): { index: number; during: boolean } | null {
+  return segmentAt(segments, atMs, { holdMs: CALL_LAST_SAID_HOLD_MS });
+}
+
+/**
+ * What a synced transcript holds where an agent looked at a frame of a call
+ * (`cast call snap`, then a Read of the picture): the moment's reference,
+ * never the picture. The picture would otherwise ride the session's message
+ * to everyone who can read the session (a team feed, a public share link),
+ * none of whom the call's own access rule was asked about, and would outlive
+ * the recording it came from. The reference renders as that frame for a
+ * reader the call admits, and as nothing once the recording is deleted. The
+ * agent's own model input is untouched: this is only what codecast keeps.
+ */
+export function callFrameSeenText(ref: string): string {
+  return `Frame of the call: ${ref}`;
+}
+
+/** The moment a tool result's text says the agent looked at, or null. */
+export function callFrameSeenRef(text: string | null | undefined): string | null {
+  const m = /(?:^|\n)Frame of the call: (cl-\d+@[0-9:.]+s?)[ \t]*(?:\n|$)/.exec(text ?? "");
+  return m ? m[1] : null;
+}
+
 /**
  * The moments to sample across a stretch of a call (a transcript line range):
  * `count` points spread evenly from `fromMs` to `toMs`, ends included, never
@@ -359,9 +498,46 @@ export function sampleCallMoments(fromMs: number, toMs: number, count: number, m
   return Array.from({ length: n }, (_, i) => Math.round(a + (span * i) / (n - 1)));
 }
 
-/** The moment a transcript line points at: where its first word was said. */
-export function lineMomentMs(segment: { t0: number }): number {
-  return Math.max(0, segment.t0);
+/**
+ * The moment a transcript line points at, and the moment its frame is taken:
+ * the first whole second a little after its first word. One rule for every
+ * surface (`cast call snap cl-42:<line>`, `cast call`'s [video] marks, the
+ * call page's filmed rail and its links), so a line reads as filmed in one
+ * place exactly when it does in the others, and a link to it lands on the
+ * second the CLI cites. A little after, because a line's t0 is where the
+ * recognizer heard speech begin and the speaker is still finishing the
+ * gesture that goes with it; a whole second, because the citation printed
+ * beside the frame is `cl-42@12:34` and a whole second is what it can name,
+ * so the frame an agent cites is the frame it saw. A line too short to reach
+ * that second takes the first whole second at or after its start, even when
+ * that is a moment past its last word: never a second before it began, which
+ * shows what was on screen during the line before it (a quarter of the lines
+ * of a real call span no whole second), and at most a second late, still the
+ * picture being pointed at.
+ */
+export function lineFrameMs(seg: { t0: number; t1?: number }): number {
+  const start = Math.max(0, seg.t0);
+  const end = Math.max(start, seg.t1 ?? start);
+  const nudged = Math.ceil((start + 250) / 1000) * 1000;
+  return nudged <= end ? nudged : Math.ceil(start / 1000) * 1000;
+}
+
+/** Whether a line was on camera: some stretch covers the moment its frame is
+ *  taken (lineFrameMs), the moment `cast call snap cl-42:<line>` shows. */
+export function lineFilmed(spans: ReadonlyArray<{ fromMs: number; toMs: number }>, seg: { t0: number; t1?: number }): boolean {
+  return spanCovers(spans, lineFrameMs(seg));
+}
+
+const spanCovers = (spans: ReadonlyArray<{ fromMs: number; toMs: number }>, at: number) => spans.some((s) => s.fromMs <= at && at < s.toMs);
+
+/** Where a click on a line seeks the call's media: its first word (t0), so
+ *  the line is heard from its start, unless no stretch covers that moment
+ *  while the line still reads as filmed (lineFilmed: its first word came a
+ *  moment before the recording's first frame). Then it seeks to the frame
+ *  the rail promised (lineFrameMs), never to a moment with no video. */
+export function lineSeekMs(spans: ReadonlyArray<{ fromMs: number; toMs: number }>, seg: { t0: number; t1?: number }): number {
+  if (spanCovers(spans, seg.t0) || !lineFilmed(spans, seg)) return seg.t0;
+  return lineFrameMs(seg);
 }
 
 // The call page reads a recording through a presigned URL that stays
@@ -403,6 +579,14 @@ export const RECORDING_PRESS_FRESH_MS = 30_000;
  *  callRecordings.startRecording) and the Record button waits it out. */
 export const RECORDING_RESTART_COOLDOWN_MS = 5_000;
 
+/** Is a room's Record press still waiting out that cooldown? Its run is
+ *  stopping and the stop was asked for less than the cooldown ago (or when,
+ *  is not known yet). The Record button on every platform asks this, so the
+ *  web's and the phone's "saving" agree with what the server would refuse. */
+export function recordingCooling(status: CallRecordingStatus | null | undefined, stopRequestedAt: number | null | undefined, now: number): boolean {
+  return status === "stopping" && (stopRequestedAt == null || now - stopRequestedAt < RECORDING_RESTART_COOLDOWN_MS);
+}
+
 /** Is a press made at `pressedAt` too old to act on at `now`? A press with no
  *  stamp (a client older than the rule) is taken as made now. */
 export function recordingPressStale(pressedAt: unknown, now: number): boolean {
@@ -424,29 +608,48 @@ export function recordingPressStaleWords(on: boolean): string {
 // words must say exactly what the access rule does.
 
 /** Who can watch a room's recording (transcripts.canReadCall: whoever may
- *  open the room's calls, which for a huddle is whoever may enter its room).
- *  Without a room key (a guest's page, which is never told the room's kind)
- *  it names the hosts' team, the widest a huddle's room reaches. */
+ *  open the room's calls, which for a huddle is whoever may enter its room,
+ *  and any teammate seated in it while it recorded, `recorded_people`, even
+ *  one rung in on an invite for a minute: they may watch every run). A
+ *  room narrower than the team names that second door too. Without a room
+ *  key (a guest's page, which is never told the room's kind) it names the
+ *  hosts' team, the widest a huddle's room reaches, which holds them all. */
 export function recordingAudience(roomKey?: string | null): string {
   const kind = roomKey ? parseRoomKey(roomKey)?.kind : null;
-  if (kind === "dm") return "the people this huddle is between";
-  if (kind === "channel") return "everyone in the channel";
-  if (kind === "session") return "everyone who can open the session";
+  const seated = " and any teammate who sat in it while it recorded";
+  if (kind === "dm") return `the people this huddle is between${seated}`;
+  if (kind === "channel") return `everyone in the channel${seated}`;
+  if (kind === "session") return `everyone who can open the session${seated}`;
   return "the team hosting it";
 }
 
-/** Where the video goes once it is kept, in one sentence: with the call, for
- *  the room's audience, and for a public link only when somebody shares the
- *  video on it (shareIncludesVideo: off on every link until turned on). */
+/** Where the video goes once it is kept: with the call, for the room's
+ *  audience; on a public link only when somebody shares the video on it
+ *  (shareIncludesVideo: off on every link until turned on); and a single
+ *  picture from it by link only from whoever may share the video, or the
+ *  person whose screen the picture shows (mayShareFrame). */
 export function recordingKeptWords(roomKey?: string | null): string {
-  return `The video stays with the call, where ${recordingAudience(roomKey)} can watch it, and anyone with the call's public link if someone shares the video on it.`;
+  return `The video stays with the call, where ${recordingAudience(roomKey)} can watch it, and anyone with the call's public link if someone shares the video on it. Whoever recorded it, or the person whose screen a picture shows, can also share single pictures from it by link.`;
 }
+
+/** Why a picture from a recording was not put on a public link: who may (the
+ *  server's mayShareFrame), in words a person or an agent reads. `cast call
+ *  snap --share` adds the access-checked alternative, the moment's
+ *  reference, which only someone who may read the call can open. */
+export const FRAME_SHARE_REFUSED_WORDS =
+  "Only whoever recorded this call, a team admin, or the person whose screen it shows can share a picture from it by link.";
+
+/** Why a reader of a call may not open it to anyone: the server's
+ *  mayPublishCall, said by the refusal and by the share popover before the
+ *  press. Closing the link is any reader's. */
+export const CALL_LINK_REFUSED_WORDS = "Only someone who was in this call, or a team admin, can open it to anyone.";
 
 /** How a run that stopped by itself is said, by its reason, for the room's
  *  thread and the notice: null for the reasons said otherwise (a press names
  *  who pressed, a failure gives its words). Each says only what is true: the
  *  huddle ending, the media room left without a teammate (guests may still
- *  be in it), a ceiling, or LiveKit closing the file without a reason. */
+ *  be in it), a ceiling, or LiveKit closing the file with no cause the
+ *  room could see, which says so rather than reading as unexplained. */
 export function recordingStoppedItselfWords(reason: string | null | undefined): string | null {
   switch (reason) {
     case "huddle_ended":
@@ -456,8 +659,11 @@ export function recordingStoppedItselfWords(reason: string | null | undefined): 
     case "limit":
       return "Recording stopped at its time limit";
     case "ended":
+      return "Recording stopped: the media server closed the file";
     case "share_ended":
       return "Recording stopped";
+    case "calls_off":
+      return "Recording stopped: calls were turned off for this team";
     default:
       return null;
   }
@@ -472,4 +678,14 @@ export function recordingFailureWords(error: string | null | undefined): string 
   if (!e) return "The recording failed.";
   if (/^(the recording|recording is|stopped before|livekit (lost|accepted))/i.test(e)) return e;
   return `The recording failed. ${e}`;
+}
+
+/** A stopped recording whose video then failed to save: the room was told it
+ *  was saving, so this is said on its own (the thread's record_lost line,
+ *  the presser's notice), with the server's plain words for why. */
+export const RECORDING_LOST_TITLE = "Recording could not be saved";
+
+export function recordingLostWords(error: string | null | undefined): string {
+  const e = (error ?? "").trim();
+  return e ? `${RECORDING_LOST_TITLE}. ${e}` : `${RECORDING_LOST_TITLE}.`;
 }

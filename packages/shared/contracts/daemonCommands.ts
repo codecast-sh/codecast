@@ -163,6 +163,18 @@ export const DAEMON_COMMANDS = [
   // reason) while a turn is in progress; "force" interrupts it. Old daemons:
   // "Unknown command" (the runner reports the source must be upgraded).
   "quiesce_session",
+  // The app's edit of a project's .codecast/line.toml (plan pl-838), sent
+  // through users.sendConfigCommand like config_read/config_write and
+  // targeted at the device that published the profile. args:
+  // LineProfileEditArgs (packages/cli/src/lineProfileEdit.ts) — { root,
+  // edits[] | content, base? }. The daemon applies the edits in place,
+  // validates with the profile loader, writes atomically and republishes.
+  // Result: LineProfileEditReply. Old daemons: "Unknown command".
+  "line_profile_edit",
 ] as const;
 
 export type DaemonCommand = (typeof DAEMON_COMMANDS)[number];
+
+/** How long a command waits for its daemon: one not picked up by then is
+ *  closed with error "expired_ttl" and never runs. */
+export const DAEMON_COMMAND_TTL_MS = 5 * 60 * 1000;

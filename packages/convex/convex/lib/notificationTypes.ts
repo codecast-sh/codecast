@@ -62,5 +62,10 @@ export const NOTIFICATION_TYPE = v.union(
   // The hourly fold-up of "sessions are waiting for you" (notifications.ts).
   v.literal("sessions_need_input"),
   // A teammate shared a machine with a team the recipient is on.
-  v.literal("device_shared")
+  v.literal("device_shared"),
+  // The line (the-line-end-to-end.md LE16): a change card waits on the
+  // recipient, a cause's change shipped, a watched cause reopened.
+  v.literal("card_waiting"),
+  v.literal("change_shipped"),
+  v.literal("cause_reopened")
 );

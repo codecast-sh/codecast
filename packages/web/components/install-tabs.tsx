@@ -10,7 +10,7 @@ const INSTALL_COMMANDS = {
 
 /** `compact` is the slim strip the landing hero sets above its film: smaller tabs, body and copy button. */
 export function InstallTabs({ location = "unknown", showAlternatives = true, compact = false }: { location?: string; showAlternatives?: boolean; compact?: boolean }) {
-  const tab = compact ? "px-3 sm:px-4 py-1.5 text-xs" : "px-3 sm:px-5 py-2.5 text-sm";
+  const tab = compact ? "px-2.5 sm:px-4 py-1.5 text-xs" : "px-2.5 sm:px-5 py-2.5 text-sm";
   const icon = compact ? "w-4 h-4" : "w-5 h-5";
   const [platform, setPlatform] = useState<InstallOs>(detectInstallOs);
   const [copied, setCopied] = useState(false);
@@ -27,7 +27,7 @@ export function InstallTabs({ location = "unknown", showAlternatives = true, com
       <div className="flex items-center" style={{ backgroundColor: '#eee8d5' }}>
         <button
           onClick={() => setPlatform("unix")}
-          className={`${tab} font-medium whitespace-nowrap transition-all`}
+          className={`${tab} shrink-0 font-medium whitespace-nowrap transition-all`}
           style={platform === "unix"
             ? { backgroundColor: '#002b36', color: '#fdf6e3' }
             : { color: '#657b83' }
@@ -37,7 +37,7 @@ export function InstallTabs({ location = "unknown", showAlternatives = true, com
         </button>
         <button
           onClick={() => setPlatform("windows")}
-          className={`${tab} font-medium whitespace-nowrap transition-all`}
+          className={`${tab} shrink-0 font-medium whitespace-nowrap transition-all`}
           style={platform === "windows"
             ? { backgroundColor: '#002b36', color: '#fdf6e3' }
             : { color: '#657b83' }
@@ -50,14 +50,14 @@ export function InstallTabs({ location = "unknown", showAlternatives = true, com
           target="_blank"
           rel="noopener noreferrer"
           onClick={() => track("install_script_viewed", { location, platform })}
-          className={`ml-auto ${tab} font-medium whitespace-nowrap transition-colors hover:text-[#002b36]`}
+          className={`ml-auto min-w-0 truncate ${tab} font-medium whitespace-nowrap transition-colors hover:text-[#002b36]`}
           style={{ color: '#93a1a1' }}
         >
-          View <span className="hidden sm:inline">install </span>script
+          <span className="sm:hidden">Script</span><span className="hidden sm:inline">View install script</span>
         </a>
       </div>
       <div className={`${compact ? "px-4 py-2" : "p-4"} flex items-center justify-between gap-4`} style={{ backgroundColor: '#002b36' }}>
-        <code className="text-sm font-mono" style={{ color: '#eee8d5' }}>
+        <code className="min-w-0 overflow-x-auto whitespace-nowrap text-sm font-mono" style={{ color: '#eee8d5' }}>
           {platform === "unix" ? (
             INSTALL_COMMANDS.unix
           ) : (

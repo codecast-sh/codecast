@@ -4,18 +4,37 @@
 // scopes and profile fields, the iOS bundle id the native Apple token is issued
 // for, the relay mutation the desktop app redeems, the OTP email templates, the
 // deep link schemes, and the two product hooks (view revision, welcome email).
+//
+// Google sign-in is offered only on a deployment that has its OAuth client
+// (AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET, which @auth/core reads); without them
+// the provider is never registered and signInProviders says so, so the web
+// button stays hidden.
 import { convexAuth } from "@convex-dev/auth/server";
+// The raw builder on purpose: this query reads only the environment, and
+// ./functions would put this module, which http.ts and lib/access.ts import,
+// on the wrapped builder's import graph.
+import { query } from "./_generated/server";
 import { createAuthConfig } from "@platform/auth/convex";
 import { internal } from "./_generated/api";
 import { advanceCurrentUserViewRevision } from "./principalViewRevisions";
 import { deliver } from "./emails/send";
 import { passwordReset, verifyEmail } from "./emails/templates";
 
-export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth(
-  createAuthConfig({
+/** Whether this deployment can run Google sign-in. */
+export function googleSignInConfigured(): boolean {
+  return !!process.env.AUTH_GOOGLE_ID && !!process.env.AUTH_GOOGLE_SECRET;
+}
+
+/** Codecast's auth config. A function so the env gate is testable: it reads
+ *  the environment each time it runs (once, at module load, in production). */
+export function codecastAuthConfig() {
+  return createAuthConfig({
     redirect: {
       deepLinkSchemes: ["codecast://", "exp+codecast://"],
     },
+    // Basic profile only (openid email profile). Mail and calendar access is
+    // a separate, incremental connect (googleOAuth.ts), never part of sign-in.
+    ...(googleSignInConfigured() ? { google: {} } : {}),
     github: {
       scope: "read:user user:email repo read:org",
       profile(profile: any, tokens: any) {
@@ -62,5 +81,14 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth(
     async onUserUpdated(ctx, { userId }) {
       await advanceCurrentUserViewRevision(ctx.db as any, userId as any);
     },
-  }),
-);
+  });
+}
+
+export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth(codecastAuthConfig());
+
+/** The optional sign-in providers this deployment offers, for the sign-in
+ *  buttons. Public and unauthenticated: it names configuration, not users. */
+export const signInProviders = query({
+  args: {},
+  handler: async (): Promise<{ google: boolean }> => ({ google: googleSignInConfigured() }),
+});

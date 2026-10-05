@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { GuestOutcome, linkAsOf, type Outcome } from "./GuestOutcome";
 import { GuestLobby, deviceTrouble, type LobbyMode } from "./GuestLobby";
-import { CallNotice } from "./MeetChrome";
+import { CallNotice, NoticePills } from "./MeetChrome";
 import { GuestInCall } from "./GuestInCall";
 import { devicePermissionHint } from "../../../lib/calls/guestRoom";
 
@@ -42,6 +42,21 @@ describe("the end of the road, in plain words", () => {
     expect(t.split("This link has expired").length - 1).toBe(1);
     // A reason the heading does not carry is still explained.
     expect(outcome({ kind: "refused", reason: "inviter_gone" })).toContain("can no longer invite guests");
+  });
+
+  test("a link that closed names whom to ask, and a guest who was waiting is told what happened", () => {
+    const t = outcome({ kind: "refused", reason: "expired", inviter: "Ashot" });
+    expect(t).toContain("Ask Ashot for a new one.");
+    expect(t).not.toContain("whoever sent it");
+    expect(outcome({ kind: "refused", reason: "revoked", inviter: "Ashot" })).toContain("Ask Ashot for a new one.");
+    // The sender who can no longer invite is named as the reason, and the
+    // way forward is somebody else in the meeting.
+    const gone = outcome({ kind: "refused", reason: "inviter_gone", inviter: "Ashot" });
+    expect(gone).toContain("Ashot can no longer invite guests to this meeting.");
+    expect(gone).toContain("Ask someone else in it");
+    const closed = outcome(view("closed", { reason: "expired", meeting: "A call with Ashot", inviter: "Ashot" }));
+    expect(closed).toContain("The link to A call with Ashot expired while you were waiting. Ask Ashot for a new one.");
+    expect(outcome(view("closed", { reason: "revoked" }))).toContain("This link was turned off while you were waiting. Ask whoever sent it");
   });
 
   test("turned away: a countdown, then Ask again", () => {
@@ -107,7 +122,8 @@ describe("the end of the road, in plain words", () => {
     expect(linkAsOf(described, T)).toBe(described);
     expect(linkAsOf(described, T + 599_999)).toBe(described);
     const lapsed = linkAsOf(described, T + 600_000);
-    expect(lapsed).toEqual({ ok: false, reason: "expired" });
+    // Still named, as the server names a link that closed.
+    expect(lapsed).toEqual({ ok: false, reason: "expired", title: "Design review" });
     expect(outcome({ kind: "refused", reason: (lapsed as { reason: "expired" }).reason })).toContain("This link has expired");
     // A refusal the server already gave stands as it was; nothing to judge.
     const revoked = { ok: false as const, reason: "revoked" as const };
@@ -125,6 +141,49 @@ describe("the notice before joining", () => {
     expect(notice(true, false)).not.toContain("recorded");
     expect(notice(true, true)).toContain("being recorded, video and screen shares included");
     expect(notice(false, false)).toContain("not being transcribed or recorded");
+  });
+
+  test("leads with the short sentence, the rest one press away; the waiting card's has only the sentence", () => {
+    const lobby = notice(true, true);
+    expect(lobby).toContain("This call is being recorded, video and screen shares included. Anyone in it can stop it.");
+    expect(lobby).toContain("What happens to the video");
+    expect(lobby).toContain("Who reads it");
+    const compact = text(renderToStaticMarkup(<CallNotice compact transcribed recording />));
+    expect(compact).not.toContain("What happens to the video");
+    expect(compact).not.toContain("Who reads it");
+  });
+
+  test("the bar's transcription pill keeps its word on a phone, and is a press that says more when the page can", () => {
+    const pill = renderToStaticMarkup(<NoticePills transcribed wordsPublic onExplain={() => {}} />);
+    expect(pill).toMatch(/^<button/);
+    expect(text(pill)).toContain("transcribed, public");
+    // The phone's word, not hidden there: "transcribed", without ", public".
+    expect(pill).toMatch(/sm:hidden">transcribed</);
+    expect(renderToStaticMarkup(<NoticePills transcribed />)).toMatch(/^<span/);
+    expect(renderToStaticMarkup(<NoticePills transcribed={false} />)).toBe("");
+  });
+
+  test("a recording whose video goes to the public link says so, and marks it new to someone told only of the recording", () => {
+    const pub = (since?: { recording: boolean; transcribed: boolean; video_public?: boolean }) =>
+      text(renderToStaticMarkup(<CallNotice transcribed={false} recording videoPublic since={since} />));
+    expect(pub()).toContain("the video is shared by public link");
+    expect(pub({ recording: true, transcribed: false })).toContain("Now shared by public link.");
+    expect(pub({ recording: false, transcribed: false })).toContain("Started while you waited.");
+    expect(pub({ recording: true, transcribed: false, video_public: true })).not.toContain("Now shared");
+    // Public says nothing while nothing is recorded.
+    expect(text(renderToStaticMarkup(<CallNotice transcribed recording={false} videoPublic />))).not.toContain("public link");
+  });
+
+  test("a transcript on the public link says so, and a link turned on mid-call is news to someone told only of the transcript", () => {
+    const pub = (since?: { recording: boolean; transcribed: boolean; words_public?: boolean }) =>
+      text(renderToStaticMarkup(<CallNotice transcribed recording={false} wordsPublic since={since} />));
+    expect(pub()).toContain("the transcript is shared by public link");
+    expect(pub()).not.toContain("written down for the team, and the AI agents they work with can read it");
+    expect(pub({ recording: false, transcribed: true })).toContain("Now shared by public link.");
+    expect(pub({ recording: false, transcribed: false })).toContain("Turned on while you waited.");
+    expect(pub({ recording: false, transcribed: true, words_public: true })).not.toContain("Now shared");
+    // Public says nothing while nothing is written down.
+    expect(text(renderToStaticMarkup(<CallNotice transcribed={false} recording={false} wordsPublic />))).not.toContain("public link");
   });
 });
 
@@ -160,6 +219,7 @@ describe("the lobby and the door", () => {
         live
         transcribed
         recording={false}
+        videoPublic={false}
         name="Ada"
         onName={() => {}}
         onAsk={() => {}}
@@ -187,6 +247,9 @@ describe("the lobby and the door", () => {
     expect(t).toContain("live now");
     expect(t).toContain("This call is transcribed");
     expect(t).toContain("Ask to join");
+    // The app's solid button finish, not a hand-rolled hover.
+    expect(lobby("ask")).toContain("sol-btn-solid");
+    expect(lobby("ask")).not.toMatch(/#[0-9a-f]{6}/i);
   });
 
   test("no name, no knock", () => {
@@ -209,7 +272,7 @@ describe("the lobby and the door", () => {
     expect(t).not.toContain("Someone in the call will let you in");
     // Not in line, and nobody inside can see them: no minutes, no knocking ring.
     expect(t).toContain("waiting for a place at the door");
-    expect(t).not.toContain("waiting less than a minute");
+    expect(t).not.toContain("asked just now");
     const html = lobby("waiting", { doorFull: true });
     expect(html).not.toContain("meet-knock-ring");
     expect(lobby("waiting")).toContain("meet-knock-ring");
@@ -229,6 +292,43 @@ describe("the lobby and the door", () => {
     expect(html.match(/disabled="" class="[^"]*bg-white\/10 text-white\/50/g)?.length).toBe(2);
     expect(html).not.toContain("bg-sol-red/85");
     expect(lobby("ask")).toContain("bg-sol-red/85");
+  });
+
+  test("let in, then the transcript went public: the Join names what changed", () => {
+    const told = { recording: false, transcribed: true };
+    const t = text(lobby("rejoin", { accepted: told, wordsPublic: true }));
+    expect(t).toContain("Join, transcript is public");
+    expect(t).toContain("The call made its transcript public after you asked, so it's your choice: join, or leave.");
+    expect(t).toContain("Now shared by public link.");
+    expect(t).toContain("Leave");
+    const both = text(lobby("rejoin", { accepted: told, recording: true, wordsPublic: true }));
+    expect(both).toContain("Join the recorded call");
+    expect(both).toContain("The call started recording and made its transcript public after you asked");
+    // Transcription switched on while they waited.
+    const words = text(lobby("rejoin", { accepted: { recording: false, transcribed: false } }));
+    expect(words).toContain("Join the transcribed call");
+    expect(words).toContain("The call started transcribing after you asked");
+    expect(words).not.toContain("Your camera and microphone");
+    expect(text(lobby("rejoin", { accepted: { ...told, words_public: true }, wordsPublic: true }))).toContain("Join the call");
+  });
+
+  test("a machine with no camera says so the way its picker does, and the camera switch rests", () => {
+    const listed = (camera: unknown[]) => ({
+      ...preview,
+      getSnapshot: () => ({ ...preview.getSnapshot(), devicesListed: true, devices: { mic: [], camera, speaker: [] } }),
+    });
+    const none = lobby("ask", { preview: listed([]) });
+    expect(text(none)).not.toContain("Your camera is off");
+    // The picture and the picker under it: one fact, one wording.
+    expect(text(none).split("No camera found").length - 1).toBe(2);
+    expect(none).toContain('title="No camera was found on this device. Plug one in and it shows up here."');
+    expect(none).toMatch(/disabled="" class="[^"]*bg-white\/10 text-white\/50[^"]*" title="No camera was found/);
+    // A camera that is there and switched off is still off, and still a switch.
+    const off = lobby("ask", { preview: listed([{ deviceId: "cam1", label: "FaceTime HD", kind: "videoinput" }]) });
+    expect(text(off)).toContain("Your camera is off");
+    expect(off).toContain('title="Turn your camera on"');
+    // Before the browser has listed anything, an empty list is not "none".
+    expect(text(lobby("ask"))).toContain("Your camera is off");
   });
 
   test("a blocked device is fixed where this browser keeps it, not where desktop Chrome does", () => {
@@ -279,11 +379,27 @@ describe("the lobby and the door", () => {
     expect(t).toContain("being recorded");
     // Let in meanwhile: the lobby says joining is theirs to choose.
     const r = text(lobby("rejoin", { recording: true, accepted: { recording: false, transcribed: true } }));
-    expect(r).toContain("joining is yours to choose");
+    expect(r).toContain("The call started recording after you asked, so it's your choice: join, or leave.");
     // The choice is explicit: join under what it keeps now, or walk out.
-    expect(r).toContain("Join, recorded");
+    expect(r).toContain("Join the recorded call");
     expect(r).toContain("Leave");
     expect(r).not.toContain("Don't join");
+  });
+
+  test("the lobby says the video goes to the public link, and a link made public since widens the join", () => {
+    expect(text(lobby("ask", { recording: true, videoPublic: true }))).toContain("the video is shared by public link");
+    const r = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true } }));
+    expect(r).toContain("Now shared by public link.");
+    expect(r).toContain("Join the recorded call");
+    expect(r).toContain("The call made its recording public after you asked");
+    const same = text(lobby("rejoin", { recording: true, videoPublic: true, accepted: { recording: true, transcribed: true, video_public: true } }));
+    expect(same).toContain("Join the call");
+  });
+
+  test("on a phone the press sits under the notice whenever there is something to agree to", () => {
+    expect(lobby("ask")).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { recording: true, accepted: { recording: false, transcribed: true } })).not.toContain("max-sm:sticky");
+    expect(lobby("rejoin", { accepted: { recording: false, transcribed: true } })).toContain("max-sm:sticky");
   });
 
   test("a signed-in browser is pointed at the app, to join as themselves", () => {
@@ -331,6 +447,7 @@ describe("inside the call", () => {
           onLeave={() => {}}
           onReconnect={() => {}}
           onStopRecording={async () => {}}
+          onAgree={() => {}}
           {...over}
         />,
       ),

@@ -112,7 +112,7 @@ const HOST_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9.+:@_-]*$/;
 function validateHost(raw: unknown, file?: string): HostSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'host' must be a table", file, "host");
-  const known = new Set(["packages", "services", "run"]);
+  const known = new Set(["packages", "services", "run", "simulators"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) throw new ManifestError(`unknown key in [host]: '${key}'`, file, `host.${key}`);
   }
@@ -123,8 +123,15 @@ function validateHost(raw: unknown, file?: string): HostSpec | undefined {
       if (!HOST_NAME_RE.test(name)) throw new ManifestError(`'host.${key}[${i}]' is not a package or unit name`, file, `host.${key}[${i}]`);
     });
   }
-  return { packages, services, run: validateStringArray(raw["run"], "host.run", file) };
+  const simulators = validateStringArray(raw["simulators"], "host.simulators", file);
+  simulators.forEach((name, i) => {
+    if (!SIM_PLATFORMS.has(name)) throw new ManifestError(`'host.simulators[${i}]' must be one of ${[...SIM_PLATFORMS].join(", ")}`, file, `host.simulators[${i}]`);
+  });
+  return { packages, services, run: validateStringArray(raw["run"], "host.run", file), ...(simulators.length ? { simulators } : {}) };
 }
+
+/** Simulator platforms a cloud Mac can be provisioned for (sim/provision.ts). */
+const SIM_PLATFORMS = new Set(["iOS"]);
 
 function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
   if (raw === undefined) return undefined;

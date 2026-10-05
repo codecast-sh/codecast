@@ -301,6 +301,7 @@ WorkingDirectory=/home/ubuntu
 ExecStart=/usr/local/bin/cast _daemon
 Restart=always
 RestartSec=5
+KillMode=process
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -370,7 +371,9 @@ export function buildHostCast(onProgress: (m: string) => void, platform: "linux"
   const distDir = fs.mkdtempSync(path.join(os.tmpdir(), `cast-${platform}-dist-`));
   let built = false;
   try {
-    execFileSync("bun", ["run", "build", "--outdir", distDir], {
+    // Through run-interactive: started from an agent shell, the build inherits
+    // the daemon's utility QoS clamp and ran past its timeout under load.
+    execFileSync("bun", [path.join(cliRoot, "scripts", "run-interactive.ts"), "--", "bun", "run", "build", "--outdir", distDir], {
       cwd: cliRoot,
       env: { ...process.env, CODECAST_BUNDLE_PLATFORM: platform },
       stdio: ["ignore", "ignore", "pipe"],
@@ -506,17 +509,28 @@ export const DAEMON_CGROUP_TMUX_SCRIPT =
   "while read p; do case \"$(cat /proc/$p/comm 2>/dev/null)\" in tmux*) echo $p;; esac; done";
 
 /**
+ * The drop-in that keeps sessions through a daemon restart. With systemd's
+ * default KillMode=control-group a stop kills everything in the daemon's
+ * control group, and a tmux server the daemon started lives there with every
+ * agent session on the box, so no host daemon could be updated without taking
+ * its sessions down. KillMode=process stops the daemon alone; the next one
+ * re-adopts the panes it finds. The unit carries it from provisioning; this
+ * brings an older unit up to it.
+ */
+export const DAEMON_KEEP_SESSIONS_SCRIPT =
+  "sudo install -d /etc/systemd/system/codecast-daemon.service.d && " +
+  "printf '[Service]\\nKillMode=process\\n' | sudo tee /etc/systemd/system/codecast-daemon.service.d/keep-sessions.conf >/dev/null && " +
+  "sudo systemctl daemon-reload && systemctl show -p KillMode --value codecast-daemon.service";
+
+/**
  * Restart the host's daemon onto the bundle `installLinuxCast` just proved.
- *
- * With the unit's default KillMode=control-group, a restart kills everything in
- * the daemon's control group. A tmux server the daemon itself started lives
- * there, and with it every agent session on the box; a server started any other
- * way (an SSH shell, a keepalive loop) sits in its own scope under the user
- * slice and survives. So the restart looks first, and refuses rather than
- * silently taking sessions down, unless the caller forces it.
+ * Sessions survive it (DAEMON_KEEP_SESSIONS_SCRIPT). Should the unit refuse
+ * KillMode=process, a tmux server in the daemon's control group would die with
+ * it, so then the restart refuses unless forced.
  */
 export function restartHostDaemon(host: RemoteHost, opts: { force?: boolean } = {}): { pid: string } {
-  const tmux = remoteExec(host, DAEMON_CGROUP_TMUX_SCRIPT, 30_000).split(/\s+/).filter(Boolean);
+  const killMode = remoteExec(host, DAEMON_KEEP_SESSIONS_SCRIPT, 60_000).trim();
+  const tmux = killMode === "process" ? [] : remoteExec(host, DAEMON_CGROUP_TMUX_SCRIPT, 30_000).split(/\s+/).filter(Boolean);
   if (tmux.length && !opts.force) {
     throw new Error(
       `the daemon's control group holds tmux server ${tmux.join(", ")}, so restarting it would kill every session in that server. ` +

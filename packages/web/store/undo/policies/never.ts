@@ -100,6 +100,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   takeQueuedMessage: LOCAL_ECHO,
   resolveSessionQuestion: LOCAL_ECHO,
   confirmSessionCommand: LOCAL_ECHO,
+  dismissSessionCommand: LOCAL_ECHO,
 
   // Drafts
   setDraft: DRAFT,
@@ -119,11 +120,14 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   createPlan: CREATE,
   createProject: CREATE,
   createSavedView: CREATE,
+  createModObject: CREATE,
   createSession: CREATE,
   createStackWith: CREATE,
   createTask: CREATE,
   dispatchCreateChatChannel: CREATE,
   dispatchCreateTeam: CREATE,
+  assignTaskToAgent: MACHINE,
+  setPrShepherd: MACHINE,
   dispatchOpenDm: CREATE,
   ensurePlanDoc: CREATE,
   promoteDocToPlan: CREATE,
@@ -139,8 +143,13 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   admitGuestKnock: never("door: letting a stranger into a call is not taken back by an undo; remove them"),
   denyGuestKnock: never("door: the guest was told no; they can ask again"),
   removeCallGuest: never("door: the guest was put out of the call; they can be let in again"),
+  deleteCodeComment: DELETE,
+  postProjectUpdate: SEND,
+  commentProjectUpdate: SEND,
+  deleteProjectUpdate: DELETE,
   deleteComment: DELETE,
   deleteSavedView: DELETE,
+  setModEnabled: SETTINGS,
   deleteSession: DELETE,
   deleteTrigger: DELETE,
   dispatchChatDelete: DELETE,
@@ -155,6 +164,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
     "bulk dismiss: the server half dismisses every session older than 30 days by age, not the ids shown, and has no restore verb (follow-up)",
   ),
   unlinkChatSlack: DELETE,
+  removeLineWorkflow: DELETE,
 
   // Read state
   markAllNotificationsRead: READ_STATE,
@@ -202,7 +212,6 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   revokeOpsAction: never("permission: a revoke changes what agents may do; grant it again explicitly"),
   updateChatSlackLink: SETTINGS,
   persistClientTips: SETTINGS,
-  updateClientUI: SETTINGS,
   setActiveTeamPointer: never("navigation: switching workspace moves the view, it changes no work"),
 
   // Machine and agent control
@@ -219,9 +228,13 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
 
   // Sharing
   setCallShareVideo: SHARING,
+  deleteCallFrameShare: SHARING,
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setTeamMembershipVisibility: SHARING,
+
+  // The project's line.toml, written on the checkout's machine by the daemon
+  editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
 
   // Internal
   applyUndoPatches: never("internal: the undo replay itself"),

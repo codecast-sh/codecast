@@ -26,7 +26,6 @@
 import { drainMicrotasks } from "bun:jsc";
 import { fnv1a32, inboxEpoch } from "@codecast/shared/contracts";
 import { makeRng } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
-import { _resetUndoStacks } from "@platform/engine";
 import { __createInboxStoreForTests, useInboxStore } from "../../inboxStore";
 import type { Net } from "./net";
 import {
@@ -305,10 +304,8 @@ export function installRealm(seed: number, opts: RealmOptions = {}): void {
   };
   realm = r;
   slotOwner = null;
-  // The undo stacks are one module's in this process, where production keeps
-  // one per window: each run starts with none, so a step never reaches an
-  // entry an earlier run's window recorded.
-  _resetUndoStacks();
+  // Undo histories need no reset here: each window keeps its own in its slot
+  // (the engine's seam in windowSlots.ts), and a new window starts fresh.
   const g = globalThis as any;
   r.restores.push(
     swap(Date, "now", () => vnow),
@@ -339,9 +336,9 @@ export function uninstallRealm(): void {
   // The facade's own methods come back with the rest.
   for (const undo of r.restores.reverse()) undo();
   facadeTarget = null;
+  // The base slots carry the undo history the process had before the run.
   restoreSlots(r.baseSlots);
   resetMemos();
-  _resetUndoStacks();
   slotOwner = null;
   realm = null;
 }

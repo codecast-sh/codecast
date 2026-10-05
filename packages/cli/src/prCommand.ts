@@ -681,8 +681,8 @@ export function registerPrCommand(program: Command, deps: PublishDeps): void {
     .argument("[ref]", "PR reference")
     .description(
       "Bind a session to a pull request until it merges\n\n" +
-      "A shepherded PR wakes its session when the state moves: a review lands, CI\n" +
-      "turns red, the branch falls behind, the merge is ready. `off` releases it.",
+      "A shepherded PR wakes its session when it needs work: a review or comment\n" +
+      "lands, CI turns red, the branch conflicts. `off` releases it.",
     )
     .option("--for <session>", "Bind another session of yours (default: this one)")
     .option("--repo <owner/name>", "Repository to resolve the reference in")

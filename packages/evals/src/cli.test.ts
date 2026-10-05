@@ -241,6 +241,17 @@ describe('./evals', () => {
     expect(JSON.parse(w.run('runs', 'list', '--json').out).map((x: { status: string }) => x.status)).toEqual(['crash', 'crash']);
   });
 
+  // 2026-10-05: suggest was blocked after two nights where 18 reps scored and a vendor run crashed a few.
+  test('crashes beside reps that ran do not count toward the block', () => {
+    const w = world();
+    const boom = freezeIdOf(w.run('freeze', 'create', 'echo@fixture:boom', '--json').out);
+    const ok = freezeIdOf(w.run('freeze', 'create', 'echo@fixture:a', '--json').out);
+    for (let i = 0; i < 2; i++) w.run('check', 'echo', '--dry', '--reps', '1', '--freeze', boom.slice(0, 8), '--freeze', ok.slice(0, 8));
+    const state = JSON.parse(readFileSync(join(w.home, 'state.json'), 'utf8'));
+    expect(state.echo.crash).toBeUndefined();
+    expect(w.run('stale', 'echo').out).not.toContain('blocked  echo');
+  });
+
   test('a resumed batch runs a crashed seed again, and the set counts that seed once', () => {
     const w = world();
     const boom = freezeIdOf(w.run('freeze', 'create', 'echo@fixture:boom', '--json').out);

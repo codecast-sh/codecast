@@ -77,6 +77,30 @@ describe("decideSwitchAhead", () => {
     expect(decideSwitchAhead({ ...base, profiles })).toBeNull();
   });
 
+  test("a model-scoped week counts only for the models the fleet runs", () => {
+    // 2026-10-04: an Opus fleet was moved onto an account at 85% because every
+    // account at 5-65% of its week had a pegged Fable week.
+    const fable = (u: ReturnType<typeof usage>) => ({ ...u, weekly_scoped: { percent: 100, resets_at: now + 86_400_000, label: "Fable" } });
+    const profiles = [
+      { name: "fleet", email: "fleet@x.com", usage: usage(10, 98) },
+      { name: "fableSpent", email: "fable@x.com", usage: fable(usage(5, 5)) },
+      { name: "busy", email: "busy@x.com", usage: usage(5, 60) },
+    ];
+    expect(decideSwitchAhead({ ...base, profiles, models: ["claude-opus-5-5"] })).toEqual({ profile: "fableSpent" });
+    expect(decideSwitchAhead({ ...base, profiles, models: ["claude-fable-5-1"] })).toEqual({ profile: "busy" });
+    // A pegged Fable week on the fleet account does not drive an Opus fleet away.
+    const onFable = [{ name: "fleet", email: "fleet@x.com", usage: fable(usage(10, 50)) }, profiles[2]];
+    expect(decideSwitchAhead({ ...base, profiles: onFable, models: ["claude-opus-5-5"] })).toBeNull();
+    expect(decideSwitchAhead({ ...base, profiles: onFable, models: ["claude-fable-5-1"] })).toEqual({ profile: "busy" });
+  });
+
+  test("on its last call the fleet takes any account below the thresholds", () => {
+    const profiles = [{ name: "fleet", email: "fleet@x.com", usage: usage(10, 99) }, { name: "close", email: "close@x.com", usage: usage(10, 92) }];
+    expect(decideSwitchAhead({ ...base, profiles })).toEqual({ profile: "close" });
+    const notYet = [{ ...profiles[0], usage: usage(10, 97) }, profiles[1]];
+    expect(decideSwitchAhead({ ...base, profiles: notYet })).toBeNull();
+  });
+
   test("waits out the cooldown and skips an account tried this window without fresh evidence", () => {
     expect(decideSwitchAhead({ ...base, lastActionAt: now - SWITCH_AHEAD_COOLDOWN_MS + 1000 })).toBeNull();
     const attempts = [{ profile: "keychain", at: now - AUTO_SWITCH_ATTEMPT_EVIDENCE_MS / 2 }];

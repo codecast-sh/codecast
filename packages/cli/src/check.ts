@@ -121,6 +121,9 @@ export function resolveProjects(root: string, names: string[], cwd = process.cwd
       return { name: slugOf(path.dirname(rel)), tsconfig: rel };
     }
     const known = configured?.map((p) => p.name).join(", ");
+    if (fs.existsSync(file)) {
+      throw new Error(`'${name}' is outside this tree (${root}); a watcher belongs to one tree, so run cast check from inside that folder (cd ${path.dirname(file)} && cast check)`);
+    }
     throw new Error(`unknown project '${name}': ${known ? `one of ${known}, or ` : ""}a directory with a tsconfig.json, or a tsconfig path`);
   });
 }

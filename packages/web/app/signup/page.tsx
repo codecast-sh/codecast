@@ -9,6 +9,8 @@ import { AuthProviderButtons } from "../../components/AuthProviderButtons";
 import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
+import { LANE_PATHS } from "../../components/simple/lanePaths";
+import { assistantInvite, useConnectAvailable } from "../../components/simple/assistantPromise";
 
 function SignUpForm() {
   const [email, setEmail] = useState("");
@@ -24,6 +26,7 @@ function SignUpForm() {
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/inbox";
+  const connect = useConnectAvailable();
 
   // Local-first: same instant bounce as the login page for a stored token.
   const localAuthed = useLocalAuth();
@@ -199,6 +202,20 @@ function SignUpForm() {
             </Link>
           </p>
         </div>
+
+        {/* The way in for someone who does not write code: the hosted
+            assistant's onboarding, which signs them in on its own. */}
+        {redirectTo !== LANE_PATHS.welcome ? (
+          <p className="mt-6 text-center text-sm text-sol-text-dim">
+            Don't write code?{" "}
+            <Link
+              href={LANE_PATHS.welcome}
+              className="text-sol-text-muted hover:text-sol-text underline underline-offset-4 decoration-sol-border transition-colors"
+            >
+              {assistantInvite(connect.available === true)}
+            </Link>
+          </p>
+        ) : null}
       </div>
     </main>
   );

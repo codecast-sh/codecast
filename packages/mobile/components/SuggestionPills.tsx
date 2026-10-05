@@ -95,8 +95,8 @@ export function SuggestionPills({
     <ScrollView
       horizontal
       showsHorizontalScrollIndicator={false}
-      style={styles.strip}
-      contentContainerStyle={styles.stripContent}
+      style={pillStyles.strip}
+      contentContainerStyle={pillStyles.stripContent}
       keyboardShouldPersistTaps="always"
     >
       {suggestions.map((text) => (
@@ -113,9 +113,9 @@ export function SuggestionPills({
             report(text, 'edited');
             onEdit(text);
           }}
-          style={styles.pill}
+          style={pillStyles.pill}
         >
-          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.pillText} numberOfLines={1}>
+          <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={pillStyles.pillText} numberOfLines={1}>
             {text}
           </RNText>
         </TouchableOpacity>
@@ -126,7 +126,7 @@ export function SuggestionPills({
           suggestions.forEach((t) => report(t, 'dismissed'));
           setDismissedAnchor(row!.anchor_message_uuid);
         }}
-        style={styles.dismiss}
+        style={pillStyles.dismiss}
       >
         <FontAwesome name="times" size={11} color={Theme.textMuted} />
       </TouchableOpacity>
@@ -134,7 +134,8 @@ export function SuggestionPills({
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+/** The pill strip above the composer, shared with SlashCommandPills. */
+export const pillStyles = themedStyles((Theme) => StyleSheet.create({
   strip: {
     flexGrow: 0,
     marginBottom: 6,

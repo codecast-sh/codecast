@@ -24,7 +24,6 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, sessionsWithPendingSend, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipProjectFilters, passesFilterTerms, groupSessionsForLabelView, groupSessionsByPlan, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { sessionsWakeSig, resolveShowOld, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS } from "../store/inboxStore";
-import { useFlipAnimation } from "../hooks/useFlipAnimation";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -2779,21 +2778,22 @@ function SessionListPanelImpl({
     const targetIdx = rest.findIndex((sess) => sess._id === (targetParent ?? targetId));
     if (targetIdx < 0) return;
     let insertIndex = (targetParent ? "after" : pos) === "before" ? targetIdx : targetIdx + 1;
+    // One write for the whole block, so the drag is one undo entry.
+    const keys: Record<string, number> = {};
     for (const sess of block) {
       const key = computeManualSortKey(restKeys, insertIndex);
-      useInboxStore.getState().setSessionManualOrder(sess._id, key);
+      keys[sess._id] = key;
       restKeys.splice(insertIndex++, 0, key);
     }
+    useInboxStore.getState().setSessionManualOrders(keys);
   }, [flatList, manualOrder]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrolledToRef = useRef<string | null>(null);
 
   // -- A just-started session leaving NEW --
-  // Its hold expiring re-files it (placeInboxRows). The store subscriber runs
-  // inside set(), before React commits, so the rows still sit where they were:
-  // the "first" measurement the glide needs. The rows it arrives among get a
+  // Its hold expiring re-files it (placeInboxRows) in place, with no glide: a
+  // row sliding across the list pulls the eye. The rows it arrives among get a
   // brief wash in its color (or the collapsed header does).
-  const { beforeReorder: beforeHoldRelease } = useFlipAnimation({ durationMs: 560, containerRef: scrollContainerRef });
   const [landedIds, setLandedIds] = useState<ReadonlySet<string>>(() => new Set());
   // While a session you started is held in NEW and you are elsewhere, the
   // beacon points at it (the newest one), so it is findable even when Pinned
@@ -2806,7 +2806,6 @@ function SessionListPanelImpl({
     const now = Date.now();
     const released = Object.keys(prev.newSessionHolds).filter((id) => !(id in st.newSessionHolds) && prev.newSessionHolds[id] <= now);
     if (released.length === 0) return;
-    beforeHoldRelease();
     setLandedIds(new Set(released));
     setTimeout(() => setLandedIds((cur) => (released.every((id) => cur.has(id)) ? new Set() : cur)), 1600);
   }));
@@ -2890,8 +2889,8 @@ function SessionListPanelImpl({
     const ids = filteredStashed
       .filter((sess) => !sess.parent_conversation_id || !stashedIds.has(sess.parent_conversation_id))
       .map((sess) => sess._id);
+    // The kill's own entry toast announces it, with its Undo.
     killManyWithNotice(ids);
-    toast.success(`Killed ${ids.length} stashed session${ids.length === 1 ? "" : "s"}`);
   }, [killAllArmed, filteredStashed, killManyWithNotice]);
 
   // Auto-scroll to active session, retrying when sessions load and revealing hidden sections
@@ -3246,7 +3245,6 @@ function SessionListPanelImpl({
             return (
               <div
                 key={session._id}
-                data-flip-key={session._id}
                 style={holdStyleOf(session._id)}
                 className={`relative border-b border-sol-border/30${holdLeft > 0 ? " inbox-held" : ""}${justStarted ? " animate-inbox-row-in" : ""}${landedIds.has(session._id) ? " inbox-landed" : ""}`}
                 onDragOver={reorderable ? (e) => {

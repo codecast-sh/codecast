@@ -158,12 +158,21 @@ export function ChangesPage() {
     for (const e of recentEditions) if (e.repository) commits.set(e.repository, (commits.get(e.repository) ?? 0) + (e.stats?.commits ?? 0));
     return [...commits].filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([repo, n]) => ({ repo, commits: n }));
   }, [recentEditions]);
-  const feed = useSyncChangesTimeline({ teamId, repository: url.repo ? normalizeRepository(url.repo) : undefined, today, chunks });
+  // A repository the team does not have (a link from another team, or the
+  // page kept open across a team switch) reads as the team's default, never
+  // as an empty timeline.
+  const teamRepoSet = useMemo(
+    () => new Set([...repos.map((r) => r.repo), ...teamRepos.rows.filter((r) => String(r.team_id) === teamId).map((r) => normalizeRepository(r.repository))]),
+    [repos, teamRepos.rows, teamId],
+  );
+  const urlRepo = url.repo ? normalizeRepository(url.repo) : undefined;
+  const foreign = !!urlRepo && teamRepoSet.size > 0 && !teamRepoSet.has(urlRepo);
+  const feed = useSyncChangesTimeline({ teamId, repository: foreign ? undefined : urlRepo, today, chunks });
   const defaultRepo = feed.recentReady || recentEditions.length ? repos[0]?.repo ?? knownRepo : undefined;
-  const repo = url.repo ? normalizeRepository(url.repo) : defaultRepo;
+  const repo = urlRepo && !foreign ? urlRepo : defaultRepo;
   useWatchEffect(() => {
-    if (!url.repo && defaultRepo) setUrl({ repo: defaultRepo }, "replace");
-  }, [url.repo, defaultRepo]);
+    if ((!urlRepo || foreign) && defaultRepo) setUrl({ repo: defaultRepo }, "replace");
+  }, [urlRepo, foreign, defaultRepo]);
 
   // ── Store rows ──────────────────────────────────────────────────────────
   const span = useMemo(() => ({ from_date: timelineChunk(today, chunks - 1).from_date, to_date: today }), [today, chunks]);

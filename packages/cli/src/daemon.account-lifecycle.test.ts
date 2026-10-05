@@ -73,7 +73,7 @@ function harness() {
       await hooks.kill(conv, session);
       return { result: "killed_tmux" };
     },
-    saveProfile: (name: string) => ({ name }), deleteProfile: () => ({}),
+    saveProfile: (name: string) => ({ name }), deleteProfile: () => ({}), verifyActiveIdentity: async () => null,
     sendHeartbeat: async () => {},
     pushCredentialToRemoteHosts: async () => {}, maintainCcUsageSnapshots: async () => {},
     maintainCodexUsageSnapshot: async () => {},

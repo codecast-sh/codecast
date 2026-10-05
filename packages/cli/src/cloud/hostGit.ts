@@ -48,11 +48,14 @@
  * "Overwrite?" prompt included) can read the rest of the script as input.
  */
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { DEVICE_GIT_KEY_REL, deviceKeyComment, isGitAuthError } from "../gitIdentity.js";
 import { shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { FIND_CAST_SH, ghWrapperInstallSnippet } from "./ghWrapper.js";
-import { githubRepo, hostAppOrigin, hostProbeOrigin, isGitHubHost, originHost } from "./gitOrigin.js";
+import { ACCOUNT_KEY_URL, githubRepo, hostAppOrigin, hostProbeOrigin, isGitHubHost, originHost } from "./gitOrigin.js";
 
 export { DEVICE_GIT_KEY_REL as DEVICE_KEY_REL } from "../gitIdentity.js";
 
@@ -630,4 +633,68 @@ export function hostAccessPath(
   if (key && key.write !== null) return { path: "none", reason: noPushReason(key) };
   if (app) return { path: "none", reason: app.error ?? "the GitHub App token path did not answer" };
   return { path: "none", reason: "never probed" };
+}
+
+export const GH_NOT_LOGGED_IN_MESSAGE = "gh is not logged in — run `gh auth login` first, or add the key by hand at the URL above";
+
+export const KEY_ALREADY_IN_USE_MESSAGE =
+  "this key is already registered on GitHub (another repo's deploy key or an account key) — remove it there, or add it as an account key at " +
+  `${ACCOUNT_KEY_URL} (broad access: every repo you can reach)`;
+
+/**
+ * `gh repo deploy-key add` for the host's key, with write access, after
+ * `gh auth status` says gh can act at all (its own login error names the
+ * API call, not the precondition). GitHub registers a public key ONCE across
+ * deploy keys and account keys, so the second repo's add fails with "key is
+ * already in use" — reported as such instead of as a raw API error, with the
+ * choice the human has to make.
+ */
+/** Add a key to GitHub through gh from a 0600 scratch file that is removed afterwards; `argv` names the gh verb that adds it. */
+function ghAddKey(
+  gh: string,
+  pubkey: string,
+  argv: (file: string) => string[],
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  const auth = spawnSync(gh, ["auth", "status"], { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
+  if (auth.error) return { ok: false, error: (auth.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : auth.error.message };
+  if (auth.status !== 0) return { ok: false, error: GH_NOT_LOGGED_IN_MESSAGE };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-deploy-key-"));
+  const file = path.join(dir, "key.pub");
+  try {
+    fs.writeFileSync(file, `${pubkey}\n`, { mode: 0o600 });
+    const r = spawnSync(gh, argv(file), { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
+    if (r.error) return { ok: false, error: (r.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : r.error.message };
+    if (r.status === 0) return { ok: true };
+    const err = `${r.stderr ?? ""}${r.stdout ?? ""}`;
+    if (/already in use/i.test(err)) return { ok: false, alreadyInUse: true, error: KEY_ALREADY_IN_USE_MESSAGE };
+    return { ok: false, error: err.trim().split("\n").filter(Boolean).pop() ?? `gh exited ${r.status}` };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The host's key as a deploy key with write access on one repository. */
+export function grantDeployKey(
+  pubkey: string,
+  origin: string,
+  hostId: string,
+  gh = "gh",
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  const repo = githubRepo(origin);
+  if (!repo) return { ok: false, error: `${origin} is not a GitHub repository; add the key by hand` };
+  return ghAddKey(gh, pubkey, (file) => ["repo", "deploy-key", "add", file, "--allow-write", "--title", `codecast-${hostId}`, "-R", repo]);
+}
+
+/**
+ * The host's key on the account itself: the host then reaches every
+ * repository this GitHub account can, which is what a host that carries this
+ * person's sessions across several repositories needs. gh needs the
+ * admin:public_key scope for it (`gh auth refresh -s admin:public_key`).
+ */
+export function grantAccountKey(
+  pubkey: string,
+  hostId: string,
+  gh = "gh",
+): { ok: boolean; alreadyInUse?: boolean; error?: string } {
+  return ghAddKey(gh, pubkey, (file) => ["ssh-key", "add", file, "--title", `codecast-${hostId}`, "--type", "authentication"]);
 }

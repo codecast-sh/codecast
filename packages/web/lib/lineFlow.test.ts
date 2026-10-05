@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
+import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -19,6 +19,16 @@ const signal = (id: string, over: Partial<LineSignal> = {}): LineSignal => ({
 const run = (id: string, over: Partial<LineFlowRun> = {}): LineFlowRun => ({
   _id: id, status: "running", created_at: NOW - 3 * HOUR, updated_at: NOW - HOUR, ...over,
 });
+/** A line run on a task that reached the given end station at `at` (LE12). */
+const endedRun = (id: string, task: string, end: "watch" | "drop" | "dissolve" | "park", at: number, over: Partial<LineFlowRun> = {}): LineFlowRun =>
+  run(id, {
+    task_id: task, status: "completed", workflow_name: "line", created_at: at - 2 * HOUR, updated_at: at,
+    node_statuses: [
+      { node_id: "ground", status: "completed", started_at: at - 2 * HOUR, completed_at: at - HOUR },
+      { node_id: end, status: "completed", started_at: at - 1000, completed_at: at },
+    ] as any,
+    ...over,
+  });
 const card = (id: string, over: Partial<LineDecision> = {}): LineDecision => ({
   _id: id, status: "pending", blocking: true, workflow_run_id: `r-${id}`, gate_node_id: "decide", created_at: NOW - HOUR, ...over,
 });
@@ -85,6 +95,7 @@ describe("buildLineFlow", () => {
         cause("unswept", { status: "done", closed_at: NOW - 6 * DAY, watch_until: NOW - 2 * HOUR }),
         cause("again", { status: "done", closed_at: NOW - 2 * HOUR, resolved_at: NOW - 3 * DAY }),
       ],
+      runs: [endedRun("r1", "held", "watch", NOW - 5 * DAY), endedRun("r2", "unswept", "watch", NOW - 6 * DAY), endedRun("r3", "again", "watch", NOW - 2 * HOUR)],
     });
     expect(f.closed.items.map((c) => [c.task._id, c.outcome, c.at])).toEqual([
       ["held", "resolved", NOW - HOUR],
@@ -97,11 +108,35 @@ describe("buildLineFlow", () => {
   });
 
   it("a ship still in its watch counts as shipped and says it sits in Watching, not Closed", () => {
-    const f = flow({ tasks: [cause("w", { status: "done", closed_at: NOW - DAY, watch_until: NOW + 5 * DAY })] });
+    const f = flow({ tasks: [cause("w", { status: "done", closed_at: NOW - DAY, watch_until: NOW + 5 * DAY })], runs: [endedRun("r1", "w", "watch", NOW - DAY)] });
     expect(f.throughput.shipped).toBe(1);
     expect(f.throughput.shippedInWatch).toBe(1);
     expect(f.watching.count).toBe(1);
     expect(f.closed.count).toBe(0);
+  });
+
+  it("shipped keys on the run's ship record, not on the cause's status at a moment (LE16)", () => {
+    const f = flow({
+      tasks: [
+        // The old run end left a shipped cause in review; a reopened one is open again.
+        cause("stale", { status: "in_review", watch_until: NOW + 5 * DAY }),
+        cause("reopened", { status: "open" }),
+        // Dissolved by the line (cast task done): done, never shipped.
+        cause("gone", { status: "done", closed_at: NOW - HOUR }),
+        // Closed by a person with no line run: not a ship either.
+        cause("hand", { status: "done", closed_at: NOW - HOUR }),
+      ],
+      runs: [
+        endedRun("r1", "stale", "watch", NOW - DAY),
+        endedRun("r2", "reopened", "watch", NOW - 2 * DAY),
+        endedRun("r3", "gone", "dissolve", NOW - HOUR),
+        // A run of another workflow with a station named watch is not the line.
+        run("r4", { task_id: "hand", status: "completed", node_statuses: [{ node_id: "watch", status: "completed", completed_at: NOW - HOUR }] as any }),
+      ],
+    });
+    expect(f.throughput.shipped).toBe(2);
+    expect(f.throughput.daily.shipped).toEqual([0, 0, 0, 0, 0, 1, 1]);
+    expect(f.closed.items.find((c) => c.task._id === "gone")?.outcome).toBe("dissolved");
   });
 
   it("only cards at the decide gate hold admission; Awaiting lists every blocking ask", () => {
@@ -156,7 +191,7 @@ describe("buildLineFlow", () => {
         cause("c", { status: "dropped", closed_at: NOW - HOUR }),
       ],
       signals: [signal("s1", { reopened: true }), signal("s2", { created_at: NOW - 10 * DAY })],
-      runs: [run("r1", { task_id: "a", status: "completed", total_tokens: 3000 }), run("r2", { task_id: "b", status: "completed", total_tokens: 1000 })],
+      runs: [endedRun("r1", "a", "watch", NOW - DAY, { total_tokens: 3000 }), endedRun("r2", "b", "watch", NOW - HOUR, { total_tokens: 1000 })],
     });
     expect(f.throughput).toEqual({
       signalsIn: 1,
@@ -255,6 +290,18 @@ describe("groupBuild", () => {
     const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [{ ...live("a", "implement"), workflow_name: "line" }, { ...live("b", "card_write"), workflow_name: "line" }, { ...live("c", "implement"), workflow_name: "feature" }] });
     expect(Object.fromEntries(f.build.items.map((b) => [b.run._id, b.stepIndex]))).toEqual({ a: 2, b: 4, c: null });
   });
+  it("a run of a project's customized line keeps its steps and says which line it ran", () => {
+    const projects = [{ _id: "p1", short_id: "pj-a", title: "Web" }];
+    const f = flow({ projects, tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [
+      { ...live("a", "implement"), workflow_name: "Line for Web", workflow_slug: "line-pj-a" },
+      { ...live("b", "verify"), workflow_name: "line" },
+      { ...live("c", "implement"), workflow_name: "Other", workflow_slug: "line-pj-zz" },
+    ] });
+    const by = Object.fromEntries(f.build.items.map((b) => [b.run._id, b]));
+    expect([by.a.stepIndex, by.a.line]).toEqual([2, { kind: "customized", project: projects[0] }]);
+    expect([by.b.stepIndex, by.b.line]).toEqual([3, { kind: "shipped" }]);
+    expect([by.c.stepIndex, by.c.line]).toEqual([null, null]);
+  });
 });
 
 describe("per project lines (line-profile.md LP1, LP3)", () => {
@@ -278,9 +325,9 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
   };
   const projects: LineProject[] = [
     { _id: "pA", short_id: "pj-a", title: "Agent Quality", line_profile: { finders: [
-      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"] },
-      { id: "guards", source: "union.guard", kind: ["prompt_miss"], runs: "daily" },
-    ], root: "/src/union", default: true, changed_at: NOW } },
+      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"], fingerprint: "union:cluster:<id>" },
+      { id: "guards", source: "union.guard", kind: ["prompt_miss"], fingerprint: "union:guard:<id>", runs: "daily" },
+    ], root: "/src/union", default: true, changed_at: NOW - 30 * DAY } },
     { _id: "pB", short_id: "pj-b", title: "Infrastructure", project_path: "/src/infra" },
     { _id: "pC", short_id: "pj-c", title: "Quiet" },
   ];
@@ -297,12 +344,16 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
   });
 
   it("a declared finder is a Sense row even when silent, and an undeclared source is flagged", () => {
-    const f = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders });
+    const f = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders, findersSince: projects[0].line_profile!.changed_at });
     const bySource = Object.fromEntries(f.sense.items.map((s) => [s.source, s]));
     expect(bySource.agentwatch).toMatchObject({ day: 2, silent: false, undeclared: false, finder: { id: "clusters" } });
     expect(bySource["union.guard"]).toMatchObject({ day: 0, week: 0, newest: null, silent: true, finder: { id: "guards" } });
     expect(f.sense.state.why).toBe("signals arriving, 1 of 2 finders silent");
-    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any" }] });
+    // A finder in a profile changed inside the window may be new: it has not filed yet, it is not silent.
+    const fresh = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders, findersSince: NOW - DAY });
+    expect(fresh.sense.items.find((s) => s.source === "union.guard")).toMatchObject({ newest: null, silent: false });
+    expect(silentText(fresh.sense.items.find((s) => s.source === "union.guard")!, NOW)).toBe("nothing filed yet");
+    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any", fingerprint: "g" }] });
     expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(true);
   });
 

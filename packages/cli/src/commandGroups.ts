@@ -84,6 +84,13 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./workspace/cli.js").then((m) => m.registerWorkspaceCommand),
   },
   {
+    token: "dev",
+    args: ["[service...]"],
+    hasOptions: true,
+    description: `Start (or reuse) this checkout's dev server on its own port and print the URL`,
+    load: () => import("./workspace/devCli.js").then((m) => m.registerDevCommand),
+  },
+  {
     token: "remote",
     description: `Move sessions to and from cloud hosts, and mirror a cloud session's edits here`,
     load: () => import("./remote/cli.js").then((m) => m.registerRemoteCommand),
@@ -101,6 +108,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     hasOptions: true,
     description: `Git credential helper: a GitHub App installation token for this cloud host`,
     load: () => import("./cloud/gitCredential.js").then((m) => m.registerGitCredentialCommand),
+  },
+  {
+    token: "migrate",
+    description: `Move many sessions between this machine and a cloud host at once`,
+    load: () => import("./migrate/cli.js").then((m) => m.registerMigrateCommand),
   },
   {
     token: "hosts",
@@ -195,6 +207,38 @@ Examples:
   cast signal ls [--task ct-N] [--source <finder>]
   cast signal show sg-N`,
     load: () => import("./signalCommand.js").then((m) => m.registerSignalCommand),
+  },
+  {
+    token: "mod",
+    aliases: ["mods"],
+    description: `Mods: extend codecast with panes, commands and blocks agents can draw, written as one hooks module
+
+  cast mod new <name>          scaffold one that already works
+  cast mod dev                 push on every save, print its logs
+  cast mod push | publish      one dev push | a numbered version with source
+  cast mod inspect             what it hooks, calls and reads vs what it is granted
+  cast mod ls | logs <name> | versions <name> | pull <name> | rollback <name> <v>
+  cast mod enable | disable | rm <name>
+
+codecast-mod.json declares what a mod adds and touches: permissions, panes,
+commands, fences, sidebar, objects (new kinds like bug-14), local (a half the
+daemon runs where you approve it) and agents (guidance cast mod guide prints).
+The API, every element and every event are typed in codecast-mod.d.ts in the
+mod's folder (cast mod types rewrites it).`,
+    load: () => import("./modCommand.js").then((m) => m.registerModCommand),
+  },
+  {
+    token: "obj",
+    aliases: ["objects"],
+    description: `Objects of the kinds mods declare (bug-14, inc-3): file them, list them, move them along
+
+  cast obj kinds                         every kind, its statuses and fields
+  cast obj ls <prefix> [--status s] [--all]
+  cast obj create <prefix> "<title>" [--set field=value] [--body -]
+  cast obj show <id> | set <id> [--status s] [--set field=value] | done <id> | archive <id>
+
+Short ids render as live pills wherever codecast shows prose.`,
+    load: () => import("./objCommand.js").then((m) => m.registerObjCommand),
   },
   {
     token: "goals",
@@ -401,6 +445,12 @@ Examples:
     token: "computer",
     description: `Drive a native app (macOS, or Linux on X11) through its accessibility tree (cast browser is still the tool for web pages)`,
     load: () => import("./computer/cli.js").then((m) => (program: Command) => m.registerComputerCommand(program)),
+  },
+  {
+    token: "sim",
+    aliases: ["simulator"],
+    description: `iOS simulators from this machine's pool, on a laptop or a cloud Mac: acquire, boot, install, launch, screenshot, tap, type, swipe`,
+    load: () => import("./sim/cli.js").then((m) => m.registerSimCommand),
   },
   {
     token: "agent",

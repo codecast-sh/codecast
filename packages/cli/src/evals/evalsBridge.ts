@@ -47,7 +47,14 @@ const IDLE_MS = 10 * 60_000;
 const REQUEST_TIMEOUT_MS = 120_000;
 const CRASH_BACKOFF_MS = 5_000;
 const REFUSAL_MEMO_MS = 30_000;
+const KNOWN_ROOTS = 4;
 const STDERR_LINES = 40;
+/** One stderr line past this is cut: the ring is for reading, not for holding a dump. */
+const STDERR_LINE_MAX = 4096;
+/** The largest answer the bridge forwards. Every answer is parsed and re-encoded
+ *  on the daemon's loop, so a bigger one is refused rather than stalling delivery;
+ *  the child caps its own big reads (diffs and run files at 2 MiB) well below it. */
+export const ANSWER_MAX = 32 * 1024 * 1024;
 const KILL_GRACE_MS = 5_000;
 
 export type EvalsReply = { status: number; body: unknown };
@@ -67,6 +74,8 @@ export interface EvalsBridgeDeps {
   crashBackoffMs: number;
   /** While a fallback serves, a refused pointer is not checked again (git spawn included) inside this window. */
   refusalMemoMs: number;
+  /** The largest answer line forwarded; a longer one is refused by its id. */
+  answerMax: number;
   log: (msg: string) => void;
 }
 
@@ -87,11 +96,13 @@ const defaultDeps: EvalsBridgeDeps = {
   requestTimeoutMs: REQUEST_TIMEOUT_MS,
   crashBackoffMs: CRASH_BACKOFF_MS,
   refusalMemoMs: REFUSAL_MEMO_MS,
+  answerMax: ANSWER_MAX,
   log: () => {},
 };
 
 export type CheckoutRefusal = { ok: false; reason: EvalsUnavailableReason; error: string };
-export type CheckoutCheck = { ok: true; root: string } | CheckoutRefusal;
+/** `main` is the main checkout of the git repo `root` belongs to (itself, for a main checkout). */
+export type CheckoutCheck = { ok: true; root: string; main: string | null } | CheckoutRefusal;
 
 const refuse = (reason: EvalsUnavailableReason, error: string): CheckoutCheck => ({ ok: false, reason, error });
 
@@ -133,10 +144,16 @@ export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps,
     return refuse("checkout-bad-header", `${root}/evals is not codecast's evals script`);
   }
 
-  const top = await execFileAsync("git", ["-C", root, "rev-parse", "--show-toplevel"], { encoding: "utf8", timeout: 15_000, env: deps.env() })
-    .then(async ({ stdout }) => fsp.realpath(stdout.trim()))
-    .catch(() => null);
+  // One git call: the top level, then the repo's common dir, whose parent is
+  // the main checkout when this is a worktree of it.
+  const [top, common] = await execFileAsync("git", ["-C", root, "rev-parse", "--show-toplevel", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", timeout: 15_000, env: deps.env() })
+    .then(async ({ stdout }): Promise<[string, string]> => {
+      const [t = "", c = ""] = stdout.split("\n");
+      return [await fsp.realpath(t.trim()), c.trim()];
+    })
+    .catch((): [null, string] => [null, ""]);
   if (top !== root) return refuse("checkout-not-toplevel", `${root} is not the top of a git checkout`);
+  const main = path.basename(common) === ".git" ? await fsp.realpath(path.dirname(common)).catch(() => null) : null;
 
   const entry = await fsp.stat(path.join(root, EVALS_ENTRY)).catch(() => null);
   if (!entry?.isFile()) return refuse("checkout-no-entry", `${root} has no ${EVALS_ENTRY}`);
@@ -144,10 +161,12 @@ export async function validateEvalsCheckout(deps: EvalsBridgeDeps = defaultDeps,
   if (!api?.isFile()) {
     return refuse("checkout-no-entry", `${root} last ran ./evals, and its eval tool predates the api command (no ${EVALS_API_COMMAND}); run ./evals from a current checkout`);
   }
-  return { ok: true, root };
+  return { ok: true, root, main };
 }
 
 interface Pending {
+  /** The request's method and path, for the words of an error about it. */
+  what: string;
   resolve: (reply: EvalsReply) => void;
   timer: ReturnType<typeof setTimeout>;
 }
@@ -174,13 +193,40 @@ export interface EvalsBridge {
 
 const errorReply = (status: number, body: EvalsErrorBody): EvalsReply => ({ status, body });
 
-/** Split a stream into lines, holding a partial last line until its newline arrives. */
-function lineReader(onLine: (line: string) => void): (chunk: Buffer | string) => void {
-  let carry = "";
+/**
+ * Split a stream into lines. Each byte is scanned once: a partial line waits
+ * as a list of pieces and only the new chunk is searched for its newline, so
+ * a large answer costs its length, not its length squared, on the daemon's
+ * loop. Pieces stay bytes until the line is whole, so a character split
+ * across two chunks is decoded intact. A line longer than `max` bytes keeps
+ * only its first `max` and arrives with `over` set.
+ */
+export function lineReader(onLine: (line: string, over: boolean) => void, max = Infinity): (chunk: Buffer | string) => void {
+  let held: Buffer[] = [];
+  let size = 0;
+  let over = false;
+  const take = (part: Buffer) => {
+    if (size + part.length > max) {
+      over = true;
+      part = part.subarray(0, max - size);
+    }
+    if (!part.length) return;
+    held.push(part);
+    size += part.length;
+  };
   return (chunk) => {
-    const parts = (carry + chunk.toString()).split("\n");
-    carry = parts.pop() ?? "";
-    for (const line of parts) onLine(line);
+    let buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    for (let at = buf.indexOf(10); at !== -1; at = buf.indexOf(10)) {
+      take(buf.subarray(0, at));
+      const line = held.length === 1 ? held[0]!.toString("utf8") : Buffer.concat(held, size).toString("utf8");
+      const cut = over;
+      held = [];
+      size = 0;
+      over = false;
+      onLine(line, cut);
+      buf = buf.subarray(at + 1);
+    }
+    take(buf);
   };
 }
 
@@ -188,10 +234,15 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
   const deps: EvalsBridgeDeps = { ...defaultDeps, ...overrides };
   let child: Child | null = null;
   let lastCrash: { at: number; root: string; reply: EvalsReply } | null = null;
-  /** The newest root that passed validation. Every checkout that runs ./evals
-   *  takes the pointer, a review or agent worktree at an old commit included,
-   *  so a pointer that cannot serve falls back to it rather than closing the area. */
-  let lastGood: string | null = null;
+  /** Roots to serve when the pointer cannot, best first: the newest roots that
+   *  passed validation, each followed by its repo's main checkout. Every
+   *  checkout that runs ./evals takes the pointer, a review, agent or line
+   *  worktree at an old commit included, and such a worktree is often
+   *  destroyed afterwards; the area then falls back here rather than closing. */
+  let known: string[] = [];
+  const remember = (ok: { root: string; main: string | null }) => {
+    known = [...new Set([ok.root, ...(ok.main ? [ok.main] : []), ...known])].slice(0, KNOWN_ROOTS);
+  };
   /** The pointer's last refusal while a fallback served, so polls against an
    *  old worktree's pointer do not spawn git for it on every request. */
   let refused: { named: string | null; check: CheckoutRefusal; at: number } | null = null;
@@ -247,22 +298,32 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
       c.stderr.push(line);
       if (c.stderr.length > STDERR_LINES) c.stderr.splice(0, c.stderr.length - STDERR_LINES);
     };
-    proc.stderr.on("data", lineReader(keep));
+    proc.stderr.on("data", lineReader(keep, STDERR_LINE_MAX));
+    const answer = (id: number, reply: EvalsReply) => {
+      const p = c.pending.get(id)!;
+      c.pending.delete(id);
+      clearTimeout(p.timer);
+      p.resolve(reply);
+      if (child === c) armIdle(c);
+    };
     proc.stdout.on(
       "data",
-      lineReader((line) => {
+      lineReader((line, over) => {
         if (!line.trim()) return;
+        if (over) {
+          // Never parsed: the child writes the id first, so the head names whose answer it was.
+          const id = Number(/^\{"id":(\d+)/.exec(line.slice(0, 64))?.[1]);
+          const p = c.pending.get(id);
+          if (!p) return keep(`stdout: an answer over ${deps.answerMax} bytes for no pending request`);
+          return answer(id, errorReply(500, { error: `the evals process answered ${p.what} with more than ${Math.round(deps.answerMax / 1024 / 1024)} MiB, too large to forward` }));
+        }
         let msg: Partial<EvalsBridgeResponse> | null = null;
         try {
           msg = JSON.parse(line);
         } catch {}
-        const p = typeof msg?.id === "number" ? c.pending.get(msg.id) : undefined;
-        if (!p || typeof msg?.status !== "number") return keep(`stdout: ${line.slice(0, 400)}`);
-        c.pending.delete(msg.id!);
-        clearTimeout(p.timer);
-        p.resolve({ status: msg.status, body: msg.body ?? null });
-        if (child === c) armIdle(c);
-      }),
+        if (typeof msg?.id !== "number" || !c.pending.has(msg.id) || typeof msg.status !== "number") return keep(`stdout: ${line.slice(0, 400)}`);
+        answer(msg.id, { status: msg.status, body: msg.body ?? null });
+      }, deps.answerMax),
     );
     // A child that exits closes its stdin under us; the exit handler answers.
     proc.stdin.on("error", () => {});
@@ -308,26 +369,37 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
     const c = child;
     // A cheap read: the pointer moves when ./evals runs from another checkout.
     const named = await pointedRoot(deps);
-    if (live(c)) {
-      const real = named ? await fsp.realpath(named).catch(() => null) : null;
-      if (live(c) && real === c.root) return c;
-    }
-    const fallback = live(c) ? c.root : lastGood;
-    const memo = fallback && refused && refused.named === named && Date.now() - refused.at < deps.refusalMemoMs ? refused.check : null;
+    const real = named ? await fsp.realpath(named).catch(() => null) : null;
+    if (live(c) && real === c.root) return c;
+    // The running child's own checkout is what the pointer names, and it can no longer serve (a destroyed worktree).
+    const ownRoot = live(c) && named !== null && (named === c.root || real === c.root);
+    const fallbacks = known.filter((r) => r !== named && r !== real);
+    const canFallBack = (live(c) && !ownRoot) || fallbacks.length > 0;
+    const memo = canFallBack && refused && refused.named === named && Date.now() - refused.at < deps.refusalMemoMs ? refused.check : null;
     let check: CheckoutCheck = memo ?? (await validateEvalsCheckout(deps, named));
     if (!check.ok) {
-      if (fallback && fallback !== named) {
-        if (!memo) {
-          if (refused?.check.error !== check.error) deps.log(`[EVALS] ${check.error}; serving ${fallback}`);
-          refused = { named, check, at: Date.now() };
-        }
-        if (live(c)) return c;
-        const prior = await validateEvalsCheckout(deps, fallback);
-        if (prior.ok) check = prior;
+      const why = check;
+      let serving = live(c) && !ownRoot ? c.root : null;
+      if (live(c) && ownRoot) {
+        end(c, why.error);
+        known = known.filter((r) => r !== c.root);
       }
+      for (const root of serving ? [] : fallbacks) {
+        const prior = await validateEvalsCheckout(deps, root);
+        if (prior.ok) {
+          check = prior;
+          serving = prior.root;
+          break;
+        }
+      }
+      if (serving && !memo) {
+        if (refused?.check.error !== why.error) deps.log(`[EVALS] ${why.error}; serving ${serving}`);
+        refused = { named, check: why, at: Date.now() };
+      }
+      if (live(c) && !ownRoot) return c;
     }
     if (!check.ok) return errorReply(503, { error: check.error, reason: check.reason });
-    lastGood = check.root;
+    remember(check);
     if (live(c)) {
       if (c.root === check.root) return c;
       end(c, `checkout moved to ${check.root}`);
@@ -353,7 +425,11 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
     async request(req) {
       clearIdle();
       const got = await ensureChild();
-      if ("status" in got) return got;
+      if ("status" in got) {
+        // An error reply sends nothing to the child, so nothing else re-arms its idle end.
+        if (child) armIdle(child);
+        return got;
+      }
       const c = got;
       const id = nextId++;
       return new Promise<EvalsReply>((resolve) => {
@@ -363,7 +439,7 @@ export function createEvalsBridge(overrides: Partial<EvalsBridgeDeps> = {}): Eva
           if (child === c) armIdle(c);
         }, deps.requestTimeoutMs);
         timer.unref?.();
-        c.pending.set(id, { resolve, timer });
+        c.pending.set(id, { what: `${req.method} ${req.path}`, resolve, timer });
         const line: EvalsBridgeRequest = { id, ...req };
         c.proc.stdin.write(`${JSON.stringify(line)}\n`);
       });

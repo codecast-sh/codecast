@@ -46,14 +46,3 @@ export function cleanNotificationBody(text: string, maxLen = 180): string {
   if (cleaned.length <= maxLen) return cleaned;
   return cleaned.slice(0, maxLen - 1).trimEnd() + "…";
 }
-
-/** An agent's reply as speech: the same plain line, ending on a whole
- *  sentence within `maxLen` so a long answer stops cleanly rather than
- *  mid-word. The full reply stays in the call's chat. */
-export function speakableAgentLine(text: string, maxLen = 600): string {
-  const plain = plainAgentLine(text);
-  if (plain.length <= maxLen) return plain;
-  const head = plain.slice(0, maxLen);
-  const end = Math.max(head.lastIndexOf(". "), head.lastIndexOf("? "), head.lastIndexOf("! "));
-  return end > maxLen / 3 ? head.slice(0, end + 1) : `${head.slice(0, head.lastIndexOf(" "))}…`;
-}

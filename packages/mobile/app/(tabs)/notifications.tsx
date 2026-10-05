@@ -108,6 +108,9 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "chat_here": return { name: "bullhorn", color: Theme.orange };
     case "chat_post": return { name: "hashtag", color: Theme.cyan };
     case "daemon_overloaded": return { name: "hourglass-half", color: Theme.orange };
+    case "card_waiting": return { name: "question-circle", color: Theme.orange };
+    case "change_shipped": return { name: "rocket", color: Theme.green };
+    case "cause_reopened": return { name: "undo", color: Theme.red };
     default: return { name: "bell", color: Theme.textMuted };
   }
 }

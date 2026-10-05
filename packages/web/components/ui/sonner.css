@@ -169,20 +169,22 @@
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
 }
-/* The action is the one thing on the card to press, so it is filled: a faint
-   tint read as a disabled chip on the dark card. */
+/* The action wears the app's filled cyan button (button.css): the Toaster
+   gives it those classes, and these rules read the face back from the
+   button's custom properties because sonner's own rules outweigh button.css. */
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action] {
-  color: var(--sol-bg);
-  background: var(--sol-cyan);
-  border-color: var(--sol-cyan);
-  box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 8%, transparent) inset;
+  color: var(--btn-ink);
+  background-color: var(--btn-fill);
+  background-image: var(--btn-sheen);
+  border-color: transparent;
+  box-shadow: var(--btn-face);
 }
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action]:hover {
-  background: color-mix(in srgb, var(--sol-cyan) 86%, var(--sol-text));
-  border-color: color-mix(in srgb, var(--sol-cyan) 86%, var(--sol-text));
+  background-color: var(--btn-fill-hover);
 }
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-action]:active {
-  transform: translateY(0.5px);
+  background-image: none;
+  box-shadow: var(--btn-face-pressed);
 }
 /* [data-button] twice over: sonner's dark theme rule for the cancel has the
    same weight as this one and loads after it, which painted a grey fill.
@@ -233,31 +235,4 @@
 .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] [data-close-button]:focus-visible {
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
-}
-
-/* The countdown: a toast whose action only works while it shows (Undo,
-   `countdownToast` in lib/persistentToast.ts) drains a hairline along its foot
-   over its life, so how long the answer stays open is on the card. It is a
-   background layer, so the card's rounded corners clip it, and it holds while
-   the stack is expanded under the pointer, which is when sonner holds the
-   timer. Under reduced motion it does not show. */
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown {
-  background-image: linear-gradient(color-mix(in srgb, var(--sol-cyan) 70%, transparent), color-mix(in srgb, var(--sol-cyan) 70%, transparent));
-  background-repeat: no-repeat;
-  background-position: left bottom;
-  background-size: 0% 2px;
-  animation: cc-toast-drain var(--toast-life, 4000ms) linear forwards;
-}
-.cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown[data-expanded="true"] {
-  animation-play-state: paused;
-}
-@keyframes cc-toast-drain {
-  from { background-size: 100% 2px; }
-  to { background-size: 0% 2px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .cc-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"].cc-toast-countdown {
-    animation: none;
-    background-image: none;
-  }
 }

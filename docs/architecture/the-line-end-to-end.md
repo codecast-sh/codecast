@@ -9,6 +9,8 @@ sense → attach → ground → admit → [plan gate] → prove → build → ve
       → eval → review → card → decide gate → ship → watch → learn
 ```
 
+![The line end to end: finders write through signals.ingest into causes, lineGround.sweep grounds them, cast workflow run starts one line.cast run (ground through card), the card becomes a decide gate the person answers, Ship lands the change and watches the cause, and a Revise or Drop note becomes a lesson signal](../diagrams/the-line-end-to-end.svg)
+
 The front half turns what the world tells us (errors, eval drift, judge
 findings, people's complaints, our own corrections) into a small number of
 causes, each tied to a goal. The back half turns a cause into one change with
@@ -132,6 +134,11 @@ offer, a value outside the vocabulary) leaves the cause `needs_context` with
 the reason, for a person; no reply at all leaves it for the next pass.
 
 ## LE6. Admit: work starts at the rate decisions finish
+
+The admission sweep is off: `crons.ts` does not register `orgLine.sweep`
+(since 2026-10-02), so a run starts when someone runs `cast workflow run
+--task <ct-N>` (no file: the calling role's line, else the shipped `line`).
+The rule below is what `orgLine.sweep` and `orgLine.queue` compute.
 
 `orgLine.sweep` (the-line.md L9) admits causes, highest priority first, while
 both hold:
@@ -287,3 +294,33 @@ judges write signals with the cluster id as fingerprint; its arc splits into
 the prove, build and card nodes; its decisions become gates whose answers
 reach the planner through the run, not a parsed comment. The desk's prompt
 change chain and the broker's typed asks use the same card and the same gate.
+
+## LE16. The line inside the product
+
+The line is not a page of its own; it is a way the work moves, so it shows up
+wherever that work already appears.
+
+- **Status follows the line.** A cause's status is the line's honest summary
+  of where it is: open while it waits to be admitted, in progress while a run
+  builds it, in review while a card waits on a person, done once shipped (with
+  a watch chip naming the day the watch ends), open again when a watch reopens
+  it, dropped when a person drops it. A run never writes over a status the line
+  already decided, and every status the line writes goes through the one task
+  status path, so it lands in the task's history and notifies like a person's
+  change.
+- **The task page tells the cause's story.** Under the station strip: the
+  signals behind it, the goal it serves, its risk and readiness, the card and
+  its answer, every run with its outcome, and the watch.
+- **The run page is a report, not a graph dump.** It opens with what the run
+  did and what is true now, then the path it took in phases (understand,
+  prove, build, check, decide, ship) with each station's result in one line
+  and a link to the session that did it, then the card, then earlier attempts
+  on the same cause. The full graph sits behind a toggle.
+- **The project owns its line.** The project page has a Line tab: the
+  project's flow (the /line view scoped to it), its sources and their health,
+  its stations with their prompts, and what each version of the line
+  delivered (runs, ship rate, revise rate, reopens, cost), keyed by the graph
+  hash every run records. Editing goes through /line/settings.
+- **People hear about it.** A card waiting on you, a change shipped, and a
+  watched cause that reopened each reach the person who answers for it, the
+  same way other work does.

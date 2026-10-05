@@ -7,9 +7,12 @@ import { resolveCreationPrivacy } from "./privacy";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { askCore, finalizeAnswer, normalizeVerdict, personMayResolve, withdrawCore, type AnsweredBy } from "./sessionDecisions";
 import { createStackCore } from "./decisionStacks";
-import type { ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, isLineRun, lineRunOutcome, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
+import { moveTaskStatus } from "./tasks";
+import { noticeCardWaiting, noticeChangeShipped } from "./lineNotices";
 import { createDataContext } from "./data";
 
 type Ctx = { db: any };
@@ -41,6 +44,43 @@ export async function runScope(
 export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
   return workspaceGrantsAccess(ctx, userId, await resolveWorkspaceKey(ctx, run));
+}
+
+// ── LE16: status follows the line ────────────────────────────────────────────
+
+/**
+ * The status a run's end leaves its task in (the-line-end-to-end.md LE16).
+ * A status the line already decided stands: done and dropped are never
+ * overwritten. A line run that shipped makes the cause done (the watch is the
+ * window after done); one that parked returns it to open, to wait for
+ * admission. Any other completed run hands work it was still doing to a
+ * person (in_progress becomes in_review) and leaves every other status, such
+ * as a review reject's open, where its station put it. Null leaves it.
+ */
+export function runEndStatus(
+  taskStatus: string,
+  runStatus: "completed" | "failed" | "running",
+  nodes: Parameters<typeof lineRunOutcome>[0],
+): "done" | "open" | "in_review" | null {
+  if (runStatus !== "completed" || isTerminalTaskStatus(taskStatus)) return null;
+  const end = lineRunOutcome(nodes)?.kind;
+  if (end === "shipped") return "done";
+  if (end === "parked") return taskStatus === "in_progress" ? "open" : null;
+  return taskStatus === "in_progress" ? "in_review" : null;
+}
+
+/** A run ended: its task's status through the one status path, and the ship notice. */
+async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStatus: "completed" | "failed" | "running", failReason: string | undefined, now: number) {
+  const task = await ctx.db.get(run.task_id);
+  if (!task) return;
+  if (runStatus === "failed") {
+    await patchTask(ctx, task, { execution_status: "blocked", ...(failReason ? { execution_concerns: failReason } : {}), updated_at: now });
+    return;
+  }
+  const next = runEndStatus(task.status, runStatus, run.node_statuses);
+  if (!next) return;
+  await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now });
+  if (next === "done" && lineRunOutcome(run.node_statuses)?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
 }
 
 // ── the-line.md L4: a gate is a decision ─────────────────────────────────────
@@ -115,10 +155,11 @@ export async function pauseAtGateCore(
   });
 
   // The station the task waits at is the one the gate parks it in: the
-  // decision is bound there so a blocking gate holds the task (L5).
+  // decision is bound there so a blocking gate holds the task (L5). A dropped
+  // task stays dropped: the line decided it (LE16).
   if (run.task_id) {
     const held = await ctx.db.get(run.task_id);
-    if (held) await patchTask(ctx, held, { status: "in_review", updated_at: now });
+    if (held && held.status !== "dropped") await moveTaskStatus(ctx, held, "in_review", { actorUserId: run.user_id, now });
   }
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
 
@@ -152,6 +193,11 @@ export async function pauseAtGateCore(
     if (asked && !asked.error) {
       decision = { id: asked.id, short_id: asked.short_id };
       await ctx.db.patch(args.run_id, { gate_decision_id: asked.id });
+      // A card waits on a person (LE16): the person holding the decision hears.
+      const holder = (asked as { holder?: { kind: string; id: string } }).holder;
+      if (task && holder?.kind === "user" && (args.card || args.node_id === CARD_GATE_NODE_ID)) {
+        await noticeCardWaiting(ctx, task, holder.id as Id<"users">, asked.short_id);
+      }
     }
   }
 
@@ -273,7 +319,7 @@ export const create = mutation({
 
     if (args.task_id) {
       const bound = await ctx.db.get(args.task_id);
-      if (bound) await patchTask(ctx, bound, { workflow_run_id: runId, status: "in_progress", updated_at: now });
+      if (bound) await moveTaskStatus(ctx, bound, "in_progress", { actorUserId: userId, now, extra: { workflow_run_id: runId } });
     }
 
     if (args.plan_id) {
@@ -392,7 +438,7 @@ export async function createRunCore(
   });
 
   if (opts.task) {
-    await patchTask(ctx, opts.task, { workflow_run_id: runId, status: "in_progress", updated_at: now });
+    await moveTaskStatus(ctx, opts.task, "in_progress", { actorUserId: userId, now, extra: { workflow_run_id: runId } });
   }
   if (opts.plan) {
     await ctx.db.patch(opts.plan._id, { workflow_run_id: runId, updated_at: now });
@@ -764,18 +810,7 @@ export const updateProgress = mutation({
       const taskId = (run as any).task_id;
       const planId = (run as any).plan_id;
 
-      if (taskId) {
-        const taskUpdates: Record<string, any> = { updated_at: now };
-        if (args.run_status === "completed") {
-          taskUpdates.status = "in_review";
-        } else if (args.run_status === "failed") {
-          taskUpdates.execution_status = "blocked";
-          if (args.fail_reason) taskUpdates.execution_concerns = args.fail_reason;
-        }
-        if (Object.keys(taskUpdates).length > 1) {
-          await ctx.db.patch(taskId, taskUpdates);
-        }
-      }
+      if (taskId) await settleRunTask(ctx, { ...run, node_statuses: nodeStatuses }, args.run_status, args.fail_reason, now);
 
       if (planId) {
         const planUpdates: Record<string, any> = { updated_at: now };
@@ -1195,5 +1230,58 @@ export const backfillWorkspace = internalMutation({
       await ctx.db.patch(r._id, { workspace: computeWorkspaceKey({ user_id: r.user_id }, null) });
     }
     return { stamped: rows.length };
+  },
+});
+
+// ── LE16 repair: causes the old run end left in review ───────────────────────
+
+/**
+ * The status a cause should hold, given the completed line run bound to it,
+ * when the old run end overwrote it with in_review (no history row, so the
+ * overwrite is silent): shipped and dissolved are done, dropped is dropped,
+ * parked and a review reject are open. Null leaves the row alone. A status
+ * moved through the history after the run ended was a person's, and stands.
+ */
+export function repairedLineStatus(
+  task: { status: string; review_verdict?: { verdict: string } | null },
+  run: { status: string; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
+): "done" | "dropped" | "open" | null {
+  if (run.status !== "completed" || task.status !== "in_review") return null;
+  const end = lineRunOutcome(run.node_statuses)?.kind;
+  if (end === "shipped" || end === "dissolved") return "done";
+  if (end === "dropped") return "dropped";
+  if (end === "parked") return "open";
+  if (!end && isLineRun(run.node_statuses) && task.review_verdict?.verdict === "reject") return "open";
+  return null;
+}
+
+/**
+ * One time repair (LE16): walk completed runs, and move each line cause the
+ * old run end left in review to the status its run decided, through the one
+ * status path. `dry_run` reports what it would move without writing.
+ * Paged: call again with the returned cursor until `done`.
+ */
+export const repairLineCauseStatus = internalMutation({
+  args: { dry_run: v.boolean(), cursor: v.optional(v.union(v.string(), v.null())), page: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_status", (q: any) => q.eq("status", "completed"))
+      .paginate({ cursor: args.cursor ?? null, numItems: args.page ?? 200 });
+    const moved: Array<{ task: string; from: string; to: string }> = [];
+    let skipped = 0;
+    for (const run of page.page) {
+      if (!run.task_id) continue;
+      const task: any = await ctx.db.get(run.task_id);
+      // Only the run the cause is bound to speaks for it now.
+      if (!task || String(task.workflow_run_id ?? "") !== String(run._id)) continue;
+      const next = repairedLineStatus(task, run);
+      if (!next) continue;
+      const history = await ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect();
+      if (history.some((h: any) => h.field === "status" && h.created_at > run.updated_at)) { skipped++; continue; }
+      moved.push({ task: task.short_id, from: task.status, to: next });
+      if (!args.dry_run) await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id });
+    }
+    return { scanned: page.page.length, moved, skipped, cursor: page.continueCursor, done: page.isDone };
   },
 });

@@ -79,6 +79,9 @@ let refreshTarget: UndoEntry | null = null;
 let groupDepth = 0;
 let groupChildren: UndoEntry[] | null = null;
 let groupToast = false;
+// External entries recorded inside the open group: one gesture over several
+// rows the record owns becomes one history row, named by the group's label.
+let groupExternals: UndoEntry[] | null = null;
 let idCounter = 0;
 
 /** Tune the limits; the middleware calls it with PlatformConfig.undo. */
@@ -209,8 +212,28 @@ export function withoutUndo<T>(fn: () => T): T {
   }
 }
 
+// Holds on recording for the whole window (suspendUndoRecording).
+let recordingHolds = 0;
+
+/**
+ * Stop recording in this window until the returned release runs. For a
+ * window with no way to undo (no undo key, no toast it can click, no
+ * timeline): an entry recorded there would strand in its in-memory history,
+ * and the gesture would look undoable when nothing can reach it. Counted, and
+ * each release counts once.
+ */
+export function suspendUndoRecording(): () => void {
+  recordingHolds += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    recordingHolds = Math.max(0, recordingHolds - 1);
+  };
+}
+
 export function isUndoSuppressed(): boolean {
-  return suppressDepth > 0;
+  return suppressDepth > 0 || recordingHolds > 0;
 }
 
 /** The entry a redo is refreshing, so its capture rewrites that entry instead of pushing. */
@@ -232,6 +255,80 @@ export function undoneAfter(entry: UndoEntry): UndoEntry[] {
     out.push(...(later.children ?? [later]));
   }
   return out;
+}
+
+/** The entries recorded after `entry`, oldest first: its later siblings in
+ *  its group, then every entry the history holds above its owner. */
+function recordedAfter(entry: UndoEntry): UndoEntry[] {
+  const order = history.some((e) => e === entry || e.children?.includes(entry)) ? history : undoStack;
+  const owner = order.find((e) => e === entry || e.children?.includes(entry));
+  if (!owner) return [];
+  const out = owner === entry ? [] : owner.children!.slice(owner.children!.indexOf(entry) + 1);
+  for (const later of order.slice(order.indexOf(owner) + 1)) out.push(...(later.children ?? [later]));
+  return out;
+}
+
+/** A cell whose value under the later entries changed: the value they saw (`from`) and the one that stands (`to`). */
+export type UndoCellMove = { from: { after: unknown; hadAfter: boolean }; to: { after: unknown; hadAfter: boolean } };
+
+// Cells kept beside an entry outside the stack (a controller's applied cells),
+// rebased with the entry's own.
+const rebaseHooks = new Set<(entry: UndoEntry, rebase: (cells: CellChange[]) => CellChange[]) => void>();
+
+/** Called when an entry's cells are rebased, with the same rebase for any cells kept beside it. Returns the unsubscribe. */
+export function onUndoRebase(hook: (entry: UndoEntry, rebase: (cells: CellChange[]) => CellChange[]) => void): () => void {
+  rebaseHooks.add(hook);
+  return () => {
+    rebaseHooks.delete(hook);
+  };
+}
+
+/**
+ * A value under `later` moved: each cell in `moved` (by cell key) now stands at
+ * its `to` value where the later entries recorded `from`. The nearest later
+ * entry that touches the cell takes `to` as its before, if its before was
+ * `from`; the cell is then settled for every entry above it, which recorded
+ * that entry's after instead.
+ */
+export function rebaseUndoCells(
+  later: Iterable<UndoEntry>,
+  moved: Map<string, UndoCellMove>,
+  defer?: (entry: UndoEntry) => boolean,
+): boolean {
+  let touched = false;
+  for (const entry of later) {
+    if (moved.size === 0) break;
+    const reached = new Set<string>();
+    // An entry `defer` names consumes the move without taking it: it is
+    // kept beside the entry (replayDeferred) for its replay's refusal.
+    if (defer?.(entry)) {
+      for (const c of entry.changes ?? []) {
+        const m = moved.get(cellKey(c));
+        if (!m) continue;
+        reached.add(cellKey(c));
+        if (c.hadBefore !== m.from.hadAfter || !sameShape(c.before, m.from.after)) continue;
+        entry.replayDeferred = [
+          ...(entry.replayDeferred ?? []).filter((d) => cellKey(d) !== cellKey(c)),
+          { ...c, before: m.from.after, hadBefore: m.from.hadAfter, after: m.to.after, hadAfter: m.to.hadAfter },
+        ];
+      }
+      for (const k of reached) moved.delete(k);
+      continue;
+    }
+    const rebase = (cells: CellChange[]) =>
+      cells.map((c) => {
+        const m = moved.get(cellKey(c));
+        if (!m) return c;
+        reached.add(cellKey(c));
+        if (c.hadBefore !== m.from.hadAfter || !sameShape(c.before, m.from.after)) return c;
+        touched = true;
+        return { ...c, before: m.to.after, hadBefore: m.to.hadAfter };
+      });
+    if (entry.changes) entry.changes = rebase(entry.changes);
+    for (const hook of rebaseHooks) hook(entry, rebase);
+    for (const k of reached) moved.delete(k);
+  }
+  return touched;
 }
 
 export function withUndoRefresh<T>(entry: UndoEntry, fn: () => T): T {
@@ -261,19 +358,29 @@ export function undoGroup<T>(label: string | ((entries: UndoEntry[]) => string),
   }
   groupDepth = 1;
   groupChildren = [];
+  groupExternals = [];
   groupToast = false;
   try {
     return fn();
   } finally {
     const children = groupChildren;
+    const externals = groupExternals;
     const toast = groupToast;
     groupDepth = 0;
     groupChildren = null;
+    groupExternals = null;
     groupToast = false;
     if (children.length > 0) {
       const group = makeGroupEntry(typeof label === "function" ? label(children) : label, children);
       pushEntry(group);
       if (toast) announceRecorded(group);
+    }
+    if (externals.length === 1) {
+      addToHistory(externals[0]!);
+      changed();
+    } else if (externals.length > 1) {
+      addToHistory({ ...externals[0]!, id: newUndoEntryId(), label: typeof label === "function" ? label(externals) : label });
+      changed();
     }
   }
 }
@@ -386,6 +493,12 @@ function cellKey(c: CellChange): string {
 type CoalescedCall = { outboxId: string; changes: CellChange[]; label: string; args?: unknown[] };
 type CoalescedRun = { origin: CellChange[]; calls: CoalescedCall[] };
 const coalescedRuns = new WeakMap<UndoEntry, CoalescedRun>();
+// A run that ended where it began leaves the history, but its calls are still
+// on the wire. Keyed by each call's outbox id until one is refused (or the
+// cap pushes it out), so the refusal can bring the entry back.
+// `below` is the history entry it sat on, so it comes back at its own place.
+const vanishedRuns = new Map<string, { entry: UndoEntry; run: CoalescedRun; below: UndoEntry | undefined }>();
+const VANISHED_RUNS_LIMIT = 200;
 
 // First before, last after; a cell the run took back to where it began is no change.
 function mergeRun(origin: CellChange[], laterCalls: CellChange[][]): CellChange[] {
@@ -421,6 +534,37 @@ function splitRefusedCall(entry: UndoEntry, outboxId: string): boolean {
   return true;
 }
 
+// A call of a run that ended where it began was refused: what stands is the
+// run without it. When that is a change, the entry comes back at its place in
+// the history and on the undo stack, and the entries recorded since are
+// rebased onto it.
+function restoreVanishedRun(outboxId: string): boolean {
+  const vanished = vanishedRuns.get(outboxId);
+  if (!vanished) return false;
+  const { entry, run, below } = vanished;
+  for (const call of run.calls) vanishedRuns.delete(call.outboxId);
+  const standing = run.calls.filter((c) => c.outboxId !== outboxId);
+  if (standing.length === 0) return false;
+  const merged = mergeRun(run.origin, standing.map((c) => c.changes));
+  if (!merged.some((c) => !isStampCell(c))) return false;
+  const last = standing[standing.length - 1]!;
+  run.calls = standing;
+  entry.changes = merged;
+  entry.objects = objectsOf(merged);
+  entry.label = last.label;
+  entry.args = last.args;
+  entry.outboxIds = standing.map((c) => c.outboxId);
+  entry.status = "done";
+  coalescedRuns.set(entry, run);
+  const under = below ? history.indexOf(below) : -1;
+  const later = history.findIndex((e) => e.ts > entry.ts);
+  history.splice(under !== -1 ? under + 1 : !below ? 0 : later === -1 ? history.length : later, 0, entry);
+  restoreToStack("undo", entry);
+  // The later entries saw the run end where it began.
+  rebaseRefused(entry, run.origin.map((c) => ({ ...c, after: c.before, hadAfter: c.hadBefore })), merged);
+  return true;
+}
+
 // Merge a rapid repeat of the top entry's action over the same cells into it:
 // first before, last after, last args.
 function tryCoalesce(entry: UndoEntry): boolean {
@@ -451,6 +595,9 @@ function tryCoalesce(entry: UndoEntry): boolean {
     // that changed no cell never records one.
     remove(undoStack, top);
     history.pop();
+    const vanished = { entry: top, run, below: history[history.length - 1] };
+    for (const call of run.calls) if (call.outboxId) vanishedRuns.set(call.outboxId, vanished);
+    while (vanishedRuns.size > VANISHED_RUNS_LIMIT) vanishedRuns.delete(vanishedRuns.keys().next().value!);
     changed();
     return true;
   }
@@ -476,7 +623,12 @@ function announceRecorded(entry: UndoEntry): void {
  * (coalesce), or onto the stack. External entries are history only.
  */
 export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coalesce?: boolean }): void {
+  if (recordingHolds > 0) return;
   if (entry.status === "external") {
+    if (groupExternals) {
+      groupExternals.push(entry);
+      return;
+    }
     addToHistory(entry);
     changed();
     return;
@@ -494,6 +646,7 @@ export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coal
 /** A hand-written entry (mode "manual"). Returns its id. */
 export function pushUndo(entry: Omit<UndoEntry, "id" | "ts" | "status" | "mode">): string {
   const full: UndoEntry = { ...entry, id: newUndoEntryId(), ts: Date.now(), status: "done", mode: "manual" };
+  if (recordingHolds > 0) return full.id;
   if (groupChildren) {
     groupChildren.push(full);
     return full.id;
@@ -533,7 +686,47 @@ function pruneExpiredManual(now: number): void {
   if (undoStack.length + redoStack.length !== before) changed();
 }
 
+// Gestures whose store write waits on something before it runs (a row's exit
+// animation). Until it runs nothing records it, yet it is the newest thing the
+// user did: a walk that arrived in the wait would take back an older entry,
+// and the gesture landing afterwards would drop that entry's redo.
+const pendingGestures = new Set<() => void>();
+
+/**
+ * Register a gesture whose write runs later. Returns `commit`, which runs it
+ * once: call it when the wait ends. Every walk (a press, a toast's undo, a
+ * history click) commits pending gestures first, so it takes them back.
+ */
+export function deferUndoGesture(commit: () => void): () => void {
+  let done = false;
+  const run = () => {
+    if (done) return;
+    done = true;
+    pendingGestures.delete(run);
+    commit();
+  };
+  pendingGestures.add(run);
+  return run;
+}
+
+/** Run every gesture still waiting, oldest first. Each walk calls it before it reads the stacks. */
+export function commitPendingUndoGestures(): void {
+  for (const run of [...pendingGestures]) {
+    try {
+      run();
+    } catch (error) {
+      console.error("[undo] deferred gesture failed", error);
+    }
+  }
+}
+
 type StepResult = { ok: true; entry: UndoEntry } | { ok: false; entry: UndoEntry };
+
+// The order undo steps ran in, so a refused replay can find the steps that
+// came after it (and judged against its value) wherever they sit now: still
+// undone, or dropped by a gesture.
+const undoSeq = new WeakMap<UndoEntry, number>();
+let undoSeqCounter = 0;
 
 function stepUndo(entry: UndoEntry): StepResult {
   const outcome = runClosure(entry.undo);
@@ -543,6 +736,8 @@ function stepUndo(entry: UndoEntry): StepResult {
     changed();
     return { ok: false, entry };
   }
+  undoSeqCounter += 1;
+  undoSeq.set(entry, undoSeqCounter);
   entry.status = "undone";
   entry.undoneAt = Date.now();
   redoStack.push(entry);
@@ -591,6 +786,7 @@ function announceConflict(kind: "undo" | "redo", entry: UndoEntry): void {
  * under it would take back an older change the user did not aim at.
  */
 export function performUndo(): boolean {
+  commitPendingUndoGestures();
   const now = Date.now();
   pruneExpiredManual(now);
   const top = undoStack[undoStack.length - 1];
@@ -609,6 +805,7 @@ export function performUndo(): boolean {
 
 /** Keyboard redo: the top undone entry, if it was undone inside the keyboard window. */
 export function performRedo(): boolean {
+  commitPendingUndoGestures();
   const now = Date.now();
   pruneExpiredManual(now);
   const entry = redoStack[redoStack.length - 1];
@@ -625,6 +822,7 @@ export function performRedo(): boolean {
  * A manual entry can only be undone from the top.
  */
 export function undoEntry(id: string): boolean {
+  commitPendingUndoGestures();
   const now = Date.now();
   pruneExpiredManual(now);
   const at = undoStack.findIndex((e) => e.id === id);
@@ -647,6 +845,7 @@ export function undoEntry(id: string): boolean {
  * Explicit, so a generic entry past the keyboard window is still reachable.
  */
 export function undoTo(id: string): number {
+  commitPendingUndoGestures();
   const now = Date.now();
   pruneExpiredManual(now);
   if (!undoStack.some((e) => e.id === id)) return 0;
@@ -670,6 +869,7 @@ export function undoTo(id: string): number {
 
 /** Redo from the top of the redo stack up to and including `id`. */
 export function redoTo(id: string): number {
+  commitPendingUndoGestures();
   const now = Date.now();
   pruneExpiredManual(now);
   if (!redoStack.some((e) => e.id === id)) return 0;
@@ -699,6 +899,8 @@ export function showUndoToast(label: string): void {
 }
 
 export function canUndo(): boolean {
+  // A waiting gesture records when the walk commits it.
+  if (pendingGestures.size > 0) return true;
   const now = Date.now();
   pruneExpiredManual(now);
   const top = undoStack[undoStack.length - 1];
@@ -706,6 +908,8 @@ export function canUndo(): boolean {
 }
 
 export function canRedo(): boolean {
+  // A waiting gesture drops the redo branch when the walk commits it.
+  if (pendingGestures.size > 0) return false;
   const now = Date.now();
   pruneExpiredManual(now);
   const top = redoStack[redoStack.length - 1];
@@ -717,7 +921,7 @@ export function canRedo(): boolean {
 // ---------------------------------------------------------------------------
 
 function toItem(entry: UndoEntry): UndoHistoryItem {
-  const { undo: _u, redo: _r, children, ...rest } = entry;
+  const { undo: _u, redo: _r, children, replaySent: _s, supersededReplay: _p, replayDeferred: _d, ...rest } = entry;
   return children ? { ...rest, children: children.map(toItem) } : { ...rest };
 }
 
@@ -758,6 +962,138 @@ function* allEntries(): Generator<{ entry: UndoEntry; parent: UndoEntry | null }
   }
 }
 
+// An undone entry whose undo replay went out: that replay carried the entry's
+// before as it stood then, and is what the server holds unless it is refused.
+const replayOut = (e: UndoEntry) =>
+  (e.status === "undone" || e.status === "dropped") && e.replayDir === "undo" && !!e.replaySent;
+
+/** Moves from cells: each from its `before` to its `after`. */
+const movesOf = (cells: readonly CellChange[]) =>
+  new Map(cells.map((c) => [cellKey(c), { from: { after: c.before, hadAfter: c.hadBefore }, to: { after: c.after, hadAfter: c.hadAfter } }] as const));
+
+// A refused write never landed: each cell `was` wrote now stands where `now`
+// leaves it (a split run's last standing call), or back at its before when
+// `now` no longer writes it. The entries recorded after `entry` recorded the
+// refused after as their before, and are rebased onto what stands. An entry
+// already undone with its replay out is not: that replay sent the refused
+// value as its before, so the move waits on the replay (replayDeferred).
+function rebaseRefused(entry: UndoEntry, was: readonly CellChange[], now: readonly CellChange[]): void {
+  const nowByKey = new Map(now.map((c) => [cellKey(c), c] as const));
+  const moved = new Map<string, UndoCellMove>();
+  for (const c of was) {
+    const stands = nowByKey.get(cellKey(c));
+    const to = stands ? { after: stands.after, hadAfter: stands.hadAfter } : { after: c.before, hadAfter: c.hadBefore };
+    if (to.hadAfter === c.hadAfter && sameShape(to.after, c.after)) continue;
+    moved.set(cellKey(c), { from: { after: c.after, hadAfter: c.hadAfter }, to });
+  }
+  if (moved.size > 0) rebaseUndoCells(recordedAfter(entry), moved, replayOut);
+}
+
+// A refused replay never reached the server, so the entries that used its
+// value are rebased onto what it held. `replayed` is the entry whose replay was
+// refused (a group's child, or the entry itself) and `owner` what goes back on
+// a stack with it.
+//
+// Undo: the replay wrote each cell's before value; the cell stands at the
+// entry's after value instead, unless a later step of the walk wrote it. A
+// later step that judged the replay's value as its after wrote its own before
+// value, and so on down the walk: the entry's before becomes the value the
+// last of them left, which is what stands. A gesture recorded after the entry
+// saw the replay's value as its before, where the server held the after value.
+//
+// Redo (a partial redo's replay of the after values): the cells stand at the
+// before values, and every entry recorded after it, the walk's later redos
+// included, saw the after value as its before.
+//
+// An undo replay whose every cell a later step of the walk wrote over returns
+// those steps: the value it wrote over does not come back on screen while
+// their replays stand, so its entry stays undone (coveredBy). Otherwise null.
+function rebaseRefusedReplay(replayed: UndoEntry, owner: UndoEntry, dir: "undo" | "redo"): Set<UndoEntry> | null {
+  // What the replay carried: `before` written over `after`. An entry from
+  // before replays kept that falls back on its cells.
+  const flip = (c: CellChange): CellChange => ({ ...c, before: c.after, hadBefore: c.hadAfter, after: c.before, hadAfter: c.hadBefore });
+  const sent = (replayed.replaySent ?? (dir === "undo" ? replayed.changes : replayed.changes?.map(flip)) ?? [])
+    .filter((c) => !isStampCell(c));
+  const deferred = replayed.replayDeferred;
+  replayed.replaySent = undefined;
+  replayed.replayDeferred = undefined;
+  if (sent.length === 0) return null;
+  const toLater = new Map<string, UndoCellMove>();
+  if (dir === "redo") {
+    for (const c of sent) {
+      toLater.set(cellKey(c), { from: { after: c.before, hadAfter: c.hadBefore }, to: { after: c.after, hadAfter: c.hadAfter } });
+    }
+    rebaseUndoCells(recordedAfter(replayed), toLater);
+    return null;
+  }
+  // The walk's later steps: every entry undone after the owner whose own
+  // undo replay went out, even one whose forward was refused since (its
+  // replay still wrote), judged by what that replay carried.
+  const since = undoSeq.get(owner) ?? Infinity;
+  const sentOut = (e: UndoEntry) =>
+    e.status === "undone" || e.status === "dropped" || (e.status === "refused" && e.replayDir === "undo" && !!e.replaySent);
+  const steps: UndoEntry[] = [];
+  for (const { entry, parent } of allEntries()) {
+    if (parent || entry === owner) continue;
+    const seq = undoSeq.get(entry);
+    if (seq === undefined || seq <= since || !sentOut(entry)) continue;
+    steps.push(entry);
+  }
+  steps.sort((a, b) => undoSeq.get(a)! - undoSeq.get(b)!);
+  // A group's children undo newest first, so the replayed child's older
+  // siblings came after it in the same step.
+  const siblings = owner.children ? owner.children.slice(0, owner.children.indexOf(replayed)).reverse() : [];
+  const walk = [
+    ...siblings.map((step) => ({ step, by: owner })),
+    ...steps.flatMap((e) => (e.children ? [...e.children].reverse() : [e]).map((step) => ({ step, by: e }))),
+  ];
+  const own = new Map<string, UndoCellMove>();
+  const covering = new Set<UndoEntry>();
+  for (const c of sent) {
+    let value = { after: c.before, hadAfter: c.hadBefore };
+    for (const { step, by } of walk) {
+      if (!sentOut(step)) continue;
+      // `after` is what a step's replay wrote over, `before` what it wrote.
+      const hit = (step.replaySent ?? step.changes)?.find((s) => cellKey(s) === cellKey(c));
+      if (!hit || hit.hadAfter !== value.hadAfter || !sameShape(hit.after, value.after)) continue;
+      value = { after: hit.before, hadAfter: hit.hadBefore };
+      if (by !== owner) covering.add(by);
+    }
+    const from = { after: c.before, hadAfter: c.hadBefore };
+    if (value.hadAfter !== from.hadAfter || !sameShape(value.after, from.after)) own.set(cellKey(c), { from, to: value });
+    else toLater.set(cellKey(c), { from, to: { after: c.after, hadAfter: c.hadAfter } });
+  }
+  if (own.size > 0) rebaseUndoCells([replayed], own);
+  // A refused forward under the entry waited on this replay: it applies now,
+  // where the walk left the cell at what the replay sent.
+  if (deferred?.length) rebaseUndoCells([replayed], movesOf(deferred));
+  if (toLater.size > 0) rebaseUndoCells(recordedAfter(replayed), toLater);
+  return toLater.size === 0 && covering.size > 0 ? covering : null;
+}
+
+// Entries left undone by a refused undo replay because later steps of the
+// walk wrote every cell over (rebaseRefusedReplay), by covering step. When a
+// covering step's own replay is refused too, the cells roll back past both
+// and the entry's value is on screen again: it goes back to be undone.
+const coveredBy = new WeakMap<UndoEntry, UndoEntry[]>();
+
+function releaseCovered(step: UndoEntry): boolean {
+  const owners = coveredBy.get(step);
+  if (!owners) return false;
+  coveredBy.delete(step);
+  let touched = false;
+  for (const owner of owners) {
+    if ((owner.status !== "undone" && owner.status !== "dropped") || undoStack.includes(owner)) continue;
+    remove(redoStack, owner);
+    owner.droppedBy = undefined;
+    owner.status = "done";
+    owner.undoneAt = undefined;
+    restoreToStack("undo", owner);
+    touched = true;
+  }
+  return touched;
+}
+
 /**
  * The server refused the dispatch with this outbox id for good. A forward
  * capture (or a redo) that named it is marked refused and leaves both stacks.
@@ -769,8 +1105,15 @@ export function markUndoOutboxRefused(outboxId: string): void {
   for (const { entry, parent } of allEntries()) {
     if (entry.outboxIds?.includes(outboxId)) {
       touched = true;
+      // The entries recorded after this one saw its after values as their
+      // befores; what stands now is what the server held (rebaseRefused).
+      const was = entry.changes ?? [];
       // A coalesced run stays undoable down to the calls that landed.
-      if (splitRefusedCall(entry, outboxId)) continue;
+      if (splitRefusedCall(entry, outboxId)) {
+        rebaseRefused(entry, was, entry.changes ?? []);
+        continue;
+      }
+      rebaseRefused(entry, was, []);
       entry.status = "refused";
       if (parent) {
         parent.children = parent.children!.filter((c) => c !== entry);
@@ -783,6 +1126,10 @@ export function markUndoOutboxRefused(outboxId: string): void {
         remove(undoStack, entry);
         remove(redoStack, entry);
       }
+    } else if (!parent && entry.supersededReplay?.ids.includes(outboxId)) {
+      const { dir } = entry.supersededReplay;
+      entry.supersededReplay = undefined;
+      if (restoreSuperseded(entry, dir)) touched = true;
     } else if (entry.replayOutboxIds?.includes(outboxId)) {
       // A refused replay sends its owner back off the stack the replay put
       // it on. A replay of several passes can be refused once per pass;
@@ -791,6 +1138,19 @@ export function markUndoOutboxRefused(outboxId: string): void {
       // back with its owner even when an earlier child already moved it.
       const owner = parent ?? entry;
       if (entry.replayDir === "undo") {
+        // The walk's later steps and any gesture since judged the replay's value.
+        // Once per entry: a replay of several passes is refused once per pass.
+        if (entry.status !== "done" && entry.replaySent) {
+          const covering = rebaseRefusedReplay(entry, owner, "undo");
+          // Cells the walk's later steps wrote over stay where they left them,
+          // so the entry stays undone until one of those replays is refused.
+          if (covering && !parent) {
+            for (const step of covering) coveredBy.set(step, [...(coveredBy.get(step) ?? []), owner]);
+            if (releaseCovered(owner)) touched = true;
+            continue;
+          }
+        }
+        if (releaseCovered(owner)) touched = true;
         // A gesture recorded while the replay was on the wire dropped the
         // redo branch. The forward value comes back on screen all the same,
         // so its entry must come back with it.
@@ -807,6 +1167,7 @@ export function markUndoOutboxRefused(outboxId: string): void {
           entry.undoneAt = undefined;
         }
       } else if (entry.replayDir === "redo") {
+        if (entry.status !== "undone" && entry.replaySent) rebaseRefusedReplay(entry, owner, "redo");
         if (remove(undoStack, owner)) {
           touched = true;
           owner.status = "undone";
@@ -821,7 +1182,36 @@ export function markUndoOutboxRefused(outboxId: string): void {
       }
     }
   }
+  if (!touched && restoreVanishedRun(outboxId)) touched = true;
   if (touched) changed();
+}
+
+// A later step of `entry` overtook the replay `sup` names, was refused, and
+// rolled back past that replay's dropped send: neither landed, so the cells
+// stand where they stood before that replay. An undo replay's entry is done
+// again, a redo replay's undone again. The step's refusal rebased the entries
+// recorded after it onto the value this replay would have written; they go
+// back to the value that stands.
+function restoreSuperseded(entry: UndoEntry, dir: "undo" | "redo"): boolean {
+  const target = dir === "undo" ? "done" : "undone";
+  const onStack = dir === "undo" ? undoStack : redoStack;
+  if (entry.status === target && onStack.includes(entry)) return false;
+  const cells = (entry.changes ?? []).filter((c) => !isStampCell(c));
+  const toLater = new Map<string, UndoCellMove>();
+  for (const c of cells) {
+    const [from, to] = dir === "undo"
+      ? [{ after: c.before, hadAfter: c.hadBefore }, { after: c.after, hadAfter: c.hadAfter }]
+      : [{ after: c.after, hadAfter: c.hadAfter }, { after: c.before, hadAfter: c.hadBefore }];
+    toLater.set(cellKey(c), { from, to });
+  }
+  if (toLater.size > 0) rebaseUndoCells(recordedAfter(entry), toLater);
+  remove(undoStack, entry);
+  remove(redoStack, entry);
+  entry.droppedBy = undefined;
+  entry.status = target;
+  entry.undoneAt = dir === "undo" ? undefined : Date.now();
+  restoreToStack(dir, entry);
+  return true;
 }
 
 const rekeyPendingKey = (key: string, oldId: string, newId: string): string => {
@@ -829,7 +1219,14 @@ const rekeyPendingKey = (key: string, oldId: string, newId: string): string => {
   return parts.map((p) => (p === oldId ? newId : p)).join(":");
 };
 
-/** `value` with every string equal to `oldId` replaced, at any depth; the same reference when none is. */
+/**
+ * `value` with every mention of `oldId` moved to `newId`, at any depth: a
+ * string equal to it, and an object key equal to it (a table keyed by row id,
+ * a map from row id to a sort key). A row whose own `_id` is the stub moves
+ * the way syncEngine moves it: its `_id` follows, and any other top-level
+ * field that holds the stub (its alt key, `client_id`) stays. The same
+ * reference comes back when nothing names the id.
+ */
 export function rekeyIds<T>(value: T, oldId: string, newId: string): T {
   if (value === oldId) return newId as T;
   if (Array.isArray(value)) {
@@ -837,34 +1234,28 @@ export function rekeyIds<T>(value: T, oldId: string, newId: string): T {
     return (next.some((v, i) => v !== value[i]) ? next : value) as T;
   }
   if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    let out: Record<string, unknown> | null = null;
-    for (const [k, v] of Object.entries(value)) {
-      const next = rekeyIds(v, oldId, newId);
-      if (next !== v) (out ??= { ...(value as Record<string, unknown>) })[k] = next;
-    }
-    return (out ?? value) as T;
+    const own = (value as { _id?: unknown })._id === oldId;
+    let moved = false;
+    const entries = Object.entries(value).map(([k, v]): [string, unknown] => {
+      const key = k === oldId ? newId : k;
+      const next = own && k !== "_id" && v === oldId ? v : rekeyIds(v, oldId, newId);
+      if (key !== k || next !== v) moved = true;
+      return [key, next];
+    });
+    return (moved ? Object.fromEntries(entries) : value) as T;
   }
   return value;
 }
 
-// A whole row moves to its server id the way syncEngine moves it: only its
-// `_id` changes, the rest (its client_id among them) stays.
-const rekeyRow = (row: unknown, oldId: string, newId: string): unknown =>
-  row && typeof row === "object" && (row as { _id?: unknown })._id === oldId ? { ...row, _id: newId } : row;
-
 /**
- * Cells naming `oldId`, moved to `newId`; the same array when none does. A
- * field cell's values follow too (a parent pointer or a bucket id the app's
- * rekeyExtra rewrites), so the guard compares them with the rewritten row.
+ * Cells naming `oldId`, moved to `newId`; the same array when none does. The
+ * values follow too, a whole row's as well as a field's (a parent pointer or a
+ * bucket id the app's rekeyExtra rewrites), so the guard compares them with
+ * the rewritten row and a restored row comes back pointing at the server id.
  */
 export function rekeyCells(cells: CellChange[], oldId: string, newId: string): CellChange[] {
   let moved = false;
   const out = cells.map((c) => {
-    if (c.field === undefined) {
-      if (c.id !== oldId) return c;
-      moved = true;
-      return { ...c, id: newId, before: rekeyRow(c.before, oldId, newId), after: rekeyRow(c.after, oldId, newId) };
-    }
     const id = c.id === oldId ? newId : c.id;
     const before = rekeyIds(c.before, oldId, newId);
     const after = rekeyIds(c.after, oldId, newId);
@@ -890,11 +1281,15 @@ export function onUndoRekey(hook: (entry: UndoEntry, oldId: string, newId: strin
 export function rekeyUndoIds(oldId: string, newId: string): void {
   if (oldId === newId) return;
   let touched = false;
-  for (const { entry } of allEntries()) {
-    if (entry.changes) {
-      const changes = rekeyCells(entry.changes, oldId, newId);
-      if (changes !== entry.changes) {
-        entry.changes = changes;
+  // A vanished run can still come back (restoreVanishedRun), so it follows too.
+  const vanished = new Set([...vanishedRuns.values()].map((v) => v.entry));
+  for (const { entry } of [...allEntries(), ...[...vanished].map((entry) => ({ entry }))]) {
+    for (const list of ["changes", "replaySent", "replayDeferred"] as const) {
+      const cells = entry[list];
+      if (!cells) continue;
+      const next = rekeyCells(cells, oldId, newId);
+      if (next !== cells) {
+        entry[list] = next;
         touched = true;
       }
     }
@@ -934,15 +1329,116 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
   if (touched) changed();
 }
 
+const resetListeners = new Set<() => void>();
+
+/**
+ * Called when the history is reset: anything outside the stacks that holds a
+ * reset history's state (a controller's send order, a toast, an open card)
+ * drops it here. Returns the unsubscribe.
+ */
+export function onUndoReset(fn: () => void): () => void {
+  resetListeners.add(fn);
+  return () => {
+    resetListeners.delete(fn);
+  };
+}
+
+/**
+ * Forget every entry, as at an account boundary: the history belongs to the
+ * principal that made it, and replaying it under another would write the old
+ * account's rows into the new one's store and send them as the new one. A
+ * group or suppression already running keeps its own bookkeeping; only what
+ * it recorded so far goes.
+ */
+export function resetUndoHistory(): void {
+  vanishedRuns.clear();
+  undoStack = [];
+  redoStack = [];
+  history = [];
+  if (groupChildren) groupChildren = [];
+  if (groupExternals) groupExternals = [];
+  for (const fn of [...resetListeners]) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("[undo] reset listener failed", error);
+    }
+  }
+  changed();
+}
+
+/** One window's undo state: everything a browser window keeps of its own. */
+type UndoWindowSlots = {
+  undoStack: UndoEntry[];
+  redoStack: UndoEntry[];
+  history: UndoEntry[];
+  version: number;
+  snapshot: UndoHistorySnapshot | null;
+  suppressDepth: number;
+  refreshTarget: UndoEntry | null;
+  groupDepth: number;
+  groupChildren: UndoEntry[] | null;
+  groupToast: boolean;
+  groupExternals: UndoEntry[] | null;
+  recordingHolds: number;
+};
+
+/**
+ * Test seam for a harness that runs several windows in one process (the
+ * codecast multiplayer sim): each browser window keeps its own history, so the
+ * harness saves this state after a window's turn and loads it before the
+ * next. Arrays are copied, so a saved slot never aliases the live stacks.
+ * Configuration, the notifier, listeners and the id counter stay one per
+ * process (set once at load; ids only need to be unique).
+ */
+export function __undoStackWindowSlots(): { get(): object; set(s: object): void; fresh(): object } {
+  // Lists are copied; anything else a harness hands in passes as it is.
+  const list = <T>(x: T): T => (Array.isArray(x) ? ([...x] as T) : x);
+  const copy = (s: UndoWindowSlots): UndoWindowSlots => ({
+    ...s,
+    undoStack: list(s.undoStack),
+    redoStack: list(s.redoStack),
+    history: list(s.history),
+    groupChildren: list(s.groupChildren),
+    groupExternals: list(s.groupExternals),
+  });
+  return {
+    fresh: (): UndoWindowSlots => ({
+      undoStack: [],
+      redoStack: [],
+      history: [],
+      version: 0,
+      snapshot: null,
+      suppressDepth: 0,
+      refreshTarget: null,
+      groupDepth: 0,
+      groupChildren: null,
+      groupToast: false,
+      groupExternals: null,
+      recordingHolds: 0,
+    }),
+    get: (): UndoWindowSlots =>
+      copy({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds }),
+    set: (raw: object) => {
+      const s = copy(raw as UndoWindowSlots);
+      ({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds } = s);
+    },
+  };
+}
+
 /** Test hook: the stacks live at module scope and would leak across tests. */
 export function _resetUndoStacks(): void {
+  pendingGestures.clear();
+  vanishedRuns.clear();
   undoStack = [];
   redoStack = [];
   history = [];
   suppressDepth = 0;
+  recordingHolds = 0;
   refreshTarget = null;
   groupDepth = 0;
   groupChildren = null;
+  groupExternals = null;
   groupToast = false;
   changed();
 }

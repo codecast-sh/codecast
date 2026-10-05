@@ -175,6 +175,18 @@ function peopleTitle(
   return `Huddle with ${shown}${more > 0 ? ` and ${more} more` : ""}`;
 }
 
+/** How long a call ran, on every surface that lists it (the web's history
+ *  and call page, `cast calls`): `31s` under a minute, `12m`, `1h 14m`, or
+ *  `live` while it has no end. One rule, so a call has one length. */
+export function callLength(startedAt: number, endedAt: number | null | undefined): string {
+  if (!endedAt) return "live";
+  const sec = Math.max(1, Math.round((endedAt - startedAt) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m`;
+  return `${Math.floor(min / 60)}h${min % 60 ? ` ${min % 60}m` : ""}`;
+}
+
 /** What a call is called on every surface that lists it: its own title, else
  *  the place it happened, else the people in it, else a plain word. Never
  *  the room key: a key is an opaque id that tells a person nothing and costs
@@ -186,7 +198,7 @@ export function callDisplayTitle(
   const title = call.title?.trim();
   if (title) return title;
   const parsed = parseRoomKey(call.room_key);
-  if (parsed?.kind === "rec") return "Untitled recording";
+  if (parsed?.kind === "rec") return "Untitled voice note";
   if (names.peerName) return `Call with ${names.peerName}`;
   if (parsed?.kind === "session" && names.sessionTitle) return `Huddle in ${names.sessionTitle}`;
   if (parsed?.kind === "channel" && names.channelName) return `Huddle in #${names.channelName}`;
@@ -239,8 +251,8 @@ export function chatRoomKey(channel: {
   return channelRoomKey(channel.id);
 }
 
-// An agent's face in a call: a Tavus PAL that joins the LiveKit room and
-// speaks the agent's replies (convex/tavusPal.ts). People join under their
+// An agent's voice in a call: a live model with a Tavus face that joins the
+// LiveKit room and talks for the agent (convex/callFace.ts). People join under their
 // user id; a face joins under this prefix and the agent's conversation id, so
 // a client can tell a face from a person by identity alone.
 const AGENT_FACE_PREFIX = "agent:";

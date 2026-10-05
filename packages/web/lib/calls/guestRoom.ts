@@ -155,6 +155,9 @@ export type PreviewSnapshot = {
   /** Asking the browser right now (the permission prompt may be up). */
   asking: boolean;
   devices: DeviceLists;
+  /** The browser has answered for the devices at least once. Until it has,
+   *  an empty list means "not asked yet", not "this machine has none". */
+  devicesListed: boolean;
   choice: DeviceChoice;
 };
 
@@ -189,6 +192,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
       micDenied: false,
       asking: false,
       devices: NO_DEVICES,
+      devicesListed: false,
       choice,
     });
   }
@@ -320,7 +324,7 @@ export class GuestPreview extends Emitter<PreviewSnapshot> {
 
   async refreshDevices(): Promise<void> {
     const devices = await listAllDevices();
-    if (!this.disposed) this.set({ devices });
+    if (!this.disposed) this.set({ devices, devicesListed: true });
   }
 
   private async openCamera(): Promise<void> {

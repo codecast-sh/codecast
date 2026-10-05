@@ -5,6 +5,7 @@
 //
 //   bun scripts/line.ts prove --dir <run files> [--reps 5]
 //   bun scripts/line.ts eval --base <branch> --dir <run files> [--reps n]
+//   bun scripts/line.ts ship --base <branch> --tree <main checkout>
 //
 // prove: each miss freeze in <dir>/freezes.txt (one id per line) must fail by
 // majority on this tree, which is still the base, and each guard in
@@ -15,6 +16,10 @@
 // freezes. It writes <dir>/reps.json, the file the contract names, and does
 // the statistics only for its own report; the station's verdict is
 // `cast line eval-result` over the same reps.
+// ship: lands an approved change the way this repo works, in the main
+// checkout's working tree beside everyone else's uncommitted work, never as a
+// push; committing is a person's separate step. It applies the branch's diff
+// against its merge base and prints the one line that goes on the task.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -117,8 +122,29 @@ function evalBranch(): void {
   process.exit(r.status ?? 1);
 }
 
+function git(cwd: string, args: string[], input?: string): { ok: boolean; out: string; err: string } {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 });
+  return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
+}
+
+function ship(): void {
+  const tree = need("tree");
+  const cwd = process.cwd();
+  const base = git(cwd, ["merge-base", need("base"), "HEAD"]);
+  if (!base.ok) fail(`no merge base with ${arg("base")}: ${base.err}`);
+  const range = `${base.out.trim()}..HEAD`;
+  const patch = git(cwd, ["diff", "--binary", range]).out;
+  if (!patch.trim()) { console.log("nothing to land: the branch has no change against its base"); return; }
+  const check = git(tree, ["apply", "--check", "-"], patch);
+  if (!check.ok) fail(`the change does not apply to ${tree} as it stands: ${check.err.split("\n")[0]}`);
+  const applied = git(tree, ["apply", "-"], patch);
+  if (!applied.ok) fail(`applying to ${tree} failed: ${applied.err.split("\n")[0]}`);
+  const stat = git(cwd, ["diff", "--shortstat", range]).out.trim();
+  console.log(`applied to the working tree at ${tree}: ${stat}`);
+}
+
 if (import.meta.main) {
-  const commands: Record<string, () => void> = { prove, eval: evalBranch };
+  const commands: Record<string, () => void> = { prove, eval: evalBranch, ship };
   const run = commands[process.argv[2] ?? ""];
   if (!run) fail(`usage: bun scripts/line.ts ${Object.keys(commands).join("|")} [options]`);
   run();

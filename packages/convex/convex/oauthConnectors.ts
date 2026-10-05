@@ -21,13 +21,9 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { convexSiteUrl, webBaseUrl } from "./slack";
-import {
-  encryptRefreshToken,
-  decryptRefreshToken,
-  signStateWith,
-  verifyStateWith,
-} from "./googleOAuth";
-import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh } from "./lib/tokenRefresh";
+import { encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
+import { signStateWith, verifyStateWith } from "./lib/hmac";
+import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh, storedRefreshFailure } from "./lib/tokenRefresh";
 import { sha256Hex } from "./lib/hash";
 
 /* ==========================================================================
@@ -393,6 +389,7 @@ export const storeConnection = internalMutation({
         refresh_token_enc: args.refresh_token_enc ?? existing.refresh_token_enc,
         access_expires_at: args.access_expires_at,
         last_error: undefined,
+        last_error_kind: undefined,
         refresh_lease_id: undefined,
         refresh_lease_until: undefined,
         granted_scopes: args.granted_scopes,
@@ -510,6 +507,7 @@ export const finishConfirm = internalMutation({
       // The promotion is the newest word on this connection: a refresh that
       // was in flight against the old credentials must not land on top of it.
       last_error: undefined,
+      last_error_kind: undefined,
       refresh_lease_id: undefined,
       refresh_lease_until: undefined,
       pending_replacement: undefined,
@@ -617,6 +615,7 @@ export const updateStoredTokens = internalMutation({
     refresh_token_enc: v.optional(v.string()),
     access_expires_at: v.optional(v.number()),
     last_error: v.optional(v.string()),
+    last_error_kind: v.optional(storedRefreshFailure),
   },
   handler: async (ctx, args) => {
     const { installation_id, ...outcome } = args;

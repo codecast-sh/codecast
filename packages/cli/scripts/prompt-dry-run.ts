@@ -54,6 +54,18 @@
 //     HELP or REFUSED.
 //  4. No controlling terminal (start_new_session), no tmux variables, none of
 //     the launching session's identity (CODECAST_SESSION_ID and friends).
+//  5. An agent run's scratch is its own (ct-56832). The model picks fixed
+//     paths like /tmp/org_inputs.json, so two runs in flight read each other's
+//     files. On macOS the agent's whole process tree runs under sandbox-exec
+//     with every file under /tmp and /var/tmp unreadable and unwritable, the
+//     run dir excepted, while TMPDIR and CLAUDE_CODE_TMPDIR (Claude Code's
+//     own scratch, which ignores TMPDIR and defaults to /tmp) point at
+//     <run>/tmp. A write to /tmp fails with "Operation not permitted" and the
+//     agent moves to $TMPDIR or its cwd. Where sandbox-exec cannot apply
+//     (another OS, an already sandboxed parent), the run goes ahead unisolated
+//     and args.json says so; `--isolation-check` answers that question alone
+//     (exit 0 isolated, 3 not), and `./evals check` runs agent reps in
+//     parallel only on a yes.
 //
 // Output, in the run directory: out.json (the claude result), reply.txt (its
 // final message and cost), said.txt and said.json (every assistant message of
@@ -84,6 +96,45 @@ import { accountTokenFilePath, fleetStoreDir, fleetStoreEnabled } from "../src/c
 function arg(name: string, fallback?: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i >= 0 ? process.argv[i + 1] : fallback;
+}
+
+/** Every file under the shared temp dirs is off limits; the run dir and the
+ *  directories the run reads from stay reachable even when they sit there.
+ *  Paths arrive as -D parameters, so no path is ever quoted into the profile. */
+const SCRATCH_PROFILE = `(version 1)
+(allow default)
+(deny file-read* file-write* (regex #"^/private/(var/)?tmp/"))
+(allow file-read* file-write* (subpath (param "RUN_DIR")))
+(allow file-read* (subpath (param "GUARD_DIR")) (subpath (param "SERVE_DIR")))`;
+
+/** The argv prefix that runs a command with private scratch, and the env it needs. */
+function scratchSandbox(run: string, readable: { guard: string; serve?: string }) {
+  const scratch = path.join(run, "tmp");
+  fs.mkdirSync(scratch, { recursive: true, mode: 0o700 });
+  const real = (p: string) => (fs.existsSync(p) ? fs.realpathSync(p) : p);
+  const prefix = ["sandbox-exec", "-D", `RUN_DIR=${real(run)}`, "-D", `GUARD_DIR=${real(readable.guard)}`, "-D", `SERVE_DIR=${real(readable.serve ?? run)}`, "-p", SCRATCH_PROFILE];
+  return { prefix, env: { TMPDIR: `${scratch}/`, TMP: scratch, TEMP: scratch, CLAUDE_CODE_TMPDIR: scratch } };
+}
+
+/** Whether the sandbox applies here and does what it claims: a write to /tmp
+ *  is refused while one to the run's scratch lands. Null when it does, else why not. */
+function scratchIsolationGap(run: string, guard: string): string | null {
+  if (process.platform !== "darwin") return `no sandbox-exec on ${process.platform}`;
+  const sb = scratchSandbox(run, { guard });
+  const probe = `p=/tmp/.dry-run-probe-$$; if ( : > "$p" ) 2>/dev/null; then rm -f "$p"; exit 3; fi; : > "$TMPDIR/probe" || exit 4; rm -f "$TMPDIR/probe"`;
+  const r = spawnSync(sb.prefix[0], [...sb.prefix.slice(1), "/bin/sh", "-c", probe], { env: { ...process.env, ...sb.env }, encoding: "utf8" });
+  if (r.status === 0) return null;
+  if (r.status === 3) return "sandbox-exec ran but /tmp stayed writable";
+  if (r.status === 4) return "sandbox-exec refused the run's own scratch dir";
+  return `sandbox-exec would not apply: ${(r.stderr || r.error?.message || `exit ${r.status}`).trim()}`;
+}
+
+if (process.argv.includes("--isolation-check")) {
+  const probeRun = fs.mkdtempSync(path.join(fs.realpathSync(process.env.TMPDIR || "/tmp"), "dry-run-isolation-"));
+  const gap = scratchIsolationGap(probeRun, path.resolve(arg("guard") ?? path.join(import.meta.dir, "prompt-dry-run-bin")));
+  fs.rmSync(probeRun, { recursive: true, force: true });
+  console.log(gap ? `not isolated: ${gap}` : "isolated");
+  process.exit(gap ? 3 : 0);
 }
 
 const runDir = path.resolve(arg("run") ?? "");
@@ -123,13 +174,11 @@ function profileToken(name: string): string {
   if (!m) throw new Error(`no CLAUDE_CODE_OAUTH_TOKEN in ${file}`);
   return m[1];
 }
-/** The login every session on this machine runs on: the machine item (or the
- *  scoped one when this shell runs under a config dir), then the fleet store's
- *  item, which the daemon rewrites on every account switch. A signed-out
- *  machine login keeps its item with the token blanked, so the fleet store is
- *  what a run must fall back to, or it fails while every session works. */
+/** The login a run spends: the fleet store's item, which the daemon rewrites
+ *  on every account switch, then the machine item (or the scoped one when this
+ *  shell runs under a config dir) for a machine without a fleet store. */
 function loginToken(): string {
-  const items = [...ccKeychainReadItems(), ...(fleetStoreEnabled() ? ccKeychainReadItems(fleetStoreDir()) : [])];
+  const items = [...(fleetStoreEnabled() ? ccKeychainReadItems(fleetStoreDir()) : []), ...ccKeychainReadItems()];
   for (const item of items) {
     const r = spawnSync("security", ccKeychainReadArgs(item), { encoding: "utf8" });
     if (r.status !== 0 || !r.stdout.trim()) continue;
@@ -148,7 +197,13 @@ fs.rmSync(configDir, { recursive: true, force: true });
 fs.mkdirSync(configDir, { recursive: true });
 fs.mkdirSync(noCast, { recursive: true });
 
-fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir }, null, 1) + "\n");
+// A --call run has no tools, so nothing in it can write scratch.
+const isolationGap = call ? null : scratchIsolationGap(runDir, guardDir);
+const sandbox = call || isolationGap ? null : scratchSandbox(runDir, { guard: guardDir, serve: serveDir });
+if (isolationGap) console.error(`scratch not isolated (${isolationGap}): this run shares /tmp with every other run on the machine`);
+const isolation = call ? null : sandbox ? "sandbox-exec" : `none: ${isolationGap}`;
+
+fs.writeFileSync(path.join(runDir, "args.json"), JSON.stringify({ model, call, maxOutputTokens: maxOutputTokens ? Number(maxOutputTokens) : null, tools, maxTurns: Number(maxTurns), serve: serveDir ?? null, guard: guardDir, isolation }, null, 1) + "\n");
 
 // CLAUDE_CODE_MAX_OUTPUT_TOKENS reaches the child only from --max-output-tokens,
 // never inherited, so args.json says every cap the run had.
@@ -176,6 +231,7 @@ env.CLAUDE_ENV_FILE = envFile;
 env.DRY_RUN_GUARD = path.join(guardDir, "cast");
 env.DRY_RUN_EMPTY_CODECAST_DIR = noCast;
 if (maxOutputTokens) env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = maxOutputTokens;
+if (sandbox) Object.assign(env, sandbox.env);
 // A prod call has no thinking, no CLAUDE.md and no memory. What claude still
 // adds on a subscription login is fixed: an SDK identity line in the system
 // prompt and three short reminders (environment, model, date) before the
@@ -218,7 +274,9 @@ function runTurn(name: string, promptText?: string, resume?: string): Promise<{ 
     const turn = call
       ? ["-p", "--tools", "", ...(systemFile ? ["--system-prompt-file", systemFile] : ["--system-prompt", NEUTRAL_SYSTEM]), "--strict-mcp-config", "--disable-slash-commands"]
       : [...(resume ? ["--resume", resume] : []), "-p", ...(promptText === undefined ? [] : [promptText]), "--allowedTools", ...tools, "--dangerously-skip-permissions"];
-    const child = spawn("claude", [
+    const command = [...(sandbox?.prefix ?? []), "claude"];
+    const child = spawn(command[0], [
+      ...command.slice(1),
       "--setting-sources", "project",
       ...turn,
       "--max-turns", maxTurns,

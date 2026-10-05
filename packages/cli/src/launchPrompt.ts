@@ -1,9 +1,10 @@
 // A session's first message, carried as the client's launch prompt argument.
 //
-// The daemon's only way to put text in a running Claude composer is a
-// bracketed paste, and Claude Code wraps a paste in <pasted_content> and tells
-// the model to follow instructions inside it only when the user's own message
-// asks. A spawned worker's whole first turn is that paste, so it could read
+// The daemon types into an idle Claude composer and pastes everywhere else,
+// and Claude Code wraps a long paste in <pasted_content> and tells the model to
+// follow instructions inside it only when the user's own message asks. A
+// composer still booting is no idle composer, so a spawned worker's whole
+// first turn would be that paste, and it could read
 // its brief as third party text and wait to be told to start (ct-55890). The
 // launch argument (`claude [options] -- "<prompt>"`) is the user's own first
 // message with no paste involved, so a session that starts with a message

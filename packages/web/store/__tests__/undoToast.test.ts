@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, spyOn, test } from "
 import { toast } from "sonner";
 import { _resetUndoStacks, getUndoHistory, setUndoNotifier } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
-import { CODECAST_UNDO_NOTIFIER, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
+import { CODECAST_UNDO_NOTIFIER, gestureToast, UNDO_QUIET_ACTION_CLASS, performRedo, performUndo, pushUndo, showUndoToast, undoEntryToastId, undoStepMessage, undoTo, UNDO_STATUS_TOAST_ID } from "../undoStack";
 import * as undoTimeline from "../../lib/undoTimelineOpen";
 import { undoAsOne } from "../undoActions";
 
@@ -159,11 +159,39 @@ describe("undo announcements", () => {
     undoTimeline.close();
   });
 
+  test("a gesture made while the held peek shows keeps its own Undo toast", () => {
+    // The peek narrates the steps it takes, not a new gesture: that card is
+    // on its way out (the gesture's key or click ends the walk), so the
+    // entry's Undo toast is the only place the new change can be taken back.
+    useInboxStore.getState().stashSession(A);
+    undoTimeline.open("peek");
+    mark = toast.getHistory().length;
+    gestureToast("Stashed", () => useInboxStore.getState().stashSession(B));
+    const head = getUndoHistory().head!;
+    expect(latest(undoEntryToastId(head))?.action?.label).toBe("Undo");
+    undoTimeline.close();
+  });
+
+  test("a gesture made while the interactive card is open shows no toast over it", () => {
+    undoTimeline.open("interactive");
+    mark = toast.getHistory().length;
+    gestureToast("Stashed", () => useInboxStore.getState().stashSession(B));
+    expect(since()).toHaveLength(0);
+    undoTimeline.close();
+  });
+
   test("a ⌘Z that stops at a confirm entry toasts when the card is closed and marks the row when it is open", () => {
     let undone = 0;
-    const id = pushUndo({ label: "Made “First” private", confirm: true, undo: () => { undone += 1; }, redo: () => {} });
+    pushUndo({ label: "Made “First” private", confirm: true, undo: () => { undone += 1; }, redo: () => {} });
     performUndo();
     expect(status()?.title).toBe("Undo Made “First” private from its toast or the history");
+    // The stop is a doorway, not a dead end: the entry's own Undo rides on
+    // the toast that names it, so the change it points at is one click away
+    // long after the entry's own 5 s toast has gone.
+    expect(status()?.action?.label).toBe("Undo");
+    status()!.action!.onClick({} as any);
+    expect(undone).toBe(1);
+    const id = pushUndo({ label: "Made “First” private", confirm: true, undo: () => { undone += 1; }, redo: () => {} });
 
     undoTimeline.open("interactive");
     mark = toast.getHistory().length;
@@ -171,7 +199,7 @@ describe("undo announcements", () => {
     performUndo();
     expect(since()).toHaveLength(0);
     expect(undoTimeline.getFlash()).toEqual({ id, n: before + 1 });
-    expect(undone).toBe(0);
+    expect(undone).toBe(1);
     undoTimeline.close();
   });
 

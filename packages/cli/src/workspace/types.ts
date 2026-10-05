@@ -111,6 +111,8 @@ export interface HostSpec {
   services: string[];
   /** Shell commands run in order from the repo checkout; each must be safe to run again. */
   run: string[];
+  /** Simulator platforms a cloud Mac gets (Xcode, the runtime, axe), e.g. ["iOS"]. Ignored on Linux hosts. */
+  simulators?: string[];
 }
 
 /**

@@ -5,7 +5,8 @@
 // never disagree about what a proposal changes. Without a tree (the org
 // feeder has not answered, or the proposal belongs to another workspace) the
 // rows keep their lines and statuses and lose their faces.
-import { describeOrgChange, editedOrgChange, isOrgQuietChange, quietChangeSentence, type OrgChangeKind, type OrgChangeStatus } from "@codecast/shared/contracts/orgProposal";
+import { describeOrgChange, editedOrgChange, isOrgQuietChange, quietChangeSentence, type OrgChange, type OrgChangeKind, type OrgChangeStatus } from "@codecast/shared/contracts/orgProposal";
+import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { OrgParentRef, OrgTree } from "./orgTypes";
 import type { OrgProposalChange } from "./orgStaffingTypes";
 import { ghostsFor, roleNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
@@ -19,6 +20,8 @@ export type ProposalTreeFace =
   | { kind: "role"; id: string; name: string; handle: string; avatar?: string; stub?: OrgGhostStub }
   | { kind: "session"; id: string; name: string; short_id: string; stub?: OrgGhostStub }
   | { kind: "record"; id: string; name: string; record: "task" | "plan" | "project" }
+  /** A company goal: a live initiative, or one this proposal sets (`proposed`). */
+  | { kind: "goal"; id: string; name: string; short_id?: string; proposed?: boolean }
   | { kind: "unknown"; id: string; name: string };
 
 export type ProposalTreeRow = {
@@ -34,6 +37,8 @@ export type ProposalTreeRow = {
   node: ProposalTreeFace;
   /** After the change: who the node reports to (a role, a move, an adopt). */
   parent: ProposalTreeFace | null;
+  /** A goal's owner after the change: a person or a role. */
+  owner: ProposalTreeFace | null;
   /** A move: who the node reported to before, drawn faded. */
   from: ProposalTreeFace | null;
   /** A change that is neither a node nor an edge (scope, limit, routine, a
@@ -80,8 +85,41 @@ function roleDetail(tree: OrgTree | null, ch: { scope?: { projects?: string[]; p
 /** The rows of a proposal, in seq order. Removed changes are history and
  *  draw nothing; skipped ones keep a row so the card can say what happened;
  *  a quiet kind (a limit, S23.2) never draws a row (proposalQuietLines). */
-export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProposalChange[], opts: OrgGhostOptions = {}): ProposalTreeRow[] {
+export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProposalChange[], opts: OrgGhostOptions & { goals?: readonly InitiativeRow[] } = {}): ProposalTreeRow[] {
+  return nestGoalRows(proposalChangeRows(tree, changes, opts));
+}
+
+/** One row per change, before the card joins and nests them (the chart's goals lens places these). */
+export function proposalChangeRows(tree: OrgTree | null, changes: readonly OrgProposalChange[], opts: OrgGhostOptions & { goals?: readonly InitiativeRow[] } = {}): ProposalTreeRow[] {
   const ordered = [...changes].filter((c) => c.status !== "removed" && !isOrgQuietChange(c.change)).sort((a, b) => a.seq - b.seq);
+  return rowsOf(tree, changes, ordered, opts);
+}
+
+/** Goals draw as their tree: a goal that lands under another goal of the same
+ *  card follows it, so the card reads purpose first, then what feeds it. */
+function nestGoalRows(all: ProposalTreeRow[]): ProposalTreeRow[] {
+  // Several changes to one existing goal read as one line: its tags and details joined.
+  const rows: ProposalTreeRow[] = [];
+  for (const r of all) {
+    const same = r.node.kind === "goal" && r.tag !== "new" ? rows.find((x) => x.node.kind === "goal" && x.tag !== "new" && x.node.id === r.node.id) : undefined;
+    if (!same) { rows.push(r); continue; }
+    rows[rows.indexOf(same)] = { ...same, tag: `${same.tag}, ${r.tag}`, detail: [same.detail, r.detail].filter(Boolean).join(" · ") || null, owner: same.owner ?? r.owner, from: same.from ?? r.from, status: same.status === r.status ? same.status : "proposed", unresolved: same.unresolved || r.unresolved, line: `${same.line}; ${r.line}` };
+  }
+  const isChild = (r: ProposalTreeRow) => r.parent?.kind === "goal" && rows.some((p) => p !== r && p.node.kind === "goal" && p.node.id === r.parent!.id);
+  const out: ProposalTreeRow[] = [];
+  const emit = (r: ProposalTreeRow) => {
+    if (out.includes(r)) return;
+    out.push(r);
+    if (r.node.kind === "goal") for (const k of rows) if (isChild(k) && k.parent!.id === r.node.id) emit(k);
+  };
+  for (const r of rows) if (!isChild(r)) emit(r);
+  for (const r of rows) emit(r);
+  return out;
+}
+
+const GOAL_KINDS = new Set<string>(["initiative", "initiative_projects", "initiative_owner", "initiative_shape"]);
+
+function rowsOf(tree: OrgTree | null, changes: readonly OrgProposalChange[], ordered: OrgProposalChange[], opts: OrgGhostOptions & { goals?: readonly InitiativeRow[] }): ProposalTreeRow[] {
   const plan = tree ? ghostsFor(tree, changes, opts) : null;
   const liveRole = (handle: string) => plan?.merged.roles.find((r) => r.status !== "retired" && strip(r.handle) === strip(handle));
   const me = plan?.merged.people.find((p) => p.is_me) ?? plan?.merged.people[0];
@@ -91,6 +129,71 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
     if (r && plan) return { face: { kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar, stub: plan.stubs[roleNodeId(r._id)] }, unresolved: false };
     return { face: { kind: "unknown", id: strip(handle), name: name ?? `@${strip(handle)}` }, unresolved: !!plan };
   };
+  // An owner the way the server resolves one (orgInit resolveReportsTo):
+  // "me", "@handle" or a role's short id, else a member by name.
+  const ownerFace = (ref: string | undefined): { face: ProposalTreeFace; unresolved: boolean } | null => {
+    const t = ref?.trim();
+    if (!t) return null;
+    if (t.toLowerCase() === "me") return { face: meFace(), unresolved: false };
+    const r = liveRole(t) ?? plan?.merged.roles.find((x) => x.short_id === t);
+    if (r) return roleFace(r.handle);
+    const lc = t.replace(/^@/, "").toLowerCase();
+    const p = plan?.merged.people.find((x) => x.name.toLowerCase() === lc || x.user_id === t);
+    if (p) return { face: { kind: "person", id: p.user_id, name: p.name, image: p.image, me: p.is_me }, unresolved: false };
+    return { face: { kind: "unknown", id: lc, name: t.replace(/^@/, "") }, unresolved: !!plan };
+  };
+  // A goal by whatever names it: one this proposal sets (by title), else a
+  // live initiative by in-N, id or title, else the ref as written.
+  const goals = opts.goals ?? [];
+  const setHere = ordered.filter((c) => editedOrgChange(c.change, c.edits).kind === "initiative");
+  const goalFace = (ref: string, title?: string): ProposalTreeFace => {
+    const lc = ref.trim().toLowerCase();
+    const here = setHere.find((c) => (editedOrgChange(c.change, c.edits) as { title: string }).title.trim().toLowerCase() === lc);
+    if (here) return { kind: "goal", id: here._id, name: (editedOrgChange(here.change, here.edits) as { title: string }).title, proposed: true };
+    const live = goals.find((g) => g._id === ref || g.short_id === lc || g.title.trim().toLowerCase() === lc);
+    if (live) return { kind: "goal", id: live._id, name: live.title, short_id: live.short_id };
+    return { kind: "goal", id: lc, name: title?.trim() || ref };
+  };
+  const liveGoal = (face: ProposalTreeFace) => goals.find((g) => g._id === face.id);
+  // Where a goal sits after this proposal: a shape here that places it, else where it sits now.
+  const goalParent = (face: ProposalTreeFace): ProposalTreeFace | null => {
+    for (const c of ordered) {
+      const ch = editedOrgChange(c.change, c.edits);
+      if (ch.kind === "initiative_shape" && ch.parent !== undefined && goalFace(ch.initiative, ch.title).id === face.id) return ch.parent ? goalFace(ch.parent) : null;
+    }
+    const pid = liveGoal(face)?.parent_initiative_id;
+    const p = pid ? goals.find((g) => g._id === pid) : undefined;
+    return p ? { kind: "goal", id: p._id, name: p.title, short_id: p.short_id } : null;
+  };
+  const projectsWords = (refs: string[]) => (refs.length <= 3 ? refs.join(", ") : `${refs.length} projects`);
+  const measures = (ms: { name: string; target: string }[]) => ms.map((m) => `${m.name.trim()} → ${m.target.trim()}`).join(", ");
+  const goalRow = (ch: OrgChange): Pick<ProposalTreeRow, "tag" | "node" | "parent" | "owner" | "from" | "detail" | "unresolved"> | null => {
+    switch (ch.kind) {
+      case "initiative": {
+        const node = goalFace(ch.title);
+        const owner = ownerFace(ch.owner);
+        return { tag: "new", node, parent: ch.parent ? goalFace(ch.parent) : null, owner: owner?.face ?? null, from: null, unresolved: !!owner?.unresolved, detail: [ch.metrics?.length ? measures(ch.metrics) : "", projectsWords(ch.projects)].filter(Boolean).join(" · ") || null };
+      }
+      case "initiative_shape": {
+        const node = goalFace(ch.initiative, ch.title);
+        const now = liveGoal(node)?.parent_initiative_id;
+        const before = now ? goals.find((g) => g._id === now) : undefined;
+        const parent = goalParent(node);
+        const moved = ch.parent !== undefined && (before?._id ?? null) !== (parent?.id ?? null);
+        return { tag: [ch.parent === undefined ? "" : ch.parent ? "moves here" : "to the top", ch.metrics === undefined ? "" : "measured"].filter(Boolean).join(", "), node, parent, owner: null, from: moved && before ? { kind: "goal", id: before._id, name: before.title, short_id: before.short_id } : null, unresolved: false, detail: ch.metrics === undefined ? null : ch.metrics.length ? measures(ch.metrics) : "no number" };
+      }
+      case "initiative_projects": {
+        const node = goalFace(ch.initiative, ch.title);
+        return { tag: "projects added", node, parent: goalParent(node), owner: null, from: null, unresolved: false, detail: projectsWords(ch.projects) };
+      }
+      case "initiative_owner": {
+        const node = goalFace(ch.initiative, ch.title);
+        const owner = ownerFace(ch.owner);
+        return { tag: "owner", node, parent: goalParent(node), owner: owner?.face ?? null, from: null, unresolved: !!owner?.unresolved, detail: null };
+      }
+      default: return null;
+    }
+  };
   const chipOf = (changeId: string): string | null => {
     if (!plan) return null;
     for (const chips of Object.values(plan.chips)) for (const c of chips) if (c.change_id === changeId) return c.chip;
@@ -99,7 +202,8 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
 
   return ordered.map((c): ProposalTreeRow => {
     const ch = editedOrgChange(c.change, c.edits);
-    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null, closes: null } as const;
+    const base = { change_id: c._id, seq: c.seq, kind: ch.kind, status: c.status, line: describeOrgChange(ch), from: null, chip: null, unresolved: false, detail: null, closes: null, owner: null } as const;
+    if (GOAL_KINDS.has(ch.kind)) return { ...base, ...goalRow(ch)! };
     switch (ch.kind) {
       case "role": {
         // The stub ghostsFor pushed (keyed by the change id), else the live
@@ -143,8 +247,9 @@ export function proposalTreeRows(tree: OrgTree | null, changes: readonly OrgProp
       default: {
         // A chip kind: on the handle's role when it names one, else on the
         // viewer's own card, the way the chart places it.
-        const handle = "handle" in ch && typeof (ch as any).handle === "string" ? (ch as any).handle as string : "owner" in ch && typeof (ch as any).owner === "string" ? (ch as any).owner as string : null;
-        const subject = handle ? roleFace(handle) : { face: meFace(), unresolved: false };
+        const handle = "handle" in ch && typeof (ch as any).handle === "string" ? (ch as any).handle as string : null;
+        const owner = !handle && "owner" in ch && typeof (ch as any).owner === "string" ? ownerFace((ch as any).owner) : null;
+        const subject = handle ? roleFace(handle) : owner ?? { face: meFace(), unresolved: false };
         const node = subject.face.kind === "unknown" && !subject.unresolved ? meFace() : subject.face;
         return { ...base, tag: CHANGE_KIND_WORD[ch.kind] ?? String(ch.kind), node, parent: null, chip: chipOf(c._id), unresolved: subject.unresolved };
       }

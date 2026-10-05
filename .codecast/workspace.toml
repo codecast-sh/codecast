@@ -23,7 +23,14 @@ install = ["bun install"]
 
 # Per-worktree web dev server port. `acquire` picks the first free port at/after
 # `base` and exposes it as PORT_WEB, so parallel worktrees never collide.
-# Run the dev server with it, e.g.  vite --port "$PORT_WEB"
+# `cast dev` starts the web dev server on it (detected from packages/web's
+# `dev` script); `cast dev logs` / `cast dev stop` manage it.
 [ports.web]
 base = 3201
 range = 20
+
+# What a cloud host needs beyond the base provisioning (`cast hosts setup`).
+# A Mac host gets Xcode (copied from the laptop), the iOS simulator runtime and
+# axe, so sessions that drive the mobile app in a simulator can move there.
+[host]
+simulators = ["iOS"]

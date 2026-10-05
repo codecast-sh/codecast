@@ -5,7 +5,7 @@ import { FIXTURE_INITIATIVES as ROWS, FIXTURE_NOW, FIXTURE_PROJECTS, FIXTURE_TAS
 import { projectTaskCounts } from "@codecast/shared/tasks";
 import { ORG_FIXTURE } from "../../components/org/orgFixture";
 import type { OrgTree } from "../../components/org/orgTypes";
-import { groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, ownerSeat, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, topLevelInitiatives } from "../initiatives";
+import { goalScopeInitiativeIds, goalScopeProjectIds, groupInitiativesByStatus, initiativeProgress, initiativeSig, initiativesOfProject, ownerId, ownerSeat, progressPercent, projectInitiativeIndex, projectTrouble, subInitiatives, topLevelInitiatives } from "../initiatives";
 
 
 const row = (short: string) => ROWS.find((r) => r.short_id === short)!;
@@ -66,6 +66,21 @@ test("the wake signature ignores a bare updated_at and sees a health change", ()
   const r = row("in-1");
   expect(initiativeSig({ ...r, updated_at: r.updated_at + 1 })).toBe(initiativeSig(r));
   expect(initiativeSig({ ...r, health: "off_track" })).not.toBe(initiativeSig(r));
+  // The number, its history and the record are painted by the list and the page (I4, I5).
+  expect(initiativeSig({ ...r, metrics: [{ key: "k", name: "K", target: "10" }] })).not.toBe(initiativeSig(r));
+  expect(initiativeSig({ ...r, scoreboard: { k: { value: "4", observed_at: 1, source: "s" } } })).not.toBe(initiativeSig(r));
+  expect(initiativeSig({ ...r, milestones: [{ key: "m", title: "M", done_at: 1 }] })).not.toBe(initiativeSig(r));
+  expect(initiativeSig({ ...r, why: "because" })).not.toBe(initiativeSig(r));
+});
+
+test("a goal's activity covers its own projects and its sub goals', each once, and names the numbered goals", () => {
+  const top = row("in-1");
+  const withSub = [...ROWS, { ...row("in-2"), _id: "extra-sub", short_id: "in-9", project_ids: ["proj-billing", "proj-org"] }];
+  expect(goalScopeProjectIds(top, withSub)).toEqual(["proj-org", "proj-inbox", "proj-billing"]);
+  expect(goalScopeProjectIds(row("in-4"), ROWS)).toEqual([]);
+  expect(goalScopeInitiativeIds(top, ROWS)).toEqual(["init-org", "init-org-sub"]);
+  // A stub the server has not numbered has no row to ask about.
+  expect(goalScopeInitiativeIds({ _id: "in_stub", short_id: "" }, ROWS)).toEqual([]);
 });
 
 test("the conversation an initiative opens beside: a role's seat, a person's own anchor, the root seat they host", () => {

@@ -35,8 +35,10 @@ import {
   browserRoutePath,
   browserPathLabel,
   displayHost,
+  forwardedLoopbackUrl,
   isLoopbackUrl,
   normalizeUrl,
+  unforwardedUrl,
   pageAddress,
   parseBrowserRoute,
   prefersNativeRoute,
@@ -51,7 +53,9 @@ import { isDesktop } from "../../lib/desktop";
 import { copyText } from "../../lib/copyText";
 import { explainOpenInBrowser, openInBrowser } from "../../lib/popOut";
 import { stageClose, stageExpand } from "../../lib/stage";
-import { getTerminalEndpoint } from "../../lib/terminal/endpoint";
+import { forwardHostPort, getTerminalEndpoint } from "../../lib/terminal/endpoint";
+import { api } from "@codecast/convex/convex/_generated/api";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useSqueezeToFit } from "../../hooks/useSqueezeToFit";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { useInboxStore } from "../../store/inboxStore";
@@ -108,6 +112,15 @@ export function BrowserPane() {
   }, [parsed, owner]);
   const wantsNative = prefersNativeRoute(path);
   const url = source?.kind === "url" ? source.url : null;
+  // A loopback address belongs to the machine that served it, and the route's
+  // `s=` says which session that was. Routing is not driving: the hint picks
+  // the machine even after the offer's grace has passed (a reload, a restored
+  // tab), and the forward only exists for a host this laptop manages.
+  const servedBy = useServedLoopback(parsed?.kind === "url" ? parsed : null);
+  const loadSource = useMemo(
+    () => (servedBy?.loadUrl && source?.kind === "url" ? { ...source, url: servedBy.loadUrl } : source),
+    [source, servedBy?.loadUrl],
+  );
   const focused = ctx?.isActive ?? true;
   const leafId = ctx?.leafId;
 
@@ -153,7 +166,10 @@ export function BrowserPane() {
     },
     [url],
   );
-  const handleUrl = useCallback((next: string) => setLiveUrl(next), []);
+  const handleUrl = useCallback(
+    (next: string) => setLiveUrl(servedBy?.loadUrl && url ? unforwardedUrl(next, servedBy.loadUrl, url) : next),
+    [servedBy?.loadUrl, url],
+  );
   const handleState = useCallback((next: BrowserPaneState) => setState(next), []);
   const handleActions = useCallback((next: PaneStripAction[]) => setActions(next), []);
 
@@ -254,13 +270,15 @@ export function BrowserPane() {
   const loopback = !!url && isLoopbackUrl(url);
   // One lookup for the badge and the "nothing is listening" card, and only for
   // an address this machine serves: a github.com pane has no machine to name.
-  const machine = useThisMachine(loopback);
+  const thisMachine = useThisMachine(loopback && !servedBy);
+  const machine = servedBy?.device ?? thisMachine;
   const secure = shownUrl.startsWith("https://");
   const overlay = paneOverlay({
     state,
     host: url ? displayHost(url) : "",
     loopback,
     machineName: machine ? deviceDisplayName(machine) : null,
+    elsewhere: !!servedBy,
     askedWhy,
     desktop: isDesktop(),
     onReload: () => setReloadToken((n) => n + 1),
@@ -327,7 +345,7 @@ export function BrowserPane() {
             }`}
           />
         )}
-        {loopback && <LoopbackBadge device={machine} />}
+        {loopback && <LoopbackBadge device={machine} elsewhere={!!servedBy} />}
         {source?.kind === "url" && (
           <ShortcutTooltip label="Reload this page">
             <button
@@ -412,7 +430,7 @@ export function BrowserPane() {
         {source ? (
           <div className="absolute inset-0">
             <Backend
-              source={source as BrowserSource}
+              source={loadSource as BrowserSource}
               focused={focused}
               reloadToken={reloadToken}
               onTitle={handleTitle}
@@ -485,6 +503,8 @@ function paneOverlay(a: {
   host: string;
   loopback: boolean;
   machineName: string | null;
+  /** The address is served by another machine (a cloud host), not this one. */
+  elsewhere: boolean;
   askedWhy: boolean;
   desktop: boolean;
   onReload: () => void;
@@ -515,10 +535,14 @@ function paneOverlay(a: {
         icon={<Unplug className={glyph} />}
         host={a.host}
         headline={
-          a.state.loopback ? "Nothing is listening on this machine" : "Nothing answered at this address"
+          a.elsewhere
+            ? `Nothing answered from ${a.machineName ?? "the session's machine"}`
+            : a.state.loopback ? "Nothing is listening on this machine" : "Nothing answered at this address"
         }
         detail={
-          a.state.loopback
+          a.elsewhere
+            ? `The server may have stopped (cast dev there starts it again), or this window has no daemon that can reach ${a.machineName ?? "that machine"}: open the pane on the laptop that manages it.`
+            : a.state.loopback
             ? `Start the server on ${a.machineName ?? "this machine"}, or open this pane on the machine that runs it.`
             : "The host may be down, or its name may not resolve from here."
         }
@@ -624,9 +648,11 @@ function paneOverlay(a: {
 
 /** Which machine a loopback pane points at. The path persists across machines
  *  and tabs, so "localhost:3000" has to say WHOSE localhost. */
-function LoopbackBadge({ device }: { device: ReturnType<typeof useThisMachine> }) {
+function LoopbackBadge({ device, elsewhere }: { device: Device | undefined; elsewhere: boolean }) {
   const name = device ? deviceDisplayName(device) : null;
-  const tip = name
+  const tip = elsewhere
+    ? `This address is served by ${name ?? "the session's machine"}, reached through this laptop`
+    : name
     ? `This address is served by ${name}, the machine this window runs on`
     : "This address is served by the machine this window runs on";
   // The label folds away first when the strip runs out of room (`cq-sq1`),
@@ -635,10 +661,59 @@ function LoopbackBadge({ device }: { device: ReturnType<typeof useThisMachine> }
     <ShortcutTooltip label={tip}>
       <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-sol-text-dim/80" aria-label={tip}>
         {device ? <DeviceIcon d={device} className="w-3 h-3" /> : <Laptop className="w-3 h-3" />}
-        <span className="cq-sq1 max-w-[140px] truncate">this machine{name ? ` · ${name}` : ""}</span>
+        <span className="cq-sq1 max-w-[140px] truncate">{elsewhere ? (name ?? "remote") : `this machine${name ? ` · ${name}` : ""}`}</span>
       </span>
     </ShortcutTooltip>
   );
+}
+
+/**
+ * Where an offered loopback address is served, when that is not this window's
+ * machine: the offering session's runner device, and the address that reaches
+ * it from here (this laptop's daemon forwards a port to a cloud host it
+ * manages; lib/terminal/endpoint forwardHostPort). `loadUrl` is null while the
+ * forward is pending or impossible. Null when the page is served right here,
+ * or the pane names no session.
+ */
+function useServedLoopback(route: { url: string; session?: string } | null): { device: Device | undefined; loadUrl: string | null } | null {
+  const convex = useConvex();
+  const loopback = !!route?.session && isLoopbackUrl(route.url);
+  const conversationId = useInboxStore((s) => {
+    if (!loopback) return undefined;
+    for (const r of Object.values(s.conversations)) if ((r as any)?.session_id === route!.session) return (r as any)._id as string;
+    for (const r of Object.values(s.sessions)) if ((r as any)?.session_id === route!.session) return (r as any)._id as string;
+    return undefined;
+  });
+  const runner = useQueryNoThrow(
+    api.devices.getConversationMachine,
+    conversationId ? ({ conversation_id: conversationId as any } as any) : "skip",
+  ).data as { device_id: string; is_remote?: boolean } | null | undefined;
+  const [here, setHere] = useState<string | null | undefined>(undefined);
+  const [loadUrl, setLoadUrl] = useState<string | null>(null);
+  useWatchEffect(() => {
+    if (!runner) return;
+    let live = true;
+    void getTerminalEndpoint(convex)
+      .then((ep) => { if (live) setHere(ep?.deviceId ?? null); })
+      .catch(() => { if (live) setHere(null); });
+    return () => { live = false; };
+  }, [convex, runner?.device_id]);
+  const elsewhere = !!runner && here !== undefined && here !== runner.device_id;
+  useWatchEffect(() => {
+    setLoadUrl(null);
+    if (!elsewhere || !route) return;
+    const port = Number(new URL(route.url).port);
+    if (!port) return;
+    let live = true;
+    void forwardHostPort(convex, runner!.device_id, port).then((local) => {
+      if (live && local) setLoadUrl(forwardedLoopbackUrl(route.url, local));
+    });
+    return () => { live = false; };
+  }, [convex, elsewhere, runner?.device_id, route?.url]);
+  const device = useInboxStore((s) =>
+    elsewhere ? (s.machineRoster as Device[]).find((d) => d.device_id === runner!.device_id) : undefined,
+  );
+  return elsewhere ? { device, loadUrl } : null;
 }
 
 /** The machine this window runs on, when we can prove it: the daemon that

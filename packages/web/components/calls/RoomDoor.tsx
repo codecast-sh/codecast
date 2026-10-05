@@ -1,5 +1,6 @@
 "use client";
 
+import { toast } from "sonner";
 import { useState } from "react";
 import { Lock, Unlock } from "lucide-react";
 import { AvatarImg } from "../../lib/avatarCache";
@@ -132,7 +133,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
               </span>
               {canAnswer && guest && (
                 <button
-                  onClick={() => denyGuest(k.guest_id!)}
+                  onClick={() => void denyGuest(k.guest_id!, false, toast.error)}
                   className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
                   aria-label={`Turn ${name} away`}
                   title="Not now. They can ask again in a minute"
@@ -143,7 +144,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
               {canAnswer && (
                 <button
                   onClick={() => {
-                    if (guest) return admitGuest(k.guest_id!, k.from_name);
+                    if (guest) return void admitGuest(k.guest_id!, k.from_name, toast.error);
                     setRang((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
                     void admitKnock(roomKey, String(k.from_user));
                   }}
@@ -166,7 +167,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                   {k.link_turned_away} turned away from this link already
                 </span>
                 <button
-                  onClick={() => denyGuest(k.guest_id!, { revokeLink: true })}
+                  onClick={() => void denyGuest(k.guest_id!, true, toast.error)}
                   className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                   title="Turn them away and turn the link off, so nobody new can use it"
                 >

@@ -15,6 +15,7 @@ export const HELP_SECTIONS: { when: string | undefined; label: string; accent: s
   { when: "docs", label: "Documents", accent: "bg-sol-yellow" },
   { when: "evalsRun", label: "Eval run", accent: "bg-sol-violet" },
   { when: "evalsSim", label: "Multiplayer sim run", accent: "bg-sol-magenta" },
+  { when: "line", label: "Line", accent: "bg-sol-blue" },
   { when: "review", label: "Review", accent: "bg-sol-violet" },
   { when: "desktop", label: "Desktop", accent: "bg-sol-cyan" },
   { when: "undoWalk", label: "Undo history peek", accent: "bg-sol-orange" },

@@ -1,6 +1,4 @@
 import { useState } from "react";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { CheckCircle2, ExternalLink, Link2, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { CommentComposer } from "../comments/CommentComposer";
@@ -9,11 +7,9 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useRepositoryTeamId } from "../../hooks/useRepoBrowse";
 import { relTimeShort } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { isOptimisticComment, threadResolved, type CodeCommentRow } from "../../lib/prView";
 import "../chat/chat.css";
-
-const api = _api as any;
 
 /** Where a new line note goes: into the reader's review, or straight out. */
 export type NoteMode = "review" | "now";
@@ -87,8 +83,6 @@ export function PRCommentCard({ comment, linkUrl }: {
 }) {
   const author = useAuthor(comment);
   const { user } = useCurrentUser();
-  const update = useMutation(api.codeComments.update);
-  const remove = useMutation(api.codeComments.remove);
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(comment.content);
   const mine = !!user && comment.author_user_id === user._id && !isOptimisticComment(comment._id);
@@ -134,7 +128,7 @@ export function PRCommentCard({ comment, linkUrl }: {
               <button type="button" className="text-sol-text-dim hover:text-sol-text" title="Edit" onClick={() => { setText(comment.content); setEditing(true); }}>
                 <Pencil className="w-3 h-3" />
               </button>
-              <button type="button" className="text-sol-text-dim hover:text-sol-red" title="Delete" onClick={() => void remove({ comment_id: comment._id })}>
+              <button type="button" className="text-sol-text-dim hover:text-sol-red" title="Delete" onClick={() => useInboxStore.getState().deleteCodeComment(comment._id)}>
                 <Trash2 className="w-3 h-3" />
               </button>
             </span>
@@ -146,7 +140,7 @@ export function PRCommentCard({ comment, linkUrl }: {
             onSubmit={async (e) => {
               e.preventDefault();
               const content = text.trim();
-              if (content && content !== comment.content) await update({ comment_id: comment._id, content });
+              if (content && content !== comment.content) useInboxStore.getState().editCodeComment(comment._id, content);
               setEditing(false);
             }}
           >

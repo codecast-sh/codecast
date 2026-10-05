@@ -90,6 +90,36 @@ describe("what counts as an overlay", () => {
     expect(overlayHidesPane(PANE, collectOverlays(body, rectOf))).toBe(true);
   });
 
+  test("a dialog that says it is not modal hides a pane only where it lands", () => {
+    // The undo card, a drill-in over one board, an anchored confirm: dialogs
+    // in role, but they leave the rest of the app usable, so a browser pane on
+    // the other half of the window must not blink off and on with them.
+    const beside = dom(`<div role="dialog" aria-modal="false" data-rect="${Object.values(BESIDE_PANE).join(",")}"></div>`);
+    const over = dom(`<div role="dialog" aria-modal="false" data-rect="${Object.values(OVER_PANE).join(",")}"></div>`);
+    expect(collectOverlays(beside, rectOf).map((h) => h.kind)).toEqual(["floating"]);
+    expect(overlayHidesPane(PANE, collectOverlays(beside, rectOf))).toBe(false);
+    expect(overlayHidesPane(PANE, collectOverlays(over, rectOf))).toBe(true);
+  });
+
+  test("every non-modal dialog in the app declares itself so", () => {
+    // The class guard: a role=dialog surface that leaves the app usable must
+    // carry aria-modal="false", or the guard treats it as a modal and hides
+    // every native pane while it is up.
+    const { readFileSync } = require("node:fs") as typeof import("node:fs");
+    const { join } = require("node:path") as typeof import("node:path");
+    const NON_MODAL = [
+      "components/undo/UndoTimelineView.tsx",
+      "components/FleetBoard.tsx",
+      "components/org/OrgPage.tsx",
+    ];
+    for (const rel of NON_MODAL) {
+      const src = readFileSync(join(import.meta.dir, "..", "..", rel), "utf8");
+      const tags = src.match(/<div[^>]*?role="dialog"[^>]*>/gs) ?? [];
+      const bare = tags.filter((t) => !t.includes("aria-modal"));
+      expect({ rel, bare }).toEqual({ rel, bare: [] });
+    }
+  });
+
   test("the two lists stay disjoint", () => {
     // A selector in both would make a floating thing black out every pane —
     // the exact over-hiding this split exists to avoid.

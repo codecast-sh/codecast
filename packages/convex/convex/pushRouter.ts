@@ -125,6 +125,9 @@ const TYPE_LABELS: Record<string, [string, string]> = {
   daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
   goal_stall: ["stalled goal", "stalled goals"],
   device_shared: ["shared machine", "shared machines"],
+  card_waiting: ["change card waiting", "change cards waiting"],
+  change_shipped: ["change shipped", "changes shipped"],
+  cause_reopened: ["cause reopened", "causes reopened"],
 };
 
 export function summarizePushBatch(

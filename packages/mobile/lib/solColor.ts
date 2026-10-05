@@ -35,3 +35,22 @@ export function solColor(value: string | undefined | null, t: Palette, fallback:
   if (token) return solTokens(t)[token[1]] ?? fallback;
   return /^(#|rgb)/.test(value) ? value : fallback;
 }
+
+function rgbOf(hex: string): [number, number, number] | null {
+  const m = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(hex.trim()) ?? /^#([\da-f])([\da-f])([\da-f])$/i.exec(hex.trim());
+  if (!m) return null;
+  return [m[1], m[2], m[3]].map((c) => parseInt(c.length === 1 ? c + c : c, 16)) as [number, number, number];
+}
+
+/** CSS `color-mix(in srgb, a pct%, b)` for two hex colours, as a hex native
+ *  views can paint. `b` may be 'transparent', which gives `a` at that alpha. */
+export function mixColor(a: string, pct: number, b: string): string {
+  const p = Math.min(100, Math.max(0, pct)) / 100;
+  const x = rgbOf(a);
+  if (!x) return a;
+  if (b === 'transparent') return `rgba(${x[0]}, ${x[1]}, ${x[2]}, ${p})`;
+  const y = rgbOf(b);
+  if (!y) return a;
+  const hex = (i: number) => Math.round(x[i] * p + y[i] * (1 - p)).toString(16).padStart(2, '0');
+  return `#${hex(0)}${hex(1)}${hex(2)}`;
+}

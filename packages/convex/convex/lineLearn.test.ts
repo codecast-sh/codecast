@@ -20,6 +20,7 @@ const modules = {
   "./_generated/server.ts": () => import("./_generated/server"),
   "./signals.ts": () => import("./signals"),
   "./tasks.ts": () => import("./tasks"),
+  "./notificationRouter.ts": () => import("./notificationRouter"),
 };
 
 async function setup() {
@@ -72,7 +73,7 @@ describe("watch (LE12)", () => {
     }));
     expect(history.some((h: any) => h.field === "status" && h.old_value === "in_review" && h.new_value === "done")).toBe(true);
     const iso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
-    expect(comments.map((c: any) => c.text)).toEqual([`Resolved: no new signal from ${iso(now - 2 * DAY)} to ${iso(now - 1000)}.`]);
+    expect(comments.map((c: any) => c.text)).toEqual([`Watch ended quiet: no new signal from ${iso(now - 2 * DAY)} to ${iso(now - 1000)}.`]);
   });
 
   test("a cause already done keeps its close; a watch still running is left alone", async () => {

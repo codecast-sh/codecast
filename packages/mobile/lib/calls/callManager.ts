@@ -155,7 +155,7 @@ function startHeartbeat(roomKey: string) {
               muted: snap.muted,
               languages: localTranscribeLanguages(),
             })
-            .catch(() => void leaveCall());
+            .catch(() => void leaveCall({ hangup: false }));
         }
       })
       .catch(() => {});
@@ -267,7 +267,7 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     r.on(RoomEvent.LocalTrackPublished, rebuildParticipants);
     r.on(RoomEvent.LocalTrackUnpublished, rebuildParticipants);
     r.on(RoomEvent.Disconnected, () => {
-      if (snap.roomKey === roomKey) void leaveCall();
+      if (snap.roomKey === roomKey) void leaveCall({ hangup: false });
     });
     r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       if (snap.roomKey !== roomKey) return;
@@ -307,7 +307,12 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
   }
 }
 
-export async function leaveCall(): Promise<void> {
+/** A leave is a hang-up (the person pressed End) unless `hangup: false`
+ *  says the call fell away under them: the server stops a recording the
+ *  moment the last teammate hangs up, and gives a fall-away the time to come
+ *  back (calls.leaveRoom). */
+export async function leaveCall(opts?: { hangup?: boolean }): Promise<void> {
+  const hangup = opts?.hangup !== false;
   const roomKey = currentRoomKey ?? snap.roomKey;
   // Local-first: the UI shows "left" NOW. Emitting after the awaited teardown
   // stomped a join that started during the ~1s disconnect window (idle over
@@ -316,7 +321,7 @@ export async function leaveCall(): Promise<void> {
   emit({ ...IDLE });
   await teardownMedia();
   if (roomKey) {
-    await convex.mutation(api.calls.leaveRoom, { room_key: roomKey }).catch(() => {});
+    await convex.mutation(api.calls.leaveRoom, { room_key: roomKey, ...(hangup ? { hangup: true } : {}) }).catch(() => {});
   }
 }
 

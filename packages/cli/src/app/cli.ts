@@ -92,6 +92,11 @@ function portListening(port: number, timeoutMs = 1000): Promise<boolean> {
 async function originFor(o: TargetOpts): Promise<string> {
   if (o.origin) return o.origin.replace(/\/+$/, "");
   if (process.env.CAST_APP_ORIGIN) return process.env.CAST_APP_ORIGIN.replace(/\/+$/, "");
+  // The dev server `cast dev` runs for this checkout (a worktree, a cloud
+  // host): the tree being edited, on whatever port it was given.
+  const { checkoutRoot, runningDevServer } = await import("../workspace/dev.js");
+  const dev = runningDevServer(checkoutRoot());
+  if (dev) return dev.url;
   // Local dev when it answers; the tree an agent is editing is what it
   // should be driving. A TCP connect, not an HTTP GET: vite serves `/` only
   // after a transform pass, which under load takes longer than any sane

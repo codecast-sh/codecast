@@ -184,10 +184,12 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
       console.log(`[xuser-paste] mode=${mode} renderer=${renderer} attempts=${errors.length + 1} errors=${JSON.stringify(errors)} chips=${JSON.stringify([...chips])} turns=${turns.length} withMarker=${withMarker().length} wrappers=${wrappers} acks=${acks} receipt=${receipt?.phase}`);
 
       expect(withMarker()).toHaveLength(1);
-      // One wrapper when this machine's flags turn it on (a split paste shows
-      // as more than one in the turn, a lost wrapper as none), none otherwise.
+      // An idle composer is typed into, so its turn carries no wrapper. Mid-turn
+      // the message is pasted: one wrapper when this machine's flags turn it on
+      // (a split paste shows as more than one in the turn, a lost wrapper as
+      // none), none otherwise.
       if (!WRAPPED) console.log("[xuser-paste] this machine's cached flags leave the paste wrapper off; expecting no <pasted_content>");
-      expect(wrappers).toBe(WRAPPED ? 1 : 0);
+      expect(wrappers).toBe(WRAPPED && mode === "busy" ? 1 : 0);
       expect(acks).toBe(1);
       expect((await db.get(row._id)).status).toBe("delivered");
       expect(receipt?.phase).toBe("verified");
@@ -203,8 +205,8 @@ describe.skipIf(!CAN_RUN)("a teammate's long paste into a live claude pane under
       await watcher;
       expect(withMarker()).toHaveLength(1);
       // A paste over 2KB always shows a chip; exactly one means it neither
-      // split nor went unseen.
-      expect(chips.size).toBe(1);
+      // split nor went unseen. Typed text never collapses into one.
+      expect(chips.size).toBe(mode === "busy" ? 1 : 0);
     } finally {
       watching = false;
       load.off();

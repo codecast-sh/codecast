@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import {
+  forwardedLoopbackUrl,
+  unforwardedUrl,
   appDocumentTitle,
   appPathOf,
   browserPathLabel,
@@ -490,5 +492,20 @@ describe("the host screen pane", () => {
   });
   it("refuses a device id that is not one", () => {
     expect(parseBrowserRoute("/browser?screen=../../etc")).toBeNull();
+  });
+});
+
+describe("a loopback page another machine serves", () => {
+  it("loads through the forwarded port with the same path", () => {
+    expect(forwardedLoopbackUrl("http://localhost:3207/inbox?x=1#h", 51234)).toBe("http://localhost:51234/inbox?x=1#h");
+    expect(forwardedLoopbackUrl("http://127.0.0.1:3207/", 51234)).toBe("http://localhost:51234/");
+  });
+  it("forwards nothing without a port or off loopback", () => {
+    expect(forwardedLoopbackUrl("http://localhost/", 51234)).toBeNull();
+    expect(forwardedLoopbackUrl("https://example.com:8443/", 51234)).toBeNull();
+  });
+  it("reports navigation in the serving machine's address", () => {
+    expect(unforwardedUrl("http://localhost:51234/settings", "http://localhost:51234/", "http://localhost:3207/")).toBe("http://localhost:3207/settings");
+    expect(unforwardedUrl("https://github.com/x", "http://localhost:51234/", "http://localhost:3207/")).toBe("https://github.com/x");
   });
 });

@@ -2,6 +2,7 @@ import { ConvexProvider, type ConvexReactClient } from "convex/react";
 import { getFunctionName } from "convex/server";
 import { MemoryRouter } from "react-router";
 import { AccountUsageChip } from "../../AccountUsageChip";
+import { ProfileSignInDialogHost } from "../../ProfileSignInDialog";
 import { useLocalDeviceId } from "../../../hooks/useLocalDeviceId";
 import { useInboxStore } from "../../../store/inboxStore";
 import { settingsDataKey } from "../../../lib/settingsData";
@@ -74,5 +75,5 @@ function LocalIdentity() {
 }
 
 export function AccountHarness({ client, identityOnly = false }: { client: ConvexReactClient; identityOnly?: boolean }) {
-  return <ConvexProvider client={client}><MemoryRouter>{identityOnly ? <LocalIdentity /> : <AccountUsageChip />}</MemoryRouter></ConvexProvider>;
+  return <ConvexProvider client={client}><MemoryRouter>{identityOnly ? <LocalIdentity /> : <><AccountUsageChip /><ProfileSignInDialogHost /></>}</MemoryRouter></ConvexProvider>;
 }

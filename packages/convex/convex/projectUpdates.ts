@@ -16,9 +16,11 @@ import { nextShortId } from "./counters";
 // workspace stamp, so they can never disagree with the project's scope.
 //
 // Sync model: both tables are untracked (same trade as task_comments). Every
-// write bumps the parent project's updated_at so the change feed notices, and
-// the web reads these tables through reactive queries, which Convex keeps live
-// without any change-log plumbing.
+// write bumps the parent project's updated_at so the change feed notices. The
+// web feeds webList into its projectUpdates store collection and writes
+// through store actions whose dispatch side effects call the web* mutations
+// here (convex/dispatch.ts), so the page paints each gesture at once and an
+// edit is undoable.
 
 const MAX_BODY = 20_000;
 const MAX_COMMENT = 4_000;
@@ -47,6 +49,7 @@ async function insertUpdate(
     title?: string;
     body: string;
     conversation_id?: Id<"conversations">;
+    client_key?: string;
   },
 ) {
   const now = Date.now();
@@ -398,12 +401,23 @@ export const webPost = mutation({
     project_id: v.id("projects"),
     body: v.string(),
     title: v.optional(v.string()),
+    client_key: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
     if (!args.body.trim()) throw new Error("Update body is empty");
     const project = await requireAccessibleProject(ctx, userId, args.project_id);
+    // An outbox replay of the same post lands on the row the first made.
+    if (args.client_key) {
+      const recent = await ctx.db
+        .query("project_updates")
+        .withIndex("by_project_created", (q: any) => q.eq("project_id", project._id))
+        .order("desc")
+        .take(50);
+      const same = recent.find((u: any) => u.client_key === args.client_key && String(u.user_id) === String(userId));
+      if (same) return { id: same._id, short_id: same.short_id };
+    }
     const user = await ctx.db.get(userId);
     return insertUpdate(ctx, project, {
       user_id: userId,
@@ -413,6 +427,7 @@ export const webPost = mutation({
       kind: "update",
       title: args.title,
       body: args.body,
+      ...(args.client_key ? { client_key: args.client_key } : {}),
     });
   },
 });

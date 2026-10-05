@@ -1,5 +1,6 @@
 import { PROD_DEFAULT_MODEL } from '../../models';
 import { OWN_BRIEF_EDIT, surfaceSources, type SurfaceMeta } from '../../surface';
+import { orgCut } from './cut';
 
 export const meta: SurfaceMeta = {
   id: 'org-review',
@@ -15,6 +16,7 @@ export const meta: SurfaceMeta = {
     'packages/cli/src/orgInitRun.ts',
     'packages/cli/src/orgInit.ts',
     'packages/cli/scripts/prompt-dry-run-bin/cast',
+    'packages/cli/scripts/prompt-dry-run-bin/git',
   ),
   reps: { check: 8, smoke: 3 },
   // The opus pin's measured mean (32 reps, 2026-10-02: $2.65 to $12.70); state.ts keeps each model's own history once a run records one.
@@ -25,4 +27,6 @@ export const meta: SurfaceMeta = {
   frozenVerbs: ['org', 'brief'],
   // The prompt ends every review by writing the analyzer's read into its own brief; that write is the prompt's, not the analyzer's choice.
   allowedRefusals: [OWN_BRIEF_EDIT],
+  // A snapshot is the workspace at its capture: the records the analyzer drills into are captured, any other read is refused, and git history stops there.
+  cut: orgCut,
 };

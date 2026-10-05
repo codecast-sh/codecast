@@ -3,7 +3,7 @@ import * as childProcess from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
+import { baseProvisionScript, buildLinuxCast, uploadLinuxCast, installLinuxCast, restartHostDaemon, pushCodecastConfig, DAEMON_CGROUP_TMUX_SCRIPT, DAEMON_KEEP_SESSIONS_SCRIPT, daemonUnitScript, IDLE_WATCHDOG_VERSION, RTSP_PORT, HLS_PORT, SCREEN_DISPLAY, SCREEN_SIZE, type ProvisionReport, type PushCodecastConfigDeps, idleWatchdogScript } from "./provisionLinux.js";
 import { encryptToken } from "../tokenEncryption.js";
 import { DEVICE_BOUND_TOKEN_PREFIX } from "@platform/auth/cli";
 import * as remote from "./remote.js";
@@ -199,11 +199,14 @@ describe("Linux split bundle transfer", () => {
     fs.writeFileSync(path.join(dir, "src/daemon.ts"), 'console.log((await import("./shared.ts")).value);');
     fs.writeFileSync(path.join(dir, "src/shared.ts"), 'export const value = "fresh-split-build";');
     const build = spyOn(childProcess, "execFileSync").mockImplementation(((command, args, options) => {
+      // The build runs through run-interactive.ts (Interactive priority); what follows its `--` is the build itself.
       expect(command).toBe("bun");
-      expect(args?.slice(0, 3)).toEqual(["run", "build", "--outdir"]);
+      expect(String(args?.[0])).toEndWith("scripts/run-interactive.ts");
+      const real = args!.slice(args!.indexOf("--") + 1);
+      expect(real.slice(0, 4)).toEqual(["bun", "run", "build", "--outdir"]);
       expect((options as childProcess.ExecFileSyncOptions).env?.CODECAST_BUNDLE_PLATFORM).toBe("linux");
-      buildDirs.push(String(args?.[3]));
-      return execFileSync(process.execPath, args, { ...options, cwd: dir, timeout: 20_000 });
+      buildDirs.push(String(real[4]));
+      return execFileSync(process.execPath, real.slice(1), { ...options, cwd: dir, timeout: 20_000 });
     }) as typeof childProcess.execFileSync);
     const first = buildLinuxCast(() => {});
     const second = buildLinuxCast(() => {});
@@ -220,7 +223,7 @@ describe("Linux split bundle transfer", () => {
 
   test.each(["failed", "missing entry"])("cleans an incomplete build when %s", (failure) => {
     spyOn(childProcess, "execFileSync").mockImplementation(((_command: string, args: readonly string[]) => {
-      const output = String(args?.[3]);
+      const output = String(args[args.indexOf("--outdir") + 1]);
       buildDirs.push(output);
       fs.writeFileSync(path.join(output, "main.js"), "partial entry");
       if (failure === "failed") throw new Error("build failed");
@@ -237,8 +240,8 @@ describe("Linux split bundle transfer", () => {
   /** A split build the way `bun run build` emits one: a tiny entry that imports its chunk. */
   function fakeBuild() {
     return spyOn(childProcess, "execFileSync").mockImplementation(((command: string, args: readonly string[], options: childProcess.ExecFileSyncOptions) => {
-      if (command !== "bun" || args?.[0] !== "run") return execFileSync(command, args, options);
-      const out = String(args[3]);
+      if (command !== "bun" || !args?.includes("build")) return execFileSync(command, args, options);
+      const out = String(args[args.indexOf("--outdir") + 1]);
       buildDirs.push(out);
       fs.writeFileSync(path.join(out, "main.js"), 'import { v } from "./main-chunk.js"; console.log(v);');
       fs.writeFileSync(path.join(out, "daemon.js"), 'import { v } from "./main-chunk.js"; console.log(v);');
@@ -301,16 +304,25 @@ describe("restartHostDaemon", () => {
   const host: RemoteHost = { address: "unused", user: "ubuntu", keyPath: "/unused", remoteBaseDir: "/home/ubuntu/work" };
   afterEach(() => mock.restore());
 
-  function scripted(tmuxPids: string) {
+  function scripted(tmuxPids: string, killMode = "control-group") {
     const seen: string[] = [];
     spyOn(remote, "remoteExec").mockImplementation((_host, command) => {
       seen.push(command);
+      if (command === DAEMON_KEEP_SESSIONS_SCRIPT) return `${killMode}\n`;
       return command === DAEMON_CGROUP_TMUX_SCRIPT ? tmuxPids : "active\n4242";
     });
     return seen;
   }
 
-  test("refuses when a tmux server lives in the daemon's control group, and restarts nothing", () => {
+  test("sessions survive: the unit is brought to KillMode=process first, and then a tmux server in the daemon's group is no reason to refuse", () => {
+    const seen = scripted("91\n", "process");
+    expect(restartHostDaemon(host)).toEqual({ pid: "4242" });
+    expect(seen[0]).toBe(DAEMON_KEEP_SESSIONS_SCRIPT);
+    expect(seen).not.toContain(DAEMON_CGROUP_TMUX_SCRIPT);
+    expect(daemonUnitScript()).toContain("KillMode=process");
+  });
+
+  test("a unit that kept control-group refuses when a tmux server would die with it, and restarts nothing", () => {
     const seen = scripted("91\n");
     expect(() => restartHostDaemon(host)).toThrow("tmux server 91");
     expect(seen.some((c) => c.includes("systemctl restart"))).toBe(false);
