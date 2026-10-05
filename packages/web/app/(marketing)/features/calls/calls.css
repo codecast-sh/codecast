@@ -1,0 +1,94 @@
+/*
+ * Motion for /features/calls. Every element's resting style is its final
+ * state; animations only play the way in. `[data-static]` on the root (set by
+ * ?static) and prefers-reduced-motion both skip them, so a page whose timers
+ * never run still reads complete.
+ */
+
+.cc-root {
+  --cc-hero-dur: 9s;
+}
+
+@keyframes cc-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cc-sweep {
+  from { left: 0%; opacity: 1; }
+  96% { opacity: 1; }
+  to { left: 100%; opacity: 0; }
+}
+@keyframes cc-lit {
+  from { opacity: 0.18; transform: scaleY(0.35); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cc-ping {
+  0% { transform: scale(0.4); opacity: 0; }
+  40% { transform: scale(1.25); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+@keyframes cc-breathe {
+  0%, 100% { transform: scaleY(0.55); }
+  50% { transform: scaleY(1); }
+}
+@keyframes cc-caret {
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .cc-root:not([data-static]) .cc-rise {
+    animation: cc-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: var(--d, 0s);
+  }
+  .cc-root:not([data-static]) .cc-fade {
+    animation: cc-fade 0.6s ease-out both;
+    animation-delay: var(--d, 0s);
+  }
+  /* The hero: a playhead crosses every lane once, each segment lights as it
+     passes, and the transcript line it produced lands at the same moment. */
+  .cc-root:not([data-static]) .cc-playhead {
+    animation: cc-sweep var(--cc-hero-dur) linear 0.6s both;
+  }
+  .cc-root:not([data-static]) .cc-seg {
+    animation: cc-lit 0.35s ease-out both;
+    animation-delay: calc(0.6s + var(--cc-hero-dur) * var(--at));
+    transform-origin: center;
+  }
+  .cc-root:not([data-static]) .cc-line {
+    animation: cc-rise 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(0.6s + var(--cc-hero-dur) * var(--at));
+  }
+  .cc-root:not([data-static]) .cc-batch {
+    animation: cc-ping 0.5s ease-out both;
+    animation-delay: calc(0.6s + var(--cc-hero-dur) * var(--at));
+  }
+  .cc-root:not([data-static]) .cc-after {
+    animation: cc-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    animation-delay: calc(0.9s + var(--cc-hero-dur));
+  }
+  .cc-root:not([data-static]) .cc-talking span {
+    animation: cc-breathe 0.9s ease-in-out infinite;
+    animation-delay: calc(var(--i) * -0.13s);
+    transform-origin: center;
+  }
+  .cc-root:not([data-static]) .cc-caret {
+    animation: cc-caret 1s step-end infinite;
+  }
+}
+
+/* Micro-interaction: hovering a transcript line marks the words it came from. */
+.cc-seg { transition: filter 0.2s, box-shadow 0.2s; }
+.cc-seg[data-hot="true"] { filter: saturate(1.4) brightness(0.92); box-shadow: 0 0 0 2px var(--c); }
+.cc-line { transition: background-color 0.2s; }
+
+.cc-lift { transition: transform 0.25s cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 0.25s; }
+.cc-lift:hover { transform: translateY(-2px); box-shadow: 0 10px 30px -14px rgba(0, 43, 54, 0.35); }
+
+/* Lane stripes: a faint grid of seconds behind the waveforms. */
+.cc-grid {
+  background-image: repeating-linear-gradient(90deg, rgba(147, 161, 161, 0.14) 0 1px, transparent 1px 8.333%);
+}
