@@ -150,8 +150,12 @@ export const generateShortTitle = internalAction({
         label: "Short title generation",
       });
       if (!reply) return;
-      const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title);
-      if (!shortTitle) return;
+      // An answer that fails the name rule is stored as "" (asked, no usable
+      // name), which readers treat as absent and the cron's index skips. The
+      // request runs at temperature 0, so asking again gets the same answer:
+      // leaving the field unset re-asked the same 80 rows every two minutes
+      // and held the scheduler's slots doing it.
+      const shortTitle = cleanShortTitle(extractTitleJson(reply.text)?.short_title) ?? "";
       await ctx.runMutation(internal.titleGeneration.setShortTitle, { id: args.id, short_title: shortTitle });
     } catch (error) {
       console.error("Failed to generate short title:", error);
@@ -251,7 +255,7 @@ export const sweepMissingShortTitles = internalMutation({
       .take(batch);
     let scheduled = 0;
     for (const c of rows) {
-      if (c.short_title || !c.title || c.skip_title_generation) continue;
+      if (c.short_title !== undefined || !c.title || c.skip_title_generation) continue;
       if (!c.subtitle && !c.title_is_custom) continue;
       await ctx.scheduler.runAfter(
         scheduled * (args.spread_s ?? 1) * 1000,

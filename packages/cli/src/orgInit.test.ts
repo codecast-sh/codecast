@@ -3,7 +3,7 @@ import { HEAD_OF_PEOPLE_HANDLE, registerOrgInitCommands } from "./orgInit";
 import { Command } from "commander";
 import { apply, applyStack, buildOrgAnalyzerPrompt, buildReviseOps, coverageLine, findOpenOrgProposal, listProposals, orderForApply, proposalUrl, propose, revise, runAnalyzer, staff, summarizeInputs } from "./orgInitRun";
 import { headOfPeoplePrompt } from "@codecast/shared/contracts/headOfPeoplePrompt";
-import { orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
+import { describeOrgChange, orgProposalBlock } from "@codecast/shared/contracts/orgProposal";
 
 // The review prompt is the Head of People's own text
 // (docs/architecture/head-of-people-prompt.md), filled in for the workspace.
@@ -163,7 +163,8 @@ describe("registerOrgInitCommands", () => {
 });
 
 // propose: the spec is validated before anything is posted; a good one posts
-// and prints op-N with the page link.
+// and prints op-N, each change with the number the server gave it (the n of
+// `op-N#n`), and the page link.
 describe("propose", () => {
   const specFile = (body: any) => { const f = `${process.env.TMPDIR ?? "/tmp"}/org-spec-${Date.now()}-${Math.random().toString(36).slice(2)}.json`; require("fs").writeFileSync(f, JSON.stringify(body)); return f; };
   test("a spec with faults is refused before posting, listing every fault", async () => {
@@ -176,9 +177,10 @@ describe("propose", () => {
     expect(posted).toEqual([]);
     expect(cap.said()).toContain("changes[0] (trust): autonomy on is true or false");
   });
-  test("a good spec posts with the workspace and the calling session, then prints op-N and the link", async () => {
+  test("a good spec posts with the workspace and the calling session, then prints op-N, each change's number and the link", async () => {
     let body: any;
-    const d = deps({ cliPost: async (path: string, b: any) => { body = [path, b]; return { short_id: "op-9", changes: [{}, {}] }; }, callingSession: () => "sess-1" });
+    // The rows the server answers with (orgProposals.create): seq, change, line.
+    const d = deps({ cliPost: async (path: string, b: any) => { body = [path, b]; return { short_id: "op-9", changes: b.changes.map((c: any, i: number) => ({ seq: i + 1, change: c.change, status: "proposed", line: describeOrgChange(c.change) })) }; }, callingSession: () => "sess-1" });
     const cap = capture();
     try {
       await propose(d, { spec: specFile({ title: "Staffing for Acme", summary_md: "S", mode: "init", changes: [{ change: { kind: "role", name: "Growth", handle: "growth" }, rationale: "r" }, { change: { kind: "adopt", handle: "head-of-people", conversation: "sess-1" }, rationale: "r" }] }) });
@@ -189,6 +191,9 @@ describe("propose", () => {
     expect(body[1].mode).toBe("init");
     expect(body[1].changes.length).toBe(2);
     expect(cap.said()).toContain("op-9");
+    expect(cap.said()).toContain("· 2 changes · init");
+    expect(cap.said()).toContain("\n  #1 create role Growth @growth");
+    expect(cap.said()).toContain("\n  #2 adopt session sess-1 as @head-of-people's standing session");
     expect(cap.said()).toContain("https://codecast.sh/org?proposal=op-9");
     expect(cap.said()).not.toContain("cast org apply");
   });

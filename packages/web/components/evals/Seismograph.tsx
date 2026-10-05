@@ -6,17 +6,15 @@
 //
 // The columns are shared with the cost track and the ledger (surfaceColumns),
 // so a batch sits at one x everywhere. A drag across the plot zooms (the
-// ActivityCharts brush); a click pins a column and a shift-click pins a second.
+// day charts' brush); a click pins a column and a shift-click pins a second.
 
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { CommitRef, Epoch, FootingMarker, RunRow } from "@codecast/shared/contracts/evalsApi";
-import { HoverTip } from "../ActivityHeatmap";
-import { BrushRect, timeAxisLabels, useDayBrush } from "../ActivityCharts";
+import { BrushRect, useDayBrush } from "./charts/brush";
 import { FootingGlyph } from "./charts/ScoreStrip";
-import { PASS_MARK, dayList, dayStart, jitter, nearestIndex, scoreScale, stepPath } from "./charts/scale";
-// The marks, bands and median below are styled here, and the freeze page draws them too.
-import "./surface.css";
+import { PASS_MARK, dayList, dayStart, jitter, nearestIndex, scoreScale, stepPath, timeAxisLabels } from "./charts/scale";
 import { score2, shortSha, usd, whenLabel } from "./format";
+import { useEvalsHost } from "./host";
 import { type SurfaceColumn, type SurfaceColumns, HOUR, type EpochBand, epochBandsOf, REP_HATCH_ID, scoredRep, gateDropped, repY, medianOf } from "./seismographModel";
 
 /** Alternating faint bands, a perforation at each boundary and an e1, e2 label along the top. The label opens the epoch's diff when the chart can. */
@@ -54,8 +52,8 @@ export function EpochBands({ bands, top, bottom, onOpenEpoch }: { bands: readonl
 export function RepHatch() {
   return (
     <pattern id={REP_HATCH_ID} width={3} height={3} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-      <rect width={3} height={3} style={{ fill: "color-mix(in srgb, var(--sol-yellow) 18%, transparent)" }} />
-      <line x1={0} y1={0} x2={0} y2={3} style={{ stroke: "var(--sol-yellow)" }} strokeWidth={1.1} opacity={0.75} />
+      <rect width={3} height={3} style={{ fill: "var(--ev-hatch)" }} />
+      <line x1={0} y1={0} x2={0} y2={3} style={{ stroke: "var(--ev-yellow)" }} strokeWidth={1.1} opacity={0.75} />
     </pattern>
   );
 }
@@ -162,13 +160,14 @@ const SHAPES = ["circle", "square", "diamond"] as const;
 
 /** A model's marker: circle, square or diamond, filled for pass and hollow for fail. */
 function Marker({ shape, cx, cy, r, filled, className }: { shape: (typeof SHAPES)[number]; cx: number; cy: number; r: number; filled: boolean; className: string }) {
-  const paint = filled ? { fill: "currentColor" } : { fill: "var(--sol-bg)", stroke: "currentColor", strokeWidth: 1.2 };
+  const paint = filled ? { fill: "currentColor" } : { fill: "var(--ev-bg)", stroke: "currentColor", strokeWidth: 1.2 };
   if (shape === "square") return <rect x={cx - r * 0.88} y={cy - r * 0.88} width={r * 1.76} height={r * 1.76} className={className} {...paint} />;
   if (shape === "diamond") return <path d={`M${cx},${cy - r * 1.15} L${cx + r * 1.15},${cy} L${cx},${cy + r * 1.15} L${cx - r * 1.15},${cy} Z`} className={className} {...paint} />;
   return <circle cx={cx} cy={cy} r={r} className={className} {...paint} />;
 }
 
 export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compare, hover, onHover, onPick, onZoom, onOpenRun, onOpenEpoch, commits = [], onOpenCommit, baseline = [] }: SeismographProps) {
+  const { HoverTip } = useEvalsHost().ui;
   const { list, width: w, padL, padR } = cols;
   const models = useMemo(() => {
     const seen: string[] = [];
@@ -229,7 +228,7 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
 
   return (
     <div className="ev-sf-seis ev-bench" data-ev-seismograph data-ev-lanes={lanes.length}>
-      <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} role="img" aria-label="Every rep over time" className="block overflow-visible">
+      <svg width={w} height={height} viewBox={`0 0 ${w} ${height}`} role="img" aria-label="Every rep over time" className="ev-sf-seis-svg">
         <defs>
           <RepHatch />
         </defs>

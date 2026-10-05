@@ -116,7 +116,12 @@ export const loadPerCore = (p: ResourcePoint) => p.load1 / Math.max(1, p.logical
 // ---- grouping ----
 
 export type GroupBy = "session" | "project" | "kind" | "machine";
-export type SortBy = "cpu" | "memory" | "idle" | "name";
+export type SortBy = "name" | "state" | "cpu" | "memory" | "procs" | "idle";
+export type SortDir = "asc" | "desc";
+export type Sort = { by: SortBy; dir: SortDir };
+/** The direction a column sorts in when first picked: biggest and most idle first, names and states in order. */
+export const DEFAULT_SORT_DIR: Record<SortBy, SortDir> = { name: "asc", state: "asc", cpu: "desc", memory: "desc", procs: "desc", idle: "desc" };
+const STATE_ORDER = ["working", "needs_input", "idle", "hibernated", "dead"];
 
 export type TableRow = {
   key: string;
@@ -230,18 +235,27 @@ export function buildRows(
   return [...groups.values()];
 }
 
-export function sortRows(rows: TableRow[], by: SortBy): TableRow[] {
+export function sortRows(rows: TableRow[], sort: Sort): TableRow[] {
+  const { by, dir } = sort;
+  const usage = by === "cpu" || by === "memory" || by === "procs";
+  const key = (r: TableRow): number | string | undefined =>
+    by === "name" ? r.label
+    : by === "state" ? (r.session ? STATE_ORDER.indexOf(r.session.state) : undefined)
+    : by === "cpu" ? r.usage.cpu
+    : by === "memory" ? r.usage.rss
+    : by === "procs" ? r.usage.count
+    : r.lastActiveAt === undefined ? undefined : -r.lastActiveAt;
   const cmp = (a: TableRow, b: TableRow) => {
     // The unattributed row always sits last: it is context, not a candidate.
     const tail = (r: TableRow) => (r.type === "unattributed" ? 1 : 0);
     if (tail(a) !== tail(b)) return tail(a) - tail(b);
-    if (!!a.unmeasured !== !!b.unmeasured) return Number(!!a.unmeasured) - Number(!!b.unmeasured);
-    if (by === "cpu") return b.usage.cpu - a.usage.cpu;
-    if (by === "memory") return b.usage.rss - a.usage.rss;
-    if (by === "idle") return (a.lastActiveAt ?? Infinity) - (b.lastActiveAt ?? Infinity);
-    return a.label.localeCompare(b.label);
+    if (usage && !!a.unmeasured !== !!b.unmeasured) return Number(!!a.unmeasured) - Number(!!b.unmeasured);
+    const ka = key(a), kb = key(b);
+    if ((ka === undefined) !== (kb === undefined)) return ka === undefined ? 1 : -1;
+    const c = typeof ka === "string" ? ka.localeCompare(kb as string) : ((ka as number) ?? 0) - ((kb as number) ?? 0);
+    return (dir === "asc" ? c : -c) || a.label.localeCompare(b.label);
   };
-  return [...rows].sort(cmp).map((r) => (r.children ? { ...r, children: sortRows(r.children, by) } : r));
+  return [...rows].sort(cmp).map((r) => (r.children ? { ...r, children: sortRows(r.children, sort) } : r));
 }
 
 // ---- formatting ----

@@ -17,7 +17,7 @@
 
 import { useState, type CSSProperties, type ReactNode } from "react";
 import type { BatchStats, Epoch, FootingMarker, RunRowStatus } from "@codecast/shared/contracts/evalsApi";
-import { HoverTip } from "../../ActivityHeatmap";
+import { useEvalsHost } from "../host";
 import { PASS_MARK, linear, nearestIndex, scoreScale, stepPath, jitter } from "./scale";
 
 export interface StripDot {
@@ -64,7 +64,7 @@ export function FootingGlyph({ marker, x, y, scale = 1 }: { marker: FootingMarke
   return marker.kind === "model" ? (
     <g className="ev-quiet" data-ev-footing="model">
       <title>{`Model moved from ${marker.from ?? "none"} to ${marker.to ?? "none"}`}</title>
-      <path d={`M${x},${y - d} L${x + d},${y} L${x},${y + d} L${x - d},${y} Z`} style={{ fill: "var(--sol-bg)" }} stroke="currentColor" strokeWidth={1.1} />
+      <path d={`M${x},${y - d} L${x + d},${y} L${x},${y + d} L${x - d},${y} Z`} style={{ fill: "var(--ev-bg)" }} stroke="currentColor" strokeWidth={1.1} />
     </g>
   ) : (
     <g className="ev-ruler" data-ev-footing="judge">
@@ -75,6 +75,7 @@ export function FootingGlyph({ marker, x, y, scale = 1 }: { marker: FootingMarke
 }
 
 export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, to, width, height = 44, cursor = null, onCursor, onPick, pinned = null, tip, delayMs = 0, label, emphasis = null }: ScoreStripProps) {
+  const { HoverTip } = useEvalsHost().ui;
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const w = Math.max(width, 40);
   const x = linear(from, to, 2, w - 2 - NEWEST_STEP);
@@ -127,7 +128,7 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
           );
         })}
         {pinned && batches.some((b) => b.batch === pinned) && (
-          <rect x={x(at(batches.find((b) => b.batch === pinned)!)) - 3} y={PAD_TOP - 2} width={6} height={plotBottom - PAD_TOP + 2} rx={2} style={{ fill: "var(--sol-cyan)", opacity: 0.16 }} />
+          <rect x={x(at(batches.find((b) => b.batch === pinned)!)) - 3} y={PAD_TOP - 2} width={6} height={plotBottom - PAD_TOP + 2} rx={2} style={{ fill: "var(--ev-cyan)", opacity: 0.16 }} />
         )}
         {line && <path d={line} pathLength={1} className="ev-strip-median ev-draw" style={{ "--ev-delay": `${delayMs}ms` } as CSSProperties} />}
         {base.length > 0 && (
@@ -144,7 +145,7 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
           <g className="ev-fail" data-ev-strip-red>
             {baseLevel !== null && <line x1={red.x0} x2={red.x0} y1={y(baseLevel)} y2={red.y} stroke="currentColor" strokeWidth={1} strokeDasharray="1.5 1.5" />}
             <line x1={red.x0} x2={red.x1} y1={red.y} y2={red.y} stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" />
-            <circle cx={red.x0} cy={red.y} r={3} style={{ fill: "var(--sol-bg)" }} stroke="currentColor" strokeWidth={1.6} />
+            <circle cx={red.x0} cy={red.y} r={3} style={{ fill: "var(--ev-bg)" }} stroke="currentColor" strokeWidth={1.6} />
           </g>
         )}
         {epochs
@@ -171,7 +172,7 @@ export function ScoreStrip({ strip, dots = [], epochs = [], footing = [], from, 
           <FootingGlyph key={i} marker={m} x={x(Date.parse(m.batchAt))} y={height - 3.5} />
         ))}
         {cursorX !== null && cursorX >= 0 && cursorX <= w && <line x1={cursorX} x2={cursorX} y1={0} y2={plotBottom} className="ev-strip-cursor" />}
-        {hot && <circle cx={x(at(hot))} cy={y(hot.median as number)} r={2.6} style={{ fill: "var(--sol-bg)", stroke: "var(--sol-text)" }} strokeWidth={1.25} />}
+        {hot && <circle cx={x(at(hot))} cy={y(hot.median as number)} r={2.6} style={{ fill: "var(--ev-bg)", stroke: "var(--ev-text)" }} strokeWidth={1.25} />}
         <rect x={0} y={0} width={w} height={height} className="ev-strip-hit" onMouseMove={move} onMouseLeave={leave} onClick={click} />
       </svg>
       {tip && pointer && hot && (

@@ -1,12 +1,13 @@
 // Two runs side by side: GET /compare?a=&b=, the platform's diffRuns over
 // both scores, both replies and both prompts.
 
-import { EmptyState } from "../../EmptyState";
 import { useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
 import { CompareView } from "../CompareView";
+import { useEvalsHost } from "../host";
 
 export function ComparePage({ view }: { view: Extract<EvalsView, { view: "compare" }> }) {
+  const { EmptyState } = useEvalsHost().ui;
   const res = useEvalsResource("GET /compare", { query: { a: view.a, b: view.b } });
   const data = res.data && res.data.a.id === view.a && res.data.b.id === view.b ? res.data : null;
   if (!data) {
@@ -15,7 +16,7 @@ export function ComparePage({ view }: { view: Extract<EvalsView, { view: "compar
     }
     if (res.error) return <EmptyState title="These two runs could not be read" description={res.error} />;
     return (
-      <div className="ev-page text-[12px] ev-quiet" data-evals-page="compare" data-evals-loading>
+      <div className="ev-page ev-note" data-evals-page="compare" data-evals-loading>
         Reading both runs...
       </div>
     );

@@ -11,8 +11,8 @@ import { HealthStrip, MiniTrace } from "./HealthStrip";
 import { OffloadReview, OffloadRuns } from "./OffloadReview";
 import { ResourceTable } from "./ResourceTable";
 import {
-  KINDS, KIND_LABEL, buildRows, processesUnavailable, fmtAgo, fmtBytes, freshness, machineTotals, memoryUsed, memoryUsedPct, sortRows,
-  type Freshness, type GroupBy, type SortBy, type TableRow, type Usage,
+  KINDS, KIND_LABEL, buildRows, processesUnavailable, fmtAgo, fmtBytes, freshness, machineTotals, memoryUsed, memoryUsedPct, sortRows, DEFAULT_SORT_DIR,
+  type Freshness, type GroupBy, type Sort, type SortBy, type TableRow, type Usage,
 } from "./resourceModel";
 import type { ResourceMachine, ResourceMonitorProps, ResourceSessionState } from "./types";
 
@@ -128,7 +128,8 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
     if (machineId !== "all" && !machines.some((m) => m.deviceId === machineId)) setMachineId(defaultMachine);
   }, [machines, machineId, defaultMachine]);
   const [groupBy, setGroupBy] = React.useState<GroupBy>("session");
-  const [sortBy, setSortBy] = React.useState<SortBy>("memory");
+  const [sort, setSort] = React.useState<Sort>({ by: "memory", dir: "desc" });
+  const onSort = (by: SortBy) => setSort((s) => (s.by === by ? { by, dir: s.dir === "asc" ? "desc" : "asc" } : { by, dir: DEFAULT_SORT_DIR[by] }));
   const [stateFilter, setStateFilter] = React.useState<StateFilter>("all");
   const [query, setQuery] = React.useState("");
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
@@ -147,7 +148,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
     if (!q) return true;
     return [r.label, r.session?.shortId, r.session?.projectPath, ...r.processes.map((p) => p.name)].some((s) => s?.toLowerCase().includes(q));
   };
-  const rows = sortRows(allRows.filter(matches), sortBy);
+  const rows = sortRows(allRows.filter(matches), sort);
   const totals = scope.reduce<Usage>((a, m) => {
     if (!m.snapshot) return a;
     const t = machineTotals(m.snapshot);
@@ -252,7 +253,6 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
 
               <div className="sticky top-0 z-[2] flex flex-wrap items-center gap-2 border-b border-sol-border/30 bg-sol-bg px-3 py-1.5">
                 <Seg label="Group by" value={groupBy} onChange={setGroupBy} options={[["session", "Session"], ["project", "Project"], ["kind", "Kind"], ...(machines.length > 1 ? [["machine", "Machine"] as [GroupBy, string]] : [])]} />
-                <Seg label="Sort by" value={sortBy} onChange={setSortBy} options={[["memory", "Memory"], ["cpu", "CPU"], ["idle", "Idle"], ["name", "Name"]]} />
                 <select aria-label="Session state" value={stateFilter} onChange={(e) => setStateFilter(e.target.value as StateFilter)} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
                   <option value="all">All states</option>
                   <option value="working">Working</option>
@@ -308,6 +308,8 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                   actions={actions}
                   actionsDisabledReason={actionsDisabledReason}
                   showMachine={scope.length > 1}
+                  sort={sort}
+                  onSort={onSort}
                 />
               )}
               {machine?.snapshot && machine.snapshot.limitations.length > 0 && (

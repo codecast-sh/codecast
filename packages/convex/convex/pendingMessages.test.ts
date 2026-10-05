@@ -358,13 +358,14 @@ describe("collectDeliverableForOwner", () => {
     const rows = [
       // The bug's exact shape: my own message with NO owner_user_id (written by a path that forgot it).
       { _id: "self_unowned", conversation_id: "cMine", from_user_id: "u1", status: "pending" },
-      // A teammate's message into my conversation — only reachable via the owner index.
-      { _id: "team_owned", conversation_id: "cMine", from_user_id: "u-alice", owner_user_id: "u1", status: "pending" },
+      // A teammate's message into my other conversation — only reachable via the owner index.
+      { _id: "team_owned", conversation_id: "cMine2", from_user_id: "u-alice", owner_user_id: "u1", status: "pending" },
       // Someone else's message — must never appear in my daemon's queue.
       { _id: "other_user", conversation_id: "cOther", from_user_id: "u2", owner_user_id: "u2", status: "pending" },
     ];
     const convs = {
       cMine: { _id: "cMine", user_id: "u1" },
+      cMine2: { _id: "cMine2", user_id: "u1" },
       cOther: { _id: "cOther", user_id: "u2" },
     };
     const { ctx } = createDeliverCtx(rows, convs);
@@ -401,15 +402,47 @@ describe("collectDeliverableForOwner", () => {
   // server-side error state. The scan is bounded now; a deep backlog drains in waves.
   test("bounds the scan so a deep backlog cannot make the query un-executable", async () => {
     const rows = Array.from({ length: 600 }, (_, i) => ({
-      _id: `m${i}`, conversation_id: "cMine", from_user_id: "u1", owner_user_id: "u1", status: "pending",
+      _id: `m${i}`, conversation_id: `c${i}`, from_user_id: "u1", owner_user_id: "u1", status: "pending",
     }));
-    const convs = { cMine: { _id: "cMine", user_id: "u1" } };
+    const convs = Object.fromEntries(rows.map((r) => [r.conversation_id, { _id: r.conversation_id, user_id: "u1" }]));
     const { ctx } = createDeliverCtx(rows, convs);
 
     const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
     expect(out.length).toBe(500);
     // Index order = oldest first, so the oldest slice delivers first.
     expect(out[0]._id).toBe("m0");
+  });
+
+  // ct-56547: a conversation takes one message at a time, so the daemon gets
+  // only the head of each queue. A down session's backlog (52 rows on one
+  // conversation on 2026-10-05) was claimed in full on every push.
+  test("returns only the oldest deliverable row of each conversation", async () => {
+    const rows = [
+      { _id: "a2", conversation_id: "cA", from_user_id: "u1", owner_user_id: "u1", status: "pending", created_at: 20 },
+      { _id: "a1", conversation_id: "cA", from_user_id: "u1", owner_user_id: "u1", status: "pending", created_at: 10 },
+      { _id: "a3", conversation_id: "cA", from_user_id: "u1", owner_user_id: "u1", status: "pending", created_at: 30 },
+      // A teammate's older row reached through the owner index still heads its queue.
+      { _id: "b2", conversation_id: "cB", from_user_id: "u1", status: "pending", created_at: 50 },
+      { _id: "b1", conversation_id: "cB", from_user_id: "u-alice", owner_user_id: "u1", status: "pending", created_at: 40 },
+    ];
+    const convs = { cA: { _id: "cA", user_id: "u1" }, cB: { _id: "cB", user_id: "u1" } };
+    const { ctx } = createDeliverCtx(rows, convs);
+
+    const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
+    expect(out.map((r) => r._id).sort()).toEqual(["a1", "b1"]);
+  });
+
+  test("a row the daemon may not deliver never hides the deliverable one behind it", async () => {
+    const rows = [
+      // Oldest, but fenced: not this rail's to deliver.
+      { _id: "fenced", conversation_id: "cA", from_user_id: "u1", owner_user_id: "u1", status: "pending", created_at: 1, delivery_protocol_version: 1 },
+      { _id: "next", conversation_id: "cA", from_user_id: "u1", owner_user_id: "u1", status: "pending", created_at: 2 },
+    ];
+    const convs = { cA: { _id: "cA", user_id: "u1" } };
+    const { ctx } = createDeliverCtx(rows, convs);
+
+    const out = await collectDeliverableForOwner(ctx as any, "u1" as any, "dev1");
+    expect(out.map((r) => r._id)).toEqual(["next"]);
   });
 });
 

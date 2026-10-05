@@ -70,9 +70,11 @@ for (const platform of ["ios", "android"] as const) {
 
     // One `import { captureException } from "@sentry/react"` in a shared hook
     // shipped ~300 files of a second Sentry version to the phone. Shared code
-    // reports through ../lib/analytics, which has a native twin.
+    // reports through ../lib/analytics, which has a native twin. The web's
+    // router is web only too: its build reads `import.meta`, which Hermes
+    // refuses, so one router hook in a shared lane module fails the bundle.
     test("no web only SDK reaches the native bundle", () => {
-      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie", "next"];
+      const WEB_ONLY = ["@sentry/react", "@sentry/browser", "posthog-js", "dexie", "next", "react-router", "react-router-dom"];
       const hit = [...graph.externals].filter((spec) => WEB_ONLY.some((pkg) => spec === pkg || spec.startsWith(pkg + "/")));
       expect(hit).toEqual([]);
     });

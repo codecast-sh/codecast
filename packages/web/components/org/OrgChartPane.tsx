@@ -18,18 +18,22 @@ import { useSyncOrgHealth } from "../../hooks/useSyncOrgHealth";
 import { useInitiatives } from "../../hooks/useInitiatives";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { findEntityInStore } from "../../lib/liveEntities";
+import { proposalAnswersOf } from "../../lib/reviewActions";
 import { cn } from "../../lib/utils";
 import { OrgGraph, type OrgLens } from "./OrgGraph";
 import { ProposalMeta } from "./ProposalCard";
+import { useGhostAnswers } from "./ProposalLedger";
+import { ProposalReplyBox, proposalBatchKey } from "./ProposalReplyBox";
 import { proposalSeen, useProposalChanges } from "./proposalHooks";
 import { orgPreviewEnabled, proposalWorkspace, sameWorkspace } from "./staffingModel";
+import { proposalThread } from "./staffingRevise";
 import { ORG_FIXTURE } from "./orgFixture";
 import { GOALS_PREVIEW_FIXTURES } from "./goalsFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import { chartPointerOfParams, chartView, orgChartPath, type ChartPointer } from "./orgChartPointer";
 import { useThreadChartPointer } from "./orgChartLink";
 import type { OrgFocusTarget, OrgLayoutView } from "./orgLayout";
-import type { OrgProposalListRow } from "./orgStaffingTypes";
+import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgGraphProps } from "./OrgGraph";
 
 const LENSES: { lens: OrgLens; label: string; title: string; icon: typeof Users }[] = [
@@ -65,6 +69,7 @@ const PREVIEW_DEV = !!import.meta.env?.DEV;
 const PREVIEW_FIXTURES = [...GOALS_PREVIEW_FIXTURES, { proposal: ORG_STAFFING_FIXTURE_PROPOSAL, tree: ORG_FIXTURE, goalsData: GOALS_PREVIEW_FIXTURES[0].goalsData, health: GOALS_PREVIEW_FIXTURES[1].health }];
 
 const NO_CLUSTERS: ReadonlySet<string> = new Set();
+const NO_CHANGES: readonly OrgProposalChange[] = [];
 const noop = () => {};
 let focusSeq = 0;
 
@@ -121,10 +126,25 @@ export function OrgChartPane({ goalsData: goalsProp }: { /** Fixture rows for th
   const focusChangeId = picked?.for === search ? picked.changeId : view.focus?.kind === "change" ? view.focus.id : null;
   const addressed = useMemo<OrgFocusTarget | null>(() => (view.focus ? { ...view.focus, seq: ++focusSeq } : null), [view.focus?.kind, view.focus?.id, search]); // eslint-disable-line react-hooks/exhaustive-deps
   const focusTarget = pan && (!addressed || pan.seq > addressed.seq) ? pan : addressed;
-  const decide = useCallback((id: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => {
+  // Edit (accept with edits) is the chart's one direct verdict (S39).
+  const editAccept = useCallback((id: string, edits: Record<string, unknown>) => {
     if (preview) return; // fixture rows: nothing to decide
-    useInboxStore.getState().decideOrgProposalChange(id, verdict, edits, proposalSeen(allChanges));
+    useInboxStore.getState().decideOrgProposalChange(id, "accept", edits, proposalSeen(allChanges));
   }, [allChanges, preview]);
+  // Where a ghost's answers wait (S39): beside a conversation, in that
+  // conversation's batch, so its composer tray shows them and its send
+  // carries them; alone, in the proposal's own key, with a reply box at the
+  // pane's foot to send them from. The thread's key is not used beside a
+  // conversation: the person answers where they are looking.
+  const threadKey = useMemo(() => { const t = proposal && proposal.status === "open" ? proposalThread(proposal, tree) : null; return t ? { conversation_id: t.conversationId } : null; }, [proposal, tree]);
+  const batchKey = proposal && changes ? session ?? proposalBatchKey(proposal._id, threadKey) : null;
+  const ghostAnswers = useGhostAnswers(proposal && changes ? proposal : undefined, changes ?? NO_CHANGES, batchKey);
+  // The preview's send flips nothing: the fixture rows stay; the batch empties.
+  const previewSend = useCallback(() => {
+    if (!proposal || !batchKey) return;
+    const s = useInboxStore.getState();
+    for (const c of proposalAnswersOf(s.reviewComments[batchKey], proposal._id)) s.removeReviewComment(batchKey, c.id);
+  }, [proposal, batchKey]);
   const openInPeople = useCallback((nodeId: string) => { setSelectedId(nodeId); setPan({ kind: "node", id: nodeId, seq: ++focusSeq }); go({ ...pointer, lens: "people", focus: undefined }); }, [go, pointer]);
 
   return (
@@ -183,13 +203,20 @@ export function OrgChartPane({ goalsData: goalsProp }: { /** Fixture rows for th
             focusChangeId={focusChangeId}
             focusTarget={focusTarget}
             onFocusChange={(changeId) => setPicked({ changeId, for: search })}
-            onDecideChange={decide}
+            ghostAnswers={ghostAnswers}
+            onEditAccept={editAccept}
             onOpenInPeople={openInPeople}
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-[12.5px] text-sol-text-dim" data-chart-loading>The chart appears here when it is ready.</div>
         )}
       </div>
+      {/* Alone (no conversation beside it): the answers show and send from here. Beside one, its composer tray has them. */}
+      {!session && proposal && changes && batchKey && (
+        <div className="shrink-0 border-t px-3 pb-2 pt-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-chart-reply>
+          <ProposalReplyBox proposal={proposal} changes={changes} batchKey={batchKey} thread={threadKey} onSend={preview ? previewSend : undefined} className="border-t-0 pt-1" />
+        </div>
+      )}
     </div>
   );
 }

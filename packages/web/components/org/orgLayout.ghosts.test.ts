@@ -196,7 +196,7 @@ describe("ghostsFor", () => {
     const scoped = change({ kind: "project_meta", project: ORG_FIXTURE.roles[0].scope_names.projects[0]?.title ?? "Growth", priority: "p1" });
     const { ghosts } = lay([owned, scoped]);
     expect(ghosts.chips[GROWTH]?.map((c) => c.change_id)).toEqual([owned._id, scoped._id]);
-    expect(ghosts.chips[GROWTH]?.[0].line).toBe("Write the charter of Anything, owned by @growth: Double signups");
+    expect(ghosts.chips[GROWTH]?.[0].line).toBe("Make @growth the lead of Anything and write down what it is for");
   });
 
   it("adopt: a ghost session under the role, 'this session' when the viewer is looking from it", () => {

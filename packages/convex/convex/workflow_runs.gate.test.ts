@@ -322,12 +322,45 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
 
   test("createFromCli stamps workspace and team_id from the bound task", async () => {
     const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "completed";
     const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", spawner_session: "sess-spawner" });
     const run = tables.workflow_runs.find((x) => x._id === r.run_id);
     expect(run.workspace).toBe(`team:${TEAM}`);
     expect(run.team_id).toBe(TEAM);
     expect(run.spawner_conversation_id).toBe("conversations_spawner");
     expect(run.workflow_id).toBe("workflows_line");
+  });
+
+  test("createFromCli refuses a second run while the cause's run is live (LE1.4), and --force overrides", async () => {
+    for (const status of ["pending", "running", "paused"]) {
+      const { ctx, tables } = await seed();
+      tables.workflow_runs[0].status = status;
+      await expect((createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" }))
+        .rejects.toThrow(/ct-7 already has a live run/);
+      expect(tables.workflow_runs).toHaveLength(1);
+      const forced = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", force: true });
+      expect(tables.workflow_runs.map((x) => x._id)).toContain(forced.run_id);
+    }
+  });
+
+  test("createFromCli --detach hands the run to the calling machine's daemon", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "completed";
+    const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", detach: true, run_on_device: "dev-box" });
+    expect(tables.daemon_commands).toHaveLength(1);
+    expect(tables.daemon_commands[0]).toMatchObject({ user_id: HOST, command: "run_workflow", target_device_id: "dev-box" });
+    expect(JSON.parse(tables.daemon_commands[0].args)).toEqual({ workflow_run_id: r.run_id });
+    await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7", force: true });
+    expect(tables.daemon_commands).toHaveLength(1);
+  });
+
+  test("createFromCli starts a new attempt once the cause's run has ended", async () => {
+    for (const status of ["completed", "failed"]) {
+      const { ctx, tables } = await seed();
+      tables.workflow_runs[0].status = status;
+      const r = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
+      expect(tables.tasks[0].workflow_run_id).toBe(r.run_id);
+    }
   });
 
   test("createFromCli with no task stamps the personal key from an unmapped directory", async () => {

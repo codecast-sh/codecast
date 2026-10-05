@@ -305,6 +305,16 @@ export interface RoleCardInitiative {
 export function roleCardInitiativeLine(i: RoleCardInitiative): string {
   return `${i.title} (${i.short_id})${i.chain.length ? `, under ${i.chain.join(", under ")}` : ""}${i.metrics.length ? `; ${i.metrics.join("; ")}` : ""}`;
 }
+/** The card's body as labelled lines, the one wording a wake frame and a
+ *  session's org context (`cast org where`) both print. */
+export function roleCardLines(r: RoleCard): string[] {
+  return [
+    r.scope.length ? `Looks after: ${r.scope.join(", ")}` : "Looks after no area of its own: it runs its routine and answers what it is asked.",
+    r.charter ? `Charter: ${r.charter}` : "",
+    r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
+    ...(r.initiatives ?? []).map((i) => `Serves: ${roleCardInitiativeLine(i)}`),
+  ].filter(Boolean);
+}
 function parseRoleCardInitiativeLine(line: string): RoleCardInitiative {
   const [head, ...metrics] = line.split("; ");
   const m = head.match(/^(.*?) \((in-\d+)\)(?:, under (.*))?$/);
@@ -360,12 +370,7 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
     ? `\n${f.workers.map((w) => `<worker-report ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)]])}>${w.state.trim()}</worker-report>`).join("\n")}\n\n`
     : "";
   const r = f.role;
-  const roleLines = r ? [
-    r.scope.length ? `Looks after: ${r.scope.join(", ")}` : "Looks after no area of its own: it runs its routine and answers what it is asked.",
-    r.charter ? `Charter: ${r.charter}` : "",
-    r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
-    ...(r.initiatives ?? []).map((i) => `Serves: ${roleCardInitiativeLine(i)}`),
-  ].filter(Boolean).join("\n") : "";
+  const roleLines = r ? roleCardLines(r).join("\n") : "";
   const role = r ? `\n<role-card ${tagAttrs([["handle", r.handle], ["name", r.name], ["reports-to", r.reports_to]])}>${roleLines}</role-card>\n` : "";
   return `<scheduled-task ${head}>${role}${waiting}${change}${workers}${f.body}</scheduled-task>`;
 }

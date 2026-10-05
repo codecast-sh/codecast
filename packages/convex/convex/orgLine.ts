@@ -7,7 +7,7 @@ import { resolveScope } from "./org";
 import { capsFor, cardsCapOf, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
 import { recordHandStart } from "./spawn";
 import { insertTaskComment } from "./tasks";
-import { createRunCore } from "./workflow_runs";
+import { createRunCore, LIVE_RUN_STATUSES, queueRunOnDaemon } from "./workflow_runs";
 import { lineSlugOf } from "./orgRoles";
 import { allRolesInBoundary, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
@@ -148,7 +148,7 @@ export function roleMayStartHands(role: any, now: number): boolean {
 // One name in the contract, shared with the line page's admission state.
 export const LINE_CARD_GATE_NODE = CARD_GATE_NODE_ID;
 
-const IN_FLIGHT = ["pending", "running", "paused"] as const;
+const IN_FLIGHT = LIVE_RUN_STATUSES;
 
 // The cards open on this role's line: every line run (a run with a task that
 // the role's standing session spawned) from its start until its card is
@@ -273,12 +273,7 @@ export async function startLineRun(ctx: Ctx, role: any, task: any, now = Date.no
     now,
   });
 
-  await ctx.db.insert("daemon_commands", {
-    user_id: hostId,
-    command: "run_workflow",
-    args: JSON.stringify({ workflow_run_id: runId, workflow_slug: slug }),
-    created_at: now,
-  });
+  await queueRunOnDaemon(ctx, hostId, runId, { slug, now });
 
   // The run's primary session is a hand of the role: it counts against
   // caps.hands_per_day and carries org_role_id, the same as a spawn.

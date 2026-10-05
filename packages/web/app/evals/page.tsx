@@ -1,6 +1,8 @@
 // /evals and everything under it: one registered area whose sub-paths
 // components/evals/evalsPaths.ts reads. Each view's page loads on its own, so
-// the wall does not pay for the Multiplayer sim lanes.
+// the wall does not pay for the Multiplayer sim lanes. This is the area's
+// mount root: it hands the views codecast's host (components/evals/host.tsx)
+// and imports the area's tokens and stylesheet, once.
 
 import { lazy, Suspense, useMemo, type ComponentType } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -8,6 +10,15 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { EvalsShell } from "../../components/evals/EvalsShell";
 import { parseEvalsPath, type EvalsView, type EvalsViewName } from "../../components/evals/evalsPaths";
+import { codecastEvalsHost, EvalsHostProvider } from "../../components/evals/host";
+import "../../components/evals/tokens.css";
+import "../../components/evals/evals.css";
+import "../../components/evals/surface.css";
+import "../../components/evals/wall.css";
+import "../../components/evals/bisect.css";
+import "../../components/evals/run.css";
+import "../../components/evals/runPanels.css";
+import "../../components/evals/freeze.css";
 
 type PageFor<V extends EvalsViewName> = ComponentType<{ view: Extract<EvalsView, { view: V }> }>;
 
@@ -46,7 +57,7 @@ const OPENING: { [V in Exclude<EvalsViewName, "not-found">]: string } = {
 
 function Opening({ view }: { view: EvalsView }) {
   return (
-    <div className="ev-page text-[12px] ev-quiet" data-evals-loading="page">
+    <div className="ev-page ev-note" data-evals-loading="page">
       Opening {view.view === "not-found" ? "the page" : OPENING[view.view]}...
     </div>
   );
@@ -68,11 +79,13 @@ export default function EvalsPage() {
   return (
     <AuthGuard>
       <div className="h-full min-h-0">
-        <EvalsShell view={view}>
-          <Suspense fallback={<Opening view={view} />}>
-            <EvalsViewPage view={view} />
-          </Suspense>
-        </EvalsShell>
+        <EvalsHostProvider host={codecastEvalsHost}>
+          <EvalsShell view={view}>
+            <Suspense fallback={<Opening view={view} />}>
+              <EvalsViewPage view={view} />
+            </Suspense>
+          </EvalsShell>
+        </EvalsHostProvider>
       </div>
     </AuthGuard>
   );

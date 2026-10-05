@@ -399,7 +399,7 @@ export const COMPARISONS: Comparison[] = [
     competitor: "Conductor",
     competitorUrl: "https://conductor.build",
     title: "Codecast vs Conductor",
-    dek: "Conductor runs a fleet of agents in parallel from one Mac app. Codecast is the workspace a whole team and its agents share: every session on every machine, with the chat, tasks, docs and pull requests around them.",
+    dek: "Conductor runs a fleet of agents in parallel from one Mac app, and on its paid plans teammates can work in the same workspaces live. Codecast is the workspace a whole team and its agents share: every session on every machine, with the chat, tasks, docs and pull requests around them.",
     codecastIs:
       "Codecast is a workspace for a team and its coding agents. A daemon syncs every session your team runs, on any supported agent and any machine, into one searchable, steerable record, and the team's chat, tasks, plans, docs, pull requests and decisions live on that record with agents taking part in each.",
     competitorIs:
@@ -416,17 +416,17 @@ export const COMPARISONS: Comparison[] = [
         codecast: "Daemon on every machine where agents run; clients on web, desktop, iOS",
         competitor: "A macOS app; runs execute locally or in Conductor's cloud sandboxes",
       },
-      { ...SHARED_ROWS.team, competitor: "Single-user: your Mac, your runs" },
+      { ...SHARED_ROWS.team, competitor: "Live collaboration in shared workspaces through Conductor Multiplayer on its Pro, Teams and Enterprise plans" },
       {
         ...SHARED_ROWS.memory,
         competitor: "Session history within the app for your local runs",
       },
       { ...SHARED_ROWS.blame, competitor: "Not a goal; review happens per-run before merge" },
-      { ...SHARED_ROWS.remote, competitor: "On the Mac running it" },
+      { ...SHARED_ROWS.remote, competitor: "The Mac app, plus web access and a mobile app on Pro and higher plans" },
       { ...SHARED_ROWS.oss, competitor: "Closed source" },
     ],
     whenCompetitor: [
-      "You work solo on one Mac and mainly want to fan a feature out across parallel agents with clean worktree isolation.",
+      "You mainly want to fan a feature out across parallel agents with clean worktree isolation, and launch, review and merge those runs from one app.",
       "You want the tool itself to own launching, reviewing, and merging each run.",
     ],
     whenCodecast: [
@@ -542,13 +542,13 @@ export const COMPARISONS: Comparison[] = [
     codecastIs:
       "Codecast is a workspace for a team and its coding agents. It syncs every session your team runs (Claude Code, Codex, Cursor, Gemini, OpenCode and pi) with live steering, full-text search, agent-usable memory and line-level attribution, and adds the chat, tasks, docs, pull requests and decisions the team works in.",
     competitorIs:
-      "Happy is an open-source mobile and web client for Claude Code: it mirrors your sessions to your phone with end-to-end encryption, push notifications, and voice input, so you can watch and answer your own agents from anywhere.",
+      "Happy is an open-source (MIT) client for Claude Code and Codex, on iOS, Android, the web and macOS: it mirrors your sessions to your devices with end-to-end encryption, push notifications, and voice input, so you can watch and answer your own agents from anywhere.",
     rows: [
       {
         ...SHARED_ROWS.model,
         competitor: "Remote-controls the Claude Code sessions you run",
       },
-      { ...SHARED_ROWS.agents, competitor: "Claude Code (Codex support emerging)" },
+      { ...SHARED_ROWS.agents, competitor: "Claude Code and Codex" },
       {
         dimension: "Designed for",
         codecast: "Teams (with a real single-player mode): shared feed, per-directory privacy",
@@ -577,14 +577,14 @@ export const COMPARISONS: Comparison[] = [
   },
   {
     slug: "codecast-vs-claudia",
-    competitor: "Claudia",
-    competitorUrl: "https://claudiacode.com",
-    title: "Codecast vs Claudia",
-    dek: "Claudia is a desktop GUI that wraps Claude Code on your machine. Codecast leaves your terminal alone and brings every session into a workspace your team shares.",
+    competitor: "opcode (formerly Claudia)",
+    competitorUrl: "https://opcode.sh",
+    title: "Codecast vs opcode (formerly Claudia)",
+    dek: "opcode, the app formerly called Claudia, is a desktop GUI that wraps Claude Code on your machine. Codecast leaves your terminal alone and brings every session into a workspace your team shares.",
     codecastIs:
       "Codecast doesn't replace how you run agents: a daemon watches the sessions you already run in your own terminal and syncs them, across agents and machines, into a workspace your team shares, with a searchable, steerable record and the chat, tasks, docs and pull requests built on it.",
     competitorIs:
-      "Claudia is an open-source desktop app that wraps Claude Code in a GUI: manage projects and sessions, build custom agents, track usage and costs, and checkpoint session timelines, all locally on your machine.",
+      "opcode (formerly Claudia) is an open-source (AGPL) desktop app for Windows, macOS and Linux that wraps Claude Code in a GUI: manage projects and sessions, build custom agents, track usage and costs, manage MCP servers, and checkpoint session timelines, with all data kept on your machine.",
     rows: [
       {
         ...SHARED_ROWS.model,
@@ -594,7 +594,7 @@ export const COMPARISONS: Comparison[] = [
       {
         dimension: "Your terminal workflow",
         codecast: "Unchanged — keep tmux, IDE terminals, SSH; codecast records alongside",
-        competitor: "Moves into Claudia's interface",
+        competitor: "Moves into opcode's interface",
       },
       { ...SHARED_ROWS.team, competitor: "Single-user, local data" },
       {
@@ -614,7 +614,7 @@ export const COMPARISONS: Comparison[] = [
       "Sessions happen on more than one machine, by more than one person, or in more than one agent.",
     ],
     together:
-      "They compose: Claudia launches real Claude Code sessions, which a codecast daemon on the same machine records like any other — GUI locally, team record everywhere.",
+      "They compose: opcode launches real Claude Code sessions, which a codecast daemon on the same machine records like any other — GUI locally, team record everywhere.",
   },
 ];
 

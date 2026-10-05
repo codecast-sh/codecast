@@ -12,6 +12,8 @@ export function useOverflows(ref: RefObject<HTMLElement | null>, maxHeight: numb
     if (!el) return;
     const check = () => setOverflows(el.scrollHeight > maxHeight);
     check();
+    // A window with no layout (a test's jsdom) has nothing to watch: the first answer stands.
+    if (typeof ResizeObserver === "undefined") return;
     const obs = new ResizeObserver(check);
     obs.observe(el);
     for (const child of el.children) obs.observe(child);

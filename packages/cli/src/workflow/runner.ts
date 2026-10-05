@@ -1108,7 +1108,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     graph.goal = options.goalOverride;
   }
 
-  const { validateWorkflow, graphHash } = await import("./parser");
+  const { validateWorkflow, graphHash, graphNodeHashes } = await import("./parser");
   const errors = validateWorkflow(graph);
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
@@ -1182,6 +1182,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
       node_id: startNode.id,
       node_status: "running",
       graph_hash: hash,
+      graph_nodes: graphNodeHashes(graph),
     });
   }
 

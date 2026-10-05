@@ -90,7 +90,7 @@ describe("lineWriteGate", () => {
 describe("editOutcome", () => {
   test("reads the daemon's answer", () => {
     expect(editOutcome(undefined)).toEqual({ state: "waiting" });
-    expect(editOutcome({ executed_at: 1, error: "/src/app/.codecast/line.toml: [line] size_budget must be a positive integer" })).toEqual({ state: "refused", message: "[line] size_budget must be a positive integer" });
+    expect(editOutcome({ executed_at: 1, error: "/src/app/.codecast/line.toml: [line] size_budget must be a positive integer" })).toEqual({ state: "refused", message: "size_budget must be a positive integer" });
     expect(editOutcome({ executed_at: 1, error: "expired_ttl" })).toMatchObject({ state: "refused", message: expect.stringMatching(/within 5 minutes.*Nothing reached the file/) });
     expect(editOutcome({ executed_at: 1, error: "Unknown command: line_profile_edit" })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast/) });
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: true } }) })).toEqual({ state: "saved" });

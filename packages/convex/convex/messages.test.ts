@@ -3,6 +3,8 @@ import {
   findDuplicateUserRow,
   getAddMessagesAgentStatusProjection,
   shouldApplyAddMessagesAgentStatusProjection,
+  nextAgentStatusProbe,
+  AGENT_STATUS_PROBE_WINDOW_MS,
 } from "./messages";
 
 describe("getAddMessagesAgentStatusProjection", () => {
@@ -84,5 +86,34 @@ describe("findDuplicateUserRow", () => {
     const stored = { role: "user", content: "token=SECRET", timestamp: t0 };
     const redact = (c: string) => c.replace("SECRET", "***");
     expect(findDuplicateUserRow([stored], { content: "token=***", timestamp: t0 + 1 }, redact)).toBe(stored);
+  });
+});
+
+describe("nextAgentStatusProbe", () => {
+  const assistant = { has_assistant_message: true, has_tool_result_reply: false };
+  const toolResult = { has_assistant_message: false, has_tool_result_reply: true };
+
+  test("the first batch opens a probe and schedules the one check", () => {
+    expect(nextAgentStatusProbe(undefined, assistant, 1000)).toEqual({
+      schedule: true,
+      probe: { ...assistant, due_at: 1000 + AGENT_STATUS_PROBE_WINDOW_MS, at: 1000 },
+    });
+  });
+
+  test("a batch inside the window folds its evidence in without scheduling", () => {
+    const open = nextAgentStatusProbe(undefined, assistant, 1000).probe;
+    expect(nextAgentStatusProbe(open, toolResult, 1500)).toEqual({
+      schedule: false,
+      probe: { has_assistant_message: true, has_tool_result_reply: true, due_at: open.due_at, at: 1500 },
+    });
+  });
+
+  test("a batch after the window opens a fresh probe, so a lost check heals", () => {
+    const open = nextAgentStatusProbe(undefined, assistant, 1000).probe;
+    const later = open.due_at + 1;
+    expect(nextAgentStatusProbe(open, toolResult, later)).toEqual({
+      schedule: true,
+      probe: { ...toolResult, due_at: later + AGENT_STATUS_PROBE_WINDOW_MS, at: later },
+    });
   });
 });

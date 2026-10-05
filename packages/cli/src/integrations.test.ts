@@ -201,3 +201,17 @@ describe("connect with a token", () => {
     expect(logs.join("\n")).toContain("Sentry refused the token (401)");
   });
 });
+
+describe("connect and disconnect refusals", () => {
+  test("a refusal code reads as the same words the web shows", async () => {
+    answer = () => ({ ok: false, error: "signed_out" });
+    await expect(run("connect", "gmail")).rejects.toThrow(/exit 1/);
+    expect(logs.join("\n")).toContain("You were signed out. Sign in, then connect again.");
+    expect(logs.join("\n")).not.toMatch(/\bsigned_out\b/);
+
+    logs = [];
+    answer = () => ({ ok: false, error: "no_such_installation" });
+    await expect(run("disconnect", "gmail")).rejects.toThrow(/exit 1/);
+    expect(logs.join("\n")).toContain("That connection no longer exists.");
+  });
+});

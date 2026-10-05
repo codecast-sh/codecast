@@ -3,6 +3,29 @@
 // blockquote (`> ...`), which both renders as a quote in the thread and reads as
 // a quote to the agent. A comment is that blockquote followed by the user's reply.
 
+import type { OrgReplyVerdict } from "@codecast/shared/contracts/orgProposal";
+
+// A person's answer to one card of an org proposal (org-staffing.md S39),
+// held in the same batch as the quotes until the next send applies it. The
+// item's `quote` is the card's sentence, so every reader of a PendingComment
+// still has words; `body` is the person's own words; `messageId` is "".
+export type PendingProposalAnswer = {
+  id: string;
+  short_id: string;
+  title: string;
+  /** SubjectCard.key; "" for an answer about the whole proposal. */
+  card: string;
+  /** Every member of the card in apply order: what the verdict sends. */
+  change_ids: string[];
+  /** The drawn seqs, ascending: what the words name. */
+  seqs: number[];
+  verdict: OrgReplyVerdict;
+  /** The number the person sees on the card, when the list numbers them. */
+  ordinal?: number;
+  /** On an approval that would take sessions over (R1): leave them where they are. */
+  leave_sessions?: boolean;
+};
+
 export type PendingComment = {
   id: string;
   messageId: string;
@@ -23,7 +46,15 @@ export type PendingComment = {
   // `quote` then holds the page and the words at that spot, which is what the
   // agent reads; this anchor is what draws the pin back on the framed page.
   page?: QuotedPage;
+  // Set on an answer to an org proposal card. Quote-only readers skip it
+  // (isProposalAnswer); the send applies it and writes it in words.
+  proposal?: PendingProposalAnswer;
 };
+
+/** A batch item that answers a proposal card rather than quoting a message. */
+export function isProposalAnswer(c: Pick<PendingComment, "proposal">): c is PendingComment & { proposal: PendingProposalAnswer } {
+  return !!c.proposal;
+}
 
 // `point` is where on the picture the note sits, as fractions of its width
 // and height from the top left; `width`/`height` are the picture's own pixel
@@ -128,12 +159,15 @@ export function describePoint({ point, width, height }: QuotedImage): string {
 // Comments with no body still emit their quote (treated as a plain quote).
 // `attachmentNumbers` maps an image comment's id to its position among the
 // send's attached images, and `markers` to its marker number on that image.
+// A proposal answer is never a quote: its words come from proposalReplyText
+// (lib/reviewActions takeProposalAnswers), so it is skipped here.
 export function formatPendingComments(
-  comments: (Pick<PendingComment, "quote" | "body" | "image"> & { id?: string })[],
+  comments: (Pick<PendingComment, "quote" | "body" | "image" | "proposal"> & { id?: string })[],
   attachmentNumbers?: ReadonlyMap<string, number>,
   markers?: ReadonlyMap<string, number>,
 ): string {
   return comments
+    .filter((c) => !isProposalAnswer(c))
     .map((c) => formatQuotedReply(imageQuoteText(c, c.id ? attachmentNumbers?.get(c.id) : undefined, c.id ? markers?.get(c.id) : undefined), c.body))
     .filter(Boolean)
     .join("\n\n");

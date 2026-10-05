@@ -10,6 +10,7 @@ import { compressImage } from "../lib/compressImage";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
 import { textareaCaretRect } from "../lib/textareaCaret";
 import { classifyApiErrorBanner, ACTIVE_AGENT_STATUSES, isHostedAgentType, type AgentStatus } from "@codecast/shared/contracts";
+import { HOSTED_IMAGE_REFUSAL } from "@codecast/shared/contracts/assistant";
 import { useLimitRecovery } from "../hooks/useLimitRecovery";
 import { useCoarseNow, useNowWhen } from "../hooks/useCoarseNow";
 import { formatCountdown, HIBERNATED_COPY } from "@codecast/shared/contracts";
@@ -27,6 +28,7 @@ import { attachReviewToMessage, quotedImages } from "../lib/reviewActions";
 import { uploadMarkedImage } from "../lib/markedImage";
 import { enterReviewFromComposer } from "../lib/reviewNav";
 import { ReviewBar } from "./ReviewBar";
+import { useReviewComposer } from "./reviewContext";
 import { ComposerFoot, ComposerSendButton, ComposerShell, ComposerTextarea, ComposerTextRow } from "./ComposerShell";
 import { composerColumn, FIELD_SIZING_SUPPORTED } from "./composerLayout";
 import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggestion";
@@ -44,7 +46,7 @@ import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
 import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft } from "lucide-react";
 import type { ComposeEditorHandle } from "./editor/ComposeEditor";
-import { useMentionQuery, useMentionServerSearch, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
+import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, mentionItemMatches, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
 import { parseChatDraftKey } from "../lib/chatDraftKey";
 import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
@@ -247,6 +249,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
   const composeTeamId = useInboxStore((s) => s.sessions[conversationId]?.team_id);
+  // A new session has no team until the server stamps it: mention from the
+  // team its directory files into meanwhile (sessionMentionTeamId).
+  const composePath = useInboxStore((s) => {
+    const row = s.sessions[conversationId];
+    return row && !row.team_id ? row.git_root || row.project_path || null : null;
+  });
   // Parked on a usage limit: the status line says so instead of "Ready", with
   // the reset counted down from the park stamp's banner (a primitive
   // signature, so heartbeats never re-render the composer for it).
@@ -279,14 +287,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const mentionScope = useMemo(() => {
     const teamId = mentionTeamId
       ? String(mentionTeamId)
-      : composeTeamId ? String(composeTeamId) : null;
+      : sessionMentionTeamId(useInboxStore.getState(), { team_id: composeTeamId, project_path: composePath });
     const isMember = teamId
       ? (memberTeams || []).some((t: any) => String(t._id) === teamId)
       : false;
     if (teamId && isMember) return { kind: "team" as const, teamId };
     const uid = mentionUser?._id ? String(mentionUser._id) : "";
     return uid ? { kind: "personal" as const, userId: uid } : { kind: "any" as const };
-  }, [mentionTeamId, composeTeamId, memberTeams, mentionUser?._id]);
+  }, [mentionTeamId, composeTeamId, composePath, memberTeams, mentionUser?._id]);
   const composeMentionQuery = useMentionQuery(mentionScope);
   const [pendingMessageId, setPendingMessageId] = useState<Id<"pending_messages"> | null>(null);
   const [sentAt, setSentAt] = useState<number | null>(null);
@@ -1173,6 +1181,20 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // Pending review quotes count as sendable content: handleSubmit auto-attaches
   // them (attachReviewToMessage), so a bare Enter with an empty input is a valid send.
   const reviewCount = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).length);
+  // Whether any of them answer a proposal card (S39): the placeholder then
+  // speaks of answers, which the send applies, rather than quotes.
+  const hasReviewAnswers = useInboxStore((s) => (s.reviewComments[conversationId] ?? []).some((c) => !!c.proposal));
+  // Hand this composer's send to the review bridge while mounted, so a
+  // proposal ledger in the thread can press it. Only the conversation's own
+  // composer attaches: a comment composer inside the same view never does.
+  const reviewComposer = useReviewComposer();
+  const attachSend = reviewComposer?.conversationId === conversationId ? reviewComposer.attachSend : undefined;
+  const handleSubmitRef = useRef<((e: React.FormEvent) => Promise<unknown>) | null>(null);
+  useWatchEffect(() => {
+    if (!attachSend) return;
+    attachSend(() => { void handleSubmitRef.current?.({ preventDefault: () => {} } as unknown as React.FormEvent); });
+    return () => attachSend(null);
+  }, [attachSend]);
   const hasContent = (composeMode ? composeHasContent : message.trim().length > 0) || pastedImages.length > 0 || queuedMessages.length > 0;
   // A showing ghost suggestion is content too: it can run several lines, and
   // the collapsed pill (narrow, fully rounded) bends that into an ellipse.
@@ -1452,14 +1474,26 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return previewUrl;
   }, [convex, conversationId, addImagePlaceholder, clearImageByPreview]);
 
+  // Every way an image reaches the composer (paste, drop, the compose
+  // editor's paste) goes through here. A hosted assistant reads text only, so
+  // there the image is turned away at once, in the server's own words, rather
+  // than sent and refused after it shows as sent.
+  const takeImage = useCallback((file: File) => {
+    if (hostedConversation) {
+      toast.error(HOSTED_IMAGE_REFUSAL, { id: "hosted-image-refusal" });
+      return;
+    }
+    uploadImage(file);
+  }, [hostedConversation, uploadImage]);
+
   useWatchEffect(() => {
     if (onDropFiles) {
       onDropFiles.current = (files: File[]) => {
-        files.forEach(f => { if (f.type.startsWith("image/")) uploadImage(f); });
+        files.forEach(f => { if (f.type.startsWith("image/")) takeImage(f); });
       };
       return () => { if (onDropFiles) onDropFiles.current = null; };
     }
-  }, [onDropFiles, uploadImage]);
+  }, [onDropFiles, takeImage]);
 
   const handlePaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
@@ -1469,10 +1503,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (items[i].type.startsWith("image/")) {
         if (!hasImage) { e.preventDefault(); hasImage = true; }
         const file = items[i].getAsFile();
-        if (file) uploadImage(file);
+        if (file) takeImage(file);
       }
     }
-  }, [uploadImage]);
+  }, [takeImage]);
 
   // Set when a submit could not commit its send (the optimistic row + outbox
   // enqueue refused). Read synchronously right after handleSubmit() is called:
@@ -1490,7 +1524,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       : messageRef.current;
     suggestionRef.current?.settleSend(message);
     if (onGateSend) {
-      const text = message.trim();
+      // The pending batch rides a gate send the way it rides the main one:
+      // the quotes, and a proposal's answers (org-staffing.md S39), lead the
+      // text and are taken here, so a bare Enter with answers waiting is a
+      // send. The gate's host receives the whole body and takes nothing.
+      const text = attachReviewToMessage(conversationId, message).trim();
       // Same reconcile as the main path: the durable draft is the record of
       // pasted images, memory can lose rows across a remount (jx7byyk).
       const gateDraftRows = restoreDraftImages(useInboxStore.getState().drafts[conversationId] ?? undefined);
@@ -1550,7 +1588,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const submitImages = [...memoryImages, ...draftOnlyImages];
     // Auto-attach any pending review quotes/comments so a plain send carries them —
     // no separate "add to message" step. They prepend the typed reply and the batch
-    // is cleared. (Gate/workflow above return early, so they're unaffected.) Images
+    // is cleared. (The gate path above takes it the same way; workflow does not.) Images
     // quoted from the gallery ride along as attachments after the composer's own,
     // and each quote names its picture by that attachment number. A fork from a
     // selection sends text only, so its image quotes point by address instead.
@@ -2160,6 +2198,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     onSubmitWithIntent?.(false);
   };
 
+  handleSubmitRef.current = handleSubmit;
   const canSubmit = hasContent || reviewCount > 0;
   // When the send is carried entirely by attached quotes, tint the button cyan to
   // match the tray so it reads as "this sends the quotes".
@@ -2644,7 +2683,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         ref={composeRef}
                         initialContent={message}
                         onMentionQuery={composeMentionQuery}
-                        onImagePaste={uploadImage}
+                        onImagePaste={takeImage}
                         onSubmit={() => handleFormSubmit({ preventDefault: () => {} } as any)}
                         onExit={toggleCompose}
                         onContentChange={setComposeHasContent}
@@ -2682,7 +2721,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     onPaste={handlePaste}
                     onFocus={() => setIsFocused(true)}
                     onBlur={() => { setIsFocused(false); setAcTrigger(null); }}
-                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...` : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
+                    placeholder={ghostVisible ? "" : composerPlaceholder ?? (bareComposer ? "Comment…" : onGateSend ? "Send a message to continue the workflow..." : onWorkflowLaunch ? "Goal override (optional) — press send to run workflow..." : reviewCount > 0 ? (hasReviewAnswers ? "Send your answers as they are, or add a reply first..." : `Send ${reviewCount} quote${reviewCount !== 1 ? "s" : ""} as-is, or add a reply first...`) : agentStatus === "permission_blocked" ? ((pendingPermissionsCount ?? 0) > 0 ? "Approve or deny permission to continue..." : hasAskUserQuestion ? "Answer the question to continue..." : "Send a message...") : "Send a message...")}
                     dim={isSelectionActive && !isSelectionEditedRef.current}
                   />
                   {!bareComposer && suggestionsEnabled && !onGateSend && !onWorkflowLaunch && !hasAskUserQuestion && (

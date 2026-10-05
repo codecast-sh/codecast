@@ -35,11 +35,13 @@ export function probeScript(): string {
   return `${PATH_LINE}
 x=""; [ -d ${HOST_XCODE} ] && x=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" ${HOST_XCODE}/Contents/Info.plist 2>/dev/null)
 sel=$(xcode-select -p 2>/dev/null)
-lic=0; case "$sel" in ${HOST_XCODE}/*) xcrun simctl help >/dev/null 2>&1 && lic=1;; esac
+lic=0; case "$sel" in ${HOST_XCODE}/*) xcodebuild -license check >/dev/null 2>&1 && xcodebuild -checkFirstLaunchStatus >/dev/null 2>&1 && lic=1;; esac
 rts=""; [ "$lic" = 1 ] && rts=$(xcrun simctl list runtimes 2>/dev/null | awk '/^iOS / && !/unavailable/ {print $2}' | paste -sd, -)
 ax=$(command -v axe || true); axv=""; [ -n "$ax" ] && axv=$(axe --version 2>/dev/null | tail -1)
-python3 -c 'import json,sys; a=sys.argv; print(json.dumps(dict(macos=a[1], xcode=a[2] or None, selected=a[3] or None, license=a[4]=="1", runtimes=[r for r in a[5].split(",") if r], axe=a[6] or None, zstd=a[7]=="1")))' \\
-  "$(sw_vers -productVersion)" "$x" "$sel" "$lic" "$rts" "$axv" "$(command -v zstd >/dev/null && echo 1 || echo 0)"`;
+zs=0; command -v zstd >/dev/null && zs=1
+q() { [ -n "$1" ] && printf '"%s"' "$1" || printf null; }
+# Plain printf, not python3: until the license is accepted, /usr/bin/python3 is an Xcode shim that refuses to run.
+printf '{"macos":"%s","xcode":%s,"selected":%s,"license":%s,"runtimes":[%s],"axe":%s,"zstd":%s}\n' "$(sw_vers -productVersion)" "$(q "$x")" "$(q "$sel")" "$([ "$lic" = 1 ] && echo true || echo false)" "$(printf '%s' "$rts" | sed 's/[^,][^,]*/"&"/g')" "$(q "$axv")" "$([ "$zs" = 1 ] && echo true || echo false)"`;
 }
 
 function ssh(host: RemoteHost, script: string, timeoutMs: number, input?: string): { ok: boolean; out: string } {
@@ -78,18 +80,27 @@ export function streamXcode(host: RemoteHost, app: string, log: (m: string) => v
   const [pack, unpack] = zstd ? [`${zstd} -1 -T0`, "zstd -d"] : ["gzip -1", "gzip -d"];
   const dir = app.slice(0, app.lastIndexOf("/"));
   const name = app.slice(app.lastIndexOf("/") + 1);
-  const remote = `${PATH_LINE}; set -e; rm -rf /tmp/cast-xcode; mkdir -p /tmp/cast-xcode; cd /tmp/cast-xcode; ${unpack} | tar -xf -; sudo -n rm -rf '${dest}'; sudo -n mv '${name}' '${dest}'; rm -rf /tmp/cast-xcode; echo XCODE-IN-PLACE`;
+  const remote = `${PATH_LINE}; set -e; rm -rf /tmp/cast-xcode; mkdir -p /tmp/cast-xcode; cd /tmp/cast-xcode; ${unpack} | tar -xf -; sudo -n rm -rf '${dest}'; sudo -n mv '${name}' '${dest}'; rm -rf /tmp/cast-xcode; ${dest === HOST_XCODE ? `${activateLines()}; ` : ""}echo XCODE-IN-PLACE`;
   log(`streaming ${app} to the host (several GB; this takes a while)…`);
   const sshCmd = ["ssh", ...sshBase(host), `${host.user}@${host.address}`, remote].map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ");
   const r = spawnSync("bash", ["-c", `set -o pipefail; tar -C '${dir}' -cf - '${name}' | ${pack} | ${sshCmd}`], { encoding: "utf-8", timeout: 4 * 3600_000, maxBuffer: 16 * 1024 * 1024 });
   if (r.status !== 0 || !(r.stdout ?? "").includes("XCODE-IN-PLACE")) throw new Error(`Xcode copy failed: ${`${r.stdout ?? ""}${r.stderr ?? ""}`.trim().slice(-400)}`);
 }
 
+/**
+ * Select Xcode and accept its license in one step. Until the license is
+ * accepted, every /usr/bin developer shim (python3, git, make) refuses to run
+ * once Xcode is the selected developer dir, which breaks the host's other
+ * scripts; so the copy runs this right after the move, never later.
+ */
+function activateLines(): string {
+  const xcodebuild = `${HOST_XCODE}/Contents/Developer/usr/bin/xcodebuild`;
+  return `sudo -n xcode-select -s ${HOST_XCODE}/Contents/Developer && sudo -n ${xcodebuild} -license accept && sudo -n ${xcodebuild} -runFirstLaunch`;
+}
+
 export function activateScript(): string {
   return `${PATH_LINE}; set -e
-sudo -n xcode-select -s ${HOST_XCODE}/Contents/Developer
-sudo -n xcodebuild -license accept
-sudo -n xcodebuild -runFirstLaunch
+${activateLines()}
 echo XCODE-ACTIVE`;
 }
 
