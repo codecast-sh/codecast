@@ -6,6 +6,7 @@
 // order, so an option index means the same thing everywhere.
 
 import { autonomyOn, trustForSwitch } from "./roleAutonomy";
+import { INITIATIVE_RECORD_MAX } from "./initiative";
 
 export const ORG_PROPOSAL_FENCE = "org-proposal";
 
@@ -15,6 +16,8 @@ export type OrgProposalCaps = { hands_per_day?: number; wakes_per_day?: number; 
 // The line a role's tasks run on (the-line.md L2): a workflow slug, absent
 // meaning the shipped "line" template.
 export const DEFAULT_LINE_SLUG = "line";
+/** The line a role runs: its own pick, else the shipped line. */
+export const lineSlugOf = (role: { line_workflow_slug?: string | null }): string => role.line_workflow_slug || DEFAULT_LINE_SLUG;
 export const LINE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 export type OrgProposalScope = {
@@ -172,19 +175,28 @@ export type OrgUpgradeChange = { kind: "upgrade"; instance: string; template: st
 // carried so the row reads cold in a store that does not hold the row.
 /** How a goal is measured: a name and the number to reach ("Weekly active teams", "1000"). At most two. */
 export type OrgInitiativeMetric = { name: string; target: string };
+/** A step on the way to a goal, with the day it is due (unix ms) when one was named. */
+export type OrgInitiativeMilestone = { title: string; date?: number };
+/** The written half of a goal's intent record (I5) a change may carry: why
+ *  it matters, what done looks like, milestones, and where the goal was
+ *  stated (`sources`: each an address, the words said, or both, read by
+ *  parseIntentSource). */
+export type OrgInitiativeRecord = { why?: string; done_when?: string; milestones?: OrgInitiativeMilestone[]; sources?: string[] };
 /** Set a goal: the initiative with the sentence that says what reaching it
  *  looks like, the projects that carry it, who drives it, the top level goal
  *  it feeds (`parent`: a ref, or the title of a goal set earlier in the same
- *  proposal) and the one or two numbers it is measured by. */
-export type OrgInitiativeChange = { kind: "initiative"; title: string; description: string; projects: string[]; owner?: string; target_date?: number; parent?: string; metrics?: OrgInitiativeMetric[]; evidence?: string[] };
+ *  proposal), the one or two numbers it is measured by, and its record. */
+export type OrgInitiativeChange = { kind: "initiative"; title: string; description: string; projects: string[]; owner?: string; target_date?: number; parent?: string; metrics?: OrgInitiativeMetric[]; evidence?: string[] } & OrgInitiativeRecord;
 /** Add projects to a goal that exists. */
 export type OrgInitiativeProjectsChange = { kind: "initiative_projects"; initiative: string; projects: string[]; title?: string };
 /** Give a goal an owner, a person or a role. */
 export type OrgInitiativeOwnerChange = { kind: "initiative_owner"; initiative: string; owner: string; title?: string };
-/** Place a goal that exists in the tree and say how it is measured: `parent`
- *  is a ref or null (a top level goal), `metrics` replaces the list; each is
- *  optional and an absent one is left as it is. */
-export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: string; parent?: string | null; metrics?: OrgInitiativeMetric[]; title?: string };
+/** Place a goal that exists in the tree, say how it is measured and write its
+ *  record: `parent` is a ref or null (a top level goal), `metrics` replaces
+ *  the list, `why` and `done_when` replace the words, and `milestones`,
+ *  `sources`, `questions` and `decisions` are entries to ADD, never a
+ *  replacement. Each is optional and an absent one is left as it is. */
+export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: string; parent?: string | null; metrics?: OrgInitiativeMetric[]; title?: string; questions?: string[]; decisions?: string[] } & OrgInitiativeRecord;
 export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
 export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange
@@ -421,7 +433,7 @@ export function orgChangeError(raw: any): string | null {
       if (raw.owner !== undefined && !nonEmpty(raw.owner)) return "initiative owner is \"@handle\" for a role, \"me\" or a member's name for a person";
       if (raw.target_date !== undefined && !(typeof raw.target_date === "number" && raw.target_date > 0)) return "initiative target_date is unix ms";
       if (raw.parent !== undefined && !nonEmpty(raw.parent)) return "initiative parent is the top level goal it feeds: in-N, an id, or the title of a goal set earlier in this proposal";
-      { const m = metricsError("initiative", raw.metrics); if (m) return m; }
+      { const m = metricsError("initiative", raw.metrics) ?? recordError("initiative", raw); if (m) return m; }
       return optStrings(raw.evidence) ? null : "initiative evidence is a list of strings";
     case "initiative_projects":
       if (!nonEmpty(raw.initiative)) return "initiative_projects needs an initiative ref (in-N, an id or its title)";
@@ -434,8 +446,8 @@ export function orgChangeError(raw: any): string | null {
     case "initiative_shape":
       if (!nonEmpty(raw.initiative)) return "initiative_shape needs an initiative ref (in-N, an id or its title)";
       if (raw.parent !== undefined && raw.parent !== null && !nonEmpty(raw.parent)) return "initiative_shape parent is the top level goal it feeds (a ref), or null for a top level goal";
-      { const m = metricsError("initiative_shape", raw.metrics); if (m) return m; }
-      if (raw.parent === undefined && raw.metrics === undefined) return "initiative_shape needs a parent or metrics: what it changes about the goal";
+      { const m = metricsError("initiative_shape", raw.metrics) ?? recordError("initiative_shape", raw, SHAPE_ONLY_LISTS); if (m) return m; }
+      if (raw.parent === undefined && raw.metrics === undefined && !carriesRecord(raw)) return "initiative_shape needs a parent, metrics, why, done_when, milestones, sources, questions or decisions: what it changes about the goal";
       return optString(raw.title) ? null : "initiative_shape title is the initiative's title, a string";
   }
   return null;
@@ -448,6 +460,29 @@ function metricsError(kind: string, raw: unknown): string | null {
   for (const m of raw) if (!m || typeof m !== "object" || !nonEmpty((m as any).name) || !nonEmpty((m as any).target)) return `${kind} metrics entries are { name, target }, both strings ("Weekly active teams", "1000")`;
   return null;
 }
+
+/** The record lists a change may add to as plain strings, and what each entry is. */
+const RECORD_STRING_LISTS = { sources: "where the goal was stated: an address (a call, a session, a link), the words said, or both", questions: "what is still undecided", decisions: "what was decided" } as const;
+const SHAPE_ONLY_LISTS = ["questions", "decisions"] as const;
+/** The lists a shape change adds to, never replaces. */
+const SHAPE_ADD_LISTS = ["milestones", "sources", ...SHAPE_ONLY_LISTS] as const;
+/** A goal change's record (I5): why and done_when as words, milestones as
+ *  { title, date? }, and the string lists the kind may carry, each within the
+ *  row's own cap (INITIATIVE_RECORD_MAX). */
+function recordError(kind: string, raw: any, more: ReadonlyArray<"questions" | "decisions"> = []): string | null {
+  if (raw.why !== undefined && !nonEmpty(raw.why)) return `${kind} why is a string: why the goal matters`;
+  if (raw.done_when !== undefined && !nonEmpty(raw.done_when)) return `${kind} done_when is a string: what done looks like, the sentence a result is checked against`;
+  if (raw.milestones !== undefined) {
+    if (!Array.isArray(raw.milestones) || raw.milestones.length > INITIATIVE_RECORD_MAX.milestones) return `${kind} milestones is a list of at most ${INITIATIVE_RECORD_MAX.milestones} { title, date? }: the steps on the way`;
+    for (const m of raw.milestones) if (!m || typeof m !== "object" || !nonEmpty(m.title) || (m.date !== undefined && !(typeof m.date === "number" && m.date > 0))) return `${kind} milestones entries are { title, date? }: a title, and the day it is due as unix ms`;
+  }
+  for (const list of ["sources", ...more] as const) {
+    if (!optStrings(raw[list]) || (raw[list]?.length ?? 0) > INITIATIVE_RECORD_MAX[list]) return `${kind} ${list} is a list of at most ${INITIATIVE_RECORD_MAX[list]} strings: ${RECORD_STRING_LISTS[list]}`;
+  }
+  return null;
+}
+/** Does the change write anything to the goal's record? An empty list adds nothing. */
+const carriesRecord = (c: any): boolean => c.why !== undefined || c.done_when !== undefined || SHAPE_ADD_LISTS.some((list) => c[list]?.length > 0);
 
 export function isOrgChange(raw: any): raw is OrgChange { return orgChangeError(raw) === null; }
 
@@ -706,7 +741,7 @@ export function goalChangeSentence(c: OrgGoalChange, names?: OrgAskNames): strin
   const project = (ref: string) => names?.project?.(ref) ?? ref;
   const goal = (ref: string, title?: string) => title?.trim() || names?.initiative?.(ref) || ref;
   switch (c.kind) {
-    case "initiative": return `set a goal: ${c.title.trim()}, carried by ${andList(c.projects.map(project))}${c.owner ? `, owned by ${owner(c.owner)}` : ""}${c.parent ? `, under ${goal(c.parent)}` : ""}${c.metrics?.length ? `, measured by ${metricsWords(c.metrics)}` : ""}`;
+    case "initiative": return `set a goal: ${c.title.trim()}, carried by ${andList(c.projects.map(project))}${c.owner ? `, owned by ${owner(c.owner)}` : ""}${c.parent ? `, under ${goal(c.parent)}` : ""}${c.metrics?.length ? `, measured by ${metricsWords(c.metrics)}` : ""}${c.milestones?.length ? `, with ${count(c.milestones.length, "milestone")}` : ""}`;
     case "initiative_projects": return `add ${andList(c.projects.map(project))} to the goal ${goal(c.initiative, c.title)}`;
     case "initiative_owner": return c.owner.trim() ? `make ${owner(c.owner)} the owner of the goal ${goal(c.initiative, c.title)}` : `the goal ${goal(c.initiative, c.title)} has no owner`;
     case "initiative_shape": {
@@ -714,9 +749,41 @@ export function goalChangeSentence(c: OrgGoalChange, names?: OrgAskNames): strin
         c.parent === undefined ? "" : c.parent === null ? "a top level goal" : `under ${goal(c.parent)}`,
         c.metrics === undefined ? "" : c.metrics.length ? `measured by ${metricsWords(c.metrics)}` : "with no metric",
       ].filter(Boolean);
-      return `${c.parent === null && parts.length === 1 ? "make" : "put"} the goal ${goal(c.initiative, c.title)} ${andList(parts)}`;
+      const name = goal(c.initiative, c.title);
+      const placed = parts.length ? `${c.parent === null && parts.length === 1 ? "make" : "put"} the goal ${name} ${andList(parts)}` : "";
+      // The record reads as what is written down, never as the words themselves: those are the effect's.
+      const record = recordWords(c);
+      if (!record.length) return placed || `change the goal ${name}`;
+      return placed ? `${placed}, and record ${andList(record)}` : `record on the goal ${name}: ${andList(record)}`;
     }
   }
+}
+const count = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`;
+/** The words as a sentence: a full stop where the writer left none. */
+const fullStop = (text: string) => { const t = text.trim(); return /[.!?]$/.test(t) ? t : `${t}.`; };
+/** What a shape change writes to the goal's record, each part named and counted: "why it matters", "the milestone Private beta open", "2 open questions". */
+function recordWords(c: OrgInitiativeShapeChange): string[] {
+  const some = (k: number | undefined, one: string, many: string) => !k ? "" : k === 1 ? one : `${k} ${many}`;
+  return [
+    c.why !== undefined ? "why it matters" : "",
+    c.done_when !== undefined ? "what done looks like" : "",
+    some(c.milestones?.length, `the milestone ${c.milestones?.[0]?.title.trim()}`, "milestones"),
+    some(c.questions?.length, "an open question", "open questions"),
+    some(c.decisions?.length, "a decision", "decisions"),
+    some(c.sources?.length, "where it was stated", "places it was stated"),
+  ].filter(Boolean);
+}
+/** The record a goal change carries, as the sentences an effect reads: the words themselves, each under its own name. */
+function recordEffect(c: OrgInitiativeRecord & { questions?: string[]; decisions?: string[] }): string {
+  const stop = fullStop;
+  return [
+    c.why?.trim() ? `Why it matters: ${stop(c.why)}` : "",
+    c.done_when?.trim() ? `Done when: ${stop(c.done_when)}` : "",
+    c.milestones?.length ? `${c.milestones.length === 1 ? "Milestone" : "Milestones"}: ${c.milestones.map((m) => `${m.title.trim()}${m.date ? ` (${humanEndDate(m.date)})` : ""}`).join("; ")}.` : "",
+    c.questions?.length ? `Still open: ${c.questions.map((q) => stop(q)).join(" ")}` : "",
+    c.decisions?.length ? `Decided: ${c.decisions.map((d) => stop(d)).join(" ")}` : "",
+    c.sources?.length ? `Its record says where it was stated (${count(c.sources.length, "source")}).` : "",
+  ].filter(Boolean).join(" ");
 }
 /** "Weekly active teams (target 1,000) and Paying teams (target 40)" */
 export const metricsWords = (metrics: ReadonlyArray<OrgInitiativeMetric>): string => andList(metrics.map((m) => `${m.name.trim()} (target ${m.target.trim()})`));
@@ -788,10 +855,10 @@ function askWords(names?: OrgAskNames) {
         const parts = [c.add?.length ? `takes on ${things(c.add)}` : "", c.remove?.length ? `hands off ${things(c.remove)}` : ""].filter(Boolean);
         return `${agent(c.handle)} ${andList(parts)}.`;
       }
-      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${c.description.trim()}`;
+      case "initiative": return `A new goal, ${c.title.trim()}, appears on the initiatives page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${recordEffect(c) ? `${fullStop(c.description)} ${recordEffect(c)}` : c.description.trim()}`;
       case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
       case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
-      case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; its owner reports the numbers.` : "It is no longer read against a number.") : ""}`.trim();
+      case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; its owner reports the numbers. ` : "It is no longer read against a number. ") : ""}${recordEffect(c)}`.trim();
       default: return describeOrgChange(c);
     }
   };
@@ -1019,12 +1086,15 @@ export function foldRepeatedSubjects(rows: any[]): { changes: any[]; notes: stri
     if (!hit) { if (key) at.set(key, { out: out.length, src: i }); index[i] = out.length; out.push(row); return; }
     index[i] = hit.out;
     const first = out[hit.out];
-    const conflict = Object.keys(row.change).find((k) => k !== "reason" && k in first.change && !same(first.change[k], row.change[k]));
+    // A shape change's record lists add to the goal, so two rows' lists join rather than disagree.
+    const joins = (k: string) => row.change.kind === "initiative_shape" && (SHAPE_ADD_LISTS as readonly string[]).includes(k);
+    const joined = Object.fromEntries(SHAPE_ADD_LISTS.filter((k) => joins(k) && first.change[k] && row.change[k]).map((k) => [k, [...first.change[k], ...row.change[k].filter((e: unknown) => !first.change[k].some((f: unknown) => same(e, f)))]]));
+    const conflict = Object.keys(row.change).find((k) => k !== "reason" && !joins(k) && k in first.change && !same(first.change[k], row.change[k]));
     if (conflict) { errors.push(`changes[${i}] (${describeOrgChange(row.change)}) repeats changes[${hit.src}] with a different ${conflict}: one change per subject`); return; }
     const evidence = [...(first.evidence ?? []), ...(row.evidence ?? []).filter((e: any) => !(first.evidence ?? []).some((f: any) => same(e, f)))];
     out[hit.out] = {
       ...first,
-      change: { ...first.change, ...row.change, ...("reason" in first.change || "reason" in row.change ? { reason: prose(first.change.reason, row.change.reason) } : {}) },
+      change: { ...first.change, ...row.change, ...joined, ...("reason" in first.change || "reason" in row.change ? { reason: prose(first.change.reason, row.change.reason) } : {}) },
       rationale: prose(first.rationale, row.rationale),
       ...(evidence.length ? { evidence } : {}),
       ...(prose(first.expected_effect, row.expected_effect) ? { expected_effect: prose(first.expected_effect, row.expected_effect) } : {}),
@@ -1187,12 +1257,15 @@ export function describeOrgChange(c: OrgChange): string {
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
     case "task_status": return `mark task ${c.task} ${c.status}`;
     case "project_status": return `mark project ${c.project} ${c.status}`;
-    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}${c.parent ? ` under ${c.parent}` : ""}${c.metrics?.length ? ` measured by ${metricsWords(c.metrics)}` : ""}`;
+    case "initiative": return `create initiative ${c.title} over ${list(c.projects)}${c.owner ? ` owned by ${c.owner}` : ""}${c.parent ? ` under ${c.parent}` : ""}${c.metrics?.length ? ` measured by ${metricsWords(c.metrics)}` : ""}${recordTerse(c)}`;
     case "initiative_projects": return `initiative ${c.initiative} +${list(c.projects)}`;
     case "initiative_owner": return `initiative ${c.initiative} owner ${c.owner}`;
-    case "initiative_shape": return `initiative ${c.initiative}${c.parent !== undefined ? ` under ${c.parent ?? "nothing"}` : ""}${c.metrics !== undefined ? ` metrics ${c.metrics.length ? metricsWords(c.metrics) : "none"}` : ""}`;
+    case "initiative_shape": return `initiative ${c.initiative}${c.parent !== undefined ? ` under ${c.parent ?? "nothing"}` : ""}${c.metrics !== undefined ? ` metrics ${c.metrics.length ? metricsWords(c.metrics) : "none"}` : ""}${recordTerse(c)}`;
   }
 }
+/** The record a goal change carries, for the terse line: " why done_when +2 milestones +1 sources". */
+const recordTerse = (c: OrgInitiativeRecord & { questions?: string[]; decisions?: string[] }): string =>
+  `${c.why !== undefined ? " why" : ""}${c.done_when !== undefined ? " done_when" : ""}${(["milestones", "questions", "decisions", "sources"] as const).map((list) => c[list]?.length ? ` +${c[list]!.length} ${list}` : "").join("")}`;
 
 /**
  * A record change as its row shows it (S9): the act ("mark done"), the

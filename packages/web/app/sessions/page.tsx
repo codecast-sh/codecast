@@ -6,11 +6,11 @@ import { useState, useMemo, useCallback, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
+import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
 import { useAggregateMetrics, useManagedSessions } from "../../hooks/useSyncManagedSessions";
 import { AuthGuard } from "../../components/AuthGuard";
 import Link from "next/link";
 import type { FunctionReturnType } from "convex/server";
-import { toast } from "sonner";
 // Reuse the inbox's canonical state predicates so /sessions and /inbox never
 // disagree about what "needs input" / "idle" means.
 import {
@@ -18,7 +18,6 @@ import {
   type InboxSession,
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
-import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/contracts";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
@@ -334,7 +333,6 @@ export function SessionsView() {
   // conversation row — the inbox's own synced sessions collection, joined by
   // id, so no second listInboxSessions subscription duplicates the sync.
   const inboxRows = useCollectionRows<InboxSession>("sessions", { sig: triageSig });
-  const convCommand = useInboxStore((s) => s.convCommand);
   const pruneSession = useMutation(api.managedSessions.unregisterManagedSession);
   // Local-first: patchConversation mutates conversations[id] synchronously and
   // rides applyPatches to Convex (inbox_pinned_at/inbox_dismissed_at aren't in
@@ -449,18 +447,17 @@ export function SessionsView() {
     }), 2000);
   }, []);
 
+  // A kill here is the same gesture as everywhere else: the store's kill
+  // action paints the hide, records one undo entry with its Undo toast and
+  // says which triggers died with it (useTriggerKillNotice).
+  const { killWithNotice, killManyWithNotice } = useTriggerKillNotice();
   const handleKill = useCallback(
     (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      void convCommand(s.conversation_id, "killSession").catch((err: unknown) => {
-        // The kill remains durably queued; only a genuine failure should use
-        // the existing error channel.
-        if (isParkedDispatchError(err)) return;
-        toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+      killWithNotice(s.conversation_id);
     },
-    [convCommand, markBusy]
+    [killWithNotice, markBusy]
   );
 
   // Prune removes the stale DB row for a dead session. It does not touch any
@@ -480,16 +477,17 @@ export function SessionsView() {
 
   const handleBulk = useCallback(
     async (rows: ClassifiedSession[]) => {
-      for (const s of rows) {
-        // Prefer a real kill for anything with a conversation — even "dead" rows,
-        // whose tmux session + shell often still linger on the machine. killSession
-        // reaps the tmux + full process tree (daemon side) AND hides the row. Only
-        // conversation-less rows fall back to a plain DB prune.
-        if (s.conversation_id) handleKill(s);
-        else handlePrune(s);
-      }
+      // Prefer a real kill for anything with a conversation — even "dead" rows,
+      // whose tmux session + shell often still linger on the machine. The kill
+      // reaps the tmux + full process tree (daemon side) AND hides the row, as
+      // one gesture and one undo for the whole confirm. Only conversation-less
+      // rows fall back to a plain DB prune.
+      const kills = rows.filter((s) => s.conversation_id);
+      for (const s of kills) markBusy(s.session_id);
+      killManyWithNotice(kills.map((s) => s.conversation_id!));
+      for (const s of rows) if (!s.conversation_id) handlePrune(s);
     },
-    [handleKill, handlePrune]
+    [killManyWithNotice, handlePrune, markBusy]
   );
 
   // Pin/unpin and dismiss/restore write straight to the conversation via the same
@@ -507,9 +505,9 @@ export function SessionsView() {
     (s: ClassifiedSession) => {
       if (!s.conversation_id) return;
       markBusy(s.session_id);
-      // Restore clears the retired marker too, or a row killed by THIS page's
-      // kill button (convCommand("killSession"), the one surface that stamps
-      // inbox_killed_at without inbox_dismissed_at) would keep its "restore"
+      // Restore clears the retired marker too, or a row killed by a path that
+      // stamps inbox_killed_at without inbox_dismissed_at (the killSession
+      // mutation, behind `cast` and older clients) would keep its "restore"
       // button forever while shouldShowInInbox went on hiding it. Nulling all
       // three is what `cast undismiss` does, and it is the un-kill SHAPE the
       // dispatch rail requires before it will honor a kill-clear (dispatch.ts).
@@ -522,7 +520,7 @@ export function SessionsView() {
 
   if (sessions === undefined) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="text-zinc-500 font-mono text-sm">loading sessions...</div>
       </div>
     );
@@ -547,7 +545,7 @@ export function SessionsView() {
   const bulkPruneCount = bulkRows.length - bulkKillCount;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
         <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">

@@ -6,10 +6,12 @@
 import { v } from "convex/values";
 import { mutation, internalMutation } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { TEAM_FEATURE_KEYS } from "@codecast/shared/contracts";
+import { TEAM_FEATURE_KEYS, teamFeatureEnabled, type TeamFeatures } from "@codecast/shared/contracts";
+import type { Id } from "./_generated/dataModel";
 import { applyFeatureChange } from "@platform/flags";
 import { TEAM_FEATURE_CATALOG } from "./lib/teamFeatureGuard";
 import { changesFlagChanged } from "./lib/changesDirty";
+import { stopTeamRecordings } from "./lib/callRecordingRuns";
 
 export {
   TEAM_FEATURE_CATALOG,
@@ -24,6 +26,18 @@ export {
 const teamFeatureKeyValidator = v.union(
   ...(TEAM_FEATURE_KEYS.map((k) => v.literal(k)) as [any, ...any[]]),
 );
+
+/** What a feature change does beyond the flag. Calls going off takes every
+ *  room of the team away from its people at once: the live room list drops
+ *  them (and the REC mark with them), and every Stop is refused by the
+ *  feature gate. So a room being filmed stops here, said in the room's
+ *  thread, rather than filming people who can no longer see it or end it. */
+async function afterFeatureChange(ctx: any, teamId: Id<"teams">, before: TeamFeatures | undefined, after: TeamFeatures) {
+  await changesFlagChanged(ctx, teamId, before, after);
+  if (teamFeatureEnabled({ features: before }, "calls") && !teamFeatureEnabled({ features: after }, "calls")) {
+    await stopTeamRecordings(ctx, teamId, "calls_off");
+  }
+}
 
 
 /** Admin-only: turn one team feature on or off. */
@@ -49,7 +63,7 @@ export const setTeamFeature = mutation({
       enabled: args.enabled,
     });
     await ctx.db.patch(args.team_id, { features });
-    await changesFlagChanged(ctx, args.team_id, team?.features, features);
+    await afterFeatureChange(ctx, args.team_id, team?.features, features);
     return { features };
   },
 });
@@ -74,7 +88,7 @@ export const setTeamFeatureInternal = internalMutation({
       enabled: args.enabled,
     });
     await ctx.db.patch(args.team_id, { features });
-    await changesFlagChanged(ctx, args.team_id, team?.features, features);
+    await afterFeatureChange(ctx, args.team_id, team?.features, features);
     return { team: team?.name ?? null, features };
   },
 });

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { convexTest } from "convex-test";
+import { CALL_LINK_REFUSED_WORDS, channelRoomKey } from "@codecast/shared/contracts";
+import schema from "./schema";
 import { claimShareToken, getSharedCall, getSharedProject, writeObjectShareLink } from "./publicShare";
 
 const UUID_A = "1a221088-1fc3-48c8-a814-71119676adf0";
@@ -71,6 +74,78 @@ describe("writeObjectShareLink", () => {
   });
 });
 
+// A call's link opens by the people who sat through it (or a team admin) and
+// closes by any reader: a channel huddle is readable by the whole channel,
+// and somebody who was never in the room must not put its words, guests'
+// included, on the open web (lib/callRecordingRuns.mayPublishCall).
+describe("a call's public link", () => {
+  const modules = { "./_generated/server.ts": () => import("./_generated/server") };
+  async function channelCall() {
+    const t = convexTest(schema, modules);
+    const now = Date.now();
+    const ids = await t.run(async (ctx: any) => {
+      const team = await ctx.db.insert("teams", { name: "T", created_at: now, invite_code: "x", features: { calls: true, chat: true } });
+      const [ana, ben, ada] = await Promise.all(["Ana", "Ben", "Ada"].map((name) => ctx.db.insert("users", { name })));
+      for (const [u, role] of [[ana, "member"], [ben, "member"], [ada, "admin"]] as const) {
+        await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role, joined_at: now });
+      }
+      const channel = await ctx.db.insert("chat_channels", { team_id: team, name: "design", kind: "public", created_by: ana, created_at: now, updated_at: now });
+      const call = await ctx.db.insert("transcripts", {
+        room_key: channelRoomKey(String(channel)),
+        team_id: team,
+        started_by: ana,
+        status: "ended",
+        started_at: now,
+        ended_at: now + 60_000,
+        participants: [{ id: String(ana), name: "Ana" }, { id: "guest:g1", name: "Dana (guest)" }],
+        routes: [],
+        last_seq: 0,
+      });
+      return { team, ana, ben, ada, call };
+    });
+    const share = (who: string, token: string | null) =>
+      t.run(async (ctx: any) => writeObjectShareLink(ctx, who as any, "call", String(ids.call), token));
+    const token = () => t.run(async (ctx: any) => (await ctx.db.get(ids.call))?.share_token ?? null);
+    return { t, ...ids, share, token };
+  }
+
+  test("a channel member who was not in the call may not open it, and may close it", async () => {
+    const c = await channelCall();
+    await expect(c.share(String(c.ben), UUID_A)).rejects.toThrow(CALL_LINK_REFUSED_WORDS);
+    expect(await c.token()).toBeNull();
+    await c.share(String(c.ana), UUID_A);
+    expect(await c.token()).toBe(UUID_A);
+    // Keeping the link it already has is not opening it.
+    await c.share(String(c.ben), UUID_A);
+    await c.share(String(c.ben), null);
+    expect(await c.token()).toBeNull();
+  });
+
+  test("turning it on or off is a line in the room's thread, once per change, naming who", async () => {
+    const c = await channelCall();
+    const lines = () =>
+      c.t.run(async (ctx: any) => (await ctx.db.query("call_chat_messages").collect()).map((r: any) => [r.event, String(r.user_id), String(r.transcript_id)]));
+    await c.share(String(c.ana), UUID_A);
+    // Keeping the link it already has changes nothing, and says nothing.
+    await c.share(String(c.ana), UUID_A);
+    await c.share(String(c.ben), null);
+    await c.share(String(c.ben), null);
+    expect(await lines()).toEqual([
+      ["link_on", String(c.ana), String(c.call)],
+      ["link_off", String(c.ben), String(c.call)],
+    ]);
+  });
+
+  test("a speaker and a team admin may open it", async () => {
+    const c = await channelCall();
+    await c.share(String(c.ana), UUID_A);
+    expect(await c.token()).toBe(UUID_A);
+    await c.share(String(c.ana), null);
+    await c.share(String(c.ada), UUID_B);
+    expect(await c.token()).toBe(UUID_B);
+  });
+});
+
 describe("getSharedCall", () => {
   test("a stranger reads names and words but never a user id", async () => {
     const call = {
@@ -95,6 +170,16 @@ describe("getSharedCall", () => {
     expect(out.segments[0].speaker_id).toBe(out.participants[0].id);
     expect(JSON.stringify(out)).not.toContain("user_secret_1");
     expect(JSON.stringify(out)).not.toContain("team:abc");
+  });
+
+  test("a deleted team's call serves nothing, and a restore brings the link back", async () => {
+    const call = { _id: "c1", team_id: "team1", share_token: UUID_A, room_key: "team:abc", status: "ended", started_at: 1, participants: [] };
+    const team = { _id: "team1", deleted_at: 5 };
+    const { db } = fakeDb([call, team]);
+    const ctx = { db, storage: { getUrl: async () => null } };
+    expect(await (getSharedCall as any)._handler(ctx, { share_token: UUID_A })).toBeNull();
+    await db.patch("team1", { deleted_at: undefined });
+    expect((await (getSharedCall as any)._handler(ctx, { share_token: UUID_A }))?.status).toBe("ended");
   });
 
   test("an unknown token is null", async () => {

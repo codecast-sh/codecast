@@ -96,11 +96,11 @@ digraph line {
   card_write [label="Card words", shape=tab, backend=session, agent=claude, max_visits=2, prompt="@line/card_write.md"]
 
   card [label="Card", shape=parallelogram, timeout=300,
-    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --wrong $card_write.json.wrong --change $card_write.json.change --recommend $card_write.json.recommend --why $card_write.json.why"]
+    script="cd \"$(cast ws path $worktree)\" && cast card build --task $task_id --dir $run_dir --base $default_branch --publish --headline $card_write.json.headline --context $card_write.json.context --wrong $card_write.json.wrong --change $card_write.json.change --recommend $card_write.json.recommend --why $card_write.json.why"]
 
   decide [label="Decide", shape=hexagon, category=review,
-    prompt="Ship this change? $task_title",
-    doc="What is wrong: $card_write.json.wrong\n\nWhat this changes: $card_write.json.change\n\nRecommends $card_write.json.recommend: $card_write.json.why",
+    prompt="Ship this change? $card_write.json.headline",
+    doc="$card_write.json.context\n\nWhat is wrong: $card_write.json.wrong\n\nWhat this changes: $card_write.json.change\n\nRecommends $card_write.json.recommend: $card_write.json.why",
     card="$run_dir/card.json"]
 
   reopen [label="Reopen", shape=parallelogram, script="cast task update $task_id -s in_progress"]

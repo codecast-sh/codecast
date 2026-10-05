@@ -19,7 +19,7 @@ import { compareVersions, validateTemplate, type OrgTemplate } from "@codecast/s
 import { markSetup, nextHumanAsk, readiness, recordEvidence, recordScores, setupRows, type InstanceState, type SetupText } from "@codecast/shared/contracts/orgTemplateState";
 import { routineState, type RoutineReadiness } from "@codecast/shared/contracts/orgTemplateReadiness";
 import type { LessonKind } from "@codecast/shared/contracts/orgTemplateLearning";
-import { applyActivate, getManageableTask } from "./agentTasks";
+import { applyActivate, getArmableTask } from "./agentTasks";
 import { refuseUnlessHuman, standingConversationOf } from "./orgRoles";
 import { DEVICE_ONLINE_MS, pickOwnerDevice } from "./deviceRouting";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
@@ -531,7 +531,7 @@ export const activateRoutine = mutation({
   handler: async (ctx, { api_token, from_session, task_id }) => {
     await refuseUnlessHuman(ctx, { api_token, from_session }, "Activating a routine");
     const userId = await requireCaller(ctx, api_token);
-    const task = await getManageableTask(ctx as any, task_id, userId);
+    const task = await getArmableTask(ctx as any, task_id, userId);
     if (!task) throw new Error("Routine not found");
     return applyActivate(ctx as any, task);
   },

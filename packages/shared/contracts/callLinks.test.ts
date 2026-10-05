@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { callAnchorHref, callAnchorKey, callExcerptHref, parseCallAnchor, type CallAnchor } from "./callLinks";
+import { callAnchorHref, callAnchorKey, callExcerptHref, callMomentHref, callPathRef, callViewParam, parseCallAnchor, parseCallViewParam, type CallAnchor } from "./callLinks";
 
 const parse = (href: string) => parseCallAnchor(new URL(href, "https://x.test").searchParams);
 
@@ -26,6 +26,15 @@ describe("call anchors", () => {
     expect(parse("/calls/abc?turns=3")).toEqual({ kind: "turns", from_seq: 3, to_seq: 3 });
   });
 
+  test("a call is addressed by its short id, the name everything else gives it", () => {
+    const call = { _id: "mn7n6jp204bph9nmsdpb74c96s8fkc0p", short_id: "cl-117" };
+    expect(callAnchorHref(callPathRef(call))).toBe("/calls/cl-117");
+    expect(callMomentHref(callPathRef(call), 150_000)).toBe("/calls/cl-117?t=150");
+    // A call from before short ids keeps its full id.
+    expect(callPathRef({ _id: call._id, short_id: null })).toBe(call._id);
+    expect(callPathRef({ _id: call._id })).toBe(call._id);
+  });
+
   test("no anchor or junk means the whole call", () => {
     expect(callAnchorHref("abc")).toBe("/calls/abc");
     expect(parse("/calls/abc")).toBeNull();
@@ -39,5 +48,16 @@ describe("call anchors", () => {
       callAnchorKey({ kind: "turns", from_seq: 1, to_seq: 2 }),
     ];
     expect(new Set(keys).size).toBe(3);
+  });
+});
+
+describe("callViewParam", () => {
+  test("spells a view the way a built link does, and reads back through parseCallViewParam", () => {
+    expect(callViewParam(null)).toBeNull();
+    expect(callViewParam({ screen: true })).toBe("screen");
+    expect(callViewParam({ screen: true, identity: "guest:g1" })).toBe("screen:guest%3Ag1");
+    expect(callMomentHref("cl-117", 150_000, null, { screen: true, identity: "guest:g1" })).toBe(`/calls/cl-117?t=150&view=${callViewParam({ screen: true, identity: "guest:g1" })}`);
+    const back = parseCallViewParam(new URLSearchParams(`t=150&view=${callViewParam({ screen: true, identity: "guest:g1" })}`));
+    expect(back).toEqual({ screen: true, identity: "guest:g1" });
   });
 });

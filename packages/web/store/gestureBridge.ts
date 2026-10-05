@@ -29,6 +29,8 @@
 // The row fields the bridge carries. Every one of them is written by a user
 // gesture and read by the inbox's bucket/sort logic, and every one is
 // nullable — which is what makes a stale sibling's whole-row put destructive.
+import { afterCommit } from "@platform/engine";
+
 export const BRIDGED_FIELDS = [
   "inbox_dismissed_at",
   "inbox_stashed_at",
@@ -159,6 +161,12 @@ export function gestureSourceToken(): string {
  * synchronous close().
  */
 export function broadcastGesture(msg: GestureMessage, userId: string | null): void {
+  // Sent once the action asking for it commits: a draft the undo engine
+  // vetoes (a refused redo) must not reach sibling windows either.
+  afterCommit(() => postGesture(msg, userId));
+}
+
+function postGesture(msg: GestureMessage, userId: string | null): void {
   const ch = channelFactory(channelName(userId));
   if (!ch) return;
   const envelope: Envelope = { ...msg, v: PROTOCOL_VERSION, source: gestureSourceToken(), userId };

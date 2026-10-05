@@ -9,114 +9,15 @@
 // ActivityCharts brush); a click pins a column and a shift-click pins a second.
 
 import { useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { BatchStats, CommitRef, Epoch, FootingMarker, RunRow } from "@codecast/shared/contracts/evalsApi";
+import type { CommitRef, Epoch, FootingMarker, RunRow } from "@codecast/shared/contracts/evalsApi";
 import { HoverTip } from "../ActivityHeatmap";
 import { BrushRect, timeAxisLabels, useDayBrush } from "../ActivityCharts";
 import { FootingGlyph } from "./charts/ScoreStrip";
-import { PASS_MARK, dayList, dayStart, jitter, linear, nearestIndex, scoreScale, stepPath } from "./charts/scale";
-import { score2, shortSha, usd, whenLabel } from "./parts";
+import { PASS_MARK, dayList, dayStart, jitter, nearestIndex, scoreScale, stepPath } from "./charts/scale";
 // The marks, bands and median below are styled here, and the freeze page draws them too.
 import "./surface.css";
-
-// ── Columns: one x per batch, shared by every track on the page ─────────────
-
-export type SurfaceAxis = "time" | "ordinal";
-
-export interface SurfaceColumn {
-  batch: string;
-  at: number;
-  x: number;
-  stats: BatchStats;
-}
-
-export interface SurfaceColumns {
-  list: SurfaceColumn[];
-  /** By batch name. */
-  byBatch: Map<string, SurfaceColumn>;
-  /** The x of a time; in ordinal mode, the x of the column at or after it. */
-  xOfTime: (at: number) => number;
-  /** A typical distance between neighbouring columns, px. */
-  gap: number;
-  width: number;
-  padL: number;
-  padR: number;
-  axis: SurfaceAxis;
-}
-
-export const SEIS_PAD_L = 38;
-export const SEIS_PAD_R = 14;
-const HOUR = 3_600_000;
-
-/** Where each batch sits across `width`: by when it began, or evenly by order. */
-export function surfaceColumns(batches: readonly BatchStats[], axis: SurfaceAxis, width: number, padL = SEIS_PAD_L, padR = SEIS_PAD_R): SurfaceColumns {
-  const sorted = [...batches].sort((a, b) => Date.parse(a.batchAt) - Date.parse(b.batchAt));
-  const ats = sorted.map((b) => Date.parse(b.batchAt));
-  const inner = Math.max(40, width - padL - padR);
-  let xs: number[];
-  let xOfTime: (at: number) => number;
-  if (axis === "time" && sorted.length > 0) {
-    const span = ats[ats.length - 1] - ats[0];
-    const margin = Math.max(span * 0.02, 2 * HOUR);
-    const x = linear(ats[0] - margin, ats[ats.length - 1] + margin, padL, padL + inner);
-    xs = ats.map(x);
-    xOfTime = x;
-  } else {
-    const step = inner / Math.max(1, sorted.length);
-    xs = sorted.map((_, i) => padL + (i + 0.5) * step);
-    xOfTime = (at) => {
-      const i = ats.findIndex((t) => t >= at);
-      return i < 0 ? padL + inner : xs[i];
-    };
-  }
-  const gaps = xs.slice(1).map((v, i) => v - xs[i]).sort((a, b) => a - b);
-  const gap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : inner;
-  const list = sorted.map((stats, i) => ({ batch: stats.batch, at: ats[i], x: xs[i], stats }));
-  return { list, byBatch: new Map(list.map((c) => [c.batch, c])), xOfTime, gap, width, padL, padR, axis };
-}
-
-/** What the epoch bands need of a column layout: each batch's x and time, and the plot's edges. The freeze page's strip lays its own columns out and draws the same bands. */
-export interface ColumnRail {
-  list: ReadonlyArray<{ batch: string; at: number; x: number }>;
-  width: number;
-  padL: number;
-  padR: number;
-}
-
-/** The x where an epoch begins: halfway between the last column before it and its first. Null when it begins after the window. */
-export function epochStartX(cols: ColumnRail, epoch: Pick<Epoch, "firstBatch" | "firstBatchAt">): number | null {
-  const at = Date.parse(epoch.firstBatchAt);
-  const i = cols.list.findIndex((c) => c.batch === epoch.firstBatch || c.at >= at);
-  if (i < 0) return null;
-  if (i === 0) return cols.padL;
-  return (cols.list[i - 1].x + cols.list[i].x) / 2;
-}
-
-export interface EpochBand {
-  n: number;
-  x0: number;
-  x1: number;
-  /** A perforation marks where it began: every epoch but one that opens the window. */
-  boundary: boolean;
-  changed: number;
-}
-
-/** Each epoch's span across the columns, clipped to the plot. */
-export function epochBandsOf(cols: ColumnRail, epochs: readonly Epoch[]): EpochBand[] {
-  const { list, width: w, padL, padR } = cols;
-  const sorted = [...epochs].sort((a, b) => a.n - b.n);
-  const out: EpochBand[] = [];
-  sorted.forEach((e, i) => {
-    const start = epochStartX(cols, e);
-    if (start === null) return;
-    const next = sorted[i + 1] ? epochStartX(cols, sorted[i + 1]) : null;
-    const x0 = Math.max(padL, start);
-    const x1 = Math.min(w - padR, next ?? w - padR);
-    if (x1 <= padL || x0 >= w - padR || x1 - x0 < 1) return;
-    const firstCol = list.find((c) => c.batch === e.firstBatch || c.at >= Date.parse(e.firstBatchAt));
-    out.push({ n: e.n, x0, x1, boundary: e.n > 1 && !!firstCol && firstCol !== list[0], changed: e.changedFreezes.length });
-  });
-  return out;
-}
+import { score2, shortSha, usd, whenLabel } from "./format";
+import { type SurfaceColumn, type SurfaceColumns, HOUR, type EpochBand, epochBandsOf, REP_HATCH_ID, scoredRep, gateDropped, repY, medianOf } from "./seismographModel";
 
 /** Alternating faint bands, a perforation at each boundary and an e1, e2 label along the top. The label opens the epoch's diff when the chart can. */
 export function EpochBands({ bands, top, bottom, onOpenEpoch }: { bands: readonly EpochBand[]; top: number; bottom: number; onOpenEpoch?: (n: number) => void }) {
@@ -149,10 +50,6 @@ export function EpochBands({ bands, top, bottom, onOpenEpoch }: { bands: readonl
   );
 }
 
-// ── One rep's mark, shared with the freeze page's strip ─────────────────────
-
-export const REP_HATCH_ID = "ev-sf-hatch";
-
 /** The dirty hatch: yellow at 18% under a dirty rep. Render it once in each chart's defs. */
 export function RepHatch() {
   return (
@@ -163,22 +60,13 @@ export function RepHatch() {
   );
 }
 
-export const scoredRep = (r: RunRow) => r.score !== null && (r.status === "pass" || r.status === "fail");
-/** A failed hard gate: the rep is drawn at 0 with a red tick, whatever the judge scored. */
-export const gateDropped = (r: RunRow) => r.status === "fail" && r.gatesFailed.length > 0;
-
-/** Where a rep sits on a score axis: a gate failure at 0, an unscored rep just under the axis, else its score. */
-export function repY(row: RunRow, y: (v: number) => number): number {
-  if (!scoredRep(row)) return y(0) + 9;
-  return y(gateDropped(row) ? 0 : (row.score as number));
-}
-
 export type RepTone = "ev-pass" | "ev-fail" | "ev-quiet" | `ev-model-${number}`;
 
 /**
  * One rep as every Evals chart draws it: hatched when dirty, a cross for a
- * crash, a dashed ring when unscored, else the marker filled for pass and
- * hollow for fail, with a red tick under a failed gate. The rest of the props
+ * crash (or a rep the model was never asked about), a dashed ring when
+ * unscored, else the marker filled for pass and hollow for fail, with a red
+ * tick under a failed gate. The rest of the props
  * (handlers, data attributes, style) land on the group.
  */
 export function RepMark({
@@ -188,17 +76,19 @@ export function RepMark({
   r,
   shape = "circle",
   tone,
+  unasked = false,
   children,
   ...group
-}: { row: RunRow; cx: number; y: (v: number) => number; r: number; shape?: (typeof SHAPES)[number]; tone?: RepTone; children?: ReactNode } & Omit<React.SVGProps<SVGGElement>, "children" | "className" | "cx" | "y" | "r" | "shape">) {
-  const gate = gateDropped(row);
+}: { row: RunRow; cx: number; y: (v: number) => number; r: number; shape?: (typeof SHAPES)[number]; tone?: RepTone; unasked?: boolean; children?: ReactNode } & Omit<React.SVGProps<SVGGElement>, "children" | "className" | "cx" | "y" | "r" | "shape" | "unasked">) {
+  // A rep in a batch the model was never asked about (BatchStats.unasked) is drawn as a crash: its 0 is the harness's, not a score.
+  const gate = !unasked && gateDropped(row);
   const unscored = !scoredRep(row);
   const cy = repY(row, y);
   const t = tone ?? (row.status === "pass" ? "ev-pass" : unscored ? "ev-quiet" : "ev-fail");
   return (
     <g className="ev-sf-dot ev-settle" data-ev-dot={row.status} data-ev-dirty={row.dirty || undefined} {...group}>
       {row.dirty && <circle cx={cx} cy={cy} r={r + 2.4} fill={`url(#${REP_HATCH_ID})`} />}
-      {row.status === "crash" ? (
+      {row.status === "crash" || unasked ? (
         <path d={`M${cx - 2.4},${cy - 2.4} L${cx + 2.4},${cy + 2.4} M${cx + 2.4},${cy - 2.4} L${cx - 2.4},${cy + 2.4}`} className="ev-quiet" stroke="currentColor" strokeWidth={1.3} strokeLinecap="round" />
       ) : unscored ? (
         <circle cx={cx} cy={cy} r={r - 0.4} className="ev-quiet" fill="none" stroke="currentColor" strokeWidth={1} strokeDasharray="1.4 1.4" />
@@ -221,6 +111,7 @@ export function BatchTip({ col }: { col: SurfaceColumn }) {
       <div>
         <b>{whenLabel(col.at)}</b> {s.cadence ?? "by hand"}
         {s.dry ? ", dry render" : ""}
+        {s.unasked ? ", never reached the model (nothing spent, every rep failed)" : ""}
       </div>
       <div className="ev-sf-tip-dim">batch {s.batch}</div>
       <div>
@@ -277,14 +168,6 @@ function Marker({ shape, cx, cy, r, filled, className }: { shape: (typeof SHAPES
   return <circle cx={cx} cy={cy} r={r} className={className} {...paint} />;
 }
 
-/** The median of a list, or null for an empty one. */
-export function medianOf(xs: number[]): number | null {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
-
 export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compare, hover, onHover, onPick, onZoom, onOpenRun, onOpenEpoch, commits = [], onOpenCommit, baseline = [] }: SeismographProps) {
   const { list, width: w, padL, padR } = cols;
   const models = useMemo(() => {
@@ -327,7 +210,8 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
   const axisLabels = useMemo(() => {
     if (!list.length) return [];
     if (cols.axis === "time") {
-      const days = dayList(list[0].at - 12 * HOUR, list[list.length - 1].at + 12 * HOUR);
+      // Ends on the last batch's own day: a midnight past it would label a day with no data.
+      const days = dayList(list[0].at - 12 * HOUR, list[list.length - 1].at);
       return timeAxisLabels(days, (i) => cols.xOfTime(dayStart(days[i]))).filter((l) => l.x >= padL && l.x <= w - padR);
     }
     const every = Math.max(1, Math.ceil(54 / Math.max(1, cols.gap)));
@@ -340,6 +224,8 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
     .filter((c): c is SurfaceColumn => !!c)
     .sort((a, b) => a.at - b.at);
   const hoverCol = hover ? cols.byBatch.get(hover) ?? null : null;
+  // A pin's number shares the date row, so a date it would sit on gives way to it.
+  const shownLabels = axisLabels.filter((l) => !pinnedCols.some((c) => Math.abs(c.x - l.x) < 14));
 
   return (
     <div className="ev-sf-seis ev-bench" data-ev-seismograph data-ev-lanes={lanes.length}>
@@ -370,12 +256,12 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
         ))}
 
         <line x1={padL} x2={w - padR} y1={plotBottom + 1} y2={plotBottom + 1} className="ev-sf-axis" />
-        {axisLabels.map((l, i) => (
+        {shownLabels.map((l, i) => (
           <text key={i} x={l.x} y={plotBottom + 26} textAnchor="middle" className="ev-sf-xlabel">
             {l.label}
           </text>
         ))}
-        {/* The latest verdict's baseline: which batches the wall's "vs pooled 3" weighed, bracketed under the axis. */}
+        {/* The latest verdict's baseline: which batches the wall's "vs 3 nights" weighed, bracketed under the axis. */}
         {(() => {
           const xs = baseline.flatMap((b) => {
             const c = cols.byBatch.get(b);
@@ -476,6 +362,7 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
         {laneGeo.map(({ key, y, lane, modelIndex }) => {
           const laneRows = (rows: RunRow[]) => (lane ? rows.filter((r) => r.model === lane) : rows);
           const medians = list
+            .filter((c) => !c.stats.unasked)
             .map((c) => ({ x: c.x, m: medianOf(laneRows(byBatch.get(c.batch) ?? []).filter(scoredRep).map((r) => r.score as number)) }))
             .filter((p): p is { x: number; m: number } => p.m !== null);
           return (
@@ -490,6 +377,7 @@ export function Seismograph({ cols, runs, epochs, footing, facet, pinned, compar
                     r={r}
                     shape={lane ? SHAPES[modelIndex % 3] : "circle"}
                     tone={lane ? `ev-model-${modelIndex % 3}` : undefined}
+                    unasked={!!c.stats.unasked}
                     style={{ "--ev-delay": `${list.length * 10 + ci * 6}ms` } as CSSProperties}
                     onClick={(e) => (e.stopPropagation(), onOpenRun(row.id))}
                     onMouseEnter={(e) => setDotTip({ row, x: e.clientX, y: e.clientY })}

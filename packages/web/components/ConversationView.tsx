@@ -27,6 +27,7 @@ import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
+import { OrgChartChip } from "./org/orgChartLink";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
@@ -42,7 +43,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { cssZoomOf } from "../lib/cssZoom";
 import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
-import { animatedHideSession } from "../store/undoActions";
+import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, shouldAdjustScrollForResize, jumpRowForMessage, initialScrollEdge } from "./conversationScroll";
 import { deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
@@ -138,7 +139,7 @@ import { PlanBlock } from "./conversation/blocks/planBlock";
 import { CastBrowserRowContext, ChatWakeContext } from "../lib/conversationBlockContexts";
 import { UserIcon } from "./conversation/blocks/shared";
 import { agentColorMap } from "../lib/conversationBlockStyles";
-import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
+import { AgentSwitchDivider, BashCommandBlock, ChatWakeBlock, CommandMessageBlock, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
@@ -160,6 +161,7 @@ import { useToolResultMaps } from "../hooks/useToolResultMaps";
 import { useBrowserAndWakeRows } from "../hooks/useBrowserAndWakeRows";
 import { useSessionImages } from "../hooks/useSessionImages";
 import { useConversationTaskMaps } from "../hooks/useConversationTaskMaps";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 const api = _typedApi as any;
 
 const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
@@ -654,7 +656,6 @@ const ConversationViewInner = (
   const convCommand = useInboxStore((s) => s.convCommand);
   // Durable send via the dispatch outbox (survives reload mid-send).
   const sendInlineMessage = useInboxStore((s) => s.sendMessage);
-  const toggleFavoriteMutation = useInboxStore((s) => s.toggleFavorite);
 
   const addOptimisticMsg = useInboxStore((s) => s.addOptimisticMessage);
   const moveDraft = useInboxStore((s) => s.moveDraft);
@@ -767,8 +768,7 @@ const ConversationViewInner = (
     if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "Tab" || !e.shiftKey) return;
-      const target = e.target as HTMLElement;
-      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+      if (keyBelongsElsewhere(e.target)) return;
       if (hasOpenModal()) return;
       e.preventDefault();
       handleCycleMode();
@@ -1618,6 +1618,7 @@ const ConversationViewInner = (
         case 'skill_expansion': return commandExpansionMap.consumed.has(msg._id) ? 0 : 44;
         case 'task_notification': return 40;
         case 'scheduled_task': return 56;
+        case 'role_brief': return 44;
         case 'teammate_events': return 80;
         case 'task_prompt': return 0;
         case 'compaction_prompt': return 0;
@@ -2063,9 +2064,8 @@ const ConversationViewInner = (
 
   usePaneShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
-    toggleFavoriteMutation(conversation._id);
-    toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
-  }, [conversation, isOwner, toggleFavoriteMutation]));
+    toggleSessionsLikeFirst([conversation._id], "favorite");
+  }, [conversation, isOwner]));
 
   // `r` = quote. With text selected inside a reply it quotes THAT selection (the
   // key behind the floating "Quote into reply" button); with nothing selected it
@@ -3420,6 +3420,8 @@ const ConversationViewInner = (
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
           return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} />;
+        case 'role_brief':
+          return <FoldedPromptBlock key={msg._id} label="Role brief" preview={stripSystemTags(msg.content!).trim().split("\n")[0].replace(/\*\*/g, "")} content={stripSystemTags(msg.content!).trim()} timestamp={msg.timestamp} />;
         case 'session_message':
           return <SessionMessageBlock key={msg._id} variant={kind.variant === 'agent' ? "agent" : "session"} from={kind.from} name={kind.name} body={kind.body} timestamp={msg.timestamp} pendingStatus={(msg as any)._serverPendingStatus} pendingReason={(msg as any)._serverPendingReason} recipientConversationId={conversation?._id} linkToConversationId={kind.variant === 'agent' ? agentNameToChildMap?.[kind.from] : undefined} />;
         case 'huddle_summary':
@@ -3748,6 +3750,7 @@ const ConversationViewInner = (
             <AnchorHeaderPill conversationId={conversation._id.toString()} />
             <SessionCallPill conversationId={conversation._id.toString()} />
             <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
+            <OrgChartChip conversationId={conversation._id.toString()} />
         </>}
 
         status={<AgentStatusPill agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} />}
@@ -4155,8 +4158,7 @@ const ConversationViewInner = (
                     )}
                     {isOwner && (
                       <DropdownMenuItem onSelect={() => {
-                        toggleFavoriteMutation(conversation._id);
-                        toast.success(conversation.is_favorite ? "Removed from favorites" : "Added to favorites");
+                        toggleSessionsLikeFirst([conversation._id], "favorite");
                       }}>
                         <svg className={`w-3 h-3 mr-1.5 ${conversation.is_favorite ? "text-amber-400" : ""}`} fill={conversation.is_favorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />

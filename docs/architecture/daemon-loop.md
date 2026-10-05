@@ -9,6 +9,10 @@ The worker and parking design below describes the shared development tree, not
 the release candidate or a running daemon. The release boundary is recorded
 separately below; source on disk does not prove what a process loaded at boot.
 
+Status on 2026-10-04: F (ct-47711) and G (ct-47712) are still in progress. The
+evidence files cited below under `/tmp/pl497/` no longer exist on this machine;
+the citations record where the evidence was, not where to read it now.
+
 ## Main-process budget
 
 The daemon keeps the loopback server, Convex subscriptions and writes, delivery
@@ -36,6 +40,8 @@ separate scrutiny when interpreting measured stalls.
 
 ## Worker boundary
 
+![The daemon main process keeps every write and decision and sends bounded read requests over NDJSON to three read-only children: probe, scan and ingest](../diagrams/daemon-workers.svg)
+
 `workers/bridge.ts` configures worker hosts only when
 `config.daemon_workers === true`. An omitted setting leaves them off. Windows
 does not enter this worker path, matching the daemon's existing platform limit.
@@ -46,7 +52,7 @@ source does not establish correctness or fleet performance.
 | --- | --- | --- |
 | `probe` | Validated read-only process, tmux, focus, launchd and keychain commands | Scheduling, identity decisions and mutations |
 | `scan` | Paged filesystem walks, index refresh, watcher scans, inventory and Cursor workspace observations | Cache publication, generation checks and sync decisions |
-| `ingest` | Development source reads/parses eight client formats through seven serialized entry points; not independently accepted | Positions, deduplication, retries and Convex writes stay here |
+| `ingest` | Reads and parses nine client formats (`INGEST_CLIENTS` in `workers/ingestTypes.ts`) and runs the `prepare`, `messagesSdk` and `payloadCodec` operations; not independently accepted (ct-47711) | Positions, deduplication, retries and Convex writes stay here |
 
 The host launches the same executable through `main` before ordinary CLI boot:
 
@@ -191,6 +197,11 @@ OS and backend observations.
 
 ### Release candidate parking fallback
 
+Historical: `4c84473f9` sits on side branches and never landed on main. Main
+has no `parking-safety-unavailable` refusal; it runs the guarded hibernation
+pass in `daemon.ts` with its policy in `hibernation.ts` (ct-47710 done), still
+off by default.
+
 Candidate commit `4c84473f9` deliberately does not include the full E1/E2 parking
 safety closure or F worker migration. Its shared manual/automatic policy returns
 `parking-safety-unavailable` unless an existing never-rule gives a more specific
@@ -324,11 +335,9 @@ bun test ./packages/cli/src/bench/load.test.ts ./packages/cli/src/bench/probes.t
 bun test ./packages/cli/src/bench/integration.test.ts
 ```
 
-The CLI's existing exit expression checks only teardown warnings. The separate
-unapplied correction is `/tmp/pl497/g-load-work/cli-exit.unapplied.patch`; read
-JSON acceptance and its reasons until the CLI owner applies that correction.
-The package-script correction from `bun test src/` to `bun test ./src/` is also
-kept unapplied for that owner. No tests are dropped by that correction.
+`cast bench daemon` exits 1 only when `acceptance.status` is `FAIL`; a NOT
+ESTABLISHED report exits 0, so read JSON acceptance and its reasons. The CLI
+package's test script is `bun test ./src/`.
 
 Recorded pre-worker observation, `2026-09-05T01:22:38.671Z`, 120 seconds:
 

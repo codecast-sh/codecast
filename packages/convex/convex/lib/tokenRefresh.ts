@@ -8,6 +8,15 @@
 // are a lost token, not a harmless duplicate. The lease makes the grant
 // single flight; the fenced outcome write makes a late finish harmless.
 
+import { v } from "convex/values";
+
+/** The failure a refresh records on its row as `last_error_kind`, next to
+ *  the `last_error` message: the provider refused the grant, the stored
+ *  credentials cannot be read, or a failure the next call may clear. A
+ *  good refresh clears both. */
+export const storedRefreshFailure = v.union(v.literal("revoked"), v.literal("undecryptable"), v.literal("transient"));
+export type StoredRefreshFailure = "revoked" | "undecryptable" | "transient";
+
 /** Refresh this far ahead of expiry so an in-flight call never straddles it. */
 export const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 /** How long one caller may hold the refresh; long enough for a slow token
@@ -89,6 +98,7 @@ export type OutcomeArgs = {
   refresh_token_enc?: string;
   access_expires_at?: number;
   last_error?: string;
+  last_error_kind?: StoredRefreshFailure;
 };
 export type WriteResult = { ok: boolean; reason?: "gone" | "superseded" };
 
@@ -130,15 +140,23 @@ export async function writeRefreshOutcomeOn(db: any, id: any, args: OutcomeArgs,
       access_token_enc: args.access_token_enc,
       access_expires_at: args.access_expires_at,
       last_error: undefined,
+      last_error_kind: undefined,
       ...(args.refresh_token_enc ? { refresh_token_enc: args.refresh_token_enc } : {}),
     });
     return { ok: true };
   }
-  await db.patch(id, { ...release, last_error: args.last_error });
+  await db.patch(id, { ...release, last_error: args.last_error, last_error_kind: args.last_error_kind });
   return { ok: true };
 }
 
-export type RefreshResult = { ok: boolean; token?: string; expires_at?: number; error?: string };
+/** Why a refresh produced no token, for callers that act on the reason
+ *  rather than show the message: the connection is gone, its stored
+ *  credentials cannot be read, the provider refused the grant (reconnect),
+ *  another caller still holds the refresh, or a failure the next call may
+ *  clear. */
+export type RefreshFailure = "no_connection" | "undecryptable" | "revoked" | "held" | "transient";
+
+export type RefreshResult = { ok: boolean; token?: string; expires_at?: number; error?: string; kind?: RefreshFailure };
 
 export type RefreshDeps = {
   /** Provider name for messages ("Linear", "Gmail"). */
@@ -172,10 +190,11 @@ export type RefreshDeps = {
  * yields the owner's.
  */
 export async function singleFlightRefresh(deps: RefreshDeps): Promise<RefreshResult> {
-  const noConnection: RefreshResult = { ok: false, error: deps.errors.noConnection };
+  const noConnection: RefreshResult = { ok: false, error: deps.errors.noConnection, kind: "no_connection" };
+  const undecryptable: RefreshResult = { ok: false, error: deps.errors.undecryptable, kind: "undecryptable" };
   const tokenOf = async (row: RefreshRow): Promise<RefreshResult> => {
     const token = row.access_token_enc ? await deps.decrypt(row.access_token_enc) : null;
-    return token ? { ok: true, token, expires_at: row.access_expires_at } : { ok: false, error: deps.errors.undecryptable };
+    return token ? { ok: true, token, expires_at: row.access_expires_at } : undecryptable;
   };
   /** Wait for another claimant's write. Resolves with the new credentials,
    *  or null once the lease lapsed with nothing written. */
@@ -212,7 +231,7 @@ export async function singleFlightRefresh(deps: RefreshDeps): Promise<RefreshRes
     row = again;
     if (!needsRefresh(row, Date.now())) return await tokenOf(row);
   }
-  if (!lease) return { ok: false, error: `${deps.provider} refresh is held by another caller; retry` };
+  if (!lease) return { ok: false, error: `${deps.provider} refresh is held by another caller; retry`, kind: "held" };
   const mine = row;
   const stamp = stampOf(mine);
 
@@ -238,20 +257,27 @@ export async function singleFlightRefresh(deps: RefreshDeps): Promise<RefreshRes
   if (!refreshToken) {
     // No refresh token (or undecryptable): the access token is all we have.
     // Releasing the lease is an outcome write like any other, so a reconnect
-    // or disconnect that landed meanwhile refuses it.
-    const released = await deps.write(mine._id, { expected_enc: stamp, lease });
+    // or disconnect that landed meanwhile refuses it. When that token cannot
+    // be read either, the release records it, so the row reads as needing a
+    // reconnect like a revoked one does.
+    const held = mine.access_token_enc ? await tokenOf(mine) : undecryptable;
+    const released = await deps.write(mine._id, {
+      expected_enc: stamp,
+      lease,
+      ...(held.ok ? {} : { last_error: held.error, last_error_kind: "undecryptable" as const }),
+    });
     if (!released.ok) return await deferToOwner(released.reason);
-    return mine.access_token_enc ? await tokenOf(mine) : { ok: false, error: deps.errors.undecryptable };
+    return held;
   }
-  const fail = async (error: string) => {
-    const stamped = await deps.write(mine._id, { expected_enc: stamp, lease: lease!, last_error: error });
-    return stamped.ok ? { ok: false, error } : await deferToOwner(stamped.reason);
+  const fail = async (error: string, kind: StoredRefreshFailure): Promise<RefreshResult> => {
+    const stamped = await deps.write(mine._id, { expected_enc: stamp, lease: lease!, last_error: error, last_error_kind: kind });
+    return stamped.ok ? { ok: false, error, kind } : await deferToOwner(stamped.reason);
   };
   let res: { ok: boolean; status: number; tok: any };
   try {
     res = await deps.request(refreshToken);
   } catch {
-    return await fail(`${deps.provider} token endpoint unreachable; the next call retries`);
+    return await fail(`${deps.provider} token endpoint unreachable; the next call retries`, "transient");
   }
   const tok = res.tok;
   if (!res.ok || typeof tok?.access_token !== "string") {
@@ -261,6 +287,7 @@ export async function singleFlightRefresh(deps: RefreshDeps): Promise<RefreshRes
       revoked
         ? `${deps.provider} refresh refused (${code}): access was revoked or the refresh token expired; ${deps.errors.reconnect}`
         : `${deps.provider} refresh failed (${code}); the next call retries`,
+      revoked ? "revoked" : "transient",
     );
   }
   const expiresAt = accessExpiresAt(tok, now);

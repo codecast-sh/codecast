@@ -105,6 +105,7 @@ function answerWords(a: Attribution): string {
   const x = a.answer;
   switch (x.kind) {
     case 'footing':
+      if (x.freezeIds?.length) return `the per-freeze rubric changed on ${x.freezeIds.map((f) => f.slice(0, 8)).join(', ')} (${x.from ?? 'none'} to ${x.to ?? 'none'}): not a source change, nothing to search`;
       return `the ${x.change === 'model' ? 'model' : "judge's ruler"} moved (${x.from ?? 'none'} to ${x.to ?? 'none'}): not a source change, nothing to search`;
     case 'freeze':
       return `the frozen moment changed on ${x.freezeIds.map((f) => f.slice(0, 8)).join(', ')}: not a source change, nothing to search`;
@@ -189,7 +190,7 @@ export function planFrom(args: PlanArgs, world: PlanWorld, attribution?: Attribu
     maxMinutes: args.maxMinutes ?? DEFAULT_MAX_MINUTES,
     allCommits: Boolean(args.allCommits),
     needsConfirm: meta.route === 'agent',
-    summary: can ? costLine(bound, budgetUsd) : searchable(a) ? `${open!.length} class(es) left and none loads under today's tool (${open!.find((c) => c.skip)?.skip ?? 'no render'}): no replay can probe them` : answerWords(a),
+    summary: can ? costLine(bound, budgetUsd) : !focus.length ? 'no freeze graded on both ends fell, so every commit renders alike; pick a good and a bad batch that both graded the freeze that broke' : searchable(a) ? `${open!.length} class(es) left and none loads under today's tool (${open!.find((c) => c.skip)?.skip ?? 'no render'}): no replay can probe them` : answerWords(a),
   };
 }
 

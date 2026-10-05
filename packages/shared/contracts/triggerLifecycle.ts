@@ -2,6 +2,7 @@ import { formatScheduledTask, type RoleCard, type WaitingSession } from "./machi
 import type { AreaChange } from "./orgAreas";
 import { orgReviewFocusOf } from "./orgReview";
 import { fenceForeignText } from "./fence";
+import { roleFocusBlock } from "./rolePlaybook";
 
 // Appended to a trigger run's frame when its session is stashed: the agent
 // must know nobody is watching, and that declaring its state is its only way
@@ -83,13 +84,15 @@ export function pendingEventsBlock(events: readonly PendingTriggerEvent[] | null
  *  server's one writer (agentTasks.triggerFrameFor) and the eval harness's
  *  role-wake fixtures render the same bytes. */
 export function triggerRunFrame(
-  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; pending_events?: readonly PendingTriggerEvent[] },
+  task: { _id: string; short_id?: string; title?: string; prompt?: string | null; role_id?: string; event_filter?: { event_type?: string }; requested_run_focus?: string; role_focus?: string | null; pending_events?: readonly PendingTriggerEvent[] },
   read: { role: RoleCard | null; waiting?: WaitingSession | null; change?: AreaChange; stashed: boolean },
 ): string {
   // A focus a person gave this run (orgReview.ts) leads the body: the run is
   // the routine's, narrowed, so the routine's own words still follow.
   const focus = orgReviewFocusOf(task.requested_run_focus);
-  const body = [focus?.prompt, task.prompt, pendingEventsBlock(task.pending_events), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
+  // A role's own focus for its check (org-staffing.md S38) follows the
+  // routine's prompt: the prompt is the product's, the focus is the role's.
+  const body = [focus?.prompt, task.prompt, roleFocusBlock(task.role_focus), pendingEventsBlock(task.pending_events), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
   return formatScheduledTask({
     title: task.title || "",
     task_id: String(task._id),

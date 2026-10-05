@@ -6,8 +6,9 @@ import { REPO_ROOT } from '../paths';
 
 // How the api child starts long work (a bisect, a shrink, a sweep): in a
 // detached tmux session the founder can attach to, or, with no tmux, as a
-// detached process writing its own log. Always an argv array: nothing a
-// client sends ever reaches a shell.
+// detached process. Either way everything the job prints lands in its log
+// file, so the reason a job ended outlives its tmux window. Always an argv
+// array: nothing a client sends ever reaches a shell.
 
 /**
  * The eval tool a spawned command runs: the checkout's own entry, through the
@@ -35,18 +36,31 @@ export interface Launched {
   pid: number | null;
 }
 
+/** A path as one single-quoted shell word (tmux pipe-pane runs its command through sh). */
+const shellWord = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+
 /**
- * Starts `argv` detached: `tmux new-session -d -s <name> -c <cwd> -- argv…`
- * (tmux execs a multi-word command without a shell), or, with no tmux, a
- * detached process whose output goes to `log`.
+ * Starts `argv` detached, its output appended to `log`. With tmux the
+ * session opens on a placeholder, pipe-pane tees the pane into the log, and
+ * only then does respawn-pane exec argv (tmux execs a multi-word command
+ * without a shell), so not even a crash in the first millisecond is lost.
+ * With no tmux the process writes the log itself.
  */
 export function launch(name: string, argv: string[], o: { cwd: string; log: string }): Launched {
+  mkdirSync(dirname(o.log), { recursive: true });
   if (hasTmux()) {
-    const r = spawnSync('tmux', ['new-session', '-d', '-s', name, '-c', o.cwd, '--', ...argv], { encoding: 'utf8' });
-    if (r.status !== 0) throw new Error(`tmux could not start ${name}: ${(r.stderr || '').trim()}`);
+    const target = `=${name}:`;
+    const run = (args: string[]) => spawnSync('tmux', args, { encoding: 'utf8' });
+    const opened = run(['new-session', '-d', '-s', name, '-c', o.cwd, '--', 'sleep', '600']);
+    if (opened.status !== 0) throw new Error(`tmux could not start ${name}: ${(opened.stderr || '').trim()}`);
+    const piped = run(['pipe-pane', '-t', target, '-o', `cat >> ${shellWord(o.log)}`]);
+    const started = piped.status === 0 ? run(['respawn-pane', '-k', '-t', target, '-c', o.cwd, '--', ...argv]) : piped;
+    if (started.status !== 0) {
+      run(['kill-session', '-t', `=${name}`]);
+      throw new Error(`tmux could not start ${name}: ${(started.stderr || '').trim()}`);
+    }
     return { tmux: name, pid: null };
   }
-  mkdirSync(dirname(o.log), { recursive: true });
   const fd = openSync(o.log, 'a');
   try {
     const child = spawn(argv[0]!, argv.slice(1), { cwd: o.cwd, detached: true, stdio: ['ignore', fd, fd] });

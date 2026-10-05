@@ -15,7 +15,6 @@ import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
 import { useShortcutAction } from "./ShortcutProvider";
 import { useUndoWalk } from "../hooks/useUndoWalk";
-import * as undoTimeline from "../lib/undoTimelineOpen";
 import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
@@ -298,12 +297,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('workbench.8', useCallback(() => switchWorkbench(7), [switchWorkbench]));
   useShortcutAction('workbench.9', useCallback(() => switchWorkbench(8), [switchWorkbench]));
 
-  // ui.undo and ui.redo, plus the held-modifier peek of the timeline.
+  // ui.undo, ui.redo and ui.undoHistory, plus the held-modifier peek of the timeline.
   useUndoWalk();
-
-  useShortcutAction('ui.undoHistory', useCallback(() => {
-    undoTimeline.toggle('interactive');
-    return true;
-  }, []));
 
 }

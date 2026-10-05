@@ -34,12 +34,14 @@ import {
   webCallsForConversation,
   webGetCall,
   webGetCallRef,
+  writeSegments,
   backfillCallShortIds,
   webListCalls,
+  webCallPlaces,
   endTranscript,
   HUDDLE_GRACE_MS,
 } from "./transcripts";
-import { LIVE_TRANSCRIBE_MODEL } from "@codecast/shared/contracts";
+import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
@@ -480,10 +482,10 @@ describe("the huddle digest", () => {
     last_seq: 3,
     ...over,
   });
-  const ctx = (rows: any[], segments: any[] = []) => {
+  const ctx = (rows: any[], segments: any[] = [], recordings: any[] = []) => {
     const scheduled: { name: string; args: any }[] = [];
     return {
-      db: makeFakeDb({ transcripts: rows, transcript_segments: segments, users: [], push_outbox: [] }),
+      db: makeFakeDb({ transcripts: rows, transcript_segments: segments, users: [], push_outbox: [], call_recordings: recordings }),
       scheduler: {
         async runAfter(_d: number, reference: unknown, args: any) {
           scheduled.push({ name: getFunctionName(reference as any), args });
@@ -571,6 +573,48 @@ describe("the huddle digest", () => {
     const c = ctx([huddle({ last_seq: 0 })]);
     await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
     expect(c._scheduled).toEqual([]);
+  });
+
+  // A filmed huddle is content whether anyone spoke or not (a screen walked
+  // through in silence, transcription off): the place it was held is where
+  // a teammate looks for its video, so the digest posts and names it.
+  describe("a huddle recorded on video", () => {
+    // The room's file from 4:40 to 7:20 of the call, a screen inside it, and
+    // a failed second run that filmed nothing.
+    const recs = [
+      { _id: "r1", transcript_id: "t1", kind: "composite", status: "ready", started_at: 1_000 + 280_000, duration_ms: 160_000 },
+      { _id: "r2", transcript_id: "t1", kind: "screen", status: "ready", started_at: 1_000 + 300_000, duration_ms: 60_000 },
+      { _id: "r3", transcript_id: "t1", kind: "composite", status: "failed", started_at: 1_000 + 500_000, duration_ms: 9_000 },
+    ];
+    const filmed = (over: Record<string, unknown> = {}) =>
+      huddle({ last_seq: 0, participants: [], recorded_people: ["ua"], video_runs: 2, short_id: "cl-42", ...over });
+
+    test("nobody spoke: the digest still posts, and names the video", async () => {
+      const c = ctx([filmed()], [], recs);
+      await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
+      expect(c._scheduled.map((s) => s.name)).toEqual(["chat:postCallDigest"]);
+      expect(c._scheduled[0].args.content).toBe("**Huddle** · 12 min huddle\n\nRecorded on video: 4:40-7:20.");
+    });
+
+    test("a session's agent is told it can snap a frame of it", async () => {
+      const c = ctx([filmed({ room_key: "session:conv1" })], [], recs);
+      await call(setSummary, c, { transcript_id: "t1", summary_status: "skipped" });
+      const { body } = c._scheduled[0].args;
+      expect(body).toContain("Recorded on video: 4:40-7:20.");
+      expect(body).toContain("`cast call snap cl-42:<line>`");
+    });
+
+    test("with words too: the video line sits above the summary", async () => {
+      const c = ctx([filmed({ last_seq: 3, participants: [{ id: "ua", name: "Alice" }] })], [], recs);
+      await call(setSummary, c, verdict);
+      expect(c._scheduled[0].args.content).toContain("with Alice\n\nRecorded on video: 4:40-7:20.\n\nAlice and Bob agreed");
+    });
+
+    test("never filmed: nothing about video", async () => {
+      const c = ctx([huddle()], [], recs);
+      await call(setSummary, c, verdict);
+      expect(c._scheduled[0].args.content).not.toContain("video");
+    });
   });
 
   test("too few words to summarize: the words themselves are the digest", async () => {
@@ -720,6 +764,76 @@ describe("the call history leaves out empty huddles", () => {
     };
     const rows = await (webListCalls as any)._handler(c, {});
     expect(rows.map((r: any) => r._id)).toEqual(["live", "spoken", "typed"]);
+  });
+
+  // The list keeps `limit` calls per source WHILE it walks. Taking `limit`
+  // rows and filtering afterwards let six scratch huddles hide the one real
+  // call behind them (cast calls -n 5 skipped the recorded calls on prod).
+  const listCtx = (transcripts: any[]) => ({
+    db: makeFakeDb({
+      transcripts,
+      call_chat_messages: [],
+      team_memberships: [{ user_id: "ua", team_id: "teamA" }],
+      teams: [{ _id: "teamA", features: { calls: true } }, { _id: "teamB", features: { calls: true } }],
+      transcript_segments: [],
+    }),
+    auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+  });
+
+  test("silent huddles newer than a real call do not crowd it out of a short list", async () => {
+    const silent = Array.from({ length: 6 }, (_, i) => huddle(`silent${i}`, { started_at: 10_000 + i }));
+    const c = listCtx([...silent, huddle("real", { last_seq: 2, started_at: 1_000 })]);
+    const rows = await (webListCalls as any)._handler(c, { limit: 3 });
+    expect(rows.map((r: any) => r._id)).toEqual(["real"]);
+  });
+
+  test("a personal recording filed under another team interleaves by start time", async () => {
+    const rec = (id: string, started_at: number) => ({
+      ...huddle(id, { started_at, last_seq: 1 }),
+      room_key: "rec:1f8e7d6c-1234-4abc-9def-0123456789ab",
+      team_id: "teamB",
+    });
+    const c = listCtx([
+      ...Array.from({ length: 4 }, (_, i) => huddle(`silent${i}`, { started_at: 20_000 + i })),
+      huddle("newest", { last_seq: 2, started_at: 9_000 }),
+      rec("rec_mid", 7_000),
+      huddle("older", { last_seq: 2, started_at: 5_000 }),
+      rec("rec_old", 3_000),
+    ]);
+    const rows = await (webListCalls as any)._handler(c, { limit: 3 });
+    expect(rows.map((r: any) => r._id)).toEqual(["newest", "rec_mid", "older"]);
+  });
+});
+
+// The web names a call from its own store and asks the server only for the
+// places it could not find (a session never loaded). The answer is the one
+// `cast calls` prints, and only for calls the viewer may read: a room key is
+// never enough to learn a name.
+describe("webCallPlaces names only the calls the viewer may read", () => {
+  test("a readable call gets its place, an unreadable one gets nothing", async () => {
+    const row = (id: string, room_key: string, who: string) => ({
+      _id: id, room_key, team_id: "teamA", started_by: who, status: "ended",
+      started_at: 1_000, ended_at: 2_000, routes: [], last_seq: 2, participants: [{ id: who, name: who }],
+    });
+    const c = {
+      db: makeFakeDb({
+        transcripts: [row("mine", "dm:ua:ub", "ua"), row("theirs", "dm:ub:uc", "ub")],
+        users: [
+          { _id: "ua", name: "Ada" },
+          { _id: "ub", name: "Bo Chen" },
+          { _id: "uc", name: "Cy" },
+        ],
+        team_memberships: [
+          { user_id: "ua", team_id: "teamA" },
+          { user_id: "ub", team_id: "teamA" },
+          { user_id: "uc", team_id: "teamA" },
+        ],
+        teams: [{ _id: "teamA", features: { calls: true } }],
+      }),
+      auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+    };
+    const places = await (webCallPlaces as any)._handler(c, { transcript_ids: ["mine", "theirs"] });
+    expect(places).toEqual({ mine: { session_title: null, peer_name: "Bo Chen", channel_name: null } });
   });
 });
 
@@ -1494,6 +1608,51 @@ describe("call references (cl-N)", () => {
     expect(out?.turns?.from_seq).toBe(2);
     expect(out?.turns?.to_seq).toBe(3);
     expect(out?.turns?.segments[0]).toMatchObject({ speaker_name: "Ada", text: expect.stringMatching(/^line/), t1: expect.any(Number) });
+  });
+
+  // A moment's card is captioned with the line said then, by the rule `cast
+  // call snap` names a frame's line by (lineSaidAt over the whole list), found
+  // by a search over seq rather than a read of every line.
+  test("a moment carries the line the CLI would name, on a long call", async () => {
+    // 41 lines, 3s apart, each 2s long; line 20 overlaps 21 (talked over).
+    const many = Array.from({ length: 41 }, (_, i) => {
+      const seq = i + 1;
+      return { _id: `m${seq}`, _creationTime: seq, transcript_id: "tr_rec", seq, speaker_id: "ua", speaker_name: "Ada", text: `line ${seq}`, t0: seq * 3000, t1: seq * 3000 + (seq === 20 ? 4500 : 2000) };
+    });
+    const c = {
+      ...ctxFor("ua", [row({ last_seq: 41 })]),
+      db: makeFakeDb({
+        transcripts: [row({ last_seq: 41 })],
+        team_memberships: [{ user_id: "ua", team_id: "teamA" }],
+        teams: [{ _id: "teamA", features: { calls: true } }],
+        transcript_segments: many,
+      }),
+    };
+    for (const at of [0, 2_999, 3_000, 4_999, 5_500, 61_000, 63_100, 64_000, 64_600, 70_000, 125_000, 143_000, 200_000]) {
+      const out = await call(webGetCallRef, c, { ref: "cl-7", at_ms: at });
+      const want = lineSaidAt(many, at);
+      expect(out?.line ? { seq: out.line.seq, during: out.line.during } : null).toEqual(want ? { seq: many[want.index].seq, during: want.during } : null);
+    }
+    // Spot checks of what that rule says, so the loop above is not vacuous.
+    // Talked over: the line begun first is still the one being said.
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 64_000 }))?.line).toMatchObject({ seq: 20, during: true, text: "line 20" });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 64_600 }))?.line).toMatchObject({ seq: 21, during: true });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 125_000 }))?.line).toMatchObject({ seq: 41, during: false });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 200_000 }))?.line).toBeNull();
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 1_000 }))?.line).toBeNull();
+  });
+
+  // Every open pill, excerpt and frame card of a live call re-runs on each
+  // batch of lines (the query reads the call's row, which writeSegments
+  // patches). The answer must not change unless something it shows did, or
+  // each re-run is a push and every reference re-renders for the whole call.
+  test("a new line on a live call leaves a frame's answer unchanged", async () => {
+    const c = ctxFor("ua", [row({ status: "live", ended_at: undefined })]);
+    const before = await call(webGetCallRef, c, { ref: "cl-7", at_ms: 5_000 });
+    const live = await c.db.get("tr_rec");
+    await writeSegments(c, live, [{ speaker_id: "ua", speaker_name: "Ada", text: "line 4", t0: 9_000, t1: 9_500 }]);
+    expect((await c.db.get("tr_rec"))?.last_seq).toBe(4);
+    expect(await call(webGetCallRef, c, { ref: "cl-7", at_ms: 5_000 })).toEqual(before);
   });
 
   test("a reader the call page refuses gets nothing from a mention either", async () => {

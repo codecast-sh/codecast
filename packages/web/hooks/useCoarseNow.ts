@@ -51,6 +51,11 @@ export function subscribeCoarseTick(intervalMs: number, listener: () => void): (
 
 export function useCoarseNow(intervalMs: number): number {
   const c = clockFor(intervalMs);
+  // An idle clock (no listener, so no timer) froze at its last tick, which can
+  // be minutes old: a countdown mounted after a quiet spell would open on that
+  // stale time. Bring it current before the first read; a running clock is left
+  // alone so every subscriber in one tick sees the same value.
+  if (c.timer === null) c.now = Date.now();
   return useSyncExternalStore(
     (notify) => subscribeCoarseTick(intervalMs, notify),
     () => c.now,

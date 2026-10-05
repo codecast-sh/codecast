@@ -52,7 +52,7 @@ import {
 } from "../../hooks/useRecorder";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { fmtClock } from "../../components/calls/speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { soundMeetingDetected } from "../../lib/sounds";
 import { MeetingOfferFace } from "../../components/calls/MeetingOfferToast";
 import "../../components/calls/recorder.css";
@@ -173,7 +173,7 @@ function RecordingFace({
       <button type="button" className="rec-win-expand" title={expanded ? "Shrink" : "Details"} onClick={onToggle}>
         <span className="rec-pill-dot" aria-hidden="true" />
         <span className="rec-win-clock">
-          {fmtClock(status.startedAt ? now - status.startedAt : 0)}
+          {formatCallTime(status.startedAt ? now - status.startedAt : 0)}
         </span>
         {expanded && (
           <span className="rec-win-dim">

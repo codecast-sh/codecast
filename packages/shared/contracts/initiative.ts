@@ -9,6 +9,10 @@
 // the store: progress (tasks done over tasks in its projects), each project's
 // lead (contracts/orgLead.ts), the owner's face and name, and sub initiatives
 // (rows whose `parent_initiative_id` names this one).
+//
+// The intent record (I5) is the row's second half: why it matters, what done
+// looks like, milestones, every reported number over time, open questions,
+// decisions taken, and the sources that say who stated the goal and where.
 
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
 export type InitiativeStatus = (typeof INITIATIVE_STATUSES)[number];
@@ -130,6 +134,172 @@ export function initiativeStanding(readings: MetricReading[]): MetricStanding {
   return "unknown";
 }
 
+// ── The intent record (I5) ───────────────────────────────────────────────────
+
+export const INTENT_SOURCE_KINDS = ["call", "chat", "doc", "session", "task", "plan", "link", "note"] as const;
+export type IntentSourceKind = (typeof INTENT_SOURCE_KINDS)[number];
+
+/**
+ * Who said it and where. `ref` is the object's own address: a call reference
+ * (`cl-42`, `cl-42:15`, the shared/entities form), a chat message id, a doc id, a session short id with an
+ * optional `:line`, `ct-N`, `pl-N`, or a URL. `quote` is the words as said.
+ * A `note` has no address: its quote is all there is.
+ */
+export type IntentSource = { kind: IntentSourceKind; ref?: string; quote?: string; by?: string; at?: number };
+
+export const INTENT_SOURCE_LABEL: Record<IntentSourceKind, string> = {
+  call: "Call", chat: "Chat", doc: "Doc", session: "Session", task: "Task", plan: "Plan", link: "Link", note: "Note",
+};
+
+const QUOTE_MAX = 400;
+const trimQuote = (text: string): string | undefined => {
+  const t = text.trim().replace(/^[\s:,;-]+/, "").replace(/^["'“‘]([\s\S]*)["'”’]$/, "$1").trim();
+  return t ? t.slice(0, QUOTE_MAX) : undefined;
+};
+
+/** One address read as a source kind and ref, or null when it is not an address. */
+function readSourceRef(token: string): Pick<IntentSource, "kind" | "ref"> | null {
+  const t = token.trim().replace(/[.,;:]+$/, "");
+  if (!t) return null;
+  if (/^https?:\/\/\S+$/i.test(t)) return { kind: "link", ref: t };
+  if (/^ct-\d+$/i.test(t)) return { kind: "task", ref: t.toLowerCase() };
+  if (/^pl-\d+$/i.test(t)) return { kind: "plan", ref: t.toLowerCase() };
+  const named = t.match(/^(call|chat|doc|session|task|plan):(\S+)$/i);
+  if (named) {
+    const kind = named[1].toLowerCase() as IntentSourceKind;
+    // A call line reads "call:cl-42:14" or "call:cl-42#14"; both store as the
+    // shared call reference form (shared/entities callRefId), "cl-42:14".
+    const ref = kind === "call" ? named[2].replace(/#(\d+(?:-\d+)?)$/, ":$1").toLowerCase() : named[2];
+    return { kind, ref };
+  }
+  // A session short id, alone or with a line: "jx7c6zk", "jx7c6zk:142".
+  if (/^(?=[a-z0-9]*\d)(?=[a-z0-9]*[a-z])[a-z0-9]{7}(?::\d+(?:-\d+)?)?$/.test(t)) return { kind: "session", ref: t };
+  return null;
+}
+
+/**
+ * Read a source the way people and the review write one: an address alone
+ * ("call:k57abc#14", "jx7c6zk:142", "ct-12", a URL), an address followed by
+ * the words said, or plain words, which are a note. Never throws: text that
+ * names no address is still a record of what was said.
+ */
+export function parseIntentSource(text: string, extra: Pick<IntentSource, "by" | "at" | "quote"> = {}): IntentSource {
+  const t = (text ?? "").trim();
+  const [first, ...rest] = t.split(/\s+/);
+  const ref = readSourceRef(first ?? "");
+  const quote = extra.quote?.trim() ? trimQuote(extra.quote) : trimQuote(ref ? rest.join(" ") : t);
+  const out: IntentSource = ref ? { ...ref } : { kind: "note" };
+  if (quote) out.quote = quote;
+  if (extra.by?.trim()) out.by = extra.by.trim().slice(0, 80);
+  if (extra.at) out.at = extra.at;
+  return out;
+}
+
+/** Two sources are the same when they name the same address, or say the same words with none. */
+export const intentSourceKey = (s: IntentSource): string => `${s.kind}:${(s.ref ?? s.quote ?? "").trim().toLowerCase()}`;
+
+/** "Call, line 14", "Session jx7c6zk, line 142", "ct-12", "Note". The words a link wears. */
+export function intentSourceLabel(s: IntentSource): string {
+  const ref = s.ref ?? "";
+  switch (s.kind) {
+    case "call": { const m = ref.match(/^([^:@]+)(?::(\d+(?:-\d+)?))?(?:@(.+))?$/); return m?.[2] ? `Call ${m[1]}, line ${m[2]}` : m?.[3] ? `Call ${m[1]} at ${m[3]}` : `Call ${m?.[1] ?? ref}`; }
+    case "session": { const [id, line] = ref.split(":"); return line ? `Session ${id}, line ${line}` : `Session ${id}`; }
+    case "task": case "plan": return ref;
+    case "link": { try { return new URL(ref).hostname.replace(/^www\./, ""); } catch { return "Link"; } }
+    default: return INTENT_SOURCE_LABEL[s.kind];
+  }
+}
+
+/** "Ashot on a call, 30 Sep: our goal is $250 or less per introduction" for a terminal and a prompt. */
+export function intentSourceLine(s: IntentSource, now = Date.now()): string {
+  const where = s.kind === "note" ? "" : s.ref && s.kind !== "task" && s.kind !== "plan" && s.kind !== "link" ? `${s.kind}:${s.ref}` : (s.ref ?? "");
+  const head = [s.by, where, s.at ? dayWord(s.at, now) : ""].filter(Boolean).join(", ");
+  return s.quote ? (head ? `${head}: "${s.quote}"` : `"${s.quote}"`) : head || "Note";
+}
+
+/** Add sources to a list, keeping the first of any two that are the same, capped at the list's limit. */
+export function mergeIntentSources(prior: readonly IntentSource[] | undefined, more: readonly IntentSource[]): IntentSource[] {
+  const out = [...(prior ?? [])];
+  const seen = new Set(out.map(intentSourceKey));
+  for (const s of more) {
+    const k = intentSourceKey(s);
+    if (seen.has(k) || k.endsWith(":")) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out.slice(0, INITIATIVE_RECORD_MAX.sources);
+}
+
+/** A step on the way, with the day it is due and the moment it was reached. */
+export type InitiativeMilestone = { key: string; title: string; date?: number; done_at?: number; source?: IntentSource };
+/** Something still undecided. An answer closes it; the question stays on the record. */
+export type InitiativeQuestion = { key: string; text: string; at: number; by?: string; source?: IntentSource; answer?: string; answered_at?: number };
+/** Something that was decided, by whom and where. */
+export type InitiativeDecision = { key: string; text: string; at: number; by?: string; source?: IntentSource };
+
+/** The record's four lists and how many entries each holds. */
+export const INITIATIVE_RECORD_LISTS = ["milestones", "questions", "decisions", "sources"] as const;
+export type InitiativeRecordList = (typeof INITIATIVE_RECORD_LISTS)[number];
+export const INITIATIVE_RECORD_MAX: Record<InitiativeRecordList, number> = { milestones: 12, questions: 20, decisions: 40, sources: 20 };
+/** How many reported values a metric keeps: a year of weekly reports. */
+export const INITIATIVE_SCORE_HISTORY_MAX = 52;
+
+/** A short key for a new entry, unique within its list: a slug of its words, numbered on a clash. */
+export function recordEntryKey(text: string, taken: readonly string[]): string {
+  const base = metricKeyOf(text).slice(0, 32) || "entry";
+  if (!taken.includes(base)) return base;
+  for (let n = 2; ; n++) if (!taken.includes(`${base}_${n}`)) return `${base}_${n}`;
+}
+
+/** Milestones in reading order: dated ones by day, then undated ones as written. */
+export function orderedMilestones(milestones: readonly InitiativeMilestone[] | undefined): InitiativeMilestone[] {
+  return (milestones ?? []).map((m, i) => ({ m, i })).sort((a, b) => (a.m.date ?? Infinity) - (b.m.date ?? Infinity) || a.i - b.i).map((x) => x.m);
+}
+/** The next milestone: the first one not reached, earliest day first. Null when every one is reached or none is set. */
+export const nextMilestone = (row: Pick<InitiativeRow, "milestones">): InitiativeMilestone | null => orderedMilestones(row.milestones).find((m) => !m.done_at) ?? null;
+/** "3 of 5 reached" as counts. */
+export const milestoneCounts = (row: Pick<InitiativeRow, "milestones">): { done: number; total: number } => ({ done: (row.milestones ?? []).filter((m) => m.done_at).length, total: (row.milestones ?? []).length });
+export const openQuestions = (row: Pick<InitiativeRow, "questions">): InitiativeQuestion[] => (row.questions ?? []).filter((q) => !q.answer);
+
+/** Add a reported value to a metric's history, oldest first, the newest INITIATIVE_SCORE_HISTORY_MAX kept. A second report for the same moment replaces the first. */
+export function appendScoreHistory(history: Record<string, InitiativeScore[]> | undefined, key: string, score: InitiativeScore): Record<string, InitiativeScore[]> {
+  const series = [...(history?.[key] ?? []).filter((s) => s.observed_at !== score.observed_at), score].sort((a, b) => a.observed_at - b.observed_at);
+  return { ...(history ?? {}), [key]: series.slice(-INITIATIVE_SCORE_HISTORY_MAX) };
+}
+
+export type MetricTrend = {
+  /** Which way the number moved between the first and the last report read. */
+  direction: "up" | "down" | "flat" | "unknown";
+  /** Whether that is toward the target; null when flat or unknown. */
+  toward: boolean | null;
+  /** The change between the previous report and the latest, as a number; null when either is unread. */
+  delta: number | null;
+  /** The readable values oldest first, for a sparkline. */
+  series: Array<{ at: number; n: number }>;
+};
+
+/** A metric's history read as a direction and a series. `window` is how many of the latest reports to read. */
+export function metricTrend(history: readonly InitiativeScore[] | undefined, target: string, window = 12): MetricTrend {
+  const series = (history ?? []).map((s) => ({ at: s.observed_at, n: metricNumber(s.value) })).filter((p): p is { at: number; n: number } => p.n !== null).sort((a, b) => a.at - b.at).slice(-window);
+  if (series.length < 2) return { direction: "unknown", toward: null, delta: null, series };
+  const first = series[0].n, last = series[series.length - 1].n;
+  const span = Math.max(Math.abs(first), Math.abs(last), 1e-9);
+  const direction = Math.abs(last - first) / span < 0.005 ? "flat" : last > first ? "up" : "down";
+  const toward = direction === "flat" ? null : (metricDirection(target) === "at_most") === (direction === "down");
+  return { direction, toward, delta: last - series[series.length - 2].n, series };
+}
+export const metricTrends = (row: Pick<InitiativeRow, "metrics" | "score_history">): Record<string, MetricTrend> => Object.fromEntries((row.metrics ?? []).map((m) => [m.key, metricTrend(row.score_history?.[m.key], m.target)]));
+
+/** "up from 380, toward the target" for a terminal and a prompt; empty before two reports. */
+export function trendWords(t: MetricTrend): string {
+  if (t.direction === "unknown") return "";
+  if (t.direction === "flat") return "flat";
+  const from = t.series[0]?.n;
+  return `${t.direction}${from !== undefined ? ` from ${formatMetricNumber(from)}` : ""}${t.toward === null ? "" : t.toward ? ", toward the target" : ", away from the target"}`;
+}
+/** 1234.5 → "1,234.5"; whole numbers print whole. */
+export const formatMetricNumber = (n: number): string => (Number.isInteger(n) ? n : Math.round(n * 100) / 100).toLocaleString("en-US");
+
 export type InitiativeLink = { short_id: string; title: string };
 /**
  * The goals above this one, nearest first, up to the top level goal: what a
@@ -157,7 +327,7 @@ export type InitiativeRow = {
   /** The optimistic stub's own key; the server row carrying it supersedes the stub. */
   client_key?: string;
   title: string;
-  /** Purpose, scope and context. */
+  /** The goal in a few sentences: its scope and context. */
   description?: string;
   status: InitiativeStatus;
   /** Absent means nobody drives it, which is the first finding of a review. */
@@ -171,8 +341,22 @@ export type InitiativeRow = {
   parent_initiative_id?: string;
   /** One or two numbers the goal is measured by, each with a target (at most INITIATIVE_METRICS_MAX). */
   metrics?: InitiativeMetric[];
-  /** The reported values by metric key, with a source and a date each (the template scoreboard's shape). */
+  /** The reported values by metric key, with a source and a date each (the template scoreboard's shape). The latest of `score_history`. */
   scoreboard?: Record<string, InitiativeScore>;
+  /** Every reported value by metric key, oldest first (I5): what the trend is read from. Written only with `scoreboard`. */
+  score_history?: Record<string, InitiativeScore[]>;
+  /** Why it matters. */
+  why?: string;
+  /** What done looks like: the sentence a result is checked against. */
+  done_when?: string;
+  /** Steps on the way; the next one is the first not reached (nextMilestone). */
+  milestones?: InitiativeMilestone[];
+  /** What is still undecided, and what was answered. */
+  questions?: InitiativeQuestion[];
+  /** What was decided, newest last. */
+  decisions?: InitiativeDecision[];
+  /** Where the goal was stated: who said it and where. */
+  sources?: IntentSource[];
   /** Copied from the latest update when it is posted; `none` before one exists. */
   health: InitiativeHealth;
   /** When the latest update was posted, so a list shows the date with no updates loaded. */

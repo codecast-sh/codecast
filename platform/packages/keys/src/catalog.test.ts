@@ -261,3 +261,28 @@ describe("conflicts", () => {
     expect(createShortcutCatalog(defs, { isMac: false }).conflicts().length).toBe(0);
   });
 });
+
+// mac: null = no binding on mac. ⌃Y yanks in every mac text field, so an
+// off-mac redo row must never match there, list there, or collide there.
+describe("a chord unbound on mac", () => {
+  type U = "redo";
+  const defs: ShortcutDef<U>[] = [
+    { key: "ctrl+y", mac: null, action: "redo", description: "Redo" },
+  ];
+  const ev = { key: "y", code: "KeyY", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false } as KeyboardEvent;
+
+  test("matches off mac only", () => {
+    expect(createShortcutCatalog(defs, { isMac: false }).matchShortcut(ev, defs[0])).toBe(true);
+    expect(createShortcutCatalog(defs, { isMac: true }).matchShortcut(ev, defs[0])).toBe(false);
+  });
+
+  test("is absent from every mac listing", () => {
+    const mac = createShortcutCatalog(defs, { isMac: true });
+    expect(mac.shortcuts).toEqual([]);
+    expect(mac.getShortcutsForAction("redo")).toEqual([]);
+    expect(mac.getShortcutsByContext()).toEqual([]);
+    expect(mac.formatShortcutLabel("redo")).toBeNull();
+    expect(mac.formatShortcutParts(defs[0])).toEqual([]);
+    expect(createShortcutCatalog(defs, { isMac: false }).formatShortcutLabel("redo")).toBe("Ctrl+Y");
+  });
+});

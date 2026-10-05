@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Loaded by Convex, browsers, React Native and Node alike; ES2021 is the
+    // oldest lib among them (codecast's convex program).
+    "lib": ["ES2021", "DOM"]
+  },
+  "include": ["src"]
+}

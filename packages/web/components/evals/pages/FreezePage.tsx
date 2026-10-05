@@ -4,19 +4,24 @@
 // for where it flipped; and GET /run/:id for each of the two cards.
 
 import { useMemo, useState } from "react";
+import { resolveEvalsBatchRef } from "@codecast/shared/contracts/evalsApi";
 import { EmptyState } from "../../EmptyState";
 import { useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
-import { FreezeView, defaultFreezePair, type FreezePair } from "../FreezeView";
+import { FreezeView } from "../FreezeView";
+import { defaultFreezePair, type FreezePair } from "../freezeModel";
 
 function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: string | null; given: FreezePair | null }) {
   const freeze = useEvalsResource("GET /freeze/:id", { params: { id: freezeId } });
   const surfaceId = freeze.data?.freeze.surface ?? null;
   const surface = useEvalsResource("GET /surface/:id", surfaceId ? { params: { id: surfaceId } } : null);
-  const cells = useMemo(() => surface.data?.ledger.find((r) => r.freezeId === freezeId)?.cells ?? null, [surface.data, freezeId]);
+  // The address names the freeze by its prefix and a labelled batch by its hash; the freeze's own record says which.
+  const fullId = freeze.data?.freeze.id ?? freezeId;
+  const pinned = useMemo(() => (batch && freeze.data ? resolveEvalsBatchRef(batch, freeze.data.runs.flatMap((r) => (r.batch ? [r.batch] : []))) : batch), [batch, freeze.data]);
+  const cells = useMemo(() => surface.data?.ledger.find((r) => r.freezeId === fullId)?.cells ?? null, [surface.data, fullId]);
   // The default pair waits for the ledger (or its failure), so the cards do not jump once it lands.
   const ledgerSettled = !!surface.data || !!surface.error;
-  const pick = useMemo(() => (freeze.data && ledgerSettled ? defaultFreezePair(freeze.data.runs, cells, batch) : null), [freeze.data, ledgerSettled, cells, batch]);
+  const pick = useMemo(() => (freeze.data && ledgerSettled ? defaultFreezePair(freeze.data.runs, cells, pinned) : null), [freeze.data, ledgerSettled, cells, pinned]);
   // A link that names two runs (a flip's before and after) opens on them, not on the default pair.
   const [chosen, setChosen] = useState<FreezePair | null>(given);
   const pair: FreezePair = chosen ?? pick ?? { a: null, b: null };
@@ -44,7 +49,7 @@ function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: 
       freeze={freeze.data}
       cells={cells}
       footing={surface.data?.footing ?? []}
-      pinnedBatch={batch}
+      pinnedBatch={pinned}
       pair={pair}
       pick={pick ?? { a: null, b: null, flip: null, why: "Reading where it flipped..." }}
       runA={pair.a ? runA.data : null}

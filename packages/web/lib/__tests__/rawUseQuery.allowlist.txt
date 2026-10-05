@@ -7,7 +7,6 @@
 #   cd packages/web && RATCHET_WRITE=prune bun test lib/__tests__/rawUseQuery.ratchet.test.ts
 app/admin/daemon-logs/page.tsx 4
 app/auth/cli/page.tsx 1
-app/calls/page.tsx 1
 app/explore/page.tsx 1
 app/join/[code]/page.tsx 2
 app/plans/[id]/page.tsx 1

@@ -24,7 +24,12 @@ export const SITE_LINKS = {
   enterpriseEmail: "enterprise@codecast.sh",
 } as const;
 
+/** A mail to support with the subject already filled in. */
+export function supportMailto(subject: string): string {
+  return `mailto:${SITE_LINKS.supportEmail}?subject=${encodeURIComponent(subject)}`;
+}
+
 /** A mail to support asking for early access to one part of the product ("Team", "Org"). */
 export function earlyAccessMailto(what: string): string {
-  return `mailto:${SITE_LINKS.supportEmail}?subject=${encodeURIComponent(`Codecast ${what} early access`)}`;
+  return supportMailto(`Codecast ${what} early access`);
 }

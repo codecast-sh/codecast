@@ -53,6 +53,12 @@ export type ClientSyncRegistryEntry = {
   // query: a source-level test fails any component/app file that subscribes
   // to a registered feed directly. Only the sync hook may.
   feeds?: readonly string[];
+  // Convex modules whose public mutations write the server rows this key
+  // mirrors, beyond the modules of its feeds ("teams", "orgSplit"). A
+  // localFirst key declares feeds or writers: the store-action guard
+  // (lib/__tests__/storeActionMutations.guard.test.ts) reads both, and fails a
+  // surface that calls such a mutation past the store action owning the write.
+  writtenBy?: readonly string[];
   // Boot hydration is automatic for every persisted key — registering a
   // persistence entry IS the permission to load AND save. This field only
   // tunes it, never gates it:
@@ -83,6 +89,13 @@ export type ClientSyncRegistryEntry = {
   // webGetTaskDetail lingers in the never-pruned cache forever as a phantom
   // task that 404s when opened.
   validRow?: (row: any) => boolean;
+  // Whether a held row belongs in a LIST of this collection. The list channels
+  // drop soft-deleted rows on the server, but the sync log and the byIds
+  // fetch deliver them with their soft-delete stamp (an archived doc carries
+  // archived_at), because the undo's tombstone check and the row's own page
+  // need that state. Enumeration (useWorkspaceCollection) applies this rule,
+  // so every list reader hides such a row while the store keeps it.
+  listed?: (row: any) => boolean;
   // Fields on a localFirst collection that auto pending protection must skip
   // (see RegistryEntry.unprotectedFields in @platform/engine). For an
   // append-stream field the optimistic local value contains stub content the
@@ -117,6 +130,7 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["users.getRecentProjectsWithGitInfo", "githubApp.listInstallations", "devices.listAgentBoxes"],
   },
   sessions: {
+    writtenBy: ["conversations"],
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
     // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
@@ -141,11 +155,13 @@ export const CLIENT_SYNC_REGISTRY = {
     },
   },
   conversations: {
+    writtenBy: ["conversations"],
     persistence: { kind: "meta", key: "conversations" },
     localFirst: true,
     dispatchTable: { table: "conversations", kind: "collection" },
   },
   tasks: {
+    writtenBy: ["tasks"],
     persistence: { kind: "collection", key: "tasks" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -167,6 +183,7 @@ export const CLIENT_SYNC_REGISTRY = {
       (row.comments === undefined || Array.isArray(row.comments)),
   },
   capabilityBindings: {
+    writtenBy: ["capabilityBindings"],
     persistence: { kind: "collection", key: "capabilityBindings" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -204,11 +221,15 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
   },
   docs: {
+    writtenBy: ["docs"],
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
     workspaceScoped: true,
     sync: { isDelta: true },
+    // An archived doc arrives through the sync log with archived_at set; it
+    // stays held (undo, its own page) but leaves every docs list.
+    listed: (row: any) => !row?.archived_at,
     // `docs` is the THIN list: bodies live in docDetails (the doc page) and in
     // live webGet queries (embeds, pills). Drop a body a past channel cached —
     // unless it is an unsynced local edit still under a pending field lock.
@@ -247,6 +268,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // patch rail to the session_decisions table. Everything structural
   // (question, options, context) is server-owned and stays undispatchable.
   sessionDecisions: {
+    writtenBy: ["sessionDecisions"],
     persistence: { kind: "collection", key: "sessionDecisions" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -306,6 +328,29 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "savedViews" },
     feeds: ["savedViews.webList"],
   },
+  // Codecast mods (lib/mods, plan pl-839): every mod the viewer can see, with
+  // the bundle each one runs. Persisted so an enabled mod starts at boot from
+  // the cache, offline included. Snapshot: webList is the complete visible set.
+  mods: {
+    persistence: { kind: "collection", key: "mods" },
+    localFirst: true,
+    feeds: ["mods.webList"],
+  },
+  // What mods' local halves published ($.publish), read by their sandboxed
+  // halves ($.local.get). Server-written only; a snapshot of the viewer's set.
+  modState: {
+    persistence: { kind: "collection", key: "modState" },
+    feeds: ["modLocal.webState"],
+  },
+  // Objects of the kinds mods declare (bug-14, inc-3): one collection for
+  // every kind, rows carrying a workspace access key like tasks.
+  modObjects: {
+    persistence: { kind: "collection", key: "modObjects" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    workspaceScoped: true,
+    feeds: ["modObjects.webList"],
+  },
   plans: {
     persistence: { kind: "collection", key: "plans" },
     hydration: { phase: "deferred" },
@@ -315,6 +360,7 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["plans.webList"],
   },
   projects: {
+    writtenBy: ["projects"],
     persistence: { kind: "collection", key: "projects" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -360,6 +406,7 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["initiatives.webUpdates"],
   },
   buckets: {
+    writtenBy: ["buckets"],
     persistence: { kind: "collection", key: "buckets" },
     localFirst: true,
     // Field edits (rename / archive / color / sort) dispatch as generic patches.
@@ -369,6 +416,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // user+conversation), not patches — so no dispatchTable here. localFirst keeps
   // optimistic assignments protected until the server row syncs back.
   bucketAssignments: {
+    writtenBy: ["buckets"],
     persistence: { kind: "collection", key: "bucketAssignments" },
     localFirst: true,
   },
@@ -376,6 +424,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // dispatch side effect. In particular edits must not also ride generic
   // patches: that path can silently no-op after deletion/access revocation.
   comments: {
+    writtenBy: ["comments"],
     persistence: { kind: "collection", key: "comments" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -392,10 +441,12 @@ export const CLIENT_SYNC_REGISTRY = {
   // instead, and plants its two real deletion tombstones by hand
   // (store/chatSlice.ts explains both).
   chatChannels: {
+    writtenBy: ["chat"],
     persistence: { kind: "collection", key: "chatChannels" },
     hydration: { phase: "deferred" },
   },
   chatMessages: {
+    writtenBy: ["chat"],
     persistence: { kind: "collection", key: "chatMessages" },
     hydration: { phase: "deferred" },
     // A channel (or a thread) reads off disk without scanning every message
@@ -595,12 +646,19 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["agentTasks.webListRuns"],
   },
-  // Workflow definitions. webList is a 50-newest window, so delta.
+  // Workflow definitions. webList is a 50-newest window, so delta; webGet
+  // and webGetBySlug overlay one row each (a project's customized line is
+  // fed by slug, so it arrives whatever its age). The fork is written here
+  // (saveLineWorkflow): it paints a stub that the server row supersedes by
+  // slug, unique per user.
   workflows: {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true },
-    feeds: ["workflows.webList", "workflows.webGet"],
+    localFirst: true,
+    sync: { isDelta: true, altKey: "slug" },
+    // The server's clock; a client cannot predict it.
+    unprotectedFields: ["created_at", "updated_at"],
+    feeds: ["workflows.webList", "workflows.webGet", "workflows.webGetBySlug"],
   },
   // Workflow runs, fed by four windows (listDynamicRuns, listForWorkflow,
   // get, listRuns) that overlay into one collection, last push wins. Every
@@ -744,6 +802,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { kind: "singleton" },
     feeds: ["sessionThreads.listSessionThreads"],
   },
+  // The hosted assistant's wallet (wallet.mine, lib/wallet.ts WalletSummary):
+  // plan, this period's cap, usage, holds and what is left, the top-up
+  // balance, and recent cost per conversation. The simple lane's plan screen
+  // and meter paint it from the cache; a stale cache never clobbers a live one.
+  wallet: {
+    persistence: { kind: "meta", key: "wallet" },
+    hydration: { phase: "deferred", merge: "fill" },
+    sync: { kind: "singleton" },
+    feeds: ["wallet.mine"],
+  },
   // The org tree (people, roles, anchors, top sessions per parent): one
   // server-derived snapshot for the active workspace. Singleton; the store's
   // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
@@ -751,6 +819,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // org.roles (roles and seats, no session read) for the ones that only name
   // a role; ORG_SYNC_REGISTRY fills a roles-only push from the held tree.
   orgTree: {
+    writtenBy: ["orgRoles", "orgSplit", "orgHandoff", "orgLineMerge", "orgTemplates", "orgTemplateLearning"],
     persistence: { kind: "meta", key: "orgTree" },
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
@@ -813,6 +882,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
   pullRequests: {
+    writtenBy: ["prShepherd"],
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
@@ -829,8 +899,26 @@ export const CLIENT_SYNC_REGISTRY = {
     // client_id it was created with; the server row carrying the same
     // client_id supersedes the stub when listForPR echoes it back.
     sync: { isDelta: true, altKey: "client_id" },
+    // Resolve, reopen, edit and delete paint here first (resolveCodeCommentThread,
+    // editCodeComment, deleteCodeComment) and are held until the echo.
+    localFirst: true,
     indexes: "_id, pull_request_id, repository, file_path, created_at",
     feeds: ["codeComments.listForPR", "codeComments.listForRef", "codeComments.listForFile"],
+  },
+  // A project's update posts, each with its comment thread embedded, fed for
+  // the project on screen (projectUpdates.webList returns its complete set,
+  // so the feeder prunes absent rows of that project). A post renders from
+  // its stub keyed by client_key until the row carrying it supersedes it.
+  // Edits and deletes paint first and are held until the echo; the thread
+  // and the server's clocks are replaced whole by the next push.
+  projectUpdates: {
+    persistence: { kind: "collection", key: "projectUpdates" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, altKey: "client_key", deepFields: ["comments"] },
+    localFirst: true,
+    unprotectedFields: ["comments", "edited_at", "updated_at", "created_at", "short_id"],
+    indexes: "_id, project_id",
+    feeds: ["projectUpdates.webList"],
   },
   // Git activity as first class events (git_events): one row per commit,
   // push, PR change, review, check result or code comment. Every feed is a
@@ -909,14 +997,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // stops heartbeating leaves. Readers additionally hide rows whose
   // last_heartbeat is stale, so a persisted row can't outlive its window.
   // Daemon commands a store action asked for (hibernate, restart, device
-  // move, account switch), keyed by the action's request id, plus the extra
+  // move, account switch, a line file edit), keyed by the action's request id, plus the extra
   // rows of a restart or move (the kill, a remote move's later resume) keyed
   // by command id. results settles request ids; forConversation narrates the
   // open conversation's pipeline. The action's intent (where a move goes,
   // which account a switch picks) is local, so the echo must not blank it.
   sessionCommands: {
     persistence: { kind: "collection", key: "sessionCommands", perWindow: true },
-    sync: { isDelta: true, preserveFields: ["kind", "conversation_id", "to_device_id", "to_remote", "to_label", "profile", "email", "started_at", "confirmed_at"] },
+    sync: { isDelta: true, preserveFields: ["kind", "conversation_id", "to_device_id", "to_remote", "to_label", "profile", "email", "started_at", "confirmed_at", "project_id", "edits", "keys"] },
     feeds: ["sessionCommands.results", "sessionCommands.forConversation"],
   },
   managedSessions: {
@@ -1002,6 +1090,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // set, so a snapshot). Persisted so the phone's Notifications tab and its
   // badge paint the cached list on open instead of a skeleton.
   notifications: {
+    writtenBy: ["notifications"],
     persistence: { kind: "collection", key: "notifications" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -1027,12 +1116,14 @@ export const CLIENT_SYNC_REGISTRY = {
   // pressed, the clock's time 0, whether a press could work and why not, when
   // a saving run was stopped, whether its video goes to the public link): the room's
   // recording has this one home, and every mark, the Record button and the
-  // notice read it. All the server's, none locked.
+  // notice read it. All the server's, none locked, like `words_public` (the
+  // live record's public link is on: the words go out as they are written).
   callRooms: {
     sync: {},
     localFirst: true,
     unprotectedFields: [
       "transcribe_off_at",
+      "words_public",
       "recording",
       "recording_status",
       "recording_run_id",
@@ -1108,6 +1199,19 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, preserveFields: ["deleted_here_at"] },
     localFirst: true,
     unprotectedFields: ["deleted_here_at"],
+    feeds: ["callRecordings.webCallRecordings"],
+  },
+  // The pictures of a call on public links (`cast call snap --share`), one row
+  // per picture keyed by its share id, each carrying its transcript_id: the
+  // call page lists them under its share control. Fed by the same answer as
+  // the call's files (webCallRecordings `frame_shares`), the call's complete
+  // set each time, so a delta pruned to the call. localFirst: taking one down
+  // (store deleteCallFrameShare) drops the row on the draft, and its exclude
+  // tombstone holds it out of a push computed before the delete committed.
+  // Never persisted, like the files beside it.
+  callFrameShares: {
+    sync: { isDelta: true },
+    localFirst: true,
     feeds: ["callRecordings.webCallRecordings"],
   },
   // The viewer's calls and recordings (transcripts.webListCalls, the newest
@@ -1222,6 +1326,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // before and after the action, so actions may mutate rows in place or
   // replace them.
   teams: {
+    writtenBy: ["teams"],
     persistence: { kind: "meta", key: "teams" },
     localFirst: true,
     // createTeam's stub row is superseded by the server row carrying its id
@@ -1229,6 +1334,7 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { kind: "list", altKey: "client_key" },
   },
   teamMembers: {
+    writtenBy: ["teams"],
     persistence: { kind: "meta", key: "teamMembers" },
     localFirst: true,
     sync: { kind: "list" },
@@ -1259,6 +1365,7 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
   },
   bookmarks: {
+    writtenBy: ["bookmarks"],
     persistence: { kind: "meta", key: "bookmarks" },
     hydration: { phase: "deferred" },
     localFirst: true,
@@ -1282,6 +1389,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // currentUser.available_skills and show project/personal skills in the compose
   // popup's slash menu (otherwise it would have only built-in commands).
   currentUser: {
+    writtenBy: ["users"],
     persistence: { kind: "meta", key: "currentUser" },
     // Singleton record, not a collection: never union stale cached fields into
     // a freshly-synced user — only fill a still-empty slot (palette/cold start).
@@ -1388,6 +1496,17 @@ export const REGISTERED_FEEDS: Record<string, string> = Object.fromEntries(
   registryEntries.flatMap(([key, entry]) => (entry.feeds ?? []).map((f) => [f, key])),
 );
 
+/** Convex module → the store keys whose rows its public mutations write:
+ *  the modules of each key's feeds plus its declared writers. */
+export const SYNCED_WRITER_MODULES: Record<string, readonly string[]> = (() => {
+  const out: Record<string, string[]> = {};
+  for (const [key, entry] of registryEntries) {
+    const mods = new Set([...(entry.feeds ?? []).map((f) => f.split(".").slice(0, -1).join(".")), ...(entry.writtenBy ?? [])]);
+    for (const mod of mods) (out[mod] ??= []).push(key);
+  }
+  return out;
+})();
+
 /** Every key that is a collection in memory: persisted as a collection table,
  *  OR synced as one (`sync` with the default "collection" kind) without
  *  persistence — a transient collection still needs its `{}` at boot. */
@@ -1450,6 +1569,11 @@ export function collectionRowValidator(key: string): ((row: any) => boolean) | u
   return entry?.validRow;
 }
 
+export function collectionRowListed(key: string): ((row: any) => boolean) | undefined {
+  const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
+  return entry?.listed;
+}
+
 export function collectionRowHydrator(key: string): ClientSyncRegistryEntry["hydrateRow"] {
   const entry = CLIENT_SYNC_REGISTRY[key as ClientSyncStoreKey] as ClientSyncRegistryEntry | undefined;
   return entry?.hydrateRow;
@@ -1484,6 +1608,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   decisionDetails: "shared",
   taskEvidence: "shared",
   savedViews: "shared",
+  mods: "shared",
+  modObjects: "shared",
+  modState: "shared",
   plans: "shared",
   projects: "shared",
   initiatives: "shared",
@@ -1527,6 +1654,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   anchorSpaces: "shared",
   anchors: "shared",
   sessionThreads: "shared",
+  wallet: "shared",
   orgTree: "shared",
   orgHealth: "shared",
   orgProposals: "shared",
@@ -1536,6 +1664,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   commits: "shared",
   pullRequests: "shared",
   codeComments: "shared",
+  projectUpdates: "shared",
   externalEvents: "shared",
   changeStories: "shared",
   changeEditions: "shared",
@@ -1562,6 +1691,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // Per-view, like guestLinks: fed by the window showing the call.
   callRecordings: "local",
   callRecordingCalls: "local",
+  callFrameShares: "local",
   callList: "shared",
   callDetails: "shared",
   clientState: "shared",

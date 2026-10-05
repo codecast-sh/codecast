@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "bun:test";
-import { action, actionKind, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
+import { action, actionKind, afterCommit, asyncAction, mutativeMiddleware, receiptAsyncAction, sync } from "./middleware";
 import { createSyncEngine } from "./syncEngine";
 import { captureCells } from "./undo";
 import {
@@ -48,7 +48,7 @@ const REGISTRY: PlatformConfig["registry"] = {
 
 type Calls = {
   beforeReplay: Array<[string, string]>;
-  afterReplay: Array<[string, string, number]>;
+  afterReplay: Array<[string, string, number, string]>;
   restoreView: Array<[string, unknown]>;
 };
 
@@ -65,7 +65,7 @@ function undoConfig(calls: Calls, over: Partial<UndoConfig> = {}): UndoConfig {
       },
     },
     beforeReplay: (entry, dir) => calls.beforeReplay.push([entry.label, dir]),
-    afterReplay: (entry, dir, applied) => calls.afterReplay.push([entry.label, dir, applied.length]),
+    afterReplay: (entry, dir, applied, how) => calls.afterReplay.push([entry.label, dir, applied.length, how]),
     restoreView: (_draft, field, value) => calls.restoreView.push([field, value]),
     specs: {
       rename: { label: (ctx) => `Renamed to ${ctx.args[1]}` },
@@ -535,7 +535,7 @@ describe("replay mechanics", () => {
     expect(replay.args).toEqual([]);
     expect(replay.patches).toEqual({ item_rows: { [A]: { deferred_at: null, snoozed_until: SNOOZE } } });
     expect(h.calls.beforeReplay).toEqual([["Deferred", "undo"]]);
-    expect(h.calls.afterReplay).toEqual([["Deferred", "undo", 2]]);
+    expect(h.calls.afterReplay).toEqual([["Deferred", "undo", 2, "replay"]]);
     expect(notices).toEqual(["Undid: Deferred"]);
   });
 
@@ -617,12 +617,14 @@ describe("replay mechanics", () => {
     expect(Object.keys(draft.pending).filter((k) => k.startsWith(`items:${A}:`))).toEqual([]);
   });
 
-  it("a spell that turns an added row into a field cell keeps the row, plants no exclude, and redo finds it", () => {
+  it("a spell that turns an added row into a field cell keeps the row, plants no exclude, and redo finds it", async () => {
     const h = makeStore();
     h.wrapped.shelveDoc(A, "top");
     expect(performUndo()).toBe(true);
     // The row stays, unshelved, and the writer sends the clear.
     expect(h.state.docs[A]).toEqual({ _id: A });
+    // The undo writes back only part of what the forward sent, so it waits for that send.
+    await waitFor(() => !!lastDispatch(h, "saveDoc"));
     expect(lastDispatch(h, "saveDoc")!.args).toEqual([A, { shelf: undefined }]);
     expect(h.state.pending[`docs:${A}`]?.type).not.toBe("exclude");
     expect(performRedo()).toBe(true);
@@ -879,7 +881,7 @@ describe("conflicts and partial undo", () => {
     expect(h.state.favorites).toEqual([{ _id: B }]);
   });
 
-  it("a partial undo of an inverse entry dispatches nothing for the skipped row", () => {
+  it("a partial undo of an inverse entry dispatches nothing for the skipped row", async () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
     h.wrapped.seed(B, { title: "b" });
@@ -887,6 +889,10 @@ describe("conflicts and partial undo", () => {
     h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
     const before = h.dispatched.length;
     performUndo();
+    // The undo writes back only part of what the forward sent, so it waits for that send.
+    await waitFor(() => h.dispatched.length > before && h.outbox.size === 0);
+    await sleep(10);
+    // Once: the drain its forward's ack starts does not send it again.
     const sent = h.dispatched.slice(before);
     expect(sent.map((d) => [d.action, d.args])).toEqual([["restore", [A]]]);
     expect(sent[0]!.patches).toEqual({ item_rows: { [A]: { hidden_at: null } } });
@@ -1001,7 +1007,7 @@ describe("redo and groups", () => {
     expect(notices.at(-1)).toBe("Can't redo Renamed to x: changed since");
   });
 
-  it("redo after a partial undo restores only the rows the undo applied", () => {
+  it("redo after a partial undo restores only the rows the undo applied", async () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "a" });
     h.wrapped.seed(B, { title: "b" });
@@ -1014,6 +1020,8 @@ describe("redo and groups", () => {
     expect(h.state.items[B].title).toBe("someone");
     // The applied cells went back on the undo's route; the action never re-ran.
     expect(h.dispatched.filter((d) => d.action === "renameBoth")).toHaveLength(renames);
+    // The undo writes back only part of what the forward sent, so it waits for that send.
+    await waitFor(() => !!lastDispatch(h, "applyUndoPatches"));
     expect(lastDispatch(h, "applyUndoPatches")!.patches).toBeTruthy();
     expect(h.state.pending[`items:${A}:title`]).toMatchObject({ value: "both" });
     expect(notices.at(-1)).toBe("Redid: Both (1 changed since, left as they are)");
@@ -1154,7 +1162,7 @@ describe("refusal and rekey", () => {
     expect(getUndoHistory().head).not.toBe(id);
   });
 
-  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", () => {
+  it("a rekeyed removal comes back under the server id, and a rekeyed inverse names it", async () => {
     const h = makeStore();
     h.wrapped.seed("stub_1", { title: "a" });
     h.wrapped.drop("stub_1");
@@ -1167,6 +1175,8 @@ describe("refusal and rekey", () => {
     h.setState({ items: { ...h.state.items, [B]: { ...h.state.items["stub_2"], _id: B } } });
     rekeyUndoIds("stub_2", B);
     performUndo();
+    // The undo writes back only part of what the forward sent, so it waits for that send.
+    await waitFor(() => !!lastDispatch(h, "restore"));
     expect(lastDispatch(h, "restore")!.args).toEqual([B]);
     expect(h.state.items[B].hidden_at).toBeUndefined();
   });
@@ -1338,6 +1348,107 @@ describe("ADV stub rekey", () => {
   });
 });
 
+describe("a whole row that names a stub follows its rekey", () => {
+  const link = action(function (this: any, id: string, parent: string) {
+    this.items[id] = { _id: id, parent_id: parent };
+  });
+
+  it("undo of an added row that points at a stub still finds it unchanged", () => {
+    const h = makeStore({ extra: { link }, undo: withSpecs({ link: { label: () => "Linked" } }) });
+    h.wrapped.link(B, "stub-p");
+    // The app's rekeyExtra moves the child pointer to the server id.
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], parent_id: A } } });
+    rekeyUndoIds("stub-p", A);
+    performUndo();
+    expect(notices).toEqual(["Undid: Linked"]);
+    expect(h.state.items[B]).toBeUndefined();
+  });
+
+  it("undo of a removed row restores it pointing at the server id", () => {
+    const h = makeStore();
+    h.wrapped.seed(B, { title: "b", parent_id: "stub-p" });
+    h.wrapped.drop(B);
+    rekeyUndoIds("stub-p", A);
+    performUndo();
+    expect(h.state.items[B]).toEqual({ _id: B, title: "b", parent_id: A });
+  });
+
+  it("the stub row itself keeps its alt key, as the sync engine keeps it", () => {
+    const h = makeStore();
+    h.wrapped.seed("stub-r", { title: "r", client_id: "stub-r" });
+    h.wrapped.drop("stub-r");
+    rekeyUndoIds("stub-r", A);
+    performUndo();
+    expect(h.state.items[A]).toEqual({ _id: A, title: "r", client_id: "stub-r" });
+  });
+
+  it("a partial undo asks the inverse again over a frame that follows the rekey", () => {
+    const seen: unknown[] = [];
+    const h = makeStore({
+      undo: withSpecs({
+        stashBoth: {
+          label: () => "Stashed two",
+          inverse: (ctx) => {
+            const ids = [...new Set(ctx.changes.filter((c) => c.store === "items").map((c) => c.id))];
+            seen.push(ids.map((id) => ctx.before.items[id]?.title));
+            return ids.map((id) => ({ action: "restore", args: [id], runDraft: false }));
+          },
+        },
+      }),
+    });
+    h.wrapped.seed("stub-s", { title: "s" });
+    h.wrapped.seed(B, { title: "b" });
+    h.wrapped.stashBoth("stub-s", B);
+    const { ["stub-s"]: stub, ...rest } = h.state.items;
+    h.setState({ items: { ...rest, [A]: { ...stub, _id: A } } });
+    rekeyUndoIds("stub-s", A);
+    // B changed since: the undo narrows to A and asks the inverse again.
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], hidden_at: 99 } } });
+    performUndo();
+    expect(seen.at(-1)).toEqual(["s"]);
+  });
+});
+
+describe("a spec's captureKeys", () => {
+  it("captures a field of a key the config ignores, for that spec only", () => {
+    const h = makeStore({
+      extra: {
+        widen: action(function (this: any, width: number) { this.layout.width = width; }),
+        widenAndRename: action(function (this: any, id: string, width: number) {
+          this.layout.width = width;
+          this.items[id].title = "renamed";
+        }),
+      },
+      undo: withSpecs({
+        widen: { label: () => "Widened", captureKeys: ["layout"] },
+        widenAndRename: { label: () => "Both" },
+      }),
+    });
+    h.wrapped.seed(A, { title: "t" });
+    h.wrapped.widen(5);
+    expect(top().changes!.map((c) => `${c.store}.${c.id}`)).toEqual(["layout.width"]);
+    performUndo();
+    expect(h.state.layout.width).toBe(1);
+    h.wrapped.widenAndRename(A, 7);
+    expect(top().changes!.map((c) => `${c.store}.${c.id}.${c.field}`)).toEqual([`items.${A}.title`]);
+  });
+});
+
+describe("a restored mirror row is restamped", () => {
+  it("its stamp moves to the undo's time with the row", async () => {
+    const h = makeStore({
+      extra: { tag: action(function (this: any, id: string, tag: string) { this.notes[id] = { ...(this.notes[id] ?? { _id: id }), tag, updated_at: 100 }; }) },
+      undo: withSpecs({ tag: { label: () => "Tagged" } }),
+    });
+    h.setState({ notes: { [A]: { _id: A, tag: "a", updated_at: 50 } } });
+    h.wrapped.tag(A, "b");
+    const before = Date.now();
+    performUndo();
+    expect(h.state.notes[A].tag).toBe("a");
+    expect(h.state.notes[A].updated_at).toBeGreaterThanOrEqual(before);
+  });
+});
+
 describe("ADV coalesce", () => {
   it("ADV8 a coalesced run that ends where it began leaves no entry", () => {
     const h = makeStore();
@@ -1494,13 +1605,15 @@ const chanSpecs = () =>
   });
 
 describe("mirror cells changed since", () => {
-  it("an inverse is narrowed to the mirror cells the undo restores", () => {
+  it("an inverse is narrowed to the mirror cells the undo restores", async () => {
     const h = makeStore({ extra: chanExtra, undo: chanSpecs() });
     h.setState({ chans: { [A]: { _id: A, name: "general", topic: "old" } } });
     h.wrapped.editChan(A, { name: "renamed", topic: "new" });
     h.setState({ chans: { [A]: { ...h.state.chans[A], name: "teammate" } } });
     const before = h.dispatched.length;
     performUndo();
+    // The undo writes back only part of what the forward sent, so it waits for that send.
+    await waitFor(() => h.dispatched.slice(before).some((d) => d.action === "editChan"));
     const sent = h.dispatched.slice(before).filter((d) => d.action === "editChan").map((d) => d.args);
     expect({ local: h.state.chans[A], sent }).toEqual({
       local: { _id: A, name: "teammate", topic: "old" },
@@ -1575,6 +1688,55 @@ describe("redo checks every captured cell", () => {
     expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
     await sleep(5);
     expect(h.dispatched.slice(before).some((d) => d.action === "setTwo")).toBe(false);
+  });
+
+  // The binding announces values to sibling windows only for a replay the
+  // engine wrote itself: a re-invoked action announces its own effects.
+  it("tells afterReplay whether the redo re-ran the action or restored fields", () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "old", color: "red" });
+    h.wrapped.setTwo(A, "new", "red");
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "blue" } } });
+    performRedo();
+    expect(h.calls.afterReplay.map(([, dir, , how]) => [dir, how])).toEqual([["undo", "replay"], ["redo", "replay"]]);
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "red" } } });
+    h.wrapped.rename(A, "plain");
+    performUndo();
+    performRedo();
+    expect(h.calls.afterReplay.at(-1)?.[3]).toBe("reinvoke");
+  });
+
+  // A vetoed re-invoke has run the action body on a draft that is thrown away,
+  // so the outside effects it asked for (a sibling-window broadcast, a sound)
+  // must be thrown away with it.
+  it("a vetoed redo runs none of the action body's commit effects", () => {
+    const effects: string[] = [];
+    const h = makeStore({
+      undo: withSpecs({ setTwoLoud: { label: () => "Set two loud" } }),
+      extra: {
+        setTwoLoud: action(function (this: any, id: string, title: string, color: string) {
+          this.items[id].title = title;
+          this.items[id].color = color;
+          afterCommit(() => effects.push(`${id}:${title}`));
+        }),
+      },
+    });
+    h.wrapped.seed(A, { title: "old", color: "red" });
+    h.wrapped.setTwoLoud(A, "new", "red");
+    expect(effects).toEqual([`${A}:new`]);
+    performUndo();
+    h.setState({ items: { ...h.state.items, [A]: { ...h.state.items[A], color: "blue" } } });
+    performRedo();
+    expect([h.state.items[A].title, h.state.items[A].color]).toEqual(["new", "blue"]);
+    expect(effects).toEqual([`${A}:new`]);
+  });
+
+  it("an effect asked for outside any action runs at once", () => {
+    const effects: number[] = [];
+    afterCommit(() => effects.push(1));
+    expect(effects).toEqual([1]);
   });
 
   it("a row the forward wrote unchanged is not redone over a change made since the undo", () => {
@@ -1811,6 +1973,52 @@ describe("a coalesced run with one call refused", () => {
     expect(h.state.items[A].priority).toBe("low");
   });
 
+  // A run that ended where it began records nothing, but its calls are still
+  // on the wire: a refusal of one puts a value on screen the history must
+  // still be able to take back.
+  it("a run that netted to nothing comes back when a later call is refused", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t", priority: "p0" });
+    await waitFor(() => h.outbox.size === 0);
+    let n = 0;
+    h.respond(async (a) => {
+      if (a === "cycle" && n++ === 1) throw new Error("Uncaught Error: no");
+      return {};
+    });
+    h.wrapped.cycle(A, "p1");
+    h.wrapped.cycle(A, "p0");
+    expect(items().length).toBe(0);
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].priority).toBe("p1");
+    expect(items().map((i) => [i.label, i.status])).toEqual([["Priority p1", "done"]]);
+    expect(items()[0]!.changes!.find((c) => c.field === "priority")).toMatchObject({ before: "p0", after: "p1" });
+    performUndo();
+    expect(h.state.items[A].priority).toBe("p0");
+  });
+
+  it("a run that netted to nothing comes back under an entry recorded after it", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t", priority: "p0" });
+    await waitFor(() => h.outbox.size === 0);
+    let n = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    h.respond(async (a) => {
+      if (a === "cycle" && n++ === 1) {
+        await gate;
+        throw new Error("Uncaught Error: no");
+      }
+      return {};
+    });
+    h.wrapped.cycle(A, "p1");
+    h.wrapped.cycle(A, "p0");
+    h.wrapped.rename(A, "renamed");
+    release();
+    await waitFor(() => h.outbox.size === 0);
+    expect(items().map((i) => [i.label, i.status])).toEqual([["Renamed to renamed", "done"], ["Priority p1", "done"]]);
+    expect(getUndoHistory().undoOrder.length).toBe(2);
+  });
+
   it("ends at the last call that stood when the newest call is refused", async () => {
     const h = makeStore();
     h.wrapped.seed(A, { title: "t", priority: "low" });
@@ -2025,6 +2233,52 @@ describe("dispatch order", () => {
     h.wrapped._drainOutbox();
     await waitFor(() => h.outbox.size === 0);
     expect(arrived).toEqual(["rename", "applyUndoPatches"]);
+  });
+});
+
+describe("a live write behind a parked one", () => {
+  // Not an undo concern alone: any later write of a cell a parked row also
+  // wrote must reach the server after it, or the drain lands the stale value last.
+  it("is held behind the parked row, so the drain delivers both in call order", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    h.wrapped.seed(A, { title: "t0" });
+    await waitFor(() => h.outbox.size === 0);
+    const server = { title: "t0", arrived: [] as string[] };
+    let down = true;
+    h.respond(async (a) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      if (down) throw new Error("Server Error");
+      const title = d.patches?.item_rows?.[A]?.title;
+      server.arrived.push(`${a}:${title}`);
+      if (title !== undefined) server.title = title;
+      return {};
+    });
+    h.wrapped.rename(A, "x");
+    // Its retries run out and it parks.
+    await sleep(40);
+    down = false;
+    h.wrapped.rename(A, "fresh");
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(20);
+    expect(server.arrived).toEqual(["rename:x", "rename:fresh"]);
+    expect(server.title).toBe("fresh");
+    expect(h.state.items[A].title).toBe("fresh");
+  });
+
+  it("is not held behind a parked row of another field", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    h.wrapped.seed(A, { title: "t0", priority: "low" });
+    await waitFor(() => h.outbox.size === 0);
+    const arrived: string[] = [];
+    h.respond(async (a) => {
+      if (a === "rename") throw new Error("Server Error");
+      arrived.push(a);
+      return {};
+    });
+    h.wrapped.rename(A, "x");
+    await sleep(40);
+    h.wrapped.cycle(A, "high");
+    await waitFor(() => arrived.includes("cycle"));
   });
 });
 
@@ -2553,5 +2807,938 @@ describe("a refused write's rollback after the server spoke under its lock", () 
     await sleep(10);
     expect(h.state.items[A].title).toBe("teammate");
     expect(h.state.pending[`items:${A}:title`]).toBeUndefined();
+  });
+});
+
+// A step goes out at once only past the sends it wholly writes back. A send
+// it merely follows (another field, another store's copy of the row, another
+// row's pass) is waited for, so a transient failure of that send is retried
+// rather than dropped as overtaken.
+// A row parked while dispatch was unwired is still waiting when the binding
+// comes back; the drain needs a moment to load it. A send made in that gap
+// that must follow it (an undo's `after`, a newer write of its cell) waits
+// for the drain, so the server ends on the newer value.
+describe("a row parked while dispatch was unwired orders the sends after it", () => {
+  const unwiredThenRewired = async (then: (h: ReturnType<typeof makeStore>) => void) => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t0" });
+    await waitFor(() => h.outbox.size === 0);
+    const server = new Map<string, Record<string, unknown>>([[A, { title: "t0" }]]);
+    const order: string[] = [];
+    const fn = async (a: string, args: any, patches: any) => {
+      order.push(`${a}:${patches?.item_rows?.[A]?.title}`);
+      for (const [id, row] of Object.entries((patches?.item_rows ?? {}) as Record<string, any>)) server.set(id, { ...server.get(id), ...row });
+      return {};
+    };
+    h.wrapped._setDispatch(null);
+    h.wrapped.retitle(A, "t1");
+    await waitFor(() => h.outbox.size === 1);
+    h.wrapped._setOutbox(
+      async (entry: OutboxEntry) => { h.outbox.set(entry.id, entry); },
+      async (id: string) => { h.outbox.delete(id); },
+      async () => { await sleep(30); return [...h.outbox.values()].sort((a, b) => a.ts - b.ts); },
+    );
+    h.wrapped._setDispatch(fn);
+    then(h);
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(80);
+    await waitFor(() => h.outbox.size === 0);
+    return { h, server, order };
+  };
+
+  it("an undo made while the drain loads goes out after the parked forward", async () => {
+    const { h, server, order } = await unwiredThenRewired(() => performUndo());
+    expect(order).toEqual(["retitle:t1", "applyUndoPatches:t0"]);
+    expect(server.get(A)?.title).toBe("t0");
+    expect(h.state.items[A].title).toBe("t0");
+  });
+
+  it("a newer write of the cell made while the drain loads lands last", async () => {
+    const { h, server, order } = await unwiredThenRewired((h) => h.wrapped.retitle(A, "t2"));
+    expect(order).toEqual(["retitle:t1", "retitle:t2"]);
+    expect(server.get(A)?.title).toBe("t2");
+    expect(h.state.items[A].title).toBe("t2");
+  });
+});
+
+describe("a rebind never re-sends a forward an undo overtook", () => {
+  it("the drain after a rebind retires the overtaken forward's row", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "t0" });
+    await waitFor(() => h.outbox.size === 0);
+    const server = new Map<string, Record<string, unknown>>([[A, { title: "t0" }]]);
+    const order: string[] = [];
+    const apply = (a: string, patches: any) => {
+      order.push(`${a}:${patches?.item_rows?.[A]?.title}`);
+      for (const [id, row] of Object.entries((patches?.item_rows ?? {}) as Record<string, any>)) server.set(id, { ...server.get(id), ...row });
+    };
+    // The forward's first attempt hangs; the undo overtakes it and lands.
+    h.wrapped._setDispatch(async (a: string, _args: any, patches: any) => {
+      if (a === "retitle") return new Promise(() => {});
+      apply(a, patches);
+      return {};
+    });
+    h.wrapped.retitle(A, "t1");
+    performUndo();
+    await waitFor(() => order.includes("applyUndoPatches:t0"));
+    await waitFor(() => h.outbox.size === 1);
+    // A rebind strands the hanging send; the successor drains the outbox.
+    h.wrapped._setDispatch(async (a: string, _args: any, patches: any) => {
+      apply(a, patches);
+      return {};
+    });
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(order).toEqual(["applyUndoPatches:t0"]);
+    expect(server.get(A)?.title).toBe("t0");
+    expect(h.state.items[A].title).toBe("t0");
+  });
+});
+
+describe("a step overtakes only the sends it wholly reverses", () => {
+  // A server holding every item row, applying each send's grouped row patches
+  // in arrival order. `fails` sees the action, its rows, and the attempt.
+  const rowsServer = (h: ReturnType<typeof makeStore>, fails: (action: string, rows: Record<string, any>, attempt: number) => boolean) => {
+    const rows = new Map<string, Record<string, unknown>>();
+    const attempts = new Map<string, number>();
+    h.respond(async (a) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      const patch: Record<string, any> = d.patches?.item_rows ?? {};
+      const key = `${a}:${JSON.stringify(d.args)}:${JSON.stringify(patch)}`;
+      const n = attempts.get(key) ?? 0;
+      attempts.set(key, n + 1);
+      if (fails(a, patch, n)) throw new Error("Server Error");
+      for (const [id, row] of Object.entries(patch)) rows.set(id, { ...rows.get(id), ...row });
+      return {};
+    });
+    return rows;
+  };
+  const seeded = async (rows: Record<string, Record<string, unknown>>) => {
+    const h = makeStore({ retryDelays: [30] });
+    for (const [id, row] of Object.entries(rows)) h.wrapped.seed(id, row);
+    await waitFor(() => h.outbox.size === 0);
+    return h;
+  };
+  const settle = async (h: ReturnType<typeof makeStore>) => {
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(60);
+  };
+
+  it("undoTo a favorite over a later rename: the rename's undo failing once still lands", async () => {
+    const h = await seeded({ [A]: { title: "old" } });
+    h.wrapped.toggleFav(A);
+    const fav = top().id;
+    h.wrapped.rename(A, "new");
+    await settle(h);
+    const server = rowsServer(h, (a, rows, n) => a === "applyUndoPatches" && rows[A]?.title === "old" && n === 0);
+    server.set(A, { title: "new", is_favorite: true });
+    expect(undoTo(fav)).toBe(2);
+    await settle(h);
+    expect(h.state.items[A].title).toBe("old");
+    expect(server.get(A)?.title).toBe("old");
+  });
+
+  // ct-57028: an undo overtakes a rename still on its first attempt, so the
+  // rename's failure is dropped (the undo writes it back). If the undo is then
+  // refused, the rename never landed either: the window must land on what the
+  // server holds, not on the rename the rollback would otherwise restore.
+  // Two quick edits of one field, the first failing once on a transient
+  // error: the first's retry must not land after the second. A later write
+  // that covers every cell the first wrote supersedes it (its failure is
+  // dropped).
+  const orderServer = (h: ReturnType<typeof makeStore>, failFirst: string) => {
+    const server = new Map<string, Record<string, unknown>>([[A, { title: "old", color: "red" }]]);
+    let failed = false;
+    h.respond(async (a) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      const patch: Record<string, any> = d.patches?.item_rows ?? {};
+      if (a === failFirst && !failed) { failed = true; await sleep(10); throw new Error("Server Error"); }
+      for (const [id, row] of Object.entries(patch)) server.set(id, { ...server.get(id), ...row });
+      return {};
+    });
+    return server;
+  };
+
+  it("a second edit of a field is not overtaken by the first edit's retry", async () => {
+    const h = await seeded({ [A]: { title: "old", color: "red" } });
+    const server = orderServer(h, "rename");
+    h.wrapped.rename(A, "first");
+    h.wrapped.rename(A, "second");
+    await settle(h);
+    expect(server.get(A)?.title).toBe("second");
+    expect(h.state.items[A].title).toBe("second");
+  });
+
+  // A rename also restamps updated_at; a later write of the title alone still
+  // supersedes it, since a stamp is not a value the rename keeps alive.
+  it("a title-only edit supersedes an earlier stamped rename's retry", async () => {
+    const h = await seeded({ [A]: { title: "old", color: "red" } });
+    const server = orderServer(h, "rename");
+    h.wrapped.rename(A, "first");
+    h.wrapped.retitle(A, "second");
+    await settle(h);
+    expect(server.get(A)?.title).toBe("second");
+    expect(h.state.items[A].title).toBe("second");
+  });
+
+  // The forward also sent a field its spec ignores: the undo writes back only
+  // what capture kept, so it must wait for the forward rather than overtake it.
+  it("an undo waits for a forward that also sent a field its spec ignores", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    h.setState({ docs: { [A]: { _id: A, title: "t", content: "c" } } });
+    let failed = false;
+    const server: Record<string, unknown> = { title: "t", content: "c" };
+    h.respond(async (a) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      if (a === "editDoc" && !failed) { failed = true; await sleep(10); throw new Error("Your request timed out"); }
+      if (a === "editDoc") Object.assign(server, d.args[1]);
+      if (a === "saveDoc") Object.assign(server, d.args[1]);
+      return {};
+    });
+    h.wrapped.editDoc(A, { title: "T2", content: "c2" });
+    expect(top().changes!.map((c) => c.field)).toEqual(["title"]);
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(40);
+    expect(h.dispatched.filter((d) => d.action === "editDoc")).toHaveLength(2);
+    expect(server).toEqual({ title: "t", content: "c2" });
+  });
+
+  it("a refused undo that overtook a failed rename rolls back past the rename", async () => {
+    const h = await seeded({ [A]: { title: "old" } });
+    const server = new Map<string, Record<string, unknown>>([[A, { title: "old" }]]);
+    h.respond(async (a) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      const patch: Record<string, any> = d.patches?.item_rows ?? {};
+      if (a === "rename") { await sleep(10); throw new Error("Server Error"); }
+      if (a === "applyUndoPatches") throw new Error("Uncaught Error: refused");
+      for (const [id, row] of Object.entries(patch)) server.set(id, { ...server.get(id), ...row });
+      return {};
+    });
+    h.wrapped.rename(A, "new");
+    performUndo();
+    await settle(h);
+    expect(server.get(A)?.title).toBe("old");
+    expect(h.state.items[A].title).toBe("old");
+    expect(h.state.pending[`items:${A}:title`]).toBeUndefined();
+  });
+
+  it("undoing a favorite does not drop a rename of the same row still on its first attempt", async () => {
+    const h = await seeded({ [A]: { title: "old" } });
+    const server = rowsServer(h, (a, _rows, n) => a === "rename" && n === 0);
+    server.set(A, { title: "old" });
+    h.wrapped.rename(A, "new");
+    h.wrapped.toggleFav(A);
+    performUndo();
+    await settle(h);
+    expect(h.state.items[A].title).toBe("new");
+    expect(server.get(A)?.title).toBe("new");
+    expect(items().find((i) => i.label === "Renamed to new")?.status).toBe("done");
+  });
+
+  it("undoing one field of a send that wrote two keeps the other field's undo", async () => {
+    const h = await seeded({ [A]: { title: "t0", color: "c0" } });
+    h.wrapped.rename(A, "r");
+    const renamed = top().id;
+    h.wrapped.setTwo(A, "s", "blue");
+    await settle(h);
+    const server = rowsServer(h, (a, rows, n) => a === "applyUndoPatches" && rows[A]?.color === "c0" && n === 0);
+    server.set(A, { title: "s", color: "blue" });
+    expect(undoTo(renamed)).toBe(2);
+    await settle(h);
+    expect(h.state.items[A]).toMatchObject({ title: "t0", color: "c0" });
+    expect(server.get(A)).toMatchObject({ title: "t0", color: "c0" });
+  });
+
+  it("a step on one row does not drop a pass of the step before it for another row", async () => {
+    // Hides both rows again, one restore per row on the way back.
+    const extra = {
+      hideBoth: action(function (this: any, a: string, b: string) {
+        this.items[a].hidden_at = 9;
+        this.items[b].hidden_at = 9;
+      }),
+    };
+    const specs: UndoConfig["specs"] = {
+      hideBoth: {
+        label: () => "Hid two",
+        inverse: (ctx) =>
+          ctx.changes
+            .filter((c) => c.store === "items" && c.field === "hidden_at")
+            .map((c) => ({ action: "restore", args: [c.id], runDraft: false })),
+      },
+    };
+    const h = makeStore({ retryDelays: [30], extra, undo: withSpecs(specs) });
+    h.wrapped.seed(A, { title: "a", hidden_at: null });
+    h.wrapped.seed(B, { title: "b", hidden_at: null });
+    h.wrapped.stash(A);
+    const stashed = top().id;
+    h.wrapped.hideBoth(A, B);
+    await settle(h);
+    const server = rowsServer(h, (a, rows, n) => a === "restore" && B in rows && n === 0);
+    server.set(A, { hidden_at: 9 });
+    server.set(B, { hidden_at: 9 });
+    expect(undoTo(stashed)).toBe(2);
+    await settle(h);
+    expect(h.state.items[B].hidden_at).toBeNull();
+    expect(server.get(B)?.hidden_at).toBeNull();
+    expect(h.state.items[A].hidden_at).toBeNull();
+    expect(server.get(A)?.hidden_at).toBeNull();
+  });
+});
+
+describe("an account boundary", () => {
+  it("clearing the store's runtime bindings forgets the history, so nothing replays under the next account", () => {
+    const h = makeStore();
+    h.setState({ docs: { [A]: { _id: A, title: "Account A secret plan" } } });
+    h.wrapped.archiveDoc(A);
+    expect(items()).toHaveLength(1);
+    h.wrapped._clearRuntimeBindings();
+    h.setState({ docs: {} });
+    const sent: string[] = [];
+    h.wrapped._setDispatch(async (a: string) => {
+      sent.push(a);
+      return {};
+    });
+    expect(items()).toEqual([]);
+    expect(performUndo()).toBe(false);
+    expect(performRedo()).toBe(false);
+    expect(h.state.docs[A]).toBeUndefined();
+    expect(sent).toEqual([]);
+  });
+});
+
+describe("external entries inside a group", () => {
+  it("one gesture over several rows the record owns is one history row, named by the group", () => {
+    const h = makeStore();
+    undoGroup("Skipped a proposal", () => {
+      for (let i = 0; i < 3; i++) h.wrapped.orgMove(A);
+    });
+    expect(items().map((i) => [i.label, i.status])).toEqual([["Skipped a proposal", "external"]]);
+  });
+
+  it("a group holding one keeps its own label", () => {
+    const h = makeStore();
+    undoGroup(() => "unused", () => h.wrapped.orgMove(A));
+    expect(items().map((i) => i.label)).toEqual(["Moved in org"]);
+  });
+});
+
+// A send held behind the sends it follows (an undo replay waiting on an
+// earlier one) is still ahead of every later write of the same cell: the
+// server must see the user's next edit after it, never before.
+describe("a held send orders later writes of its cells", () => {
+  // Applies each request's patches when it arrives (one client's mutations
+  // run in send order) and answers only once released.
+  const arrivalServer = (h: ReturnType<typeof makeStore>) => {
+    const rows = new Map<string, Record<string, unknown>>();
+    let held = false;
+    const gates: Array<() => void> = [];
+    h.respond(async () => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      for (const [id, row] of Object.entries<any>(d.patches?.item_rows ?? {}))
+        rows.set(id, { ...rows.get(id), ...row });
+      if (held) await new Promise<void>((r) => gates.push(r));
+      return {};
+    });
+    return {
+      rows,
+      hold: () => { held = true; },
+      release: () => { held = false; for (const g of gates.splice(0)) g(); },
+    };
+  };
+
+  it("a forward edit after two undos lands after the held older replay", async () => {
+    const h = makeStore();
+    const server = arrivalServer(h);
+    h.wrapped.seed(A, { title: "a0", color: "c0" });
+    await waitFor(() => h.outbox.size === 0);
+    h.wrapped.retitle(A, "t1");
+    h.wrapped.setTwo(A, "x", "red");
+    await waitFor(() => h.outbox.size === 0);
+    server.hold();
+    performUndo();
+    performUndo();
+    h.wrapped.retitle(A, "mine");
+    for (let i = 0; i < 5; i++) { await sleep(5); server.release(); }
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(20);
+    server.release();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("mine");
+    expect(server.rows.get(A)?.title).toBe("mine");
+  });
+
+  // The class's other holder: a forward write retrying after a transient
+  // failure is followed, not overtaken, by a later write of its cell.
+  it("a later write waits for an earlier one that is retrying", async () => {
+    const h = makeStore({ retryDelays: [30] });
+    const rows = new Map<string, unknown>();
+    let failNext = false;
+    h.respond(async () => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      if (failNext) { failNext = false; throw new Error("Server Error"); }
+      for (const [id, row] of Object.entries<any>(d.patches?.item_rows ?? {}))
+        if (row?.title !== undefined) rows.set(id, row.title);
+      return {};
+    });
+    h.wrapped.seed(A, { title: "a0" });
+    await waitFor(() => h.outbox.size === 0);
+    failNext = true;
+    h.wrapped.retitle(A, "first");
+    await sleep(5);
+    h.wrapped.retitle(A, "second");
+    await waitFor(() => h.outbox.size === 0);
+    await sleep(60);
+    expect(h.state.items[A].title).toBe("second");
+    expect(rows.get(A)).toBe("second");
+  });
+});
+
+// A send still on its first attempt can fail after a later call wrote some of
+// its cells and landed. Its retry (or the drain after the retries) must not
+// put the older value of those cells back: it re-sends only what no later
+// send owns. And a send dropped as overtaken is taken back from the history
+// with its overtaker when that one is refused.
+// Every request waits for the test: ok() applies its row patches then,
+// fail() refuses (transiently by default) without applying anything.
+const manualServer = (h: ReturnType<typeof makeStore>) => {
+  const rows = new Map<string, Record<string, unknown>>();
+  const queue: Array<{ action: string; patch: Record<string, any>; ok: () => void; fail: (msg?: string) => void }> = [];
+  h.respond((a) => new Promise((resolve, reject) => {
+    const d = h.dispatched[h.dispatched.length - 1]!;
+    const patch: Record<string, any> = d.patches?.item_rows ?? {};
+    queue.push({
+      action: a,
+      patch,
+      ok: () => { for (const [id, row] of Object.entries<any>(patch)) rows.set(id, { ...rows.get(id), ...row }); resolve({}); },
+      fail: (msg = "Server Error") => reject(new Error(msg)),
+    });
+  }));
+  const next = async (action: string) => {
+    await waitFor(() => queue.some((q) => q.action === action));
+    return queue.splice(queue.findIndex((q) => q.action === action), 1)[0]!;
+  };
+  // Lands everything still asked for, and whatever its retries ask next.
+  const drain = async () => {
+    for (let i = 0; i < 20; i++) {
+      await sleep(15);
+      for (const q of queue.splice(0)) q.ok();
+    }
+  };
+  return { rows, next, drain };
+};
+const seeded = async (h: ReturnType<typeof makeStore>, server: ReturnType<typeof manualServer>) => {
+  h.wrapped.seed(A, { title: "a0", color: "c0" });
+  (await server.next("seed")).ok();
+  await waitFor(() => h.outbox.size === 0);
+};
+
+describe("a retry never re-sends a cell a later send owns", () => {
+  it("an undo replay that fails after a rename of one of its cells landed does not put the old title back", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.setTwo(A, "p", "red");
+    (await server.next("setTwo")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    h.wrapped.retitle(A, "z");
+    (await server.next("retitle")).ok();
+    replay.fail();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("z");
+    expect(server.rows.get(A)).toMatchObject({ title: "z", color: "c0" });
+  });
+
+  it("a forward write that fails after a rename of one of its cells landed does not put the old title back", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.setTwo(A, "p", "red");
+    const first = await server.next("setTwo");
+    h.wrapped.retitle(A, "z");
+    (await server.next("retitle")).ok();
+    first.fail();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("z");
+    expect(server.rows.get(A)).toMatchObject({ title: "z", color: "red" });
+  });
+
+  it("the same holds when the retries run out and the outbox drain replays it", async () => {
+    const h = makeStore({ retryDelays: [] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.setTwo(A, "p", "red");
+    const first = await server.next("setTwo");
+    h.wrapped.retitle(A, "z");
+    (await server.next("retitle")).ok();
+    first.fail();
+    await sleep(20);
+    expect(h.outbox.size).toBe(1);
+    void h.wrapped._drainOutbox?.(false);
+    await server.drain();
+    expect(server.rows.get(A)).toMatchObject({ title: "z", color: "red" });
+    expect(h.state.items[A].title).toBe("z");
+  });
+
+  it("an overtaken undo replay dropped on failure goes back with its entry when the overtaker is refused", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.retitle(A, "x");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    const entry = top();
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    h.wrapped.retitle(A, "y");
+    const later = await server.next("retitle");
+    replay.fail();
+    await sleep(20);
+    later.fail("Uncaught Error: no");
+    await sleep(20);
+    expect(server.rows.get(A)?.title).toBe("x");
+    expect(h.state.items[A].title).toBe("x");
+    // The change is on screen again, so its entry is back to be undone.
+    expect(getUndoHistory().undoOrder[0]).toBe(entry.id);
+  });
+});
+
+// A refused forward write never reached the server, so a newer entry that
+// wrote the same cell recorded the refused value as its before. The refusal
+// rebases it onto what the server held, or its undo writes the refused value
+// back (and, when the refusal depends on the value, is refused again on every
+// press and stays on top of the stack).
+describe("a refused write under a newer entry on the same cell", () => {
+  it("the newer entry's undo returns to what the server held", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a0" });
+    await waitFor(() => h.outbox.size === 0);
+    let n = 0;
+    h.respond(async (a) => {
+      if (a === "rename" && n++ === 0) throw new Error("Uncaught Error: no");
+      return {};
+    });
+    h.wrapped.rename(A, "x");
+    h.wrapped.rename(A, "y");
+    await waitFor(() => h.outbox.size === 0);
+    expect(items().map((i) => [i.label, i.status])).toEqual([["Renamed to y", "done"], ["Renamed to x", "refused"]]);
+    expect(h.state.items[A].title).toBe("y");
+    performUndo();
+    expect(h.state.items[A].title).toBe("a0");
+    await waitFor(() => h.outbox.size === 0);
+    expect(JSON.stringify(lastDispatch(h, "applyUndoPatches"))).toContain('"a0"');
+    expect(JSON.stringify(lastDispatch(h, "applyUndoPatches"))).not.toContain('"x"');
+  });
+
+  it("a value the server refuses never comes back through the newer entry's undo", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a0" });
+    await waitFor(() => h.outbox.size === 0);
+    h.respond(async () => {
+      const last = h.dispatched[h.dispatched.length - 1]!;
+      if (JSON.stringify([last.args, last.patches]).includes('"x"')) throw new Error("Uncaught Error: no x");
+      return {};
+    });
+    h.wrapped.rename(A, "x");
+    const y = (h.wrapped.rename(A, "y"), top().id);
+    await waitFor(() => h.outbox.size === 0);
+    performUndo();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("a0");
+    expect(items().find((i) => i.id === y)!.status).toBe("undone");
+  });
+
+  it("rebases a later sibling in the same group", async () => {
+    const h = makeStore();
+    h.wrapped.seed(A, { title: "a0" });
+    await waitFor(() => h.outbox.size === 0);
+    let n = 0;
+    h.respond(async (a) => {
+      if (a === "rename" && n++ === 0) throw new Error("Uncaught Error: no");
+      return {};
+    });
+    undoGroup("both", () => {
+      h.wrapped.rename(A, "x");
+      h.wrapped.retitle(A, "y");
+    });
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("y");
+    performUndo();
+    expect(h.state.items[A].title).toBe("a0");
+  });
+});
+
+// A refused undo replay never reached the server. Its owner goes back on the
+// undo stack, and the entries that judged and wrote against the replay's value
+// are rebased onto what the server held: an older entry the walk undid after
+// it, and a gesture recorded while it was on the wire.
+describe("a refused undo replay rebases the entries that used its value", () => {
+  it("an older entry undone after it: the owner's undo writes nothing back", async () => {
+    const h = makeStore({ retryDelays: [] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "t0" });
+    (await server.next("seed")).ok();
+    h.wrapped.retitle(A, "x");
+    (await server.next("retitle")).ok();
+    h.wrapped.retitle(A, "t0");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    expect(performUndo()).toBe(true);
+    const refused = await server.next("applyUndoPatches");
+    expect(performUndo()).toBe(true);
+    refused.fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("t0");
+    expect(server.rows.get(A)?.title).toBe("t0");
+    // The returned entry already stands at its before: its undo takes nothing back.
+    performUndo();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("t0");
+    expect(server.rows.get(A)?.title).toBe("t0");
+    expect(items().map((i) => i.status)).toEqual(["undone", "undone"]);
+  });
+
+  it("an older sibling in the same group, undone after it in the same step", async () => {
+    const h = makeStore({ retryDelays: [] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "t0" });
+    (await server.next("seed")).ok();
+    undoGroup("both", () => {
+      h.wrapped.retitle(A, "x");
+      h.wrapped.rename(A, "t0");
+    });
+    (await server.next("retitle")).ok();
+    (await server.next("rename")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    expect(performUndo()).toBe(true);
+    (await server.next("applyUndoPatches")).fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("t0");
+    performUndo();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("t0");
+    expect(server.rows.get(A)?.title).toBe("t0");
+  });
+
+  it("a gesture recorded while it was on the wire undoes to what the server held", async () => {
+    const h = makeStore({ retryDelays: [] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "a" });
+    (await server.next("seed")).ok();
+    h.wrapped.retitle(A, "x");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    expect(performUndo()).toBe(true);
+    const refused = await server.next("applyUndoPatches");
+    h.wrapped.retitle(A, "y");
+    (await server.next("retitle")).ok();
+    refused.fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("y");
+    performUndo();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("x");
+    expect(server.rows.get(A)?.title).toBe("x");
+    performUndo();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("a");
+    expect(server.rows.get(A)?.title).toBe("a");
+  });
+});
+
+// A refusal's rebase must not depend on the order refusals arrive in. A forward
+// write still on the wire when a later entry is undone hands its value to that
+// undo's replay; when both are refused, the gesture recorded after the replay
+// saw the replay's value as its before, whichever refusal lands first.
+describe("refusals rebase the same in either arrival order", () => {
+  for (const order of ["forward first", "replay first"] as const) {
+    it(`the forward refused ${order === "forward first" ? "before" : "after"} the undo replay that carried its value`, async () => {
+      const h = makeStore({ retryDelays: [] });
+      const server = manualServer(h);
+      await seeded(h, server);
+      h.wrapped.retitle(A, "x");
+      const f1 = await server.next("retitle");
+      h.wrapped.retitle(A, "y");
+      (await server.next("retitle")).ok();
+      expect(performUndo()).toBe(true);
+      const replay = await server.next("applyUndoPatches");
+      h.wrapped.retitle(A, "z");
+      (await server.next("retitle")).ok();
+      if (order === "forward first") {
+        f1.fail("Uncaught Error: no");
+        await sleep(20);
+        replay.fail("Uncaught Error: no");
+      } else {
+        replay.fail("Uncaught Error: no");
+        await sleep(20);
+        f1.fail("Uncaught Error: no");
+      }
+      await server.drain();
+      await waitFor(() => h.outbox.size === 0);
+      expect(server.rows.get(A)?.title).toBe("z");
+      expect(h.state.items[A].title).toBe("z");
+      // z's before is what the server held when it landed: y.
+      expect(performUndo()).toBe(true);
+      await server.drain();
+      await waitFor(() => h.outbox.size === 0);
+      expect(h.state.items[A].title).toBe("y");
+      expect(server.rows.get(A)?.title).toBe("y");
+      expect(performUndo()).toBe(true);
+      await server.drain();
+      await waitFor(() => h.outbox.size === 0);
+      expect(h.state.items[A].title).toBe("a0");
+      expect(server.rows.get(A)?.title).toBe("a0");
+    });
+  }
+  // A later step of the walk whose forward was refused in the meantime still
+  // sent its undo replay, which landed: the refused replay's owner comes back
+  // judged by what that step wrote, not left claiming a value the screen does
+  // not show.
+  it("a walk step whose forward was refused since still counts: its replay landed", async () => {
+    const h = makeStore({ retryDelays: [] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.setTwo(A, "t2", "c0");
+    const f1 = await server.next("setTwo");
+    h.wrapped.retitle(A, "t1");
+    (await server.next("retitle")).ok();
+    const [older] = getUndoHistory().undoOrder.slice(1);
+    undoTo(older!);
+    const r2 = await server.next("applyUndoPatches");
+    const r1 = await server.next("applyUndoPatches");
+    f1.fail("Uncaught Error: no");
+    await sleep(20);
+    r1.ok();
+    await sleep(20);
+    r2.fail("Uncaught Error: no");
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("a0");
+    expect(h.state.items[A].title).toBe("a0");
+    // The walk's landed replay wrote the cell back to what the refused one
+    // would have: the entry stays undone, and redo brings its value back.
+    expect(getUndoHistory().undoOrder).toEqual([]);
+    notices = [];
+    performUndo();
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(notices.some((n) => n.includes("changed since"))).toBe(false);
+    expect(h.state.items[A].title).toBe("a0");
+    expect(performRedo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("t1");
+    expect(server.rows.get(A)?.title).toBe("t1");
+  });
+});
+
+// A redo overtakes the undo replay before it: when that replay fails on its
+// first attempt it is dropped as overtaken, and when the redo is then refused
+// the forward value is back on screen. The entry must come back with it.
+describe("an undo replay overtaken by a redo", () => {
+  it("re-invoke redo refused after the replay it overtook was dropped: the entry is back to be undone", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    await seeded(h, server);
+    h.wrapped.retitle(A, "x");
+    (await server.next("retitle")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    const entry = top();
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    expect(performRedo()).toBe(true);
+    const redo = await server.next("retitle");
+    replay.fail();
+    await sleep(20);
+    redo.fail("Uncaught Error: no");
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("x");
+    expect(h.state.items[A].title).toBe("x");
+    expect(getUndoHistory().undoOrder[0]).toBe(entry.id);
+    expect(items().find((i) => i.id === entry.id)!.status).toBe("done");
+    expect(performUndo()).toBe(true);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(h.state.items[A].title).toBe("a0");
+    expect(server.rows.get(A)?.title).toBe("a0");
+  });
+
+  it("partial redo refused after the replay it overtook was dropped: the entry is back to be undone", async () => {
+    const h = makeStore({ retryDelays: [5] });
+    const server = manualServer(h);
+    h.wrapped.seed(A, { title: "a" });
+    (await server.next("seed")).ok();
+    h.wrapped.seed(B, { title: "b" });
+    (await server.next("seed")).ok();
+    h.wrapped.renameBoth(A, B, "both");
+    (await server.next("renameBoth")).ok();
+    await waitFor(() => h.outbox.size === 0);
+    const entry = top();
+    h.setState({ items: { ...h.state.items, [B]: { ...h.state.items[B], title: "someone" } } });
+    expect(performUndo()).toBe(true);
+    const replay = await server.next("applyUndoPatches");
+    expect(performRedo()).toBe(true);
+    const redo = await server.next("applyUndoPatches");
+    replay.fail();
+    await sleep(20);
+    redo.fail("Uncaught Error: no");
+    await sleep(20);
+    await server.drain();
+    await waitFor(() => h.outbox.size === 0);
+    expect(server.rows.get(A)?.title).toBe("both");
+    expect(h.state.items[A].title).toBe("both");
+    expect(getUndoHistory().undoOrder[0]).toBe(entry.id);
+    expect(items().find((i) => i.id === entry.id)!.status).toBe("done");
+  });
+});
+
+// Randomized refusal orders (UNDO_FUZZ=<seeds>): a server that refuses any
+// write carrying "t2", random transient failures, in-order delivery at random
+// moments between gestures.
+// After everything settles, no entry on either stack may hold a refused
+// value as its before, the screen matches the server, and walking the undo
+// stack never leaves the same entry on top after a press that took it back.
+const FUZZ = Number(process.env.UNDO_FUZZ ?? 0);
+describe.skipIf(!FUZZ)("refusal fuzz", () => {
+  const rng = (seed: number) => () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const runSeed = async (seed: number): Promise<string | null> => {
+    _resetUndoStacks();
+    const r = rng(seed);
+    const pick = <T,>(xs: readonly T[]) => xs[Math.floor(r() * xs.length)]!;
+    const h = makeStore({ retryDelays: [5, 5] });
+    const server = new Map<string, Record<string, unknown>>();
+    const queue: Array<{ patch: Record<string, any>; resolve: (v: any) => void; reject: (e: Error) => void }> = [];
+    h.respond(() => new Promise((resolve, reject) => {
+      const d = h.dispatched[h.dispatched.length - 1]!;
+      queue.push({ patch: d.patches?.item_rows ?? {}, resolve, reject });
+    }));
+    // A refused write never lands, so when its refusal arrives is free (a
+    // first attempt that failed and was refused on retry): it may be held
+    // past later writes. Everything that lands does so in the order sent.
+    const held: typeof queue = [];
+    const settleOne = () => {
+      if (held.length > 0 && (queue.length === 0 || r() < 0.3)) {
+        held.splice(Math.floor(r() * held.length), 1)[0]!.reject(new Error("Uncaught Error: no t2"));
+        return;
+      }
+      if (queue.length === 0) return;
+      const q = queue.shift()!;
+      if (JSON.stringify(q.patch).includes('"t2"') && r() < 0.6) {
+        held.push(q);
+        return;
+      }
+      if (process.env.UNDO_FUZZ_LOG) console.log("settle", JSON.stringify(q.patch));
+      if (JSON.stringify(q.patch).includes('"t2"')) return q.reject(new Error("Uncaught Error: no t2"));
+      if (r() < 0.15) { if (process.env.UNDO_FUZZ_LOG) console.log("  transient"); return q.reject(new Error("Server Error")); }
+      for (const [id, row] of Object.entries<any>(q.patch)) server.set(id, { ...server.get(id), ...row });
+      q.resolve({});
+    };
+    const settleAll = async () => {
+      let quiet = 0;
+      for (let i = 0; i < 300 && quiet < 4; i++) {
+        while (queue.length || held.length) settleOne();
+        await sleep(12);
+        if (queue.length === 0 && h.outbox.size > 0) void h.wrapped._drainOutbox?.(false);
+        await sleep(3);
+        quiet = queue.length === 0 && held.length === 0 && h.outbox.size === 0 ? quiet + 1 : 0;
+      }
+    };
+    h.wrapped.seed(A, { title: "t0", color: "c0" });
+    h.wrapped.seed(B, { title: "t0", color: "c0" });
+    // Seeds always land.
+    await waitFor(() => queue.length === 2);
+    for (const q of queue.splice(0)) {
+      for (const [id, row] of Object.entries<any>(q.patch)) server.set(id, { ...server.get(id), ...row });
+      q.resolve({});
+    }
+    await waitFor(() => h.outbox.size === 0);
+    for (const id of [A, B]) server.set(id, { title: "t0", color: "c0" });
+    const ops: string[] = [];
+    const n = 3 + Math.floor(r() * 5);
+    for (let i = 0; i < n; i++) {
+      const k = r();
+      const id = pick([A, B]);
+      const t = pick(["t0", "t1", "t2"]);
+      const c = pick(["c0", "c1"]);
+      if (k < 0.3) { ops.push(`retitle ${id[0]} ${t}`); h.wrapped.retitle(id, t); }
+      else if (k < 0.5) { ops.push(`setTwo ${id[0]} ${t} ${c}`); h.wrapped.setTwo(id, t, c); }
+      else if (k < 0.6) { ops.push(`group ${t} ${c}`); undoGroup("g", () => { h.wrapped.retitle(A, t); h.wrapped.setTwo(B, pick(["t0", "t1", "t2"]), c); }); }
+      else if (k < 0.8) { ops.push("undo"); performUndo(); }
+      else if (k < 0.9) { ops.push("redo"); performRedo(); }
+      else {
+        const order = getUndoHistory().undoOrder;
+        if (order.length > 1) { ops.push(`undoTo ${order.length - 1}`); undoTo(order[order.length - 1]!); }
+      }
+      const steps = Math.floor(r() * 3);
+      for (let j = 0; j < steps; j++) settleOne();
+      await sleep(r() < 0.5 ? 0 : 8);
+    }
+    await settleAll();
+    const fail = (why: string) => `seed ${seed}: ${why}\n  ops ${JSON.stringify(ops)}\n  history ${JSON.stringify(items().map((i) => [i.label, i.status, (i.changes ?? []).map((c) => `${c.id[0]}.${c.field}:${c.before}>${c.after}`)]))}\n  server ${JSON.stringify([...server.entries()].map(([id, row]) => [id[0], row.title, row.color]))} screen ${JSON.stringify([A, B].map((id) => [id[0], h.state.items[id].title, h.state.items[id].color]))}`;
+    for (const id of [A, B]) {
+      const s = server.get(id)!;
+      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color) return fail("screen differs from server");
+    }
+    const byId = new Map(items().map((i) => [i.id, i]));
+    for (const id of [...getUndoHistory().undoOrder, ...getUndoHistory().redoOrder]) {
+      const it = byId.get(id)!;
+      const cells = it.children ? it.children.flatMap((c) => c.changes ?? []) : it.changes ?? [];
+      if (cells.some((c) => c.before === "t2")) return fail(`refused value as a before on ${it.label}`);
+    }
+    for (let i = 0; i < 12 && getUndoHistory().undoOrder.length > 0; i++) {
+      const topId = getUndoHistory().undoOrder[0];
+      const took = performUndo();
+      await settleAll();
+      if (took && getUndoHistory().undoOrder[0] === topId && byId.get(topId!)?.status !== "conflict" && items().find((x) => x.id === topId)?.status === "done") return fail("an undo that took something back left its entry on top");
+      if (!took) break;
+    }
+    for (const id of [A, B]) {
+      const s = server.get(id)!;
+      if (s.title !== h.state.items[id].title || s.color !== h.state.items[id].color) return fail("screen differs from server after the walk");
+    }
+    return null;
+  };
+
+  it("holds the invariants", async () => {
+    const failures: string[] = [];
+    const start = Number(process.env.UNDO_FUZZ_START ?? 1);
+    for (let seed = start; seed < start + FUZZ; seed++) {
+      const f = await runSeed(seed);
+      if (f) failures.push(f);
+    }
+    if (failures.length) console.log(failures.slice(0, 6).join("\n\n"));
+    expect(failures.length).toBe(0);
+  }, 600_000);
+});
+
+// Every step of an entry starts through one place (beginStep in undo.ts), so
+// the replay it overtakes stays findable (supersededReplay) and the cells a
+// replay sent are kept as sent (replaySent). A step that set the replay
+// fields by hand would drop an overtaken replay's ids again.
+describe("replay bookkeeping goes through beginStep", () => {
+  it("no step assigns the replay fields outside it", async () => {
+    const src = await Bun.file(new URL("./undo.ts", import.meta.url)).text();
+    const body = src.match(/const beginStep = [\s\S]*?\n  \};\n/)?.[0] ?? "";
+    expect(body).toContain("supersededReplay");
+    const outside = src.replace(body, "");
+    const assigns = outside.match(/\.(replayOutboxIds|replayDir|replaySent|supersededReplay)\s*=(?!=)/g) ?? [];
+    // The one other writer: a pass's commit appends its own outbox id.
+    expect(assigns).toEqual([".replayOutboxIds ="]);
   });
 });

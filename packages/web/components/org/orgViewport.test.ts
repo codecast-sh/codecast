@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { computeOrgViewport, hiddenRoots } from "./orgViewport";
+import { bandOrigin, computeOrgViewport, hiddenRoots } from "./orgViewport";
 import { layoutOrgTree, personNodeId } from "./orgLayout";
 import { ORG_FIXTURE } from "./orgFixture";
 
@@ -84,5 +84,23 @@ describe("computeOrgViewport focus target", () => {
     // Without the inset the same card lands under the sheet.
     const under = computeOrgViewport(nodes, 390, 800, 0, null, { id: me.id, zoom: 0.92 })!;
     expect(me.y * 0.92 + under.y + me.h * 0.92).toBeGreaterThan(800 - sheet);
+  });
+});
+
+describe("crossing a zoom stop (orgZoom)", () => {
+  const box = (id: string, y: number, h: number) => ({ id, x: 0, y, w: 100, h });
+  // The layout on screen (tall close cards), and the shorter one that replaces it.
+  const prev = [box("a", 0, 100), box("b", 120, 100), box("c", 240, 100)];
+  const next = [box("a", 0, 40), box("b", 50, 40), box("c", 100, 40)];
+
+  it("the card under the pointer stays where it is: the new layout takes its origin from it", () => {
+    expect(bandOrigin(prev, next, { x: 50, y: 290 })).toEqual({ x: 0, y: 140 });
+    expect(bandOrigin(prev, next, { x: 50, y: 10 })).toEqual({ x: 0, y: 0 });
+  });
+
+  it("between cards the nearest one anchors, and a card the new layout does not draw never does", () => {
+    expect(bandOrigin(prev, next, { x: 50, y: 112 })).toEqual({ x: 0, y: 70 });
+    expect(bandOrigin(prev, next.slice(0, 2), { x: 50, y: 290 })).toEqual({ x: 0, y: 70 });
+    expect(bandOrigin(prev, [], { x: 50, y: 50 })).toEqual({ x: 0, y: 0 });
   });
 });

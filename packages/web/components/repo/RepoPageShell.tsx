@@ -17,6 +17,7 @@ import { useRepoFamily } from "./useRepoFamily";
 import { useRepoAccess } from "../../hooks/useRepoAccess";
 import { RepoTransportProvider, publicRepoUrl, usePublicRepoRead } from "../../lib/repoTransport";
 import { LoadingSkeleton } from "../LoadingSkeleton";
+import { UndoReach } from "../undo/UndoTimeline";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "../../hooks/useSyncCollection";
 import { useIsSyncHost } from "../../hooks/useSyncRole";
@@ -50,6 +51,10 @@ function StandaloneRepoShell({ repository, children }: { repository: string; chi
         </span>
       </header>
       <div className="flex-1 min-h-0">{children}</div>
+      {/* A signed-in reader's review gestures (resolving a thread, editing a
+          comment) record undo history, so the page reaches it as the
+          dashboard does. Signed out, nothing is mounted and nothing records. */}
+      {signedIn && <UndoReach />}
     </div>
   );
 }

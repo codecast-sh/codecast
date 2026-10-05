@@ -5,21 +5,24 @@ import { v } from "convex/values";
 import { AGENT_STATUSES, DAEMON_COMMANDS } from "@codecast/shared/contracts";
 import { cloudHostReportValidator, hostReadinessValidator, localMirrorValidator } from "./lib/cloudHostValidators";
 import { openTaskValidator } from "./lib/openTasksValidator";
-import { TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
+import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES, TASK_STATUS_COLORS } from "@codecast/shared/tasks";
 import { DOC_TYPES } from "@codecast/shared/docs";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { capabilityTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
-import { callGuestLeftReasonValidator, callGuestStatusValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
+import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
+import { callGuestLeftReasonValidator, callGuestStatusValidator, guestNoticeValidator, callRecordingErrorKindValidator, callRecordingKindValidator, callRecordingStatusValidator, callRecordingStopReasonValidator } from "./lib/callValidators";
 import { googleOAuthTables } from "./googleOAuthSchema";
+import { assistantTables } from "./assistantSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
+import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
 
 // Derived from the single source of truth in @codecast/shared/contracts so the
 // schema, validators, the CLI daemon, and the browser store can never drift.
@@ -555,6 +558,9 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      // The hosted assistant (plan pl-840): Convex actions run its turns and
+      // no device ever claims the row (convex/assistant).
+      v.literal("codecast"),
     ),
     session_id: v.string(),
     slug: v.optional(v.string()),
@@ -1851,7 +1857,7 @@ export default defineSchema({
     // lessons passed the leak check and say what they are about in the
     // template's own ids. Absent on rows written before the pass existed.
     source: v.optional(v.union(v.literal("role"), v.literal("learning"))),
-    kind: v.optional(v.union(v.literal("redirect"), v.literal("setup"), v.literal("routine"), v.literal("evidence"))),
+    kind: v.optional(v.union(v.literal("redirect"), v.literal("setup"), v.literal("routine"), v.literal("evidence"), v.literal("rule"))),
     about: v.optional(v.string()),
     created_by: v.id("users"),
     created_at: v.number(),
@@ -2124,6 +2130,8 @@ export default defineSchema({
     encrypted_content: v.optional(v.string()),
     is_encrypted: v.optional(v.boolean()),
     thinking: v.optional(v.string()),
+    // A hosted message's thinking signature lives in message_thinking, and its
+    // unredacted tool call arguments in message_tool_inputs (hostedReplay.ts).
     tool_calls: v.optional(v.array(v.object({
       id: v.string(),
       name: v.string(),
@@ -3107,6 +3115,12 @@ export default defineSchema({
     // Cleared when the session resumes. Separate from agent_status_updated_at
     // so a later status write does not lose when the park started.
     hibernated_at: v.optional(v.number()),
+    // The row carries a hosted assistant conversation's status (plan pl-840):
+    // no process or daemon stands behind it. Its heartbeat proves a running
+    // turn, never a live daemon, so the user-wide daemon liveness skips it, and
+    // the stale-row reaper leaves it alone (a status parked on an approval
+    // writes no heartbeat while it waits).
+    hosted: v.optional(v.boolean()),
     permission_mode: v.optional(v.union(v.literal("default"), v.literal("plan"), v.literal("acceptEdits"), v.literal("bypassPermissions"), v.literal("dontAsk"), v.literal("auto"))),
     current_cpu: v.optional(v.number()),
     current_memory: v.optional(v.number()),
@@ -3138,6 +3152,9 @@ export default defineSchema({
     .index("by_conversation_id", ["conversation_id"])
     .index("by_user_id", ["user_id"])
     .index("by_user_heartbeat", ["user_id", "last_heartbeat"])
+    // The user's daemon rows by heartbeat (hosted absent), so the newest
+    // daemon heartbeat is one seek even for a user whose rows are all hosted.
+    .index("by_user_hosted_heartbeat", ["user_id", "hosted", "last_heartbeat"])
     .index("by_user_status", ["user_id", "agent_status"])
     .index("by_heartbeat", ["last_heartbeat"]),
 
@@ -3238,6 +3255,31 @@ export default defineSchema({
   // The before/after text of one file change, split from its file_changes row
   // (fileChangeBodies.ts). Read by change_key on demand: the web asks for the
   // few changes a fold needs, never a conversation's whole history.
+  // The API's signature over a hosted assistant message's thinking (plan
+  // pl-840), one row per message that has one. Resuming a turn that thought
+  // before a tool call must replay the thinking signed and unchanged, so the
+  // turn engine reads these; no client does, which is why they sit here and
+  // not on the message row every transcript query ships. `redacted` marks
+  // thinking the API encrypted, whose payload is the signature.
+  message_thinking: defineTable({
+    conversation_id: v.id("conversations"),
+    message_id: v.id("messages"),
+    signature: v.string(),
+    redacted: v.optional(v.boolean()),
+  })
+    .index("by_conversation_message", ["conversation_id", "message_id"]),
+
+  // A hosted assistant message's tool call arguments as the model wrote them,
+  // for each call whose stored arguments redaction changed. Server only: the
+  // turn engine replays and runs approved calls with these (hostedReplay.ts),
+  // while the message row clients read keeps the redacted form.
+  message_tool_inputs: defineTable({
+    conversation_id: v.id("conversations"),
+    message_id: v.id("messages"),
+    inputs: v.array(v.object({ id: v.string(), input: v.string() })),
+  })
+    .index("by_conversation_message", ["conversation_id", "message_id"]),
+
   file_change_bodies: defineTable({
     conversation_id: v.id("conversations"),
     change_key: v.string(),
@@ -4629,6 +4671,11 @@ export default defineSchema({
     prompt: v.string(),
     context_summary: v.optional(v.string()),
     originating_conversation_id: v.optional(v.id("conversations")),
+    // The originating conversation is a hosted assistant conversation (plan
+    // pl-840), so the server dispatcher fires this routine on every
+    // deployment. Stamped by insertTask and patchTask from the home; a
+    // conversation never changes between hosted and local.
+    hosted_home: v.optional(v.boolean()),
     target_conversation_id: v.optional(v.id("conversations")),
     // Conversation that CREATED this trigger — pure attribution, no routing
     // meaning. originating_conversation_id does double duty (its presence makes
@@ -4689,6 +4736,13 @@ export default defineSchema({
     // ORG_REVIEW_FOCUSES, carried into the run's frame and cleared when the
     // run completes. One trigger, one run path; the focus only narrows it.
     requested_run_focus: v.optional(v.string()),
+    // A role's own part of its check (org-staffing.md S38): what it chose to
+    // look at first, carried into the frame after the routine's prompt, and
+    // why and when it last changed its cadence, gate or focus (`cast role
+    // tune`). The prompt stays the product's; this is capped and the role's.
+    role_focus: v.optional(v.string()),
+    tune_why: v.optional(v.string()),
+    tuned_at: v.optional(v.number()),
     last_run_source: v.optional(v.string()),
     // `cast trigger add --spawn --wake`: a clean report of a once run wakes
     // the session that armed it (runOwnerWakeOf) instead of only posting
@@ -4762,6 +4816,8 @@ export default defineSchema({
     .index("by_user_status", ["user_id", "status"])
     .index("by_user_run_at", ["user_id", "run_at"])
     .index("by_status_run_at", ["status", "run_at"])
+    // The hosted routines a deployment with no cloud wake host still fires.
+    .index("by_hosted_status_run_at", ["hosted_home", "status", "run_at"])
     .index("by_event_filter", ["status"])
     // A firing reads only the triggers armed on its name (matchTaskTriggers).
     .index("by_status_event_type", ["status", "event_filter.event_type"])
@@ -4803,6 +4859,8 @@ export default defineSchema({
       project_path: v.optional(v.string()),
       max_runtime_ms: v.optional(v.number()),
       precheck: v.optional(v.string()),
+      role_focus: v.optional(v.string()),
+      tune_why: v.optional(v.string()),
     }),
     created_at: v.number(),
   }).index("by_task", ["task_id", "revision"]),
@@ -4862,23 +4920,14 @@ export default defineSchema({
     // with an end); a bounded project is what a program role ends with
     // (org-staffing.md S10).
     horizon: v.optional(v.union(v.literal("ongoing"), v.literal("bounded"))),
-    // The finders a repo's line profile declares for this project
-    // (line-profile.md LP3), published by `cast line profile --publish`. The
-    // repo holds the truth; this copy is what /line reads to name each
-    // finder and say when one is silent. root: the checkout that published;
-    // default: this is that profile's `[line] project`.
-    line_profile: v.optional(v.object({
-      finders: v.array(v.object({
-        id: v.string(),
-        source: v.string(),
-        kind: v.union(v.literal("any"), v.array(v.string())),
-        fingerprint: v.string(),
-        runs: v.optional(v.string()),
-      })),
-      root: v.optional(v.string()),
-      default: v.optional(v.boolean()),
-      changed_at: v.number(),
-    })),
+    // The repo's resolved line profile (line-profile.md LP3), published by
+    // `cast line profile --publish` onto every project its finders file
+    // into: the finders for this project, every other value with where it
+    // came from, the loader's notes and warnings, and the checkout and device
+    // that published it. The repo holds the truth; this copy is what the app
+    // reads. default: this is that profile's `[line] project`. Shape:
+    // @codecast/shared/contracts/lineProfile.
+    line_profile: v.optional(publishedLineProfileValidator),
 
     created_at: v.number(),
     updated_at: v.number(),
@@ -4934,7 +4983,18 @@ export default defineSchema({
     // `scoreboard` by key, the template scoreboard's own shape, written by
     // the same recordScores path `cast org template report` uses.
     metrics: v.optional(v.array(v.object({ key: v.string(), name: v.string(), target: v.string() }))),
-    scoreboard: v.optional(v.record(v.string(), v.object({ value: v.string(), observed_at: v.number(), source: v.string() }))),
+    scoreboard: v.optional(v.record(v.string(), scoreValidator)),
+    // The intent record (I5, lib/initiativeValidators): every reported value
+    // by metric key oldest first, written only with `scoreboard`; why it
+    // matters and what done looks like; and four lists edited one entry at a
+    // time through initiatives.record.
+    score_history: v.optional(v.record(v.string(), v.array(scoreValidator))),
+    why: v.optional(v.string()),
+    done_when: v.optional(v.string()),
+    milestones: v.optional(v.array(milestoneValidator)),
+    questions: v.optional(v.array(questionValidator)),
+    decisions: v.optional(v.array(decisionValidator)),
+    sources: v.optional(v.array(intentSourceValidator)),
     // Copied from the latest update when it is posted; "none" before one.
     health: v.union(v.literal("none"), v.literal("on_track"), v.literal("at_risk"), v.literal("off_track")),
     health_at: v.optional(v.number()),
@@ -4994,6 +5054,9 @@ export default defineSchema({
     title: v.optional(v.string()),
     body: v.string(),
     conversation_id: v.optional(v.id("conversations")),
+    // The web's optimistic stub id for a post (store/projectUpdatesSlice):
+    // the row carrying it supersedes the stub when the list echoes it.
+    client_key: v.optional(v.string()),
     created_at: v.number(),
     updated_at: v.number(),
     edited_at: v.optional(v.number()),
@@ -5026,6 +5089,116 @@ export default defineSchema({
   // `shared` is the whole access rule: private rows are owner-only, shared rows
   // are readable by any member of the row's team. A shared row without a
   // team_id is a contradiction (nobody to share with), so writes require one.
+  // Codecast mods (plan pl-839, shared/contracts/mods.ts). One row per mod an
+  // author owns, carrying the bundle that runs now: `cast mod dev` rewrites it
+  // on every save (rev), `cast mod publish` also snapshots it into
+  // mod_versions so a version can be read back, diffed and rolled back to.
+  // Access is the saved_views rule: the author, or the team it is shared with.
+  mods: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    shared: v.optional(v.boolean()),
+    name: v.string(),
+    title: v.optional(v.string()),
+    description: v.optional(v.string()),
+    // The validated codecast-mod.json; its shape lives in the shared contract.
+    manifest: v.any(),
+    // The bundled script (SDK + the author's module) the sandbox runs.
+    code: v.string(),
+    // The local half (manifest `local`), bundled for the daemon, and the hash a
+    // device's approval names: a new hash runs nowhere until approved again.
+    local_code: v.optional(v.string()),
+    local_hash: v.optional(v.string()),
+    rev: v.number(),
+    version: v.number(),
+    enabled: v.boolean(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_name", ["user_id", "name"])
+    .index("by_team_id", ["team_id"]),
+
+  mod_versions: defineTable({
+    mod_id: v.id("mods"),
+    version: v.number(),
+    manifest: v.any(),
+    code: v.string(),
+    local_code: v.optional(v.string()),
+    local_hash: v.optional(v.string()),
+    // The source files as written, path -> text, so a version can be read,
+    // forked and diffed without the author's folder.
+    source: v.optional(v.any()),
+    note: v.optional(v.string()),
+    created_at: v.number(),
+  }).index("by_mod_version", ["mod_id", "version"]),
+
+  // Objects of the kinds mods declare (shared/contracts/mods.ts ModObjectKind):
+  // `bug-14`, `inc-3`. One table for every kind; `prefix` names the kind and
+  // `number` counts per workspace and prefix. `workspace` is the access key,
+  // written by computeWorkspaceKey like tasks; `fields` holds the kind's own
+  // fields as the declaring manifest types them.
+  mod_objects: defineTable({
+    user_id: v.id("users"),
+    team_id: v.optional(v.id("teams")),
+    workspace: v.string(),
+    prefix: v.string(),
+    number: v.number(),
+    short_id: v.string(),
+    title: v.string(),
+    status: v.optional(v.string()),
+    fields: v.optional(v.any()),
+    body: v.optional(v.string()),
+    archived: v.optional(v.boolean()),
+    client_key: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace_prefix_number", ["workspace", "prefix", "number"])
+    .index("by_workspace_updated", ["workspace", "updated_at"])
+    .index("by_short_id", ["short_id"])
+    .index("by_client_key", ["client_key"]),
+
+  // What a mod's local half published ($.publish): one value per mod and key,
+  // the latest write wins. The web syncs these into the store, so the
+  // sandboxed half reads them like any other data ($.local.get).
+  mod_state: defineTable({
+    mod_id: v.id("mods"),
+    user_id: v.id("users"),
+    key: v.string(),
+    value: v.any(),
+    device_name: v.optional(v.string()),
+    updated_at: v.number(),
+  })
+    .index("by_mod_key", ["mod_id", "key"])
+    .index("by_user", ["user_id"]),
+
+  // A call from a mod's UI to its local half ($.local.call): queued here,
+  // claimed by a daemon that runs that half, answered with a result or an error.
+  mod_calls: defineTable({
+    mod_id: v.id("mods"),
+    user_id: v.id("users"),
+    method: v.string(),
+    args: v.any(),
+    status: v.union(v.literal("pending"), v.literal("running"), v.literal("done"), v.literal("failed")),
+    result: v.optional(v.any()),
+    error: v.optional(v.string()),
+    device_name: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_user_status", ["user_id", "status"])
+    .index("by_mod_created", ["mod_id", "created_at"]),
+
+  // What a running mod said: console lines, thrown errors, refused calls. The
+  // author's loop reads them with `cast mod logs`; capped per mod on write.
+  mod_logs: defineTable({
+    mod_id: v.id("mods"),
+    user_id: v.id("users"),
+    level: v.string(),
+    text: v.string(),
+    created_at: v.number(),
+  }).index("by_mod_created", ["mod_id", "created_at"]),
+
   saved_views: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -5286,13 +5459,7 @@ export default defineSchema({
     // default when the id no longer exists, so deleting a status needs no
     // task migration.
     status_id: v.optional(v.string()),
-    priority: v.union(
-      v.literal("urgent"),
-      v.literal("high"),
-      v.literal("medium"),
-      v.literal("low"),
-      v.literal("none")
-    ),
+    priority: v.union(...TASK_PRIORITIES.map((p) => v.literal(p))),
 
     assignee: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
@@ -5600,6 +5767,9 @@ export default defineSchema({
     // Set when pulled from the provider or once a pushed comment gets its id
     // back. docs/architecture/issue-sync.md S1.2, S4.
     external: v.optional(taskCommentExternalValidator),
+    // A person's comment reached the session that owns the task while it was
+    // working (tasks.ts deliverCommentToOwner): the thread says so under it.
+    delivered_to_conversation_id: v.optional(v.id("conversations")),
     created_at: v.number(),
   })
     .index("by_task_id", ["task_id"])
@@ -6169,6 +6339,12 @@ export default defineSchema({
     // its guests, whether or not anything was transcribing it
     // (transcripts.withinHuddleGrace). Dies with the row like the rest.
     emptied_at: v.optional(v.number()),
+    // The huddle's live call record has its public link on, which shows the
+    // transcript to anyone holding it as it is written. Stamped by
+    // callRooms.stampRoomWordsPublic when the link or the record changes,
+    // so the notice everyone in the room reads (and every guest's) never
+    // has to read the record itself, which every transcript line moves.
+    words_public: v.optional(v.boolean()),
     updated_at: v.number(),
   }).index("by_room", ["room_key"]),
 
@@ -6221,7 +6397,15 @@ export default defineSchema({
     creator_told_at: v.optional(v.number()),
   })
     .index("by_token", ["token"])
+    // Every link the room ever had, for the questions about any of them
+    // (lib/callGuestAdmission.roomHasGuestLinks: a guest admitted on a link
+    // since expired can still be inside).
     .index("by_room", ["room_key"])
+    // The room's links still open by the clock, and only those: the stage's
+    // invite panel (callGuests.listGuestLinks) subscribes to this range, so a
+    // long-lived room's past links neither grow its read nor re-run it when
+    // one of them is written.
+    .index("by_room_expires", ["room_key", "expires_at"])
     // The creator's latest push across all their links, in one read
     // (callGuests.tellCreatorIfAlone).
     .index("by_creator_told", ["created_by", "creator_told_at"])
@@ -6264,6 +6448,13 @@ export default defineSchema({
     // recorded, and went ahead. Joining requires it; the notice keeps
     // showing in the call whatever this says.
     notice_accepted_at: v.optional(v.number()),
+    // WHAT they were shown when they went ahead (GuestNotice): the knock's
+    // notice, then each Join pressed under a wider one. A media token is
+    // refused while the room keeps more than this (authForGuestToken), so a
+    // page that skips the lobby's widened notice cannot walk them into it,
+    // and the row says afterwards what the guest agreed to. Absent on rows
+    // from before it existed, which are held to the room as it is.
+    notice_accepted: v.optional(guestNoticeValidator),
     // Why a `left` row left: they walked out, or the huddle they were let
     // into ended (an admission is for one huddle). CallGuestLeftReason.
     left_reason: v.optional(callGuestLeftReasonValidator),
@@ -6286,6 +6477,10 @@ export default defineSchema({
     // Cleared on each admission, so a place let go with none is "not_joined"
     // rather than "lapsed" (the guest never came in, nothing dropped).
     media_seen_at: v.optional(v.number()),
+    // The guest's page said it is sharing its screen, as of its last beat:
+    // the edge into true starts a recording's screen file now, the same
+    // nudge a teammate's call_members.sharing gives (calls.heartbeat).
+    sharing: v.optional(v.boolean()),
   })
     // Every read of a room's door or roster is bounded by the lease
     // (last_seen), so rows from closed pages cost nothing to the reads that
@@ -6391,6 +6586,14 @@ export default defineSchema({
     // somebody back within HUDDLE_GRACE_MS clears it and the same record goes
     // on, and otherwise the record ends at this moment (endIdleTranscript).
     idle_since: v.optional(v.number()),
+    // The room's own session route is owed, not yet given. A press of Record
+    // in a session huddle with transcription off begins the record without
+    // it, because that route makes the session's agent a participant and
+    // recording a room must never invite anyone into it. Transcription coming
+    // back on pays it (transcripts.ensureOwnRoute) and clears this. A mark
+    // rather than a check of the routes, so a route somebody removed on
+    // purpose is never put back.
+    own_route_owed: v.optional(v.boolean()),
     // The audio, when there is any. A recording (`rec:` room key) uploads what
     // its microphone heard once it stops; a huddle has no single recording to
     // keep. Best effort by design — the transcript is the artifact, and a
@@ -6435,6 +6638,16 @@ export default defineSchema({
     // canReadCall admits them like speakers, so a person who was filmed but
     // never spoke (or pressed Record with transcription off) can watch it.
     recorded_people: v.optional(v.array(v.id("users"))),
+    // How many of this call's recording files are not failed
+    // (lib/callRecordingRuns.syncCallVideo): the call's own video fact,
+    // apart from recorded_people, which is who may watch and outlives the
+    // video. callFilmed reads it. Absent means none.
+    video_runs: v.optional(v.number()),
+    // A live record a Record press made (callRecordings.startRecording) that
+    // no client has scribed yet: started_by is the presser and owns it, but
+    // transcripts.start hands the scribe seat to the first client that asks
+    // and clears this. getLive reports no scribe while it is set.
+    scribe_open: v.optional(v.boolean()),
     // "cl-N" from counters.nextShortId: the handle a call is quoted by in
     // prose (`cl-42`, `cl-42:15-25` for turns 15 to 25), like ct-/pl-.
     // Optional only for rows older than the backfill.
@@ -6508,6 +6721,11 @@ export default defineSchema({
     run_id: v.optional(v.id("call_recordings")),
     // Who pressed Record (screen files inherit their run's presser), and when.
     started_by: v.id("users"),
+    // Their name as the team sees it, kept when the run was made (as
+    // call_members keeps user_name): the live room list and the call's files
+    // name the presser without reading their users row, which the daemon's
+    // heartbeat and every message they send rewrite. Absent on older rows.
+    started_by_name: v.optional(v.string()),
     requested_at: v.number(),
     // Wall ms of the file's time 0, from LiveKit's file result: the anchor of
     // every offset (locateCallMoment). Absent until LiveKit has begun writing.
@@ -6524,8 +6742,11 @@ export default defineSchema({
     // restart cooldown and the stuck-save timeout both count from here.
     stop_requested_at: v.optional(v.number()),
     // Why it failed, in plain words (lib/callRecordingRuns plainEgressError;
-    // LiveKit's own text goes to the logs).
+    // LiveKit's own text goes to the logs), and the kind of failure those
+    // words describe. Decisions (may a screen file be asked for again?) read
+    // the kind, so editing the words never changes what the loop does.
     error: v.optional(v.string()),
+    error_kind: v.optional(callRecordingErrorKindValidator),
     // How many times this file has been asked of LiveKit (absent: once). A
     // refusal that passes (no capacity this minute, a timeout) is asked again
     // up to START_RETRY_LIMIT times on the same row. `retry_after` is when a
@@ -6567,9 +6788,18 @@ export default defineSchema({
     recording_id: v.id("call_recordings"),
     transcript_id: v.id("transcripts"),
     storage_id: v.id("_storage"),
+    // The picture's content hash, so the same frame shared twice from one
+    // file is one object and one link (callRecordings.cliShareFrame).
+    sha256: v.optional(v.string()),
     user_id: v.id("users"),
     created_at: v.number(),
-  }).index("by_recording", ["recording_id"]),
+    // The moment the picture shows, in ms on the call's clock: what the call
+    // page's list of shared pictures and the room's thread line name.
+    at_ms: v.optional(v.number()),
+  })
+    .index("by_recording", ["recording_id"])
+    // The call page lists every picture of the call on a public link.
+    .index("by_transcript", ["transcript_id"]),
 
   // One row per recording run: its reconcile loop's bookkeeping, kept apart
   // from call_recordings because every room and call page subscribes to
@@ -6610,13 +6840,22 @@ export default defineSchema({
     source_message_id: v.optional(v.id("messages")),
     // Set when this row is something the room SAW rather than something
     // somebody said: "agent_joined" | "agent_left" | "transcribe_on" |
-    // "transcribe_off" | "record_on" | "record_off" | "record_deleted" |
-    // "guest_admitted" | "guest_removed".
+    // "transcribe_off" | "record_on" | "record_off" | "record_lost" |
+    // "record_deleted" | "frame_shared" | "video_shared" | "video_unshared" |
+    // "link_on" | "link_off" | "guest_admitted" | "guest_removed".
+    // record_lost follows a record_off already said: the stopped run's
+    // video failed to save, and its plain words ride in `text`. link_on and
+    // link_off are the call's public link turned on or off (its words open
+    // to anyone with it); video_shared and video_unshared are its video put
+    // on that link or taken off, video_shared with the filmed stretch it
+    // covers in event_span.
     // `user_id` is who did it (the person who added or removed the agent,
     // pressed the transcription or recording switch, or let a guest in or
     // put one out, the guest named by event_guest_name); an agent event
     // also carries `agent_conversation_id`. `text` is empty, except a
-    // recording that failed, which carries the failure in plain words.
+    // recording that failed, which carries the failure in plain words, and
+    // a frame_shared line (`cast call snap --share` put a picture of the call
+    // on a public link), which carries the moment's reference (`cl-42@12:34`).
     // Written only by callChat.postEvent; never relayed to the fed sessions.
     event: v.optional(v.string()),
     // Why a record_off happened (a CallRecordingStopReason: "pressed",
@@ -6629,6 +6868,15 @@ export default defineSchema({
     // as the guest's. On guest_admitted / guest_removed it is the guest the
     // doorkeeper (user_id) let in or put out.
     event_guest_name: v.optional(v.string()),
+    // The recording run a record_on / record_off / record_deleted line is
+    // about (callRecordingRuns.runIdOf), so the thread can tell which run a
+    // delete removed and mark that run's start and stop as gone. Absent on
+    // lines written before it existed.
+    event_run_id: v.optional(v.string()),
+    // record_deleted: the stretch of the call the deleted run had filmed, in
+    // ms on the call's clock (transcript started_at), so the line can say
+    // which recording went. Absent when the run never began filming.
+    event_span: v.optional(v.object({ from_ms: v.number(), to_ms: v.number() })),
     // The huddle this line was said in: the room's live transcript when it
     // was written (callChat.insertRoomRow), or the one a line typed before
     // the record existed was claimed by when it started. Absent on a line
@@ -7596,6 +7844,7 @@ export default defineSchema({
 
   ...issueSyncTables,
   ...agentTables,
+  ...assistantTables,
 
 }, {
   // The `messages` table is in the millions of rows, and the default
