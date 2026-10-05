@@ -2,7 +2,7 @@
 // first, with a finished week's notes where the timeline enters that week.
 // The week in progress has none: its notes only restate its newest day.
 // Pure, so the page and its tests share it.
-import { isoWeekOf } from "@codecast/shared/changes";
+import { isoWeekOf, topWeekStories, weekDates } from "@codecast/shared/changes";
 import type { EditionRow, StoryRow } from "../../hooks/useSyncChanges";
 import { byWeight, hasProse, inFocus, survives, type Person, type Ship } from "./editionModel";
 import type { ChangesUrl } from "./useChangesUrlState";
@@ -98,6 +98,14 @@ export function finishedWeeks(weeks: readonly EditionRow[], today: string): Time
     .filter((w) => hasProse(w) && w.date < thisWeek)
     .sort((a, b) => b.date.localeCompare(a.date))
     .map((w) => ({ kind: "week", week: w.date, headline: w.headline!, summary: w.narrative?.trim() || null, top: w.top_story_keys ?? [] }));
+}
+
+/** The week's picks that are still on the page, else (keys move when a day is rebuilt) its heaviest stories. */
+export function weekTop(week: TimelineWeek, byKey: ReadonlyMap<string, StoryRow>): StoryRow[] {
+  const picked = week.top.map((k) => byKey.get(k)).filter((s): s is StoryRow => !!s);
+  if (picked.length) return picked;
+  const days = new Set(weekDates(week.week) ?? []);
+  return topWeekStories([...byKey.values()].filter((s) => days.has(s.date)));
 }
 
 /** The days the timeline shows, oldest last: what a "load earlier" reads to know it reached the fed range. */

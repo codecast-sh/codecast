@@ -12,7 +12,7 @@
 import * as Accordion from "@radix-ui/react-accordion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { isoWeekOf, topWeekStories, weekDates, weekMonday } from "@codecast/shared/changes";
+import { isoWeekOf, weekMonday } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { localDate, normalizeTimezone } from "@codecast/convex/convex/lib/teamDay";
 import {
@@ -40,12 +40,12 @@ import { TooltipProvider } from "../ui/tooltip";
 import { TimelineHeader, type FilterOptions } from "./ChangesHeader";
 import { commitPath } from "./EvidenceDrawer";
 import { assignAreaColors } from "./areaColor";
-import { hasProse, nameOfPerson, peopleOf, personFor } from "./editionModel";
+import { nameOfPerson, peopleOf, personFor } from "./editionModel";
 import { plural } from "./format";
 import { NoMatch } from "./StoryParts";
 import { StoryRow } from "./StoryRow";
 import { StoryCtx, createFocusStore, type StoryContext } from "./storyContext";
-import { buildTimeline, finishedWeeks, type TimelineDay, type TimelineWeek } from "./timelineModel";
+import { buildTimeline, finishedWeeks, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { changesHref, clearFilters, hasFilters, useChangesUrlState } from "./useChangesUrlState";
 
@@ -139,14 +139,6 @@ function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label
 
 /** The calendar day `days` from `day` (YYYY-MM-DD), free of any clock or zone. */
 const shiftDay = (day: string, days: number) => new Date(Date.parse(`${day}T12:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
-
-/** The week's picks that still exist, else (keys move when a day is rebuilt) its heaviest written stories. */
-function weekTop(week: TimelineWeek, byKey: ReadonlyMap<string, Story>): Story[] {
-  const picked = week.top.map((k) => byKey.get(k)).filter((s): s is Story => !!s && hasProse(s));
-  if (picked.length) return picked;
-  const days = new Set(weekDates(week.week) ?? []);
-  return topWeekStories([...byKey.values()].filter((s) => days.has(s.date) && hasProse(s)));
-}
 
 const weekLabel = (week: string) => {
   const monday = weekMonday(week);
