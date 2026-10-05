@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { EVALS_ROUTE_KEYS, EVALS_SHA_RE, matchEvalsRoute, runRowProblems, type RunRow } from "./evalsApi";
+import { EVALS_ROUTE_KEYS, EVALS_SHA_RE, matchEvalsRoute, runRowProblems, searchRows, type RunRow } from "./evalsApi";
 
 const row: RunRow = {
   id: "settle-1a2b3c4d-seed1-2026-10-03T01-13-08-164Z",
@@ -62,9 +62,21 @@ describe("runRowProblems", () => {
   });
 });
 
+describe("searchRows", () => {
+  const row = (id: string, freezeId: string, stamp: string) => ({ id, surface: "settle", freezeId, freezeName: `f ${freezeId}`, batch: "b", stamp });
+  const rows = [row("settle-54f84f69-seed1-2026-10-01T00-00-00-000Z", "54f84f69aa", "2026-10-01T00:00:00.000Z"), row("settle-54f84f69-seed2-2026-10-02T00-00-00-000Z", "54f84f69aa", "2026-10-02T00:00:00.000Z"), row("settle-ca497977-seed1-2026-10-03T00-00-00-000Z", "ca497977bb", "2026-10-03T00:00:00.000Z")];
+  test("matches a freeze id prefix once and runs by prefix, newest first", () => {
+    expect(searchRows(rows, "54f8").freezes).toEqual([{ id: "54f84f69aa", name: "f 54f84f69aa", surface: "settle" }]);
+    expect(searchRows(rows, "settle-54f").runs.map((r) => r.id)).toEqual([rows[1]!.id, rows[0]!.id]);
+  });
+  test("asks for three characters before it matches anything", () => {
+    expect(searchRows(rows, "se")).toEqual({ freezes: [], runs: [] });
+  });
+});
+
 describe("matchEvalsRoute", () => {
   test("every key in the spec's table is listed once", () => {
-    expect(EVALS_ROUTE_KEYS.length).toBe(23);
+    expect(EVALS_ROUTE_KEYS.length).toBe(24);
     expect(new Set(EVALS_ROUTE_KEYS).size).toBe(EVALS_ROUTE_KEYS.length);
   });
 

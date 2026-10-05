@@ -1,36 +1,49 @@
-# Screenshot Capture Guide
+# Screenshot capture guide
 
-Screenshots are captured from the live production app at `codecast.sh` at retina
-resolution (1440×900 logical, 2880×1800 actual) for crisp rendering on the README.
-Use your personal/team workspace with the codecast project rail filter applied so
-the content stays on-brand and consistent across shots.
+The product screenshots come from the product film on the codecast.sh homepage. The film renders
+the real product views (inbox, conversation, task board, PR page and so on) inside a sandbox fed
+only by fixture data: a made-up "Acme" workspace with Alex Rivera, Maya Ortiz and Sarah Chen
+working on webhook retries. Nothing from a real workspace can reach the image, which matters
+because this repository is public. Never capture the live app for a public image: a real inbox
+shows other teams, private sessions and people's faces.
+
+The fixtures live in `packages/web/app/(marketing)/heroFly/fixtures/` and the chapters that lay
+them out in `heroFly/chapters/`. Change a fixture there and recapture to change what a shot shows.
 
 ## Current screenshots
 
-| Filename | View | What it shows |
-|----------|------|---------------|
-| `hero.png` | A conversation, sidebar expanded | The full three-column workspace — nav rail, open conversation, and the session feed rail |
-| `inbox.png` | `/inbox` | Session feed grouped by label with live status, model badges, and summaries next to the open conversation |
-| `conversation.png` | Any conversation | Message thread with syntax-highlighted code, collapsed tool calls, and the file-changed pill |
-| `command-palette.png` | `Cmd+K` over a conversation | Palette open showing conversation actions (pin, label, change model & effort, stash, kill) |
-| `tasks.png` | `/tasks` | Task list in the workspace column with checkboxes and titles |
-| `logo.png` | — | App mark used at the top of the README |
+Each shot is 1920×1140, captured at 2x from the film's native 1280×760 stage and scaled down.
 
-## How they were captured
+| File | Film time (`hero-t`) | What it shows |
+|---|---|---|
+| `hero.png` | 40.7 | Inbox, an open conversation, and a decision card answered inline |
+| `inbox.png` | 6.6 | Sessions grouped by who acts next, next to the open conversation |
+| `conversation.png` | 11.5 | A conversation with an inline diff and a tool call |
+| `fanout.png` | 18 | Two workers (Cursor and Codex) spawned by one lead |
+| `mobile-chat.png` | 27 | A worker's question answered from the phone |
+| `session-messages.png` | 33.5 | Two sessions messaging each other |
+| `tasks.png` | 46.5 | A project's tasks with status, links to Linear, and activity |
+| `automations.png` | 53.3 | A workflow graph, triggers, and a run paused at a gate |
+| `team-chat.png` | 58.5 | Team channel with an agent replying, and a transcribed huddle |
+| `pull-request.png` | 65.5 | A PR page with its owning session, checks and review |
+| `pages.png` | 72.5 | A published report with viewer comments |
+| `command-palette.png` | 77.5 | Palette search across sessions and tasks |
+| `blame.png` | 80.7 | `cast blame` in the repo view: each line's session |
+| `logo.png` | | App mark used at the top of the README |
 
-A headless Chrome driven over the Chrome DevTools Protocol, with the Convex auth
-JWT + refresh token seeded into `localStorage` for `convex.codecast.sh` before
-navigating. The device metrics are set to 1440×900 at `deviceScaleFactor: 2`.
+## How to capture
 
-Two production-only quirks to handle when scripting captures:
+```bash
+cast browser open "https://codecast.sh/?hero-t=6.6"
+bun packages/web/scripts/readme-shots.ts            # every shot in the table
+bun packages/web/scripts/readme-shots.ts inbox pr   # just these
+```
 
-- **Desktop handoff dialog** — fresh navigations on the `codecast.sh` host hand off
-  to the desktop app and show an "Opened in Codecast desktop" overlay. Dismiss it
-  after load by clicking the **Open in browser** button (this does not change the
-  user's sticky preference). It never fires on `local.codecast.sh` or `localhost`.
-- **Heavy list views** (`/plans` with hundreds of plans) need a long settle time
-  before they finish rendering; give them 20s+ or capture a specific item's detail
-  by full Convex id instead of the list.
+The script (`packages/web/scripts/readme-shots.ts`) freezes the film with `?hero-t=<seconds>`,
+dismisses the desktop handoff overlay, lifts the film out of the page column so it lays out at its
+native 1280×760 with no scale, captures it at 2x over the cast browser bridge (`cast browser shot`
+captures at 1x), and writes 1920×1140 PNGs here. To add a shot, add a name and a time to its
+`SHOTS` table: the chapter windows are `CHAPTERS` in `heroFly/world.ts`, each with a `hold`; pick a
+time inside one, after the chapter's motion settles.
 
-To refresh a shot: capture at 1440×900 logical / retina, then drop the PNG into
-this directory under the matching filename.
+Look at every capture before keeping it. A time between holds catches windows mid-fade.

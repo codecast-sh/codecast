@@ -3,6 +3,7 @@ import type { CheckResult, ConvoMessage } from '@platform/evals';
 import type { ChangeCommit } from '@codecast/shared/changes';
 import { DEK_MAX, HEADLINE_MAX } from '@codecast/shared/changes';
 import {
+  BODY_CHARS,
   parseStoryReply,
   skipHeadline,
   storyPromptInput,
@@ -85,10 +86,16 @@ const impl: SurfaceImpl = {
       const dek = text(raw.dek);
       if (headline.length > HEADLINE_MAX) over.push(`headline ${headline.length} > ${HEADLINE_MAX}`);
       if (dek.length > DEK_MAX) over.push(`dek ${dek.length} > ${DEK_MAX}`);
-      if (prose && text(raw.body) !== (prose.body ?? '')) over.push('body over 3 sentences');
+      const body = typeof raw.body === 'string' ? raw.body : '';
+      if (body.length > BODY_CHARS) over.push(`body ${body.length} > ${BODY_CHARS} characters`);
     }
     gates.push(gate('lengths', Boolean(raw) && over.length === 0, !raw ? 'no JSON object to measure' : over.length ? over.join('; ') : 'headline, dek and body within their limits'));
     gates.push(emDashGate(sent));
+    // A reply may show only the screenshots it was offered: every image is a listed ref.
+    const refs = typeof raw?.body === 'string' ? [...raw.body.matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)].map((m) => m[1]) : [];
+    const offered = storyInputOf(snap).image_urls;
+    const strays = refs.filter((r) => !offered[r]);
+    gates.push(gate('images', strays.length === 0, strays.length ? `images not offered: ${strays.join(', ')}` : refs.length ? `${refs.length} placed, all offered` : 'no images placed'));
 
     if (label?.why === 'none') {
       const why = prose?.why_source ?? null;

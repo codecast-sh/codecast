@@ -6,12 +6,14 @@
 // one `check --budget` will enforce. Agent surfaces ask for a confirm.
 
 import type { BisectPlan } from "@codecast/shared/contracts/evalsApi";
-import { formatShortcutParts, getShortcutsForAction } from "../../shortcuts";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { evalsHref } from "./evalsPaths";
-import { EvalsLink, VerdictGlyph, plural, shortSha, usd } from "./parts";
+import { CopyCommand, EvalsLink, VerdictGlyph } from "./parts";
 import "./bisect.css";
+import { plural, shortSha, usd } from "./format";
+import { PLAN_REPS, planOverBudget, canStart } from "./bisectModel";
+import { formatShortcutParts, getShortcutsForAction } from "../../shortcuts/index";
 
 export interface PlanSettings {
   freezes: string[];
@@ -20,17 +22,6 @@ export interface PlanSettings {
   budgetUsd: number | null;
   maxMinutes: number | null;
   allCommits: boolean;
-}
-
-export const PLAN_REPS = [3, 4, 5, 6, 7] as const;
-
-/** Over budget: `check --budget` refuses a plan whose bound is above it. */
-export const planOverBudget = (plan: BisectPlan, budgetUsd: number | null) => (budgetUsd ?? plan.budgetUsd) < plan.bound.maxUsd;
-
-/** The keys Start answers to, as the shortcut registry names them. */
-export function startKeys(): string[] {
-  const defs = getShortcutsForAction("list.open");
-  return defs.length ? formatShortcutParts(defs[0]) : [];
 }
 
 export interface BisectPlanPanelProps {
@@ -43,19 +34,13 @@ export interface BisectPlanPanelProps {
   settings: PlanSettings;
   onSettings: (s: PlanSettings) => void;
   /** The bisect holding the one-bisect lock (GET /bisects `running`): Start waits for it. */
-  blockedBy?: { id: string; surface: string | null } | null;
+  /** The bisect holding the one-bisect lock. `listed` is false for one the pages cannot open (a Multiplayer sim bisect keeps sim.json, not state.json). */
+  blockedBy?: { id: string; surface: string | null; listed: boolean } | null;
   confirm: boolean;
   onConfirm: (v: boolean) => void;
   starting: boolean;
   startError: string | null;
   onStart: () => void;
-}
-
-/** Whether Start can go: a priced plan for these settings, within budget, confirmed where it must be. */
-export function canStart(p: Pick<BisectPlanPanelProps, "plan" | "pending" | "starting" | "confirm" | "settings" | "blockedBy">): boolean {
-  if (!p.plan || p.pending || p.starting || p.blockedBy || !p.settings.freezes.length) return false;
-  if (p.plan.needsConfirm && !p.confirm) return false;
-  return !planOverBudget(p.plan, p.settings.budgetUsd);
 }
 
 function numberOrNull(v: string): number | null {
@@ -67,7 +52,10 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
   const { plan, pending, error, freezeOptions, settings, onSettings, blockedBy, confirm, onConfirm, starting, startError, onStart } = props;
   const over = plan ? planOverBudget(plan, settings.budgetUsd) : false;
   const go = canStart(props);
-  const keys = startKeys();
+  // The keys Start answers to, as the shortcut registry names them. Kept here, not in the pure model: the
+  // registry pulls in the key listener, which must not load before a test's DOM does.
+  const startDefs = getShortcutsForAction("list.open");
+  const keys = startDefs.length ? formatShortcutParts(startDefs[0]) : [];
   const set = (patch: Partial<PlanSettings>) => onSettings({ ...settings, ...patch });
   return (
     <section className="ev-card evb-plan" data-evb-plan={plan ? "priced" : pending ? "pricing" : "none"} aria-busy={pending}>
@@ -178,11 +166,22 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
         <div className="evb-lock" role="status" data-evb-blocked={blockedBy.id}>
           <span className="evb-lock-dot" aria-hidden />
           <span>
-            <EvalsLink className="evb-link" href={evalsHref.bisect(blockedBy.id)}>
-              {blockedBy.id}
-            </EvalsLink>
+            {blockedBy.listed ? (
+              <EvalsLink className="evb-link" href={evalsHref.bisect(blockedBy.id)}>
+                {blockedBy.id}
+              </EvalsLink>
+            ) : (
+              <span className="ev-mono">{blockedBy.id}</span>
+            )}
             {blockedBy.surface ? ` (${blockedBy.surface})` : ""} holds the machine. One bisect runs at a time, so Start waits until it finishes or is stopped.
+            {!blockedBy.listed && " These pages cannot open it (a Multiplayer sim bisect, say); read or stop it from the checkout:"}
           </span>
+          {!blockedBy.listed && (
+            <span className="evb-lock-cmds">
+              <CopyCommand command={`./evals bisect status ${blockedBy.id}`} />
+              <CopyCommand command={`./evals bisect stop ${blockedBy.id}`} label="Copy stop" />
+            </span>
+          )}
         </div>
       )}
 

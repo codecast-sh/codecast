@@ -37,20 +37,28 @@ export function GlobalCloseGuardDialog() {
   if (!guard) return null;
   const verb = guard.status === "done" ? "Close" : "Drop";
   const gerund = guard.status === "done" ? "Closing" : "Dropping";
+  const parents = guard.parents;
+  const open = parents.flatMap((p) => p.open);
+  const many = parents.length > 1;
   return (
     <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40" onClick={() => setGuard(null)}>
       <div className="w-[26rem] max-w-[90vw] rounded-lg border border-sol-border bg-sol-bg shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
         <div className="text-sm font-medium text-sol-text mb-1">
-          {guard.open.length} open subtask{guard.open.length === 1 ? "" : "s"}
+          {open.length} open subtask{open.length === 1 ? "" : "s"}
         </div>
         <div className="text-xs text-sol-text-muted mb-3">
-          {gerund} {guard.shortId} leaves {guard.open.length === 1 ? "it" : "these"} unfinished:
+          {gerund} {many ? `${parents.length} tasks` : parents[0]!.shortId} leaves {open.length === 1 ? "it" : "these"} unfinished:
         </div>
-        <div className="max-h-40 overflow-y-auto mb-4 space-y-1">
-          {guard.open.map((t: TaskItem) => (
-            <div key={t._id} className="flex items-center gap-2 text-xs">
-              <ShortId id={t.short_id} className="text-sol-text-dim" />
-              <span className="text-sol-text truncate">{t.title}</span>
+        <div className="max-h-40 overflow-y-auto mb-4 space-y-2">
+          {parents.map((p) => (
+            <div key={p.shortId} className="space-y-1">
+              {many && <ShortId id={p.shortId} className="text-[11px] text-sol-text-muted" />}
+              {p.open.map((t: TaskItem) => (
+                <div key={t._id} className={`flex items-center gap-2 text-xs ${many ? "pl-3" : ""}`}>
+                  <ShortId id={t.short_id} className="text-sol-text-dim" />
+                  <span className="text-sol-text truncate">{t.title}</span>
+                </div>
+              ))}
             </div>
           ))}
         </div>
@@ -59,7 +67,7 @@ export function GlobalCloseGuardDialog() {
             Cancel
           </button>
           <button onClick={() => resolveTaskCloseGuard("only_parent")} className="h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-muted hover:text-sol-text transition-colors">
-            {verb} only this
+            {verb} only {many ? "these" : "this"}
           </button>
           <button autoFocus onClick={() => resolveTaskCloseGuard("cascade")} className="h-7 px-2.5 text-xs rounded-md border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 transition-colors">
             {verb} subtasks too

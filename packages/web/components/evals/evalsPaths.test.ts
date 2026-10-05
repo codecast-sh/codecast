@@ -105,7 +105,13 @@ describe("evalsSearchTargets", () => {
 
   it("reads a known freeze prefix as the freeze, and an unknown hex as a commit", () => {
     expect(evalsSearchTargets("ef03830f", known)).toEqual([{ kind: "freeze", label: "unresolvable-error (ef03830f)", href: evalsHref.freeze("ef03830f-4363-41c1-9fe9-1e0a4532e14d") }]);
-    expect(evalsSearchTargets("6cd0083b3", known)).toEqual([{ kind: "commit", label: "commit 6cd0083b3 as the bad end", href: evalsHref.bisectNew({ bad: "6cd0083b3" }) }]);
+    expect(evalsSearchTargets("6cd0083b3", known)).toEqual([{ kind: "commit", label: "commit 6cd0083b3", href: evalsHref.commit("6cd0083b3") }]);
+  });
+
+  it("offers runs and freezes the index found by prefix, not only full ids", () => {
+    const found = { ...known, freezes: [...known.freezes, { id: "jx7btyt:100", name: "the broken moment" }], runs: [{ id: RUN, surface: "settle", freezeName: "unresolvable-error" }] };
+    expect(evalsSearchTargets(RUN.slice(0, 12), found)).toContainEqual({ kind: "run", label: RUN, href: evalsHref.run(RUN) });
+    expect(evalsSearchTargets("jx7b", found)).toContainEqual({ kind: "freeze", label: "the broken moment (jx7btyt:)", href: evalsHref.freeze("jx7btyt:100") });
   });
 
   it("finds nothing for blank input", () => {

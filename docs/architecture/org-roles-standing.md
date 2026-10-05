@@ -124,6 +124,7 @@ cast role ls | show <h> | wake <h> "msg" | pause <h> | resume <h> | retire <h> |
 cast brief [<h>] [--json]            # facts + narrative; inside a role, its own
 cast brief edit -                    # narrative from stdin (inside a role, or --for <h> as the parent)
 cast role wakes <h> [-n 20]          # the wake log
+cast role tune [<h>] --every <1h to 7d> --precheck "<cmd>" --focus "<text>" --why "<reason>"   # a role changes its own check (org-staffing.md S38)
 ```
 
 Routes `/cli/role/*`, `/cli/brief/*` in http.ts, next to `/cli/anchor/*`.

@@ -36,10 +36,11 @@ import {
   webGetCallRef,
   backfillCallShortIds,
   webListCalls,
+  webCallPlaces,
   endTranscript,
   HUDDLE_GRACE_MS,
 } from "./transcripts";
-import { LIVE_TRANSCRIBE_MODEL } from "@codecast/shared/contracts";
+import { LIVE_TRANSCRIBE_MODEL, lineSaidAt } from "@codecast/shared/contracts";
 import { makeFakeDb } from "./testDb";
 import { captureFetch, goldenBody, recordGolden, type GoldenCase } from "./__golden__/golden.testkit";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
@@ -720,6 +721,38 @@ describe("the call history leaves out empty huddles", () => {
     };
     const rows = await (webListCalls as any)._handler(c, {});
     expect(rows.map((r: any) => r._id)).toEqual(["live", "spoken", "typed"]);
+  });
+});
+
+// The web names a call from its own store and asks the server only for the
+// places it could not find (a session never loaded). The answer is the one
+// `cast calls` prints, and only for calls the viewer may read: a room key is
+// never enough to learn a name.
+describe("webCallPlaces names only the calls the viewer may read", () => {
+  test("a readable call gets its place, an unreadable one gets nothing", async () => {
+    const row = (id: string, room_key: string, who: string) => ({
+      _id: id, room_key, team_id: "teamA", started_by: who, status: "ended",
+      started_at: 1_000, ended_at: 2_000, routes: [], last_seq: 2, participants: [{ id: who, name: who }],
+    });
+    const c = {
+      db: makeFakeDb({
+        transcripts: [row("mine", "dm:ua:ub", "ua"), row("theirs", "dm:ub:uc", "ub")],
+        users: [
+          { _id: "ua", name: "Ada" },
+          { _id: "ub", name: "Bo Chen" },
+          { _id: "uc", name: "Cy" },
+        ],
+        team_memberships: [
+          { user_id: "ua", team_id: "teamA" },
+          { user_id: "ub", team_id: "teamA" },
+          { user_id: "uc", team_id: "teamA" },
+        ],
+        teams: [{ _id: "teamA", features: { calls: true } }],
+      }),
+      auth: { async getUserIdentity() { return { subject: "ua|session" }; } },
+    };
+    const places = await (webCallPlaces as any)._handler(c, { transcript_ids: ["mine", "theirs"] });
+    expect(places).toEqual({ mine: { session_title: null, peer_name: "Bo Chen", channel_name: null } });
   });
 });
 
@@ -1494,6 +1527,38 @@ describe("call references (cl-N)", () => {
     expect(out?.turns?.from_seq).toBe(2);
     expect(out?.turns?.to_seq).toBe(3);
     expect(out?.turns?.segments[0]).toMatchObject({ speaker_name: "Ada", text: expect.stringMatching(/^line/), t1: expect.any(Number) });
+  });
+
+  // A moment's card is captioned with the line said then, by the rule `cast
+  // call snap` names a frame's line by (lineSaidAt over the whole list), found
+  // by a search over seq rather than a read of every line.
+  test("a moment carries the line the CLI would name, on a long call", async () => {
+    // 41 lines, 3s apart, each 2s long; line 20 overlaps 21 (talked over).
+    const many = Array.from({ length: 41 }, (_, i) => {
+      const seq = i + 1;
+      return { _id: `m${seq}`, _creationTime: seq, transcript_id: "tr_rec", seq, speaker_id: "ua", speaker_name: "Ada", text: `line ${seq}`, t0: seq * 3000, t1: seq * 3000 + (seq === 20 ? 4500 : 2000) };
+    });
+    const c = {
+      ...ctxFor("ua", [row({ last_seq: 41 })]),
+      db: makeFakeDb({
+        transcripts: [row({ last_seq: 41 })],
+        team_memberships: [{ user_id: "ua", team_id: "teamA" }],
+        teams: [{ _id: "teamA", features: { calls: true } }],
+        transcript_segments: many,
+      }),
+    };
+    for (const at of [0, 2_999, 3_000, 4_999, 5_500, 61_000, 63_100, 64_000, 64_600, 70_000, 125_000, 143_000, 200_000]) {
+      const out = await call(webGetCallRef, c, { ref: "cl-7", at_ms: at });
+      const want = lineSaidAt(many, at);
+      expect(out?.line ? { seq: out.line.seq, during: out.line.during } : null).toEqual(want ? { seq: many[want.index].seq, during: want.during } : null);
+    }
+    // Spot checks of what that rule says, so the loop above is not vacuous.
+    // Talked over: the line begun first is still the one being said.
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 64_000 }))?.line).toMatchObject({ seq: 20, during: true, text: "line 20" });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 64_600 }))?.line).toMatchObject({ seq: 21, during: true });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 125_000 }))?.line).toMatchObject({ seq: 41, during: false });
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 200_000 }))?.line).toBeNull();
+    expect((await call(webGetCallRef, c, { ref: "cl-7", at_ms: 1_000 }))?.line).toBeNull();
   });
 
   test("a reader the call page refuses gets nothing from a mention either", async () => {

@@ -91,9 +91,7 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
       <a
         href={filesHref({ path: res.path })}
         // Real href so middle-click and "copy link" behave, but the click is
-        // handled here and moves the view through the store — no router
-        // transition follows, so the navigation bar must not start.
-        data-no-progress=""
+        // handled here and moves the view through the store.
         className={`wiki-link ${res.ambiguous ? "wiki-link-ambiguous" : ""}`}
         title={res.ambiguous ? `${res.path} (ambiguous — multiple matches)` : res.path}
         onClick={(e) => {

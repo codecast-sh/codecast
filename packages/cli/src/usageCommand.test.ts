@@ -154,9 +154,10 @@ describe("auto-switch ranking vs extra spend", () => {
     };
     const r = buildUsageReport([active, staleRolled, known], now, { auto_switch: true, auto_continue: true });
     expect(r.fallbacks.map((f) => f.name)).toEqual(["known", "stale"]);
-    expect(r.fallbacks[0].worst).toBe(69);
+    // The account's own week, not its Fable week (limitWindows).
+    expect(r.fallbacks[0].worst).toBe(37);
     expect(r.fallbacks[1].worst).toBeNull();
-    expect(describeRecovery(r)).toContain("best: known at 69%");
+    expect(describeRecovery(r)).toContain("best: known at 37%");
   });
 
   test("prints extra spend dollars when the cap is reached", () => {

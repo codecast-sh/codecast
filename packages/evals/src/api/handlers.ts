@@ -1,10 +1,10 @@
 import { mkdirSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import {
   EVALS_SHA_RE,
   matchEvalsRoute,
+  searchRows,
   type BisectPlan,
   type BisectPlanRequest,
   type BisectStartRequest,
@@ -94,17 +94,27 @@ function endpointRef(all: RunRow[], surface: string, ref: unknown, what: string)
   return ref;
 }
 
+/**
+ * Freezes a request names, as ids or id prefixes of 8 or more characters,
+ * each one the surface has run: the plan, the bisect and the free answer take
+ * the same refs, so the launcher's two asks cannot read different freezes.
+ */
+function ranFreezes(all: RunRow[], surface: string, refs: unknown[]): string[] {
+  if (refs.some((f) => typeof f !== 'string' || !/^[0-9a-f-]{8,36}$/.test(f))) throw new BadRequest('freezes are freeze ids, or id prefixes of 8 or more characters');
+  const ran = new Set(all.filter((r) => r.surface === surface).map((r) => r.freezeId));
+  const unknown = (refs as string[]).filter((f) => ![...ran].some((id) => id.startsWith(f)));
+  if (unknown.length) throw new BadRequest(`${surface} never ran freeze ${unknown.join(', ')}`);
+  return refs as string[];
+}
+
 /** A bisect request as the CLI will get it: a known surface, real endpoints, freezes the surface ran, bounded numbers. */
 async function bisectRequest(body: unknown): Promise<BisectStartRequest> {
   if (!body || typeof body !== 'object') throw new BadRequest('a bisect takes a JSON body');
   const b = body as Partial<BisectStartRequest>;
   if (typeof b.surface !== 'string' || !surfaceMeta(b.surface)) throw new BadRequest(`no surface ${String(b.surface)}`);
   const all = await rows();
-  const freezes = b.freezes ?? [];
-  if (!Array.isArray(freezes) || freezes.some((f) => typeof f !== 'string' || !/^[0-9a-f-]{8,36}$/.test(f))) throw new BadRequest('freezes are freeze ids');
-  const ran = new Set(all.filter((r) => r.surface === b.surface).map((r) => r.freezeId));
-  const unknown = freezes.filter((f) => ![...ran].some((id) => id.startsWith(f)));
-  if (unknown.length) throw new BadRequest(`${b.surface} never ran freeze ${unknown.join(', ')}`);
+  if (b.freezes !== undefined && !Array.isArray(b.freezes)) throw new BadRequest('freezes are a list of freeze ids');
+  const freezes = ranFreezes(all, b.surface, b.freezes ?? []);
   return {
     surface: b.surface,
     good: endpointRef(all, b.surface, b.good, 'good'),
@@ -197,7 +207,8 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     const surface = need(query, 'surface');
     const all = await rows();
     const ref = (k: 'good' | 'bad') => (query[k] ? endpointRef(all, surface, query[k], k) : undefined);
-    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits));
+    const freeze = query.freeze ? ranFreezes(all, surface, [query.freeze])[0] : undefined;
+    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits), freeze);
   },
   'GET /commit/:sha': ({ params, query }) => {
     if (query.surface && !surfaceMeta(query.surface)) throw new NotFound(`no surface ${query.surface}`);
@@ -209,6 +220,7 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     return p;
   },
   'GET /changes': ({ query }) => changes(Number(query.since) || 0),
+  'GET /search': async ({ query }) => searchRows(await rows(), query.q ?? ''),
   'POST /bisect/plan': async ({ body }) => {
     const req: BisectPlanRequest = await bisectRequest(body);
     const out = await runTool(bisectPlanArgs(req));
@@ -247,10 +259,10 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     if (!r) throw new NotFound(`no sim run ${params.run} in session ${params.session}`);
     return r;
   },
-  'POST /sim/shrink': ({ body }) => {
+  'POST /sim/shrink': async ({ body }) => {
     const b = (body ?? {}) as { session?: unknown; run?: unknown };
     if (typeof b.session !== 'string' || typeof b.run !== 'string') throw new BadRequest('a shrink names a session and a run');
-    return { job: startShrink(b.session, b.run).id };
+    return { job: (await startShrink(b.session, b.run)).id };
   },
   'POST /sim/sweep': async ({ body }) => {
     const b = (body ?? {}) as { filter?: unknown; seeds?: unknown };

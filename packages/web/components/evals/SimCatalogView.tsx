@@ -6,12 +6,15 @@
 
 import { useMemo, useState } from "react";
 import { GitBranch, Waves } from "lucide-react";
-import type { SimCatalogResponse, SimGridCell, SimJob, SimMarker, SimMode, SimScenario, SimSessionSummary } from "@codecast/shared/contracts/evalsApi";
-import { formatTimeAgo } from "../../lib/messageNavigator";
+import type { SimCatalogResponse, SimGridCell, SimJob, SimSessionSummary } from "@codecast/shared/contracts/evalsApi";
 import { MiniTrace } from "../resources/HealthStrip";
 import { evalsHref } from "./evalsPaths";
-import { EvalsLink, VerdictGlyph, shortSha } from "./parts";
+import { EvalsLink, StallChip, VerdictGlyph } from "./parts";
 import "./sim.css";
+import { shortSha } from "./format";
+import { isJobStalled } from "./bisectModel";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { type GridRow, gridRows, markersFor, cellFailure, rowTouches, ago, simExitedBad, simOutcome, simSessionOpen, SIM_OPEN_WORDS } from "./simModel";
 
 export type SweepState = { state: "idle" } | { state: "starting" } | { state: "running"; job: SimJob | null } | { state: "done"; job: SimJob } | { state: "failed"; error: string };
 
@@ -21,59 +24,6 @@ export interface SimCatalogViewProps {
   sweep: SweepState;
   onSweep: (filter: string, seeds: number) => void;
   now?: number;
-}
-
-const MODE_ORDER: SimMode[] = ["scripted", "interleave", "order"];
-
-interface GridRow {
-  name: string;
-  scenario: SimScenario | null;
-  cells: Map<string, SimGridCell>;
-  gitHead: string | null;
-  lastRunAt: string | null;
-}
-
-/** Rows are the catalog's scenarios (selftests last), plus any scenario the history still holds runs of. */
-export function gridRows(catalog: SimCatalogResponse): { rows: GridRow[]; modes: SimMode[] } {
-  const byScenario = new Map<string, SimGridCell[]>();
-  for (const c of catalog.grid) byScenario.set(c.scenario, [...(byScenario.get(c.scenario) ?? []), c]);
-  const modes = new Set<string>();
-  for (const s of catalog.scenarios) for (const m of s.modes) modes.add(m);
-  for (const c of catalog.grid) if (c.latest) modes.add(c.mode);
-  const named = [...catalog.scenarios].sort((a, b) => Number(a.selftest) - Number(b.selftest));
-  const rows: GridRow[] = named.map((s) => row(s.name, s, byScenario.get(s.name) ?? []));
-  for (const [name, cells] of byScenario) if (!catalog.scenarios.some((s) => s.name === name) && cells.some((c) => c.history.length)) rows.push(row(name, null, cells));
-  return { rows, modes: MODE_ORDER.filter((m) => modes.has(m)) };
-}
-
-function row(name: string, scenario: SimScenario | null, cells: SimGridCell[]): GridRow {
-  const newest = [...cells].filter((c) => c.lastRunAt).sort((a, b) => (b.lastRunAt! < a.lastRunAt! ? -1 : 1))[0];
-  return { name, scenario, cells: new Map(cells.map((c) => [c.mode, c])), gitHead: newest?.gitHead ?? null, lastRunAt: newest?.lastRunAt ?? null };
-}
-
-/** The red and known markers that apply to one cell: red names its modes (null is every mode); known applies to all. */
-export function markersFor(scenario: SimScenario | null, mode: string): Array<{ task: string; invariant: string; kind: "red" | "known" }> {
-  if (!scenario) return [];
-  const red = scenario.red.filter((m: SimMarker) => !m.modes || m.modes.includes(mode)).map((m) => ({ task: m.task, invariant: m.invariant, kind: "red" as const }));
-  const known = scenario.known.flatMap((k) => k.tasks.map((task) => ({ task, invariant: k.invariant, kind: "known" as const })));
-  return [...red, ...known];
-}
-
-/**
- * The failing run a cell opens: its newest failure with artifacts, else its
- * latest run when that failed and left a folder (a child that predates
- * `newestFailure` still links). The invariant is null when only `latest` is known.
- */
-export function cellFailure(cell: SimGridCell): { session: string; run: string; seed: number; invariant: string | null } | null {
-  if (cell.newestFailure) return cell.newestFailure;
-  const l = cell.latest;
-  return l && !l.passed && l.run ? { session: l.session, run: l.run, seed: l.seed, invariant: null } : null;
-}
-
-/** Whether a row belongs under an invariant filter: a cell's newest failure broke it, or a marker names it. */
-export function rowTouches(r: GridRow, invariant: string): boolean {
-  for (const c of r.cells.values()) if (cellFailure(c)?.invariant === invariant) return true;
-  return !!r.scenario && [...r.scenario.red.map((m) => m.invariant), ...r.scenario.known.map((k) => k.invariant)].includes(invariant);
 }
 
 export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.now() }: SimCatalogViewProps) {
@@ -176,8 +126,9 @@ export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.n
                     ))}
                     <td>
                       <span className="evs-newest">
-                        {r.gitHead && (
-                          <span className="ev-chip" title={`Newest head: ${r.gitHead}`}>
+                        {/* The suite's head is in the grid header; a row names its head only when its newest run was elsewhere. */}
+                        {r.gitHead && r.gitHead !== catalog.gitHead && (
+                          <span className="ev-chip" title={`Newest run on ${r.gitHead}, not the suite's head`} data-evs-row-head>
                             <GitBranch /> {shortSha(r.gitHead)}
                           </span>
                         )}
@@ -273,7 +224,7 @@ export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.n
                         ))}
                     </span>
                   </td>
-                  <td className="ev-tabular">{s.finishedAt ? took(Date.parse(s.finishedAt) - Date.parse(s.startedAt)) : s.unsessioned ? "" : "running or cut short"}</td>
+                  <td className="ev-tabular">{s.finishedAt ? took(Date.parse(s.finishedAt) - Date.parse(s.startedAt)) : simSessionOpen(s) ? SIM_OPEN_WORDS : ""}</td>
                   <td className="ev-tabular">
                     {s.runs} <span className="evs-note">in {s.scenarios}</span>
                   </td>
@@ -286,7 +237,9 @@ export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.n
                       s.failed
                     )}
                   </td>
-                  <td className="ev-tabular evs-note">{s.exit ?? ""}</td>
+                  <td className={`ev-tabular ${simExitedBad(s) ? "evs-count-fail" : "evs-note"}`} title={simOutcome(s).words} data-evs-exit={simExitedBad(s) ? "bad" : undefined}>
+                    {s.exit ?? ""}
+                  </td>
                 </tr>,
                 openSessions.has(s.id) && (
                   <tr key={`${s.id}:failing`} className="evs-failing-row" data-evs-failing={s.id}>
@@ -318,12 +271,6 @@ export function SimCatalogView({ catalog, sessions, sweep, onSweep, now = Date.n
       </section>
     </div>
   );
-}
-
-/** "3h ago", or "just now" under a minute. */
-export function ago(iso: string, now: number): string {
-  const t = formatTimeAgo(Date.parse(iso), now);
-  return t === "now" ? "just now" : /^\d+[mhd]$/.test(t) ? `${t} ago` : t;
 }
 
 const took = (ms: number) => (ms >= 120_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`);
@@ -383,6 +330,8 @@ function SweepBar({ scenarios, sweep, onSweep }: { scenarios: string[]; sweep: S
   const busy = sweep.state === "starting" || sweep.state === "running";
   const job = sweep.state === "running" || sweep.state === "done" ? sweep.job : null;
   const pct = job?.progress.total ? Math.min(100, Math.round((job.progress.done / job.progress.total) * 100)) : null;
+  const now = useCoarseNow(30_000);
+  const stalled = sweep.state === "running" && !!job && isJobStalled(job, now);
   return (
     <section className="ev-card evs-sweep" data-evs-sweep={sweep.state}>
       <span className="evs-section-title" style={{ margin: 0 }}>
@@ -415,6 +364,7 @@ function SweepBar({ scenarios, sweep, onSweep }: { scenarios: string[]; sweep: S
           </span>
           {job ? job.progress.text || `${job.progress.done}${job.progress.total ? ` of ${job.progress.total}` : ""} seeds` : "Starting..."}
           {job?.tmux && <code className="ev-mono">tmux {job.tmux}</code>}
+          {stalled && <StallChip since={job!.updatedAt} data-evs-stalled />}
         </span>
       )}
       {sweep.state === "starting" && <span className="evs-job">Starting the sweep...</span>}

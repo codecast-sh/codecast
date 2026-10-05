@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { guestIdentity } from "@codecast/shared/contracts";
 import { useInboxStore } from "../inboxStore";
 
 // The room's answers to a guest paint in the frame they are pressed: the
@@ -60,10 +61,13 @@ describe("answering a guest, local-first", () => {
   });
 
   it("a removed guest leaves the live room's faces, and a refusal can put them back", () => {
-    useInboxStore.setState({ liveRooms: [{ room_key: ROOM, guests: [{ identity: "guest:g2", name: "Cy" }] }] } as any);
+    // The room's guests carry the identity the server minted, through the
+    // contract's one home for its format; the removal must match it.
+    const cy = { identity: guestIdentity("g2"), name: "Cy" };
+    useInboxStore.setState({ liveRooms: [{ room_key: ROOM, guests: [cy, { identity: guestIdentity("g3"), name: "Di" }] }] } as any);
     void useInboxStore.getState().removeCallGuest(ROOM, "g2", false);
-    expect((useInboxStore.getState() as any).liveRooms[0].guests).toEqual([]);
-    useInboxStore.getState().restoreCallGuest(ROOM, { identity: "guest:g2", name: "Cy" });
-    expect((useInboxStore.getState() as any).liveRooms[0].guests).toEqual([{ identity: "guest:g2", name: "Cy" }]);
+    expect((useInboxStore.getState() as any).liveRooms[0].guests.map((g: any) => g.name)).toEqual(["Di"]);
+    useInboxStore.getState().restoreCallGuest(ROOM, cy);
+    expect((useInboxStore.getState() as any).liveRooms[0].guests.map((g: any) => g.name)).toEqual(["Di", "Cy"]);
   });
 });

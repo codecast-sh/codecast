@@ -28,6 +28,7 @@ import {
   newUndoEntryId,
   objectsOf,
   onUndoRekey,
+  onUndoReset,
   undoneAfter,
   recordUndoEntry,
   rekeyCells,
@@ -751,6 +752,7 @@ export type UndoControllerDeps = {
     opts?: {
       onCommitted?: (commit: { outboxId: string }) => void;
       after?: readonly string[];
+      reverses?: readonly string[];
       vet?: (commit: { state: any; nextState: any; patches: Patch[] }) => boolean;
     },
   ) => any;
@@ -772,11 +774,18 @@ type Internal = {
   frame: Pick<UndoCtx, "before" | "after" | "result">;
 };
 
+/**
+ * Outbox ids a send must follow, and the subset it wholly writes back. It may
+ * overtake one of `reverses` still on its first attempt (that send is then
+ * not retried); every other id in `after` it waits for.
+ */
+export type SendOrder = { after: readonly string[]; reverses: readonly string[] };
+
 export type UndoController = {
   /** Whether a call of `key` should be captured right now. */
   wants: (key: string, flags: Flags) => boolean;
-  /** Outbox ids a call made right now must not overtake: a redo's re-invoke follows its undo's sends. */
-  orderAfter: () => readonly string[] | undefined;
+  /** The sends a call made right now must not overtake: a redo's re-invoke follows its undo's sends. */
+  orderAfter: () => SendOrder | undefined;
   /** The judge of a call of `key` made right now: a redo's re-invoke, once. */
   vetFor: (key: string) => ((commit: { state: any; nextState: any; patches: Patch[] }) => boolean) | undefined;
   capture: (
@@ -810,6 +819,12 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       lastSend.delete(`#${oldId}`);
       lastSend.set(`#${newId}`, new Map([...sends, ...(lastSend.get(`#${newId}`) ?? [])]));
     }
+    // The cells a send wrote, named under the id it was sent with.
+    const stub = `\u0000${oldId}\u0000`;
+    for (const [id, wrote] of sentCells) {
+      if (![...wrote].some((k) => k.includes(stub))) continue;
+      sentCells.set(id, new Set([...wrote].map((k) => k.split(stub).join(`\u0000${newId}\u0000`))));
+    }
     const internal = internals.get(entry);
     if (!internal) return false;
     const inverse = internal.inverse?.map((inv) => ({ ...inv, args: rekeyIds(inv.args, oldId, newId) })) ?? null;
@@ -818,6 +833,12 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     const touched = applied !== internal.applied || left !== internal.left || inverse?.some((inv, i) => inv.args !== internal.inverse![i]!.args) === true;
     if (touched) internals.set(entry, { ...internal, inverse, applied, left });
     return touched;
+  });
+
+  // A reset history (an account boundary) takes its send order with it.
+  onUndoReset(() => {
+    lastSend.clear();
+    sentCells.clear();
   });
 
   const isStamp = (c: CellChange) => c.field !== undefined && !!config.stampFields?.has(c.field);
@@ -843,7 +864,16 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   const SEND_ROWS_LIMIT = 1000;
   const scopeOf = (c: { store: string; id: string }) => (c.id !== "" ? `#${c.id}` : `@${c.store}`);
   const WHOLE = "\u0001";
+  // The cells each send wrote (the whole step's, for a pass): a later step
+  // may overtake a send only when it writes every one of them back.
+  const sentCells = new Map<string, ReadonlySet<string>>();
   const noteSends = (cells: readonly CellChange[], outboxIds: readonly string[]) => {
+    const wrote = new Set(cells.filter((c) => !isStamp(c)).map(cellKey));
+    for (const id of outboxIds) {
+      sentCells.delete(id);
+      sentCells.set(id, wrote);
+    }
+    while (sentCells.size > SEND_ROWS_LIMIT * 4) sentCells.delete(sentCells.keys().next().value!);
     for (const c of cells) {
       if (isStamp(c)) continue;
       const scope = scopeOf(c);
@@ -854,7 +884,11 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     }
     while (lastSend.size > SEND_ROWS_LIMIT) lastSend.delete(lastSend.keys().next().value!);
   };
-  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): string[] => {
+  // What a step writing `cells` must follow (`after`), and the subset it
+  // wholly writes back (`reverses`): only those may it overtake, since a
+  // dropped failure of one leaves nothing on the server the step does not
+  // overwrite. The rest it waits for.
+  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): SendOrder => {
     const out = new Set(own);
     for (const c of cells) {
       if (isStamp(c)) continue;
@@ -863,7 +897,15 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       const named = c.field === undefined ? [...fields.values()] : [fields.get(c.field), fields.get(WHOLE)];
       for (const ids of named) for (const id of ids ?? []) out.add(id);
     }
-    return [...out];
+    const writes = new Set(cells.filter((c) => !isStamp(c)).map(cellKey));
+    const wholeRows = new Set(cells.filter((c) => !isStamp(c) && c.field === undefined).map(rowKeyOfCell));
+    const covers = (key: string) => writes.has(key) || wholeRows.has(key.slice(0, key.lastIndexOf("\u0000")));
+    const after = [...out];
+    const reverses = after.filter((id) => {
+      const wrote = sentCells.get(id);
+      return !!wrote && [...wrote].every(covers);
+    });
+    return { after, reverses };
   };
 
   // A redo re-invokes its action, which may write a value the first run did
@@ -905,7 +947,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   });
 
   // The sends a redo's re-invoke follows, while it runs.
-  let redoAfter: readonly string[] | undefined;
+  let redoAfter: SendOrder | undefined;
   // The judge of the redo's re-invoke, taken by its one call.
   let redoVet: { action: string; judge: (commit: { state: any; nextState: any; patches: Patch[] }) => boolean } | undefined;
 
@@ -914,7 +956,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     pass: ReplayPass,
     first: boolean,
     skippedRows: Array<{ store: string; id: string }>,
-    after: readonly string[],
+    order: SendOrder,
     writes: readonly CellChange[],
   ) => {
     const target = deps.rawCreator(pass.inv.action);
@@ -933,8 +975,9 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
           // The step's sends so far: the last pass notes all of them.
           noteSends(writes, entry.replayOutboxIds);
         },
-        // A reversal never overtakes a write it reverses.
-        after,
+        // A reversal never overtakes a write it does not wholly reverse.
+        after: order.after,
+        reverses: order.reverses,
       }),
     );
     swallow(result);
@@ -992,7 +1035,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       const kept = new Set(apply.map(cellKey));
       internal.left = cleared.filter((c) => !isStamp(c) && !kept.has(cellKey(c)));
     }
-    config.afterReplay?.(entry, "undo", apply);
+    config.afterReplay?.(entry, "undo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
   };
 
@@ -1012,7 +1055,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     entry.replayOutboxIds = [];
     entry.replayDir = "redo";
     passes.forEach((pass) => runPass(entry, pass, false, [], after, apply));
-    config.afterReplay?.(entry, "redo", apply);
+    config.afterReplay?.(entry, "redo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
   };
 
@@ -1091,7 +1134,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       entry.replayDir = replayDir;
       return redoPartial(entry, get(), applied);
     }
-    config.afterReplay?.(entry, "redo", entry.changes ?? []);
+    config.afterReplay?.(entry, "redo", entry.changes ?? [], "reinvoke");
     return { ok: true, applied: (entry.changes ?? []).filter((c) => !isStamp(c)).length, skipped: 0 };
   };
 

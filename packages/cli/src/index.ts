@@ -34,9 +34,9 @@ import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
-import { INITIATIVE_STATUS_ICONS, healthText, initiativeLine, metricStandingText, parseInitiativeHealth, parseInitiativeStatus, progressText, scopeSentence } from "./initiativeCommand.js";
-import { metricLine, metricReadings } from "@codecast/shared/contracts/initiative";
-import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
+import { RECORD_NOUN, healthText, initiativeLine, initiativeShowLines, metricRecordLine, parseInitiativeHealth, parseInitiativeStatus, parseMilestoneArg, pickRecordEntry, readSourceArg, recordWriteLines, scopeSentence, type RecordEntry } from "./initiativeCommand.js";
+import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, type InitiativeRecordList, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
   buildEntityUrl,
@@ -73,6 +73,7 @@ import {
   FOREIGN_TEXT_CAPS,
   callLinkHow,
   callAnchorHref,
+  callPathRef,
   segmentAt,
   cliErrorMessage,
   normalizeGuestName,
@@ -107,7 +108,7 @@ import {
   WorkspaceUnresolved,
   type Workspace,
 } from "./resolveWorkspace.js";
-import { listProfiles, saveProfile, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
+import { listProfiles, saveProfile, verifyActiveIdentity, switchFleetTo, launchProfileName, deleteProfile, getAccountsHeartbeatPayload, CcAccountError, accountLaunchInfo, accountTokenInfo, writeAccountToken, removeAccountToken, ensureProfileStore, profileStoreDir, adoptProfileStoreCredential, auditProfileIdentities, repairProfileIdentities, credentialHealth, readActiveCredential, type ProfileAudit } from "./ccAccounts.js";
 import { buildUsageReport, loadLocalUsageProfiles, renderUsageReport } from "./usageCommand.js";
 import type { RecoveryMode } from "@codecast/shared/contracts";
 import type { CumulativeChange } from "@codecast/shared/diff";
@@ -117,6 +118,7 @@ import { AuthServer } from "./authServer.js";
 import { startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, routineLine, standingSessionLine } from "./briefLines.js";
+import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
 import { planReadiness, resolvedTaskIds, isUnblocked } from "./planReadiness.js";
 import { ensureTmux, tryInstallTmux, tmuxRun, hasTmux, listCodecastPanes, pickPaneForSession } from "./tmux.js";
 import { editHarnessJson, removeHarnessFile, withHarnessCause, writeHarnessFile } from "./harness.js";
@@ -4362,6 +4364,7 @@ accountsCmd
   .description("Snapshot the currently logged-in account as a profile")
   .action(async (name: string) => {
     try {
+      await verifyActiveIdentity();
       const meta = saveProfile(name);
       console.log(`${c.green}✓${c.reset} saved ${c.cyan}${name}${c.reset} (${meta.email ?? "unknown email"})`);
       // With a second account saved, the usage-limits guidance is worth
@@ -4586,7 +4589,7 @@ accountsCmd
     "stale identity in ~/.claude.json — one login then gets re-saved under other\n" +
     "profiles' names. --fix drops duplicate copies and relabels the rest."
   )
-  .option("--fix", "repair what it finds (drop duplicate credentials, relabel mislabeled profiles)")
+  .option("--fix", "repair what it finds (drop duplicate credentials, move or relabel mislabeled profiles)")
   .option("--json", "machine-readable report")
   .action(async (options: any) => {
     let rows: ProfileAudit[];
@@ -4614,14 +4617,14 @@ accountsCmd
         r.verdict === "unverifiable" ? `${c.dim}${r.reason ?? "could not verify"}${c.reset}` :
         `${c.yellow}holds ${r.actual_email ?? r.actual_uuid ?? "another account"}${c.reset}` +
           (r.verdict === "duplicate" ? `${c.dim} (already saved under its own name)${c.reset}` : "");
-      const repaired = r.repair ? ` ${c.dim}→ ${r.repair}${c.reset}` : "";
+      const repaired = r.repair ? ` ${c.dim}→ ${r.repair === "moved" ? `moved to ${r.moved_to}` : r.repair}${c.reset}` : "";
       console.log(`${mark} ${c.cyan}${r.name.padEnd(16)}${c.reset} ${detail}${repaired}`);
     }
     const bad = rows.filter((r) => r.verdict === "mislabeled" || r.verdict === "duplicate");
     if (bad.length > 0 && !options.fix) {
       console.log(`\n${c.dim}Repair with:${c.reset} cast accounts verify --fix`);
       console.log(`${c.dim}Then log into each emptied account once (claude /login) and:${c.reset} cast accounts save <name>`);
-    } else if (bad.some((r) => r.repair === "dropped-credential")) {
+    } else if (bad.some((r) => r.repair === "dropped-credential" || r.repair === "moved")) {
       console.log(`\n${c.dim}Emptied profiles need one login each:${c.reset} claude /login ${c.dim}then${c.reset} cast accounts save <name>`);
     }
     await publishAccountsInventory();
@@ -5045,41 +5048,12 @@ program
   .action(showStatus);
 
 program
-  .command("attach")
-  .description("Open live tmux session TUI and attach/switch quickly")
-  .option("--plain", "Use plain list mode (no TUI)")
-  .option("--gc", "Kill sessions idle for more than 1 hour, then open TUI")
-  .option("--gc-mins <minutes>", "Idle threshold in minutes (default: 60)")
+  .command("herd")
+  .description("Open your live agent sessions in herdr: a tab per session, grouped by project, with codecast's live state")
+  .option("--no-open", "Print how to open the herd without starting mirrors")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const config = readConfig();
-    if (!config?.auth_token || !config?.convex_url) {
-      console.error("Not authenticated. Run: cast auth");
-      process.exit(1);
-    }
-
-    if (options.gc) {
-      const mins = Number.parseInt(options.gcMins || "60", 10) || 60;
-      const { gcStaleSessions } = await import("./attachTui.js");
-      const { killed } = gcStaleSessions(mins * 60);
-      if (killed.length > 0) {
-        console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-      } else {
-        console.log("No stale sessions to clean up.");
-      }
-    }
-
-    if (options.plain || !process.stdout.isTTY || !process.stdin.isTTY) {
-      await selectAndAttachFromLiveSessions(config, { tmuxOnly: true });
-      return;
-    }
-
-    const { runAttachTui } = await import("./attachTui.js");
-    await runAttachTui({
-      authToken: config.auth_token,
-      convexUrl: config.convex_url,
-    });
+    const { runHerdCommand } = await import("./herdCommand.js");
+    await runHerdCommand(readConfig(), { open: options.open });
   });
 
 program
@@ -5088,33 +5062,8 @@ program
   .option("-m, --mins <minutes>", "Idle threshold in minutes (default: 60)")
   .option("--dry-run", "Show what would be killed without actually killing")
   .action(async (options) => {
-    if (!ensureTmux()) return;
-
-    const mins = Number.parseInt(options.mins || "60", 10) || 60;
-    const { gcStaleSessions, discoverWithIdleTimes } = await import("./attachTui.js");
-
-    if (options.dryRun) {
-      const sessions = discoverWithIdleTimes();
-      const nowSec = Math.floor(Date.now() / 1000);
-      const stale = sessions.filter((s) => s.idleSec >= mins * 60);
-      if (stale.length === 0) {
-        console.log(`No sessions idle for >${mins}m.`);
-        return;
-      }
-      console.log(`Would kill ${stale.length} session${stale.length === 1 ? "" : "s"}:`);
-      for (const s of stale) {
-        const idleMins = Math.floor(s.idleSec / 60);
-        console.log(`  ${s.tmuxSession}  (idle ${idleMins}m)`);
-      }
-      return;
-    }
-
-    const { killed } = gcStaleSessions(mins * 60);
-    if (killed.length > 0) {
-      console.log(`Killed ${killed.length} stale session${killed.length === 1 ? "" : "s"}: ${killed.join(", ")}`);
-    } else {
-      console.log(`No sessions idle for >${mins}m.`);
-    }
+    const { runGcCommand } = await import("./herdCommand.js");
+    runGcCommand(options);
   });
 
 program
@@ -7336,11 +7285,6 @@ interface LiveProcess {
   uptime: string;
 }
 
-interface LiveProcessDiscoveryOptions {
-  tmuxOnly?: boolean;
-  fastSessionLookup?: boolean;
-}
-
 function normalizePsTty(tty: string): string {
   if (tty.startsWith("/dev/")) return tty;
   if (/^s\d+$/.test(tty)) return `/dev/tty${tty}`;
@@ -7373,9 +7317,7 @@ function loadSessionRegistryLookups(): { byPid: Map<number, string>; byTty: Map<
   return { byPid, byTty };
 }
 
-function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveProcess[] {
-  const tmuxOnly = !!options.tmuxOnly;
-  const fastSessionLookup = !!options.fastSessionLookup;
+function discoverLiveProcesses(): LiveProcess[] {
   const procs: LiveProcess[] = [];
   const seen = new Set<number>();
   const seenTty = new Set<string>();
@@ -7403,7 +7345,6 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
   const addProcess = (pid: number, tty: string, sessionId: string, agentType: "claude_code" | "codex") => {
     const normalTty = normalizePsTty(tty);
     const tmuxSession = tmuxPanes[normalTty] || null;
-    if (tmuxOnly && !tmuxSession) return;
     if (seen.has(pid) || seenTty.has(normalTty)) return;
     seen.add(pid);
     seenTty.add(normalTty);
@@ -7496,11 +7437,10 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const args = parts.slice(10).join(" ");
       const resumeMatch = args.match(/--resume\s+([0-9a-f-]{36})/i);
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || (fastSessionLookup ? null : findSessionByCwd(pid));
+      const sid = resumeMatch ? resumeMatch[1] : sidFromRegistry || findSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-${pid}`, "claude_code");
     }
   } catch {}
@@ -7516,9 +7456,8 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
       const tty = parts[6];
       if (isNaN(pid) || tty === "?" || tty === "??") continue;
       const normalTty = normalizePsTty(tty);
-      if (tmuxOnly && !tmuxPanes[normalTty]) continue;
       const sidFromRegistry = sessionRegistry.byPid.get(pid) || sessionRegistry.byTty.get(normalTty) || null;
-      const sid = sidFromRegistry || (fastSessionLookup ? null : findCodexSessionByCwd(pid));
+      const sid = sidFromRegistry || findCodexSessionByCwd(pid);
       addProcess(pid, tty, sid || `unknown-codex-${pid}`, "codex");
     }
   } catch {}
@@ -7528,22 +7467,14 @@ function discoverLiveProcesses(options: LiveProcessDiscoveryOptions = {}): LiveP
 
 async function selectAndAttachFromLiveSessions(
   config: Config,
-  options: { cliOverrideArgs?: string; tmuxOnly?: boolean } = {},
+  options: { cliOverrideArgs?: string } = {},
 ): Promise<void> {
-  const rawProcs = discoverLiveProcesses({
-    tmuxOnly: options.tmuxOnly,
-    fastSessionLookup: !!options.tmuxOnly,
-  });
+  const rawProcs = discoverLiveProcesses();
 
   if (rawProcs.length === 0) {
-    if (options.tmuxOnly) {
-      console.log(`${c.dim}No live tmux sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start one in tmux, then run:${c.reset}  cast attach`);
-    } else {
-      console.log(`${c.dim}No live sessions found${c.reset}`);
-      console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
-      console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
-    }
+    console.log(`${c.dim}No live sessions found${c.reset}`);
+    console.log(`\n${c.dim}Start a session with:${c.reset}  claude`);
+    console.log(`${c.dim}Search history with:${c.reset}  cast resume <query>`);
     return;
   }
 
@@ -7617,8 +7548,7 @@ async function selectAndAttachFromLiveSessions(
     return { name: `${c.bold}${displayTitle}${c.reset}`, value: String(idx), description: desc };
   });
 
-  const liveLabel = options.tmuxOnly ? "tmux sessions" : "sessions";
-  console.log(`\n${c.dim}${sessions.length} live ${liveLabel}${c.reset}\n`);
+  console.log(`\n${c.dim}${sessions.length} live sessions${c.reset}\n`);
 
   const selected = await select({
     message: "Attach to session",
@@ -10112,7 +10042,7 @@ program
     const rows = (options.video ? all.filter((r) => r.video) : all).slice(0, limit);
     if (options.json) {
       // Each row with the link and the reference `cast call --json` gives.
-      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(String(r._id))}`, ...r })), null, 2));
+      console.log(JSON.stringify(rows.map((r) => ({ ref: r.short_id ?? r._id, url: `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(r))}`, ...r })), null, 2));
       return;
     }
     if (rows.length === 0) {
@@ -10156,11 +10086,12 @@ const CALL_SNAP_ABOUT =
   "refusal gives its code and a `try` list of the commands that will work. `cast call <id>`\n" +
   "says what was recorded and marks each filmed line with ▸. Each frame prints its size: a\n" +
   "wide one is shrunk before a model reads it, so for small text on a shared screen take\n" +
-  "part of it (--crop) or all of it in quarters (--tiles 2x2). Times may carry a fraction\n" +
-  "(cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
-  "outside codecast; deleting the recording deletes them. The stretch still being\n" +
-  "recorded has only its live picture, for people in the call, until Record is stopped;\n" +
-  "stretches already saved can be snapped at once. Needs ffmpeg.";
+  "part of it (--crop) or all of it in overlapping tiles (--tiles 2x1). Times may carry a\n" +
+  "fraction (cl-42@2:30.5). --share uploads frames as public images, only for readers\n" +
+  "outside codecast, and only by whoever recorded the call, a team admin, or the person\n" +
+  "whose screen it shows; the room is told, and deleting the recording deletes them.\n" +
+  "The stretch still being recorded has only its live picture, for people in the call,\n" +
+  "until Record is stopped; stretches already saved can be snapped at once. Needs ffmpeg.";
 const SNAP_OPTION_PREFIX = "With `snap`";
 /** Options that mean something to snap: its own, --json and help. */
 const snapOption = (o: Option) => o.description.startsWith(SNAP_OPTION_PREFIX) || o.long === "--json" || o.long === "--help";
@@ -10217,8 +10148,8 @@ program
   .option("-o, --out <path>", "With `snap`: a .png/.jpg file, or a directory (default: a private scratch directory)")
   .option("--max <n>", "With `snap` on a line range: at most this many frames (default 8, up to 50)")
   .option("--crop <region>", "With `snap`: only part of each frame, at full resolution: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right, center, or x,y,w,h in pixels or percent (its own file, named by the part, beside any whole frame)")
-  .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br)")
-  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast (cite cl-42@12:34 for everyone else)")
+  .option("--tiles <grid>", "With `snap`: each frame also as tiles at full resolution, columns x rows (2x2 writes _tl, _tr, _bl, _br), each reaching a little past its neighbours so a line on a seam is whole in one")
+  .option("--share", "With `snap`: upload each frame as a public image anyone with its link can open; only for readers outside codecast, and only by whoever recorded the call, a team admin, or the person whose screen it shows (cite cl-42@12:34 for everyone else)")
   .configureHelp({
     formatHelp: (cmd, helper) => (cmd.args[0] === "snap" ? snapHelp(cmd, helper) : Help.prototype.formatHelp.call(helper, cmd, helper)),
   })
@@ -10238,8 +10169,7 @@ program
         process.exit(1);
       }
       const { runCallSnap } = await import("./callSnap.js");
-      const { uploadOne } = await import("./imageCommand.js");
-      const deps = { getCliEndpoint, detectCurrentSessionId };
+      const { shareCallFrame } = await import("./imageCommand.js");
       // `snap cl-42 15`: the moment as its own word. A colon pair there
       // (`snap cl-42 12:34`) is refused as ambiguous, lines or a time.
       const extra = command.args.slice(2).join(" ") || undefined;
@@ -10250,7 +10180,7 @@ program
           post: (route, body) => cliPost(route, body, { throwOnError: true }),
           resolveCallId: (r) => findCallId(r, { throwOnError: true }),
           baseUrl: CODECAST_BASE_URL,
-          upload: (file, alt) => uploadOne(deps, file, alt),
+          share: (file, recordingId, alt, atMs) => shareCallFrame((route, body) => cliPost(route, body, { throwOnError: true }), file, recordingId, alt, atMs),
         },
         extra,
       );
@@ -10388,15 +10318,28 @@ program
             toMs: Math.max(...segs.map((s: any) => Math.max(s.t0, s.t1))),
           })
         : null;
+      const one = turns.from_seq === turns.to_seq;
+      // Unfilmed, the same words the moment view prints below: still saving,
+      // the nearest recorded moment, or no video at all.
+      const missing =
+        snap || !segs.length
+          ? null
+          : snapLib.noPictureNote(handle, video, knowsVideo, {
+              fromMs: segs[0].t0,
+              toMs: Math.max(...segs.map((s: any) => Math.max(s.t0, s.t1))),
+              stretch: one ? "line" : "lines",
+              ref: callRefId(handle, turns),
+            });
       if (options.json) {
-        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs.map(segJson), snap }, null, 2));
+        console.log(JSON.stringify({ ref: callRefId(handle, turns), title: call.title, segments: segs.map(segJson), snap, ...(missing?.nearest ? { nearest: missing.nearest } : {}) }, null, 2));
         return;
       }
-      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}lines ${turns.from_seq}-${turns.to_seq}${c.reset}`);
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}${one ? `line ${turns.from_seq}` : `lines ${turns.from_seq}-${turns.to_seq}`}${c.reset}`);
       printLines(segs);
       if (segs.length === 0) console.log(`${c.dim}(no lines in that range; this call runs 1-${call.last_seq})${c.reset}`);
-      console.log(`\n${c.dim}Embed these words in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
-      if (snap) console.log(`${c.dim}Frames across these lines: ${c.reset}${snap}`);
+      console.log(`\n${c.dim}Embed ${one ? "this line" : "these words"} in a message: ${c.reset}${callRefId(handle, turns)}${c.dim} on its own line${c.reset}`);
+      if (snap) console.log(`${c.dim}${one ? "The picture when it was said" : "Frames across these lines"}: ${c.reset}${snap}`);
+      else if (missing) console.log(`${c.dim}${missing.note}${c.reset}${missing.command ?? ""}`);
       return;
     }
     if (asRef?.at_ms != null) {
@@ -10404,34 +10347,63 @@ program
       // around it, with the line being said marked, and the way to its frame
       // when one was filmed.
       const at = asRef.at_ms;
+      // The window printed is centered on the last line before the moment,
+      // however long ago. What the moment is said to be on is snap's rule
+      // (lineAt: a line is "the last said" only for a little while after
+      // it), so this view, `cast call snap` and a `cl-42@m:ss` card name the
+      // same line.
       const hit = segmentAt(allSegs, at, { holdMs: Infinity });
+      const said = snapLib.lineAt(allSegs, at);
       const center = hit?.index ?? 0;
       const near = allSegs.slice(Math.max(0, center - 2), center + 3);
       const momentRef = callRefId(handle, null, at);
       const snap = snapLib.snapHint(handle, video, { atMs: at });
-      const saving = !snap && video.some((s) => s.pending && s.fromMs <= at && at < s.toMs);
-      const nearest = snap || saving ? null : snapLib.nearestRecordedMs(video, at);
+      const missing = snap ? null : snapLib.noPictureNote(handle, video, knowsVideo, { fromMs: at, toMs: at, stretch: "moment", ref: momentRef });
+      // Beside the nearest recorded second, the nearest filmed line: an
+      // agent reading a transcript steps by line.
+      const nearLine = missing?.nearest ? snapLib.nearestFilmedLine(video, allSegs, at) : null;
+      const nearLineRef = nearLine ? callRefId(handle, { from_seq: nearLine.seq, to_seq: nearLine.seq }) : null;
+      // In a silence, the lines either side, as snap places a silent frame.
+      const around = said ? null : snapLib.linesAround(allSegs, at);
+      const placed = (s: any) => s && { ref: callRefId(handle, { from_seq: s.seq, to_seq: s.seq }), at: formatCallTime(s.t0) };
       if (options.json) {
-        const under = hit ? allSegs[hit.index] : null;
         console.log(
           JSON.stringify(
-            { ref: momentRef, at: formatCallTime(at), at_ms: at, title: call.title, line: under?.seq ?? null, during: hit?.during ?? false, segments: near.map(segJson), snap, ...(nearest !== null ? { nearest: callRefId(handle, null, nearest) } : {}) },
+            {
+              ref: momentRef,
+              at: formatCallTime(at),
+              at_ms: at,
+              title: call.title,
+              line: said?.seg.seq ?? null,
+              during: said?.during ?? false,
+              ...(around && (around.before || around.after) ? { between: { before: placed(around.before), after: placed(around.after) } } : {}),
+              segments: near.map(segJson),
+              snap,
+              ...(missing?.nearest ? { nearest: missing.nearest } : {}),
+              ...(nearLineRef ? { nearest_line: nearLineRef } : {}),
+            },
             null,
             2,
           ),
         );
         return;
       }
-      const said = hit ? `line ${allSegs[hit.index].seq} ${hit.during ? "was being said" : "was the last said"}` : allSegs.length ? "before the first line" : "no transcript";
-      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}at ${snapLib.preciseCallTime(at)} (${said})${c.reset}`);
-      printLines(near, hit ? allSegs[hit.index] : null);
+      const last = hit && !hit.during ? allSegs[hit.index] : null;
+      const words = said
+        ? `line ${said.seg.seq} ${said.during ? "was being said" : `was ${snapLib.saidBefore(said.seg, at, "this moment")}`}`
+        : last
+          ? `nothing said; line ${last.seq} was ${snapLib.saidBefore(last, at, "this moment")}`
+          : allSegs.length ? "before the first line" : "no transcript";
+      console.log(`${c.bold}${callTitle(call)}${c.reset} ${c.dim}at ${snapLib.preciseCallTime(at)} (${words})${c.reset}`);
+      printLines(near, said ? said.seg : null);
       if (snap) console.log(`\n${c.dim}The picture at that moment: ${c.reset}${snap}`);
-      else if (saving) console.log(`\n${c.dim}That moment was recorded and is still saving; cast call snap ${momentRef} works once Record is stopped and the file lands.${c.reset}`);
-      else if (nearest !== null) console.log(`\n${c.dim}Not recorded at that moment. Nearest recorded: ${c.reset}cast call snap ${callRefId(handle, null, nearest)}`);
-      else if (knowsVideo && video.length === 0) console.log(`\n${c.dim}This call has no video.${c.reset}`);
+      else if (missing) {
+        console.log(`\n${c.dim}${missing.note}${c.reset}${missing.command ?? ""}`);
+        if (nearLineRef) console.log(`${c.dim}Nearest filmed line: ${c.reset}cast call snap ${nearLineRef}`);
+      }
       return;
     }
-    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(String(call._id), anchor)}`;
+    const callUrl = (anchor?: Parameters<typeof callAnchorHref>[1]) => `${CODECAST_BASE_URL}${callAnchorHref(callPathRef(call), anchor)}`;
     if (options.json) {
       // The share link's token is the whole secret of the public page, and
       // this output lands in a session transcript that can be read more
@@ -10439,6 +10411,7 @@ program
       // to open it (a server from before `shared` still sends the token).
       const { share_token, ...rest } = call;
       const lines = snapLib.spanLines(video, allSegs);
+      const snaps = snapLib.spanSnaps(handle, video, allSegs);
       console.log(
         JSON.stringify(
           {
@@ -10446,7 +10419,7 @@ program
             ...rest,
             segments: allSegs.map(segJson),
             shared: rest.shared ?? !!share_token,
-            video: snapLib.spanDetails(video).map((d, i) => ({ ...d, lines: lines[i] })),
+            video: snapLib.spanDetails(video).map((d, i) => ({ ...d, lines: lines[i], snap: snaps[i] })),
           },
           null,
           2,
@@ -10471,7 +10444,13 @@ program
       const firstLine = snapLib.firstFilmedLine(video, allSegs);
       const first = snapLib.nearestRecordedMs(video, video[0].fromMs);
       const example = firstLine ? callRefId(handle, { from_seq: firstLine.seq, to_seq: firstLine.seq }) : first !== null ? callRefId(handle, null, first) : null;
-      const hint = example ? ` ${c.dim}(a frame: cast call snap ${example})${c.reset}` : "";
+      // "What was shown?" is the first question about a recorded call, and
+      // a range snap over a filmed stretch answers it: the stretch holding
+      // the most lines, a shared screen's first.
+      const range = snapLib.bestSpanSnap(handle, video, allSegs);
+      const hint = range && example
+        ? ` ${c.dim}(frames: ${range}, or one line: cast call snap ${example})${c.reset}`
+        : example ? ` ${c.dim}(a frame: cast call snap ${example})${c.reset}` : "";
       console.log(`${c.dim}video:${c.reset} ${snapLib.describeSpansByLine(video, allSegs)}${hint}`);
     }
     if (call.summary) {
@@ -13714,6 +13693,32 @@ roleGroup
     const result = await cliPost("/cli/role/wake", { role_id, message, from_session });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     printSendResult(result, console.log, { target: result.short_id, label: `@${handle.replace(/^@/, "")} ${c.dim}(${result.short_id})${c.reset}`, fromSession: !!from_session });
+  });
+
+// A role tunes its own check (org-staffing.md S38). No trigger id: inside a
+// role's session the handle is its own, and the server finds that role's
+// check, so a role never reads the person's roster of triggers to do this.
+roleGroup
+  .command("tune")
+  .description("Change how a role's own check runs: how often (1h to 7d), behind what gate, looking at what first. Logged in the org history, where a person can take it back")
+  .argument("[handle]", "@handle, or-N, or id (default: the role this session is)")
+  .option("--every <duration>", "How often the check runs, between 1h and 7d (12h, 1d, 3d)")
+  .option("--precheck <command>", 'A shell command that gates each run: exit 0 runs it ("" removes the gate)')
+  .option("--focus <text>", 'What the check looks at first, carried into its frame ("" clears it)')
+  .requiredOption("--why <reason>", "What changed about the pace of the work")
+  .option("--team <name|id>", "Team workspace")
+  .option("--json", "Machine-readable output")
+  .action(async (handle: string | undefined, options: any) => {
+    let role_id: string;
+    if (handle) role_id = await resolveRoleId(handle, options.team);
+    else {
+      const self = await ownRole();
+      if (!self) { console.error("Not inside a role's session: pass a handle (cast role tune @handle ...)"); process.exit(1); }
+      role_id = self.role_id;
+    }
+    const result = await cliPost("/cli/role/tune", { role_id, every: options.every, precheck: options.precheck, focus: options.focus, why: options.why, from_session: callingSession() });
+    if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
+    console.log(`${c.green}✓${c.reset} @${result.handle}'s check now runs ${wakeWords(result.wake)}${result.next_run_at ? ` ${c.dim}· next ${formatDateSmart(result.next_run_at, Date.now())}${c.reset}` : ""}`);
   });
 
 for (const verb of ["pause", "resume", "retire", "restart"] as const) {
@@ -17405,7 +17410,9 @@ projectCmd
 // --- Initiatives ---
 // A goal the company is trying to reach, carried by projects, with one owner
 // (docs/architecture/initiatives-projects-role-page.md I1). `update` posts an
-// update (how it is going); `set` changes the fields.
+// update (how it is going); `set` changes the fields; `milestone`, `ask`,
+// `answer`, `decide` and `source` each write one entry of the intent record
+// (I5) through the record's one door.
 
 const initiativeCmd = program
   .command("initiative")
@@ -17413,12 +17420,51 @@ const initiativeCmd = program
   .description("Manage initiatives (a goal above projects, with an owner and a health)")
   .showHelpAfterError(true);
 
-// A target is a calendar day, stored through the shared pair the web reads with.
-function initiativeTargetArg(text: string): number | null {
+// A target is a calendar day, stored through the shared pair the web reads
+// with. A milestone's --date and a source's --at are days read the same way.
+function initiativeTargetArg(text: string, flag = "--target"): number | null {
   if (NONE(text)) return null;
   const stamp = targetDayStamp(text);
-  if (stamp === null) { console.error(`Invalid --target "${text}" — use YYYY-MM-DD, or "none" to clear`); process.exit(1); }
+  if (stamp === null) { console.error(`Invalid ${flag} "${text}": use YYYY-MM-DD, or "none" to clear`); process.exit(1); }
   return stamp;
+}
+
+// A source as a person types one: an address, the words said, or both.
+function initiativeSourceArg(text: string, extra: Pick<IntentSource, "by" | "at" | "quote"> = {}): IntentSource {
+  const source = readSourceArg(text, extra);
+  if (!source) { console.error("A source needs an address (a call, chat, doc, session, ct-N, pl-N or a link) or the words said"); process.exit(1); }
+  return source;
+}
+
+// "Private beta open=2026-11-01" is a milestone with its day.
+function initiativeMilestoneArg(text: string): { title: string; date?: number } {
+  const milestone = parseMilestoneArg(text);
+  if (!milestone) { console.error(`Invalid milestone "${text}": use "Title" or "Title=YYYY-MM-DD"`); process.exit(1); }
+  return milestone;
+}
+
+// Which entry a person means by its number or its words, after one read of the goal.
+async function initiativeEntry(ref: string, list: InitiativeRecordList, pick: string): Promise<RecordEntry> {
+  const row = await cliPost("/cli/initiatives/get", { id: ref });
+  if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
+  const picked = pickRecordEntry(row, list, pick);
+  if ("error" in picked) { console.error(picked.error); process.exit(1); }
+  return picked;
+}
+
+// One op on the intent record (the wire is initiatives.record's RecordOp),
+// signed by the calling session so a role's entry carries the role's handle.
+async function initiativeRecord(ref: string, verb: string, op: { list: InitiativeRecordList; action: "add" | "edit" | "close" | "remove"; key?: string; entry?: Record<string, any>; at?: number; answer?: string }): Promise<void> {
+  const body: Record<string, any> = { id: ref, ...op };
+  const sessionId = detectCurrentSessionId();
+  if (sessionId) body.session_id = sessionId;
+  const result = await cliPost("/cli/initiatives/record", body);
+  for (const line of recordWriteLines(c, verb, result, op.list)) console.log(line);
+}
+
+// What --by and --source add to a new question or decision.
+function initiativeSaid(options: { by?: string; source?: string }): Record<string, any> {
+  return { ...(options.by ? { by: options.by } : {}), ...(options.source ? { source: initiativeSourceArg(options.source) } : {}) };
 }
 
 // A person writes a health as "on track"; the wire says on_track.
@@ -17467,12 +17513,23 @@ initiativeCmd
   .option("--project <ref>", "A project it carries (repeatable): id, short id or title substring", collectRepeatable)
   .option("--parent <in-N>", "The top level goal this one feeds (one level)")
   .option("--metric <name=target>", "A number the goal is measured by, with its target (repeatable, at most two): \"Weekly active teams=1000\"", collectRepeatable)
+  .option("--why <text>", stdinText("Why it matters"))
+  .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against"))
+  .option("--milestone <title[=YYYY-MM-DD]>", "A step on the way, with the day it is due (repeatable): \"Private beta open=2026-11-01\"", collectRepeatable)
+  .option("--source <ref>", "Where the goal was stated (repeatable): call:<id>#<line>, chat:<id>, doc:<id>, a session short id with an optional :line, ct-N, pl-N, a link, or the words said", collectRepeatable)
   .option("--labels <labels>", "Comma-separated labels")
   .option("--team <name|id|personal>", "Workspace to create in (default: the active team)")
   .action(async (title: string, options: any) => {
+    // Read every argument before the workspace is resolved, so a mistyped one costs no call.
+    const milestones = options.milestone?.map(initiativeMilestoneArg);
+    const sources = options.source?.map((s: string) => initiativeSourceArg(s));
     const ws = await writeWorkspace(options.team);
     const body: Record<string, any> = { title, ...workspaceScope(ws) };
     if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
+    if (options.why) body.why = options.why;
+    if (options.doneWhen) body.done_when = options.doneWhen;
+    if (milestones) body.milestones = milestones;
+    if (sources) body.sources = sources;
     if (options.description) body.description = options.description;
     if (options.owner) body.owner = options.owner;
     if (options.status) {
@@ -17518,44 +17575,14 @@ initiativeCmd
 
 initiativeCmd
   .command("show")
-  .description("Show an initiative: its projects with leads and progress, its updates, its sub initiatives")
+  .description("Show an initiative whole: why, what done looks like, owner, metrics with their trend, milestones, questions, decisions, sources, projects, updates")
   .argument("<in-N>", "Initiative short id or id")
   .option("--json", "Output as JSON")
   .action(async (ref: string, options: any) => {
     const row = await cliPost("/cli/initiatives/get", { id: ref });
     if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
     if (options.json) { printJson(row); return; }
-    const icon = INITIATIVE_STATUS_ICONS[row.status as keyof typeof INITIATIVE_STATUS_ICONS] ?? "?";
-    console.log(`\n  ${icon} ${c.bold}${row.title}${c.reset}  ${c.cyan}${row.short_id}${c.reset}`);
-    const facts = [row.status, `owner ${row.owner_label ?? `${c.yellow}none${c.reset}`}`, `health ${healthText(c, row.health, row.health_at)}`];
-    if (row.priority) facts.push(row.priority);
-    if (row.target_date) facts.push(`target ${targetDayOf(row.target_date)}`);
-    if (row.parent) facts.push(`under ${c.cyan}${row.parent.short_id}${c.reset} ${row.parent.title}`);
-    console.log(`  ${c.dim}${facts.join(" | ")}${c.reset}`);
-    if (row.labels?.length) console.log(`  ${c.dim}Labels: ${row.labels.join(", ")}${c.reset}`);
-    const readings = metricReadings(row);
-    if (readings.length) {
-      console.log(`\n  ${c.bold}Metrics${c.reset} ${c.dim}on track means against the target${c.reset}`);
-      for (const m of readings) console.log(`  ${metricStandingText(c, m.standing)} ${metricLine(m)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
-      console.log(fmt.muted(`  Report a value: cast initiative report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
-    }
-    if (row.description) console.log(`\n${row.description.split("\n").map((l: string) => `  ${l}`).join("\n")}`);
-    console.log(`\n  ${c.bold}Projects (${row.projects.length})${c.reset} ${c.dim}${progressText(row.task_counts)}${c.reset}`);
-    if (!row.projects.length) console.log(fmt.muted("  None yet: cast initiative add-project " + row.short_id + " <project>"));
-    for (const p of row.projects) {
-      console.log(`  ${PROJECT_STATUS_ICONS[p.status] ?? "?"} ${c.bold}${p.title}${c.reset} ${c.dim}${p.status} | lead ${p.lead ?? `${c.yellow}none${c.reset}${c.dim}`} | ${progressText(p.task_counts)}${c.reset}`);
-    }
-    if (row.sub_initiatives?.length) {
-      console.log(`\n  ${c.bold}Sub initiatives${c.reset}`);
-      for (const s of row.sub_initiatives) console.log(`  ${INITIATIVE_STATUS_ICONS[s.status as keyof typeof INITIATIVE_STATUS_ICONS] ?? "?"} ${c.cyan}${s.short_id}${c.reset} ${s.title} ${healthText(c, s.health)}`);
-    }
-    console.log(`\n  ${c.bold}Updates (${row.updates.length})${c.reset}`);
-    if (!row.updates.length) console.log(fmt.muted(`  None yet: cast initiative update ${row.short_id} --health on_track "How it is going"`));
-    for (const u of row.updates) {
-      console.log(`  ${healthText(c, u.health)} ${c.dim}· ${u.by_label ?? "unknown"} · ${formatRelativeTime(u.at)}${c.reset}`);
-      console.log(u.body.split("\n").map((l: string) => `    ${l}`).join("\n"));
-    }
-    console.log();
+    for (const line of initiativeShowLines(c, row, { ago: formatRelativeTime, projectIcons: PROJECT_STATUS_ICONS })) console.log(line);
   });
 
 initiativeCmd
@@ -17609,10 +17636,14 @@ initiativeCmd
   .option("--priority <p>", "p0, p1, p2, p3 ('none' clears)")
   .option("--parent <in-N>", "The top level goal this one feeds ('none' clears)")
   .option("--metric <name=target>", "The numbers the goal is measured by, with targets (repeatable, at most two; replaces; 'none' clears)", collectRepeatable)
+  .option("--why <text>", stdinText("Why it matters ('none' clears)"))
+  .option("--done-when <text>", stdinText("What done looks like: the sentence a result is checked against ('none' clears)"))
   .option("--labels <labels>", "Comma-separated labels (replaces; 'none' clears)")
   .action(async (ref: string, options: any) => {
     const body: Record<string, any> = { id: ref };
     if (options.title) body.title = options.title;
+    if (options.why !== undefined) body.why = NONE(options.why) ? null : options.why;
+    if (options.doneWhen !== undefined) body.done_when = NONE(options.doneWhen) ? null : options.doneWhen;
     if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
     if (options.description !== undefined) body.description = NONE(options.description) ? null : options.description;
     if (options.status) {
@@ -17625,7 +17656,7 @@ initiativeCmd
     if (options.parent !== undefined) body.parent_initiative_id = NONE(options.parent) ? null : options.parent;
     if (options.labels !== undefined) body.labels = NONE(options.labels) ? [] : options.labels.split(",").map((s: string) => s.trim());
     if (Object.keys(body).length === 1) {
-      console.error("Nothing to change — pass --title, --description, --status, --owner, --target, --priority, --parent, --metric, or --labels");
+      console.error("Nothing to change: pass --title, --description, --why, --done-when, --status, --owner, --target, --priority, --parent, --metric, or --labels");
       process.exit(1);
     }
     const result = await cliPost("/cli/initiatives/update", body);
@@ -17650,7 +17681,96 @@ initiativeCmd
     if (sessionId) body.session_id = sessionId;
     const result = await cliPost("/cli/initiatives/report", body);
     console.log(`${c.green}ok${c.reset} Reported ${Object.keys(result.written).join(", ")} on ${c.cyan}${result.short_id}${c.reset}`);
-    for (const m of metricReadings(result.row)) console.log(`  ${metricStandingText(c, m.standing)} ${metricLine(m)}`);
+    // Each value against its target, then which way its history is moving.
+    const trends = metricTrends(result.row);
+    for (const m of metricReadings(result.row)) console.log(`  ${metricRecordLine(c, m, trends[m.key])}`);
+  });
+
+// The intent record (I5): four lists on the goal, each written one entry at a
+// time. An entry is named by its number as `show` prints it, or by its words.
+initiativeCmd
+  .command("milestone")
+  .description("Add a milestone, or mark one reached (--done) or take one off (--remove)")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("[title]", stdinText("The milestone to add"))
+  .option("--date <date>", "The day it is due (YYYY-MM-DD)")
+  .option("--source <ref>", "Where it was set: an address (call:<id>#<line>, a session short id, ct-N, a link) or the words said")
+  .option("--done <n|title>", "Mark a milestone reached, by its number in `show` or its title")
+  .option("--remove <n|title>", "Take a milestone off the record")
+  .action(async (ref: string, title: string | undefined, options: any) => {
+    const pick = options.done ?? options.remove;
+    if ([title, options.done, options.remove].filter((x) => x !== undefined).length !== 1) {
+      console.error("Give one of: a title to add, --done <n|title>, or --remove <n|title>");
+      process.exit(1);
+    }
+    if (pick !== undefined) {
+      const { key } = await initiativeEntry(ref, "milestones", pick);
+      return initiativeRecord(ref, options.done !== undefined ? "Reached a milestone of" : "Removed a milestone from", { list: "milestones", action: options.done !== undefined ? "close" : "remove", key });
+    }
+    const entry: Record<string, any> = { title };
+    if (options.date) entry.date = initiativeTargetArg(options.date, "--date");
+    if (options.source) entry.source = initiativeSourceArg(options.source);
+    await initiativeRecord(ref, "Added a milestone to", { list: "milestones", action: "add", entry });
+  });
+
+initiativeCmd
+  .command("ask")
+  .description("Put an open question on the record: something still undecided")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<question>", stdinText("The question"))
+  .option("--by <who>", "Who asks: a name or an @handle (default: you, or the role this session works as)")
+  .option("--source <ref>", "Where it was asked: an address or the words said")
+  .action(async (ref: string, question: string, options: any) => {
+    await initiativeRecord(ref, "Asked on", { list: "questions", action: "add", entry: { text: question, ...initiativeSaid(options) } });
+  });
+
+initiativeCmd
+  .command("answer")
+  .description("Answer an open question; it stays on the record with its answer")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<n|text>", "The question, by its number in `show` or its words")
+  .argument("<answer>", stdinText("The answer"))
+  .action(async (ref: string, pick: string, answer: string) => {
+    const { key } = await initiativeEntry(ref, "questions", pick);
+    await initiativeRecord(ref, "Answered a question on", { list: "questions", action: "close", key, answer });
+  });
+
+initiativeCmd
+  .command("decide")
+  .description("Put a decision on the record: what was decided, by whom and where")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<decision>", stdinText("The decision"))
+  .option("--by <who>", "Who decided: a name or an @handle (default: you, or the role this session works as)")
+  .option("--source <ref>", "Where it was decided: an address or the words said")
+  .action(async (ref: string, decision: string, options: any) => {
+    await initiativeRecord(ref, "Recorded a decision on", { list: "decisions", action: "add", entry: { text: decision, ...initiativeSaid(options) } });
+  });
+
+initiativeCmd
+  .command("source")
+  .description("Add where the goal was stated: who said it and where")
+  .argument("<in-N>", "Initiative short id or id")
+  .argument("<ref>", "call:<id>#<line>, chat:<id>, doc:<id>, a session short id with an optional :line, ct-N, pl-N, a link, or the words said")
+  .option("--quote <text>", stdinText("The words as said"))
+  .option("--by <name>", "Who said it: a name or an @handle")
+  .option("--at <date>", "The day it was said (YYYY-MM-DD)")
+  .action(async (ref: string, source: string, options: any) => {
+    const at = options.at ? initiativeTargetArg(options.at, "--at") ?? undefined : undefined;
+    await initiativeRecord(ref, "Added a source to", { list: "sources", action: "add", entry: initiativeSourceArg(source, { quote: options.quote, by: options.by, at }) });
+  });
+
+// The one way to take a question, a decision or a source back off the record.
+initiativeCmd
+  .command("record")
+  .description("Remove one entry from an initiative's record")
+  .argument("<in-N>", "Initiative short id or id")
+  .requiredOption("--list <list>", INITIATIVE_RECORD_LISTS.join(", "))
+  .requiredOption("--remove <n|key>", "The entry, by its number in `show`, its key or its words")
+  .action(async (ref: string, options: any) => {
+    const list = INITIATIVE_RECORD_LISTS.find((l) => l === options.list);
+    if (!list) { console.error(`Invalid --list "${options.list}": ${INITIATIVE_RECORD_LISTS.join(", ")}`); process.exit(1); }
+    const { key } = await initiativeEntry(ref, list, options.remove);
+    await initiativeRecord(ref, `Removed a ${RECORD_NOUN[list]} from`, { list, action: "remove", key });
   });
 
 // --- Plans ---

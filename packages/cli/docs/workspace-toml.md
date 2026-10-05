@@ -129,18 +129,38 @@ ports on later acquire or heal calls. `cast ws status <name>` shows the choice.
 
 ## `[services.<name>]`
 
-A background service the workspace needs. `mode = "shared"` points every
-workspace at one instance and requires `url`; `mode = "isolated"` starts one per
-worktree and requires `start` and `stop`.
+A server the workspace runs, started on demand by `cast dev` in whatever
+checkout it is typed in (a worktree, the main checkout, a cloud host). `mode =
+"shared"` points every workspace at one instance and requires `url`; `mode =
+"isolated"` runs one per checkout and requires `start`.
+
+`start` runs with `bash -c` from the checkout root, detached, with its output in
+a log (`cast dev logs`). `port` names the port it listens on (`"web"` or
+`"$PORT_WEB"`): inside a workspace that is the port `[ports.<name>]` allocated;
+elsewhere `cast dev` takes the first free port from that entry's `base` (else
+3000). Both `PORT_<NAME>` and `PORT` hold it. `ready_check` (`http:<port>/path`
+or `tcp:<port>`, `$VARS` expanded) decides when it is up; the default is any HTTP
+answer at `/`. `stop` is optional: `cast dev stop` ends the process group either
+way.
+
+When no `[services.web]` is declared, detection supplies one for a web framework
+app (Vite, Next, Astro, Remix, SvelteKit, Nuxt, Angular, Vue CLI) at the root or
+under `packages/` or `apps/` whose `package.json` has a `dev` script:
+`cd packages/web && bun run dev --port "$PORT_WEB"`.
 
 ```toml
+[services.web]
+mode = "isolated"
+start = "cd packages/web && bunx vite --port \"$PORT_WEB\" --strictPort"
+port = "web"
+ready_timeout_sec = 180
+
 [services.db]
 mode = "isolated"
 start = "pg_ctl start"
 stop = "pg_ctl stop"
 port = "$PORT_DB"
-ready_check = "tcp:5432"
-ready_timeout_sec = 30
+ready_check = "tcp:$PORT_DB"
 ```
 
 ## `[env]`

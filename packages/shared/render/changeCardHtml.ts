@@ -133,6 +133,7 @@ main{max-width:880px;margin:0 auto;padding:40px 24px 64px}
 .task{font-family:var(--mono);font-size:12.5px;color:var(--ink)}
 .risk{margin-left:auto;font-weight:600;color:var(--ink);border:1px solid var(--rule);padding:3px 10px;border-radius:8px}
 h1{font-size:30px;line-height:1.2;font-weight:700;letter-spacing:-.015em;margin:18px 0 10px}
+.context{font-size:18px;line-height:1.45;margin:0 0 12px;max-width:62ch}
 .goal{color:var(--muted);margin:0}
 .goal b{color:var(--ink);font-weight:600}
 .why{margin:6px 0 0;color:var(--muted);font-size:15px;max-width:62ch}
@@ -219,7 +220,7 @@ export function renderChangeCardHtml(card: ChangeCard): string {
   const goal =
     card.goal.ref === "none"
       ? `<p class="goal">Serves no named goal.</p>`
-      : `<p class="goal">Serves <b>${esc(card.goal.name || card.goal.ref)}</b>${readableRef(card.goal) ? `<code>${esc(card.goal.ref)}</code>` : ""}</p>${card.goal.why ? `<p class="why">${esc(card.goal.why)}</p>` : ""}`;
+      : `<p class="goal" title="${esc(card.goal.why)}">Serves <b>${esc(card.goal.name || card.goal.ref)}</b>${readableRef(card.goal) ? `<code>${esc(card.goal.ref)}</code>` : ""}</p>${card.goal.why && !card.headline ? `<p class="why">${esc(card.goal.why)}</p>` : ""}`;
   const proofBlock = card.proof.before.length || card.proof.after.length
     ? `<section class="block"><h2>Proof <span class="count">${esc(proof.evidence)}</span></h2><div class="beads" aria-hidden="true">${beads(card)}</div><ul class="proof">${proofRows(card)}</ul></section>`
     : `<section class="block"><h2>Proof <span class="count">none recorded</span></h2></section>`;
@@ -239,7 +240,8 @@ export function renderChangeCardHtml(card: ChangeCard): string {
 <div class="sheet">
 <header>
   <div class="meta"><span class="verdict">${recommends}</span><span class="task">${esc(c.task)}</span>${signals}${sources}<span class="risk">${esc(riskLabel(card.risk))}</span></div>
-  <h1>${esc(c.title)}</h1>
+  <h1>${esc(card.headline || c.title)}</h1>
+  ${card.context ? `<p class="context">${esc(card.context)}</p>` : ""}
   ${goal}
 </header>
 <div class="two">

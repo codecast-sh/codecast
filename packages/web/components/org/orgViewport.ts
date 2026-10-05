@@ -9,7 +9,9 @@ export const FIT_PAD = 24;
 const ROOT_KINDS = new Set(["person", "role"]);
 
 type Rect = { x: number; y: number; w: number; h: number };
-function boundsOf(nodes: OrgLayoutNode[]): Rect | null {
+/** What the fit reads off a node: either lens' layout hands these. */
+export type OrgViewportNode = Rect & { id: string; kind: string };
+function boundsOf(nodes: readonly OrgViewportNode[]): Rect | null {
   if (nodes.length === 0) return null;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const n of nodes) { x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x + n.w); y1 = Math.max(y1, n.y + n.h); }
@@ -26,7 +28,7 @@ function boundsOf(nodes: OrgLayoutNode[]): Rect | null {
  * the free area.
  */
 export function computeOrgViewport(
-  nodes: OrgLayoutNode[],
+  nodes: readonly OrgViewportNode[],
   width: number,
   height: number,
   panelWidth: number,
@@ -80,9 +82,35 @@ export function computeOrgViewport(
 }
 
 
+type Rect = { id: string; x: number; y: number; w: number; h: number };
+
+/**
+ * Where a new layout's origin goes so the card the person is pointing at does
+ * not move (orgZoom): each zoom level is laid out at its own card sizes, and
+ * crossing a stop swaps one layout for the other. The anchor is the card
+ * under `point` in the layout on screen (`prev`, already at its origin), else
+ * the one nearest it; `next` is the new layout at the zero origin. The cards
+ * then slide to their places around the anchor, and the canvas is not moved.
+ */
+export function bandOrigin(prev: readonly Rect[], next: readonly Rect[], point: { x: number; y: number }): { x: number; y: number } {
+  const to = new Map(next.map((n) => [n.id, n]));
+  const away = (n: Rect) => Math.hypot(Math.max(n.x - point.x, 0, point.x - (n.x + n.w)), Math.max(n.y - point.y, 0, point.y - (n.y + n.h)));
+  let anchor: Rect | null = null, best = Infinity;
+  for (const n of prev) {
+    if (!to.has(n.id)) continue;
+    const d = away(n);
+    if (d < best) { best = d; anchor = n; }
+  }
+  if (!anchor) return { x: 0, y: 0 };
+  const n = to.get(anchor.id)!;
+  return { x: anchor.x - n.x, y: anchor.y - n.y };
+}
+
 /** Root cards fully outside the free canvas on each side, for the edge cues. */
 export function hiddenRoots(nodes: OrgLayoutNode[], vp: Viewport, freeW: number): { left: OrgLayoutNode[]; right: OrgLayoutNode[] } {
-  const roots = nodes.filter((n) => n.y === 0);
+  // The top row, wherever the layout's origin sits (bandOrigin moves it).
+  const top = Math.min(...nodes.map((n) => n.y));
+  const roots = nodes.filter((n) => n.y === top);
   const left: OrgLayoutNode[] = [];
   const right: OrgLayoutNode[] = [];
   for (const n of roots) {

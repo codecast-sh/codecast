@@ -3,7 +3,7 @@ import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import { lockSaw, newLockId, sameLock, sameShape } from "./syncProtocol";
 import { createUndoController, enumerateTouchedCells, type UndoController } from "./undo";
 export { enumerateTouchedCells, type TouchedCell, type TouchedCellShape, type CellShapeKind } from "./undo";
-import { markUndoOutboxRefused } from "./undoStack";
+import { markUndoOutboxRefused, resetUndoHistory } from "./undoStack";
 import { claimOutboxOwner, defaultLockManager, liveOutboxOwners, newOutboxOwnerId, ownedByAnotherLiveWindow, type LockManagerLike } from "./outboxOwner";
 import type {
   ActionFieldLock,
@@ -126,6 +126,29 @@ type PublicCommandReceipt = {
   result?: unknown;
   rejection?: { code: string; message: string; correction?: unknown };
 };
+
+// Outside effects an action body asks for (a message to sibling windows, a
+// sound). A body runs on a draft that may never commit: an undo engine's vet
+// can throw a redo's draft away after the body ran. So an effect asked for
+// while a body runs waits for that body's commit and is dropped with its
+// draft; one asked for outside any body runs at once.
+const commitEffectFrames: Array<Array<() => void>> = [];
+
+export function afterCommit(effect: () => void): void {
+  const frame = commitEffectFrames[commitEffectFrames.length - 1];
+  if (frame) frame.push(effect);
+  else effect();
+}
+
+function runCommitEffects(key: string, effects: Array<() => void>): void {
+  for (const effect of effects) {
+    try {
+      effect();
+    } catch (error) {
+      console.error(`[local-first] commit effect failed (action=${key})`, error);
+    }
+  }
+}
 
 export function action<T extends (...args: any[]) => any>(fn: T): T {
   (fn as any)[ACTION_FLAG] = true;
@@ -811,6 +834,11 @@ type RunActionOpts = {
    */
   after?: readonly string[];
   /**
+   * The ids in `after` this call wholly writes back. Only these may it
+   * overtake while on their first attempt; the rest it waits for.
+   */
+  reverses?: readonly string[];
+  /**
    * Judges the drafted write before anything commits: false drops it whole
    * (no state, locks, persistence or dispatch). A redo's re-invoke uses it to
    * refuse writing over a cell changed since the undo.
@@ -912,9 +940,41 @@ export function mutativeMiddleware(
       /** A send ordered after it went out while this one was on its first attempt. */
       overtaken: boolean;
       receipt: boolean;
+      /** The cells it writes, so a later write of one goes behind it while it is held. */
+      writes: ReadonlySet<string>;
     };
     const liveSends = new Map<string, LiveSend>();
     const parkedOutboxIds = new Set<string>();
+    // The cells (table, row, field) each parked row of this page wrote. A
+    // later live send of any of them goes behind the row (as if it named it in
+    // `after`), so the drain cannot land the older value last.
+    const parkedCells = new Map<string, ReadonlySet<string>>();
+    const cellsOf = (grouped: Record<string, Record<string, Record<string, any>>> | undefined) => {
+      const cells = new Set<string>();
+      for (const [table, rows] of Object.entries(grouped ?? {})) {
+        for (const [row, fields] of Object.entries(rows ?? {})) {
+          if (fields && typeof fields === "object" && !Array.isArray(fields)) {
+            for (const field of Object.keys(fields)) cells.add(`${table}\u0000${row}\u0000${field}`);
+          } else cells.add(`${table}\u0000${row}`);
+        }
+      }
+      return cells;
+    };
+    const shares = (a: ReadonlySet<string>, b: ReadonlySet<string>) => {
+      for (const c of a) if (b.has(c)) return true;
+      return false;
+    };
+    // The sends a new write of `cells` must follow: every parked row, and
+    // every live send not yet out (held behind its own `after`) or retrying,
+    // that wrote one of them. Live sends otherwise leave in call order, so
+    // only a held or retrying one could land after the new write.
+    const heldOverlapping = (cells: ReadonlySet<string>): string[] => {
+      if (cells.size === 0) return [];
+      const out: string[] = [];
+      for (const [id, wrote] of parkedCells) if (parkedOutboxIds.has(id) && shares(cells, wrote)) out.push(id);
+      for (const [id, s] of liveSends) if ((s.waiting || s.retrying) && shares(cells, s.writes)) out.push(id);
+      return out;
+    };
     // How a send ordered after `after` goes out. Sends leave in call order,
     // so one still on its first attempt cannot be overtaken: the follower
     // goes at once and marks it overtaken, so a failure of it is not retried
@@ -922,15 +982,24 @@ export function mutativeMiddleware(
     // ambiguous failures replay) is waited for. One parked in the outbox
     // holds the follower there too (false), so the drain keeps ts order.
     // Null: send now.
-    const settledInOrder = (after: readonly string[] | undefined): Promise<boolean> | null => {
+    // Only a send the follower wholly writes back (`reverses`) can be
+    // overtaken: a dropped failure of any other would leave a write of it
+    // the follower never makes, so those are waited for too.
+    const settledInOrder = (
+      after: readonly string[] | undefined,
+      reverses: readonly string[] | undefined,
+    ): Promise<boolean> | null => {
       if (!after?.length) return null;
-      const live = after.map((id) => liveSends.get(id)).filter((s): s is LiveSend => !!s);
+      const overtakable = new Set(reverses ?? []);
+      const live = after
+        .map((id) => [id, liveSends.get(id)] as const)
+        .filter((e): e is readonly [string, LiveSend] => !!e[1]);
       const parked = () => after.some((id) => parkedOutboxIds.has(id));
-      if (live.some((s) => s.retrying || s.waiting || s.receipt)) {
-        return Promise.all(live.map((s) => s.settled)).then(() => !parked());
+      if (live.some(([id, s]) => s.retrying || s.waiting || s.receipt || !overtakable.has(id))) {
+        return Promise.all(live.map(([, s]) => s.settled)).then(() => !parked());
       }
       if (parked()) return Promise.resolve(false);
-      for (const s of live) s.overtaken = true;
+      for (const [, s] of live) s.overtaken = true;
       return null;
     };
     // coalesceKey → newest enqueued row for that key (by entry ts — enqueue
@@ -943,7 +1012,9 @@ export function mutativeMiddleware(
       enqueued: Promise<unknown> | null,
     ) => {
       retiredOutboxIds.add(id);
+      if (draining) retiredSinceDrainLoad.add(id);
       parkedOutboxIds.delete(id);
+      parkedCells.delete(id);
       try {
         // Wait for the row to exist (or for its write to have failed) before
         // deleting it, so the delete can't lose the race with its own commit.
@@ -1120,6 +1191,11 @@ export function mutativeMiddleware(
 
     let draining = false;
     let drainAgain = false;
+    // Ids retired while a drain runs. The drain works from a snapshot of the
+    // outbox, so a live send that settles and retires its row after the load
+    // would otherwise be in neither retiredOutboxIds nor inFlightOutboxIds by
+    // the time the drain reaches it, and go out a second time.
+    const retiredSinceDrainLoad = new Set<string>();
     // Consumers that must not act on a PRE-REPLAY view of server state wait for a
     // verified-empty durable outbox. A failed/re-queued entry is still a pending
     // server write, so merely attempting it cannot open this gate.
@@ -1233,6 +1309,7 @@ export function mutativeMiddleware(
       draining = true;
       try {
         const drainGeneration = outboxGeneration;
+        retiredSinceDrainLoad.clear();
         const live = await liveOutboxOwners(lockManager);
         // Rows a sibling window owns and is still alive to deliver are not
         // this drain's: re-sending one it already delivered would land after
@@ -1254,6 +1331,7 @@ export function mutativeMiddleware(
         const entries = loaded.filter((entry) => {
           // A row whose command already settled (ack raced the enqueue commit)
           // must not re-dispatch; finish its deferred removal instead.
+          if (retiredSinceDrainLoad.has(entry.id)) return false;
           if (retiredOutboxIds.has(entry.id)) {
             void retireOutboxEntry(entry.id, null);
             return false;
@@ -1286,6 +1364,12 @@ export function mutativeMiddleware(
         // a failure there leaves the entry exactly as-is, so routine reconnect
         // churn can't burn through a write's boot budget.
         for (const entry of entries) {
+          // Settled live while an earlier row of this pass was on the wire.
+          if (retiredSinceDrainLoad.has(entry.id) || retiredOutboxIds.has(entry.id)) continue;
+          if (inFlightOutboxIds.has(entry.id)) {
+            undelivered.add(entry.id);
+            continue;
+          }
           if (entry.after?.some((id) => undelivered.has(id))) {
             undelivered.add(entry.id);
             continue;
@@ -1395,6 +1479,7 @@ export function mutativeMiddleware(
         if (parkedOutboxIds.size > 0) {
           const still = new Set(remaining.map((entry) => entry.id));
           for (const id of parkedOutboxIds) if (!still.has(id)) parkedOutboxIds.delete(id);
+          for (const id of parkedCells.keys()) if (!parkedOutboxIds.has(id)) parkedCells.delete(id);
         }
         bootOutboxDrained = remaining.length === 0 &&
           pendingOutboxEnqueues === 0 &&
@@ -1426,11 +1511,15 @@ export function mutativeMiddleware(
       fieldLocks: ActionFieldLock[],
       outboxId: string,
       after?: readonly string[],
+      reverses?: readonly string[],
     ): any => {
       const isAsyncAct = flags.asyncAct;
       const isReceiptAsyncAct = flags.receipt;
       const grouped =
         patches.length > 0 ? groupPatchesByTable(patches, finalState, groupCtx) : undefined;
+      const writes = cellsOf(grouped);
+      const behindHeld = heldOverlapping(writes);
+      if (behindHeld.length > 0) after = [...new Set([...(after ?? []), ...behindHeld])];
       const usesReceiptEnvelope = isReceiptAsyncAct;
       const returnsPromise = isAsyncAct;
       const dispatchResult: unknown = usesReceiptEnvelope
@@ -1501,7 +1590,7 @@ export function mutativeMiddleware(
         // it is parked, so the drain delivers both in ts order.
         // A send held this way is itself waited for by the sends that
         // follow it, so the order holds down a chain of followers.
-        const waiting = settledInOrder(after);
+        const waiting = settledInOrder(after, reverses);
         const dispatchNow = () => {
           if (!waiting) return send();
           return waiting.then((inOrder) => {
@@ -1520,7 +1609,14 @@ export function mutativeMiddleware(
         // merely replays a command the server dedups (client id for
         // content writes, commandId for receipt actions, LWW for patches).
         inFlightOutboxIds.add(outboxId);
-        const dispatched = dispatchNow().finally(() => inFlightOutboxIds.delete(outboxId));
+        const dispatched = dispatchNow();
+        // Released only after the handlers below have recorded the send's
+        // fate (retired, parked): a drain landing in between would find the
+        // row in neither set and send it again. Handlers on one promise run
+        // in the order they were attached, so each branch attaches this last.
+        const releaseInFlight = () => {
+          inFlightOutboxIds.delete(outboxId);
+        };
         const settled = dispatched.then(
           () => "ok" as const,
           (e) => {
@@ -1529,6 +1625,7 @@ export function mutativeMiddleware(
             // Without an outbox row nothing will replay it, so nothing waits on it.
             if (!enqueued) return "ok" as const;
             parkedOutboxIds.add(outboxId);
+            if (writes.size > 0) parkedCells.set(outboxId, writes);
             // Held behind a parked write: the drain sends both, in order.
             if (e instanceof DispatchHeldError) {
               void enqueued.then(() => {
@@ -1538,7 +1635,7 @@ export function mutativeMiddleware(
             return "parked" as const;
           },
         );
-        liveSends.set(outboxId, { settled, retrying: false, waiting: !!waiting, overtaken: false, receipt: usesReceiptEnvelope });
+        liveSends.set(outboxId, { settled, retrying: false, waiting: !!waiting, overtaken: false, receipt: usesReceiptEnvelope, writes });
         void settled.then(() => liveSends.delete(outboxId));
         const enqueueDurable = () =>
           enqueued ? enqueued.then(() => true, () => false) : Promise.resolve(false);
@@ -1617,6 +1714,7 @@ export function mutativeMiddleware(
             // never reinterpret this as a domain rejection.
             capturedError?.(key, error, actionArgs);
           });
+          dispatched.then(releaseInFlight, releaseInFlight);
           return receiptWaiter.promise;
         }
         const promise = dispatched.then(async (r) => {
@@ -1644,6 +1742,7 @@ export function mutativeMiddleware(
           }
           throw e;
         });
+        dispatched.then(releaseInFlight, releaseInFlight);
         if (returnsPromise) return promise;
         promise.catch(() => {});
       } else {
@@ -1722,13 +1821,21 @@ export function mutativeMiddleware(
       {
         const state = get();
         let returnValue: any;
-        const [nextState, patches] = mutativeCreate(
-          state,
-          (draft: any) => {
-            returnValue = recipe(draft);
-          },
-          { enablePatches: { pathAsArray: true } }
-        );
+        const effects: Array<() => void> = [];
+        commitEffectFrames.push(effects);
+        let nextState: any;
+        let patches: Patch[];
+        try {
+          [nextState, patches] = mutativeCreate(
+            state,
+            (draft: any) => {
+              returnValue = recipe(draft);
+            },
+            { enablePatches: { pathAsArray: true } }
+          );
+        } finally {
+          commitEffectFrames.pop();
+        }
         if (opts?.vet && !opts.vet({ state, nextState, patches })) return undefined;
 
         // Auto-generate pending entries for synced collections so local-first
@@ -1769,6 +1876,7 @@ export function mutativeMiddleware(
         }
 
         set(finalState, true);
+        runCommitEffects(key, effects);
 
         if (idbWriteFn && finalPatches.length > 0) {
           // Synchronous: the storage engine's bulk writes don't block the main
@@ -1789,7 +1897,7 @@ export function mutativeMiddleware(
 
         if (isAct || isAsyncAct) {
           const outboxId = newOutboxId();
-          const result = enqueueDispatch(key, flags, actionArgs, patches, finalState, returnValue, fieldLocks, outboxId, opts?.after);
+          const result = enqueueDispatch(key, flags, actionArgs, patches, finalState, returnValue, fieldLocks, outboxId, opts?.after, opts?.reverses);
           // After the dispatch is on its way, and never able to stop it: the
           // undo capture runs app code (a spec's label, inverse, confirm,
           // spell), and a bug there must cost the history its entry, never
@@ -1821,14 +1929,14 @@ export function mutativeMiddleware(
         const onCommitted = undo?.wants(key, flags)
           ? (commit: ActionCommit) => undo.capture(key, actionArgs, commit)
           : undefined;
-        const after = undo?.orderAfter();
+        const order = undo?.orderAfter();
         const vet = undo?.vetFor(key);
         return runAction(
           key,
           flags,
           (draft) => (val as Function).apply(draft, actionArgs),
           actionArgs,
-          onCommitted || after || vet ? { onCommitted, after, vet } : undefined,
+          onCommitted || order || vet ? { onCommitted, after: order?.after, reverses: order?.reverses, vet } : undefined,
         );
       };
       copyActionFlags(val, wrappedFn);
@@ -1938,6 +2046,9 @@ export function mutativeMiddleware(
       // already happened and let them read the server before the new account's
       // parked writes ship — the exact race the flag exists to prevent.
       bootOutboxDrained = false;
+      // The history is the outgoing principal's: an undo of it would write
+      // that account's rows into the next one's store and send them as it.
+      if (undoController) resetUndoHistory();
       // Receipt waiters intentionally survive a runtime/auth rebind. Their
       // random entry ids can resolve only when that exact principal-scoped
       // outbox row drains again; another account cannot present the row. This

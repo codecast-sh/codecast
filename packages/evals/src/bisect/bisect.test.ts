@@ -8,7 +8,8 @@ import { runRowProblems, type BisectState, type CommitRef, type RunRow } from '@
 import type { AttributionGit } from '../history/attribution';
 import type { PromptReader } from '../history/epochs';
 import { costBound, costLine, planFrom, renderPlan, searchable, type PlanArgs, type PlanWorld } from './plan';
-import { crashedFocus, readProbe, renderBatch, renderClasses, treeLabel, type CheckExit, type ProbeEnv, type Tree } from './probe';
+import { renderBatch, renderClasses, treeLabel, type CheckExit, type ProbeEnv, type Tree } from './probe';
+import { crashedFocus, readProbe } from './reading';
 import { runBisect, startRefusal } from './runner';
 import { bisectPaths, readBisectState, readSteps, requestStop } from './state';
 
@@ -348,6 +349,21 @@ describe('the search, with a fake check', () => {
     const s = await run('echo-d', env);
     expect(s.answer).toEqual({ kind: 'drift', detail: "The good control read good and the bad control read good on today's tool and judge." });
     expect(env.calls.filter((c) => !c.dry).length).toBe(2);
+  });
+
+  test('a stable control failing at either end is drift, even when the flipped freeze reproduces', async () => {
+    const env = fakeEnv(world(), { render: threeClasses, score: (t, f) => (f === A && idx(t.sha) >= 3 ? 0.2 : f === D && idx(t.sha) === 6 ? 0.3 : 0.9) });
+    const s = await run('echo-control-drift', env);
+    expect(s.answer).toEqual({ kind: 'drift', detail: "The good control read good and the bad control read bad; the control freeze d4d4d4d4 failed at the bad end on today's tool and judge." });
+    expect(env.calls.filter((c) => !c.dry).length).toBe(2);
+  });
+
+  test('a probe where a stable control fails is a skip, so it never moves a bound', async () => {
+    const env = fakeEnv(world(), { render: threeClasses, score: (t, f) => (f === A && idx(t.sha) >= 3 ? 0.2 : f === B && idx(t.sha) === 4 ? 0.3 : 0.9) });
+    const s = await run('echo-control-probe', env);
+    expect(probeKinds(s)).toContain('probe@4c1:skip');
+    expect(s.probes.find((p) => p.kind === 'probe' && p.sha === C(4))!.skipReason).toBe('the control freeze b2b2b2b2 failed here');
+    expect(s.answer).toMatchObject({ kind: 'range', tier: 2 });
   });
 
   // 2026-10-04: every rep of title-20261004-120047 crashed (the probe tree ran its own, older harness, which

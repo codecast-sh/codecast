@@ -46,7 +46,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { performMoveSessionToDevice } from "./devices";
+import { enqueueTargetedResume, findPullableConversation, performMoveSessionToDevice, performReassignToDevice } from "./devices";
+import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
 import { fromConvexAgentType } from "@codecast/shared/contracts";
@@ -147,7 +148,8 @@ export function planMigration(opts: {
     if (seen.has(c._id)) continue;
     seen.add(c._id);
     if (!target) { skip("the destination device is not registered"); continue; }
-    if (c.status === "completed") { skip("the session has ended"); continue; }
+    // An ended session can still come home: its files and transcript are on the host.
+    if (c.status === "completed" && target.is_remote) { skip("the session has ended"); continue; }
     if (c.inbox_killed_at) { skip("the session was killed"); continue; }
     if (c.is_subagent) { skip("a subagent moves with its parent"); continue; }
     if (c.migration) { skip(`already migrating (${c.migration.batch_id})`); continue; }
@@ -623,7 +625,7 @@ export async function performBeginSession(
   if (conv.migration && conv.migration.migration_id.toString() !== row._id.toString()) {
     return fail(`already migrating (${conv.migration.batch_id})`);
   }
-  if (conv.status === "completed") return fail("the session has ended");
+  if (conv.status === "completed" && row.direction === "to_cloud") return fail("the session has ended");
   if (conv.inbox_killed_at) return fail("the session was killed");
   if (conv.owner_device_id === row.to_device_id) return fail("already on the destination");
   if (!conv.session_id) return fail("the session has no transcript yet");
@@ -843,12 +845,28 @@ export async function performFinishSession(
   if (!IN_FLIGHT_STATUSES.has(row.status)) return { ok: false, reason: `row is ${row.status}` };
   const conv = await ctx.db.get(row.conversation_id);
   if (!conv) return { ok: false, reason: "the session no longer exists" };
-  const moved = await performMoveSessionToDevice(ctx, userId, {
-    conversation_id: row.conversation_id,
-    owner_device_id: row.to_device_id,
-    project_path: args.project_path,
-    resume: true,
-  });
+  // Sessions moved together from one laptop folder had one tree pushed for all
+  // of them (the runner's ledger), so they share the host checkout as they
+  // shared the folder; anyone else still holds it exclusively.
+  const batchRows = args.source_path === undefined ? [] : await ctx.db
+    .query("session_migrations")
+    .withIndex("by_batch", (q: any) => q.eq("batch_id", row.batch_id))
+    .collect();
+  const sharedWith = batchRows
+    .filter((r: any) => r._id.toString() !== row._id.toString() && r.to_device_id === row.to_device_id && r.source_path === args.source_path)
+    .map((r: any) => r.conversation_id.toString());
+  let moved: Awaited<ReturnType<typeof performMoveSessionToDevice>>;
+  try {
+    moved = await performMoveSessionToDevice(ctx, userId, {
+      conversation_id: row.conversation_id,
+      owner_device_id: row.to_device_id,
+      project_path: args.project_path,
+      resume: true,
+      shared_with: sharedWith,
+    });
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
   await ctx.db.patch(row.conversation_id, {
     migration: undefined,
     session_error: undefined,
@@ -866,6 +884,32 @@ export async function performFinishSession(
   });
   return { ok: true, resume_command_id: moved.command_id ?? null, owner_device_id: moved.owner_device_id };
 }
+
+/**
+ * Who holds the host checkout a move would land in, asked BEFORE the push:
+ * the push resets that checkout, so a holder's uncommitted work would be lost
+ * if the check waited for the handoff. Rows of this batch are the runner's to
+ * coordinate (one push per laptop folder) and never count.
+ */
+export async function performCheckoutHolder(ctx: { db: any }, userId: Id<"users">, args: { migration_id: Id<"session_migrations">; project_path: string }) {
+  const row = await ctx.db.get(args.migration_id);
+  if (!row || row.user_id.toString() !== userId.toString()) return null;
+  const batch = await ctx.db.query("session_migrations").withIndex("by_batch", (q: any) => q.eq("batch_id", row.batch_id)).collect();
+  const occupant = await findSharedCheckoutOccupant(ctx, userId, row.to_device_id, {
+    projectPath: args.project_path,
+    sharedWith: batch.map((r: any) => r.conversation_id.toString()),
+  });
+  return occupant ? { conversation_id: occupant.conversation_id, short_id: occupant.short_id, title: occupant.title } : null;
+}
+
+export const checkoutHolder = query({
+  args: { api_token: v.optional(v.string()), migration_id: v.id("session_migrations"), project_path: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) return null;
+    return performCheckoutHolder(ctx, userId, args);
+  },
+});
 
 export const finishSession = mutation({
   args: {
@@ -923,13 +967,19 @@ export const confirmSession = mutation({
 export async function performFailSession(
   ctx: { db: any },
   userId: Id<"users">,
-  args: { migration_id: Id<"session_migrations">; error: string; cancelled?: boolean },
+  args: { migration_id: Id<"session_migrations">; error: string; cancelled?: boolean; restore?: boolean },
   now = Date.now(),
 ): Promise<{ ok: boolean; status: MigrationStatus }> {
   const row = await ctx.db.get(args.migration_id);
   if (!row || row.user_id.toString() !== userId.toString()) throw new Error("no such migration");
   if (TERMINAL_STATUSES.has(row.status)) return { ok: false, status: row.status };
   await clearFence(ctx, row);
+  // The runner stopped a running session for a move that then failed: it
+  // starts again where it is, so a failed move leaves nothing interrupted.
+  if (args.restore) {
+    const conv = await ctx.db.get(row.conversation_id);
+    if (conv?.owner_device_id) await enqueueTargetedResume(ctx, userId, conv, conv.owner_device_id, conv.project_path);
+  }
   const status = args.cancelled ? ("cancelled" as const) : ("failed" as const);
   await ctx.db.patch(row._id, {
     status,
@@ -942,7 +992,7 @@ export async function performFailSession(
 }
 
 export const failSession = mutation({
-  args: { api_token: v.optional(v.string()), migration_id: v.id("session_migrations"), error: v.string(), cancelled: v.optional(v.boolean()) },
+  args: { api_token: v.optional(v.string()), migration_id: v.id("session_migrations"), error: v.string(), cancelled: v.optional(v.boolean()), restore: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
@@ -1083,4 +1133,29 @@ export async function performReapStale(ctx: { db: any }, now = Date.now()): Prom
 export const reapStale = internalMutation({
   args: {},
   handler: async (ctx) => performReapStale(ctx),
+});
+
+/**
+ * "Run here" on a laptop. A session that lives on a cloud host comes back as
+ * a move (its work and transcript transferred, then resumed here); flipping
+ * ownership alone resumed the laptop's stale copy and left the host's work
+ * behind. Anything else re-homes as before.
+ */
+export const runHere = mutation({
+  args: { api_token: v.optional(v.string()), conversation_id: v.string(), device_id: v.string(), request_id: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const conv = await findPullableConversation(ctx, userId, args.conversation_id);
+    if (!conv) throw new Error("not your conversation (you can only move a session you run or own, or one visible to your team)");
+    const devices = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+    const owner = devices.find((d: any) => d.device_id === conv.owner_device_id);
+    const target = devices.find((d: any) => d.device_id === args.device_id);
+    if (owner?.is_remote && target && !target.is_remote && conv.user_id.toString() === userId.toString()) {
+      const batch = await performCreateBatch(ctx, userId, { conversation_ids: [conv._id.toString()], to_device_id: args.device_id, interrupt_on_timeout: false });
+      if (batch.batch_id) return { ok: true as const, command_id: batch.command_ids[0], device_id: args.device_id, label: target.label ?? "", batch_id: batch.batch_id };
+      throw new Error(batch.skipped[0]?.reason ?? "this session cannot be brought back right now");
+    }
+    return performReassignToDevice(ctx, userId, { conversation_id: conv._id, device_id: args.device_id, request_id: args.request_id });
+  },
 });

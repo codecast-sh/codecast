@@ -15,6 +15,7 @@ import { useTabActive } from "../../hooks/usePagePresence";
 import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { buildVaultGraph, localSubgraph, type VaultGraph } from "../../lib/vault/graphBuilder";
 import { LinkGraphCanvas, hashedTone, matchWithNeighbors, type LinkGraph } from "../graph/LinkGraphCanvas";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 /** Hops the local graph reaches. Obsidian's default depth, and the point past
  *  which "neighborhood" stops meaning anything in a densely linked vault. */
@@ -85,6 +86,7 @@ export function VaultGraphView({ activePath, onNavigate, onClose }: VaultGraphVi
   useEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key !== "Escape" || !isTabActive) return;
     const target = event.target as HTMLElement | null;
+    if (keysOwnedElsewhere(target)) return;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) {
       if (target === filterInputRef.current && filter) setFilter("");
       return;

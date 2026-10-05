@@ -35,8 +35,14 @@ export function isGuestIdentity(identity: string | null | undefined): boolean {
  *  where no identity rides along. The one test, for the web's badge and the
  *  phone's "(guest)" alike, so a guest never passes for a teammate on one. */
 export function isGuestParticipant(identity: string | null | undefined, name?: string | null): boolean {
-  return isGuestIdentity(identity) || /\(\s*guest\s*\)\s*$/i.test(name ?? "");
+  return isGuestIdentity(identity) || GUEST_MARK_RE.test(name ?? "");
 }
+
+// The room's "(guest)" at the end of a name (guestDisplayName). One pattern
+// for reading it off a stored name and for stripping one a guest typed.
+const GUEST_MARK_SRC = String.raw`\(\s*guest\s*\)`;
+export const GUEST_MARK_RE = new RegExp(`${GUEST_MARK_SRC}\\s*$`, "i");
+const GUEST_MARKS_TRAILING_RE = new RegExp(`(?:\\s*${GUEST_MARK_SRC})+\\s*$`, "i");
 
 /** The call_guests id inside a guest identity, or null for anyone else. */
 export function guestIdFromIdentity(identity: string | null | undefined): string | null {
@@ -52,6 +58,34 @@ export function callParticipantKind(identity: string): CallParticipantKind {
   if (isGuestIdentity(identity)) return "guest";
   if (isAgentFaceIdentity(identity)) return "agent";
   return "person";
+}
+
+/** The word a marked participant wears beside their name, and what it means
+ *  when someone hovers or listens for it. A teammate wears none. */
+export const PARTICIPANT_MARKS = {
+  guest: { word: "guest", title: "A guest from outside the team" },
+  agent: { word: "agent", title: "An AI agent, not a person" },
+} as const;
+export type ParticipantMark = (typeof PARTICIPANT_MARKS)[keyof typeof PARTICIPANT_MARKS];
+
+/** Which mark this participant wears, or null for a teammate. The agent test
+ *  reads the identity alone; the guest test also reads a stored line's name
+ *  (isGuestParticipant), which is all a transcript line may carry. One
+ *  answer for the web's badge and the phone's "(guest)" and "(agent)", so a
+ *  surface never marks one and forgets the other. */
+export function participantMark(identity: string | null | undefined, name?: string | null): ParticipantMark | null {
+  if (identity && callParticipantKind(identity) === "agent") return PARTICIPANT_MARKS.agent;
+  return isGuestParticipant(identity, name) ? PARTICIPANT_MARKS.guest : null;
+}
+
+/** A name for a line of plain text, where no badge can follow: `base` (a
+ *  first name, a full name) with `what` of theirs ("'s screen"), and the
+ *  participant's mark after both, "Riley's screen (guest)". The one way a
+ *  mark is put into words, so the web, the phone and the recording labels
+ *  never disagree about who wears one. */
+export function markedName(base: string, identity: string | null | undefined, name?: string | null, what = ""): string {
+  const mark = participantMark(identity, name);
+  return mark ? `${base}${what} (${mark.word})` : `${base}${what}`;
 }
 
 // LiveKit's own participant kinds (protocol ParticipantInfo.Kind), the two
@@ -89,7 +123,7 @@ export function normalizeGuestName(raw: string | null | undefined): string | nul
     .trim();
   // The "(guest)" marking is the room's to add (guestDisplayName), never the
   // guest's: typed in, it would read "Sam (guest) (guest)" everywhere.
-  const clean = Array.from(flat.replace(/(?:\s*\(\s*guest\s*\))+$/i, "").trim());
+  const clean = Array.from(flat.replace(GUEST_MARKS_TRAILING_RE, "").trim());
   if (clean.length === 0) return null;
   return clean.slice(0, GUEST_NAME_MAX).join("").trim();
 }
@@ -98,7 +132,7 @@ export function normalizeGuestName(raw: string | null | undefined): string | nul
  *  a guest so nobody mistakes them for a teammate. Faces and chips that have
  *  a badge of their own show the plain name beside it instead. */
 export function guestDisplayName(name: string | null | undefined): string {
-  return `${normalizeGuestName(name) ?? "Guest"} (guest)`;
+  return `${normalizeGuestName(name) ?? "Guest"} (${PARTICIPANT_MARKS.guest.word})`;
 }
 
 /** The speaker name a transcript line carries for a participant: a guest is
@@ -265,11 +299,12 @@ export const GUEST_LINK_REFUSAL_TEXT = Object.fromEntries(
 ) as Record<GuestLinkRefusal, string>;
 
 /** Why an admitted guest's page may not join the media right now
- *  (callGuests.mintGuestToken). Carried as a ConvexError code, because a
- *  plain Error's words do not survive to a client in production, and the
- *  page acts on the code: the ones that end the visit move it to the
- *  matching ending instead of an error line under a Join button. */
-export type GuestJoinRefusal = "not_a_guest" | "not_admitted" | "removed" | "ended" | "unavailable";
+ *  (callGuests.mintGuestToken). Carried as a ConvexError code because the
+ *  page acts on the code, not on words: the ones that end the visit move it
+ *  to the matching ending instead of an error line under a Join button. The
+ *  other guest refusals (a knock, an admission) are only ever shown, so they
+ *  stay plain Errors whose words reach the page as they are. */
+export type GuestJoinRefusal = "not_a_guest" | "not_admitted" | "removed" | "ended" | "unavailable" | "notice_changed";
 
 export const GUEST_JOIN_REFUSAL_TEXT: Record<GuestJoinRefusal, string> = {
   not_a_guest: "This page no longer holds your place in the call. Reload to ask to join again.",
@@ -277,6 +312,7 @@ export const GUEST_JOIN_REFUSAL_TEXT: Record<GuestJoinRefusal, string> = {
   removed: "Someone in the call removed you.",
   ended: "This call has ended.",
   unavailable: GUEST_LINK_REFUSAL_TEXT.unavailable,
+  notice_changed: "The call keeps more now than when you agreed to join. Read the notice again, then join.",
 };
 
 /** The refusal code a thrown join error carries, or null for anything else
@@ -289,8 +325,11 @@ export function guestJoinRefusalOf(err: unknown): GuestJoinRefusal | null {
 /** What is kept of a call, as a guest is told it. `video_public`: the
  *  recording running will be on the call's public link (convex
  *  callRecordings: a link whose video was chosen before this press), so their
- *  face reaches anyone holding that link, not only the team. */
-export type GuestNotice = { recording: boolean; transcribed: boolean; video_public?: boolean };
+ *  face reaches anyone holding that link, not only the team. `words_public`:
+ *  the call's record has a public link on, which shows its transcript live,
+ *  so what they say reaches anyone holding it. Each widens a row of its own
+ *  (noticeNews), the way the thing it names widens who can see them. */
+export type GuestNotice = { recording: boolean; transcribed: boolean; video_public?: boolean; words_public?: boolean };
 
 /**
  * The words a guest's consent rests on: whether what they say is written down
@@ -326,8 +365,13 @@ export function guestNoticeLines(
   if (n.transcribed) {
     out.push({
       key: "words",
-      text:
-        form === "long"
+      text: n.words_public
+        ? form === "long"
+          ? "This call is transcribed. What everyone says is written down for the team and the AI agents they work with, and shared by the call's public link: anyone with that link can read along."
+          : form === "short"
+            ? "This call is transcribed, and the transcript is shared by public link."
+            : "transcribed, public"
+        : form === "long"
           ? "This call is transcribed. What everyone says is written down for the team, and the AI agents they work with can read it."
           : form === "short"
             ? "This call is transcribed: what everyone says is written down."
@@ -335,6 +379,27 @@ export function guestNoticeLines(
     });
   }
   return out;
+}
+
+/** What the room keeps now beyond the notice a guest agreed to (`since`),
+ *  row by row: `rec` a recording they were not told of, or one whose video
+ *  went to the public link since; `words` a transcript switched on, or one
+ *  whose words went to the public link since. Nothing
+ *  is news before they agreed to anything. The one comparison behind the
+ *  lobby's "Join, recorded", the rows marked new and the line said inside
+ *  the call, so no two of them disagree about what changed. */
+export function noticeNews(since: GuestNotice | null | undefined, now: GuestNotice): { rec: boolean; words: boolean } {
+  if (!since) return { rec: false, words: false };
+  return {
+    rec: now.recording && (!since.recording || (!!now.video_public && !since.video_public)),
+    words: now.transcribed && (!since.transcribed || (!!now.words_public && !since.words_public)),
+  };
+}
+
+/** Does the room keep more than the guest agreed to? (noticeNews, any row) */
+export function noticeWidened(since: GuestNotice | null | undefined, now: GuestNotice): boolean {
+  const n = noticeNews(since, now);
+  return n.rec || n.words;
 }
 
 /** The notice as one sentence, for a link's card: "This call is recorded and

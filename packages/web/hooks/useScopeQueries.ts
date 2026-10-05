@@ -9,8 +9,8 @@ import type { FeedKind, FeedPage, RoleBrief, ScopeSummary } from "../components/
 
 const api = _api as any;
 
-/** Which scope a query reads: a role by id, or a literal set of projects and plans. */
-export type ScopeRef = { role_id: string } | { scope: { project_ids: string[]; plan_ids: string[] }; team_id?: string };
+/** Which scope a query reads: a role by id, or a literal set of projects, plans and goals (ids or `in-N`). */
+export type ScopeRef = { role_id: string } | { scope: { project_ids: string[]; plan_ids: string[]; initiative_ids?: string[] }; team_id?: string };
 
 export function useScopeFeedPage(args: (ScopeRef & { cursor?: string; limit?: number; kinds?: FeedKind[] }) | "skip"): { data: FeedPage | undefined; error?: Error; missing: boolean } {
   const { data, error } = useQueryNoThrow(api.org.scopeFeed, args);

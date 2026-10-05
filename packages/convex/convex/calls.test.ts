@@ -1,71 +1,10 @@
 import { getFunctionName } from "convex/server";
 import { describe, expect, test } from "bun:test";
-import { createHmac } from "node:crypto";
 import {
   CALL_INVITE_TTL_MS,
   CALL_KNOCK_TTL_MS,
   CALL_MEMBER_STALE_MS,
-  signLivekitJwt,
 } from "./calls";
-
-function b64urlToJson(part: string): any {
-  const pad = part.length % 4 === 0 ? "" : "=".repeat(4 - (part.length % 4));
-  return JSON.parse(
-    Buffer.from(part.replace(/-/g, "+").replace(/_/g, "/") + pad, "base64").toString(
-      "utf8",
-    ),
-  );
-}
-
-describe("signLivekitJwt", () => {
-  test("produces a verifiable HS256 token with the LiveKit video grant", async () => {
-    const token = await signLivekitJwt({
-      apiKey: "APIkey123",
-      apiSecret: "secret456",
-      identity: "user-1",
-      name: "Ashot",
-      room: "dm:a:b",
-      metadata: JSON.stringify({ image: "https://x/y.png" }),
-      ttlSeconds: 3600,
-      nowSeconds: 1_800_000_000,
-    });
-    const [h, p, s] = token.split(".");
-    expect(b64urlToJson(h)).toEqual({ alg: "HS256", typ: "JWT" });
-    const payload = b64urlToJson(p);
-    expect(payload.iss).toBe("APIkey123");
-    expect(payload.sub).toBe("user-1");
-    expect(payload.name).toBe("Ashot");
-    expect(payload.nbf).toBe(1_800_000_000 - 10);
-    expect(payload.exp).toBe(1_800_000_000 + 3600);
-    expect(payload.video).toEqual({
-      room: "dm:a:b",
-      roomJoin: true,
-      canPublish: true,
-      canSubscribe: true,
-    });
-    // Independent signature check with node crypto — the token must verify
-    // against the same secret LiveKit would use.
-    const expected = createHmac("sha256", "secret456")
-      .update(`${h}.${p}`)
-      .digest("base64url");
-    expect(s).toBe(expected);
-  });
-
-  test("token is scoped to exactly one room", async () => {
-    const token = await signLivekitJwt({
-      apiKey: "k",
-      apiSecret: "s",
-      identity: "u",
-      name: "n",
-      room: "channel:ch1",
-      nowSeconds: 1_800_000_000,
-    });
-    const payload = b64urlToJson(token.split(".")[1]);
-    expect(payload.video.room).toBe("channel:ch1");
-    expect(payload.video.roomAdmin).toBeUndefined();
-    expect(payload.video.roomCreate).toBeUndefined();
-  });
-});
 
 describe("lease constants", () => {
   test("stale window comfortably exceeds the heartbeat", () => {
@@ -1213,10 +1152,11 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
   // what was deleted. A `by_user` scan that also matches the membership row and
   // a transcript sweep that also matches a seat both read as the mutation
   // deleting things it never touched.
-  function prewarmCtx(rows: any[]) {
+  function prewarmCtx(rows: any[], recordings: any[] = []) {
     const tables: Record<string, any[]> = {
       team_memberships: [{ _id: "m1", user_id: "u1", team_id: "t1" }],
       call_members: rows,
+      call_recordings: recordings,
     };
     const deleted: string[] = [];
     const patches: any[] = [];
@@ -1288,6 +1228,31 @@ describe("prewarm: a connection held open by somebody who is not here", () => {
     expect(res).toEqual({ room_key: "channel:ch1", prewarm: false });
     expect(deleted).toEqual([]);
     expect(inserted).toEqual([]);
+  });
+
+  test("a recorded room refuses it: everyone in a recording is told, and a prewarm is nobody", async () => {
+    // The client skips recorded rooms on its own; this is the server's half,
+    // so an older bundle cannot drop a muted, unseated tile into the composite.
+    for (const status of ["starting", "recording"]) {
+      const { ctx, inserted, deleted } = prewarmCtx([], [
+        { _id: `rec-${status}`, room_key: "channel:ch1", kind: "composite", status },
+      ]);
+      const res = await join(ctx, { prewarm: true });
+      expect(res).toEqual({ room_key: "channel:ch1", prewarm: false });
+      expect(inserted).toEqual([]);
+      expect(deleted).toEqual([]);
+    }
+  });
+
+  test("a room whose recording ended, or another room recording, still takes it", async () => {
+    const { ctx, inserted } = prewarmCtx([], [
+      { _id: "recDone", room_key: "channel:ch1", kind: "composite", status: "ready" },
+      { _id: "recStop", room_key: "channel:ch1", kind: "composite", status: "stopping" },
+      { _id: "recElse", room_key: "channel:ch2", kind: "composite", status: "recording" },
+    ]);
+    const res = await join(ctx, { prewarm: true });
+    expect(res).toEqual({ room_key: "channel:ch1", prewarm: true });
+    expect(inserted).toHaveLength(1);
   });
 
   test("one at a time: a second room drops the first", async () => {
