@@ -125,6 +125,7 @@ export function RoomThread({
   selection,
   sinceAt,
   focus,
+  onOpenedSession,
   className,
 }: {
   roomKey: string;
@@ -144,6 +145,9 @@ export function RoomThread({
   sinceAt?: number;
   /** A link landed on a place in this call: it opens, scrolls into view and flashes. */
   focus?: CallAnchor | null;
+  /** The stage covers the app, so a session opened from its thread would
+   *  open out of sight: the stage shrinks when one opens. */
+  onOpenedSession?: () => void;
   className?: string;
 }) {
   const recording = isRecRoomKey(roomKey);
@@ -402,6 +406,7 @@ export function RoomThread({
   const openSession = (id: string) => {
     if (panel) return void navigateMainWindow(`/conversation/${id}`);
     useInboxStore.getState().openSidePanel(id);
+    onOpenedSession?.();
   };
 
   const composer = !recording;

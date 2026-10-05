@@ -5,13 +5,14 @@
 
 import { useMemo, useState } from "react";
 import { resolveEvalsBatchRef } from "@codecast/shared/contracts/evalsApi";
-import { EmptyState } from "../../EmptyState";
 import { useEvalsResource } from "../../../lib/evals/hooks";
 import { evalsHref, type EvalsView } from "../evalsPaths";
 import { FreezeView } from "../FreezeView";
+import { useEvalsHost } from "../host";
 import { defaultFreezePair, type FreezePair } from "../freezeModel";
 
 function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: string | null; given: FreezePair | null }) {
+  const { EmptyState } = useEvalsHost().ui;
   const freeze = useEvalsResource("GET /freeze/:id", { params: { id: freezeId } });
   const surfaceId = freeze.data?.freeze.surface ?? null;
   const surface = useEvalsResource("GET /surface/:id", surfaceId ? { params: { id: surfaceId } } : null);
@@ -39,7 +40,7 @@ function ConnectedFreeze({ freezeId, batch, given }: { freezeId: string; batch: 
       );
     if (freeze.error) return <EmptyState title="This freeze could not be read" description={freeze.error} />;
     return (
-      <div className="ev-page text-[12px] ev-quiet" data-evals-loading>
+      <div className="ev-page ev-note" data-evals-loading>
         Reading the freeze and every rep of it...
       </div>
     );

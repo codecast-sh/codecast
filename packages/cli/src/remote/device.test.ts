@@ -238,3 +238,13 @@ describe("resolveRemoteDevice", () => {
     expect(resolveRemoteDevice({ env: "0", marker: false })).toBe(false);
   });
 });
+
+test("a process launched as a remote device leaves the marker, so a later start without the variable still knows", () => {
+  const dir = require("node:fs").mkdtempSync(require("node:path").join(require("node:os").tmpdir(), "remote-marker-"));
+  const probe = `import { isRemoteDevice } from ${JSON.stringify(require("node:path").join(import.meta.dir, "device.ts"))}; console.log(isRemoteDevice());`;
+  const run = (env: Record<string, string>) => Bun.spawnSync(["bun", "-e", probe], { env: { ...process.env, CODECAST_REMOTE_DEVICE: "", CODECAST_DIR: dir, ...env } }).stdout.toString().trim();
+  expect(run({})).toBe("false");
+  expect(run({ CODECAST_REMOTE_DEVICE: "1" })).toBe("true");
+  expect(require("node:fs").existsSync(require("node:path").join(dir, "remote-device"))).toBe(true);
+  expect(run({})).toBe("true");
+});

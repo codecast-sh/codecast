@@ -141,28 +141,37 @@ describe("L6 scope feed pages attached to a task", () => {
 // query hands back and every get, which is what the backend's per query
 // document limit counts. resolveScope reads the tasks themselves and is
 // measured apart, so the feed is judged on what it adds.
-function countingDb(db: any): { db: any; reads: () => number } {
+// `reads(table)` is the documents one table's queries handed back, and
+// `queried` every table a query was opened on.
+function countingDb(db: any): { db: any; reads: (table?: string) => number; queried: Set<string> } {
   let n = 0;
-  const count = (rows: any) => { n += Array.isArray(rows) ? rows.length : rows ? 1 : 0; return rows; };
-  const wrapBuilder = (b: any): any => new Proxy(b, {
+  const byTable = new Map<string, number>();
+  const queried = new Set<string>();
+  const count = (table?: string) => (rows: any) => {
+    const got = Array.isArray(rows) ? rows.length : rows ? 1 : 0;
+    n += got;
+    if (table) byTable.set(table, (byTable.get(table) ?? 0) + got);
+    return rows;
+  };
+  const wrapBuilder = (b: any, table: string): any => new Proxy(b, {
     get(target, key) {
       const v = target[key];
       if (typeof v !== "function") return v;
       return (...args: any[]) => {
         const r = v.apply(target, args);
-        if (key === "collect" || key === "take" || key === "first" || key === "unique") return r.then(count);
-        return r === target ? wrapBuilder(r) : r;
+        if (key === "collect" || key === "take" || key === "first" || key === "unique") return r.then(count(table));
+        return r === target ? wrapBuilder(r, table) : r;
       };
     },
   });
   const counting = new Proxy(db, {
     get(target, key) {
-      if (key === "query") return (table: string) => wrapBuilder(target.query(table));
-      if (key === "get") return (id: any) => target.get(id).then(count);
+      if (key === "query") return (table: string) => { queried.add(table); return wrapBuilder(target.query(table), table); };
+      if (key === "get") return (id: any) => target.get(id).then(count());
       return target[key];
     },
   });
-  return { db: counting, reads: () => n };
+  return { db: counting, reads: (table) => (table ? byTable.get(table) ?? 0 : n), queried };
 }
 
 describe("F2 read budget", () => {
@@ -197,12 +206,29 @@ describe("I5 goals in the feed", () => {
   const call = (i: number) => ({
     _id: `transcripts_c${String(i).padStart(2, "0")}`, short_id: `cl-${i}`, room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - (i + 1) * H, title: `Sync ${i}`, summary: "Where in-1 stands.", participants: [{ id: ME, name: "Me" }], routes: [], last_seq: 3,
   });
-  const goalFixtures = (initiative: any, calls: any[] = []) => fixtures({
+  // Calls are stored oldest first: the fake db answers order("desc") on a
+  // table with no stamp it knows by reversing the stored order, so this is
+  // what makes it hand back the newest calls first, as by_team_started does.
+  const goalFixtures = (initiative: any, calls: any[] = [], extra: Record<string, any[]> = {}) => fixtures({
     teams: [{ _id: TEAM, name: "Acme", features: { calls: true } }],
     initiatives: [initiative],
     initiative_updates: [],
-    transcripts: calls,
+    transcripts: [...calls].sort((a, b) => a.started_at - b.started_at),
+    ...extra,
   });
+  /** Every page of the feed, in the order the client appends them. */
+  const allPages = async (db: any, resolved: any, opts: { kinds?: any[]; limit?: number } = {}) => {
+    const pages: any[][] = [];
+    let cursor: string | undefined;
+    for (let guard = 0; guard < 50; guard++) {
+      const page = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, ...opts, cursor });
+      pages.push(page.rows);
+      if (!page.next_cursor) return pages;
+      cursor = page.next_cursor;
+    }
+    throw new Error("the feed never ended");
+  };
+  const inFeedOrder = (rows: any[]) => [...rows].sort((a, b) => b.updated_at - a.updated_at || (a.id < b.id ? 1 : -1));
   const goalScope = async (db: any) => (await resolveScope(ctxOf(db), ME as any, { scope: { project_ids: [], plan_ids: [], initiative_ids: ["in-1"] }, team_id: TEAM }))!;
 
   test("the feed's reads do not grow with the entries on a goal's record", async () => {
@@ -234,5 +260,71 @@ describe("I5 goals in the feed", () => {
     const second = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["call"], cursor: first.next_cursor });
     expect(second.rows.map((r) => r.short_id)).toEqual(["cl-8", "cl-9", "cl-10"]);
     expect(second.next_cursor).toBeUndefined();
+  });
+
+  test("a call behind more newer team calls than one window holds is still reached", async () => {
+    const quiet = Array.from({ length: 70 }, (_, i) => ({ ...call(i), summary: "Nothing about the goal." }));
+    const buried = [
+      { ...call(80), summary: "Where in-1 stands." },
+      { ...call(81), title: "Broker launch review", summary: "Numbers." },
+      // Named by nothing it says: a decision on the record cites it.
+      { ...call(82), summary: "Sequencing." },
+    ];
+    const db = goalFixtures(goal({ decisions: [{ key: "d0", text: "Brokers first", at: NOW - 900 * H, source: { kind: "call", ref: "cl-82:14" } }] }), [...quiet, ...buried]);
+    const pages = await allPages(db, await goalScope(db), { kinds: ["call"] });
+    expect(pages.flat().map((r) => r.short_id)).toEqual(["cl-80", "cl-81", "cl-82"]);
+  });
+
+  test("a page cut at the call cap holds back the older rows of every kind, so pages stay newest first", async () => {
+    const db = goalFixtures(
+      goal({ decisions: Array.from({ length: 40 }, (_, i) => ({ key: `d${i}`, text: `Decision ${i}`, at: NOW - (100 + i) * H })) }),
+      Array.from({ length: 12 }, (_, i) => call(i)),
+    );
+    const pages = await allPages(db, await goalScope(db), { limit: 40 });
+    const seen = pages.flat();
+    expect(seen.length).toBe(52);
+    expect(new Set(seen.map((r) => `${r.kind}:${r.id}`)).size).toBe(52);
+    expect(seen.map((r) => r.id)).toEqual(inFeedOrder(seen).map((r) => r.id));
+    // The first page stops at the eighth call; the ninth opens the next.
+    expect(pages[0].map((r) => r.short_id)).toEqual(["cl-0", "cl-1", "cl-2", "cl-3", "cl-4", "cl-5", "cl-6", "cl-7"]);
+    expect(pages[1][0].short_id).toBe("cl-8");
+  });
+
+  test("a scan that stops with calls unread holds back older rows and never ends the feed", async () => {
+    // More quiet calls than one page scans, then one that names the goal, then
+    // a milestone older than all of them.
+    const quiet = Array.from({ length: 300 }, (_, i) => ({ ...call(i), summary: "Nothing about the goal." }));
+    const db = goalFixtures(goal({ milestones: [{ key: "m0", title: "Beta", done_at: NOW - 900 * H }] }), [...quiet, call(400)]);
+    const pages = await allPages(db, await goalScope(db));
+    expect(pages.length).toBeGreaterThan(1);
+    expect(pages.flat().map((r) => `${r.kind}:${r.short_id}`)).toEqual(["call:cl-400", "goal:in-1"]);
+  });
+
+  test("a goal with no projects reads none of the sources that need work in scope", async () => {
+    const db = goalFixtures(goal({ milestones: [{ key: "m0", title: "Beta", done_at: NOW - H }] }), [call(1)]);
+    const resolved = await goalScope(db);
+    const c = countingDb(db);
+    const { rows } = await computeScopeFeed(ctxOf(c.db), resolved, { now: NOW });
+    expect(rows.map((r) => r.kind)).toEqual(["goal", "call"]);
+    for (const table of ["docs", "artifacts", "session_decisions", "workflow_runs"]) expect(c.queried.has(table)).toBe(false);
+  });
+
+  test("the call scan stops reading once the rows it has passed fill the page", async () => {
+    // 130 quiet calls an hour apart; 100 decisions half an hour apart, so one
+    // window of calls already reaches past more decisions than a page holds.
+    const quiet = Array.from({ length: 130 }, (_, i) => ({ ...call(i), summary: "Nothing about the goal." }));
+    const db = goalFixtures(goal({ decisions: Array.from({ length: 100 }, (_, i) => ({ key: `d${i}`, text: `Decision ${i}`, at: NOW - (i + 1) * H / 2 })) }), quiet);
+    const resolved = await goalScope(db);
+    const c = countingDb(db);
+    const first = await computeScopeFeed(ctxOf(c.db), resolved, { now: NOW, limit: 40 });
+    expect(first.rows.length).toBe(40);
+    expect(c.reads("transcripts")).toBe(60);
+    // The next page is filled by rows the scan already passed: no call is read.
+    const second = await computeScopeFeed(ctxOf(c.db), resolved, { now: NOW, limit: 40, cursor: first.next_cursor });
+    expect(second.rows.length).toBe(40);
+    expect(c.reads("transcripts")).toBe(60);
+    const pages = await allPages(db, resolved, { limit: 40 });
+    expect(pages.flat().map((r) => r.id)).toEqual(inFeedOrder(pages.flat()).map((r) => r.id));
+    expect(pages.flat().length).toBe(100);
   });
 });

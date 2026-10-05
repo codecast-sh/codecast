@@ -36,6 +36,7 @@ import { useZoomLevel, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
 import { changeLine, GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
+import type { GhostAnswers } from "./ProposalLedger";
 import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
@@ -111,7 +112,11 @@ export type OrgGraphProps = {
    *  canvas pans to its ghost and the card shows its action row. */
   focusChangeId?: string | null;
   onFocusChange?: (changeId: string | null) => void;
-  onDecideChange?: (changeId: string, verdict: "accept" | "skip", edits?: Record<string, unknown>) => void;
+  /** The proposal's pending answers by change and the write into their batch
+   *  (useGhostAnswers): a ghost's Approve, Reject and Reply. Absent: read only. */
+  ghostAnswers?: GhostAnswers;
+  /** The inline edit form's accept, the one direct verdict on the chart. */
+  onEditAccept?: (changeId: string, edits: Record<string, unknown>) => void;
   /** Edit on a role change opens the hire dialog prefilled (the page owns
    *  it); every other kind gets the inline form here on the canvas. */
   onEditRoleChange?: (change: OrgProposalChange) => void;
@@ -146,7 +151,8 @@ function titleOf(n: OrgLayoutNode): string {
 type GhostHandlers = {
   focusChangeId: string | null;
   onFocusChange: (changeId: string) => void;
-  onDecideChange: (changeId: string, verdict: "accept" | "skip") => void;
+  answers?: GhostAnswers["byChange"];
+  onAnswerChange?: GhostAnswers["onAnswer"];
   onEditChange: (changeId: string, at: { x: number; y: number }) => void;
 };
 
@@ -190,7 +196,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, ghostAnswers, onEditAccept, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -214,9 +220,10 @@ function OrgGraphInner(props: OrgGraphProps) {
   // Each zoom level is laid out at its own card sizes (orgZoom), so the
   // resting chart keeps no room for what only the close card says.
   const level = useZoomLevel();
+  const focusAnswered = !!focusChangeId && !!ghostAnswers?.byChange[focusChangeId];
   const rawGoals = useMemo<GoalsLayout | null>(
-    () => (lens === "goals" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, focusChangeId }, level) : null),
-    [lens, tree, goalsData, storeGoals, projects, changes, focusChangeId, level],
+    () => (lens === "goals" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, focusChangeId, focusAnswered }, level) : null),
+    [lens, tree, goalsData, storeGoals, projects, changes, focusChangeId, focusAnswered, level],
   );
   const rawLayout = useMemo(() => (rawGoals ? NO_LAYOUT : layoutOrgTree(tree, view, ghosts, level)), [rawGoals, tree, view, ghosts, level]);
   // Crossing a zoom stop swaps one layout for another. The new one is placed
@@ -270,7 +277,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   const ghostHandlers = useMemo<GhostHandlers>(() => ({
     focusChangeId,
     onFocusChange: (id) => onFocusChange?.(id),
-    onDecideChange: (id, verdict) => { setEditing(null); onDecideChange?.(id, verdict); },
+    answers: ghostAnswers?.byChange,
+    // An answer closes an open edit form: the two are different verdicts on one change.
+    onAnswerChange: ghostAnswers ? (id, answer) => { setEditing(null); ghostAnswers.onAnswer(id, answer); } : undefined,
     onEditChange: (id, at) => {
       const c = changeById.get(id);
       if (!c) return;
@@ -278,7 +287,7 @@ function OrgGraphInner(props: OrgGraphProps) {
       if (c.change.kind === "role") onEditRoleChange?.(c);
       else setEditing({ change: c, at });
     },
-  }), [focusChangeId, onFocusChange, onDecideChange, onEditRoleChange, changeById]);
+  }), [focusChangeId, onFocusChange, ghostAnswers, onEditRoleChange, changeById]);
   const flowNodes = useMemo(() => {
     if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers);
     const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
@@ -565,7 +574,7 @@ function OrgGraphInner(props: OrgGraphProps) {
         at={editing.at}
         wrap={wrapRef.current}
         onCancel={() => setEditing(null)}
-        onAccept={(edits) => { setEditing(null); onDecideChange?.(editing.change._id, "accept", edits); }}
+        onAccept={(edits) => { setEditing(null); onEditAccept?.(editing.change._id, edits); }}
       />
     )}
     </div>

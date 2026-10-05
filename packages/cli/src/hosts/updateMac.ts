@@ -6,6 +6,7 @@ import { installHostRelease } from "./installRelease.js";
 import { remoteExec, scpTo } from "../browser/remote.js";
 import { remoteHome, shq, type RemoteHost } from "../remote/session-move.js";
 import { MAC_HOST_PATH } from "./provisionMac.js";
+import { REMOTE_DEVICE_MARKER_REL } from "../remote/device.js";
 
 export function installMacCast(host: RemoteHost, log: (message: string) => void): string {
   if (!hasHostBuildSource()) return installHostRelease(host, "darwin", log);
@@ -24,7 +25,8 @@ export function installMacCast(host: RemoteHost, log: (message: string) => void)
       if (!version.split(/\s+/).includes(cliSourceVersion())) throw new Error(`The new Mac build did not report the expected version; the installed CLI is unchanged`);
       const wrapper = `#!/usr/bin/env bash\n${MAC_HOST_PATH}\nexec bun ${shq(`${destination}/main.js`)} "$@"\n`;
       const target = `${remoteHome(host)}/.local/bin/cast`;
-      remoteExec(host, `mkdir -p ${shq(path.posix.dirname(target))}; if [ -e ${shq(target)} ] && [ ! -e ${shq(`${target}.before-source-update`)} ]; then cp -p ${shq(target)} ${shq(`${target}.before-source-update`)}; fi; printf %s ${shq(wrapper)} > ${shq(`${target}.next`)} && chmod 755 ${shq(`${target}.next`)} && mv ${shq(`${target}.next`)} ${shq(target)}`, 30_000);
+      // Every Mac this installs to is a host: keep its remote-device marker (remote/device.ts).
+      remoteExec(host, `mkdir -p ${shq(path.posix.dirname(target))} ${shq(path.posix.dirname(`${remoteHome(host)}/${REMOTE_DEVICE_MARKER_REL}`))}; : > ${shq(`${remoteHome(host)}/${REMOTE_DEVICE_MARKER_REL}`)}; if [ -e ${shq(target)} ] && [ ! -e ${shq(`${target}.before-source-update`)} ]; then cp -p ${shq(target)} ${shq(`${target}.before-source-update`)}; fi; printf %s ${shq(wrapper)} > ${shq(`${target}.next`)} && chmod 755 ${shq(`${target}.next`)} && mv ${shq(`${target}.next`)} ${shq(target)}`, 30_000);
       return version;
     } finally {
       fs.rmSync(archive, { force: true });

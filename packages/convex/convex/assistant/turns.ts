@@ -23,6 +23,7 @@
 // and writes an assistant_rules row the gate reads from then on.
 import { v } from "convex/values";
 import {
+  declineText,
   parseInput,
   runAssistant,
   type Gate,
@@ -44,8 +45,7 @@ import { applyHostedAgentStatus } from "../managedSessions";
 import { askCore, withdrawCore } from "../sessionDecisions";
 import { messageValidator } from "../messages";
 import { toolsFor, type ToolsForOptions } from "./tools";
-import { SEARCH_ESTIMATE_USD } from "./tools/web";
-import { deliveredAddress } from "./tools/gmail";
+import { deliveredAddress } from "./tools/mail";
 import { normalizeTimezone } from "../lib/teamDay";
 import { decisionAnswerOf, pendingInput, turnsIn, type Input, type Turn } from "./input";
 import {
@@ -98,14 +98,6 @@ export const turnDeps: {
 /** The model a plan's turns run on: a paid plan's strong model, the free plan's default. */
 export function modelFor(plan: PlanSpec): string {
   return plan.price_usd > 0 ? plan.strong_model : plan.default_model;
-}
-
-/** What one run may spend of what its turn reserved. A tool's own spend
- *  (search_web) is checked only before the next model call, so one search
- *  can pass the ceiling; the run keeps a search's worth of the reservation
- *  aside, and never more than half of it. */
-export function runCeiling(reservedUsd: number): number {
-  return money(Math.max(reservedUsd / 2, reservedUsd - SEARCH_ESTIMATE_USD()));
 }
 
 // ---------------------------------------------------------------- the lease
@@ -210,9 +202,21 @@ export async function leaseTurn(
 /** No room in the wallet: the person's words go into the transcript (so a
  *  sweep never wakes the conversation for them again), a plain line says why
  *  nothing happened and what to do, and the turn ends with reason `budget`.
- *  An answered approval stays with its parked turn, and runs on the next turn
- *  that has room. */
+ *  A parked approval this turn took up ends as begin would end it (settleParked),
+ *  and its call is answered as not run, right after the call's message and
+ *  before any later row, so the transcript never holds a call with no result
+ *  and a later turn never runs a call the person saw refused for usage. The
+ *  result names the real reason: usage only when the person approved it. */
 async function refuseForBudget(ctx: MutationCtx, turn: Turn, input: Input): Promise<void> {
+  const parked = await settleParked(ctx, turn, input);
+  if (parked?.call) {
+    await writeRows(ctx, turn.conversation_id, [{
+      role: "user",
+      message_uuid: `not-run:${parked.call.tool_call_id}`,
+      tool_results: [{ tool_use_id: parked.call.tool_call_id, content: notRunText(parked.call.tool, parked.answer), is_error: true }],
+      timestamp: Date.now(),
+    }]);
+  }
   await takeTyped(ctx, turn.conversation_id, input.typed);
   for (const row of input.answers) await markPendingDelivered(ctx, row);
   await stopTurn(ctx, turn, { status: "done", reason: "budget", costUsd: 0 }, () => budgetLine(ctx, turn.user_id, true));
@@ -286,6 +290,7 @@ async function afterTurn(ctx: MutationCtx, turn: Turn): Promise<void> {
 }
 
 const ERROR_LINE = "Something went wrong on my side, so I stopped here. You can ask me to try again.";
+const SAFETY_LINE = "This conversation was stopped by a safety check, so I can't continue here.";
 const TIME_LINE = "This is taking longer than I can work in one go, so I stopped here. Tell me to keep going and I'll pick up where I left off.";
 
 function dayIn(at: number, timeZone: string | undefined): string {
@@ -400,8 +405,16 @@ function verdictOf(decision: GateDecision) {
  *  when it covers exactly what the call's allowScope would write: never for a
  *  tool that is always asked, the tool as a whole, or the same people. A read
  *  tool that asks (remember after outside content) is always asked: no
- *  standing rule can waive that. */
-export function withRules(base: Gate, rules: readonly RuleView[]): Gate {
+ *  standing rule can waive that.
+ *
+ *  `readOutside` says whether content the person did not write (mail, events,
+ *  pages) is in front of the model (ToolSet.readOutside over the rows the run
+ *  works from). While it is, an allow rule never waives a call that reaches
+ *  other people: an email from an address the person always allows could
+ *  otherwise steer the model into sending that address their private mail
+ *  with no card. Rules for calls that stay in the account, or reach no one,
+ *  still apply. */
+export function withRules(base: Gate, rules: readonly RuleView[], readOutside: () => boolean = () => false): Gate {
   return async (call) => {
     const decided = verdictOf(await base(call));
     if (decided.verdict !== "ask" || call.risk !== "write") return decided;
@@ -409,8 +422,8 @@ export function withRules(base: Gate, rules: readonly RuleView[]): Gate {
     const target = scopeMatch(scope);
     const mine = rules.filter((rule) => rule.tool === call.name);
     if (mine.some((rule) => rule.decision === "refuse" && (rule.match === undefined || rule.match === target))) return "refuse";
-    if (scope.kind !== "never" && mine.some((rule) => rule.decision === "allow" && rule.match === target)) return "allow";
-    return "ask";
+    if (scope.kind === "never" || (scope.kind === "match" && scope.match !== NO_ONE && readOutside())) return "ask";
+    return mine.some((rule) => rule.decision === "allow" && rule.match === target) ? "allow" : "ask";
   };
 }
 
@@ -526,6 +539,63 @@ async function takeTyped(ctx: MutationCtx, conversationId: Id<"conversations">, 
 
 const NOT_RUN_MOVED_ON = "The person wrote again instead of answering, so it did not run.";
 const NOT_RUN_STRANDED = "It did not run: the conversation moved on before it could.";
+const NOT_RUN_BUDGET = "It did not run: the person's plan had no usage left to run it.";
+
+type ParkedCall = NonNullable<Turn["pending_call"]>;
+type Answer = ReturnType<typeof approvalOf>;
+
+/** The result of a parked call that cannot run now: a declined call reads as
+ *  the run would answer it (declineText), so the model never mistakes a
+ *  refusal for a usage limit and offers the same call again. */
+function notRunText(tool: string, answer: Answer): string {
+  return answer.decision === "approve" ? NOT_RUN_BUDGET : declineText(tool, answer.note);
+}
+
+/**
+ * Closes the turn parked on an approval once a turn takes it up (the card was
+ * answered, dismissed or withdrawn, or the person wrote again instead): reads
+ * the answer from the decision row, takes a card that is still up down when
+ * the person moved on, writes the Always allow rule an answer asked for, and
+ * marks the parked turn done. The parked call itself is the caller's to run
+ * or answer. Begin and a budget refusal both go through here, so the card,
+ * the rule and the parked turn end the same way whether or not the call can
+ * run now. Null when no turn is parked or its input is not ready.
+ */
+async function settleParked(ctx: MutationCtx, turn: Turn, input: Input): Promise<{ call?: ParkedCall; answer: Answer } | null> {
+  if (!input.waiting || !input.ready) return null;
+  let answer = approvalOf(input.decision, turn.user_id);
+  if (!input.resolved && input.decision) {
+    // The person moved on: the card comes down, and the call does not run.
+    await withdrawCore(ctx, input.decision, Date.now());
+    answer = { decision: "decline", always: false, note: NOT_RUN_MOVED_ON };
+  }
+  const call = input.waiting.pending_call;
+  if (call && answer.always) await allowAlways(ctx, turn.user_id, call);
+  await ctx.db.patch(input.waiting._id, { status: "done" });
+  if (!turn.continues) await ctx.db.patch(turn._id, { continues: input.waiting._id });
+  return { ...(call ? { call } : {}), answer };
+}
+
+/** Writes the allow rule an Always allow answer asked for, once: the same
+ *  rule can be offered again (one call asked in two conversations before
+ *  either answer lands), and the gate reads every rule on every turn. */
+async function allowAlways(ctx: MutationCtx, userId: Id<"users">, call: ParkedCall): Promise<void> {
+  const scope = allowScope({ name: call.tool, input: call.args ?? {} });
+  if (scope.kind === "never") return;
+  const match = scopeMatch(scope);
+  const existing = await ctx.db
+    .query("assistant_rules")
+    .withIndex("by_user_tool", (q) => q.eq("user_id", userId).eq("tool", call.tool))
+    .collect();
+  if (existing.some((rule) => rule.decision === "allow" && rule.match === match)) return;
+  await ctx.db.insert("assistant_rules", {
+    user_id: userId,
+    tool: call.tool,
+    decision: "allow",
+    ...(match ? { match } : {}),
+    created_at: Date.now(),
+  });
+}
 
 export interface Begun {
   conversation_id: Id<"conversations">;
@@ -549,44 +619,28 @@ export const begin = internalMutation({
     const turn = await ctx.db.get(args.turn_id);
     if (!turn || turn.status !== "running") return null;
     const conversation = await ctx.db.get(turn.conversation_id);
-    if (!conversation) {
-      // Deleted after the lease: end the turn now rather than hold its
-      // reservation until the lease expires.
-      await stopTurn(ctx, turn, { status: "failed", reason: "error", costUsd: turn.cost_usd ?? 0, error: "The conversation is gone" }, ERROR_LINE);
+    // Deleted or safety-blocked after the lease: the run never starts, so no
+    // tool acts, and the reservation goes back now rather than at lease
+    // expiry. A blocked conversation takes no new input (wake answers
+    // "blocked"), so its line promises no retry.
+    if (!conversation || isConversationSafetyBlocked(conversation)) {
+      const blocked = conversation !== null;
+      const error = blocked ? "Safety stop" : "The conversation is gone";
+      await stopTurn(ctx, turn, { status: "failed", reason: "error", costUsd: turn.cost_usd ?? 0, error }, blocked ? SAFETY_LINE : ERROR_LINE);
       await afterTurn(ctx, turn);
       return null;
     }
     const input = await pendingInput(ctx, turn.conversation_id);
     const resume: Resolution[] = [];
 
-    const call = input.waiting && input.ready ? input.waiting.pending_call : undefined;
-    if (input.waiting && input.ready) {
-      let answer = approvalOf(input.decision, conversation.user_id);
-      if (!input.resolved && input.decision) {
-        // The person moved on: the card comes down, and the call does not run.
-        await withdrawCore(ctx, input.decision, Date.now());
-        answer = { decision: "decline", always: false, note: NOT_RUN_MOVED_ON };
-      }
-      if (call) {
-        resume.push({
-          call: { id: call.tool_call_id, name: call.tool, input: call.args ?? {}, risk: "write" },
-          decision: answer.decision,
-          ...(answer.note ? { note: answer.note } : {}),
-        });
-        const scope = allowScope({ name: call.tool, input: call.args ?? {} });
-        if (answer.always && scope.kind !== "never") {
-          const match = scopeMatch(scope);
-          await ctx.db.insert("assistant_rules", {
-            user_id: conversation.user_id,
-            tool: call.tool,
-            decision: "allow",
-            ...(match ? { match } : {}),
-            created_at: Date.now(),
-          });
-        }
-      }
-      await ctx.db.patch(input.waiting._id, { status: "done" });
-      if (!turn.continues) await ctx.db.patch(turn._id, { continues: input.waiting._id });
+    const parked = await settleParked(ctx, turn, input);
+    const call = parked?.call;
+    if (call && parked) {
+      resume.push({
+        call: { id: call.tool_call_id, name: call.tool, input: call.args ?? {}, risk: "write" },
+        decision: parked.answer.decision,
+        ...(parked.answer.note ? { note: parked.answer.note } : {}),
+      });
     }
 
     // A turn that carries out an answer takes no new input. The answered
@@ -629,7 +683,9 @@ export const begin = internalMutation({
       conversation_id: turn.conversation_id,
       user_id: conversation.user_id,
       model: turn.model ?? modelFor(await walletPlan(ctx, conversation.user_id)),
-      ceiling_usd: runCeiling(turn.cost_reserved_usd),
+      // The run may spend all its turn reserved: paid tools (search_web)
+      // reserve their own spend through ctx.remainingUsd and ctx.charge.
+      ceiling_usd: turn.cost_reserved_usd,
       history,
       resume,
       started_calls: started,
@@ -767,7 +823,7 @@ export const run = internalAction({
         system: systemPrompt({ name: ready.name, timezone: ready.timezone, now: Date.now(), note: set.note }),
         history: ready.history,
         tools: set.tools,
-        gate: withRules(set.gate(rows), ready.rules),
+        gate: withRules(set.gate(rows), ready.rules, () => set.readOutside(rows)),
         ceilingUsd: ready.ceiling_usd,
         deadlineMs: turnDeps.deadlineMs,
         apiKeys: turnDeps.apiKeys(),

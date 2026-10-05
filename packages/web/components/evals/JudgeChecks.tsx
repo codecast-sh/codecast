@@ -6,8 +6,7 @@
 import type { RunResponse, ScoreJson, ScoreVersion } from "@codecast/shared/contracts/evalsApi";
 import { PASS_MARK } from "./charts/scale";
 import { AnchorLink } from "./GateList";
-import { Caret } from "./CallPane";
-import { ScoreBar, VerdictGlyph } from "./parts";
+import { Caret, ScoreBar, VerdictGlyph } from "./parts";
 import { score2, usd, whenLabel } from "./format";
 import { checkAnchor, checkPasses } from "./runModel";
 
@@ -62,7 +61,7 @@ export function ScoreHistory({ versions }: { versions: readonly ScoreVersion[] }
   const legacy = versions.some((v) => v.legacy);
   const sorted = [...versions].sort((a, b) => (b.scoredAt ?? "").localeCompare(a.scoredAt ?? "") || (a.file === "score.json" ? -1 : 1));
   return (
-    <div className="ev-card overflow-hidden" data-ev-score-history>
+    <div className="ev-card ev-card--flush" data-ev-score-history>
       <table className="ev-table">
         <thead>
           <tr>
@@ -79,7 +78,7 @@ export function ScoreHistory({ versions }: { versions: readonly ScoreVersion[] }
               <td className="ev-tabular">{v.scoredAt ? whenLabel(v.scoredAt) : <span className="ev-quiet">not recorded</span>}</td>
               <td className="ev-mono">{v.judgeModel ?? "none"}</td>
               <td>
-                <span className="inline-flex items-center gap-2">
+                <span className="ev-score-cell">
                   <VerdictGlyph state={v.pass ? "pass" : "fail"} size={10} />
                   <span className="ev-tabular">{score2(v.score)}</span>
                 </span>
@@ -107,7 +106,7 @@ export function RubricCard({ rubric, status = "unscored" }: { rubric: NonNullabl
         <VerdictGlyph state={status} /> {RUBRIC_HEAD[status]}
       </div>
       <div>{rubric.criteria ?? <span className="ev-quiet">This freeze has no criteria: every rep reports a vacuous pass until it gets some.</span>}</div>
-      <div className="ev-quiet text-[12px] ev-tabular">Pass mark {score2(rubric.passMark)}, after every gate holds.</div>
+      <div className="ev-rubric-mark ev-tabular">Pass mark {score2(rubric.passMark)}, after every gate holds.</div>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, type RunOptions } from "./runner.js";
+import { runWorkflow, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, type RunOptions } from "./runner.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -717,6 +717,14 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     await runWorkflow(a, { cwd: tmpDir, runId: "run-1", apiToken: "tok", convexSiteUrl: "https://convex.test" });
     const report = calls.find(c => c.route === "/cli/workflow-runs/progress" && c.body.graph_hash);
     expect(report?.body.graph_hash).toBe(graphHash(a));
+    // Each station's own hash rides with it, so a version can say which stations changed.
+    const { graphNodeHashes } = await import("./parser.js");
+    expect(report?.body.graph_nodes).toEqual(graphNodeHashes(a));
+    const byId = (g: typeof a) => Object.fromEntries(graphNodeHashes(g).map((n) => [n.id, n.h]));
+    expect(byId(a)).toEqual(byId(b));
+    // An edge leaving start changes start, and only start.
+    expect(byId(c2).start).not.toBe(byId(a).start);
+    expect(byId(c2).exit).toBe(byId(a).exit);
   });
 
   test("validateWorkflow reports a malformed condition", () => {
@@ -839,3 +847,14 @@ describe("gatePayload card", () => {
   });
 });
 
+
+describe("workflow/runner (LE1.4: a refused or failed registration stops a cause-bound run)", () => {
+  test("a run bound to a task or plan stops, detached or not", () => {
+    expect(runRegistrationIsFatal({ taskId: "ct-7" })).toBe(true);
+    expect(runRegistrationIsFatal({ planId: "pl-3" })).toBe(true);
+    expect(runRegistrationIsFatal({ detach: true })).toBe(true);
+  });
+  test("an unbound local run carries on unregistered", () => {
+    expect(runRegistrationIsFatal({})).toBe(false);
+  });
+});

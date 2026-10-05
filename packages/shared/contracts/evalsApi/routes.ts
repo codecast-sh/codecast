@@ -1,42 +1,46 @@
 // Part of the Evals UI's wire contract (docs/architecture/evals-ui.md). Every
 // party imports it through ../evalsApi.ts. The route table every party
-// dispatches on, and the bridge's line protocol (sections 3.4 and 3.5). PURE
-// isomorphic data: no Node or DOM APIs.
+// dispatches on, and the bridge's line protocol (sections 3.4 and 3.5). The
+// neutral routes and the bridge come from @platform/evals/contract; codecast
+// re-keys the routes whose answers it widens (an override must be assignable
+// to the neutral answer, so the two cannot drift) and adds its own (the run
+// file, patches, search, starting and stopping a bisect, the sim). PURE isomorphic
+// data: no Node or DOM APIs.
 
-import type { Attribution, BisectPlan, BisectPlanRequest, BisectStartRequest, BisectStartResponse } from "./bisect";
-import type { AttributionQuery, BatchesQuery, BatchesResponse, BisectListResponse, BisectQuery, BisectResponse, BisectStopResponse, ChangesQuery, ChangesResponse, CommitQuery, CommitResponse, CompareQuery, CompareResponse, EpochQuery, EpochResponse, FreezeResponse, HealthResponse, OverviewQuery, OverviewResponse, PatchResponse, RunFileQuery, RunFileResponse, RunResponse, SearchQuery, SearchResponse, SimCatalogResponse, SimJobResponse, SimRunResponse, SimSessionsResponse, SimShrinkRequest, SimSweepRequest, SurfaceQuery, SurfaceResponse } from "./endpoints";
+import type {
+  ChangesQuery,
+  EvalsBridgeRequest as CoreBridgeRequest,
+  EvalsBridgeResponse as CoreBridgeResponse,
+  EvalsErrorBody as CoreErrorBody,
+  EvalsViewRoutes,
+  None,
+  OverviewQuery,
+  Route,
+  SurfaceQuery,
+} from "@platform/evals/contract";
+import type { BisectPlan, BisectPlanRequest, BisectStartRequest, BisectStartResponse } from "./bisect";
+import type { RunRow } from "./core";
+import type { BisectStopResponse, ChangesResponse, OverviewResponse, PatchResponse, RunFileQuery, RunFileResponse, RunResponse, SearchQuery, SearchResponse, SimCatalogResponse, SimFailureMoved, SimJobResponse, SimRunResponse, SimSessionsResponse, SimShrinkRequest, SimSweepRequest, SurfaceResponse } from "./endpoints";
 
 // ── The route table ─────────────────────────────────────────────────────────
 
-/** No params, or no query. */
-type None = Record<string, never>;
-
 /** Every endpoint, keyed `METHOD /path` with `:params`: what it takes and what it answers. Paths are relative to /evals. */
-export interface EvalsRoutes {
-  "GET /health": { params: None; query: None; body: never; response: HealthResponse };
-  "GET /overview": { params: None; query: OverviewQuery; body: never; response: OverviewResponse };
-  "GET /surface/:id": { params: { id: string }; query: SurfaceQuery; body: never; response: SurfaceResponse };
-  "GET /freeze/:id": { params: { id: string }; query: None; body: never; response: FreezeResponse };
-  "GET /run/:id": { params: { id: string }; query: None; body: never; response: RunResponse };
-  "GET /run/:id/file": { params: { id: string }; query: RunFileQuery; body: never; response: RunFileResponse };
-  "GET /compare": { params: None; query: CompareQuery; body: never; response: CompareResponse };
-  "GET /batches": { params: None; query: BatchesQuery; body: never; response: BatchesResponse };
-  "GET /epoch": { params: None; query: EpochQuery; body: never; response: EpochResponse };
-  "GET /attribution": { params: None; query: AttributionQuery; body: never; response: Attribution };
-  "GET /commit/:sha": { params: { sha: string }; query: CommitQuery; body: never; response: CommitResponse };
-  "GET /patch/:sha": { params: { sha: string }; query: None; body: never; response: PatchResponse };
-  "GET /changes": { params: None; query: ChangesQuery; body: never; response: ChangesResponse };
-  "GET /search": { params: None; query: SearchQuery; body: never; response: SearchResponse };
-  "POST /bisect/plan": { params: None; query: None; body: BisectPlanRequest; response: BisectPlan };
-  "POST /bisect": { params: None; query: None; body: BisectStartRequest; response: BisectStartResponse };
-  "GET /bisects": { params: None; query: None; body: never; response: BisectListResponse };
-  "GET /bisect/:id": { params: { id: string }; query: BisectQuery; body: never; response: BisectResponse };
-  "POST /bisect/:id/stop": { params: { id: string }; query: None; body: never; response: BisectStopResponse };
-  "GET /sim/catalog": { params: None; query: None; body: never; response: SimCatalogResponse };
-  "GET /sim/sessions": { params: None; query: None; body: never; response: SimSessionsResponse };
-  "GET /sim/run/:session/:run": { params: { session: string; run: string }; query: None; body: never; response: SimRunResponse };
-  "POST /sim/shrink": { params: None; query: None; body: SimShrinkRequest; response: SimJobResponse };
-  "POST /sim/sweep": { params: None; query: None; body: SimSweepRequest; response: SimJobResponse };
+export interface EvalsRoutes extends EvalsViewRoutes<RunRow, SimFailureMoved> {
+  "GET /overview": Route<None, OverviewQuery, OverviewResponse>;
+  "GET /surface/:id": Route<{ id: string }, SurfaceQuery, SurfaceResponse>;
+  "GET /run/:id": Route<{ id: string }, None, RunResponse>;
+  "GET /changes": Route<None, ChangesQuery, ChangesResponse>;
+  "GET /run/:id/file": Route<{ id: string }, RunFileQuery, RunFileResponse>;
+  "GET /patch/:sha": Route<{ sha: string }, None, PatchResponse>;
+  "GET /search": Route<None, SearchQuery, SearchResponse>;
+  "POST /bisect/plan": Route<None, None, BisectPlan, BisectPlanRequest>;
+  "POST /bisect": Route<None, None, BisectStartResponse, BisectStartRequest>;
+  "POST /bisect/:id/stop": Route<{ id: string }, None, BisectStopResponse>;
+  "GET /sim/catalog": Route<None, None, SimCatalogResponse>;
+  "GET /sim/sessions": Route<None, None, SimSessionsResponse>;
+  "GET /sim/run/:session/:run": Route<{ session: string; run: string }, None, SimRunResponse>;
+  "POST /sim/shrink": Route<None, None, SimJobResponse, SimShrinkRequest>;
+  "POST /sim/sweep": Route<None, None, SimJobResponse, SimSweepRequest>;
 }
 
 export type EvalsRouteKey = keyof EvalsRoutes;
@@ -107,21 +111,16 @@ export function matchEvalsRoute(method: string, path: string): { key: EvalsRoute
 
 // ── The bridge (section 3.5) ────────────────────────────────────────────────
 
-/** One line the daemon writes to the child's stdin. */
-export interface EvalsBridgeRequest {
+/** One line the daemon writes to the child's stdin: a handler request with the line's id. */
+export interface EvalsBridgeRequest extends CoreBridgeRequest {
   id: number;
   method: "GET" | "POST";
-  /** Relative to /evals, without the query. */
-  path: string;
   query: Record<string, string>;
-  body?: unknown;
 }
 
 /** One line the child writes back. */
-export interface EvalsBridgeResponse {
+export interface EvalsBridgeResponse extends CoreBridgeResponse {
   id: number;
-  status: number;
-  body: unknown;
 }
 
 /**
@@ -138,9 +137,6 @@ export type EvalsUnavailableReason =
   | "child-crashed";
 
 /** The body of every non-2xx answer. */
-export interface EvalsErrorBody {
-  error: string;
+export interface EvalsErrorBody extends CoreErrorBody {
   reason?: EvalsUnavailableReason | "bad-request" | "not-found" | "forbidden";
-  /** The child's last stderr lines, for `child-crashed`. */
-  stderr?: string[];
 }

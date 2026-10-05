@@ -15,8 +15,7 @@ import { writeAsServerShape } from "./serverShape";
 import { pushRoleFieldsIntent, type OrgSliceData } from "./orgSlice";
 import { settleRecordOp, type InitiativeRecordOp } from "./initiativeRecord";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
-import { memberHandle } from "@codecast/shared/chat";
-import type { InitiativeMetric, InitiativeOwner, InitiativePriority, InitiativeRow, InitiativeStatus, InitiativeUpdateHealth, InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import { carryMetricScores, initiativeSignature, type InitiativeMetric, type InitiativeOwner, type InitiativePriority, type InitiativeRow, type InitiativeStatus, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 
 /** Null clears a field, as the mutation reads it. */
 export type InitiativeFields = {
@@ -59,14 +58,7 @@ type InitiativeDraft = OrgSliceData & {
   initiatives: Record<string, InitiativeRow>;
   initiativeUpdates: Record<string, InitiativeUpdateRow>;
   currentUser?: { _id: string; name?: string; github_username?: string; email?: string } | null;
-};
-
-/** Who a new question or decision is signed by: the viewer's @handle, or
- *  their name when no handle reaches them. The server writes the same when an
- *  entry names nobody. */
-const signatureOf = (me: InitiativeDraft["currentUser"]): string | undefined => {
-  const handle = me && memberHandle(me);
-  return handle ? `@${handle}` : me?.name || undefined;
+  teamMembers?: Array<{ _id: string; name?: string; github_username?: string; email?: string; is_bot?: boolean }>;
 };
 
 /** Pending protection compares objects as JSON, so an owner is written with
@@ -123,7 +115,14 @@ export function createInitiativeSlice(): InitiativeSliceActions {
     updateInitiative: action(function (this: InitiativeDraft, id: string, fields: InitiativeFields) {
       const row = this.initiatives[id];
       if (!row) return;
-      writeAsServerShape(row, withStoredOwner(fields));
+      // A metric edit moves what was reported with it, by the server's rule:
+      // a renamed metric keeps its number and its trend in the same tick.
+      const carried = <T,>(byKey: Record<string, T> | undefined) => {
+        const next = carryMetricScores(row.metrics, fields.metrics, byKey);
+        return JSON.stringify(next) === JSON.stringify(byKey) ? undefined : next ?? null;
+      };
+      const scores = fields.metrics ? { scoreboard: carried(row.scoreboard), score_history: carried(row.score_history) } : {};
+      writeAsServerShape(row, { ...withStoredOwner(fields), ...scores });
       if (fields.owner) coverOwnerScope(this, row);
     }),
 
@@ -174,11 +173,15 @@ export function createInitiativeSlice(): InitiativeSliceActions {
     // The list is replaced on the draft with the entry settled here (its key,
     // who and when), and the op that carries that whole entry is returned: the
     // side effect sends it in place of the caller's, so the server stores what
-    // the page already shows.
+    // the page already shows. An entry that names nobody is signed by the
+    // server's own rule, read against the roster the server reads: the goal's
+    // team, or the viewer alone in a personal workspace.
     recordInitiativeEntry: action(function (this: InitiativeDraft, id: string, op: InitiativeRecordOp) {
       const row = this.initiatives[id];
       if (!row) return;
-      const settled = settleRecordOp(row[op.list] ?? [], op, { by: signatureOf(this.currentUser), now: Date.now() });
+      const me = this.currentUser;
+      const roster = row.team_id ? this.teamMembers ?? [] : me ? [me] : [];
+      const settled = settleRecordOp(row[op.list] ?? [], op, { by: initiativeSignature(me, roster), now: Date.now() });
       if (!settled) return;
       writeAsServerShape(row, { [op.list]: settled.next });
       return settled.op;

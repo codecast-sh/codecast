@@ -12,12 +12,13 @@
 // a run folder (packages/evals/src/layout.ts and @platform/evals' model), the
 // guard's calls.log marks (packages/cli/scripts/prompt-dry-run-bin/cast), and
 // the multiplayer sim's artifacts (packages/web/store/__tests__/sim/report.ts
-// and dsl.ts). The platform's own types are not imported, because this
-// package does not depend on @platform/evals; the api child maps them in.
+// and dsl.ts). The neutral part, which every product's eval views share,
+// lives in @platform/evals/contract; each part re-exports it and adds what is
+// codecast's own.
 //
 // PURE isomorphic data: no Node or DOM APIs.
 
-export type { EvalFlip, EvalRunSet, EvalSeparation } from "./evalResult";
+export type { EvalFlip, EvalRunSet, EvalSeparation } from "@platform/evals/contract";
 
 // The contract lives in parts under evalsApi/, by section; this file is the
 // one import path every party uses.

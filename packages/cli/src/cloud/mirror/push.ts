@@ -264,7 +264,7 @@ function applyFailure(r: ApplyResult): string {
  * `unknown command` reply is an older host. Neither the bundle nor the
  * host's stdout ever appears in an error message.
  */
-async function mirrorSsh(host: RemoteHost, command: string, opts: { input?: Buffer; timeoutMs: number; signal?: AbortSignal }): Promise<{ code: number | null; stdout: string; stderr: string }> {
+async function mirrorSsh(host: RemoteHost, command: string, opts: { input?: Buffer; timeoutMs: number; signal?: AbortSignal; what?: string }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   opts.signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn("ssh", [...sshBase(host), hostKey(host), command], { stdio: ["pipe", "pipe", "pipe"] });
@@ -277,7 +277,7 @@ async function mirrorSsh(host: RemoteHost, command: string, opts: { input?: Buff
       child.stderr.destroy();
     };
     const abort = () => cancel(new Error("mirror operation aborted"));
-    const timer = setTimeout(() => cancel(new Error("mirror push timed out")), opts.timeoutMs);
+    const timer = setTimeout(() => cancel(new Error(`${opts.what ?? "mirror push"} timed out after ${Math.round(opts.timeoutMs / 1000)}s`)), opts.timeoutMs);
     opts.signal?.addEventListener("abort", abort, { once: true });
     if (opts.signal?.aborted) abort();
     let stdout = "";
@@ -335,8 +335,11 @@ export async function pushMirrorToHostAsync(host: RemoteHost, bundle: Buffer, op
 }
 
 /** The host stamp after verification against actual bytes and modes. */
-export async function readRemoteMirrorStamp(host: RemoteHost, timeoutMs = 20_000, signal?: AbortSignal, command = MIRROR_APPLY_COMMAND.replace("--stdin", "--verify"), strict = false): Promise<MirrorStamp | null> {
-  const response = await mirrorSsh(host, command, { timeoutMs, signal });
+/** How long the stamp read may take: its reply lists every mirrored file (6.4 MB for 13,759 on 2026-10-05), and 20s ran out on a loaded laptop. */
+export const MIRROR_STAMP_TIMEOUT_MS = 120_000;
+
+export async function readRemoteMirrorStamp(host: RemoteHost, timeoutMs = MIRROR_STAMP_TIMEOUT_MS, signal?: AbortSignal, command = MIRROR_APPLY_COMMAND.replace("--stdin", "--verify"), strict = false): Promise<MirrorStamp | null> {
+  const response = await mirrorSsh(host, command, { timeoutMs, signal, what: "reading the host's mirror stamp" });
   if (strict && response.code !== 0) throw new Error(response.stderr.trim() || `mirror verification failed (exit ${response.code})`);
   const out = response.code === 0 ? response.stdout : null;
   if (!out) return null;
@@ -640,7 +643,7 @@ const moduleLoggedFailures = new Set<string>();
 export function defaultDeps(signal?: AbortSignal): MirrorDeps {
   return {
     listHosts: async () => [],
-    readStamp: (host) => readRemoteMirrorStamp(host, 20_000, signal),
+    readStamp: (host) => readRemoteMirrorStamp(host, MIRROR_STAMP_TIMEOUT_MS, signal),
     pullMemory: (host, projects, stamp) => pullHostMemory({ laptopHome: process.env.HOME || os.homedir(), hostHome: remoteHome(host), projects, stamp, read: sshMemoryReader(host) }),
     push: (host, bundle) => pushMirrorToHostAsync(host, bundle, { signal }),
     build: buildHomeMirror,

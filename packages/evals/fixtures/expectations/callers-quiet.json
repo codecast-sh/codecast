@@ -1,0 +1,181 @@
+{
+  "asOf": "2026-10-05T18:20:00.000Z",
+  "notes": "Nothing in the window bears on Callers & Call Management: a call about the domain fleet bill, deploy chatter, and a bot reposting the summary of a call from before the cursor whose rulings the document already holds. A Callers decision answered before the cursor (sd-139) is not in the document; an earlier pass read it. The pass records the window from the cursor and changes nothing.",
+  "label": {
+    "since": "2026-10-05T17:00:00.000Z",
+    "empty": true,
+    "not_sources": [
+      "j17callers0digest",
+      "cl-152",
+      "sd-139"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-05T18:20:00.000Z",
+    "project": {
+      "ref": "pj-42",
+      "name": "Callers & Call Management"
+    },
+    "reads": [
+      {
+        "argv": [
+          "expectations",
+          "show"
+        ],
+        "out": "{\n  \"project\": {\n    \"id\": \"pj7callers\",\n    \"title\": \"Callers & Call Management\"\n  },\n  \"current_version\": 1,\n  \"doc\": {\n    \"project\": {\n      \"id\": \"pj7callers\",\n      \"title\": \"Callers & Call Management\"\n    },\n    \"version\": 1,\n    \"prefix\": \"callers-call\",\n    \"items\": [\n      {\n        \"id\": \"ex-callers-call-1\",\n        \"text\": \"A caller's card shows the facts the contact gave, never a guess.\",\n        \"part\": \"Call cards\",\n        \"status\": \"active\",\n        \"citations\": [\n          {\n            \"kind\": \"call\",\n            \"ref\": \"cl-149:88\",\n            \"quote\": \"the card shows what they told us, never what we guessed\",\n            \"when\": \"2026-10-04\"\n          }\n        ],\n        \"added_in\": 1,\n        \"changed_in\": 1\n      },\n      {\n        \"id\": \"ex-callers-call-2\",\n        \"text\": \"A callback is scheduled only when the contact asked for one.\",\n        \"part\": \"Callbacks\",\n        \"status\": \"active\",\n        \"citations\": [\n          {\n            \"kind\": \"call\",\n            \"ref\": \"cl-149:140\",\n            \"quote\": \"we only call back when they asked us to\",\n            \"when\": \"2026-10-04\"\n          }\n        ],\n        \"added_in\": 1,\n        \"changed_in\": 1\n      }\n    ],\n    \"applied_at\": 1791219600000,\n    \"applied_by\": \"Mara Quill\",\n    \"how\": \"person\",\n    \"summary\": \"First lines, read with Mara\",\n    \"proposal\": \"xp-2\"\n  },\n  \"versions\": [\n    {\n      \"version\": 1,\n      \"summary\": \"First lines, read with Mara\",\n      \"how\": \"person\",\n      \"applied_at\": 1791219600000,\n      \"applied_by\": \"Mara Quill\",\n      \"active\": 2\n    }\n  ],\n  \"proposals\": [\n    {\n      \"short_id\": \"xp-2\",\n      \"status\": \"applied\",\n      \"summary\": \"First lines, read with Mara\",\n      \"changes\": 2,\n      \"base_version\": 0,\n      \"applied_version\": 1,\n      \"since\": 1789430400000,\n      \"until\": 1791219600000,\n      \"created_at\": 1791219600000\n    }\n  ],\n  \"cursor\": 1791219600000,\n  \"cursor_at\": \"2026-10-05T17:00:00.000Z\"\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "expectations",
+          "show",
+          "--project",
+          "pj-42"
+        ],
+        "out": "Expectations for Callers & Call Management, version 1 (2026-10-05).\nGrade against the active lines below. A finding names the id it breaks and version 1.\n\n## Call cards\nex-callers-call-1: A caller's card shows the facts the contact gave, never a guess.\n  - call cl-149:88 (2026-10-04): \"the card shows what they told us, never what we guessed\"\n\n## Callbacks\nex-callers-call-2: A callback is scheduled only when the contact asked for one.\n  - call cl-149:140 (2026-10-04): \"we only call back when they asked us to\"\n\nVersion 1 of 1, applied by Mara Quill from xp-2: First lines, read with Mara\nContext read up to 2026-10-05T17:00:00.000Z.\n"
+      },
+      {
+        "argv": [
+          "project",
+          "ls"
+        ],
+        "out": "[\n  {\n    \"_id\": \"pj7infra\",\n    \"short_id\": \"pj-41\",\n    \"title\": \"Infrastructure\",\n    \"status\": \"active\",\n    \"team_id\": \"t7larkspur\"\n  },\n  {\n    \"_id\": \"pj7callers\",\n    \"short_id\": \"pj-42\",\n    \"title\": \"Callers & Call Management\",\n    \"status\": \"active\",\n    \"team_id\": \"t7larkspur\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "calls"
+        ],
+        "out": "[\n  {\n    \"ref\": \"cl-152\",\n    \"short_id\": \"cl-152\",\n    \"title\": \"Domain fleet costs\",\n    \"display_title\": \"Domain fleet costs\",\n    \"status\": \"ended\",\n    \"started_at\": 1791219900000,\n    \"ended_at\": 1791222120000,\n    \"participants\": [\n      {\n        \"id\": \"u7mara\",\n        \"name\": \"Mara Quill\"\n      },\n      {\n        \"id\": \"u7theo\",\n        \"name\": \"Theo Lind\"\n      }\n    ],\n    \"summary\": \"Theo and Mara went over the domain fleet bill after the Workers Paid move and agreed to look at it again next month. Nothing about calling changed.\",\n    \"summary_status\": \"done\"\n  },\n  {\n    \"ref\": \"cl-149\",\n    \"short_id\": \"cl-149\",\n    \"title\": \"Call cards and callbacks\",\n    \"display_title\": \"Call cards and callbacks\",\n    \"status\": \"ended\",\n    \"started_at\": 1791126000000,\n    \"ended_at\": 1791128700000,\n    \"participants\": [\n      {\n        \"id\": \"u7mara\",\n        \"name\": \"Mara Quill\"\n      },\n      {\n        \"id\": \"u7ines\",\n        \"name\": \"Ines Okafor\"\n      }\n    ],\n    \"summary\": \"Mara ruled that a caller's card shows what the contact told us, never a guess, and that a callback happens only when the contact asked.\",\n    \"summary_status\": \"done\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "call",
+          "cl-152"
+        ],
+        "out": "cl-152 Domain fleet costs (2026-10-05, 37 min)\n\n[0] Theo Lind: September came in at five dollars for the fleet.\n[1] Mara Quill: Fine. Let's look again next month.\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "call",
+          "cl-149"
+        ],
+        "out": "cl-149 Call cards and callbacks (2026-10-04, 45 min)\n\n[88] Mara Quill: The card shows what they told us, never what we guessed.\n[140] Mara Quill: And we only call back when they asked us to.\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "channels"
+        ],
+        "out": "{\n  \"channels\": [\n    {\n      \"_id\": \"hx7team\",\n      \"kind\": \"channel\",\n      \"name\": \"team\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    },\n    {\n      \"_id\": \"hx7infra\",\n      \"kind\": \"channel\",\n      \"name\": \"infra\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    },\n    {\n      \"_id\": \"hx7callers\",\n      \"kind\": \"channel\",\n      \"name\": \"callers\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    }\n  ]\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7callers"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7ines\",\n      \"name\": \"Ines Okafor\",\n      \"is_bot\": false\n    },\n    {\n      \"_id\": \"u7scribe\",\n      \"name\": \"Call scribe\",\n      \"is_bot\": true\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17callers0old\",\n      \"channel_id\": \"hx7callers\",\n      \"user_id\": \"u7ines\",\n      \"author_kind\": \"user\",\n      \"content\": \"Thanks Mara, noted on callbacks.\",\n      \"created_at\": 1791136800000,\n      \"team_id\": \"t7larkspur\"\n    },\n    {\n      \"_id\": \"j17callers0digest\",\n      \"channel_id\": \"hx7callers\",\n      \"user_id\": \"u7scribe\",\n      \"author_kind\": \"agent\",\n      \"content\": \"Call summary (cl-149, Oct 4): Mara ruled that the card shows what the contact told us, never a guess, and that we only call back when they asked us to.\",\n      \"created_at\": 1791222600000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7team"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7theo\",\n      \"name\": \"Theo Lind\",\n      \"is_bot\": false\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17team0deploy\",\n      \"channel_id\": \"hx7team\",\n      \"user_id\": \"u7theo\",\n      \"author_kind\": \"user\",\n      \"content\": \"deploy going out at 6\",\n      \"created_at\": 1791221400000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7infra"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7theo\",\n      \"name\": \"Theo Lind\",\n      \"is_bot\": false\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17infra0bill\",\n      \"channel_id\": \"hx7infra\",\n      \"user_id\": \"u7theo\",\n      \"author_kind\": \"user\",\n      \"content\": \"Fleet bill for September attached, $5 as expected.\",\n      \"created_at\": 1791222240000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "search"
+        ],
+        "out": "{\n  \"messages\": [],\n  \"authors\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "thread"
+        ],
+        "out": "{\n  \"root\": null,\n  \"replies\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "ls"
+        ],
+        "out": "[\n  {\n    \"project_id\": \"pj7callers\",\n    \"team_id\": \"t7larkspur\",\n    \"task_type\": \"task\",\n    \"priority\": \"medium\",\n    \"blocks\": [],\n    \"labels\": [],\n    \"subtasks\": [],\n    \"_id\": \"mh7t60500\",\n    \"short_id\": \"ct-60500\",\n    \"title\": \"Voicemail on unanswered calls\",\n    \"status\": \"done\",\n    \"source\": \"human\",\n    \"creator_name\": \"Ines Okafor\",\n    \"created_at\": 1791018000000,\n    \"updated_at\": 1791129900000,\n    \"closed_at\": 1791129900000,\n    \"description\": \"Do we leave voicemails? Asking before Thursday's list.\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-60500"
+        ],
+        "out": "{\n  \"project_id\": \"pj7callers\",\n  \"team_id\": \"t7larkspur\",\n  \"task_type\": \"task\",\n  \"priority\": \"medium\",\n  \"blocks\": [],\n  \"decisions\": [\n    {\n      \"short_id\": \"sd-139\",\n      \"question\": \"Should callers leave a voicemail when nobody picks up?\",\n      \"options\": [\n        {\n          \"label\": \"On the second attempt only\"\n        },\n        {\n          \"label\": \"Never\"\n        }\n      ],\n      \"status\": \"answered\",\n      \"answer_index\": 0,\n      \"answer_text\": \"Leave one on the second attempt only.\",\n      \"answered_by\": \"Mara Quill\",\n      \"answered_at\": 1791129600000\n    }\n  ],\n  \"history\": [],\n  \"labels\": [],\n  \"subtasks\": [],\n  \"_id\": \"mh7t60500\",\n  \"short_id\": \"ct-60500\",\n  \"title\": \"Voicemail on unanswered calls\",\n  \"status\": \"done\",\n  \"source\": \"human\",\n  \"creator_name\": \"Ines Okafor\",\n  \"created_at\": 1791018000000,\n  \"updated_at\": 1791129900000,\n  \"closed_at\": 1791129900000,\n  \"description\": \"Do we leave voicemails? Asking before Thursday's list.\",\n  \"comments\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "[]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-139"
+        ],
+        "out": "{\n  \"short_id\": \"sd-139\",\n  \"question\": \"Should callers leave a voicemail when nobody picks up?\",\n  \"options\": [\n    {\n      \"label\": \"On the second attempt only\"\n    },\n    {\n      \"label\": \"Never\"\n    }\n  ],\n  \"status\": \"answered\",\n  \"answer_index\": 0,\n  \"answer_text\": \"Leave one on the second attempt only.\",\n  \"answered_by\": \"Mara Quill\",\n  \"answered_at\": 1791129600000\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-140"
+        ],
+        "out": "{\n  \"short_id\": \"sd-140\",\n  \"question\": \"A contact gave Ines a new email on a call. Should the enrichment vendor be allowed to overwrite it on its next sync?\",\n  \"options\": [\n    {\n      \"label\": \"The contact's address wins\"\n    },\n    {\n      \"label\": \"The vendor's address wins\"\n    }\n  ],\n  \"status\": \"answered\",\n  \"answer_index\": 0,\n  \"answer_text\": \"The address the contact gives us wins.\",\n  \"answered_by\": {\n    \"kind\": \"user\",\n    \"name\": \"Mara Quill\"\n  },\n  \"answered_at\": 1791037200000,\n  \"created_at\": 1791025200000\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "search"
+        ],
+        "out": "<SEARCHRESULTS>\nNo matches found. Use --mine for only your sessions, -g for all teams.\n</SEARCHRESULTS>\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "feed"
+        ],
+        "out": "<FEED>\nRecent conversations (2)\n\n── Infra lead ──\njx7inf1 | done | 2 days ago | ~/src/larkspur\n\n── Thursday call list ──\njx7cal2 | done | 3 days ago | ~/src/larkspur\n</FEED>\n",
+        "prefix": true
+      }
+    ]
+  }
+}

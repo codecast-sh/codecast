@@ -317,6 +317,47 @@ describe("authors", () => {
     expect(story.conversation_ids.map(String)).not.toContain(String(ids.priv));
   });
 
+  test("a slice of a batch commit names only the session whose edits are in its area, and an edit already committed earlier is not a later commit's", async () => {
+    const { t, ids, commit, build, stories } = await setup();
+    const sessions = await t.run(async (ctx) => {
+      const make = async (short: string, at0: string) => {
+        const conv = await ctx.db.insert("conversations", {
+          user_id: ids.ana, team_id: ids.team, agent_type: "claude_code", session_id: `s-${short}`, short_id: short, title: short,
+          started_at: at(at0), updated_at: at("13:00"), message_count: 9, is_private: false, status: "active", git_root: "/repo",
+        } as any);
+        await ctx.db.insert("session_insights", {
+          conversation_id: conv, team_id: ids.team, actor_user_id: ids.ana, source: "idle", generated_at: at("13:00"),
+          summary: short, headline: short, outcome_type: "shipped", themes: [],
+        } as any);
+        return conv;
+      };
+      const edit = async (conv: any, key: string, path: string, time: string) => {
+        const message = await ctx.db.insert("messages", { conversation_id: conv, message_uuid: key, role: "assistant", content: "edit", timestamp: at(time) } as any);
+        await ctx.db.insert("file_changes", { conversation_id: conv, change_key: key, message_id: message, seq: 0, file_path: `/repo/${path}`, change_type: "edit", timestamp: at(time) } as any);
+      };
+      const webAuthor = await make("jx7wwww", "06:00");
+      const apiAuthor = await make("jx7pppp", "06:00");
+      const early = await make("jx7eeee", "05:00");
+      for (let i = 0; i < 4; i++) await edit(webAuthor, `w${i}`, `packages/web/sweep${i}.tsx`, "07:30");
+      for (let i = 0; i < 4; i++) await edit(apiAuthor, `p${i}`, `packages/api/sweep${i}.ts`, "07:40");
+      // Committed at 07:00 in e1; the 08:00 sweep touching the same file does not carry it.
+      await edit(early, "e0", "packages/web/sweep0.tsx", "06:30");
+      return { webAuthor, apiAuthor, early };
+    });
+    await commit("e1", "fix(web): first pass", "07:00", ["packages/web/sweep0.tsx"]);
+    const files = [...[0, 1, 2, 3].map((i) => `packages/web/sweep${i}.tsx`), ...[0, 1, 2, 3].map((i) => `packages/api/sweep${i}.ts`), "docs/sweep.md"];
+    await commit("sw", "chore: sweep before the cut", "08:00", files);
+    await build();
+    const all = await stories();
+    const web = all.find((x) => x.commit_shas.includes("sw") && x.area === "web")!;
+    const api = all.find((x) => x.commit_shas.includes("sw") && x.area === "api")!;
+    expect(web.conversation_ids.map(String)).toContain(String(sessions.webAuthor));
+    expect(web.conversation_ids.map(String)).not.toContain(String(sessions.apiAuthor));
+    expect(api.conversation_ids.map(String)).toContain(String(sessions.apiAuthor));
+    expect(api.conversation_ids.map(String)).not.toContain(String(sessions.webAuthor));
+    expect([...web.conversation_ids, ...api.conversation_ids].map(String)).not.toContain(String(sessions.early));
+  });
+
   test("a past day finds its author under a later week's sessions", async () => {
     const { t, ids, build, byShas } = await setup();
     const author = await t.run(async (ctx) => {

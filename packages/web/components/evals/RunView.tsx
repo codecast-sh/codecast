@@ -2,27 +2,24 @@
 // everything one rep did and why it scored what it did. RunPage feeds it from
 // GET /run/:id and the freeze's GET /freeze/:id (the moment, the production
 // reply, and the freeze's other runs and epochs for the prompt diffs); the
-// fixture in __fixtures__/run.ts feeds it in the mount test.
+// fixture in __fixtures__/run.ts feeds it in the mount test. It reads the app
+// only through its host (host.tsx): the key hints, and the tabs the host adds
+// after Verdict and Moment (useRunPanels: codecast's calls, agent, guard and
+// files).
 
 import { useEffect, useRef, type ReactNode } from "react";
 import { ArrowLeftRight, FolderOpen, RotateCcw, Scale } from "lucide-react";
 import type { FreezeResponse, RunResponse, RunRow, ScoreJson } from "@codecast/shared/contracts/evalsApi";
-import type { ShortcutAction } from "../../shortcuts";
-import { KeyHint } from "../changes/useChangesKeys";
-import { AgentTranscript } from "./AgentTranscript";
-import { CallPane, Caret, CopyButton, TextPane } from "./CallPane";
 import { PASS_MARK } from "./charts/scale";
 import { evalsHref } from "./evalsPaths";
 import { MomentPane, ProductionCard } from "./FreezeView";
 import { GateList } from "./GateList";
-import { GuardLog } from "./GuardLog";
+import { useEvalsHost, type RunPanel } from "./host";
 import { JudgeCall, JudgeChecks, MissedFloors, RubricCard, ScoreHistory } from "./JudgeChecks";
-import { EvalsLink, LockBadge, ProvenanceChips, VerdictGlyph } from "./parts";
-import { RunFiles, type OpenFile } from "./RunFiles";
-import "./run.css";
+import { Caret, CopyButton, EvalsLink, KeyHint, LockBadge, ProvenanceChips, TextPane, VerdictGlyph } from "./parts";
 import { score2, shortSha, usd } from "./format";
 import { verdictOfRow } from "./verdictModel";
-import { type RunTab, RUN_TAB_WORDS, runTabs, epochOfBatch, previousEpochRun, seedNeighbours, samePromptSpread, runCommands, compareCandidates, replyReading, rubricOfRun, dryGradeWords, dodgeOffsets } from "./runModel";
+import { RUN_TABS, RUN_TAB_WORDS, epochOfBatch, previousEpochRun, seedNeighbours, samePromptSpread, runCommands, compareCandidates, replyReading, rubricOfRun, dryGradeWords, dodgeOffsets } from "./runModel";
 import { replyOfRun } from "./freezeModel";
 
 // ── Header ──────────────────────────────────────────────────────────────────
@@ -72,7 +69,7 @@ function SeedStrip({ row, all }: { row: RunRow; all: RunRow[] }) {
                 {state === "crash" ? (
                   <path d={`M${cx - 3.5},${cy - 3.5} L${cx + 3.5},${cy + 3.5} M${cx + 3.5},${cy - 3.5} L${cx - 3.5},${cy + 3.5}`} stroke="currentColor" strokeWidth={1.6} />
                 ) : (
-                  <circle cx={cx} cy={cy} r={4} fill={state === "pass" ? "currentColor" : "var(--sol-card)"} stroke="currentColor" strokeWidth={1.5} />
+                  <circle cx={cx} cy={cy} r={4} fill={state === "pass" ? "currentColor" : "var(--ev-card)"} stroke="currentColor" strokeWidth={1.5} />
                 )}
                 <title>{label}</title>
               </g>
@@ -123,7 +120,7 @@ function ComparePicker({ run, freezeRuns, onClose }: { run: RunResponse; freezeR
             <EvalsLink key={c.id} href={evalsHref.compare(run.row.id, c.id)} className="ev-picker-item" role="option" onClick={onClose} data-ev-pick={c.id}>
               {c.row ? <VerdictGlyph state={verdictOfRow(c.row)} size={10} /> : <span style={{ width: 10 }} />}
               <span>{c.label}</span>
-              <span className="flex-1" />
+              <span className="ev-grow" />
               {c.row && <span className="ev-tabular">{score2(c.row.score)}</span>}
               <span className="ev-mono">{shortSha(c.row?.gitHead ?? null)}</span>
             </EvalsLink>
@@ -134,17 +131,19 @@ function ComparePicker({ run, freezeRuns, onClose }: { run: RunResponse; freezeR
   );
 }
 
-/** Registered shortcuts as keycaps, read from the registry so a hint never drifts from its binding. */
-function Keys({ actions, children }: { actions: ShortcutAction[]; children: ReactNode }) {
+/** A page's keys as the host draws them (codecast reads its registry, so a hint never drifts from its binding). */
+function Keys({ actions, children }: { actions: Record<string, string>; children: ReactNode }) {
   return (
     <span className="ev-keys">
-      {actions.map((a) => (
-        <KeyHint key={a} action={a} />
+      {Object.entries(actions).map(([action, keys]) => (
+        <KeyHint key={action} action={action} keys={keys} />
       ))}
       {children}
     </span>
   );
 }
+
+const noPanels = (): RunPanel[] => [];
 
 // ── The view ────────────────────────────────────────────────────────────────
 
@@ -153,14 +152,13 @@ export interface RunViewProps {
   /** The freeze's own record: its moment, production reply, other runs and epochs. Null while it loads. */
   freeze: FreezeResponse | null;
   evalsHome: string | null;
-  tab: RunTab;
-  onTab: (tab: RunTab) => void;
+  /** The open tab: Verdict, Moment, or a host panel's id. A name the run has no tab for opens Verdict. */
+  tab: string;
+  onTab: (tab: string) => void;
   /** The gate or check the address names, highlighted where it sits. */
   target: string | null;
   anchorHref: (anchor: string) => string;
   onAnchor: (anchor: string) => void;
-  file: OpenFile | null;
-  onOpenFile: (path: string) => void;
   picking: boolean;
   onPicking: (open: boolean) => void;
   overlayProduction: boolean;
@@ -174,15 +172,17 @@ export function RunView(p: RunViewProps) {
   const row = run.row;
   const state = verdictOfRow(row);
   const passMark = run.score?.passMark ?? row.passMark ?? PASS_MARK;
-  const tabs = runTabs(run);
-  const tab = tabs.includes(p.tab) ? p.tab : "verdict";
   const epochs = freeze?.epochs ?? [];
   const epoch = epochOfBatch(row.batchAt, epochs);
   const prevEpoch = freeze ? previousEpochRun(row, freeze.runs, epochs) : { id: null, why: "The freeze's other runs are still loading" };
+  const useRunPanels = useEvalsHost().useRunPanels ?? noPanels;
+  const panels = useRunPanels(run, { previousEpoch: prevEpoch });
+  const tabs: string[] = [...RUN_TABS, ...panels.map((x) => x.id)];
+  const tab = tabs.includes(p.tab) ? p.tab : "verdict";
+  const panel = panels.find((x) => x.id === tab) ?? null;
   const seeds = seedNeighbours(row, run.siblings);
   const spread = freeze ? samePromptSpread(row, freeze.runs) : null;
   const cmds = runCommands(row, p.evalsHome);
-  const guardFlag = row.guard.live > 0 || run.guard.some((g) => g.status === "LIVE");
 
   return (
     <div className="ev-page ev-run" data-evals-run={row.id} data-ev-run-status={row.status}>
@@ -208,7 +208,7 @@ export function RunView(p: RunViewProps) {
         <div className="ev-run-row">
           <div className="ev-run-score">
             <VerdictGlyph state={state} size={26} />
-            <div className="flex flex-col gap-1">
+            <div className="ev-run-score-col">
               <span className={`ev-num ${state === "pass" ? "" : state === "fail" ? "ev-fail" : "ev-quiet"}`} data-ev-score>
                 {state === "dry" ? "dry" : row.score === null ? (state === "crash" ? "crash" : "--") : score2(row.score)}
               </span>
@@ -241,7 +241,7 @@ export function RunView(p: RunViewProps) {
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+      <div className="ev-run-bar">
         <SeedStrip row={row} all={seeds.all} />
         {spread && (
           <span className="ev-seeds" data-ev-same-prompt={spread.batches} title="This freeze's graded reps that rendered this exact prompt (promptSha), bisect probes left out">
@@ -252,30 +252,33 @@ export function RunView(p: RunViewProps) {
           <CopyButton text={cmds.path} what="the run folder path" label="path" icon={<FolderOpen />} />
           <CopyButton text={cmds.replay} what="the replay command" label="replay" icon={<RotateCcw />} />
           <CopyButton text={cmds.rescore} what="the rescore command" label="rescore" />
-          <span className="relative">
+          <span className="ev-run-pick">
             <button type="button" className="ev-btn" aria-pressed={p.picking} aria-haspopup="listbox" onClick={() => p.onPicking(!p.picking)} data-ev-compare-open>
               <ArrowLeftRight /> compare with
             </button>
             {p.picking && <ComparePicker run={run} freezeRuns={freeze?.runs ?? []} onClose={() => p.onPicking(false)} />}
           </span>
         </div>
-        <span className="flex-1" />
-        <div className="flex flex-wrap gap-3">
-          <Keys actions={["evalsRun.nextSeed", "evalsRun.prevSeed"]}>seed</Keys>
-          <Keys actions={["evalsRun.prevBatch", "evalsRun.nextBatch"]}>batch</Keys>
-          <Keys actions={["evalsRun.compare"]}>compare</Keys>
+        <span className="ev-grow" />
+        <div className="ev-run-hints">
+          <Keys actions={{ "evalsRun.nextSeed": "j", "evalsRun.prevSeed": "k" }}>seed</Keys>
+          <Keys actions={{ "evalsRun.prevBatch": "[", "evalsRun.nextBatch": "]" }}>batch</Keys>
+          <Keys actions={{ "evalsRun.compare": "c" }}>compare</Keys>
         </div>
       </div>
 
       <nav className="ev-run-tabs" role="tablist" aria-label="This run">
-        {tabs.map((t) => (
+        {RUN_TABS.map((t) => (
           <button key={t} type="button" role="tab" className="ev-tab" aria-current={t === tab ? "page" : undefined} aria-selected={t === tab} onClick={() => p.onTab(t)} data-ev-tab={t}>
             {RUN_TAB_WORDS[t]}
             {t === "verdict" && state !== "dry" && run.score?.gates.some((g) => !g.pass) && <span className="ev-tab-flag" title="A gate failed" />}
-            {t === "calls" && <span className="ev-tab-count">{run.calls.length}</span>}
-            {t === "guard" && <span className="ev-tab-count">{run.guard.length}</span>}
-            {t === "guard" && guardFlag && <span className="ev-tab-flag" title="It read the live workspace" />}
-            {t === "files" && <span className="ev-tab-count">{run.files.filter((f) => f.kind === "file").length}</span>}
+          </button>
+        ))}
+        {panels.map((x) => (
+          <button key={x.id} type="button" role="tab" className="ev-tab" aria-current={x.id === tab ? "page" : undefined} aria-selected={x.id === tab} onClick={() => p.onTab(x.id)} data-ev-tab={x.id}>
+            {x.label}
+            {x.count !== undefined && <span className="ev-tab-count">{x.count}</span>}
+            {x.flag && <span className="ev-tab-flag" title={x.flag} />}
           </button>
         ))}
       </nav>
@@ -283,28 +286,7 @@ export function RunView(p: RunViewProps) {
       <div role="tabpanel" data-ev-panel={tab}>
         {tab === "verdict" && <VerdictTab {...p} />}
         {tab === "moment" && <MomentTab run={run} freeze={freeze} overlay={p.overlayProduction} onOverlay={p.onOverlayProduction} />}
-        {tab === "calls" &&
-          (run.calls.length ? (
-            <div className="flex flex-col gap-4">
-              {run.calls.map((c) => (
-                <CallPane key={c.n} call={c} runId={row.id} dry={row.status === "dry"} previousEpochRun={prevEpoch.id} previousWhy={prevEpoch.why} />
-              ))}
-            </div>
-          ) : (
-            <div className="ev-card ev-empty-note">{row.status === "crash" ? "The rep crashed before its first call landed." : "This rep made no model calls."}</div>
-          ))}
-        {tab === "agent" &&
-          (run.agents.length ? (
-            <div className="flex flex-col gap-6">
-              {run.agents.map((a) => (
-                <AgentTranscript key={a.n} agent={a} runId={row.id} previousEpochRun={prevEpoch.id} previousWhy={prevEpoch.why} />
-              ))}
-            </div>
-          ) : (
-            <div className="ev-card ev-empty-note">{row.status === "crash" ? "The rep crashed before the agent wrote a turn." : "No agent folder in this run."}</div>
-          ))}
-        {tab === "guard" && <GuardLog entries={run.guard} counts={row.guard} />}
-        {tab === "files" && <RunFiles files={run.files} open={p.file} onOpen={p.onOpenFile} />}
+        {panel?.body}
       </div>
     </div>
   );
@@ -317,7 +299,7 @@ function Grade({ score, p }: { score: ScoreJson; p: RunViewProps }) {
       <section className="ev-section">
         <h2 className="ev-title">
           <VerdictGlyph state={score.gates.every((g) => g.pass) ? "pass" : "fail"} /> Gates
-          <span className="text-[11.5px] font-normal ev-quiet">
+          <span className="ev-title-note">
             {score.gates.filter((g) => !g.pass).length} of {score.gates.length} failed
           </span>
         </h2>
@@ -326,7 +308,7 @@ function Grade({ score, p }: { score: ScoreJson; p: RunViewProps }) {
       <section className="ev-section">
         <h2 className="ev-title">
           <VerdictGlyph state={score.pass ? "pass" : "fail"} /> Judged checks
-          <span className="text-[11.5px] font-normal ev-quiet ev-tabular">
+          <span className="ev-title-note ev-tabular">
             total {score2(score.score)} against {score2(score.passMark)}
           </span>
         </h2>
@@ -352,13 +334,13 @@ function VerdictTab(p: RunViewProps) {
   const reply = replyOfRun(run);
   const rubric = !score || dry ? rubricOfRun(run, p.freeze, run.row.passMark ?? PASS_MARK) : null;
   return (
-    <div className="flex flex-col gap-6" data-ev-verdict-tab>
+    <div className="ev-run-verdict" data-ev-verdict-tab>
       {/* The reply first: the judge's reasoning below reads against it, without a trip to the Moment tab. A dry rep has no reply: the model was never called. */}
       {status !== "crash" && !dry && (
         <section className="ev-section" data-ev-verdict-reply>
           <h2 className="ev-title">
             <VerdictGlyph state={verdictOfRow(run.row)} /> What it answered
-            <span className="text-[11.5px] font-normal ev-quiet">{replyReading(run)}</span>
+            <span className="ev-title-note">{replyReading(run)}</span>
           </h2>
           <div className="ev-card ev-verdict-reply">{reply ? <div className="ev-reply-text">{reply}</div> : <div className="ev-empty-note">No reply on record.</div>}</div>
         </section>
@@ -377,7 +359,7 @@ function VerdictTab(p: RunViewProps) {
             <span>The tool also graded the rendered prompt</span>
             <span className="ev-pane-size">{dryGradeWords(score)}</span>
           </summary>
-          <div className="flex flex-col gap-6 p-3">
+          <div className="ev-run-verdict ev-run-fold">
             <div className="ev-empty-note">A dry render never calls the model, so its one send is the prompt it rendered. The grade below scored that prompt as if it were a reply. No verdict, flip or bisect reads it.</div>
             <Grade score={score} p={p} />
             {run.judge && <JudgeCall judge={run.judge} />}
@@ -389,7 +371,7 @@ function VerdictTab(p: RunViewProps) {
         <section className="ev-section">
           <h2 className="ev-title">
             <VerdictGlyph state="unscored" /> Score history
-            <span className="text-[11.5px] font-normal ev-quiet">{run.scoreVersions.length} version{run.scoreVersions.length === 1 ? "" : "s"}</span>
+            <span className="ev-title-note">{run.scoreVersions.length} version{run.scoreVersions.length === 1 ? "" : "s"}</span>
           </h2>
           <ScoreHistory versions={run.scoreVersions} />
         </section>
@@ -415,21 +397,21 @@ function MomentTab({ run, freeze, overlay, onOverlay }: { run: RunResponse; free
       ) : (
         <div className="ev-card ev-empty-note">Reading the frozen moment...</div>
       )}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2">
+      <div className="ev-moment-side">
+        <div className="ev-moment-head">
           <span className="ev-title">What this rep sent</span>
           {run.row.status !== "dry" && (
-            <span className="text-[11.5px] ev-quiet">
+            <span className="ev-title-note">
               {run.sends.length} send{run.sends.length === 1 ? "" : "s"}
             </span>
           )}
-          <span className="flex-1" />
+          <span className="ev-grow" />
           <button type="button" className="ev-btn" aria-pressed={overlay} onClick={() => onOverlay(!overlay)} disabled={!freeze} data-ev-overlay>
             production reply {overlay ? "on" : "off"}
           </button>
         </div>
         {overlay && freeze && <ProductionCard production={freeze.production} surface={run.row.surface} />}
-        <section className="ev-card overflow-hidden" data-ev-sends>
+        <section className="ev-card ev-card--flush" data-ev-sends>
           {run.row.status === "dry" ? (
             <div className="ev-empty-note">A dry render calls no model and sends nothing. What it rendered is on the Calls or Agent tab.</div>
           ) : !run.sends.length ? (

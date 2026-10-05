@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
-import { ArrowLeft, ArrowRight, ChevronRight, MoveRight, Split } from "lucide-react";
+import { ArrowLeft, ArrowRight, ArrowRightLeft, ChevronRight, MoveRight, Send, Split } from "lucide-react";
 import { AGENT_MODEL_CONFIG, cloudAgentLaunch, cloudAgentLaunchWords, findModelOption, isCloudAgentBranch, modelAgentKey, type ConvexAgentType } from "@codecast/shared/contracts";
 import { formatShortcutParts, getShortcutsForAction, useShortcuts } from "../shortcuts";
 import { KeyCap } from "./KeyboardShortcutsHelp";
@@ -12,7 +12,7 @@ import { useInboxStore, type InboxSession } from "../store/inboxStore";
 import { formatModel } from "../lib/conversationProcessor";
 import { modelOptionKey, modelFitsAgent, effortGlyph, canControlModel } from "../lib/modelSwitch";
 import { commitModelChange } from "../lib/modelSwitchWeb";
-import { switchSessionAgent, forkSessionAsAgent } from "../lib/sessionAgentActions";
+import { switchSessionAgent, forkSessionAsAgent, sessionRowFor } from "../lib/sessionAgentActions";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { agentAccent } from "../lib/agentColors";
 import { AgentTypeIcon, formatAgentType } from "./AgentTypeIcon";
@@ -37,16 +37,7 @@ import { useCloudAgentOfConversation } from "./cloudAgents/sessionAgent";
 
 const SECTION_LABEL = "px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-sol-text-dim";
 
-type SessionRow = Pick<InboxSession, "_id" | "title" | "agent_type" | "project_path" | "git_root">;
-
-/** The row the move actions act on: the live store row, else a minimal
- *  stand-in from what the header already knows. */
-function sessionRowFor(conversationId: string, agentType: string | undefined): SessionRow {
-  const s = useInboxStore.getState();
-  const id = s.getConvexId(conversationId) ?? conversationId;
-  const row = (s.sessions[id] ?? s.conversations[id]) as SessionRow | undefined;
-  return row ?? ({ _id: conversationId, agent_type: agentType } as SessionRow);
-}
+const MOVE_VERB_ICON: Record<MoveVerb, typeof Split> = { switch: ArrowRightLeft, fork: Split, handoff: Send };
 
 function modelStampForPick(agentType: string | undefined, key: string): string | undefined {
   if (key === "default") return undefined;
@@ -394,7 +385,7 @@ export function SessionControlPanel({
       <div className="pb-1">
         {verbs.map((verb) => {
           const meta = MOVE_VERBS[verb];
-          const Icon = meta.icon;
+          const Icon = MOVE_VERB_ICON[verb];
           return (
             <DropdownMenuItem
               key={verb}

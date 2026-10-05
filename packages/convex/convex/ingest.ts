@@ -13,6 +13,7 @@
 // returns the key hash; the ingest key itself is returned once, by create and
 // rotate.
 import { v } from "convex/values";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -1118,7 +1119,7 @@ async function announceTransition(ctx: any, source: Doc<"event_sources">, a: Ann
   });
   if (!created) return;
   if (eventType) {
-    await ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+    await scheduleTriggerMatch(ctx, {
       event_type: eventType,
       team_id: source.team_id,
       workspace: source.workspace,
@@ -1164,7 +1165,7 @@ async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract
     dedupe_key: key,
     created_at: d.at,
   });
-  await ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+  await scheduleTriggerMatch(ctx, {
     event_type: "deploy",
     team_id: source.team_id,
     workspace: source.workspace,

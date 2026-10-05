@@ -8,7 +8,7 @@ import { ShortId } from "../ShortId";
 import { ProjectLeadMark } from "../charter/ProjectLeadChip";
 import Link from "next/link";
 import { Handle, Position, useStore, type NodeProps, type Node } from "@xyflow/react";
-import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Check, Pencil, X, Clock, Sparkles, AlertTriangle } from "lucide-react";
+import { ChevronDown, ChevronRight, GitFork, Layers, Shield, Crown, Check, Pencil, Clock, Sparkles, AlertTriangle } from "lucide-react";
 import { Avatar } from "../tasks/TaskCommentStream";
 import { compactAge } from "../../lib/threadState";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -31,6 +31,8 @@ import { seatSentence } from "@codecast/shared/contracts/orgProposal";
 import { FLAG_LABEL } from "./staffingModel";
 import { RoleWeekBody } from "./orgFlowViz";
 import type { RoleFlow } from "./orgFlow";
+import type { GhostAnswers } from "./ProposalLedger";
+import { AnswerControls, LEDGER_INKS, pendingAnswerWords, useAnswerField } from "./ProposalSubjectCard";
 
 /** Five proportional segments in state order; an empty parent draws a hairline. */
 export function StateBar({ counts, className }: { counts: StateCounts; className?: string }) {
@@ -98,7 +100,9 @@ type CardData = {
   /** The change the chart is focused on: its action row shows on its card. */
   focusChangeId?: string | null;
   onFocusChange?: (changeId: string) => void;
-  onDecideChange?: (changeId: string, verdict: "accept" | "skip") => void;
+  /** The pending answers of the proposal's cards, by change (useGhostAnswers), and the write into that batch. Absent: the strips draw read only. */
+  answers?: GhostAnswers["byChange"];
+  onAnswerChange?: GhostAnswers["onAnswer"];
   /** Edit: the graph opens the hire dialog (a role) or an inline form (the rest) at the click. */
   onEditChange?: (changeId: string, at: { x: number; y: number }) => void;
 };
@@ -189,17 +193,23 @@ export function GhostChips({ chips, focusChangeId, onFocusChange, quiet }: { chi
     </div>
   );
 }
-/** The strip's height in CSS px: 28 on a pointer, 44 on touch (the class
- *  below switches on the coarse pointer media query). */
-const STRIP_H = 28;
+/** The strip's height in CSS px: 34 on a pointer (the ledger's 28px controls
+ *  inside a pill), 44 on touch (the class below switches on the coarse
+ *  pointer media query). The goals layout books GOALS_SIZES.actionRow for it. */
+const STRIP_H = 34;
 
-/** Accept, Edit, Skip: a pill strip hanging off the bottom edge of the card,
- *  led by the kind of change it acts on ("move · Accept · Edit · Skip"), so a
- *  card carrying several changes never leaves the person guessing. The strip
- *  is scaled by the inverse of the canvas zoom (up to a limit) so its hit
- *  size does not shrink with the tree. Accepted and applied changes show
- *  their word instead; a failed one keeps its actions (it stays decidable). */
-export type GhostActionHandlers = Pick<CardData, "chips" | "onDecideChange" | "onEditChange">;
+/** Approve, Reject, Reply, Edit: a pill strip hanging off the bottom edge of
+ *  the card, led by the kind of change it acts on ("move · Approve · Reject ·
+ *  Reply · Edit"), so a card carrying several changes never leaves the person
+ *  guessing. The answers are the ledger's own controls (ProposalSubjectCard)
+ *  over the same batch: nothing fires on a press, the answer waits for the
+ *  next message, and under the strip the ghost says so in words ("Approved,
+ *  on your next message", "Rejected: too soon"). Reply opens the ledger's
+ *  field under the strip. Edit (accept with edits) is the one direct verdict.
+ *  The strip is scaled by the inverse of the canvas zoom (up to a limit) so
+ *  its hit size does not shrink with the tree. Accepted and applied changes
+ *  show their word instead; a failed one keeps its actions (it stays decidable). */
+export type GhostActionHandlers = Pick<CardData, "chips" | "answers" | "onAnswerChange" | "onEditChange">;
 export function GhostActions({ meta, word, data, below: belowProp }: { meta: OrgGhostMeta; word: string; data: GhostActionHandlers; /** Fully under the card (the goals lens reserves the row); default: only past a chips row. */ below?: boolean }) {
   const decided = meta.status === "accepted" || meta.status === "applied";
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
@@ -207,42 +217,55 @@ export function GhostActions({ meta, word, data, below: belowProp }: { meta: Org
   // or two cards showing a strip, never the whole tree.
   const zoom = useStore((s) => s.transform[2]);
   const scale = Math.min(1.75, Math.max(1, 1 / (zoom || 1)));
-  const btn = "nodrag inline-flex items-center gap-1 h-full px-2 text-[10.5px] font-semibold transition-colors hover:brightness-110";
+  const answer = data.answers?.[meta.change_id] ?? null;
+  const { onAnswerChange } = data;
+  const onAnswer = onAnswerChange ? (a: Parameters<GhostAnswers["onAnswer"]>[1]) => onAnswerChange(meta.change_id, a) : undefined;
+  const { open, setOpen, field } = useAnswerField(answer, onAnswer, !decided);
+  const rule = "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)";
   // Straddling the bottom edge on a plain card; fully below one that ends in
   // a chips row, so the strip never covers the chips (the level gap is 56px).
+  // Anchored by its top: the words and the field grow downward from the pill.
   const below = belowProp ?? !!data.chips?.length;
   return (
     <div
-      className="absolute left-1/2 flex items-center rounded-full border overflow-hidden shadow-sm h-[28px] [@media(pointer:coarse)]:h-[44px]"
-      style={{
-        bottom: below ? -(STRIP_H + 4) : -(STRIP_H / 2),
-        background: "var(--sol-card)",
-        borderColor: `color-mix(in srgb, ${decided ? "var(--sol-cyan)" : "var(--sol-violet)"} 45%, transparent)`,
-        transform: `translateX(-50%) scale(${scale})`,
-        transformOrigin: below ? "top center" : "center",
-      }}
+      className={cn("nodrag nowheel absolute left-1/2 flex flex-col items-center gap-1", LEDGER_INKS)}
+      style={{ top: `calc(100% ${below ? "+" : "-"} ${below ? 4 : STRIP_H / 2}px)`, transform: `translateX(-50%) scale(${scale})`, transformOrigin: "top center" }}
       onPointerDown={stop}
       onClick={stop}
       data-ghost-actions={meta.change_id}
+      data-ghost-answer={answer?.verdict}
     >
-      <span className="h-full pl-2.5 pr-1.5 inline-flex items-center text-[10px] font-medium uppercase tracking-[0.06em]" style={{ color: decided ? "var(--sol-text-dim)" : GHOST.color }} data-ghost-word={word}>{word}</span>
-      {decided ? (
-        <span className="inline-flex items-center gap-1 h-full pr-2.5 pl-1 text-[10.5px] font-semibold" style={{ color: meta.status === "applied" ? "var(--sol-green)" : "var(--sol-cyan)" }}>
-          <Check className="w-3 h-3" /> {meta.status}
-        </span>
-      ) : (
-        <>
-          {meta.status === "failed" && <span className="h-full px-1.5 inline-flex items-center text-[10px] font-medium" style={{ color: "var(--sol-red)" }}>failed</span>}
-          <button type="button" className={btn} style={{ color: "var(--sol-cyan)", borderLeft: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)" }} onClick={() => data.onDecideChange?.(meta.change_id, "accept")} aria-label={`Accept ${word}`} title={meta.line}>
-            <Check className="w-3 h-3" /> Accept
-          </button>
-          <button type="button" className={btn} style={{ color: "var(--sol-text-muted)", borderLeft: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)" }} onClick={(e) => data.onEditChange?.(meta.change_id, { x: e.clientX, y: e.clientY })} aria-label={`Edit ${word}`}>
-            <Pencil className="w-3 h-3" /> Edit
-          </button>
-          <button type="button" className={btn} style={{ color: "var(--sol-text-dim)", borderLeft: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)" }} onClick={() => data.onDecideChange?.(meta.change_id, "skip")} aria-label={`Skip ${word}`}>
-            <X className="w-3 h-3" /> Skip
-          </button>
-        </>
+      <div
+        className="flex h-[34px] items-center overflow-hidden rounded-full border pr-1 shadow-sm [@media(pointer:coarse)]:h-[44px]"
+        style={{ background: "var(--sol-card)", borderColor: `color-mix(in srgb, ${decided ? "var(--sol-cyan)" : "var(--sol-violet)"} 45%, transparent)` }}
+      >
+        <span className="inline-flex h-full items-center whitespace-nowrap pl-2 pr-1 text-[10px] font-medium uppercase tracking-[0.06em]" style={{ color: decided ? "var(--sol-text-dim)" : GHOST.color }} data-ghost-word={word}>{word}</span>
+        {decided ? (
+          <span className="inline-flex h-full items-center gap-1 pl-1 pr-1.5 text-[10.5px] font-semibold" style={{ color: meta.status === "applied" ? "var(--sol-green)" : "var(--sol-cyan)" }}>
+            <Check className="w-3 h-3" /> {meta.status}
+          </span>
+        ) : (
+          <>
+            {meta.status === "failed" && <span className="inline-flex h-full items-center px-1.5 text-[10px] font-medium" style={{ color: "var(--sol-red)" }}>failed</span>}
+            {onAnswer && (
+              <span className="inline-flex items-center gap-0.5 whitespace-nowrap pl-1" style={{ borderLeft: rule }}>
+                <AnswerControls answer={answer} retry={meta.status === "failed"} dense onAnswer={onAnswer} open={open} onOpen={setOpen} />
+              </span>
+            )}
+            <button type="button" className="inline-flex h-7 items-center gap-1 px-1.5 text-[11px] font-normal transition-colors hover:bg-[color-mix(in_srgb,var(--sol-border)_16%,transparent)] hover:text-[color:var(--sol-text)] rounded-md" style={{ color: "var(--sol-text-muted)", marginLeft: onAnswer ? 2 : 0, ...(onAnswer ? {} : { borderLeft: rule, borderRadius: 0, height: "100%" }) }} onClick={(e) => data.onEditChange?.(meta.change_id, { x: e.clientX, y: e.clientY })} aria-label={`Edit ${word}`} title={meta.line} data-ghost-edit>
+              <Pencil className="w-3 h-3" /> Edit
+            </button>
+          </>
+        )}
+      </div>
+      {/* The ghost reads its answered state in words, as the card does; while the field is open the words are in it. */}
+      {!decided && answer && !open && (
+        <span className="max-w-[280px] truncate rounded-md px-2 py-[3px] text-[11px] leading-[16px] shadow-sm" style={{ background: "var(--sol-card)", color: answer.verdict === "reject" ? "var(--ink-red)" : "var(--sol-text-muted)", border: rule }} title={pendingAnswerWords(answer)} data-ghost-answered={answer.verdict}>{pendingAnswerWords(answer)}</span>
+      )}
+      {open && (
+        <div className="w-[280px] rounded-lg border p-2 text-left shadow-md" style={{ background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)" }} data-ghost-reply>
+          {field({})}
+        </div>
       )}
     </div>
   );

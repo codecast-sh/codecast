@@ -28,6 +28,7 @@ import {
   type ShipEvent,
   type VisibleConversation,
   clipToSentence,
+  pathInArea,
 } from "@codecast/shared/changes";
 import { teamVisibleInputs, teamVisibleRecentInsights, type ChangesInputMode } from "./lib/changesAccess";
 import { teamDayBounds } from "./lib/teamDay";
@@ -36,7 +37,7 @@ import { isHarnessScratch, normalizeRepository } from "./lib/gitRefs";
 import { canonicalCommandArguments } from "./localFirstCommands";
 
 /** Bumped by the story prompt (changesProse.ts) so every story's inputs_hash moves and prose regenerates. */
-export const STORY_PROMPT_VERSION = "story-9";
+export const STORY_PROMPT_VERSION = "story-12";
 
 /** Commits per page (spec 7.1 step 1). A commit someone opened on /commit carries its patches (up to
  *  1 MiB a row), so a page also stops at a byte budget well under the 16 MiB read cap. */
@@ -152,21 +153,25 @@ export type GateRow = {
  * absolute ones, so each candidate's checkout root joins them. Reads paths,
  * times and session ids only, never an edit's text.
  */
+/** A session that edited a commit's files before it, with the paths it edited. */
+export type CommitAuthor = { id: Id<"conversations">; paths: string[] };
+
 export const readAuthors = internalQuery({
   args: {
     team_id: v.id("teams"),
     repository: v.string(),
     since: v.number(),
     until: v.number(),
-    commits: v.array(v.object({ sha: v.string(), timestamp: v.number(), paths: v.array(v.string()) })),
+    // Each path counts edits made since it was last committed that day: an edit already in an earlier commit is not this one's.
+    commits: v.array(v.object({ sha: v.string(), timestamp: v.number(), paths: v.array(v.object({ path: v.string(), since: v.number() })) })),
   },
-  handler: async (ctx, args): Promise<Record<string, Id<"conversations">[]>> => {
+  handler: async (ctx, args): Promise<Record<string, CommitAuthor[]>> => {
     const repository = normalizeRepository(args.repository);
     const candidates = (await teamVisibleRecentInsights(ctx, args.team_id, args.since, AUTHOR_CANDIDATES, args.until)).filter(
       (c) => !!c.checkout_root && (!c.repository || normalizeRepository(c.repository) === repository),
     );
     const known = new Set(candidates.map((c) => String(c.conversation_id)));
-    const out: Record<string, Id<"conversations">[]> = {};
+    const out: Record<string, CommitAuthor[]> = {};
     for (const c of args.commits) {
       // The checkouts of sessions at work around the commit, busiest first.
       const busy = new Map<string, number>();
@@ -176,8 +181,8 @@ export const readAuthors = internalQuery({
         busy.set(root, (busy.get(root) ?? 0) + 1);
       }
       const roots = [...busy].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, AUTHOR_ROOTS).map(([root]) => root);
-      const score = new Map<string, { id: Id<"conversations">; files: number }>();
-      for (const path of c.paths) {
+      const score = new Map<string, CommitAuthor>();
+      for (const { path, since } of c.paths) {
         const hit = new Set<string>();
         for (const root of roots) {
           const rows: Doc<"file_changes">[] = await ctx.db
@@ -187,17 +192,17 @@ export const readAuthors = internalQuery({
             .take(30);
           for (const row of rows) {
             const id = String(row.conversation_id);
-            if (row.timestamp > c.timestamp || row.timestamp < c.timestamp - AUTHOR_LOOKBACK_MS) continue;
+            if (row.timestamp > c.timestamp || row.timestamp < since) continue;
             if (row.change_type === "commit" || row.change_type === "delete" || !known.has(id) || hit.has(id)) continue;
             hit.add(id);
-            const s = score.get(id) ?? { id: row.conversation_id, files: 0 };
-            s.files += 1;
+            const s = score.get(id) ?? { id: row.conversation_id, paths: [] };
+            s.paths.push(path);
             score.set(id, s);
           }
         }
       }
-      const top = [...score.values()].sort((a, b) => b.files - a.files || String(a.id).localeCompare(String(b.id))).slice(0, AUTHORS_PER_COMMIT);
-      if (top.length) out[c.sha] = top.map((t) => t.id);
+      const top = [...score.values()].sort((a, b) => b.paths.length - a.paths.length || String(a.id).localeCompare(String(b.id))).slice(0, AUTHORS_PER_COMMIT);
+      if (top.length) out[c.sha] = top;
     }
     return out;
   },
@@ -586,17 +591,24 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
   const { ships, merged } = await readShips(ctx, window);
 
   // Who wrote each main-branch commit, beside the session its trailer names.
-  const authors: Record<string, Id<"conversations">[]> = {};
-  const authored = commits.filter((c) => !c.branch || c.branch === day.default_branch || c.branch === "main" || c.branch === "master");
-  for (const batch of chunks(authored, AUTHOR_CHUNK)) {
+  const authors: Record<string, CommitAuthor[]> = {};
+  const authored = commits
+    .filter((c) => !c.branch || c.branch === day.default_branch || c.branch === "main" || c.branch === "master")
+    .sort((a, b) => a.timestamp - b.timestamp);
+  const lastCommitted = new Map<string, number>();
+  const asked = authored.map((c) => {
+    const paths = (c.top_paths ?? []).map((path) => ({ path, since: lastCommitted.get(path) ?? c.timestamp - AUTHOR_LOOKBACK_MS }));
+    for (const path of c.top_paths ?? []) lastCommitted.set(path, c.timestamp);
+    return { sha: c.sha, timestamp: c.timestamp, paths };
+  });
+  for (const batch of chunks(asked, AUTHOR_CHUNK)) {
     Object.assign(authors, await ctx.runQuery(internal.changes.readAuthors, {
-      team_id, repository, since: day.start - AUTHOR_LOOKBACK_MS, until: day.end + AUTHOR_LOOKAHEAD_MS,
-      commits: batch.map((c) => ({ sha: c.sha, timestamp: c.timestamp, paths: c.top_paths ?? [] })),
+      team_id, repository, since: day.start - AUTHOR_LOOKBACK_MS, until: day.end + AUTHOR_LOOKAHEAD_MS, commits: batch,
     }));
   }
   const convIds = [...new Set([
     ...commits.map((c) => c.conversation_id).filter((id): id is string => !!id),
-    ...Object.values(authors).flat().map(String),
+    ...Object.values(authors).flat().map((a) => String(a.id)),
   ])] as Id<"conversations">[];
   const gate: GateRow[] = [];
   for (const ids of chunks(convIds, GATE_CHUNK)) {
@@ -632,7 +644,12 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
   const writes: StoryWrite[] = result.stories.map((s) => {
     // The story's own sessions, then its commits' authors: grouping stays on
     // the trailers, and the authors only add what the story can tell.
-    const named = [...new Set([...s.conversation_ids, ...s.commit_shas.flatMap((sha) => (authors[sha] ?? []).map(String))])];
+    // A story names a commit's author only for work in it: a slice of a batch commit takes the authors whose edits fall in its areas.
+    const areas = Object.keys(s.area_counts);
+    const wrote = (sha: string) => (authors[sha] ?? [])
+      .filter((a) => s.whole_shas.includes(sha) || a.paths.some((p) => areas.some((area) => pathInArea(p, area))))
+      .map((a) => String(a.id));
+    const named = [...new Set([...s.conversation_ids, ...s.commit_shas.flatMap(wrote)])];
     const rows = named.filter((id) => gateById.has(id)).slice(0, STORY_SESSIONS).map((id) => gateById.get(id)!);
     const storyPrs = s.pr_ids.map((id) => prById.get(id)).filter((p): p is PrRow => !!p);
     return {

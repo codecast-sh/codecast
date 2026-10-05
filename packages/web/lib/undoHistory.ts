@@ -17,6 +17,7 @@
 //   timeline (the guard makes that safe); a manual one is closed for good.
 import { DEFAULT_UNDO_KEYBOARD_WINDOW_MS, undoKeyboardSince, undoRowCount, type UndoHistoryItem, type UndoHistorySnapshot } from "@platform/engine";
 import type { RecentVisit } from "../store/inboxStore";
+import type { ClientSyncStoreKey } from "../store/clientSyncRegistry";
 import { resolveVisit, type ResolvedVisit, type VisitResolveMemo } from "./recentVisits";
 import { visitDetailParts } from "./recentVisitDetails";
 import { paletteObjectPath } from "./paletteActions";
@@ -70,13 +71,30 @@ export type UndoTimelineModel = {
 // ---------------------------------------------------------------- objects
 
 const SESSION_STORES = new Set(["sessions", "conversations"]);
-const PAGE_TYPES: Record<string, "task" | "doc" | "plan" | "project" | "trigger"> = {
-  tasks: "task",
-  docs: "doc",
-  docDetails: "doc",
-  plans: "plan",
-  projects: "project",
-  triggers: "trigger",
+
+/**
+ * Every store an undo entry can name, keyed by its registry key (a key the
+ * registry does not have is a compile error, so a store that no writer touches
+ * cannot hold a mapping nobody reaches): the noun a group's fold counts it by,
+ * and where its row opens. Triggers live in two stores, the caller's own
+ * (agentTasks) and a teammate's (foreignTriggers).
+ */
+const OBJECT_KINDS: Partial<Record<ClientSyncStoreKey, { noun: string; path?: (id: string, row: any) => string }>> = {
+  sessions: { noun: "session" },
+  conversations: { noun: "session" },
+  bucketAssignments: { noun: "session" },
+  buckets: { noun: "label" },
+  tasks: { noun: "task", path: (id) => paletteObjectPath("task", { _id: id }) },
+  docs: { noun: "doc", path: (id) => paletteObjectPath("doc", { _id: id }) },
+  docDetails: { noun: "doc", path: (id) => paletteObjectPath("doc", { _id: id }) },
+  plans: { noun: "plan", path: (id) => paletteObjectPath("plan", { _id: id }) },
+  projects: { noun: "project", path: (id) => paletteObjectPath("project", { _id: id }) },
+  agentTasks: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
+  foreignTriggers: { noun: "trigger", path: (id) => paletteObjectPath("trigger", { _id: id }) },
+  initiatives: { noun: "initiative", path: (id, row) => initiativeHref({ _id: id, short_id: row?.short_id }) },
+  chatChannels: { noun: "channel", path: (id) => `/chat/${id}` },
+  decisionStacks: { noun: "stack", path: (id, row) => `/decisions/stacks/${row?.short_id ?? id}` },
+  savedViews: { noun: "view" },
 };
 
 const rowName = (row: any): string | undefined => row?.title ?? row?.display_title ?? row?.name ?? undefined;
@@ -94,16 +112,9 @@ export function describeUndoObject(state: any, store: string, id: string, ts = 0
   }
   if (store === "buckets") return { kind: "view", key: `label:${id}`, ts, label: state.buckets?.[id]?.name };
   const row = state[store]?.[id];
-  const label = rowName(row);
-  if (store === "chatChannels") return { kind: "page", key: `page:/chat/${id}`, ts, path: `/chat/${id}`, label };
-  if (store === "initiatives") {
-    const path = initiativeHref({ _id: id, short_id: row?.short_id });
-    return { kind: "page", key: `page:${path}`, ts, path, label };
-  }
-  const type = PAGE_TYPES[store];
-  if (!type) return null;
-  const path = paletteObjectPath(type, { _id: id });
-  return { kind: "page", key: `page:${path}`, ts, path, label };
+  const path = OBJECT_KINDS[store as ClientSyncStoreKey]?.path?.(id, row);
+  if (!path) return null;
+  return { kind: "page", key: `page:${path}`, ts, path, label: rowName(row) };
 }
 
 function objectsOf(item: UndoHistoryItem): Array<{ store: string; id: string }> {
@@ -140,24 +151,17 @@ export function undoObjectsSig(state: any, snapshot: UndoHistorySnapshot): strin
 
 // ---------------------------------------------------------------- words
 
-const NOUN: Record<string, string> = {
-  sessions: "session",
-  conversations: "session",
-  bucketAssignments: "session",
-  tasks: "task",
-  docs: "doc",
-  plans: "plan",
-  projects: "project",
-  buckets: "label",
-  triggers: "trigger",
-};
+/** The stores the timeline can name and open (exported for the registry guard). */
+export const UNDO_OBJECT_STORES = Object.keys(OBJECT_KINDS);
+
+const nounOf = (store: string): string | undefined => OBJECT_KINDS[store as ClientSyncStoreKey]?.noun;
 
 /** A group's fold words: "5 sessions" when every member is one kind of thing. */
 export function undoFoldLabel(item: UndoHistoryItem): string {
   const children = item.children ?? [];
   const objects = objectsOf(item);
-  const nouns = new Set(objects.map((o) => NOUN[o.store] ?? "change"));
-  const ids = new Set(objects.map((o) => `${NOUN[o.store] ?? o.store}:${o.id}`));
+  const nouns = new Set(objects.map((o) => nounOf(o.store) ?? "change"));
+  const ids = new Set(objects.map((o) => `${nounOf(o.store) ?? o.store}:${o.id}`));
   if (nouns.size === 1 && ids.size > 1) {
     const noun = [...nouns][0];
     return `${ids.size} ${noun}s`;

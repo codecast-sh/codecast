@@ -11,10 +11,13 @@
 //       rides the FRAGMENT (never sent to a server) and the page trades it for
 //       a confirmed connection via confirmConnection. googleOAuth.ts omits the
 //       fragment's `provider`, so the search key carries it there.
-//   ?<provider>=error&reason=<text>
-//       The connector refused before it ever stored anything.
+//   ?<provider>=error&reason=<code>
+//       The connector refused before it ever stored anything. Anyone can
+//       write this link, so only a code the reason table knows is described;
+//       anything else reads as the generic line.
 //   ?<provider>=connected
-//       A reconnect of an account already confirmed: nothing left to do.
+//       A reconnect of an account already confirmed, or a connect finished
+//       server-side (the mail connect through Whisk): nothing left to do.
 //   ?success=true | ?error=<reason>
 //       The GitHub App install return, which predates the connector protocol
 //       and names no provider.
@@ -24,14 +27,19 @@
 // screenshot cannot replay the confirmation.
 
 import { APP_IDS, type AppId } from "@codecast/shared/contracts";
+import { describeReturnReason } from "@codecast/shared/contracts/connectorReasons";
 
-export type ConnectorReturn =
+/** `P` names the providers a page reads besides the apps: the simple lane
+ *  also reads the mail connect through Whisk (WHISK_RETURN_KEY). */
+export type ConnectorReturn<P extends string = AppId> =
   /** A finished authorize waiting for this session to confirm it. */
   | { kind: "confirm"; provider: AppId; installationId: string; confirmToken: string }
-  /** The connector refused. `reason` is its own words, shown verbatim. */
-  | { kind: "error"; provider: AppId | null; reason: string }
+  /** The connector refused. `reason` is a sentence that is safe to show:
+   *  when it came from the URL, it is the table's words for a known code or
+   *  the generic line, never text the link itself carried. */
+  | { kind: "error"; provider: P | null; reason: string }
   /** A connect flow that completed server-side with nothing left to do. */
-  | { kind: "success"; provider: AppId };
+  | { kind: "success"; provider: P };
 
 /** Provider ids as they appear in a callback URL, mapped to our app ids.
  *  Google's connector writes `google`; the app it connects is Gmail. */
@@ -50,13 +58,28 @@ function params(raw: string | null | undefined, lead: "#" | "?"): URLSearchParam
   return new URLSearchParams(s.startsWith(lead) ? s.slice(1) : s);
 }
 
+/** The query key the mail and calendar connect (through Whisk) comes back
+ *  with: /connect/whisk sends the browser to its lane page with
+ *  `?whisk=connected`, or `?whisk=error&reason=<code>`, the same
+ *  `?<provider>=` shape as every connector. Lane pages pass it to
+ *  parseConnectorReturn as an extra provider. */
+export const WHISK_RETURN_KEY = "whisk";
+
 /**
  * Read the connector callback out of `hash` and `search`. Returns null when
  * the URL carries no callback at all — the ordinary case of opening the page.
+ * `extra` names providers besides the apps that may report success or an
+ * error (never a confirm, which only app connectors write).
  */
-export function parseConnectorReturn(hash: string, search: string): ConnectorReturn | null {
+export function parseConnectorReturn<X extends string = never>(
+  hash: string,
+  search: string,
+  extra: readonly X[] = [],
+): ConnectorReturn<AppId | X> | null {
   const frag = params(hash, "#");
   const query = params(search, "?");
+  const toProvider = (raw: string | null | undefined): AppId | X | null =>
+    toAppId(raw) ?? (extra.find((p) => p === raw) ?? null);
 
   const installationId = frag.get("installation");
   const confirmToken = frag.get("confirm");
@@ -75,50 +98,25 @@ export function parseConnectorReturn(hash: string, search: string): ConnectorRet
   if (errored) {
     return {
       kind: "error",
-      provider: toAppId(errored[0]),
-      reason: query.get("reason") || "The connection was refused",
+      provider: toProvider(errored[0]),
+      reason: describeReturnReason(query.get("reason")),
     };
   }
 
-  const connected = toAppId([...query.entries()].find(([, v]) => v === "connected")?.[0]);
+  const connected = toProvider([...query.entries()].find(([, v]) => v === "connected")?.[0]);
   if (connected) return { kind: "success", provider: connected };
 
   // The GitHub App install return, which names no provider of its own.
   if (query.get("success") === "true") return { kind: "success", provider: "github" };
   const githubError = query.get("error");
-  if (githubError) return { kind: "error", provider: "github", reason: githubError };
+  if (githubError) return { kind: "error", provider: "github", reason: describeReturnReason(githubError) };
 
   return null;
 }
 
-/** Plain words for the reasons our own connectors write; anything else is the
- *  connector's own text, which is already a sentence. */
-const KNOWN_REASONS: Record<string, string> = {
-  installation_failed: "GitHub could not complete the install. Try again.",
-  missing_intent: "That install link did not come from Codecast. Start the install from the GitHub card.",
-  unknown_intent: "That install link is no longer valid. Start the install again.",
-  intent_expired: "The install link expired before it came back. Start it again.",
-  intent_already_used: "That install link was already used. Start the install again.",
-  not_a_team_member: "You are no longer a member of that team, so the install has nowhere to bind.",
-  install_not_authorized: "GitHub did not confirm who you are. Start the install again and approve the authorization step.",
-  installer_does_not_control_installation:
-    "That installation belongs to an account you do not administer on GitHub.",
-  install_verification_unconfigured:
-    "This deployment cannot verify GitHub installs yet (GITHUB_APP_CLIENT_ID / GITHUB_APP_CLIENT_SECRET).",
-  install_verification_failed: "GitHub could not be reached to verify the install. Try again.",
-  install_not_fresh:
-    "That GitHub installation existed before this install started. Uninstall the Codecast app on GitHub, then install it again from the GitHub card.",
-  not_authorized: "You no longer have access to that workspace, so the connection was not activated.",
-  wrong_user: "Only the person who started this connection can finish it.",
-  denied: "You declined the authorization.",
-  bad_state: "The sign-in link expired before it came back. Start the connection again.",
-  expired: "The confirmation link expired. Start the connection again.",
-  no_such_installation: "That connection no longer exists. Start it again.",
-};
-
-export function describeConnectorError(reason: string): string {
-  return KNOWN_REASONS[reason] ?? reason;
-}
+/** The reason table lives in the shared contract so `cast integrations`
+ *  describes a refusal in the same words as every web surface. */
+export { describeConnectorError } from "@codecast/shared/contracts/connectorReasons";
 
 /**
  * The same URL with every connector callback param removed, for the

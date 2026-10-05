@@ -4,14 +4,11 @@
 // evals are read from.
 
 import { useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import type { FreezeResponse, OverviewResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
-import { useEvalsStore } from "../../store/evalsStore";
-import { useEvalsResource } from "../../lib/evals/hooks";
-import { useDebounce } from "../../hooks/useDebounce";
-import { KeyCap } from "../KeyboardShortcutsHelp";
+import { useDebounce, useEvalsClient, useEvalsHealth, useEvalsLoaded, useEvalsResource } from "../../lib/evals/hooks";
 import { evalsHref, evalsSearchTargets, evalsSection, type EvalsSearchKnown, type EvalsView } from "./evalsPaths";
+import { useEvalsHost } from "./host";
 import { EvalsLink } from "./parts";
 import { shortSha } from "./format";
 
@@ -38,7 +35,7 @@ function PlateMark() {
 
 /** What the search can resolve without asking: everything a page has already loaded. */
 function useSearchKnown(): EvalsSearchKnown {
-  const resources = useEvalsStore((s) => s.resources);
+  const resources = useEvalsLoaded();
   return useMemo(() => {
     const surfaces = new Set<string>();
     const batches: Record<string, string[]> = {};
@@ -69,7 +66,11 @@ function useSearchKnown(): EvalsSearchKnown {
 }
 
 function EvalsSearch() {
-  const router = useRouter();
+  const host = useEvalsHost();
+  const { KeyCap } = host.ui;
+  const navigate = host.useNavigate();
+  const { connected } = useEvalsHealth();
+  const { load } = useEvalsClient();
   const loaded = useSearchKnown();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
@@ -88,13 +89,13 @@ function EvalsSearch() {
   // The surfaces and their batches come from the wall's answer: fetch it when
   // the box is used, so it works from any view (cached, shared with the wall).
   const wantKnown = () => {
-    if (useEvalsStore.getState().connection === "connected") void useEvalsStore.getState().load("GET /overview", {});
+    if (connected) void load("GET /overview", {});
   };
   const go = (href: string) => {
     setOpen(false);
     setQ("");
     input.current?.blur();
-    router.push(href);
+    navigate(href);
   };
   return (
     <div className="ev-search" data-evals-search>
@@ -149,19 +150,19 @@ function EvalsSearch() {
                 }}
               >
                 <span className="ev-search-kind">{t.kind}</span>
-                <span className="ev-mono truncate">{t.label}</span>
+                <span className="ev-mono ev-truncate">{t.label}</span>
               </button>
             ))
           ) : (
             <div className="ev-search-empty">Nothing here matches. A run id, a batch stamp, a freeze id prefix or a sha works.</div>
           )}
           {targets.length > 0 && (
-            <div className="flex items-center gap-3 px-2 pt-1.5 pb-0.5 text-[10.5px] ev-quiet">
-              <span className="inline-flex items-center gap-1">
+            <div className="ev-search-keys">
+              <span>
                 <KeyCap size="xs">↑</KeyCap>
                 <KeyCap size="xs">↓</KeyCap> choose
               </span>
-              <span className="inline-flex items-center gap-1">
+              <span>
                 <KeyCap size="xs">Enter</KeyCap> open
               </span>
             </div>
@@ -173,10 +174,8 @@ function EvalsSearch() {
 }
 
 function Status() {
-  const health = useEvalsStore((s) => s.health);
-  const transport = useEvalsStore((s) => s.transport?.kind ?? null);
-  const connection = useEvalsStore((s) => s.connection);
-  if (connection !== "connected" || !health) return null;
+  const { health, connected, transport } = useEvalsHealth();
+  if (!connected || !health) return null;
   return (
     <span className="ev-status" data-evals-status>
       {transport === "fixture" && (

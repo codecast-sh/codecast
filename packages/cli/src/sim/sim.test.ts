@@ -78,7 +78,8 @@ describe("reap", () => {
   test("two strikes, never a held, watched or busy device", () => {
     const base = { state: "free" as const, booted: true, watched: false, busy: false };
     expect(reapDecision(base, 1000)).toBe("strike");
-    expect(reapDecision({ ...base, seenAt: 900 }, 1000)).toBe("skip");
+    // A pass between the strike and the end of the grace period keeps the strike (the daemon passes every 5 minutes).
+    expect(reapDecision({ ...base, seenAt: 900 }, 1000)).toBe("wait");
     expect(reapDecision({ ...base, seenAt: 300 }, 1000)).toBe("reap");
     expect(reapDecision({ ...base, state: "held", seenAt: 0 }, 1000)).toBe("skip");
     expect(reapDecision({ ...base, watched: true, seenAt: 0 }, 1000)).toBe("skip");
@@ -116,10 +117,33 @@ describe("ui", () => {
     expect(screenPoints(els)).toEqual({ width: 402, height: 874 });
   });
 
+  test("the tree is flat and drops axe's duplicate text nodes", async () => {
+    const { formatTree } = await import("./ui.js");
+    const dup = [{ ...raw[0], children: [...raw[0].children, { type: "StaticText", AXLabel: "Sign in", frame: { x: 100, y: 600, width: 200, height: 50 } }] }];
+    expect(formatTree(flattenUi(dup))).toEqual([
+      'Application "Codecast"  @201,437',
+      '  Button "Sign in"  @200,625',
+      '  TextField "Email"  @200,322',
+      '  Button "Sign in with Apple"  @200,725',
+    ]);
+  });
+
   test("an exact label beats a substring; the app root never matches", () => {
     const els = flattenUi(raw);
     expect(findElements(els, "sign in").map((e) => e.label)).toEqual(["Sign in"]);
     expect(findElements(els, "apple").map((e) => e.label)).toEqual(["Sign in with Apple"]);
     expect(findElements(els, "codecast")).toEqual([]);
   });
+});
+
+describe("host probe", () => {
+  test.skipIf(process.platform !== "darwin")("prints one JSON line without python", async () => {
+    const { probeScript } = await import("./provision.js");
+    const { spawnSync } = await import("../proc.js");
+    const r = spawnSync("bash", ["-c", probeScript()], { encoding: "utf-8", timeout: 120_000 });
+    const state = JSON.parse(r.stdout.trim().split("\n").pop()!);
+    expect(typeof state.macos).toBe("string");
+    expect(typeof state.license).toBe("boolean");
+    expect(Array.isArray(state.runtimes)).toBe(true);
+  }, 130_000);
 });

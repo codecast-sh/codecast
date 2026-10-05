@@ -4,11 +4,9 @@
 // view (SurfaceView) is props only.
 
 import { useCallback, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { resolveEvalsBatchRef, type SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
-import { EmptyState } from "../../EmptyState";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { useTabActive } from "../../../hooks/usePagePresence";
+import { useEvalsHost } from "../host";
 import { SurfaceView } from "../SurfaceView";
 import { evalsHref, type EvalsView } from "../evalsPaths";
 import { surfaceColumns } from "../seismographModel";
@@ -18,8 +16,10 @@ import { DEFAULT_SURFACE_FILTERS, orderedPair, type SurfaceFilters } from "../su
 const LANDING_MS = 15 * 60_000;
 
 export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surface" }> }) {
-  const router = useRouter();
-  const keysActive = useTabActive();
+  const host = useEvalsHost();
+  const { EmptyState } = host.ui;
+  const navigate = host.useNavigate();
+  const keysActive = host.useActive();
   const [filters, setFilters] = useState<SurfaceFilters>(DEFAULT_SURFACE_FILTERS);
   const [epochN, setEpochN] = useState<number | null>(null);
 
@@ -53,8 +53,8 @@ export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surfac
   );
 
   const onPins = useCallback(
-    (pinned: string | null, compare: string | null) => router.replace(evalsHref.surface(view.surface, { batch: pinned, compare })),
-    [router, view.surface],
+    (pinned: string | null, compare: string | null) => navigate(evalsHref.surface(view.surface, { batch: pinned, compare }), { replace: true }),
+    [navigate, view.surface],
   );
 
   if (!data) {
@@ -63,7 +63,7 @@ export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surfac
     }
     if (surface.error) return <EmptyState title="This surface did not load" description={surface.error} />;
     return (
-      <div className="h-full flex items-center justify-center text-[12px] ev-quiet" data-evals-loading>
+      <div className="ev-note ev-note--center" data-evals-loading>
         Reading {view.surface}'s runs...
       </div>
     );
@@ -81,7 +81,7 @@ export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surfac
       batches={{ res: batches.data, loading: !!pair && batches.loading, error: batches.error }}
       epoch={{ n: epochN, res: epoch.data, loading: epochN !== null && epoch.loading, error: epoch.error }}
       onEpoch={setEpochN}
-      onNavigate={(href) => router.push(href)}
+      onNavigate={navigate}
       keysActive={keysActive}
       refreshing={!surface.data}
     />

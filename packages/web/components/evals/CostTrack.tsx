@@ -3,9 +3,9 @@
 // It shares the chart's columns and hover, so a bar sits under its batch.
 
 import { useState } from "react";
-import { HoverTip } from "../ActivityHeatmap";
 import { axisUsd, niceCeil } from "./charts/scale";
 import { usd } from "./format";
+import { useEvalsHost } from "./host";
 import type { SurfaceColumns } from "./seismographModel";
 
 const H = 46;
@@ -13,6 +13,7 @@ const TOP = 6;
 
 export function CostTrack({ cols, hover, onHover, pinned, compare }: { cols: SurfaceColumns; hover: string | null; onHover: (batch: string | null) => void; pinned: string | null; compare: string | null }) {
   const { list, width: w, padL, padR } = cols;
+  const { HoverTip } = useEvalsHost().ui;
   const [tipAt, setTipAt] = useState<{ x: number; y: number } | null>(null);
   // The top is a round number, so its label stays short enough for the gutter.
   const max = niceCeil(Math.max(0.0001, ...list.map((c) => c.stats.costUsd + c.stats.judgeCostUsd)));
@@ -22,7 +23,7 @@ export function CostTrack({ cols, hover, onHover, pinned, compare }: { cols: Sur
   const hoverCol = hover ? cols.byBatch.get(hover) ?? null : null;
   return (
     <div className="ev-sf-cost" data-ev-cost>
-      <svg width={w} height={H} viewBox={`0 0 ${w} ${H}`} role="img" aria-label={`Spend per batch, ${usd(total)} in view`} className="block overflow-visible">
+      <svg width={w} height={H} viewBox={`0 0 ${w} ${H}`} role="img" aria-label={`Spend per batch, ${usd(total)} in view`} className="ev-strip">
         <text x={padL - 8} y={TOP + 7} textAnchor="end" className="ev-sf-ylabel">{axisUsd(max)}</text>
         <text x={padL - 8} y={H - 2} textAnchor="end" className="ev-sf-ylabel">$0</text>
         <line x1={padL} x2={w - padR} y1={H - 1} y2={H - 1} className="ev-sf-axis" />

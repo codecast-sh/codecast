@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { PROSE_ATTEMPTS } from "./changes";
+import { PROSE_ATTEMPTS, STORY_PROMPT_VERSION } from "./changes";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { ChangeCommit } from "@codecast/shared/changes";
 import { STRONG_MODEL, modelCost } from "./lib/anthropic";
@@ -519,12 +519,30 @@ describe("runProse through rebuildDay", () => {
     expect(after.headline).toContain(`${after.stats!.commits} commits`);
   });
 
+  test("what older prompt versions spent does not cap a new version's rollout", async () => {
+    const s = await setup();
+    await s.day(PAST);
+    await s.t.action(internal.changes.buildDay, { team_id: s.ids.team, repository: REPO, date: PAST });
+    const docs = await s.byShas("d1");
+    // Five earlier rollouts spent well past the cap on this day's rows.
+    await s.t.run(async (ctx) => ctx.db.patch(docs._id, { cost_usd: 5 * DAILY_CAP_USD, cap_version: "story-0", cap_cost_usd: 5 * DAILY_CAP_USD }));
+
+    await s.rebuild();
+    expect(sent.length).toBeGreaterThan(0);
+    expect((await s.byShas("a1")).prose_status).toBe("written");
+    expect((await s.digest())!.capped_at).toBeUndefined();
+    // The story it rewrote now counts under the current version, on top of its lifetime total.
+    const a1 = (await s.byShas("a1")) as any;
+    expect(a1.cap_version).toBe(STORY_PROMPT_VERSION);
+    expect(a1.cap_cost_usd).toBe(a1.cost_usd);
+  });
+
   test("at the daily cap no call is made, stories stay pending and the day is marked capped", async () => {
     const s = await setup();
     await s.day(PAST);
     await s.t.action(internal.changes.buildDay, { team_id: s.ids.team, repository: REPO, date: PAST });
     const docs = await s.byShas("d1");
-    await s.t.run(async (ctx) => ctx.db.patch(docs._id, { cost_usd: DAILY_CAP_USD }));
+    await s.t.run(async (ctx) => ctx.db.patch(docs._id, { cost_usd: DAILY_CAP_USD, cap_version: STORY_PROMPT_VERSION, cap_cost_usd: DAILY_CAP_USD }));
 
     await s.rebuild();
     expect(sent).toEqual([]);
@@ -550,7 +568,7 @@ describe("runProse through rebuildDay", () => {
     sent = [];
     await s.commit(`g1-${PAST}`, "feat(web): line search", at("14:00"), ["packages/web/search.tsx"]);
     const docs = await s.byShas("d1");
-    await s.t.run(async (ctx) => ctx.db.patch(docs._id, { cost_usd: DAILY_CAP_USD }));
+    await s.t.run(async (ctx) => ctx.db.patch(docs._id, { cost_usd: DAILY_CAP_USD, cap_version: STORY_PROMPT_VERSION, cap_cost_usd: DAILY_CAP_USD }));
     await s.rebuild();
     expect(sent).toEqual([]);
     expect((await s.byShas("g1")).prose_status).toBe("pending");

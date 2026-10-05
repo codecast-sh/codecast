@@ -4,7 +4,7 @@
 // caught a failure. Props only; the wall hands in GET /overview's `moved`.
 
 import type { MovedEvent } from "@codecast/shared/contracts/evalsApi";
-import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
+import { useEvalsHost } from "./host";
 import { EvalsLink } from "./parts";
 import { movedLine } from "./wallModel";
 
@@ -57,6 +57,7 @@ function MovedMark({ e }: { e: MovedEvent }) {
 }
 
 export function WhatMoved({ events, now }: { events: MovedEvent[]; now: number }) {
+  const { format } = useEvalsHost();
   const list = [...events].sort((a, b) => b.at.localeCompare(a.at)).slice(0, MAX_EVENTS);
   return (
     <aside className="ev-moved" aria-label="What moved" data-ev-moved>
@@ -78,8 +79,8 @@ export function WhatMoved({ events, now }: { events: MovedEvent[]; now: number }
                     <MovedMark e={e} />
                   </span>
                   <span className="ev-moved-text">{text}</span>
-                  <time className="ev-moved-at" dateTime={e.at} title={formatFullTimestamp(at)}>
-                    {formatRelativeTime(at, now).replace(" ago", "")}
+                  <time className="ev-moved-at" dateTime={e.at} title={format.fullTimestamp(at)}>
+                    {format.relativeTime(at, now).replace(" ago", "")}
                   </time>
                 </EvalsLink>
               </li>

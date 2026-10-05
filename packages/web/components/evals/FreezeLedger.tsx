@@ -79,19 +79,19 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
   // Numbered by time, as the compare drawer numbers them: the earlier pin is 1.
   const pins = columns.filter((c) => c.batch === pinned || c.batch === compare);
   const pinNumber = (c: SurfaceColumn) => (pins.includes(c) ? String(pins.indexOf(c) + 1) : null);
-  if (!ordered.length) return <p className="text-[12px] ev-quiet">No freeze has a graded rep in this window.</p>;
+  if (!ordered.length) return <p className="ev-note">No freeze has a graded rep in this window.</p>;
   return (
     <div ref={scroller} className="ev-sf-ledger" data-ev-ledger>
       <table className="ev-sf-plate" style={{ ["--ev-well" as string]: `${WELL}px` }}>
         <thead>
           <tr>
             <th className="ev-sf-plate-name" scope="col">
-              <span className="sr-only">Freeze</span>
+              <span className="ev-sr-only">Freeze</span>
             </th>
             {columns.map((c, i) => {
               const pin = pinNumber(c);
               return (
-                <th key={c.batch} scope="col" className={`ev-sf-plate-col ${pin ? "is-pinned" : ""} ${hover === c.batch ? "is-hover" : ""}`} data-ev-col={c.batch}>
+                <th key={c.batch} scope="col" className={`ev-sf-plate-col ${pin ? "ev-sf-plate-pinned" : ""} ${hover === c.batch ? "ev-sf-plate-hovered" : ""}`} data-ev-col={c.batch}>
                   <button
                     type="button"
                     title={`${whenLabel(c.at)}: click to pin, shift-click to compare`}
@@ -112,13 +112,13 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
           {ordered.map((row) => {
             const flipped = pairFlips?.get(row.freezeId) ?? null;
             return (
-            <tr key={row.freezeId} data-ev-ledger-row={row.freezeId} data-ev-flips={row.flips} data-ev-pair-flip={flipped ?? undefined} className={flipped ? `is-pair-flip is-pair-${flipped}` : undefined}>
+            <tr key={row.freezeId} data-ev-ledger-row={row.freezeId} data-ev-flips={row.flips} data-ev-pair-flip={flipped ?? undefined}>
               <th scope="row" className="ev-sf-plate-name">
                 {flipped && (
                   <span className={`ev-sf-pairflip ${flipped === "broke" ? "ev-fail" : "ev-pass"}`} title={`${flipped === "broke" ? "Broke" : "Fixed"} between the two pinned batches`} aria-label={`${flipped} between the pinned batches`} />
                 )}
                 <EvalsLink href={evalsHref.freeze(row.freezeId)} className="ev-sf-plate-link" title={`Open ${row.name} across time`}>
-                  <span className="truncate">{row.name}</span>
+                  <span className="ev-truncate">{row.name}</span>
                 </EvalsLink>
                 <LockBadge visibility={row.visibility} />
               </th>
@@ -126,7 +126,7 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
                 const cell = row.cells[c.batch] ?? null;
                 const pin = c.batch === pinned || c.batch === compare;
                 return (
-                  <td key={c.batch} className={`${pin ? "is-pinned" : ""} ${hover === c.batch ? "is-hover" : ""}`} onMouseEnter={() => onHover(c.batch)} onMouseLeave={() => onHover(null)}>
+                  <td key={c.batch} className={`${pin ? "ev-sf-plate-pinned" : ""} ${hover === c.batch ? "ev-sf-plate-hovered" : ""}`} onMouseEnter={() => onHover(c.batch)} onMouseLeave={() => onHover(null)}>
                     {cell ? (
                       <EvalsLink href={evalsHref.freeze(row.freezeId, { batch: c.batch })} className="ev-sf-well-link" aria-label={`${row.name} at ${whenLabel(c.at)}`}>
                         <Well cell={cell} size={WELL} delayMs={ci * 10} title={`${row.name}, ${whenLabel(c.at)}: ${cell.passed} of ${cell.reps} passed${cell.mean !== null ? `, mean ${cell.mean.toFixed(2)}` : ""}${cell.flip ? `, ${cell.flip}` : ""}`} />
@@ -137,7 +137,7 @@ export function FreezeLedger({ rows, columns, pinned, compare, hover, onHover, o
                   </td>
                 );
               })}
-              <td className={`ev-sf-plate-flips ${row.flips ? "has-flips" : ""}`}>{row.flips || ""}</td>
+              <td className={`ev-sf-plate-flips ${row.flips ? "ev-sf-plate-flips--some" : ""}`}>{row.flips || ""}</td>
             </tr>
             );
           })}

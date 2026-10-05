@@ -22,9 +22,8 @@ export function clip(text: string, width: number): string {
   return flat.length <= width ? flat : flat.slice(0, Math.max(0, width - 1)) + "…";
 }
 
-export function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`;
-}
+/** Lives in format.ts, which reads no disk, so pure code can use it too. */
+export { plural } from "./format.js";
 
 /** The body from the positional argument, --body-file, or stdin.
  *  A lone "-" (or nothing, when stdin is not a terminal) reads stdin.

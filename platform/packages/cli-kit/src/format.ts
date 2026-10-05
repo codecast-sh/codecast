@@ -3,6 +3,11 @@
 // age formatter; these are the rest of the set union-mobile's agentRuns
 // views settled on, so the CLI and a web page report identical figures.
 
+/** `n noun`, an s on the noun unless n is 1. */
+export function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
 export function formatCost(usd?: number | null): string {
   if (!usd) return "$0.00";
   if (usd < 0.01) return `$${usd.toFixed(4)}`;

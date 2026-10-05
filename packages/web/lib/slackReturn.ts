@@ -1,21 +1,11 @@
-import { captureException } from "@sentry/react";
+import { browserStorage, returnStash, type ReturnStorage, type StashedReturn } from "./returnStash";
 
 export const SLACK_RETURN_KEY = "codecast-slack-return";
 export const SLACK_RETURN_PATH = "/slack/connect";
 export const SLACK_SIGN_IN_URL = `/login?reason=slack&return_to=${encodeURIComponent(SLACK_RETURN_PATH)}`;
 
-export type SlackReturn = { code: string | null; state: string | null; error: string | null };
-type ReturnStorage = Pick<Storage, "setItem" | "getItem" | "removeItem">;
-let memoryReturn: SlackReturn | null = null;
-
-function browserStorage(): ReturnStorage | null {
-  try {
-    return typeof sessionStorage === "undefined" ? null : sessionStorage;
-  } catch (error) {
-    captureException(error);
-    return null;
-  }
-}
+export type SlackReturn = StashedReturn;
+const stash = returnStash(SLACK_RETURN_KEY, "Slack");
 
 export function isSlackReturnUrl(pathname: string, search: string): boolean {
   const params = new URLSearchParams(search);
@@ -30,53 +20,23 @@ export function stashSlackReturn(
   if (!isSlackReturnUrl(loc.pathname, loc.search)) return null;
   const p = new URLSearchParams(loc.search);
   const ret = { code: p.get("code"), state: p.get("state"), error: p.get("error") };
-  memoryReturn = ret;
   p.delete("code");
   const rest = p.toString();
   replace(`${SLACK_RETURN_PATH}${rest ? `?${rest}` : ""}${loc.hash}`);
-  const storage = store === undefined ? browserStorage() : store;
-  try {
-    storage?.setItem(SLACK_RETURN_KEY, JSON.stringify(ret));
-  } catch (error) {
-    captureException(error);
-  }
+  stash.put(ret, store === undefined ? browserStorage() : store);
   return ret;
 }
 
-function storedReturn(store: ReturnStorage | null): SlackReturn | null {
-  try {
-    const raw = store?.getItem(SLACK_RETURN_KEY);
-    if (!raw) return null;
-    const ret = JSON.parse(raw);
-    if (!ret || ![ret.code, ret.state, ret.error].every((v) => v === null || typeof v === "string")) return null;
-    return ret;
-  } catch {
-    captureException(new Error("Could not read the pending Slack connection"));
-    return null;
-  }
-}
-
-function sameReturn(a: SlackReturn | null, b: SlackReturn): boolean {
-  return !!a && a.code === b.code && a.state === b.state && a.error === b.error;
-}
-
 export function readSlackReturn(search = window.location.search, store: ReturnStorage | null = browserStorage()): SlackReturn | null {
-  const ret = memoryReturn ?? storedReturn(store);
-  const state = new URLSearchParams(search).get("state");
-  return ret && (state === null || state === ret.state) ? ret : null;
+  return stash.read(search, store);
 }
 
 export function canResumeSlackReturn(ret: SlackReturn, store: ReturnStorage | null = browserStorage()): boolean {
-  return sameReturn(storedReturn(store), ret);
+  return stash.canResume(ret, store);
 }
 
 export function clearSlackReturn(ret: SlackReturn, store: ReturnStorage | null = browserStorage()): void {
-  if (sameReturn(memoryReturn, ret)) memoryReturn = null;
-  try {
-    if (sameReturn(storedReturn(store), ret)) store?.removeItem(SLACK_RETURN_KEY);
-  } catch (error) {
-    captureException(error);
-  }
+  stash.clear(ret, store);
 }
 
 export function slackProviderRedirect(redirectTo: string): string {
