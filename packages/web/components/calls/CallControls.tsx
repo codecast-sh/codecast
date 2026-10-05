@@ -46,7 +46,7 @@ export function HangUpButton({ size = "regular" }: { size?: keyof typeof SIZES }
   return (
     <button
       onClick={() => void leaveCall()}
-      className={`${sz.radius} ${sz.pad} ${size === "regular" ? "px-3.5" : ""} bg-sol-red text-white transition-colors hover:bg-sol-red/85`}
+      className={`sol-btn-solid ${sz.radius} ${sz.pad} ${size === "regular" ? "px-3.5" : ""} bg-sol-red text-white`}
       title="End call"
     >
       <Phone className={`${sz.icon} rotate-[135deg]`} />

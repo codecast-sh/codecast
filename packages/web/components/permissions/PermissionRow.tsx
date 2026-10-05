@@ -119,7 +119,7 @@ export function PermissionRow({
           className={
             leavesApp
               ? "h-7 border-sol-border bg-transparent px-2.5 text-xs text-sol-text shadow-none hover:bg-sol-bg-highlight/60 [&_svg]:size-3"
-              : "h-7 bg-sol-blue px-3 text-xs text-sol-bg shadow-none hover:bg-sol-blue/90"
+              : "h-7 bg-sol-blue px-3 text-xs text-sol-bg"
           }
         >
           {action}

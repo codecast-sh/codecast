@@ -85,7 +85,7 @@ export function NotificationNudgeBanner() {
           {action && !awaitingPrompt && (
             <button
               onClick={handleEnable}
-              className="px-2.5 py-1 text-xs font-medium rounded-md bg-sol-blue text-sol-bg hover:opacity-90 transition-opacity"
+              className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-blue text-sol-bg"
             >
               {readiness === "off" ? action : "Turn on notifications"}
             </button>

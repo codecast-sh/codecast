@@ -187,7 +187,7 @@ export function HireHeadOfPeopleCard({ compact, onHired }: { compact?: boolean; 
         <button
           onClick={create}
           disabled={busy || !tree || !meId}
-          className="mt-5 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors"
+          className="sol-btn-solid mt-5 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60"
         >
           {busy ? "Bringing it online…" : `Hire ${HEAD_OF_PEOPLE_NAME}`}
         </button>
@@ -267,7 +267,7 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
           </div>
         </div>
         {err && <div className="text-sol-red text-xs mt-3">{err}</div>}
-        <button onClick={hire} disabled={busy || !tree} className="mt-4 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60 hover:bg-sol-cyan/90 transition-colors" data-assistant-hire>
+        <button onClick={hire} disabled={busy || !tree} className="sol-btn-solid mt-4 w-full bg-sol-cyan text-sol-bg font-medium rounded-lg px-4 py-2.5 text-sm disabled:opacity-60" data-assistant-hire>
           {busy ? "Bringing it online…" : `Hire ${EXECUTIVE_ASSISTANT_NAME}`}
         </button>
       </div>

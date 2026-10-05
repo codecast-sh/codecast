@@ -148,7 +148,7 @@ export function StopRecordingQuestion({
       type="button"
       onClick={onStop}
       disabled={busy}
-      className={`flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red font-mono font-medium text-white transition-colors hover:bg-sol-red/85 disabled:opacity-60 ${
+      className={`sol-btn-solid flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red font-mono font-medium text-white disabled:opacity-60 ${
         dense ? "px-1.5 py-0.5 text-[10px]" : "px-3 py-1.5 text-[11.5px]"
       }`}
     >

@@ -217,7 +217,7 @@ export function SharePopover({
               <button
                 onClick={handleCopyLink}
                 title={link}
-                className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-semibold text-sol-base03 hover:brightness-110 transition-colors"
+                className="sol-btn-solid flex-1 inline-flex items-center justify-center gap-1.5 rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-semibold text-sol-base03"
               >
                 <LinkIcon className="w-3.5 h-3.5" />
                 Copy link

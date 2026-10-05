@@ -169,7 +169,7 @@ export function DeviceSetupDialog() {
             onClick={close}
             className={
               allRequiredOn
-                ? "bg-sol-blue text-sol-bg shadow-none hover:bg-sol-blue/90"
+                ? "bg-sol-blue text-sol-bg"
                 : "border-sol-border bg-transparent text-sol-text shadow-none hover:bg-sol-bg-highlight/60"
             }
           >

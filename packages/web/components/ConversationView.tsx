@@ -4917,7 +4917,7 @@ const ConversationViewInner = (
           <button
             onClick={() => handleConfirmShare()}
             disabled={selectedMessageIds.size === 0 || isCreatingShareLink}
-            className="px-4 py-1.5 text-sm bg-sol-cyan hover:bg-sol-cyan/80 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="sol-btn-solid px-4 py-1.5 text-sm bg-sol-cyan text-white rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isCreatingShareLink ? "Creating..." : "Copy share link"}
           </button>

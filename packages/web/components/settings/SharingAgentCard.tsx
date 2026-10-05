@@ -34,7 +34,7 @@ export function SharingAgentCard({ className }: { className?: string }) {
         <button
           type="button"
           onClick={launchSharingAgent}
-          className="inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-base03 transition-opacity hover:opacity-90 sm:self-center"
+          className="sol-btn-solid inline-flex shrink-0 items-center justify-center gap-1.5 self-start rounded-md bg-sol-cyan px-3 py-1.5 text-xs font-medium text-sol-base03 sm:self-center"
         >
           Start
           <ArrowRight className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-0.5" />

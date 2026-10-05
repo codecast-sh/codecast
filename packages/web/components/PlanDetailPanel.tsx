@@ -707,7 +707,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
             placeholder="Task title..."
             className="flex-1 text-sm px-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/50 text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
           />
-          <button onClick={handleAdd} disabled={!newTitle.trim()} className="px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg hover:opacity-90 disabled:opacity-40 transition-opacity">
+          <button onClick={handleAdd} disabled={!newTitle.trim()} className="sol-btn-solid px-3 py-1.5 text-xs rounded-lg bg-sol-cyan text-sol-bg disabled:opacity-40">
             Create
           </button>
         </div>

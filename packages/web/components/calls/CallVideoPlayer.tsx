@@ -726,7 +726,7 @@ export function DeleteRecordingButton({ onConfirm }: { onConfirm: () => void }) 
           setAsking(false);
           onConfirm();
         }}
-        className="rounded bg-sol-red px-1.5 py-0.5 font-medium text-white transition-colors hover:bg-sol-red/85"
+        className="sol-btn-solid rounded bg-sol-red px-1.5 py-0.5 font-medium text-white"
       >
         Delete
       </button>

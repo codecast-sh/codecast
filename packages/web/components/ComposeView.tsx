@@ -725,7 +725,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
           <button
             autoFocus
             onClick={onKeep}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium hover:bg-sol-cyan/90 transition-colors"
+            className="sol-btn-solid inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-sol-cyan text-white font-medium"
           >
             <FooterKeys combo="enter" />
             Keep draft

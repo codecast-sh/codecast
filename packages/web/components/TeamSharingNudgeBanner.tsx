@@ -48,7 +48,7 @@ export function TeamSharingNudgeBanner() {
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             onClick={shareNew}
-            className="px-2.5 py-1 text-xs font-medium rounded-md bg-sol-cyan text-sol-base03 hover:opacity-90 transition-opacity"
+            className="sol-btn-solid px-2.5 py-1 text-xs font-medium rounded-md bg-sol-cyan text-sol-base03"
           >
             Share new sessions in full
           </button>

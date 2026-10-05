@@ -510,7 +510,7 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
                     }
                   }}
                   disabled={!otherTexts[i]?.trim()}
-                  className="text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-sol-blue text-white hover:bg-sol-blue/90 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="sol-btn-solid text-[11px] font-medium px-2.5 py-1.5 rounded-md bg-sol-blue text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   OK
                 </button>
@@ -530,9 +530,9 @@ export function AskUserQuestionBlock({ tool, result, onSendMessage }: { tool: To
           <button
             onClick={handleSubmitAll}
             disabled={!allAnswered}
-            className={`text-[11px] font-medium px-3 py-1.5 rounded-md transition-colors ${
+            className={`text-[11px] font-medium px-3 py-1.5 rounded-md ${
               allAnswered
-                ? "bg-sol-green text-white hover:bg-sol-green/90 cursor-pointer"
+                ? "sol-btn-solid bg-sol-green text-white cursor-pointer"
                 : "bg-sol-border/15 text-sol-text-dim cursor-not-allowed"
             }`}
           >

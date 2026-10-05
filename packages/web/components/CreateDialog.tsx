@@ -117,7 +117,7 @@ export function CreateDialog({
             type="button"
             onClick={submit}
             disabled={!canSubmit}
-            className="inline-flex items-center gap-2 rounded-lg border border-transparent bg-sol-cyan py-1.5 pl-3 pr-1.5 text-xs font-semibold text-sol-bg shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] transition-[filter,background-color,color] hover:brightness-110 disabled:cursor-not-allowed disabled:border-sol-border/60 disabled:bg-sol-bg-alt disabled:text-sol-text-dim disabled:shadow-none disabled:hover:brightness-100"
+            className="sol-btn-solid inline-flex items-center gap-2 rounded-lg border border-transparent bg-sol-cyan py-1.5 pl-3 pr-1.5 text-xs font-semibold text-sol-bg disabled:cursor-not-allowed disabled:border-sol-border/60 disabled:bg-sol-bg-alt disabled:text-sol-text-dim"
           >
             {submitLabel}
             <span className="inline-flex gap-0.5 opacity-80">

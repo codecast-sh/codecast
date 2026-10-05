@@ -918,7 +918,7 @@ export default function SyncPage() {
             </Button>
             <Button
               onClick={() => executeUnsync(true)}
-              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
+              className="bg-sol-red text-sol-base03"
               disabled={isUnsyncing}
             >
               {isUnsyncing ? "Deleting..." : "Delete conversations"}

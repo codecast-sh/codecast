@@ -358,7 +358,7 @@ function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           <button
             onClick={submit}
             disabled={!valid || submitting}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-sol-cyan text-sol-bg hover:bg-sol-cyan/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            className="sol-btn-solid px-3 py-1.5 text-xs font-medium rounded-md bg-sol-cyan text-sol-bg disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {isEdit
               ? submitting ? "Saving…" : "Save changes"
@@ -1072,7 +1072,7 @@ function TriggersContent() {
           <button
             data-tour="triggers-new"
             onClick={() => setShowForm((v) => !v)}
-            className="ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg hover:bg-sol-amber/90 active:scale-[0.97] transition-all"
+            className="sol-btn-solid ml-auto inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg"
           >
             <Plus className="w-3.5 h-3.5" /> New trigger
           </button>
@@ -1094,7 +1094,7 @@ function TriggersContent() {
             </code>
             <button
               onClick={() => setShowForm(true)}
-              className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg hover:bg-sol-amber/90 transition-colors"
+              className="sol-btn-solid mt-2 inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-amber text-sol-bg"
             >
               <Plus className="w-3.5 h-3.5" /> New trigger
             </button>

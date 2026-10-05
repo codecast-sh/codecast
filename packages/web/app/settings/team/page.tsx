@@ -547,7 +547,7 @@ export default function TeamPage() {
             <Button
               onClick={handleDeleteTeam}
               disabled={!deleteNameMatches || isDeleting}
-              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
+              className="bg-sol-red text-sol-base03"
             >
               {isDeleting ? "Deleting..." : "Delete team"}
             </Button>
@@ -574,7 +574,7 @@ export default function TeamPage() {
             <Button
               onClick={handleRemoveMember}
               disabled={isRemoving}
-              className="bg-sol-red hover:bg-sol-red/80 text-sol-base03"
+              className="bg-sol-red text-sol-base03"
             >
               {isRemoving ? "Removing..." : "Remove member"}
             </Button>

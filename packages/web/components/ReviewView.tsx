@@ -196,14 +196,14 @@ export function ReviewView({ prId }: { prId: string }) {
             <button
               onClick={handleApprove}
               disabled={isSubmitting}
-              className="sol-btn-primary bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="sol-btn sol-btn-solid bg-sol-green text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? "Submitting..." : "Approve"}
             </button>
             <button
               onClick={handleRequestChanges}
               disabled={isSubmitting}
-              className="sol-btn-primary bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="sol-btn sol-btn-solid bg-sol-red text-white disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSubmitting ? "Submitting..." : "Request Changes"}
             </button>

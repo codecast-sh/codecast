@@ -581,7 +581,7 @@ export function DesktopProvider() {
             {ready && (
               <button
                 onClick={() => restartForUpdate()}
-                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+                className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
               >
                 Restart now
               </button>
@@ -589,7 +589,7 @@ export function DesktopProvider() {
             {showStalled && (
               <button
                 onClick={startUpdate}
-                className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+                className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
               >
                 Try again
               </button>
@@ -598,7 +598,7 @@ export function DesktopProvider() {
               <>
                 <button
                   onClick={startUpdate}
-                  className="rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg transition-opacity hover:opacity-90"
+                  className="sol-btn-solid rounded-md bg-sol-cyan px-3 py-1 text-[11px] font-medium text-sol-bg"
                 >
                   Update now
                 </button>

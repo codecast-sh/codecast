@@ -197,7 +197,7 @@ export function HuddleButton({
           <DialogClose asChild>
             <button type="button" className="rounded-md border border-sol-border px-3 py-2 text-sm hover:bg-sol-bg-highlight">Cancel</button>
           </DialogClose>
-          <button type="button" className="rounded-md bg-sol-violet px-3 py-2 text-sm text-sol-base3 hover:opacity-90" onClick={() => { setWarningRoom(null); start(); }}>Start and buzz everyone</button>
+          <button type="button" className="sol-btn-solid rounded-md bg-sol-violet px-3 py-2 text-sm text-sol-base3" onClick={() => { setWarningRoom(null); start(); }}>Start and buzz everyone</button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

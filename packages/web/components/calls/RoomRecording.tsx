@@ -371,7 +371,7 @@ function RecordConfirm({
           <button
             type="button"
             onClick={onRecord}
-            className="flex items-center gap-1.5 rounded-md bg-sol-red px-3 py-1.5 font-mono text-[11.5px] font-medium text-white transition-colors hover:bg-sol-red/85"
+            className="sol-btn-solid flex items-center gap-1.5 rounded-md bg-sol-red px-3 py-1.5 font-mono text-[11.5px] font-medium text-white"
           >
             Record <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
           </button>

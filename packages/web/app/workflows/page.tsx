@@ -229,7 +229,7 @@ function RunDialog({ workflowId, onClose }: { workflowId: string; onClose: () =>
           <button
             onClick={handleRun}
             disabled={running}
-            className="flex-1 px-3 py-1.5 text-xs font-medium text-sol-bg bg-sol-cyan rounded-lg hover:bg-sol-cyan/80 transition-colors disabled:opacity-50 flex items-center justify-center gap-1"
+            className="sol-btn-solid flex-1 px-3 py-1.5 text-xs font-medium text-sol-bg bg-sol-cyan rounded-lg disabled:opacity-50 flex items-center justify-center gap-1"
           >
             {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
             Run

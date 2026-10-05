@@ -105,7 +105,7 @@ function BuiltinCard({ hire, onPick }: { hire: BuiltinHire; onPick: () => void }
       </ul>
       <footer className="mt-auto flex items-center justify-between gap-2 pt-1">
         <span className="text-[10.5px] text-sol-text-dim">built in · asks nothing at hire</span>
-        <button type="button" onClick={onPick} className="inline-flex h-8 items-center gap-1 rounded-lg bg-sol-cyan px-3 text-[12px] font-semibold text-sol-bg transition-[filter] hover:brightness-110" data-template-card-hire>
+        <button type="button" onClick={onPick} className="sol-btn-solid inline-flex h-8 items-center gap-1 rounded-lg bg-sol-cyan px-3 text-[12px] font-semibold text-sol-bg" data-template-card-hire>
           Hire <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
         </button>
       </footer>
@@ -162,7 +162,7 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
           {secretInputs(t.manifest).length > 0 && <Lock className="h-3 w-3" aria-label="binds secrets on your machine" />}
         </span>
         {!reason && (
-          <button type="button" onClick={onPick} className="inline-flex h-8 items-center gap-1 rounded-lg bg-sol-violet px-3 text-[12px] font-semibold text-sol-bg transition-[filter] hover:brightness-110" data-template-card-hire>
+          <button type="button" onClick={onPick} className="sol-btn-solid inline-flex h-8 items-center gap-1 rounded-lg bg-sol-violet px-3 text-[12px] font-semibold text-sol-bg" data-template-card-hire>
             Hire <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
           </button>
         )}

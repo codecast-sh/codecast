@@ -277,7 +277,7 @@ export function OffloadReview({ plan, sessions, sourceName, now, initialSelected
               disabled={!!moveBlocked}
               title={moveBlocked}
               onClick={() => { actions?.onStartOffload?.(selections, { waitForTurnMs: wait }); onClose(); }}
-              className="shrink-0 rounded bg-sol-cyan px-3 py-1.5 text-[12px] font-semibold text-sol-bg hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+              className="sol-btn-solid shrink-0 rounded bg-sol-cyan px-3 py-1.5 text-[12px] font-semibold text-sol-bg disabled:cursor-not-allowed disabled:opacity-40"
             >
               Move {picked.length || ""} session{picked.length === 1 ? "" : "s"}
             </button>

@@ -4,15 +4,20 @@ import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
 
+// Filled variants share the .sol-btn-solid finish (globals.css): lit edge,
+// grounded shadow, one hover and press. The transition list replaces the
+// base's transition-colors so the brighten and the press animate too.
+const solid = "sol-btn-solid transition-[filter,box-shadow,transform,background-color,color]"
+
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium select-none transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
         default:
-          "bg-primary text-primary-foreground shadow hover:bg-primary/90",
+          `bg-primary text-primary-foreground ${solid}`,
         destructive:
-          "bg-destructive text-destructive-foreground shadow-sm hover:bg-destructive/90",
+          `bg-destructive text-destructive-foreground ${solid}`,
         outline:
           "border border-input bg-background shadow-sm hover:bg-accent hover:text-accent-foreground",
         secondary:
@@ -22,7 +27,7 @@ const buttonVariants = cva(
         // The settings surface's primary action. sol-cyan is a fixed accent
         // that doesn't invert between themes, so the fixed dark base03 text
         // keeps its contrast in both.
-        cyan: "bg-sol-cyan text-sol-base03 hover:bg-sol-cyan/80",
+        cyan: `bg-sol-cyan text-sol-base03 ${solid}`,
       },
       size: {
         default: "h-9 px-4 py-2",
