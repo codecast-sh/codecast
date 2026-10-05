@@ -1983,7 +1983,7 @@ pre[class*="language-"] {
    on every theme. Row hover/active fills paint over it, so a chosen row reads
    as solid. */
 .nav-subsection {
-  --hatch: color-mix(in srgb, var(--sol-text) 3%, transparent);
+  --hatch: color-mix(in srgb, var(--sol-text) 1.75%, transparent);
   background-color: rgb(0 0 0 / 0.02);
   background-image:
     repeating-linear-gradient(45deg, transparent 0 7px, var(--hatch) 7px 8px),
