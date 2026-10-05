@@ -52,13 +52,32 @@ export function periodAt(anchor: number, now: number): { start: number; end: num
 
 type PeriodFigures = Pick<Doc<"wallets">, "period_start" | "period_end" | "period_cost_usd" | "period_cap_usd" | "topup_usd">;
 
-/** The plan whose allowance a period grants. A paid plan whose renewal is
- *  failing (Stripe's `past_due`) keeps its name but grants the free
- *  allowance, so a failing card does not buy a fresh paid period; the paid
- *  allowance comes back when the payment lands and billing moves the status
- *  on (`moveSubscription`). */
-export function allowancePlan(plan: PlanId | undefined, status: string | null | undefined): PlanId | undefined {
-  return status === "past_due" ? "free" : plan;
+/** What decides a period's allowance: the plan, Stripe's status, and the end
+ *  of the last period Stripe confirmed paid (absent when no live
+ *  subscription bills the wallet). */
+export type AllowanceFacts = {
+  plan?: PlanId;
+  subscription_status?: string | null;
+  paid_through?: number | null;
+};
+
+/** The plan whose allowance a period ending at `periodEnd` grants. A paid
+ *  plan keeps its name but grants the free allowance while its renewal is
+ *  failing (Stripe's `past_due`), and for a period ending after
+ *  `paid_through`: a period opens at its boundary before Stripe has charged
+ *  for it, so it starts on the free allowance, and a renewal that is never
+ *  paid (a lapsed card, events that stopped arriving) never grants the paid
+ *  one. The paid allowance comes when the payment lands: billing moves the
+ *  status on (`moveSubscription`) or confirms the period (`alignPeriod`). */
+export function allowancePlan(facts: AllowanceFacts, periodEnd: number): PlanId | undefined {
+  if (facts.subscription_status === "past_due") return "free";
+  if (facts.paid_through != null && periodEnd > facts.paid_through) return "free";
+  return facts.plan;
+}
+
+/** The allowance in dollars that `allowancePlan` grants. */
+function allowanceUsd(facts: AllowanceFacts, periodEnd: number): number {
+  return planOf(allowancePlan(facts, periodEnd)).included_usd;
 }
 
 /** A debt (a top-up balance below zero, left by a refund or dispute of
@@ -77,8 +96,8 @@ export function repayDebt(
  *  debt first (`repayDebt`). Reservations of turns still in flight and the
  *  top-up balance carry over. The one rule for opening a period, whether the
  *  wallet rolled over or billing put it on Stripe's. */
-function freshPeriod(plan: PlanId | undefined, status: string | null | undefined, start: number, end: number, topupUsd: number): PeriodFigures {
-  const fresh = { period_cap_usd: planOf(allowancePlan(plan, status)).included_usd, period_cost_usd: 0, topup_usd: topupUsd };
+function freshPeriod(facts: AllowanceFacts, start: number, end: number, topupUsd: number): PeriodFigures {
+  const fresh = { period_cap_usd: allowanceUsd(facts, end), period_cost_usd: 0, topup_usd: topupUsd };
   const { period_cost_usd, topup_usd } = repayDebt(fresh);
   return { period_start: start, period_end: end, period_cap_usd: fresh.period_cap_usd, period_cost_usd, topup_usd };
 }
@@ -87,16 +106,16 @@ function freshPeriod(plan: PlanId | undefined, status: string | null | undefined
  *  `periodEnd` is over, or null while it runs. The one rollover rule, for
  *  the stored wallet (`rolledOver`) and for a summary a client already holds
  *  (`summaryAt`). */
-function nextPeriod(anchor: number, plan: PlanId | undefined, status: string | null | undefined, periodEnd: number, topupUsd: number, now: number): PeriodFigures | null {
+function nextPeriod(anchor: number, facts: AllowanceFacts, periodEnd: number, topupUsd: number, now: number): PeriodFigures | null {
   if (now < periodEnd) return null;
   const { start, end } = periodAt(anchor, now);
-  return freshPeriod(plan, status, start, end, topupUsd);
+  return freshPeriod(facts, start, end, topupUsd);
 }
 
 /** The patch that moves a wallet into the period holding `now`, or null when
  *  it is already there. */
 export function rolledOver(wallet: Doc<"wallets">, now: number): PeriodFigures | null {
-  return nextPeriod(periodAnchor(wallet), wallet.plan, wallet.subscription_status, wallet.period_end, wallet.topup_usd, now);
+  return nextPeriod(periodAnchor(wallet), wallet, wallet.period_end, wallet.topup_usd, now);
 }
 
 /** The moment a wallet's periods count from: the start of the paid billing
@@ -227,8 +246,8 @@ export async function releaseTurn(ctx: MutationCtx, turnId: Id<"assistant_turns"
  *  an approval and the answer wakes a new turn, so what it still holds is a
  *  hold its finish failed to give back. */
 const LIVE_TURN = new Set<Doc<"assistant_turns">["status"]>(["queued", "running"]);
-/** The newest ledger rows the leak scan also reads, for holds whose turn row
- *  was deleted (and so carries no `holding` flag to find it by). */
+/** The newest ledger rows reconcileWallet also reads, for holds whose turn
+ *  row was deleted (and so carries no `holding` flag to find it by). */
 const LEAK_SCAN_ROWS = 1000;
 /** Turns flagged `holding` the scan reads: the live ones plus any leaked. */
 const LEAK_SCAN_TURNS = 500;
@@ -238,34 +257,56 @@ const LEAK_SCAN_TURNS = 500;
  *  another turn reserve room the coming charge is about to spend. */
 export const LEAK_GRACE_MS = 10 * 60_000;
 
-/** True when a turn's hold can be taken back: the turn row is gone, or the
- *  turn ended (not queued or running) more than LEAK_GRACE_MS ago. */
-function holdLeaked(turn: Doc<"assistant_turns"> | null, now: number): boolean {
-  if (!turn) return true;
+/** True when a turn's hold can be taken back: the turn ended (not queued or
+ *  running) more than LEAK_GRACE_MS ago. */
+function holdLeaked(turn: Doc<"assistant_turns">, now: number): boolean {
   if (LIVE_TURN.has(turn.status)) return false;
   return now - (turn.ended_at ?? turn.started_at ?? turn._creationTime) >= LEAK_GRACE_MS;
 }
 
-/** Releases what ended turns of this person still hold: a turn whose finish
- *  ended it without settling, or whose row was deleted (Averil's hourly
- *  reconcile). A turn still `queued` or `running` is never touched, so a turn
- *  whose run action died keeps its hold until the turn engine's lease expiry
- *  ends it, and that sweep settles or releases it in the same mutation. Run only when a reservation is refused, the one moment a leak
- *  costs the person anything. Candidates are every turn flagged `holding`,
- *  however far back its reserve row sits, plus the reserve rows among the
- *  newest ledger rows, which catch a hold whose turn row was deleted. */
-async function releaseLeaks(ctx: MutationCtx, userId: Id<"users">, now = Date.now()): Promise<number> {
-  const turns = new Set<Id<"assistant_turns">>();
+/** The turns flagged `holding` whose hold has leaked. Reads only
+ *  by_user_holding, so it is cheap enough for the lease mutation. */
+async function leakedHolding(ctx: MutationCtx, userId: Id<"users">, now: number): Promise<Id<"assistant_turns">[]> {
   const holding = await ctx.db.query("assistant_turns").withIndex("by_user_holding", (q) => q.eq("user_id", userId).eq("holding", true)).take(LEAK_SCAN_TURNS);
-  for (const turn of holding) turns.add(turn._id);
-  const rows = await ctx.db.query("wallet_ledger").withIndex("by_user_at", (q) => q.eq("user_id", userId)).order("desc").take(LEAK_SCAN_ROWS);
-  for (const row of rows) if (row.kind === "reserve" && row.turn_id) turns.add(row.turn_id);
+  return holding.filter((turn) => holdLeaked(turn, now)).map((turn) => turn._id);
+}
+
+async function releaseAll(ctx: MutationCtx, turns: Iterable<Id<"assistant_turns">>): Promise<number> {
   let released = 0;
-  for (const turnId of turns) {
-    if (!holdLeaked(await ctx.db.get(turnId), now)) continue;
-    released += await releaseTurn(ctx, turnId);
-  }
+  for (const turnId of turns) released += await releaseTurn(ctx, turnId);
   return money(released);
+}
+
+/** Releases what this person's ended turns still hold, for a reservation
+ *  that does not fit: a turn whose finish ended it without settling. A turn
+ *  still `queued` or `running` is never touched, so a turn whose run action
+ *  died keeps its hold until the turn engine's lease expiry ends it, and that
+ *  sweep settles or releases it in the same mutation. It releases every leak
+ *  it finds even when they cannot cover this request, so the caller's next,
+ *  smaller ask (the lease's fall back to whatever room is left) sees them.
+ *  It reads only holding turns, and each leak is released once and then
+ *  carries no flag, so a lease near the end of an allowance stays a few
+ *  reads. Holds whose turn row was deleted carry no flag to find them by;
+ *  reconcileWallet catches those on its hourly pass. */
+async function releaseLeaks(ctx: MutationCtx, userId: Id<"users">, now = Date.now()): Promise<number> {
+  return releaseAll(ctx, await leakedHolding(ctx, userId, now));
+}
+
+/** Averil's reconcile: gives back every leaked hold of one person, including
+ *  a hold whose turn row was deleted (found among the reserve rows in the
+ *  newest LEAK_SCAN_ROWS ledger rows; a turn row that still exists is found
+ *  by its `holding` flag, so the ledger pass adds only missing ones).
+ *  Heavier than the lease's pass, so it runs from the scheduled sweep
+ *  (wallet.reconcile), never on a turn start.
+ *  Idempotent: a released turn holds nothing. Returns what it gave back. */
+export async function reconcileWallet(ctx: MutationCtx, userId: Id<"users">, now = Date.now()): Promise<number> {
+  const candidates = new Set(await leakedHolding(ctx, userId, now));
+  const rows = await ctx.db.query("wallet_ledger").withIndex("by_user_at", (q) => q.eq("user_id", userId)).order("desc").take(LEAK_SCAN_ROWS);
+  for (const row of rows) {
+    if (row.kind !== "reserve" || !row.turn_id || candidates.has(row.turn_id)) continue;
+    if (!(await ctx.db.get(row.turn_id))) candidates.add(row.turn_id);
+  }
+  return releaseAll(ctx, candidates);
 }
 
 /** A turn's charge row, the mark that it was settled. */
@@ -370,13 +411,24 @@ export interface WalletSubscription {
   stripe_customer_id?: string;
   stripe_subscription_id?: string;
   subscription_status?: string;
+  /** When billing read the subscription from Stripe. */
+  subscription_read_at?: number;
+  /** Whether a live subscription bills the wallet. `false` lifts the payment
+   *  gate (`paid_through`); `true` with the period paid in full
+   *  (`moveSubscription` without `prorate`) confirms the wallet's current
+   *  period paid. Absent leaves the gate as it is. */
+  billed?: boolean;
 }
 
-function subscriptionPatch(subscription: WalletSubscription): Partial<Doc<"wallets">> {
+/** The wallet fields `subscription` changes. `paidInFull` says the
+ *  subscription has paid for the wallet's current period. */
+function subscriptionPatch(wallet: Doc<"wallets">, subscription: WalletSubscription, paidInFull: boolean): Partial<Doc<"wallets">> {
   const patch: Partial<Doc<"wallets">> = {};
-  for (const key of ["stripe_customer_id", "stripe_subscription_id", "subscription_status"] as const) {
-    if (subscription[key] !== undefined) patch[key] = subscription[key];
+  for (const key of ["stripe_customer_id", "stripe_subscription_id", "subscription_status", "subscription_read_at"] as const) {
+    if (subscription[key] !== undefined) (patch as Record<string, unknown>)[key] = subscription[key];
   }
+  if (subscription.billed === false) patch.paid_through = undefined;
+  else if (subscription.billed && paidInFull) patch.paid_through = Math.max(wallet.paid_through ?? 0, wallet.period_end);
   return patch;
 }
 
@@ -389,8 +441,8 @@ function subscriptionPatch(subscription: WalletSubscription): Partial<Doc<"walle
  *  here. */
 export async function setPlan(ctx: MutationCtx, userId: Id<"users">, plan: PlanId, subscription: WalletSubscription = {}): Promise<Doc<"wallets">> {
   const wallet = await ensureWallet(ctx, userId);
-  const status = subscription.subscription_status ?? wallet.subscription_status;
-  const patch: Partial<Doc<"wallets">> = { plan, period_cap_usd: planOf(allowancePlan(plan, status)).included_usd, ...subscriptionPatch(subscription) };
+  const facts: Partial<Doc<"wallets">> = { plan, ...subscriptionPatch(wallet, subscription, false) };
+  const patch: Partial<Doc<"wallets">> = { ...facts, period_cap_usd: allowanceUsd({ ...wallet, ...facts }, wallet.period_end) };
   await ctx.db.patch(wallet._id, patch);
   return { ...wallet, ...patch };
 }
@@ -419,7 +471,8 @@ export function proratedCap(
  *  that was already paid up: an upgrade, a downgrade, a cancel or a renewal
  *  that started failing) the change counts for the rest of the period only;
  *  without it (a new subscription, or a failing renewal finally paid) the
- *  period was paid in full and the whole allowance applies. */
+ *  period was paid in full, so a billed subscription confirms it paid
+ *  (`paid_through`) and the whole allowance applies. */
 export async function moveSubscription(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -429,9 +482,9 @@ export async function moveSubscription(
 ): Promise<Doc<"wallets">> {
   const now = options.now ?? Date.now();
   const wallet = await ensureWallet(ctx, userId, now);
-  const from = planOf(allowancePlan(wallet.plan, wallet.subscription_status)).included_usd;
-  const to = planOf(allowancePlan(plan, subscription.subscription_status ?? wallet.subscription_status)).included_usd;
-  const patch: Partial<Doc<"wallets">> = { plan, ...subscriptionPatch(subscription) };
+  const patch: Partial<Doc<"wallets">> = { plan, ...subscriptionPatch(wallet, subscription, !options.prorate) };
+  const from = allowanceUsd(wallet, wallet.period_end);
+  const to = allowanceUsd({ ...wallet, ...patch }, wallet.period_end);
   if (from !== to) patch.period_cap_usd = options.prorate ? proratedCap(wallet, from, to, now) : to;
   await ctx.db.patch(wallet._id, patch);
   return { ...wallet, ...patch };
@@ -472,21 +525,27 @@ export async function refundTopup(ctx: MutationCtx, source: string, share: numbe
 }
 
 /** Puts the wallet on a paid billing period, `period` in milliseconds as
- *  Stripe's invoice for it names it, and anchors later periods there so the
- *  wallet's own rollover lands on Stripe's renewals. A period starting after
- *  the wallet's current one is a fresh paid period, opened by the same rule a
- *  rollover uses (`freshPeriod`, `openPeriod`). A
- *  period the wallet already holds changes nothing, so a redelivered invoice
- *  or one arriving after the rollover moves no money; a period already over
- *  is ignored. Returns whether the wallet moved. */
+ *  Stripe's invoice for it names it: anchors later periods there so the
+ *  wallet's own rollover lands on Stripe's renewals, and confirms the period
+ *  paid (`paid_through`). A period starting after the wallet's current one is
+ *  a fresh paid period, opened by the same rule a rollover uses
+ *  (`freshPeriod`, `openPeriod`). The period the wallet is already in, opened
+ *  at its boundary on the free allowance because its renewal was not yet
+ *  paid, gets the plan's whole allowance now that it is. A period the wallet
+ *  already holds as paid changes nothing, so a redelivered invoice moves no
+ *  money; a period already over is ignored. Returns whether the wallet moved. */
 export async function alignPeriod(ctx: MutationCtx, userId: Id<"users">, period: { start: number; end: number }, now = Date.now()): Promise<boolean> {
   if (!(period.end > period.start) || period.end <= now) return false;
   const wallet = await ensureWallet(ctx, userId, now);
-  if (wallet.period_start === period.start && wallet.period_end === period.end && wallet.period_anchor === period.start) return false;
+  const paid = { period_start: period.start, period_end: period.end, period_anchor: period.start, paid_through: Math.max(wallet.paid_through ?? 0, period.end) };
+  if (wallet.period_start === period.start && wallet.period_end === period.end && wallet.period_anchor === period.start && wallet.paid_through === paid.paid_through) return false;
+  const next = { ...wallet, ...paid };
   if (period.start > wallet.period_start) {
-    await openPeriod(ctx, wallet, { ...freshPeriod(wallet.plan, wallet.subscription_status, period.start, period.end, wallet.topup_usd), period_anchor: period.start }, now);
+    await openPeriod(ctx, wallet, { ...freshPeriod(next, period.start, period.end, wallet.topup_usd), ...paid }, now);
   } else {
-    await ctx.db.patch(wallet._id, { period_start: period.start, period_end: period.end, period_anchor: period.start });
+    const from = allowanceUsd(wallet, wallet.period_end);
+    const to = allowanceUsd(next, period.end);
+    await ctx.db.patch(wallet._id, from !== to ? { ...paid, period_cap_usd: to } : paid);
   }
   return true;
 }
@@ -529,6 +588,9 @@ export interface WalletSummary {
   period_start: number | null;
   period_end: number | null;
   subscription_status: string | null;
+  /** The end of the last period Stripe confirmed paid while a subscription
+   *  bills the wallet, else null (`allowancePlan`). */
+  paid_through: number | null;
   /** Whether Stripe holds a customer for this person (any plan or top-up was
    *  bought), so the billing portal has something to show. */
   billing_account: boolean;
@@ -549,7 +611,7 @@ const SUMMARY_ACCOUNT_LINES = 10;
  *  (useWallet). Returns the same object while the period runs. */
 export function summaryAt(summary: WalletSummary, now: number): WalletSummary {
   if (summary.period_anchor == null || summary.period_end == null) return summary;
-  const next = nextPeriod(summary.period_anchor, summary.plan, summary.subscription_status, summary.period_end, summary.topup_usd, now);
+  const next = nextPeriod(summary.period_anchor, summary, summary.period_end, summary.topup_usd, now);
   if (!next) return summary;
   return {
     ...summary,
@@ -596,6 +658,7 @@ export async function walletSummary(ctx: QueryCtx, userId: Id<"users">, now = Da
     period_start: wallet?.period_start ?? null,
     period_end: wallet?.period_end ?? null,
     subscription_status: wallet?.subscription_status ?? null,
+    paid_through: wallet?.paid_through ?? null,
     billing_account: !!wallet?.stripe_customer_id,
     conversations: [...byConversation.values()],
     account,

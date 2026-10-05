@@ -86,6 +86,30 @@ describe("aes round trip", () => {
   });
 });
 
+describe("aes additional data", () => {
+  it("opens only with the additional data it was sealed with", async () => {
+    const sealed = await encryptAESGCMString("refresh-token", KEY64, "credentials:a1:refresh_token");
+    expect(await decryptAESGCMString(sealed, KEY64, "credentials:a1:refresh_token")).toBe("refresh-token");
+    // Moved to another row or field, or opened without it: refused.
+    expect(await decryptAESGCMString(sealed, KEY64, "credentials:a2:refresh_token")).toBeNull();
+    expect(await decryptAESGCMString(sealed, KEY64, "credentials:a1:access_token")).toBeNull();
+    expect(await decryptAESGCMString(sealed, KEY64)).toBeNull();
+  });
+
+  it("does not open a ciphertext sealed without it when some is presented", async () => {
+    const plain = await encryptAESGCMString("x", KEY64);
+    expect(await decryptAESGCMString(plain, KEY64, "context")).toBeNull();
+    expect(await decryptAESGCMString(plain, KEY64)).toBe("x");
+  });
+
+  it("binds the binary form the same way", async () => {
+    const aad = new Uint8Array([1, 2, 3]);
+    const sealed = await encryptAESGCM(new Uint8Array([9, 9]), KEY64, aad);
+    expect(await decryptAESGCM(sealed, KEY64, aad)).toEqual(new Uint8Array([9, 9]));
+    expect(await decryptAESGCM(sealed, KEY64, new Uint8Array([1, 2, 4]))).toBeNull();
+  });
+});
+
 describe("aes binary helpers", () => {
   it("round trips bytes that are valid UTF-8", async () => {
     const data = new TextEncoder().encode("plain ascii and ünïcode");

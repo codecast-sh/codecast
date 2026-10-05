@@ -18,6 +18,8 @@ import {
   workedTimes,
   LANE_PATHS,
   LANE_SECTIONS,
+  laneSurfaceLabel,
+  conversationPath,
   STEPS_SHOWN,
   conversationSubline,
   draftIsLong,
@@ -277,6 +279,9 @@ describe("usage", () => {
     expect(planPrice(PLANS.free)).toBe("$0 a month");
     expect(planPrice(PLANS.plus)).toBe("$20 a month");
     expect(planPoints(PLANS.free)[1]).toBe("3 routines, at most every day");
+    // The global hourly floor shows on every plan, so the card promises what the server allows.
+    expect(planPoints(PLANS.plus)[1]).toBe("25 routines, at most every hour");
+    expect(planPoints(PLANS.pro)[1]).toBe("Unlimited routines, at most every hour");
     expect(upgradesFrom("free").map((p) => p.id)).toEqual(["plus", "pro"]);
     expect(upgradesFrom("pro")).toEqual([]);
     expect(dollars(1.5)).toBe("$1.50");
@@ -295,6 +300,9 @@ describe("connections", () => {
     const { plainConnectError, missingAbilities } = await import("./lane");
     expect(plainConnectError("Google OAuth not configured (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET)")).toBe("Connecting Google isn't switched on here yet.");
     expect(plainConnectError("Couldn't reach Gmail")).toBe("Couldn't reach Gmail");
+    // Codes from Google's callback and the confirm step read through the connectors' one table.
+    expect(plainConnectError("access_denied")).toBe("You declined the authorization.");
+    expect(plainConnectError("wrong_account")).toContain("different account");
     expect(plainConnectError(null)).toBeNull();
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: true, calendar: true })).toBe(false);
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: false, calendar: true })).toBe(true);
@@ -305,11 +313,37 @@ describe("connections", () => {
 });
 
 describe("billing return", () => {
-  it("explains where Stripe sent the person back from", async () => {
+  it("explains where Stripe sent the person back from, and waits for the payment to land", async () => {
     const { billingReturnNote } = await import("./lane");
-    expect(billingReturnNote("done")).toBe("Your plan is updated. Thank you.");
-    expect(billingReturnNote("canceled")).toBe("Checkout was canceled, so nothing changed.");
-    expect(billingReturnNote(null)).toBeNull();
+    expect(billingReturnNote("done", true)).toEqual({ text: "Your plan is updated. Thank you.", tone: "done" });
+    expect(billingReturnNote("done", false)?.tone).toBe("pending");
+    expect(billingReturnNote("topup", false)?.text).toContain("as soon as Stripe confirms");
+    expect(billingReturnNote("canceled", true)).toEqual({ text: "Checkout was canceled, so nothing changed.", tone: "plain" });
+    expect(billingReturnNote(null, true)).toBeNull();
+    // Past the wait, a payment still missing points to support; a settled one never does.
+    const late = billingReturnNote("done", false, true)!;
+    expect(late.tone).toBe("late");
+    expect(late.support).toEqual({ subject: "My new plan hasn't shown up", link: "write to us", after: " and we'll sort it out." });
+    expect(late.text + late.support!.link + late.support!.after).toBe("Your new plan hasn't reached your account yet. If Stripe charged you, write to us and we'll sort it out.");
+    expect(billingReturnNote("topup", false, true)?.support?.subject).toBe("My extra credit hasn't shown up");
+    expect(billingReturnNote("done", true, true)?.tone).toBe("done");
+    expect(billingReturnNote("canceled", true, true)?.support).toBeUndefined();
+  });
+
+  it("counts a plan settled once the subscription is live, and a top-up once its credit is on the account", async () => {
+    const { billingReturnSettled } = await import("./lane");
+    const now = 1_000_000_000;
+    const wallet = (subscription_status: string | null, account: { kind: "topup" | "grant"; at: number }[] = []) =>
+      ({ subscription_status, account: account.map((line) => ({ ...line, amount_usd: 6 })) });
+    expect(billingReturnSettled("done", null, now)).toBe(false);
+    expect(billingReturnSettled("done", wallet(null), now)).toBe(false);
+    expect(billingReturnSettled("done", wallet("incomplete"), now)).toBe(false);
+    expect(billingReturnSettled("done", wallet("active"), now)).toBe(true);
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "topup", at: now - 60 * 60_000 }]), now)).toBe(false);
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "grant", at: now }]), now)).toBe(false);
+    // The webhook may land a little before the person is back.
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "topup", at: now - 30_000 }]), now)).toBe(true);
+    expect(billingReturnSettled("canceled", null, now)).toBe(true);
   });
 });
 
@@ -371,6 +405,13 @@ describe("shared list and fold rules", () => {
   it("lists every lane surface once, home first", () => {
     expect(LANE_SECTIONS[0].path).toBe(LANE_PATHS.home);
     expect(new Set(LANE_SECTIONS.map((t) => t.path)).size).toBe(LANE_SECTIONS.length);
+  });
+
+  it("names every lane page plainly in the window title", () => {
+    for (const s of LANE_SECTIONS) expect(laneSurfaceLabel(s.path)).toBe(s.label);
+    expect(laneSurfaceLabel(`${LANE_PATHS.approvals}/`)).toBe("Approvals");
+    expect(laneSurfaceLabel(conversationPath("abc"))).toBe("Home");
+    expect(laneSurfaceLabel(LANE_PATHS.welcome)).toBe("Welcome");
   });
 });
 
@@ -445,5 +486,33 @@ describe("the lane's spoken tab names", () => {
   it("adds what is waiting only when something is", () => {
     expect(LANE_COPY.tabs.label("Approvals", 0)).toBe("Approvals");
     expect(LANE_COPY.tabs.label("Approvals", 2)).toBe("Approvals, 2 waiting");
+  });
+});
+
+describe("the ask-before-acting promise", () => {
+  it("is worded once on every surface that makes it", async () => {
+    const { ASK_FIRST, askFirst } = await import("./askFirst");
+    const { assistantPromise } = await import("./assistantPromise");
+    const { LANE_COPY } = await import("./lane");
+    expect(ASK_FIRST).toBe(askFirst("send an email or change your calendar"));
+    expect(LANE_COPY.home.lede.endsWith(ASK_FIRST)).toBe(true);
+    expect(LANE_COPY.connections.lede.endsWith(ASK_FIRST)).toBe(true);
+    expect(assistantPromise(true).endsWith(ASK_FIRST)).toBe(true);
+    expect(assistantPromise(false).endsWith(askFirst("act for you"))).toBe(true);
+    for (const line of [ASK_FIRST, assistantPromise(true), assistantPromise(false)]) expect(line).not.toContain("—");
+  });
+});
+
+describe("home's ideas", () => {
+  it("are /welcome's first asks, so home suggests only what is connected", async () => {
+    const { ASKS, firstAsks, homeIdeas } = await import("./lane");
+    const all = { read_mail: true, modify_mail: true, send_mail: true, calendar: true };
+    for (const can of [all, { ...all, calendar: false }, { ...all, read_mail: false }, null]) {
+      const { lead, more } = firstAsks(can);
+      expect(homeIdeas(can)).toEqual((lead ? [lead, ...more] : more).slice(0, 3));
+    }
+    expect(homeIdeas(all)[0]).toBe(ASKS.week);
+    expect(homeIdeas(null)).toHaveLength(3);
+    for (const idea of homeIdeas(null)) expect(idea).not.toMatch(/mail|calendar|reply/i);
   });
 });

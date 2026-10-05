@@ -41,6 +41,11 @@ malformed base64. It does not say which, and it does not throw.
 `encryptAESGCM` / `decryptAESGCM` are the `Uint8Array` pair underneath. They
 write and read the same layout, they take and return the bytes you give them,
 and they are safe for arbitrary binary: files, images, compressed payloads.
+All four take an optional last argument, `additionalData` (a string for the
+text pair, bytes for the binary pair). It is authenticated but not encrypted,
+and decrypting needs the same value again, so a ciphertext sealed for one row
+and field returns null if it is copied into another. Leave it out and the
+output is exactly what it was before the option existed.
 
 **HMAC-SHA-512** (`src/hmac_sha512.ts`). `hmac_sha512(key, data)` returns 64
 bytes. It matches the published RFC 4231 vectors, which the tests assert.

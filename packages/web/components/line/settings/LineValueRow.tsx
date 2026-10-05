@@ -173,12 +173,12 @@ export function LineValueRow({ label, what, unit, children, source, status, note
         <div className="lset-val-line">
           {children}
           {unit && <span className="lset-unit">{unit}</span>}
-          <SourceTag source={source} />
           {source === "file" && onReset && (
             <button type="button" className="lset-to-default" onClick={onReset} title={`Remove it from the file; the line then uses the default: ${defaultText || "unset"}`} data-lset-to-default>
               use default
             </button>
           )}
+          <SourceTag source={source} />
         </div>
         {note && <p className="lset-note" data-lset-note>{note}</p>}
         {status}

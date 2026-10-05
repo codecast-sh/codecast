@@ -6,6 +6,7 @@
   },
   "include": [
     "src/**/*",
+    "scripts/**/*",
     "../convex/convex/lib/anthropic.ts",
     "../convex/convex/idleSummary.ts",
     "../cli/src/cliHttp.ts",

@@ -153,7 +153,7 @@ async function verifyProposalThread() {
   await click(q("[data-asks-bar]"));
   assert.equal(calls.pop(), "asks");
   await renderThread({ layout: "phone", asksBar: { toDecide: 0, total: 3, updated: 0, onOpen: () => {} } });
-  assert.equal(q("[data-asks-bar]")!.textContent, "All 3 decidedSee them");
+  assert.equal(q("[data-asks-bar]")!.textContent, "All 3 answeredSee them");
   assert.equal(q("[data-thread-back]"), null, "no list to go back to: the asks come to the conversation");
   // The sheet over it: the scrim and the handle both close it.
   await act(async () => root.render(React.createElement(AsksSheet, { onClose: () => calls.push("close") }, React.createElement("div", { "data-asks-inside": true }, "cards"))));

@@ -328,6 +328,27 @@ export function soundCallJoin() {
   playCue(CALL_JOIN);
 }
 
+// An agent in the room you are in answered: its reply just landed in the
+// call's chat. A clear two-note chime rising a fifth (C6 → G6), brighter and
+// shorter than the join triad and nothing like the wooden knock, so a person
+// talking hears "the agent said something" without looking. Keyed by the
+// reply, so every window watching the room sounds it once between them.
+export function soundAgentReply(rowId: string) {
+  if (!isEnabled("calls") || !isSupported() || !isAnnouncer()) return;
+  announce(
+    "calls",
+    `sound:agent-reply:${rowId}`,
+    () =>
+      play([
+        { freq: 1046.5, start: 0, dur: 0.18, gain: 0.32, type: "sine" },
+        { freq: 2093, start: 0, dur: 0.12, gain: 0.06, type: "sine" },
+        { freq: 1567.98, start: 0.11, dur: 0.32, gain: 0.3, type: "sine" },
+        { freq: 3135.96, start: 0.11, dur: 0.18, gain: 0.05, type: "sine" },
+      ], 0.05),
+    { ttl: 60_000, preferDesktop: false },
+  );
+}
+
 // A participant left / the call ended: the join triad, descending.
 export function soundCallLeave() {
   if (!isEnabled("calls")) return;

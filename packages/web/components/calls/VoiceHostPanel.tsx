@@ -38,7 +38,7 @@ import {
   showCallPanel,
   voiceShapeForCallSize,
   type CallWindowSize,
-  type VoiceWindowShape, navigateMainWindow, useFacesFloating } from "../../lib/desktop";
+  type VoiceWindowShape, DOCK_FACES_TITLE, navigateMainWindow, useFacesFloating } from "../../lib/desktop";
 import "./voiceHost.css";
 
 /**
@@ -105,10 +105,14 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     if (call.phase === "idle" && expanded) setExpanded(false);
     lastPhase.current = call.phase;
   }
-  // Shrink and hide are one move here: the stage folds back into the float,
-  // and the view decides whether the float shows (voiceHostView).
-  const hideCall = useCallback(() => setExpanded(false), []);
+  // Shrink: the stage folds back into the row, and the view decides where
+  // the row is (the float, or the header in the app: voiceHostView).
+  const shrink = useCallback(() => setExpanded(false), []);
   const expand = useCallback(() => setExpanded(true), []);
+  // Each explicit expand also RAISES the window. Expanding a stage that is
+  // already open changes no state, so without this a stage left behind the
+  // app stayed there and the button read as dead.
+  const [raised, setRaised] = useState(0);
   // The float's Hide: away for this engagement, back for the next. A row
   // the person popped out is docked back in the header instead.
   const [dismissed, setDismissed] = useState(false);
@@ -167,7 +171,11 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // the call is here; the window that holds it, raised by the shell; and a
   // call held nowhere on this machine comes here, onto the stage.
   const openCall = useCallback(() => {
-    if (inCall) return expand();
+    if (inCall) {
+      expand();
+      setRaised((n) => n + 1);
+      return;
+    }
     void (async () => {
       if (await showCallPanel()) return;
       if (!rowCall || !claim(rowCall)) return;
@@ -176,6 +184,9 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- claim reads a ref
   }, [inCall, rowCall, call.muted, expand]);
+  // The expand command lands in a listener registered once, at mount.
+  const openCallRef = useRef(openCall);
+  openCallRef.current = openCall;
   const ringIn = row.card.kind === "ring-in" ? row.card : null;
   const view: VoiceWindowShape = voiceHostView({
     engaged: row.me !== null,
@@ -229,6 +240,10 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // row came up cut off in the seed sized window until a hover re-sent it.
   // Layout effects run before every passive effect, parent or child, so the
   // ask is on the wire before the report.
+  //
+  // A raise re-sends the stage, which a current shell brings to the front.
+  // A shell from before that only fronts it through showCallPanel, for a room
+  // this window has reported, so a raise asks that too.
   const warned = useRef(false);
   useLayoutEffect(() => {
     void setCallWindowSize(view).then((landed) => {
@@ -236,7 +251,8 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
       warned.current = true;
       toast("The desktop app needs an update for the call window's shapes");
     });
-  }, [view]);
+    if (raised && view === "panel") void showCallPanel();
+  }, [view, raised]);
 
   // Toasts are the app's and the stage's; a row floating over somebody's
   // editor is no place for one (voiceHost.css reads the class).
@@ -286,9 +302,10 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
     onVoiceCommand(({ cmd, args }) => {
       void runVoiceCommand(cmd, args);
     });
-    // The elsewhere pill, in any window: the explicit expand.
+    // The elsewhere pill, through the shell, which raises the window itself.
     onCallPanelShow(expand);
-    onHostExpand(expand);
+    // Expand, from any window's call card: what the float's own Expand does.
+    onHostExpand(() => openCallRef.current());
     // Listeners first, then the declaration: from here rooms are commands.
     declareVoiceHost();
   });
@@ -319,7 +336,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   if (view === "panel") {
     return (
       <>
-        <CallStage panel onShrink={hideCall} onHide={hideCall} />
+        <CallStage panel onShrink={shrink} />
         {/* A ring during a call: the row's card, over the stage where the
             person is. Nothing else in the app draws it while a host exists. */}
         {ringIn && (
@@ -333,7 +350,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   if (view === "wall") {
     return (
       <div className="voice-wall-window">
-        <PeoplePanel host callBehind={inCall} onShowCall={expand} />
+        <PeoplePanel host callBehind={inCall} onShowCall={openCall} />
       </div>
     );
   }
@@ -351,7 +368,7 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
             onExpand: openCall,
             onClose: closeFloat,
             closeWord: floating.floating ? "Dock" : "Hide",
-            closeTitle: floating.floating ? "Dock the faces back in the header" : "Hide the faces until the next call or voice",
+            closeTitle: floating.floating ? DOCK_FACES_TITLE : "Hide the faces until the next call or voice",
             docks: floating.floating,
           }}
         >

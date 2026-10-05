@@ -174,7 +174,8 @@ test("the pane reads its address, draws the proposal, and follows the thread's n
   expect(q("[data-graph-lens]", el)!.getAttribute("data-graph-lens")).toBe("goals");
   expect(q("[data-graph-changes]", el)!.getAttribute("data-graph-changes")).toBe("5");
   expect(q("[data-chart-proposal='op-8']", el)!.textContent).toContain("Name the goals the work already serves");
-  expect(q("[data-proposal-meta]", el)!.getAttribute("data-proposal-meta")).toBe("5 of 5 to decide");
+  // Counted in cards: two of the five changes land on one goal.
+  expect(q("[data-proposal-meta]", el)!.getAttribute("data-proposal-meta")).toBe("4 to decide");
   expect(q("[data-chart-follow]", el)!.getAttribute("data-chart-follow")).toBe("on");
   // The pointer that was there when the pane opened moves nothing.
   expect(replaced).toEqual([]);

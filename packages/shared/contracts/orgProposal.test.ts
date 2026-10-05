@@ -266,8 +266,8 @@ describe("goal changes", () => {
     expect(orgChangeError({ ...GOOD.initiative, metrics: [{ name: "A" }] })).toContain("{ name, target }");
   });
   // The intent record (I5 "Proposals"): a goal change may carry why, done
-  // when, milestones and sources; a shape change may also add questions and
-  // decisions. The sentence stays short and the words are the effect's.
+  // when, milestones, sources, questions and decisions. The sentence stays
+  // short and the words are the effect's.
   test("a goal change carries its record: validated, counted in the sentence, written out in the effect", async () => {
     const { deriveAsks } = await import("./orgProposal");
     const record = { why: "Brokers bring the sellers", done_when: "Three brokers trade through us.", milestones: [{ title: "Quiet onboarded", date: Date.UTC(new Date().getUTCFullYear(), 10, 1) }, { title: "Second broker live" }], sources: ["call:cl-42#14 our goal is three brokers", "jx7c6zk:142"] };
@@ -300,8 +300,14 @@ describe("goal changes", () => {
     expect(two.errors).toEqual([]);
     expect(two.changes.map((c) => c.change)).toEqual([{ kind: "initiative_shape", initiative: "in-2", parent: "Reach 1k teams", questions: ["Do we price per seat?", "Who signs?"], decisions: ["Ship to brokers first"] }]);
     expect(foldRepeatedSubjects([{ change: { kind: "initiative_shape", initiative: "in-2", why: "a" } }, { change: { kind: "initiative_shape", initiative: "in-2", why: "b" } }]).errors[0]).toContain("with a different why");
-    // Questions and decisions belong to a goal that exists: the create does not read them.
     expect(orgChangeError({ kind: "initiative_shape", initiative: "in-2", questions: Array.from({ length: 21 }, (_, i) => `Q${i}?`) })).toContain("questions is a list of at most 20 strings");
+    // A new goal may carry the questions and decisions too: the card prints them, so they are held to the same rules and written on accept.
+    const asked = { ...GOOD.initiative, questions: ["Do we price per seat?"], decisions: ["Ship to brokers first"] };
+    expect(orgChangeError(asked)).toBeNull();
+    expect(deriveAsks([{ seq: 1, change: asked }] as any)[0].effect).toContain("Still open: Do we price per seat? Decided: Ship to brokers first.");
+    expect(describeOrgChange(asked)).toContain("+1 questions +1 decisions");
+    expect(orgChangeError({ ...GOOD.initiative, decisions: [7] })).toContain("initiative decisions is a list of at most 40 strings");
+    expect(orgChangeError({ ...GOOD.initiative, questions: Array.from({ length: 21 }, (_, i) => `Q${i}?`) })).toContain("initiative questions is a list of at most 20 strings");
   });
   test("one subject per proposal, and the owner handle counts as a role the change names", async () => {
     const { orgChangeKey, orgChangeHandles } = await import("./orgProposal");
@@ -635,5 +641,424 @@ describe("a role proposal with a line", () => {
     expect(ask!.effect).toContain("runs the project's line on the line workflow, starting new work only while fewer than 5 change cards wait on a person");
     const plain = deriveAsks([{ seq: 1, change: { kind: "role", name: "Ops", handle: "ops" } as OrgChange }]);
     expect(plain[0]!.effect).not.toContain("workflow");
+  });
+});
+
+// The words of a change (org-staffing.md S17, S21, S39). With nothing passed a
+// change reads the way the log and the terminal print it; a card passes the
+// names it has and asks for the brief form: verb first, the subject's name
+// written once, nothing a field row already shows.
+import { andList, changeClauses, changeSentence, goalChangeSentence, PRIORITY_WORDS, type ChangeWords, type OrgAskNames, type OrgGoalChange, type OrgPriority, type OrgProjectMetaChange } from "./orgProposal";
+
+describe("the words of a change", () => {
+  const pick = (table: Record<string, string>) => (ref: string): string | undefined => table[ref];
+  const names: OrgAskNames = {
+    role: pick({ growth: "Head of Growth", product: "Head of Product", ops: "Content Lead", calling: "Calling Lead", "head-of-people": "Head of People" }),
+    project: pick({ "pr-1": "Growth", "pr-3": "Old site", "pr-5": "Billing" }),
+    plan: pick({ "pl-1": "Launch plan", "pl-2": "Pricing", "pl-7": "Launch" }),
+    initiative: pick({ "in-2": "Win the private network", "in-9": "Reach 1k teams" }),
+    session: pick({ jx7abcd: "Org review" }),
+  };
+  const brief = (c: OrgChange, more: ChangeWords = {}) => changeLine(c, { brief: true, names, ...more });
+  const meta = (over: Partial<OrgProjectMetaChange>): OrgProjectMetaChange => ({ kind: "project_meta", project: "pr-1", ...over });
+
+  test("with no words every kind but a project's fields reads as it always did", () => {
+    const lines = Object.fromEntries(Object.entries(GOOD).map(([kind, c]) => [kind, changeLine(c)]));
+    expect(lines).toEqual({
+      role: "Add a role, Head of Growth (@growth), reporting to you, looking after pr-1",
+      projects: "Create the project Platform; fold the project pr-3 into pr-1",
+      move: "Move @growth under @product; now also looks after pr-5",
+      retire: "Retire @ops; its sessions go back to their owners",
+      scope: "@growth also looks after pr-5 and stops looking after pl-2",
+      budget: "@growth may use up to 800,000 tokens a day",
+      trust: "@growth starts work on its own",
+      routine: '@growth runs "Weekly funnel" every week',
+      project_meta: "Make pr-1 a high priority, make @growth its lead and write down what it is for, how it is measured, what it leaves out and its risks",
+      adopt: "Make session jx7abcd the standing session of @head-of-people",
+      file: "Put plan pl-1 under the project Platform",
+      plan_status: "Mark plan pl-7 done",
+      task_status: "Mark task ct-42 done",
+      project_status: "Mark project Legacy paused",
+      authority: "@growth may spend (Paid search on the configured campaign, up to $300 a month) and write (Ship pages into the working tree), inside the limits you set",
+      hire: "Hire @growth from the template growth (2.0.0) to lead pr-1",
+      upgrade: "Move the instance acme-growth to growth 2.1.0",
+      initiative: "Set a goal: Win the private network, carried by Callers and Broker network, owned by @calling",
+      initiative_projects: "Add Callers to the goal Win the private network",
+      initiative_owner: "Make @calling the owner of the goal Win the private network",
+      initiative_shape: "Put the goal Win the private network under Reach 1k teams and measured by Brokers live (target 40)",
+    });
+    expect(changeLine({ kind: "role", name: "Head of People", handle: "people", reports_to: "@growth", seat: { existing: "jx7abcd", title: "Org review" } })).toBe("Name the session Org review as a role, Head of People (@people), reporting to @growth");
+    expect(changeLine({ kind: "move", handle: "growth", scope_remove: ["pr-5", "pl-2"] })).toBe("Move @growth; no longer looks after pr-5 and pl-2");
+    expect(changeLine({ kind: "trust", handle: "growth", trust: "understand" })).toBe("@growth stops starting work on its own");
+    // The sentence is the line before its capital, and one clause in every form but the card's.
+    for (const c of Object.values(GOOD)) {
+      const sentence = changeSentence(c);
+      expect(changeLine(c), c.kind).toBe(sentence.charAt(0).toUpperCase() + sentence.slice(1));
+      if (c.kind !== "project_meta") expect(changeClauses(c), c.kind).toEqual([sentence]);
+    }
+  });
+
+  test("a project's fields: no charter, the priority in words, what is written down named and never printed", () => {
+    expect(PRIORITY_WORDS).toEqual({ p0: "the top priority", p1: "a high priority", p2: "a medium priority", p3: "a low priority" });
+    expect((["p0", "p1", "p2", "p3"] as const).map((priority) => changeLine(meta({ priority })))).toEqual([
+      "Make pr-1 the top priority", "Make pr-1 a high priority", "Make pr-1 a medium priority", "Make pr-1 a low priority",
+    ]);
+    // The priority before, when the caller knows it: up is raise, down is lower, and the top is always made.
+    const from = (priority: OrgPriority, was: OrgPriority | null) => changeLine(meta({ priority }), { was: { priority: was } });
+    expect(from("p1", "p2")).toBe("Raise pr-1 to a high priority");
+    expect(from("p2", "p3")).toBe("Raise pr-1 to a medium priority");
+    expect(from("p3", "p1")).toBe("Lower pr-1 to a low priority");
+    expect(from("p2", "p0")).toBe("Lower pr-1 to a medium priority");
+    expect(from("p0", "p2")).toBe("Make pr-1 the top priority");
+    expect(from("p1", "p1")).toBe("Make pr-1 a high priority");
+    expect(from("p1", null)).toBe("Make pr-1 a high priority");
+    expect(changeLine(meta({ priority: "p1" }), { was: {} })).toBe("Make pr-1 a high priority");
+    // Names: the project by its title, the lead by the role's name.
+    expect(changeLine(meta({ priority: "p0" }), { names })).toBe("Make Growth the top priority");
+    expect(changeLine(meta({ owner: "@growth" }), { names })).toBe("Make Head of Growth the lead of Growth");
+    expect(changeLine(meta({ owner: "@nobody" }), { names })).toBe("Make @nobody the lead of Growth");
+    expect(changeLine(meta({ owner: "growth" }))).toBe("Make @growth the lead of pr-1");
+    // What it writes down, each part named once and the project named first.
+    expect(changeLine(meta({ goal: "Ship the onboarding" }), { names })).toBe("Write down what Growth is for");
+    expect(changeLine(meta({ success_metrics: ["activation 40%"], risks: ["one engineer"] }), { names })).toBe("Write down how Growth is measured and its risks");
+    expect(changeLine(meta({ risks: ["one engineer"] }), { names })).toBe("Write down the risks to Growth");
+    expect(changeLine(meta({ non_goals: ["paid ads"] }), { names })).toBe("Write down what Growth leaves out");
+    expect(changeLine(GOOD.project_meta, { names, was: { priority: "p3" } })).toBe("Raise Growth to a high priority, make Head of Growth its lead and write down what it is for, how it is measured, what it leaves out and its risks");
+    // As a clause after another about the same project.
+    expect(changeSentence(meta({ priority: "p1" }), { subject: "it" })).toBe("make it a high priority");
+    expect(changeSentence(meta({ priority: "p3" }), { subject: "it", was: { priority: "p1" } })).toBe("lower it to a low priority");
+    expect(changeSentence(meta({ owner: "@growth", goal: "g" }), { subject: "it", names })).toBe("make Head of Growth its lead and write down what it is for");
+    expect(changeClauses(GOOD.project_meta, { names })).toEqual(["make Growth a high priority", "make Head of Growth its lead", "write down what it is for, how it is measured, what it leaves out and its risks"]);
+    // A row that names no field (the way back of one) still reads as a sentence.
+    expect(changeLine(meta({}))).toBe("Change the project pr-1");
+    for (const line of [changeLine(GOOD.project_meta), changeLine(GOOD.project_meta, { brief: true, names })]) {
+      expect(line).not.toMatch(/charter|\bp[0-3]\b|Ship the onboarding|activation|paid ads|one engineer/);
+    }
+  });
+
+  test("names without the card's form: the same sentences, each ref by the name the reader knows", () => {
+    const named = (c: OrgChange) => changeLine(c, { names });
+    expect(named(GOOD.role)).toBe("Add a role, Head of Growth (@growth), reporting to you, looking after Growth");
+    expect(named({ kind: "role", name: "SEO", handle: "seo", reports_to: "@growth", scope: { plans: ["pl-1"] } })).toBe("Add a role, SEO (@seo), reporting to Head of Growth, looking after Launch plan");
+    expect(named(GOOD.projects)).toBe("Create the project Platform; fold the project Old site into Growth");
+    expect(named(GOOD.move)).toBe("Move Head of Growth under Head of Product; now also looks after Billing");
+    expect(named(GOOD.retire)).toBe("Retire Content Lead; its sessions go back to their owners");
+    expect(named(GOOD.scope)).toBe("Head of Growth also looks after Billing and stops looking after Pricing");
+    expect(named(GOOD.budget)).toBe("Head of Growth may use up to 800,000 tokens a day");
+    expect(named(GOOD.trust)).toBe("Head of Growth starts work on its own");
+    expect(named(GOOD.routine)).toBe('Head of Growth runs "Weekly funnel" every week');
+    expect(named(GOOD.adopt)).toBe("Make the session Org review the standing session of Head of People");
+    expect(named(GOOD.hire)).toBe("Hire Head of Growth from the template growth (2.0.0) to lead Growth");
+    expect(named(GOOD.file)).toBe("Put plan Launch plan under the project Platform");
+    // A ref the names do not know stands as written.
+    expect(named({ kind: "move", handle: "design", reports_to: "Ashot Petrosian", scope_add: ["pr-99"] })).toBe("Move @design under Ashot Petrosian; now also looks after pr-99");
+    expect(named({ kind: "adopt", handle: "design", conversation: "jx7zzzz" })).toBe("Make session jx7zzzz the standing session of @design");
+    // The subject by another word, where a caller already said its name.
+    expect(changeSentence(GOOD.scope, { subject: "it", names })).toBe("it also looks after Billing and stops looking after Pricing");
+    expect(changeSentence(GOOD.retire, { subject: "it" })).toBe("retire it; its sessions go back to their owners");
+    expect(goalChangeSentence(GOOD.initiative_projects as OrgGoalChange, names, { subject: "it" })).toBe("add Callers to it");
+    expect(goalChangeSentence(GOOD.initiative_owner as OrgGoalChange, undefined, { subject: "it" })).toBe("make @calling the owner of it");
+  });
+
+  // Every row of the ledger's sentence table (S39): the words a card prints,
+  // before the card adds its full stop and its emphasis.
+  test("the card's sentences: verb first, the subject named once, no markup and no full stop", () => {
+    const goal = GOOD.initiative, title = "Win the private network";
+    const rows: Array<[string, string, string]> = [
+      // [the sentence, the subject's name, what the row is]
+      [brief({ ...goal, parent: "in-9" } as OrgChange), title, "a new goal under a parent"],
+      [brief(goal), title, "a new goal at the top level"],
+      [brief(goal, { purpose: true }), title, "the purpose"],
+      [brief({ kind: "initiative_shape", initiative: "in-2", parent: "in-9" }), title, "a goal moved under another"],
+      [brief({ kind: "initiative_shape", initiative: "in-2", parent: null }), title, "a goal moved to the top"],
+      [brief({ kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "Brokers live", target: "40" }] }), title, "a goal measured"],
+      [brief({ kind: "initiative_shape", initiative: "in-2", metrics: [{ name: "Brokers live", target: "40" }, { name: "Reply rate", target: "1% higher (Cameron)" }] }), title, "a goal with two measures"],
+      [brief(GOOD.initiative_projects), title, "projects added to a goal"],
+      [brief(GOOD.initiative_owner), title, "a goal's owner"],
+      [brief(meta({ priority: "p0" })), "Growth", "the top priority"],
+      [brief(meta({ priority: "p1" })), "Growth", "a high priority"],
+      [brief(meta({ priority: "p2" })), "Growth", "a medium priority"],
+      [brief(meta({ priority: "p3" })), "Growth", "a low priority"],
+      [brief(meta({ priority: "p1" }), { was: { priority: "p2" } }), "Growth", "a priority raised"],
+      [brief(meta({ priority: "p3" }), { was: { priority: "p2" } }), "Growth", "a priority lowered"],
+      [brief(meta({ priority: "p0" }), { was: { priority: "p2" } }), "Growth", "the top priority from another"],
+      [brief(meta({ owner: "@product" })), "Growth", "a project's lead"],
+      [brief(GOOD.role), "Head of Growth", "a new role under the reader"],
+      [brief({ kind: "role", name: "SEO Lead", handle: "seo", reports_to: "@growth" }), "SEO Lead", "a new role under a role"],
+      [brief({ kind: "role", name: "Head of People", handle: "people", seat: { existing: "jx7abcd" } }), "Head of People", "a session named as a role"],
+      [brief({ kind: "move", handle: "growth", reports_to: "@product" }), "Head of Growth", "a move"],
+      [brief({ kind: "scope", handle: "growth", add: ["pr-5"] }), "Head of Growth", "looks after"],
+      [brief({ kind: "scope", handle: "growth", remove: ["pl-2"] }), "Head of Growth", "stops looking after"],
+      [brief(GOOD.trust), "Head of Growth", "starts work on its own"],
+      [brief({ kind: "trust", handle: "growth", trust: "understand" }), "Head of Growth", "asks before it starts"],
+      [brief(GOOD.routine), "Head of Growth", "a routine"],
+      [brief({ ...GOOD.task_status, title: "Remove the pilot" } as OrgChange), "Remove the pilot", "a task done"],
+      [brief(GOOD.plan_status), "Launch", "a plan done"],
+      [brief({ ...GOOD.project_status, status: "done" } as OrgChange), "Legacy", "a project done"],
+      [brief({ ...GOOD.plan_status, status: "active" } as OrgChange), "Launch", "a plan reopened"],
+      [brief({ ...GOOD.task_status, status: "open", title: "Remove the pilot" } as OrgChange), "Remove the pilot", "a task reopened"],
+      [brief(GOOD.retire), "Content Lead", "a retirement"],
+      [brief(GOOD.budget), "Head of Growth", "a limit alone"],
+    ];
+    expect(rows.map(([sentence]) => sentence)).toEqual([
+      "Add the goal Win the private network under Reach 1k teams",
+      "Add the goal Win the private network at the top level",
+      "Set Win the private network as the purpose",
+      "Move Win the private network under Reach 1k teams",
+      "Move Win the private network to the top level",
+      "Measure Win the private network by Brokers live",
+      "Give Win the private network two measures",
+      "Have Callers carry Win the private network",
+      "Make Calling Lead the owner of Win the private network",
+      "Make Growth the top priority",
+      "Make Growth a high priority",
+      "Make Growth a medium priority",
+      "Make Growth a low priority",
+      "Raise Growth to a high priority",
+      "Lower Growth to a low priority",
+      "Make Growth the top priority",
+      "Make Head of Product the lead of Growth",
+      "Add the role Head of Growth, reporting to you",
+      "Add the role SEO Lead, reporting to Head of Growth",
+      "Name the session Org review as the role Head of People, reporting to you",
+      "Have Head of Growth report to Head of Product",
+      "Have Head of Growth look after Billing",
+      "Have Head of Growth stop looking after Pricing",
+      "Let Head of Growth start work in its area on its own",
+      "Have Head of Growth ask before it starts work",
+      "Have Head of Growth run Weekly funnel every week",
+      "Mark the task Remove the pilot as done",
+      "Mark the plan Launch as done",
+      "Mark the project Legacy as done",
+      "Reopen the plan Launch",
+      "Reopen the task Remove the pilot",
+      "Retire Content Lead. Its sessions go back to their owners",
+      "Head of Growth keeps a safety net on its daily work",
+    ]);
+    for (const [sentence, name, what] of rows) {
+      expect(sentence.split(name).length - 1, what).toBe(1);
+      expect(sentence, what).not.toMatch(/[.*_<>]$|\*\*|<b>|@|\bscope\b|\bcharter\b|\d{3}/);
+    }
+  });
+
+  test("the card's sentences for the kinds the table leaves as they are, and the forms on the edges", () => {
+    expect(brief(GOOD.adopt)).toBe("Make the session Org review the standing session of Head of People");
+    expect(brief(GOOD.authority)).toBe("Let Head of Growth spend (Paid search on the configured campaign, up to $300 a month) and write (Ship pages into the working tree), inside the limits you set");
+    expect(brief(GOOD.hire)).toBe("Hire Head of Growth from the template growth (2.0.0) to lead Growth");
+    expect(brief(GOOD.upgrade)).toBe("Move the instance acme-growth to growth 2.1.0");
+    expect(brief(GOOD.file)).toBe("Put the plan Launch plan under the project Platform");
+    expect(brief(GOOD.projects)).toBe("Create the project Platform and fold the project Old site into Growth");
+    expect(brief({ ...GOOD.plan_status, status: "abandoned" } as OrgChange)).toBe("Mark the plan Launch as abandoned");
+    expect(brief({ ...GOOD.task_status, status: "dropped" } as OrgChange)).toBe("Mark the task ct-42 as dropped");
+    expect(brief({ ...GOOD.task_status, status: "backlog", title: "Remove the pilot" } as OrgChange)).toBe("Move the task Remove the pilot to the backlog");
+    expect(brief(GOOD.project_status)).toBe("Mark the project Legacy as paused");
+    expect(brief({ ...GOOD.project_status, status: "active" } as OrgChange)).toBe("Reopen the project Legacy");
+    // A goal: a measure taken away, an owner taken away, its record alone, and a handle the names do not know.
+    expect(brief({ kind: "initiative_shape", initiative: "in-2", metrics: [] })).toBe("Stop measuring Win the private network by a number");
+    expect(brief({ kind: "initiative_owner", initiative: "in-2", owner: " " })).toBe("Leave Win the private network with no owner");
+    expect(brief({ kind: "initiative_shape", initiative: "in-2", why: "It pays.", milestones: [{ title: "Quiet onboarded" }] })).toBe("Record why it matters and the milestone Quiet onboarded on Win the private network");
+    expect(brief({ kind: "initiative_owner", initiative: "in-2", owner: "@nobody" })).toBe("Make @nobody the owner of Win the private network");
+    expect(brief({ kind: "initiative_owner", initiative: "in-2", owner: "me" })).toBe("Make yourself the owner of Win the private network");
+    // With no names the card's form still reads, each ref as written.
+    expect(changeLine(GOOD.move, { brief: true })).toBe("Have @growth report to @product and have it look after pr-5");
+    expect(changeLine(GOOD.budget, { brief: true })).toBe("@growth keeps a safety net on its daily work");
+    expect(changeLine(GOOD.adopt, { brief: true })).toBe("Make session jx7abcd the standing session of @head-of-people");
+    // A role's handle and its area are the card's rows, never its sentence.
+    expect(brief(GOOD.role)).not.toMatch(/growth\)|looking after/);
+    // A kind this build does not know reads the same in every form.
+    expect(changeLine({ kind: "rename" } as any, { brief: true, names })).toBe('A change this version of codecast cannot show yet ("rename")');
+  });
+
+  test("the purpose: the one top level goal reads as the purpose, and every goal under it says so through the names", () => {
+    const purpose = "Broker introductions that become transactions";
+    const under: OrgAskNames = { ...names, initiative: (ref) => ref === purpose ? "the purpose" : names.initiative!(ref) };
+    expect(changeLine({ ...GOOD.initiative, title: purpose } as OrgChange, { brief: true, names: under, purpose: true })).toBe(`Set ${purpose} as the purpose`);
+    expect(changeLine({ ...GOOD.initiative, parent: purpose } as OrgChange, { brief: true, names: under })).toBe("Add the goal Win the private network under the purpose");
+    expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: purpose }, { brief: true, names: under })).toBe("Move Win the private network under the purpose");
+    // Only a goal the change sets can be the purpose.
+    expect(changeLine({ kind: "initiative_shape", initiative: "in-2", parent: null }, { brief: true, names: under, purpose: true })).toBe("Move Win the private network to the top level");
+  });
+
+  test("several changes to one subject join as clauses: the lead names it, the rest say it", () => {
+    const names54: OrgAskNames = { initiative: pick({ "Broker introductions": "the purpose" }), project: pick({ "pr-8": "Agent Quality" }) };
+    const title = "Every relationship is one we'd be proud of";
+    const shape: OrgChange = { kind: "initiative_shape", initiative: "in-4", title, parent: "Broker introductions", metrics: [{ name: "Trust breaking issues per day", target: "0" }, { name: "Average comms score", target: "0.9 or higher" }] };
+    const carry: OrgChange = { kind: "initiative_projects", initiative: "in-4", title, projects: ["pr-8"] };
+    const lead = changeClauses(shape, { brief: true, names: names54 });
+    expect(lead).toEqual([`move ${title} under the purpose`, "give it two measures"]);
+    expect(changeLine(shape, { brief: true, names: names54 })).toBe(`Move ${title} under the purpose and give it two measures`);
+    const rest = changeClauses(carry, { brief: true, names: names54, subject: "it" });
+    expect(rest).toEqual(["have Agent Quality carry it"]);
+    expect(andList([...lead, ...rest])).toBe(`move ${title} under the purpose, give it two measures and have Agent Quality carry it`);
+    // Every kind takes the word, so any change can follow another about its subject.
+    const it = (c: OrgChange) => changeSentence(c, { brief: true, names, subject: "it" });
+    expect([GOOD.move, GOOD.scope, GOOD.trust, GOOD.routine, GOOD.retire, GOOD.budget, GOOD.authority, GOOD.adopt, GOOD.hire, GOOD.file, GOOD.plan_status, GOOD.upgrade, GOOD.initiative_owner, GOOD.initiative_shape, GOOD.role, GOOD.initiative].map(it)).toEqual([
+      "have it report to Head of Product and have it look after Billing",
+      "have it look after Billing and have it stop looking after Pricing",
+      "let it start work in its area on its own",
+      "have it run Weekly funnel every week",
+      "retire it. Its sessions go back to their owners",
+      "it keeps a safety net on its daily work",
+      "let it spend (Paid search on the configured campaign, up to $300 a month) and write (Ship pages into the working tree), inside the limits you set",
+      "make the session Org review the standing session of it",
+      "hire it from the template growth (2.0.0) to lead Growth",
+      "put it under the project Platform",
+      "mark it as done",
+      "move it to growth 2.1.0",
+      "make Calling Lead its owner",
+      "move it under Reach 1k teams and measure it by Brokers live",
+      "add it, reporting to you",
+      "add it at the top level",
+    ]);
+  });
+});
+
+// A card answers the agent (org-staffing.md S39): a person's approvals,
+// rejections and notes on one proposal, written as the one message the agent
+// reads. The web's send and the server's thread send both print this text.
+import { ORG_REPLY_WORDS, aboutChangeHeader, aboutProposalHeader, parseAboutChange, proposalRepliesText, proposalReplyText, type OrgProposalReply, type OrgReplyItem } from "./orgProposal";
+import { parseProposalChangeRef } from "../entities";
+
+describe("a person's answers as the message the agent reads (proposalReplyText)", () => {
+  const TITLE = "Rank Union's projects by the goals they carry";
+  const HEAD = `On op-55 ("${TITLE}"):`;
+  const reply = (...items: OrgReplyItem[]): OrgProposalReply => ({ proposal: "op-55", title: TITLE, items });
+  const approve = (seqs: number[], text?: string): OrgReplyItem => ({ verdict: "approve", seqs, text, line: "Make Growth the top priority." });
+  const FUNNEL = "Make Matching Engine & Funnel a high priority.";
+  const CALLERS = "Make Callers & Call Management a medium priority.";
+
+  test("the whole shape: approvals, a rejection, a note and words on the proposal", () => {
+    expect(proposalReplyText(reply(
+      approve([1]), approve([3]), approve([4]),
+      { verdict: "reject", seqs: [2], text: "P1 is too high, make it P2.", line: FUNNEL },
+      { verdict: "note", seqs: [6], text: "Cameron owns this, not Samvit.", line: CALLERS },
+      { verdict: "note", seqs: [], text: "do the same for the plans next.", line: "" },
+    ))).toBe([
+      HEAD,
+      "- Approved, and applied: op-55#1, op-55#3 and op-55#4.",
+      "- Rejected op-55#2 (make Matching Engine & Funnel a high priority): P1 is too high, make it P2.",
+      "- On op-55#6 (make Callers & Call Management a medium priority): Cameron owns this, not Samvit.",
+      "- On the whole proposal: do the same for the plans next.",
+    ].join("\n"));
+  });
+
+  test("approvals with no words fold into one line, in the order of the changes", () => {
+    expect(proposalReplyText(reply(approve([4]), approve([1]), approve([3])))).toBe(`${HEAD}\n- Approved, and applied: op-55#1, op-55#3 and op-55#4.`);
+    expect(proposalReplyText(reply(approve([7])))).toBe(`${HEAD}\n- Approved, and applied: op-55#7.`);
+    // Blank words are no words.
+    expect(proposalReplyText(reply(approve([1], "  "), approve([2])))).toBe(`${HEAD}\n- Approved, and applied: op-55#1 and op-55#2.`);
+  });
+
+  test("an approval that carries words gets its own line", () => {
+    expect(proposalReplyText(reply(approve([1]), approve([5], "but revisit in a month."), approve([3])))).toBe([
+      HEAD,
+      "- Approved, and applied: op-55#1 and op-55#3.",
+      "- Approved op-55#5, and applied: but revisit in a month.",
+    ].join("\n"));
+  });
+
+  test("a reply whose approvals have not all landed says Approved alone, so the agent reads the rows", () => {
+    expect(proposalReplyText({ ...reply(approve([1]), approve([5], "but revisit in a month."), approve([3])), applied: false })).toBe([
+      HEAD,
+      "- Approved: op-55#1 and op-55#3.",
+      "- Approved op-55#5: but revisit in a month.",
+    ].join("\n"));
+    // Absent reads as applied: the web's send knows nothing else.
+    expect(proposalReplyText({ ...reply(approve([1])), applied: true })).toBe(proposalReplyText(reply(approve([1]))));
+  });
+
+  test("a rejection reads with its words, and with a full stop when it has none", () => {
+    expect(proposalReplyText(reply({ verdict: "reject", seqs: [2], text: "P1 is too high, make it P2.", line: FUNNEL })))
+      .toBe(`${HEAD}\n- Rejected op-55#2 (make Matching Engine & Funnel a high priority): P1 is too high, make it P2.`);
+    expect(proposalReplyText(reply({ verdict: "reject", seqs: [2], line: FUNNEL })))
+      .toBe(`${HEAD}\n- Rejected op-55#2 (make Matching Engine & Funnel a high priority).`);
+    expect(proposalReplyText(reply({ verdict: "reject", seqs: [2], text: " \n ", line: FUNNEL })))
+      .toBe(`${HEAD}\n- Rejected op-55#2 (make Matching Engine & Funnel a high priority).`);
+  });
+
+  test("a note names its change and carries the words; a note with no words says nothing", () => {
+    expect(proposalReplyText(reply({ verdict: "note", seqs: [6], text: "Cameron owns this, not Samvit.", line: CALLERS })))
+      .toBe(`${HEAD}\n- On op-55#6 (make Callers & Call Management a medium priority): Cameron owns this, not Samvit.`);
+    expect(proposalReplyText(reply({ verdict: "note", seqs: [6], line: CALLERS }))).toBe("");
+    expect(proposalReplyText(reply())).toBe("");
+  });
+
+  test("a card of several changes names them all", () => {
+    const two: OrgProposalReply = { proposal: "op-54", title: "Give every goal an owner", items: [
+      { verdict: "reject", seqs: [10, 9], text: "Agent Quality is full.", line: "Move Reach 1k teams under the purpose and have Agent Quality carry it." },
+      { verdict: "approve", seqs: [3, 4], line: "Add the goal Retention." },
+      { verdict: "approve", seqs: [1], line: "Add the purpose." },
+    ] };
+    expect(proposalReplyText(two)).toBe([
+      'On op-54 ("Give every goal an owner"):',
+      "- Approved, and applied: op-54#1, op-54#3 and op-54#4.",
+      "- Rejected op-54#9 and op-54#10 (move Reach 1k teams under the purpose and have Agent Quality carry it): Agent Quality is full.",
+    ].join("\n"));
+  });
+
+  test("a note on the whole proposal comes last, whatever order the answers were given in", () => {
+    expect(proposalReplyText(reply(
+      { verdict: "note", seqs: [], text: "do the same for the plans next.", line: "" },
+      { verdict: "note", seqs: [6], text: "Cameron owns this.", line: CALLERS },
+      { verdict: "reject", seqs: [2], line: FUNNEL },
+      approve([1]),
+    ))).toBe([
+      HEAD,
+      "- Approved, and applied: op-55#1.",
+      "- Rejected op-55#2 (make Matching Engine & Funnel a high priority).",
+      "- On op-55#6 (make Callers & Call Management a medium priority): Cameron owns this.",
+      "- On the whole proposal: do the same for the plans next.",
+    ].join("\n"));
+    expect(proposalReplyText(reply({ verdict: "note", seqs: [], text: "do the same for the plans next.", line: "" })))
+      .toBe(`${HEAD}\n- On the whole proposal: do the same for the plans next.`);
+  });
+
+  test("the sentence is written without its capital and full stop, either way it arrives", () => {
+    const as = (line: string) => proposalReplyText(reply({ verdict: "note", seqs: [6], text: "ok", line }));
+    const want = `${HEAD}\n- On op-55#6 (make Callers & Call Management a medium priority): ok`;
+    expect(as(CALLERS)).toBe(want);
+    expect(as("make Callers & Call Management a medium priority")).toBe(want);
+    expect(as("")).toBe(`${HEAD}\n- On op-55#6: ok`);
+  });
+
+  test("a person's lines stay inside their bullet, and a quote in the title cannot end the header", () => {
+    expect(proposalReplyText({ proposal: "op-7", title: 'Rename "Growth"', items: [{ verdict: "reject", seqs: [1], text: "Two things.\n\nFirst this.\nThen that.", line: "Rename Growth." }] }))
+      .toBe(`On op-7 ("Rename 'Growth'"):\n- Rejected op-7#1 (rename Growth): Two things.\n  First this.\n  Then that.`);
+    expect(proposalReplyText({ proposal: "op-7", title: " ", items: [{ verdict: "approve", seqs: [1], line: "" }] })).toBe("On op-7:\n- Approved, and applied: op-7#1.");
+  });
+
+  test("every change is written as a reference the pills and the agent read back", () => {
+    const text = proposalReplyText(reply(approve([1]), { verdict: "reject", seqs: [2, 12], line: FUNNEL }));
+    expect((text.match(/op-\d+#\d+/g) ?? []).map((r) => parseProposalChangeRef(r))).toEqual([
+      { proposal: "op-55", seq: 1 }, { proposal: "op-55", seq: 2 }, { proposal: "op-55", seq: 12 },
+    ]);
+  });
+
+  test("two proposals in one send are two blocks with a blank line between", () => {
+    const other: OrgProposalReply = { proposal: "op-56", title: "Hire a growth lead", items: [{ verdict: "note", seqs: [1], text: "Who pays for this?", line: "Hire Growth Lead from the template growth." }] };
+    expect(proposalRepliesText([reply(approve([1]), approve([3])), other])).toBe([
+      HEAD,
+      "- Approved, and applied: op-55#1 and op-55#3.",
+      "",
+      'On op-56 ("Hire a growth lead"):',
+      "- On op-56#1 (hire Growth Lead from the template growth): Who pays for this?",
+    ].join("\n"));
+    // A proposal whose answers say nothing leaves no block and no stray blank line.
+    expect(proposalRepliesText([reply(), other])).toBe(proposalReplyText(other));
+    expect(proposalRepliesText([])).toBe("");
+  });
+
+  test("the words a surface shows per verdict", () => {
+    expect(ORG_REPLY_WORDS).toEqual({
+      approve: { act: "Approve", done: "Approved" },
+      reject: { act: "Reject", done: "Rejected" },
+      note: { act: "Reply", done: "Noted" },
+    });
+  });
+
+  test("the About headers read as before", () => {
+    expect(aboutChangeHeader("op-55", 3, 'Rename "Growth"')).toBe(`About op-55 change 3 ("Rename 'Growth'"):`);
+    expect(aboutProposalHeader("op-55", TITLE)).toBe(`About op-55 ("${TITLE}"):`);
+    expect(parseAboutChange(`${aboutChangeHeader("op-55", 3, "Retire @growth")}\n\nwhy?`)).toEqual({ proposal: "op-55", seq: 3, line: "Retire @growth", body: "why?" });
   });
 });

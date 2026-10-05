@@ -1,0 +1,212 @@
+{
+  "asOf": "2026-10-05T18:00:00.000Z",
+  "notes": "The window holds two rulings a person made (Mara's answer on sd-140, Mara's go-ahead in #infra) and three records that only report what happened: an agent's shipped note on ct-61001, the agent's closing note for ct-61002 and a bot's ops digest. A pass that keeps the document traceable to who decided adds the two rulings in Mara's words and cites none of the reports; the shipped note on ct-61001 has no ruling behind it at all.",
+  "label": {
+    "since": "2026-10-02T00:00:00.000Z",
+    "not_sources": [
+      "ct-61001",
+      "ct-61002",
+      "j17infra0agent0shipped",
+      "j17infra0digest"
+    ],
+    "sources": [
+      "sd-140",
+      "j17infra0mara0ruling"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-05T18:00:00.000Z",
+    "project": {
+      "ref": "pj-41",
+      "name": "Infrastructure"
+    },
+    "reads": [
+      {
+        "argv": [
+          "expectations",
+          "show"
+        ],
+        "out": "{\n  \"project\": {\n    \"id\": \"pj7infra\",\n    \"title\": \"Infrastructure\"\n  },\n  \"current_version\": 1,\n  \"doc\": {\n    \"project\": {\n      \"id\": \"pj7infra\",\n      \"title\": \"Infrastructure\"\n    },\n    \"version\": 1,\n    \"prefix\": \"infrastructure\",\n    \"items\": [\n      {\n        \"id\": \"ex-infrastructure-1\",\n        \"text\": \"A bounce is tracked against the email address that bounced, not against the contact.\",\n        \"part\": \"Email sending\",\n        \"status\": \"active\",\n        \"citations\": [\n          {\n            \"kind\": \"decision\",\n            \"ref\": \"sd-95\",\n            \"quote\": \"track the bounce against the address, not the person\",\n            \"when\": \"2026-09-17\"\n          }\n        ],\n        \"added_in\": 1,\n        \"changed_in\": 1\n      },\n      {\n        \"id\": \"ex-infrastructure-2\",\n        \"text\": \"A single transient bounce never blocks a contact by itself.\",\n        \"part\": \"Email sending\",\n        \"status\": \"active\",\n        \"citations\": [\n          {\n            \"kind\": \"call\",\n            \"ref\": \"cl-131:212\",\n            \"quote\": \"one soft bounce should never block anybody\",\n            \"when\": \"2026-09-24\"\n          }\n        ],\n        \"added_in\": 1,\n        \"changed_in\": 1\n      }\n    ],\n    \"applied_at\": 1790330400000,\n    \"applied_by\": \"Mara Quill\",\n    \"how\": \"person\",\n    \"summary\": \"First lines, read with Mara\",\n    \"proposal\": \"xp-2\"\n  },\n  \"versions\": [\n    {\n      \"version\": 1,\n      \"summary\": \"First lines, read with Mara\",\n      \"how\": \"person\",\n      \"applied_at\": 1790330400000,\n      \"applied_by\": \"Mara Quill\",\n      \"active\": 2\n    }\n  ],\n  \"proposals\": [\n    {\n      \"short_id\": \"xp-2\",\n      \"status\": \"applied\",\n      \"summary\": \"First lines, read with Mara\",\n      \"changes\": 2,\n      \"base_version\": 0,\n      \"applied_version\": 1,\n      \"since\": 1789430400000,\n      \"until\": 1790899200000,\n      \"created_at\": 1790330400000\n    }\n  ],\n  \"cursor\": 1790899200000,\n  \"cursor_at\": \"2026-10-02T00:00:00.000Z\"\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "expectations",
+          "show",
+          "--project",
+          "pj-41"
+        ],
+        "out": "Expectations for Infrastructure, version 1 (2026-09-25).\nGrade against the active lines below. A finding names the id it breaks and version 1.\n\n## Email sending\nex-infrastructure-1: A bounce is tracked against the email address that bounced, not against the contact.\n  - decision sd-95 (2026-09-17): \"track the bounce against the address, not the person\"\nex-infrastructure-2: A single transient bounce never blocks a contact by itself.\n  - call cl-131:212 (2026-09-24): \"one soft bounce should never block anybody\"\n\nVersion 1 of 1, applied by Mara Quill from xp-2: First lines, read with Mara\nContext read up to 2026-10-02T00:00:00.000Z.\n"
+      },
+      {
+        "argv": [
+          "project",
+          "ls"
+        ],
+        "out": "[\n  {\n    \"_id\": \"pj7infra\",\n    \"short_id\": \"pj-41\",\n    \"title\": \"Infrastructure\",\n    \"status\": \"active\",\n    \"team_id\": \"t7larkspur\"\n  },\n  {\n    \"_id\": \"pj7callers\",\n    \"short_id\": \"pj-42\",\n    \"title\": \"Callers & Call Management\",\n    \"status\": \"active\",\n    \"team_id\": \"t7larkspur\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "calls"
+        ],
+        "out": "[\n  {\n    \"ref\": \"cl-150\",\n    \"short_id\": \"cl-150\",\n    \"title\": \"Weekly sync: Thursday call list and openers\",\n    \"display_title\": \"Weekly sync: Thursday call list and openers\",\n    \"status\": \"ended\",\n    \"started_at\": 1791043200000,\n    \"ended_at\": 1791045600000,\n    \"participants\": [\n      {\n        \"id\": \"u7mara\",\n        \"name\": \"Mara Quill\"\n      },\n      {\n        \"id\": \"u7ines\",\n        \"name\": \"Ines Okafor\"\n      },\n      {\n        \"id\": \"u7theo\",\n        \"name\": \"Theo Lind\"\n      }\n    ],\n    \"summary\": \"Ines walked through the Thursday call list and the new opener. Mara asked for two more practice calls before it goes live. Theo gave a short update on the domain fleet move, already approved in #infra.\",\n    \"summary_status\": \"done\"\n  },\n  {\n    \"ref\": \"cl-131\",\n    \"short_id\": \"cl-131\",\n    \"title\": \"Bounce handling\",\n    \"display_title\": \"Bounce handling\",\n    \"status\": \"ended\",\n    \"started_at\": 1790262000000,\n    \"ended_at\": 1790263800000,\n    \"participants\": [\n      {\n        \"id\": \"u7mara\",\n        \"name\": \"Mara Quill\"\n      },\n      {\n        \"id\": \"u7theo\",\n        \"name\": \"Theo Lind\"\n      }\n    ],\n    \"summary\": \"Mara ruled one soft bounce should never block anybody.\",\n    \"summary_status\": \"done\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "call",
+          "cl-150"
+        ],
+        "out": "cl-150 Weekly sync: Thursday call list and openers (2026-10-03, 40 min)\n\n[0] Ines Okafor: Thursday list is eighty contacts, mostly the Midwest set.\n[1] Ines Okafor: I rewrote the opener so it leads with the referral.\n[2] Mara Quill: Good. Do two more practice calls before it goes live.\n[3] Theo Lind: Quick one on the fleet: it's on Workers Paid now, the approval is in infra.\n[4] Mara Quill: Thanks. Anything else? No? Done.\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "call",
+          "cl-131"
+        ],
+        "out": "cl-131 Bounce handling (2026-09-24, 30 min)\n\n[212] Mara Quill: One soft bounce should never block anybody.\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "channels"
+        ],
+        "out": "{\n  \"channels\": [\n    {\n      \"_id\": \"hx7team\",\n      \"kind\": \"channel\",\n      \"name\": \"team\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    },\n    {\n      \"_id\": \"hx7infra\",\n      \"kind\": \"channel\",\n      \"name\": \"infra\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    },\n    {\n      \"_id\": \"hx7callers\",\n      \"kind\": \"channel\",\n      \"name\": \"callers\",\n      \"team_id\": \"t7larkspur\",\n      \"created_at\": 1785542400000\n    }\n  ]\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7infra"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7theo\",\n      \"name\": \"Theo Lind\",\n      \"is_bot\": false\n    },\n    {\n      \"_id\": \"u7mara\",\n      \"name\": \"Mara Quill\",\n      \"is_bot\": false\n    },\n    {\n      \"_id\": \"u7digest\",\n      \"name\": \"Ops digest\",\n      \"is_bot\": true\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17infra0theo0cap\",\n      \"channel_id\": \"hx7infra\",\n      \"user_id\": \"u7theo\",\n      \"author_kind\": \"user\",\n      \"content\": \"The domain fleet hit the Workers free plan cap again after a crawl, every landing page is down. Paid is $5/mo. @Mara ok to move it?\",\n      \"created_at\": 1790953800000,\n      \"team_id\": \"t7larkspur\"\n    },\n    {\n      \"_id\": \"j17infra0mara0ruling\",\n      \"channel_id\": \"hx7infra\",\n      \"user_id\": \"u7mara\",\n      \"author_kind\": \"user\",\n      \"content\": \"Go ahead and put the domain fleet on Workers Paid. A crawl should never be able to take every landing page down at once.\",\n      \"created_at\": 1790955120000,\n      \"team_id\": \"t7larkspur\"\n    },\n    {\n      \"_id\": \"j17infra0agent0shipped\",\n      \"channel_id\": \"hx7infra\",\n      \"user_id\": \"u7theo\",\n      \"author_kind\": \"user\",\n      \"origin\": \"agent\",\n      \"origin_session\": {\n        \"short_id\": \"jx7inf1\",\n        \"title\": \"Infra lead\",\n        \"agent_type\": \"claude_code\"\n      },\n      \"content\": \"Workers Paid ($5/month) is now active on the outreach domains account and every fleet landing page loads again. Closing ct-61002.\",\n      \"created_at\": 1791021900000,\n      \"team_id\": \"t7larkspur\"\n    },\n    {\n      \"_id\": \"j17infra0digest\",\n      \"channel_id\": \"hx7infra\",\n      \"user_id\": \"u7digest\",\n      \"author_kind\": \"agent\",\n      \"content\": \"Daily ops digest: all 2,954 production errors in the last 12 hours are filed as ops, none hidden as laptop noise. Fleet uptime 100%.\",\n      \"created_at\": 1791100800000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7team"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7ines\",\n      \"name\": \"Ines Okafor\",\n      \"is_bot\": false\n    },\n    {\n      \"_id\": \"u7theo\",\n      \"name\": \"Theo Lind\",\n      \"is_bot\": false\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17team0ines0hartwell\",\n      \"channel_id\": \"hx7team\",\n      \"user_id\": \"u7ines\",\n      \"author_kind\": \"user\",\n      \"content\": \"Heads up, the Hartwell contact asked us to use her personal address from now on, I put it on her card.\",\n      \"created_at\": 1791028800000,\n      \"team_id\": \"t7larkspur\"\n    },\n    {\n      \"_id\": \"j17team0lunch\",\n      \"channel_id\": \"hx7team\",\n      \"user_id\": \"u7theo\",\n      \"author_kind\": \"user\",\n      \"content\": \"lunch order is in\",\n      \"created_at\": 1791133200000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "read",
+          "--channel",
+          "hx7callers"
+        ],
+        "out": "{\n  \"authors\": [\n    {\n      \"_id\": \"u7ines\",\n      \"name\": \"Ines Okafor\",\n      \"is_bot\": false\n    }\n  ],\n  \"messages\": [\n    {\n      \"_id\": \"j17callers0opener\",\n      \"channel_id\": \"hx7callers\",\n      \"user_id\": \"u7ines\",\n      \"author_kind\": \"user\",\n      \"content\": \"New opener for the Thursday list is in the doc, feedback welcome.\",\n      \"created_at\": 1791043200000,\n      \"team_id\": \"t7larkspur\"\n    }\n  ],\n  \"has_more\": false,\n  \"next_cursor\": null,\n  \"threads\": {},\n  \"reactions\": {},\n  \"unavailable\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "search"
+        ],
+        "out": "{\n  \"messages\": [],\n  \"authors\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "chat",
+          "thread"
+        ],
+        "out": "{\n  \"root\": null,\n  \"replies\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "ls"
+        ],
+        "out": "[\n  {\n    \"project_id\": \"pj7infra\",\n    \"team_id\": \"t7larkspur\",\n    \"task_type\": \"task\",\n    \"priority\": \"medium\",\n    \"blocks\": [],\n    \"labels\": [],\n    \"subtasks\": [],\n    \"_id\": \"mh7t61003\",\n    \"short_id\": \"ct-61003\",\n    \"title\": \"Enrichment overwrote the email a contact gave on a call\",\n    \"status\": \"done\",\n    \"source\": \"human\",\n    \"creator_name\": \"Ines Okafor\",\n    \"created_at\": 1791023400000,\n    \"updated_at\": 1791111600000,\n    \"closed_at\": 1791111600000,\n    \"description\": \"The Hartwell contact gave me her personal address on Thursday's call and the vendor sync put the old work address back the same night.\"\n  },\n  {\n    \"project_id\": \"pj7infra\",\n    \"team_id\": \"t7larkspur\",\n    \"task_type\": \"task\",\n    \"priority\": \"medium\",\n    \"blocks\": [],\n    \"labels\": [],\n    \"subtasks\": [],\n    \"_id\": \"mh7t61002\",\n    \"short_id\": \"ct-61002\",\n    \"title\": \"Put the outreach domain fleet on Workers Paid\",\n    \"status\": \"done\",\n    \"source\": \"agent\",\n    \"creator_name\": \"Infra lead\",\n    \"created_at\": 1790955600000,\n    \"updated_at\": 1791021900000,\n    \"closed_at\": 1791021900000,\n    \"description\": \"Mara approved moving the fleet to Workers Paid in #infra. Upgrade the account and confirm every landing page loads.\"\n  },\n  {\n    \"project_id\": \"pj7infra\",\n    \"team_id\": \"t7larkspur\",\n    \"task_type\": \"task\",\n    \"priority\": \"medium\",\n    \"blocks\": [],\n    \"labels\": [],\n    \"subtasks\": [],\n    \"_id\": \"mh7t61001\",\n    \"short_id\": \"ct-61001\",\n    \"title\": \"Delivered intros re-marked failed after a late soft bounce\",\n    \"status\": \"done\",\n    \"source\": \"human\",\n    \"creator_name\": \"Ines Okafor\",\n    \"created_at\": 1790931600000,\n    \"updated_at\": 1791020400000,\n    \"closed_at\": 1791020400000,\n    \"description\": \"Three intros Resend showed as delivered on Tuesday went out a second time. Can someone look?\"\n  },\n  {\n    \"project_id\": \"pj7infra\",\n    \"team_id\": \"t7larkspur\",\n    \"task_type\": \"task\",\n    \"priority\": \"medium\",\n    \"blocks\": [],\n    \"labels\": [],\n    \"subtasks\": [],\n    \"_id\": \"mh7t60990\",\n    \"short_id\": \"ct-60990\",\n    \"title\": \"Track bounces per address\",\n    \"status\": \"done\",\n    \"source\": \"human\",\n    \"creator_name\": \"Theo Lind\",\n    \"created_at\": 1789549200000,\n    \"updated_at\": 1789732800000,\n    \"closed_at\": 1789732800000,\n    \"description\": \"Per sd-95.\"\n  }\n]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-61003"
+        ],
+        "out": "{\n  \"project_id\": \"pj7infra\",\n  \"team_id\": \"t7larkspur\",\n  \"task_type\": \"task\",\n  \"priority\": \"medium\",\n  \"blocks\": [],\n  \"decisions\": [\n    {\n      \"short_id\": \"sd-140\",\n      \"question\": \"A contact gave Ines a new email on a call. Should the enrichment vendor be allowed to overwrite it on its next sync?\",\n      \"status\": \"answered\",\n      \"answer_index\": 0,\n      \"answer_text\": \"The address the contact gives us wins. Keep the vendor's guess only as a spare.\",\n      \"options\": [\n        {\n          \"label\": \"The contact's address wins\"\n        },\n        {\n          \"label\": \"The vendor's address wins\"\n        }\n      ],\n      \"answered_by\": \"Mara Quill\",\n      \"answered_at\": 1791037200000\n    }\n  ],\n  \"history\": [],\n  \"labels\": [],\n  \"subtasks\": [],\n  \"_id\": \"mh7t61003\",\n  \"short_id\": \"ct-61003\",\n  \"title\": \"Enrichment overwrote the email a contact gave on a call\",\n  \"status\": \"done\",\n  \"source\": \"human\",\n  \"creator_name\": \"Ines Okafor\",\n  \"created_at\": 1791023400000,\n  \"updated_at\": 1791111600000,\n  \"closed_at\": 1791111600000,\n  \"description\": \"The Hartwell contact gave me her personal address on Thursday's call and the vendor sync put the old work address back the same night.\",\n  \"comments\": [\n    {\n      \"author\": \"Infra lead\",\n      \"comment_type\": \"note\",\n      \"created_at\": 1791111600000,\n      \"conversation_id\": \"jx7inf1fixture\",\n      \"session_info\": {\n        \"_id\": \"jx7inf1fixture\",\n        \"agent_type\": \"claude_code\",\n        \"title\": \"Infra lead\"\n      },\n      \"text\": \"Shipped: the vendor sync now keeps an address a contact gave as primary and stores its own guess as a spare.\"\n    }\n  ]\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-61001"
+        ],
+        "out": "{\n  \"project_id\": \"pj7infra\",\n  \"team_id\": \"t7larkspur\",\n  \"task_type\": \"task\",\n  \"priority\": \"medium\",\n  \"blocks\": [],\n  \"decisions\": [],\n  \"history\": [],\n  \"labels\": [],\n  \"subtasks\": [],\n  \"_id\": \"mh7t61001\",\n  \"short_id\": \"ct-61001\",\n  \"title\": \"Delivered intros re-marked failed after a late soft bounce\",\n  \"status\": \"done\",\n  \"source\": \"human\",\n  \"creator_name\": \"Ines Okafor\",\n  \"created_at\": 1790931600000,\n  \"updated_at\": 1791020400000,\n  \"closed_at\": 1791020400000,\n  \"description\": \"Three intros Resend showed as delivered on Tuesday went out a second time. Can someone look?\",\n  \"comments\": [\n    {\n      \"author\": \"Infra lead\",\n      \"comment_type\": \"note\",\n      \"created_at\": 1791020400000,\n      \"conversation_id\": \"jx7inf1fixture\",\n      \"session_info\": {\n        \"_id\": \"jx7inf1fixture\",\n        \"agent_type\": \"claude_code\",\n        \"title\": \"Infra lead\"\n      },\n      \"text\": \"Shipped in 8a2f1c: a delivery now outranks a later temporary bounce, so delivered introductions are no longer marked failed and re-sent. Verified on prod: no re-sends since the deploy.\"\n    }\n  ]\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-61002"
+        ],
+        "out": "{\n  \"project_id\": \"pj7infra\",\n  \"team_id\": \"t7larkspur\",\n  \"task_type\": \"task\",\n  \"priority\": \"medium\",\n  \"blocks\": [],\n  \"decisions\": [],\n  \"history\": [],\n  \"labels\": [],\n  \"subtasks\": [],\n  \"_id\": \"mh7t61002\",\n  \"short_id\": \"ct-61002\",\n  \"title\": \"Put the outreach domain fleet on Workers Paid\",\n  \"status\": \"done\",\n  \"source\": \"agent\",\n  \"creator_name\": \"Infra lead\",\n  \"created_at\": 1790955600000,\n  \"updated_at\": 1791021900000,\n  \"closed_at\": 1791021900000,\n  \"description\": \"Mara approved moving the fleet to Workers Paid in #infra. Upgrade the account and confirm every landing page loads.\",\n  \"comments\": [\n    {\n      \"author\": \"Infra lead\",\n      \"comment_type\": \"note\",\n      \"created_at\": 1791021900000,\n      \"conversation_id\": \"jx7inf1fixture\",\n      \"session_info\": {\n        \"_id\": \"jx7inf1fixture\",\n        \"agent_type\": \"claude_code\",\n        \"title\": \"Infra lead\"\n      },\n      \"text\": \"Workers Paid ($5/month) is now active on the outreach domains account and the fleet loads again.\"\n    }\n  ]\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "show",
+          "ct-60990"
+        ],
+        "out": "{\n  \"project_id\": \"pj7infra\",\n  \"team_id\": \"t7larkspur\",\n  \"task_type\": \"task\",\n  \"priority\": \"medium\",\n  \"blocks\": [],\n  \"decisions\": [],\n  \"history\": [],\n  \"labels\": [],\n  \"subtasks\": [],\n  \"_id\": \"mh7t60990\",\n  \"short_id\": \"ct-60990\",\n  \"title\": \"Track bounces per address\",\n  \"status\": \"done\",\n  \"source\": \"human\",\n  \"creator_name\": \"Theo Lind\",\n  \"created_at\": 1789549200000,\n  \"updated_at\": 1789732800000,\n  \"closed_at\": 1789732800000,\n  \"description\": \"Per sd-95.\",\n  \"comments\": []\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "[]",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-140"
+        ],
+        "out": "{\n  \"short_id\": \"sd-140\",\n  \"question\": \"A contact gave Ines a new email on a call. Should the enrichment vendor be allowed to overwrite it on its next sync?\",\n  \"options\": [\n    {\n      \"label\": \"The contact's address wins\"\n    },\n    {\n      \"label\": \"The vendor's address wins\"\n    }\n  ],\n  \"status\": \"answered\",\n  \"answer_index\": 0,\n  \"answer_text\": \"The address the contact gives us wins. Keep the vendor's guess only as a spare.\",\n  \"answered_by\": {\n    \"kind\": \"user\",\n    \"name\": \"Mara Quill\"\n  },\n  \"answered_at\": 1791037200000,\n  \"created_at\": 1791025200000,\n  \"asked_by\": \"Infra lead\"\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-95"
+        ],
+        "out": "{\n  \"short_id\": \"sd-95\",\n  \"question\": \"Should a bounce be tracked against the contact or the address?\",\n  \"options\": [\n    {\n      \"label\": \"The address\"\n    },\n    {\n      \"label\": \"The contact\"\n    }\n  ],\n  \"status\": \"answered\",\n  \"answer_index\": 0,\n  \"answer_text\": \"Track the bounce against the address, not the person.\",\n  \"answered_by\": {\n    \"kind\": \"user\",\n    \"name\": \"Mara Quill\"\n  },\n  \"answered_at\": 1789639200000,\n  \"created_at\": 1789552800000,\n  \"asked_by\": \"Theo Lind\"\n}",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "search"
+        ],
+        "out": "<SEARCHRESULTS>\nNo matches found. Use --mine for only your sessions, -g for all teams.\n</SEARCHRESULTS>\n",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "feed"
+        ],
+        "out": "<FEED>\nRecent conversations (2)\n\n── Infra lead ──\njx7inf1 | done | 2 days ago | ~/src/larkspur\n\n── Thursday call list ──\njx7cal2 | done | 3 days ago | ~/src/larkspur\n</FEED>\n",
+        "prefix": true
+      }
+    ]
+  }
+}

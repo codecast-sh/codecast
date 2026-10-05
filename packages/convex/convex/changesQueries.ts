@@ -95,10 +95,10 @@ const repositoryOf = (repository: string | undefined) => (repository ? normalize
 // ── Stories ──────────────────────────────────────────────────────────────
 
 /** A story as the page reads it: the stored row without its generation accounting. */
-export type StoryRow = Omit<Doc<"change_stories">, "inputs_hash" | "model" | "input_tokens" | "output_tokens" | "cost_usd">;
+export type StoryRow = Omit<Doc<"change_stories">, "inputs_hash" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "cap_version" | "cap_cost_usd">;
 
 function storyRow(row: Doc<"change_stories">): StoryRow {
-  const { inputs_hash: _h, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, ...rest } = row;
+  const { inputs_hash: _h, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, cap_version: _v, cap_cost_usd: _cc, ...rest } = row;
   return rest;
 }
 
@@ -140,7 +140,7 @@ export const listStories = query({
 
 // ── Editions ─────────────────────────────────────────────────────────────
 
-export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "scheduled_id"> & {
+export type EditionRow = Omit<Doc<"digests">, "user_id" | "events" | "model" | "input_tokens" | "output_tokens" | "cost_usd" | "cap_version" | "cap_cost_usd" | "scheduled_id"> & {
   /** When the day was first marked for a rebuild that has not run yet, else null. */
   dirty_since: number | null;
   /** dirty_since is older than STALE_AFTER_MS as of this read. The time moves on without a new read, so a page holding the row compares dirty_since itself. */
@@ -182,7 +182,7 @@ export const listEditions = query({
         .query("change_dirty")
         .withIndex("by_key", (q) => q.eq("team_id", args.team_id).eq("repository", d.repository!).eq("date", d.date))
         .first();
-      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, scheduled_id: _s, ...rest } = d;
+      const { user_id: _u, events: _e, model: _m, input_tokens: _i, output_tokens: _o, cost_usd: _c, cap_version: _v, cap_cost_usd: _cc, scheduled_id: _s, ...rest } = d;
       return { ...rest, dirty_since: dirty?.since ?? null, stale: !!dirty && now - dirty.since > STALE_AFTER_MS };
     }));
   },
