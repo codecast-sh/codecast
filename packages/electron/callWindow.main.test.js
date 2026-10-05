@@ -655,3 +655,28 @@ test("a focused window silences the conversation it shows; other banners and rin
   );
   assert.equal(handle(rig.event(), { title: "Sam wants to huddle", body: "b", data: { key: "ring:1", kind: "call", force: true } }).shown, true);
 });
+
+test("asking for the stage while it is already up, behind the app, brings it to the front", () => {
+  const rig = loadShell();
+  const { win, sender } = openCallWindow(rig);
+  win.emit("ready-to-show");
+  assert.equal(win.isVisible(), true);
+  const shown = win.did("show").length;
+  const focused = win.did("focus").length;
+  // Same shape, visible: the expand button pressed with the stage behind the
+  // main window. Before, nothing moved and the button read as dead.
+  assert.equal(rig.handlers.get("set-call-window-size")(sender, "panel"), "panel");
+  assert.equal(win.did("show").length, shown + 1);
+  assert.equal(win.did("focus").length, focused + 1);
+});
+
+test("the float asked for again while visible stays where it is and takes no focus", () => {
+  const rig = loadShell();
+  const { win, sender } = openCallWindow(rig);
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  const before = win.did("showInactive").length + win.did("show").length;
+  const focused = win.did("focus").length;
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  assert.equal(win.did("showInactive").length + win.did("show").length, before);
+  assert.equal(win.did("focus").length, focused);
+});

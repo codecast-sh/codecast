@@ -2,7 +2,7 @@ import { readLocalConfig } from "../../config/readLocalConfig.js";
 import { isCloudMirrorEnabled } from "../../config/types.js";
 import { reachableRemoteHosts } from "../../browser/cloudHost.js";
 import { listScalewayHosts, type RemoteHost } from "../../remote/session-move.js";
-import { defaultDeps, pushMirrorToHostAsync, readRemoteMirrorStamp, runMirrorTick } from "./push.js";
+import { defaultDeps, MIRROR_STAMP_TIMEOUT_MS, pushMirrorToHostAsync, readRemoteMirrorStamp, runMirrorTick } from "./push.js";
 import { readProjectRegistrations, unregisterProjectContext } from "./projectRefresh.js";
 import { startMirrorScheduler } from "./scheduler.js";
 import { watchMirrorParent } from "./process.js";
@@ -35,7 +35,7 @@ export function startStandaloneMirror(opts: {
         readProjects: (host) => readProjectRegistrations(host, opts.projectsFile),
         retireProjects: async (host, roots) => { for (const root of roots) await unregisterProjectContext(host, root, { file: opts.projectsFile }); },
         push: (host, bytes) => pushMirrorToHostAsync(host, bytes, { signal: tick.signal, command: opts.pushCommand }),
-        readStamp: (host) => readRemoteMirrorStamp(host, 20_000, tick.signal, opts.verifyCommand),
+        readStamp: (host) => readRemoteMirrorStamp(host, MIRROR_STAMP_TIMEOUT_MS, tick.signal, opts.verifyCommand),
         log,
       });
     },

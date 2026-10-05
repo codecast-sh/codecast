@@ -112,14 +112,13 @@ export type PublicRead<T> = {
 /** The public half of a read. `url === null` reads nothing at all. */
 export function usePublicRepoRead<T>(url: string | null): PublicRead<T> {
   const cycle = useCoarseNow(60_000);
-  const [state, setState] = useState<{ url: string | null; cycle?: number; result?: PublicResult }>({ url: null });
+  const [state, setState] = useState<{ url: string | null; result?: PublicResult }>({ url: null });
 
   useWatchEffect(() => {
     if (!url) return;
     let cancelled = false;
-    setState({ url, cycle });
     void readPublic(url).then((result) => {
-      if (!cancelled) setState({ url, cycle, result });
+      if (!cancelled) setState({ url, result });
     });
     return () => {
       cancelled = true;
@@ -127,8 +126,10 @@ export function usePublicRepoRead<T>(url: string | null): PublicRead<T> {
   }, [url, cycle]);
 
   // Derived, not stored: a new URL shows nothing on the render that asks for
-  // it, rather than the previous URL's answer for one frame.
-  const result = state.url === url && state.cycle === cycle ? state.result : undefined;
+  // it, rather than the previous URL's answer for one frame. The minute's
+  // refresh of the same URL keeps showing the last answer until the new one
+  // lands, so a surface never blanks and reflows while it re-asks.
+  const result = state.url === url ? state.result : undefined;
   return {
     data: result?.data as T | undefined,
     missing: !!result?.missing,

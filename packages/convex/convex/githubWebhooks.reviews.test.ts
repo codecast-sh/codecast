@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
+import { armedTriggerRows, makeFakeDb } from "./testDb";
 import { getFunctionName } from "convex/server";
 import { processReviewEvent, processReviewCommentEvent, processPushEvent } from "./githubWebhooks";
 import { wake } from "./prShepherd";
@@ -53,6 +53,7 @@ function context(payload: any, action: string | undefined, eventType: string, se
         _id: TASK, user_id: "user_1", title: "Shepherd PR #12", prompt: "old", status: "scheduled",
         schedule_type: "event", originating_conversation_id: CONV, retry_count: 0, run_count: 0, created_at: 0, mode: "apply",
       },
+      ...armedTriggerRows("pr_review", "pr_approved", "pr_changes_requested"),
     ],
     github_app_installations: [
       { _id: "inst_1", team_id: TEAM, installation_id: 7, account_login: "codecast-sh", repository_selection: "all" },

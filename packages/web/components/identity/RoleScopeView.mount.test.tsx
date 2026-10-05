@@ -156,6 +156,32 @@ async function verifyRoleScopeView() {
   // A role named inside another role's scope opens its own page (and card).
   assert.equal(q('[data-scope-section="reports"] a')!.getAttribute("href"), "/org/or-2");
 
+  // ── one language with the goal and project pages: a project's status is the
+  // glyph, word and colour its own page draws (lib/projectStatus), and a
+  // goal's health is the chip every goal surface draws, with its date ──
+  const { PROJECT_STATUS } = await import("../../lib/projectStatus");
+  const statusGlyph = () => q('article[data-scope-project="pr-4"] header svg')!;
+  assert.equal(statusGlyph().getAttribute("aria-label"), "Active");
+  assert.ok(statusGlyph().classList.contains(PROJECT_STATUS.active.color), "active wears the project's own colour, never health's green");
+  assert.equal(q("[data-scope-project-status]"), null, "an active project says no status word");
+  const projectsBefore = useInboxStore.getState().projects as Record<string, any>;
+  await seed({
+    projects: { "fixture-project-growth": { ...projectsBefore["fixture-project-growth"], status: "paused", updated_at: 4 } },
+    initiatives: { g1: row({ _id: "g1", short_id: "in-7", title: "Organic search is the first channel", status: "active", owner: { kind: "role", role_id: growth._id }, project_ids: [], health: "at_risk", health_at: Date.UTC(2026, 8, 16, 12), user_id: "fixture-user-me", created_at: 1 }) },
+  });
+  assert.equal(statusGlyph().getAttribute("aria-label"), "Paused");
+  assert.ok(statusGlyph().classList.contains(PROJECT_STATUS.paused.color));
+  assert.equal(q('[data-scope-project-status="paused"]')!.textContent, "Paused", "the word as the project page writes it");
+  assert.ok(q('[data-scope-project-status="paused"]')!.classList.contains(PROJECT_STATUS.paused.color));
+  assert.equal(qa("[data-scope-label]")[0].textContent, "Initiatives");
+  const goalRow = q('a[data-scope-initiative="in-7"]')!;
+  assert.equal(goalRow.querySelector("[data-initiative-health]")!.getAttribute("data-initiative-health"), "at_risk");
+  assert.match(goalRow.querySelector("[data-initiative-health]")!.textContent!, /^At risk.*Sep 16/, "the label as every goal surface writes it, and when it was said");
+  assert.match(goalRow.textContent!, /drives it/);
+  await mount(<RoleHoverContent role={snapshot} />);
+  assert.match(q('[data-role-scope="card"] [data-scope-initiative="in-7"] [data-initiative-health="at_risk"]')!.textContent!, /^At risk/, "the hover card draws the same chip");
+  await seed({ projects: projectsBefore, initiatives: {} });
+
   // ── no tree: the enrichment stands in, and the rows still count ──
   await seed({ orgTree: null });
   env.card = {

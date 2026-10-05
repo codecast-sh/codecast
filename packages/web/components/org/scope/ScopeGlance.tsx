@@ -8,10 +8,11 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { ChevronRight, Target } from "lucide-react";
-import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleScope } from "../../../hooks/useRoleScope";
 import { initiativeRelation } from "../../../lib/roleInitiatives";
-import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../../lib/initiativeColors";
+import { INITIATIVE_ACCENT } from "../../../lib/initiativeColors";
+import { HealthChip } from "../../initiatives/InitiativeAtoms";
 import type { ScopeTabKey } from "../../../lib/scopeTabs";
 import type { OrgRole } from "../orgTypes";
 import type { ScopeSummary } from "./scopeTypes";
@@ -23,6 +24,7 @@ export function ScopeGlance({ role, summary, onOpen }: { role: OrgRole; summary:
   const charter = (role.charter ?? "").split("\n").map((l) => l.trim()).find(Boolean);
   const tasks = summary?.tasks.open ?? 0;
   const decisions = summary?.decisions.open ?? 0;
+  const now = useCoarseNow(60_000);
   return (
     <div
       className="shrink-0 border-b px-4 py-1.5 flex flex-col gap-0.5 text-[12px] cursor-pointer transition-colors hover:bg-sol-bg-highlight/30"
@@ -34,7 +36,7 @@ export function ScopeGlance({ role, summary, onOpen }: { role: OrgRole; summary:
         <div className="flex items-center gap-2 min-w-0" data-scope-glance-goal={goal.ref}>
           <Target className="w-3.5 h-3.5 shrink-0" style={{ color: INITIATIVE_ACCENT }} aria-hidden />
           <Link href={`/initiatives/${goal.ref}`} onClick={(e) => e.stopPropagation()} className="min-w-0 truncate font-semibold text-sol-text no-underline hover:underline underline-offset-2">{goal.title}</Link>
-          {goal.health !== "none" && <span className="shrink-0 inline-flex items-center gap-1" style={{ color: HEALTH_COLOR[goal.health] }}><span className="w-[6px] h-[6px] rounded-full" style={{ background: HEALTH_COLOR[goal.health] }} aria-hidden />{INITIATIVE_HEALTH_LABEL[goal.health].toLowerCase()}</span>}
+          {goal.health !== "none" && <HealthChip health={goal.health} at={goal.health_at} now={now} className="shrink-0" />}
           <span className="shrink-0" style={{ color: goal.owned ? "var(--sol-violet)" : "var(--sol-text-dim)" }}>{initiativeRelation(goal)}</span>
           {goals.length > 1 && <span className="shrink-0" style={{ color: "var(--sol-text-dim)" }}>+{goals.length - 1} more</span>}
         </div>

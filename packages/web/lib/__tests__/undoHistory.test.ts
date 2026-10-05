@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { CLIENT_SYNC_REGISTRY } from "../../store/clientSyncRegistry";
 import {
   undoLabelNamesTitle,
   describeUndoObject,
@@ -8,7 +9,9 @@ import {
   undoTimelineNowSig,
   undoTimelineRows,
   undoWindowWords,
+  undoFoldLabel,
   UNDO_HISTORY_TIER,
+  UNDO_OBJECT_STORES,
 } from "../undoHistory";
 
 const NOW = new Date(2026, 9, 3, 12).getTime();
@@ -165,6 +168,17 @@ describe("undo timeline row model", () => {
     expect(describeUndoObject({ buckets: { b1: { name: "Review" } } }, "buckets", "b1")).toEqual({ kind: "view", key: "label:b1", ts: 0, label: "Review" });
     expect(describeUndoObject({ bucketAssignments: { a1: { conversation_id: "c1" } } }, "bucketAssignments", "a1")).toEqual({ kind: "session", key: "c1", ts: 0 });
     expect(describeUndoObject({}, "pending", "x")).toBeNull();
+  });
+
+  test("trigger entries name and open their trigger from either trigger store", () => {
+    expect(describeUndoObject({ agentTasks: { t1: { title: "Nightly" } } }, "agentTasks", "t1")).toEqual({ kind: "page", key: "page:/triggers/t1", ts: 0, path: "/triggers/t1", label: "Nightly" });
+    expect(describeUndoObject({}, "foreignTriggers", "t2")?.path).toBe("/triggers/t2");
+    const group = { id: "g", label: "Paused 2", ts: 0, status: "done", children: [{ objects: [{ store: "agentTasks", id: "t1" }] }, { objects: [{ store: "foreignTriggers", id: "t2" }] }] } as any;
+    expect(undoFoldLabel(group)).toBe("2 triggers");
+  });
+
+  test("every store the timeline maps is a registered store (a dead key resolves nothing)", () => {
+    for (const store of UNDO_OBJECT_STORES) expect(Object.keys(CLIENT_SYNC_REGISTRY)).toContain(store);
   });
 
   test("a label that quotes a title cut short still counts as naming it", () => {

@@ -3,7 +3,7 @@
 import { Pressable, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
-import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
+import Svg, { Circle } from 'react-native-svg';
 import type { ComponentProps } from 'react';
 import type { Tabs } from 'expo-router';
 import { Text } from '@/components/Themed';
@@ -12,7 +12,7 @@ import { showActionSheet } from '@/lib/actionSheet';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { LANE_COPY, LANE_SECTIONS, type LaneSectionKey } from '@codecast/web/components/simple/lane';
 import { moveToLane } from './laneRoute';
-import { useLaneTheme } from './laneTheme';
+import { LANE_BRAND_FACE, useLaneTheme } from './laneTheme';
 
 type BottomTabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
@@ -34,18 +34,14 @@ export function useTabBarClearance(): number {
   return useSafeAreaInsets().bottom + 86;
 }
 
-function BrandMark({ size = 23 }: { size?: number }) {
+/** The family's ring mark in the accent (web .sl-brand-mark, the lane's boot
+ *  screen): a thin vermilion ring on the paper. */
+function BrandMark({ size = 20 }: { size?: number }) {
   const { c } = useLaneTheme();
   const r = size / 2;
   return (
     <Svg width={size} height={size}>
-      <Defs>
-        <LinearGradient id="mark" x1="0" y1="0" x2="1" y2="1">
-          <Stop offset="0" stopColor={c.tide} />
-          <Stop offset="1" stopColor={c.sun} />
-        </LinearGradient>
-      </Defs>
-      <Circle cx={r} cy={r} r={r - 3.6} stroke="url(#mark)" strokeWidth={4.4} fill="none" />
+      <Circle cx={r} cy={r} r={size * 0.27} stroke={c.accent} strokeWidth={size * 0.11} fill="none" />
     </Svg>
   );
 }
@@ -66,9 +62,9 @@ export function LaneTop() {
   const dark = useActiveScheme() === 'dark';
   const top = useSafeAreaInsets().top;
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9, paddingTop: top + 6, height: top + 54 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 7, paddingTop: top + 6, height: top + 54 }}>
       <BrandMark />
-      <Text style={{ fontSize: 16.5, fontWeight: '600', letterSpacing: -0.25, color: c.ink }}>codecast</Text>
+      <Text style={{ fontFamily: LANE_BRAND_FACE, fontSize: 19.5, letterSpacing: 0.1, color: c.ink }}>codecast</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={LANE_COPY.menu.more}
@@ -81,7 +77,7 @@ export function LaneTop() {
           borderRadius: 19,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: pressed ? c.tideWash : 'transparent',
+          backgroundColor: pressed ? c.hover : 'transparent',
         })}
       >
         <Feather name="more-horizontal" size={20} color={c.soft} />
@@ -103,7 +99,7 @@ export function LaneTabBar({ state, navigation, approvals }: BottomTabBarProps &
           width: '94%',
           maxWidth: 420,
           padding: 5,
-          borderRadius: 24,
+          borderRadius: 18,
           backgroundColor: c.sheet,
           borderWidth: 1,
           borderColor: c.line,
@@ -135,17 +131,17 @@ export function LaneTabBar({ state, navigation, approvals }: BottomTabBarProps &
                 gap: 2,
                 paddingTop: 8,
                 paddingBottom: 7,
-                borderRadius: 18,
-                backgroundColor: focused ? c.tideWash : 'transparent',
+                borderRadius: 13,
+                backgroundColor: focused ? c.hover : 'transparent',
               }}
             >
-              <Feather name={tab.icon} size={19} color={focused ? c.tideInk : c.faint} style={{ transform: [{ translateY: focused ? -1 : 0 }] }} />
+              <Feather name={tab.icon} size={19} color={focused ? c.mark : c.faint} style={{ transform: [{ translateY: focused ? -1 : 0 }] }} />
               <Text numberOfLines={1} style={{ fontSize: 10.5, fontWeight: '500', letterSpacing: 0.05, color: focused ? c.ink : c.faint }}>
                 {tab.label}
               </Text>
               {badge > 0 ? (
-                <View style={{ position: 'absolute', top: 3, left: '56%', minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, backgroundColor: c.sunSolid, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={{ fontSize: 10.5, fontWeight: '600', color: c.onTide, fontVariant: ['tabular-nums'] }}>{badge > 99 ? '99+' : badge}</Text>
+                <View style={{ position: 'absolute', top: 3, left: '56%', minWidth: 18, height: 18, paddingHorizontal: 5, borderRadius: 9, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 10.5, fontWeight: '600', color: c.onSolid, fontVariant: ['tabular-nums'] }}>{badge > 99 ? '99+' : badge}</Text>
                 </View>
               ) : null}
             </Pressable>

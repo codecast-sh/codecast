@@ -16,7 +16,7 @@ import { ApprovalCard } from '@/components/simple/ApprovalCard';
 import { Composer } from '@/components/simple/Composer';
 import { Transcript } from '@/components/simple/Transcript';
 import { LaneButton, LanePaper, WorkingDots } from '@/components/simple/LaneUI';
-import { useLaneTheme } from '@/components/simple/laneTheme';
+import { LANE_READ_FACES, useLaneTheme } from '@/components/simple/laneTheme';
 
 const NEAR_BOTTOM_PX = 220;
 const WORDS = LANE_COPY.conversation;
@@ -65,11 +65,11 @@ export default function SimpleConversation() {
             accessibilityLabel={LANE_COPY.conversation.back}
             hitSlop={8}
             onPress={() => (router.canGoBack() ? router.back() : router.replace(LANE_PATHS.home as never))}
-            style={({ pressed }) => ({ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? c.tideWash : 'transparent' })}
+            style={({ pressed }) => ({ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: pressed ? c.hover : 'transparent' })}
           >
             <Feather name="arrow-left" size={21} color={c.soft} />
           </Pressable>
-          <Text numberOfLines={1} accessibilityRole="header" style={{ flex: 1, fontSize: 16.5, fontWeight: '600', letterSpacing: -0.15, color: c.ink }}>
+          <Text numberOfLines={1} accessibilityRole="header" style={{ flex: 1, fontFamily: LANE_READ_FACES.semiBold, fontSize: 18.5, color: c.ink }}>
             {title}
           </Text>
         </View>

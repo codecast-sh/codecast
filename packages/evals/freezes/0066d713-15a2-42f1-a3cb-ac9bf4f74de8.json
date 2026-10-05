@@ -1,0 +1,26 @@
+{
+  "name": "changes-story social-cards-media",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:social-cards-media"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:social-cards-media",
+    "title": "changes-story social-cards-media"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/social-cards-media.json"
+  },
+  "judge": "The article as rendered shows the change with the captured product screenshots: an image whose URL ends in pricing-card (and optionally features-page) appears with a caption saying what it shows. The published before-and-after page appears embedded after a sentence saying what it shows. No image whose URL ends in term appears. An image whose URL ends in pasted-bug appears only beside a sentence telling the problem it shows (shared links showed the home page card), or not at all.",
+  "notes": null,
+  "tags": [],
+  "id": "0066d713-15a2-42f1-a3cb-ac9bf4f74de8",
+  "createdAt": "2026-10-05T18:00:29.736Z"
+}

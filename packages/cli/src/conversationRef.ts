@@ -4,7 +4,7 @@
 // anchors — so pasting a share link to `cast read` can read a window around that
 // exact message.
 
-import { buildEntityUrl, CODECAST_BASE_URL } from "@codecast/shared/entities";
+import { buildEntityUrl, CODECAST_BASE_URL, isEntityId } from "@codecast/shared/entities";
 
 export interface ConversationRef {
   conversationId: string;
@@ -14,6 +14,10 @@ export interface ConversationRef {
 export function parseConversationRef(input: string): ConversationRef {
   let s = (input || "").trim();
   let messageId: string | undefined;
+
+  // An id that types whole keeps its #: a proposal's change (op-55#3), a pull
+  // request (owner/repo#482).
+  if (s.includes("#") && isEntityId(s)) return { conversationId: s };
 
   const hashIdx = s.indexOf("#");
   if (hashIdx >= 0) {

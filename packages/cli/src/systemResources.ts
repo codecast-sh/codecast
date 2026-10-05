@@ -1,5 +1,6 @@
 import os from "node:os";
 import { resourceProbe } from "./resourceProbe.js";
+import { envSessionLookup } from "./processEnv.js";
 import fs from "node:fs/promises";
 import { execFileAsync } from "./proc.js";
 import type { ProcessInfo } from "./resourceMonitor.js";
@@ -15,7 +16,9 @@ export function resourceKind(command: string): ResourceKind {
   return "system";
 }
 
-export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>): ResourceProcess[] {
+/** Each process goes to the session whose agent it descends from; one outside
+ *  every tree goes to the session its inherited environment names, as detached. */
+export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions: Map<string, number>, envSession?: (p: ProcessInfo) => string | undefined): ResourceProcess[] {
   const owners = new Map<number, string[]>();
   for (const [id, pid] of sessions) owners.set(pid, [...(owners.get(pid) ?? []), id].sort());
   return [...snapshot.values()].map(p => {
@@ -30,11 +33,15 @@ export function attributeProcesses(snapshot: Map<number, ProcessInfo>, sessions:
       if (ids) break;
       cursor = snapshot.get(cursor.ppid);
     }
+    // An agent outside every tree is a session of its own, not the work of the session it was spawned from.
+    const detached = !ids && kind !== "agent" ? envSession?.(p) : undefined;
+    if (detached) ids = [detached];
     return {
       pid: p.pid, ppid: p.ppid, name: (p.command?.split("/").pop() || "Unknown process").slice(0, 120),
       cpu: p.cpu, rss: p.rss, kind,
       ...(p.startedAt === undefined ? {} : { startedAt: p.startedAt }),
       ...(ids?.length === 1 ? { sessionId: ids[0] } : ids?.length && ids.length <= 32 ? { sharedSessionIds: ids } : {}),
+      ...(detached ? { detached: true } : {}),
     };
   });
 }
@@ -46,7 +53,20 @@ export function summarizeProcesses(rows: ResourceProcess[]) {
     g.cpu += p.cpu; g.rss += p.rss; g.processCount++;
     grouped.set(p.kind, g);
   }
-  return { groups: [...grouped.values()], processes: [...rows].sort((a, b) => b.rss - a.rss || a.pid - b.pid).slice(0, RESOURCE_PROCESS_LIMIT), omittedProcessCount: Math.max(0, rows.length - RESOURCE_PROCESS_LIMIT) };
+  return { groups: [...grouped.values()], processes: listedProcesses(rows), omittedProcessCount: Math.max(0, rows.length - RESOURCE_PROCESS_LIMIT) };
+}
+
+/** The processes the snapshot names, within RESOURCE_PROCESS_LIMIT: the ones
+ *  ranking highest by either CPU or memory, so a busy small process is named as
+ *  readily as a large idle one. */
+export function listedProcesses(rows: ResourceProcess[]): ResourceProcess[] {
+  const rank = new Map<ResourceProcess, number>();
+  [...rows].sort((a, b) => b.cpu - a.cpu || a.pid - b.pid).forEach((p, i) => rank.set(p, i));
+  [...rows].sort((a, b) => b.rss - a.rss || a.pid - b.pid).forEach((p, i) => rank.set(p, Math.min(rank.get(p)!, i)));
+  return [...rows]
+    .sort((a, b) => rank.get(a)! - rank.get(b)! || a.pid - b.pid)
+    .slice(0, RESOURCE_PROCESS_LIMIT)
+    .sort((a, b) => b.rss - a.rss || a.pid - b.pid);
 }
 
 export function parseMacMemory(vm: string, swap: string, pressure: string, total: number) {
@@ -177,8 +197,8 @@ export async function collectMachineResources(deviceId: string, snapshot: Map<nu
       load1: os.loadavg()[0], logicalCpus: os.cpus().length, ...(snapshot ? { processCount: snapshot.size } : {}),
       ...(cpu === undefined ? {} : { cpuPercent: cpu }), ...memory, ...rates,
     },
-    ...summarizeProcesses(attributeProcesses(snapshot ?? new Map(), sessions)),
+    ...summarizeProcesses(attributeProcesses(snapshot ?? new Map(), sessions, snapshot && envSessionLookup(snapshot, sessions))),
     collectionDurationMs: Date.now() - start,
-    limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
+    limitations: [...(snapshot ? [] : ["Process capture failed or timed out; process totals and session attribution are unavailable."]), "Process RSS includes shared pages and is not reclaimable memory.", "Shared and detached services may remain after a session moves.", "Network totals cover physical Ethernet/Wi-Fi interfaces; loopback and tunnels are excluded.", "Disk rates cover block devices, including disk images on Mac; they are not per-session I/O.", "Thread counts are not collected by this adapter.", "Processes with more than 32 session owners are left unattributed.", "Work an agent starts inside a tmux pane inherits the tmux server's environment, not the agent's, and is left unattributed.", ...(process.platform === "linux" ? ["Process CPU is the ps lifetime average; machine CPU uses the interval between samples."] : [])],
   };
 }

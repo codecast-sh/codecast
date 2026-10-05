@@ -248,7 +248,7 @@ describe("getConnectUrl", () => {
   test("unauthenticated caller is rejected", async () => {
     const res = await (getConnectUrl as any)._handler(actionCtx(null, tables()), {});
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("Authentication failed");
+    expect(res.error).toBe("signed_out");
   });
 });
 
@@ -405,7 +405,7 @@ describe("confirmConnection (the relay defense)", () => {
     // signed in as themselves, not as the state's user.
     const res = await (confirmConnection as any)._handler(victimBrowser, p);
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("DIFFERENT codecast account");
+    expect(res.error).toBe("wrong_account");
     // The poisoned row is gone AND the grant was revoked at Google with the
     // victim's real refresh token.
     expect(t.google_installations).toHaveLength(0);
@@ -425,7 +425,7 @@ describe("confirmConnection (the relay defense)", () => {
       confirm_token: "guessed-token",
     });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("Confirmation token mismatch");
+    expect(res.error).toBe("bad_token");
     expect(t.google_installations).toHaveLength(1);
     expect(revokeCalls(calls)).toHaveLength(0);
     // Still pending → still unusable through the credential path.
@@ -443,8 +443,7 @@ describe("confirmConnection (the relay defense)", () => {
     t.google_installations[0].pending_expires_at = Date.now() - 1;
     const res = await (confirmConnection as any)._handler(ctx, p);
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("expired");
-    expect(res.error).toContain("Apps tab"); // says what to do next
+    expect(res.error).toBe("expired");
     expect(t.google_installations).toHaveLength(0);
     const revokes = revokeCalls(calls);
     expect(revokes).toHaveLength(1);
@@ -459,13 +458,13 @@ describe("confirmConnection (the relay defense)", () => {
       confirm_token: "x",
     });
     expect(missing.ok).toBe(false);
-    expect(missing.error).toContain("Apps tab");
+    expect(missing.error).toBe("no_such_installation");
     const anon = await (confirmConnection as any)._handler(actionCtx(null, t), {
       installation_id: "gi_nope",
       confirm_token: "x",
     });
     expect(anon.ok).toBe(false);
-    expect(anon.error).toContain("sign in");
+    expect(anon.error).toBe("signed_out");
   });
 });
 
@@ -553,7 +552,7 @@ describe("disconnect", () => {
     const calls = stubGoogle();
     const res = await (disconnect as any)._handler(actionCtx("u_other", t), { installation_id: "gi_1" });
     expect(res.ok).toBe(false);
-    expect(res.error).toContain("Apps tab"); // says where to look next
+    expect(res.error).toBe("no_such_installation");
     expect(t.google_installations).toHaveLength(1);
     expect(calls).toHaveLength(0);
   });
