@@ -498,7 +498,10 @@ is opted in, the server:
    (`learning.at` on the instance row): what people typed to the role in its
    standing session and its hands, with the role's line before each; setup
    steps left open or skipped; routines that failed, were never turned on or
-   are not ready; evidence that failed or went stale. The opt-in is read
+   are not ready; evidence that failed or went stale; and the rules the role
+   wrote in its own playbook, each with the mistake that taught it
+   (org-staffing.md S38), each read once (its key joins `learning.seen`). A
+   lesson drawn from one is filed with kind `rule`. The opt-in is read
    again here, at the read, so a workspace that turned it off is not read by a
    pass already under way.
 2. asks a model for lessons about the template, with the instruction to

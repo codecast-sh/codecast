@@ -1,5 +1,7 @@
 # Codecast for people who don't code
 
+> **Status (2026-10-04):** Not built. No `@platform/agent` or `@platform/billing` package exists (`platform/packages/`), and the Averil decision in "Open questions" is still open.
+
 Status: proposal, 2026-10-02. Nothing here is built yet.
 
 ## The idea
@@ -145,6 +147,12 @@ rent rather than shape. Worth keeping as the fallback if running a fleet turns
 out to be the bottleneck.
 
 ### Where it runs
+
+Update 2026-10-04, decided while building (pl-840): phase one runs each
+hosted turn as a Convex action, with no runner fleet at all. pi's loop and
+provider bundle for that runtime, and the assistant's first jobs need no
+filesystem. The tiers below still describe where this goes once work needs a
+machine. Build spec: `docs/architecture/hosted-assistant.md`.
 
 Most assistant work is a model calling connector APIs and writing a doc. It
 needs no machine of its own. So the runtime has two tiers:

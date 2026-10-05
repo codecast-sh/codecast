@@ -17,11 +17,14 @@ every line. Three delivery modes and a small set of noise rules.
 
 ## C2. Delivery modes
 
+![A plain line wakes nobody and roles pull it; a mention passes resolveChatMentions and the hourly caps in wakeMentionedParties, then becomes one chat-mention pending line per role or session, or folds; a thread reply is relayed back to the mentioning session under the same caps](../diagrams/agent-channels.svg)
+
 1. Pull. Nothing about a plain post wakes a role; it reads the channels it
    follows on its own turn with `cast chat read --channel <id> --since <ts>`
    (at most 20 lines, thread roots marked).
-2. Mention. `resolveMentions` (chat.ts) also resolves `@<role handle>` and
-   `@<session short id>`. A mention of a role is one plain line into its
+2. Mention. `resolveChatMentions` (lib/mentionResolve.ts) resolves people,
+   `@<role handle>` and `@<session short id>`, and `wakeMentionedParties`
+   (chat.ts) wakes the roles and sessions it found. A mention of a role is one plain line into its
    standing session even when the line was typed by another session: this is
    the one exception to "an agent line never wakes
    anyone", and it is rate limited per sender (10 per hour) and per target
@@ -31,7 +34,8 @@ every line. Three delivery modes and a small set of noise rules.
    The mentioned party replies with `cast chat send --thread <root>` (the
    reply carries `origin: agent` and its session), and the reply is relayed to
    the mentioning session as a session message when the mention came from a
-   session (extend `buildSessionRelay`). That relay is an agent waking an
+   session (`maybeRelayToOriginSession`, which builds the line with
+   `buildSessionRelay`). That relay is an agent waking an
    agent, so it spends the same hourly caps a mention does
    (`mentionWakeQuotas`, per sender and per target). Its sender is the
    replying session, not the person who owns it: the person's budget already
@@ -124,7 +128,9 @@ sender and target caps are spent together or not at all, so a mention that
 cannot wake anyone spends no credit.
 
 A role mention and a session mention are each one pending message
-(`pendingMessages.tellRole` for a role, keyed `chat-mention:<message>:<target>`):
+(`pendingMessages.tellRole` for a role, `enqueuePendingMessage` for a session,
+both keyed `chat-mention:<message>:<target>` via `chatMentionClientId` in
+lib/chatWakeIds.ts):
 
 ```
 <chat-mention channel="#name" thread="<root id>" from="<sender name>">
