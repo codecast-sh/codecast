@@ -32,6 +32,30 @@ async function seed() {
 }
 
 describe("teamVisibleMedia", () => {
+  test("a wordless capture takes the agent's next words and its command; a pasted image says a person pasted it", async () => {
+    const t = convexTest(schema, modules);
+    const conv = await t.run(async (ctx) => {
+      const user = await ctx.db.insert("users", { name: "Ana" } as any);
+      const team = await ctx.db.insert("teams", { name: "Acme", created_at: 0, invite_code: "acme" } as any);
+      const conv = await ctx.db.insert("conversations", { user_id: user, team_id: team, agent_type: "claude_code", session_id: "s", started_at: T, updated_at: T, message_count: 4, status: "active" } as any);
+      const msg = (uuid: string, role: string, at: number, fields: Record<string, unknown>) => ctx.db.insert("messages", { conversation_id: conv, message_uuid: uuid, role, timestamp: at, ...fields } as any);
+      await msg("call", "assistant", T + 5, { content: "", tool_calls: [{ id: "tu1", name: "Bash", input: "cast browser shot https://example.app/pricing" }] });
+      const shot = await msg("result", "user", T + 6, { content: "", tool_results: [{ tool_use_id: "tu1", content: "" }], images: [{ media_type: "image/png", tool_use_id: "tu1" }] });
+      await msg("said", "assistant", T + 8, { content: "The pricing card now shows its own title." });
+      const pasted = await msg("ask", "user", T + 2, { content: "the card is wrong ![x](https://convex.example/bug.png)", images: [{ media_type: "image/png" }] });
+      await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: "shot", src: "https://convex.example/shot.png", message_id: shot, seq: 0, timestamp: T + 6 });
+      await ctx.db.insert("conversation_images", { conversation_id: conv, image_key: "bug", src: "https://convex.example/bug.png", message_id: pasted, seq: 0, timestamp: T + 2 });
+      return conv;
+    });
+    const media: Record<string, any> = await t.run(async (ctx) => Object.fromEntries(await teamVisibleMedia(ctx as any, [{ conversation_id: conv, mode: "full" }], { since: T, until: T + 1000 })));
+    const byUrl = Object.fromEntries(media[String(conv)].images.map((i: any) => [i.url, i]));
+    expect(byUrl["https://convex.example/shot.png"]).toMatchObject({
+      origin: "captured during the work",
+      context: "The pricing card now shows its own title. (taken with: cast browser shot https://example.app/pricing)",
+    });
+    expect(byUrl["https://convex.example/bug.png"]).toMatchObject({ origin: "pasted by a person", context: "the card is wrong" });
+  });
+
   test("only a session seen in full lends its screenshots and instruction edits, from the story's window", async () => {
     const { t, ids } = await seed();
     const media: Record<string, any> = await t.run(async (ctx) => Object.fromEntries(await teamVisibleMedia(ctx as any, [
@@ -40,7 +64,7 @@ describe("teamVisibleMedia", () => {
     ], { since: T, until: T + 1000 })));
     expect(Object.keys(media)).toEqual([String(ids.full)]);
     const full = media[String(ids.full)];
-    expect(full.images).toEqual([{ url: "https://convex.example/full.png", timestamp: T + 10, context: "The new call card, after the fix" }]);
+    expect(full.images).toEqual([{ url: "https://convex.example/full.png", timestamp: T + 10, context: "The new call card, after the fix", origin: "captured during the work" }]);
     expect(full.edits).toEqual([{ path: "packages/x/prompts/story.md", before: "Be brief.", after: "Write a short article.", timestamp: T + 20 }]);
   });
 });

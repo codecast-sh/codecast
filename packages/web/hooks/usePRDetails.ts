@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { useAction } from "convex/react";
-import * as Sentry from "@sentry/react";
+import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useWatchEffect } from "./useWatchEffect";
@@ -19,7 +19,7 @@ export function usePRDetails(prId: string | undefined, headSha: string | undefin
     void refresh({ pr_id: prId as Id<"pull_requests">, section }).then(() => {
       if (!cancelled) setResult({ key });
     }).catch((error: unknown) => {
-      Sentry.captureException(error);
+      captureError(error instanceof Error ? error : new Error(String(error)));
       if (!cancelled) setResult({ key, error: error instanceof Error ? error.message : String(error) });
     });
     return () => { cancelled = true; };

@@ -9,7 +9,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } fr
 import { Text } from '@/components/Themed';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { LANE_COPY, visibleSteps, type Step, type TranscriptItem } from '@codecast/web/components/simple/lane';
-import { Rise } from './LaneUI';
+import { Reading, Rise } from './LaneUI';
 import { useLaneTheme } from './laneTheme';
 
 const WORDS = LANE_COPY.transcript;
@@ -33,8 +33,8 @@ function StepMark({ state }: { state: Step['state'] }) {
           height: 9,
           borderRadius: 5,
           borderWidth: 1.5,
-          backgroundColor: done ? c.tide : c.paper,
-          borderColor: done || state === 'running' ? c.tide : state === 'failed' ? c.rose : c.lineStrong,
+          backgroundColor: done ? c.ok : c.paper,
+          borderColor: done ? c.ok : state === 'running' ? c.working : state === 'failed' ? c.danger : c.lineStrong,
         },
         style,
       ]}
@@ -54,13 +54,13 @@ function StepList({ steps }: { steps: Step[] }) {
           <StepMark state={s.state} />
           <Text style={{ fontSize: 14.5, lineHeight: 20, color: s.state === 'failed' ? c.faint : s.state === 'running' ? c.ink2 : c.soft }}>
             {s.text}
-            {s.state === 'failed' ? <Text style={{ fontSize: 13, color: c.rose }}>{WORDS.failed}</Text> : null}
+            {s.state === 'failed' ? <Text style={{ fontSize: 13, color: c.danger }}>{WORDS.failed}</Text> : null}
           </Text>
         </View>
       ))}
       {more > 0 ? (
         <Pressable onPress={() => setOpen(true)} hitSlop={8} accessibilityRole="button" style={{ paddingVertical: 3 }}>
-          <Text style={{ fontSize: 14, fontWeight: '500', color: c.tideInk }}>{WORDS.moreSteps(more)}</Text>
+          <Text style={{ fontSize: 14, fontWeight: '500', color: c.mark }}>{WORDS.moreSteps(more)}</Text>
         </Pressable>
       ) : null}
     </View>
@@ -86,9 +86,11 @@ export const Transcript = memo(function Transcript({
                   style={{
                     paddingVertical: 11,
                     paddingHorizontal: 16,
-                    borderRadius: 20,
-                    borderBottomRightRadius: 6,
-                    backgroundColor: item.failed ? c.roseWash : c.tideWash2,
+                    borderRadius: 16,
+                    borderBottomRightRadius: 4,
+                    borderWidth: 1,
+                    borderColor: c.line,
+                    backgroundColor: item.failed ? c.dangerWash : c.sheet,
                     opacity: item.pending ? 0.72 : 1,
                   }}
                 >
@@ -97,7 +99,7 @@ export const Transcript = memo(function Transcript({
                 {item.failed ? (
                   <Text style={{ fontSize: 12.5, color: c.faint }}>
                     {WORDS.didntSend}
-                    <Text style={{ fontWeight: '500', color: c.tideInk }} onPress={() => onRetry(item)} accessibilityRole="button">
+                    <Text style={{ fontWeight: '500', color: c.mark }} onPress={() => onRetry(item)} accessibilityRole="button">
                       {WORDS.retry}
                     </Text>
                   </Text>
@@ -109,7 +111,9 @@ export const Transcript = memo(function Transcript({
           case 'said':
             return (
               <Rise key={item.id}>
-                <MarkdownContent text={item.text} baseStyle={{ fontSize: 16.5, lineHeight: 26, color: c.ink }} />
+                <Reading>
+                  <MarkdownContent text={item.text} baseStyle={{ fontSize: 18, lineHeight: 29, color: c.ink }} />
+                </Reading>
               </Rise>
             );
           case 'steps':
@@ -117,7 +121,7 @@ export const Transcript = memo(function Transcript({
           case 'answer':
           case 'note':
             return (
-              <View key={item.id} style={{ alignSelf: 'center', paddingVertical: 5, paddingHorizontal: 13, borderRadius: 999, backgroundColor: c.inkWash }}>
+              <View key={item.id} style={{ alignSelf: 'center', paddingVertical: 5, paddingHorizontal: 13, borderRadius: 999, backgroundColor: c.wash }}>
                 <Text style={{ fontSize: 13, color: c.soft }}>{item.text}</Text>
               </View>
             );

@@ -73,12 +73,26 @@ export function findElements(elements: UiElement[], query: string): UiElement[] 
 }
 
 export function formatElement(e: UiElement, index?: number): string {
-  const name = [e.label && `"${e.label}"`, e.value && e.value !== e.label && `value="${e.value}"`, e.id && `id=${e.id}`].filter(Boolean).join(" ");
+  const name = [e.label !== undefined && `"${e.label.replace(/\s*\n\s*/g, " ")}"`, e.value && e.value !== e.label && `value="${e.value}"`, e.id && `id=${e.id}`].filter(Boolean).join(" ");
   const pre = index === undefined ? "" : `[${index}] `;
-  return `${"  ".repeat(Math.min(e.depth, 8))}${pre}${e.type}${name ? ` ${name}` : ""}  @${e.center.x},${e.center.y}${e.enabled ? "" : " (disabled)"}`;
+  return `${e.depth === 0 ? "" : "  "}${pre}${e.type}${name ? ` ${name}` : ""}  @${e.center.x},${e.center.y}${e.enabled ? "" : " (disabled)"}`;
 }
 
-/** The tree as indented lines, skipping unnamed layout containers that carry nothing to act on. */
+/**
+ * The tree as one line per element worth acting on or reading: the root, then
+ * every named element or control, flat (axe's nesting is mostly unnamed layout
+ * wrappers), with the copies axe reports for a text inside a same-named group
+ * dropped.
+ */
 export function formatTree(elements: UiElement[]): string[] {
-  return elements.filter((e) => e.label || e.value || e.id || e.depth === 0 || /Button|Field|Cell|Switch|Link|Tab/.test(e.type)).map((e) => formatElement(e));
+  const shown = elements.filter((e) => e.label || e.value || e.id || e.depth === 0 || /Button|Field|Cell|Switch|Link|Tab/.test(e.type));
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const e of shown) {
+    const key = `${e.label ?? ""}|${e.value ?? ""}|${e.center.x},${e.center.y}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(formatElement(e));
+  }
+  return out;
 }

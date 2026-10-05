@@ -10,6 +10,7 @@ import type { CellChange, Invocation, UndoCtx, UndoSpec } from "@platform/engine
 import type { UserRest } from "@codecast/shared/contracts";
 import type { UndoPolicy } from "../policy";
 import { counted, quoted, sessionTitle } from "../labels";
+import { keepConversationRows } from "../thinConversation";
 
 export const USER_REST_LABEL: Record<UserRest, string> = {
   needs_input: "Needs input",
@@ -61,6 +62,21 @@ function spellUnkill(cells: CellChange[], ctx?: UndoCtx): CellChange[] {
   }
   return out;
 }
+
+/**
+ * Whether the call brought a killed row back (cleared its dismissed or killed
+ * stamp). Its undo would write the dismissed stamp over a row without one,
+ * which the server classifies as a kill (cleanup.ts classifyHideTransition):
+ * daemon teardown, status completed, schedules canceled. The agent may be
+ * running again by then, through a send or a restart that never touches the
+ * inbox stamps the stale guard reads. So such a call is never recorded,
+ * whichever verb made it (restoreSession, a /sessions patch, a triage verb).
+ */
+export const revivesKilledRow = (ctx: Pick<UndoCtx, "changes" | "before">): boolean =>
+  // Read through the thin-conversation rule: a conversations copy can hold a
+  // stale stamp the inbox row had already cleared, and clearing that revives
+  // nothing.
+  keepConversationRows([...ctx.changes], ctx).some((c) => isSessionCell(c) && (c.field === "inbox_dismissed_at" || c.field === "inbox_killed_at") && !!c.before && !c.after);
 
 const HIDE: Partial<UndoSpec> = { inverse: restoreEachHidden, restoreView: true, toast: true };
 const KILL: Partial<UndoSpec> = { ...HIDE, spell: spellUnkill };

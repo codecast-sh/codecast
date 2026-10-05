@@ -6,7 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
-import { HOSTED_INPUT_MAX_CHARS, type WakeCause } from "@codecast/shared/contracts/assistant";
+import { HOSTED_IMAGE_REFUSAL, HOSTED_INPUT_MAX_CHARS, type WakeCause } from "@codecast/shared/contracts/assistant";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
@@ -398,10 +398,17 @@ export async function enqueuePendingMessage(
   if (isHostedAgentType(conversation.agent_type) && String(fromUserId) !== String(conversation.user_id)) {
     throw new Error("Only the owner can send to a hosted conversation");
   }
-  // Machine frames (a routine firing, a run outcome) are built here and bounded
-  // by their writers; what a person sends is bounded here.
+  // Machine frames (a routine firing, a run outcome) are built by server code
+  // and bounded by their writers; what a person sends is bounded here. The
+  // public sendMessageToSession refuses `origin` for a hosted target, so on
+  // these conversations "scheduler" is a server-only signal.
   if (isHostedAgentType(conversation.agent_type) && fields.origin !== "scheduler" && fields.content.length > HOSTED_INPUT_MAX_CHARS) {
     throw new Error(`A message to the assistant can be at most ${HOSTED_INPUT_MAX_CHARS.toLocaleString("en-US")} characters`);
+  }
+  // The turn engine sends the model text only, so an image here would be
+  // dropped without a word; refuse it so the composer can say so.
+  if (isHostedAgentType(conversation.agent_type) && (fields.image_storage_id || fields.image_storage_ids?.length)) {
+    throw new Error(HOSTED_IMAGE_REFUSAL);
   }
   if (fields.client_id) {
     const existing = await ctx.db
@@ -594,6 +601,12 @@ export const sendMessageToSession = mutation({
 
     if (conversation.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized: can only send messages to your own conversations");
+    }
+    // On a hosted conversation `origin` lifts the input cap and wakes a turn
+    // as a routine, so only server code may set it there (routine firings and
+    // run outcomes call enqueuePendingMessage directly).
+    if (args.origin && isHostedAgentType(conversation.agent_type)) {
+      throw new Error("Only the server sends machine input to a hosted conversation");
     }
 
     return await enqueuePendingMessage(ctx, conversation, authUserId, {
@@ -1013,6 +1026,14 @@ export const updateMessageStatus = mutation({
     if (!(await senderOrOwnerCanAct(ctx, message, authUserId))) {
       throw new Error("Unauthorized: can only update messages you sent or own");
     }
+    // A hosted conversation's queue is settled by its turn engine
+    // (markPendingDelivered) and the owner's retry and cancel paths. A local
+    // agent holding the owner's token must not mark queued input delivered or
+    // failed before the engine reads it.
+    const conversation = await ctx.db.get(message.conversation_id);
+    if (conversation && isHostedAgentType(conversation.agent_type)) {
+      throw new Error("A hosted conversation's queued input is settled by its turn engine");
+    }
 
     const patch = {
       status: args.status,
@@ -1427,7 +1448,27 @@ export async function collectDeliverableForOwner(
       owned.push({ ...message, conversation_agent_type: conversation.agent_type ?? null });
     }
   }
-  return owned;
+  return headOfEachQueue(owned);
+}
+
+// Only the oldest deliverable row of each conversation. A conversation takes
+// one message at a time, in queue order (the daemon serializes per
+// conversation, and the launch prompt and the web's in-flight card both read
+// the oldest row), so the rows behind the head are nothing the daemon can act
+// on yet: it claimed each one on every push only to skip it. A session that
+// stays down queues dozens (52 worker reports on one conversation, 3.5 days
+// old, on 2026-10-05), and claiming those on every push was 44 mutations a
+// second, a tenth of all backend time (ct-56547). The next row arrives the
+// moment the head leaves "pending", the same reactive turn as before.
+export function headOfEachQueue<T extends { conversation_id: unknown; created_at?: number; _creationTime?: number }>(rows: T[]): T[] {
+  const head = new Map<string, T>();
+  const at = (r: T) => r.created_at ?? r._creationTime ?? 0;
+  for (const row of rows) {
+    const key = String(row.conversation_id);
+    const held = head.get(key);
+    if (!held || at(row) < at(held)) head.set(key, row);
+  }
+  return rows.filter((r) => head.get(String(r.conversation_id)) === r);
 }
 
 export const getPendingMessagesForDaemon = query({

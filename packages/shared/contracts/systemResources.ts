@@ -11,7 +11,14 @@ export interface ResourceProcess {
   rss: number;
   sessionId?: string;
   sharedSessionIds?: string[];
+  /** Started by `sessionId` but outside its agent's process tree (backgrounded,
+   *  nohup, reparented): attributed through its inherited environment. It keeps
+   *  running here when the session moves. */
+  detached?: boolean;
 }
+
+/** A process in the session's own tree: it stops or moves with the session's agent. */
+export const movesWithSession = (p: ResourceProcess, sessionId: string) => p.sessionId === sessionId && !p.detached;
 
 export interface ResourcePoint {
   at: number;

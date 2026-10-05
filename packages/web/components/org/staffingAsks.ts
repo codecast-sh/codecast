@@ -7,6 +7,7 @@ import { resolveOrgAsks, type OrgAskNames, isOrgQuietChange } from "@codecast/sh
 import type { OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 import { isDecidable, isSyncChange, orderChanges, recordsInLine, splitAsk } from "./staffingModel";
+import { refMatches, refResolves } from "./orgLayout";
 
 /** Where one ask stands. `open` = something in it still waits on the person
  *  (a failed row does, the server takes it again); the other two are decided. */
@@ -35,17 +36,31 @@ export type AskView = {
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
+/** A row a ref can name: a project, a plan, a goal. */
+type NamedRow = { id: string; title: string; short_id?: string };
+
 /** The chart's names for a derived ask's words (S19): an agent by handle, a
- *  project or plan by the id, short id or title a change carries. */
-export function askNames(tree: OrgTree | null | undefined): OrgAskNames | undefined {
-  if (!tree) return undefined;
-  const roles = new Map(tree.roles.map((r) => [r.handle.toLowerCase(), r.name]));
+ *  project or plan by the id, short id or title a change carries. `extra` is
+ *  what a card has in hand beyond the tree: the workspace's projects, plans
+ *  and goals (a project in no role's area, a goal by its `in-N` or title),
+ *  roles the proposal itself creates, and a session's title by its short id. */
+export function askNames(tree: OrgTree | null | undefined, extra?: { projects?: readonly NamedRow[]; plans?: readonly NamedRow[]; goals?: readonly NamedRow[]; roles?: readonly { handle: string; name: string }[]; sessions?: (ref: string) => string | undefined }): OrgAskNames | undefined {
+  if (!tree && !extra) return undefined;
+  const roles = new Map([...(extra?.roles ?? []), ...(tree?.roles ?? [])].map((r) => [r.handle.replace(/^@/, "").toLowerCase(), r.name]));
   const projects = new Map<string, string>(), plans = new Map<string, string>();
-  for (const r of tree.roles) {
+  for (const r of tree?.roles ?? []) {
     for (const x of r.scope_names.projects) for (const k of [x.id, x.short_id, x.title]) if (k) projects.set(k, x.title);
     for (const x of r.scope_names.plans) for (const k of [x.id, x.short_id, x.title]) if (k) plans.set(k, x.title);
   }
-  return { role: (h) => roles.get(h), project: (ref) => projects.get(ref), plan: (ref) => plans.get(ref) };
+  // A project resolves the way the server reads one (refResolves); a plan and a goal by id, short id or title.
+  const named = (rows: readonly NamedRow[] | undefined, ref: string) => rows?.find((row) => refMatches(ref, row))?.title;
+  return {
+    role: (h) => roles.get(h),
+    project: (ref) => (extra?.projects && refResolves(ref, extra.projects)?.title) || projects.get(ref),
+    plan: (ref) => named(extra?.plans, ref) ?? plans.get(ref),
+    ...(extra?.goals ? { initiative: (ref: string) => named(extra.goals, ref) } : {}),
+    ...(extra?.sessions ? { session: extra.sessions } : {}),
+  };
 }
 
 /** The asks of a proposal joined to its rows. A proposal whose change rows
