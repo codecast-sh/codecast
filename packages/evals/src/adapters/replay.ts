@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { CheckResult, ConvoMessage, Freeze, GateResult, Replayer, ReplayOptions, RunSummary, Score } from '@platform/evals';
 import { summarizeRunFolder } from '@platform/evals/fs';
 
+import { passMarkRule, statusPassRule } from '../core/verdict';
 import { runFolderName, writeRunFolder, type RunJson } from '../layout';
 import { GUARD_CAST, GUARD_STAMP, homePaths } from '../paths';
 import { diskSources, freezeSha, pinHead, type DiskSources } from '../provenance';
@@ -144,14 +145,14 @@ export function stampGuard(dir: string, meta: Pick<SurfaceMeta, 'route'>): void 
 }
 
 /** The pass rule: every gate held, no check under its floor, and the score at PASS_AT or over. */
-export const passesAt = (score: number, gatesFailed: number, missedFloors: number): boolean => gatesFailed === 0 && missedFloors === 0 && score >= PASS_AT;
+export const passesAt = passMarkRule(PASS_AT);
 
 /**
  * A rep's verdict. A dry rep's status is `dry` (it grades canned output), but
  * its score keeps the verdict its gates gave, so `line --dry` can prove the
  * station rule's wiring end to end.
  */
-export const repPassed = (r: Pick<RunSummary, 'status' | 'score' | 'gatesFailed' | 'missedFloors'>): boolean => r.status === 'pass' || (r.status === 'dry' && r.score !== null && passesAt(r.score, r.gatesFailed.length, r.missedFloors.length));
+export const repPassed = statusPassRule(PASS_AT);
 
 /** The platform's Score: 0 on any failed gate, else the weighted mean of the checks (1 when only gates grade). */
 export function scoreOf(gates: GateResult[], checks: CheckResult[], judge?: { costUsd: number; model: string } | null): Score {

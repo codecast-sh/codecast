@@ -5,9 +5,8 @@
 
 import { GitCommit, X } from "lucide-react";
 import type { EpochResponse } from "@codecast/shared/contracts/evalsApi";
-import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../ui/sheet";
-import { KeyCap } from "../KeyboardShortcutsHelp";
 import { evalsHref } from "./evalsPaths";
+import { useEvalsHost } from "./host";
 import { CommitMarks } from "./CommitPanel";
 import { ChangedPrompts, EvalsLink } from "./parts";
 import { shortSha, whenLabel } from "./format";
@@ -27,31 +26,32 @@ export interface EpochDiffSheetProps {
 
 
 export function EpochDiffSheet({ surface, n, res, loading, error, freezeNames, onClose }: EpochDiffSheetProps) {
+  const { KeyCap, Sheet } = useEvalsHost().ui;
   const e = res && res.epoch.n === n ? res : null;
   const byFreeze = new Map<string, NonNullable<typeof e>["diffs"]>();
   for (const d of e?.diffs ?? []) (byFreeze.get(d.freezeId) ?? byFreeze.set(d.freezeId, []).get(d.freezeId)!).push(d);
   return (
-    <Sheet open={n !== null} onOpenChange={(open) => !open && onClose()}>
-      <SheetContent side="right" hideClose className="ev-sf-sheet" data-ev-epoch-sheet={n ?? undefined}>
+    <Sheet.Root open={n !== null} onOpenChange={(open) => !open && onClose()}>
+      <Sheet.Content side="right" hideClose className="ev-sf-sheet" data-ev-epoch-sheet={n ?? undefined}>
         <header className="ev-sf-sheet-head">
-          <div className="min-w-0">
-            <SheetTitle className="ev-sf-sheet-title">
+          <div className="ev-fz-sheet-heading">
+            <Sheet.Title className="ev-sf-sheet-title">
               <span className="ev-sf-epoch-chip">e{n}</span>
               {n === 1 ? "The first prompt on record" : `The prompt changed at epoch ${n}`}
-            </SheetTitle>
-            <SheetDescription className="ev-sf-sheet-sub">
+            </Sheet.Title>
+            <Sheet.Description className="ev-sf-sheet-sub">
               {e
                 ? `Began ${whenLabel(e.epoch.firstBatchAt)} on ${shortSha(e.epoch.gitHead)}, ${e.epoch.changedFreezes.length} ${e.epoch.changedFreezes.length === 1 ? "freeze" : "freezes"} rendered differently${e.epoch.scope === "analyzer-only" ? " (analyzer prompt only)" : ""}.`
                 : loading
                   ? "Reading both sides of the boundary..."
                   : (error ?? "")}
-            </SheetDescription>
+            </Sheet.Description>
           </div>
-          <span className="flex items-center gap-2 shrink-0">
+          <span className="ev-fz-sheet-keys">
             <KeyCap size="xs">esc</KeyCap>
-            <SheetClose className="ev-sf-iconbtn" aria-label="Close">
-              <X className="w-3.5 h-3.5" />
-            </SheetClose>
+            <Sheet.Close className="ev-sf-iconbtn" aria-label="Close">
+              <X className="ev-icon" />
+            </Sheet.Close>
           </span>
         </header>
 
@@ -77,7 +77,7 @@ export function EpochDiffSheet({ surface, n, res, loading, error, freezeNames, o
             )}
             <section className="ev-sf-section" data-ev-epoch-commits>
               <h4 className="ev-title">
-                <GitCommit className="w-3.5 h-3.5 ev-quiet" />
+                <GitCommit className="ev-icon ev-quiet" />
                 {e.commits.length ? `${e.commits.length} ${e.commits.length === 1 ? "commit" : "commits"} in the window` : "No commit touched the declared sources in the window"}
               </h4>
               <ul className="ev-sf-commits">
@@ -97,7 +97,7 @@ export function EpochDiffSheet({ surface, n, res, loading, error, freezeNames, o
             </section>
           </div>
         )}
-      </SheetContent>
-    </Sheet>
+      </Sheet.Content>
+    </Sheet.Root>
   );
 }

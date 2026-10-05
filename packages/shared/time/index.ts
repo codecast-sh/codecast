@@ -32,6 +32,22 @@ export function targetDayOf(ts?: number | null): string | undefined {
   return ts ? new Date(ts).toISOString().slice(0, 10) : undefined;
 }
 
+/** A stored target stamp → "Oct 30", with the year when it is not this one:
+ *  the stored day in every timezone, where formatShortDate would name the
+ *  viewer's local day of the stamp's instant. */
+export function formatTargetDay(ts: number, now: number = Date.now()): string {
+  const [y, m, d] = targetDayOf(ts)!.split("-").map(Number);
+  return formatShortDate(new Date(y, m - 1, d, 12).getTime(), now);
+}
+
+/** Whether a stored target day is over where the viewer is: their own
+ *  calendar reads a later day. A day due today is late only tomorrow. */
+export function targetDayPassed(ts: number, now: number = Date.now()): boolean {
+  const d = new Date(now);
+  const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return targetDayOf(ts)! < today;
+}
+
 // Compact relative age, e.g. "now", "3m", "2h", "5d" (no "ago" suffix — meant
 // for tight badges/chips). For full "3m ago" phrasing use formatRelative.
 // Pass `now` when the caller already holds a shared clock (useCoarseNow), so

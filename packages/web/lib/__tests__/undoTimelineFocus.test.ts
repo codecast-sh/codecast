@@ -207,4 +207,15 @@ describe("the undo card and the toaster", () => {
     // The full-width phone sheet at the very bottom.
     expect(toasterLiftFor(500, 800)).toBe(308);
   });
+
+  it("the lift reads the card's layout box, not its rect mid enter animation", async () => {
+    const { cardToasterLift } = await import("../undoCardToasterLift");
+    // Mid entry the scale and slide paint the card's top 28px low; the box is unmoved.
+    const card = { offsetHeight: 400, getBoundingClientRect: () => ({ top: 412 }) } as unknown as HTMLElement;
+    expect(cardToasterLift(card, { innerHeight: 800, getComputedStyle: () => ({ bottom: "16px" }) })).toBe(424);
+    expect(cardToasterLift(card, { innerHeight: 800, getComputedStyle: () => ({ bottom: "0px" }) })).toBe(408);
+    // The animated card is never measured by its painted rect.
+    const src = await Bun.file(new URL("../undoCardToasterLift.ts", import.meta.url)).text();
+    expect(src).not.toContain("getBoundingClientRect(");
+  });
 });

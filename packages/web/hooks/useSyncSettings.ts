@@ -14,6 +14,9 @@ const queries = {
   // The person's Google connections with what each grant allows (the simple
   // lane's connections screen). Read on demand, not in the global set.
   googleConnections: api.googleOAuth.listConnections,
+  // The person's mail and calendar connection through Whisk (the simple
+  // lane's connections, home and /welcome). Read on demand, not in the global set.
+  whiskConnection: api.whisk.connection,
   teamMembers: api.teams.getTeamMembers,
   // The active team's own record (name, invite code) for the team settings row.
   team: api.teams.getTeam,

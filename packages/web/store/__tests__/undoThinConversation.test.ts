@@ -178,12 +178,14 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
   // The /sessions restore writes all three hide stamps, usually changing only
   // one. A stash made elsewhere after the undo must survive the redo: the
   // re-invoke would write inbox_stashed_at: null again, locally and on the wire.
+  // A killed row's restore is never recorded (revivesKilledRow), so the restore
+  // here wakes a snoozed row.
   test("redo of a restore keeps a stash made elsewhere since the undo", async () => {
-    const HIDES = { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null };
+    const HIDES = { inbox_snoozed_until: null, inbox_stashed_at: null };
     useInboxStore.setState({
-      sessions: { [ID]: { _id: ID, title: "Twinless", updated_at: 1, ...HIDES, inbox_dismissed_at: 10 } } as any,
+      sessions: { [ID]: { _id: ID, title: "Twinless", updated_at: 1, ...HIDES, inbox_snoozed_until: 10 } } as any,
     });
-    state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_dismissed_at: 10 });
+    state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_snoozed_until: 10 });
     const sent: Array<{ action: string; args: any; patches: any }> = [];
     const owner = {};
     state()._setDispatch(async (action: string, args: any, patches: any) => {
@@ -191,16 +193,16 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
       return null;
     }, { owner });
     try {
-      state().patchConversation(ID, { inbox_dismissed_at: null, inbox_stashed_at: null, inbox_killed_at: null });
+      state().patchConversation(ID, { inbox_snoozed_until: null, inbox_stashed_at: null } as any);
       expect(performUndo()).toBe(true);
       await new Promise((r) => setTimeout(r, 5));
-      expect(conv().inbox_dismissed_at).toBe(10);
-      state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_dismissed_at: 10, inbox_stashed_at: 99 });
+      expect(conv().inbox_snoozed_until).toBe(10);
+      state().syncRecord("conversations", ID, { ...META, ...HIDES, inbox_snoozed_until: 10, inbox_stashed_at: 99 });
       expect(conv().inbox_stashed_at).toBe(99);
       const from = sent.length;
       expect(performRedo()).toBe(true);
       await new Promise((r) => setTimeout(r, 5));
-      expect(conv().inbox_dismissed_at ?? null).toBe(null);
+      expect(conv().inbox_snoozed_until ?? null).toBe(null);
       expect(conv().inbox_stashed_at).toBe(99);
       const wire = JSON.stringify(sent.slice(from));
       expect(wire).not.toContain("inbox_stashed_at");

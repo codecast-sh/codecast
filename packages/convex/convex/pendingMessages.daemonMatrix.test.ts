@@ -407,14 +407,14 @@ describe("DEC-05 — oversized message echo", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DOF-01 — a multi-message backlog for one conversation surfaces in creation
-// order, so the delivery loop (which iterates the array under per-conversation
-// serialization) attempts older messages first. Cross-retry reordering is only
-// reachable through undeliverable-parking → cron revival, which is the
-// documented never-drop late-arrival.
+// DOF-01 — a multi-message backlog for one conversation surfaces its oldest row
+// alone (headOfEachQueue), so the delivery loop always attempts the older
+// message first and the next one arrives when it leaves "pending".
+// Cross-retry reordering is only reachable through undeliverable-parking →
+// cron revival, which is the documented never-drop late-arrival.
 // ─────────────────────────────────────────────────────────────────────────────
 describe("DOF-01 — backlog ordering", () => {
-  test("deliverables for one conversation come back oldest-first and deduped across the index union", async () => {
+  test("a conversation's backlog surfaces only its oldest row, deduped across the index union", async () => {
     const { db } = createDb({
       conversations: [{ _id: "conv_1", user_id: "user_a" }],
       devices: [],
@@ -425,7 +425,7 @@ describe("DOF-01 — backlog ordering", () => {
       ],
     });
     const deliverable = await collectDeliverableForOwner({ db } as any, "user_a" as any, "device_live");
-    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_old", "pm_new"]);
+    expect(deliverable.map((m: any) => m._id)).toEqual(["pm_old"]);
   });
 });
 

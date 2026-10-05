@@ -1,0 +1,94 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a behavior fix whose session drew a canvas laying out the cases the fix handles, an hour before the commit; the article should embed the canvas",
+ "snapshot": {
+  "story": {
+   "area": "web",
+   "branch": "main",
+   "commit_shas": [
+    "0718293a4b5c6d7e8f901234567890123456abcd"
+   ],
+   "area_counts": {
+    "web": 4,
+    "backend": 2
+   },
+   "risks": [],
+   "conversation_ids": [
+    "k27f6g7h8j9k0m1n2p3q4r5"
+   ],
+   "kind": "fix",
+   "importance": 3
+  },
+  "commits": [
+   {
+    "sha": "0718293a4b5c6d7e8f901234567890123456abcd",
+    "subject": "fix(billing): retry suggestions skip expired and maxed-out cards",
+    "body": "The failed-payment banner offered to retry on cards that could never succeed: expired ones and ones at their limit. It now suggests only cards that can take the charge, and says why the others are left out.",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768388400000,
+    "branch": "main",
+    "conversation_id": "k27f6g7h8j9k0m1n2p3q4r5",
+    "insertions": 260,
+    "deletions": 40,
+    "areas": {
+     "web": {
+      "touches": 4,
+      "insertions": 180,
+      "deletions": 30
+     },
+     "backend": {
+      "touches": 2,
+      "insertions": 80,
+      "deletions": 10
+     }
+    },
+    "top_paths": [
+     "packages/web/billing/RetryBanner.tsx",
+     "packages/backend/billing/cards.ts"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "k27f6g7h8j9k0m1n2p3q4r5",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Retry banner suggests only cards that can pay",
+    "summary": "Customers were offered retries on expired and maxed-out cards. Mapped every card state and which ones can take a charge, then made the banner suggest only those and explain the rest.",
+    "turns": [
+     {
+      "ask": "why does the banner tell people to retry on an expired card",
+      "did": [
+       "drew the card states and which can be charged",
+       "banner now skips expired and maxed-out cards"
+      ]
+     }
+    ],
+    "media": {
+     "images": [],
+     "edits": [],
+     "artifacts": [
+      {
+       "kind": "canvas",
+       "block": "```cast-canvas\n<div data-canvas-title=\"Which cards a retry can actually use\"><table><tr><th>Card</th><th>Can retry</th></tr><tr><td>Active</td><td>yes</td></tr><tr><td>Expired</td><td>no</td></tr><tr><td>At limit</td><td>no</td></tr></table></div>\n```",
+       "title": "Which cards a retry can actually use",
+       "timestamp": 1768384800000
+      }
+     ]
+    }
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Priya Raman",
+   "Tomas Ek"
+  ]
+ },
+ "label": {
+  "why": [
+   "commit",
+   "session"
+  ]
+ }
+}

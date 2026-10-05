@@ -45,6 +45,8 @@ export type GoalsInput = {
   changes?: readonly OrgProposalChange[];
   /** The change in focus: its card keeps a row free beneath it for the action strip. */
   focusChangeId?: string | null;
+  /** The focused change already has a pending answer: the strip says so in a line under it, and the row grows by that line. */
+  focusAnswered?: boolean;
 };
 
 // ---------------------------------------------------------------- the plan
@@ -241,8 +243,10 @@ export const GOALS_SIZES = {
   chipRow: ORG_SIZES.quietChipRow,
   wasRow: 16,
   refRow: 22,
-  /** The room a focused ghost keeps beneath it for its Accept, Edit, Skip strip. */
-  actionRow: 34,
+  /** The room a focused ghost keeps beneath it for its Approve, Reject, Reply, Edit strip. */
+  actionRow: 40,
+  /** The line under the strip that reads the pending answer ("Approved, on your next message"). */
+  answerRow: 26,
   /** The empty band the owner edges cross. */
   ownerGap: 170,
   /** How far past the outline an owner edge runs straight before it curves. */
@@ -356,6 +360,7 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
   const { goals, changeGoal } = goalsPlan(input);
   const S = GOALS_SIZES;
   const focus = input.focusChangeId ?? null;
+  const actionRow = S.actionRow + (input.focusAnswered ? S.answerRow : 0);
   const nodes: GoalsNode[] = [];
   const edges: GoalsEdge[] = [];
   const kids = new Map<string | null, PlanGoal[]>();
@@ -389,7 +394,7 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
     const h = level === "far" ? goalFarHeight(g.title) : goalHeight(g, metrics.length > 0, refs.length) + (level === "close" ? goalCloseExtra(g, metrics.length, running.length) : 0);
     nodes.push({ id, kind: "goal", x: depth * S.indent, y, w: S.goal.w, h, goal: g, metrics, rows, refs, running });
     spine(parentNode, id, !!g.ghost && !g.ghost.solid);
-    y += h + (goalFocusedChange(focus, g.ghost, g.chips) ? S.actionRow : 0);
+    y += h + (goalFocusedChange(focus, g.ghost, g.chips) ? actionRow : 0);
     if (g.owner) owned.push({ node: id, owner: g.owner, ghost: !!g.ownerGhost && !g.ownerGhost.solid });
     if (g.formerOwner) owned.push({ node: id, owner: g.formerOwner, faded: true });
     for (const p of rows) {
@@ -398,7 +403,7 @@ export function layoutGoals(input: GoalsInput, /** The zoom level the cards are 
       const ph = S.project.h + (level === "close" ? S.projectClose : 0);
       nodes.push({ id: pid, kind: "project", x: (depth + 1) * S.indent, y, w: S.project.w, h: ph, project: p });
       spine(id, pid, !!p.ghost && !p.ghost.solid);
-      y += ph + (p.ghost?.kind === "initiative_projects" && goalFocusedChange(focus, p.ghost) ? S.actionRow : 0);
+      y += ph + (p.ghost?.kind === "initiative_projects" && goalFocusedChange(focus, p.ghost) ? actionRow : 0);
       drawnProjects.add(p.id);
       if (p.lead) owned.push({ node: pid, owner: p.lead });
     }

@@ -6,14 +6,14 @@
 // one `check --budget` will enforce. Agent surfaces ask for a confirm.
 
 import type { BisectPlan } from "@codecast/shared/contracts/evalsApi";
-import { KeyCap } from "../KeyboardShortcutsHelp";
-import { SegmentedToggle } from "../SegmentedToggle";
 import { evalsHref } from "./evalsPaths";
 import { CopyCommand, EvalsLink, VerdictGlyph } from "./parts";
-import "./bisect.css";
 import { plural, shortSha, usd } from "./format";
 import { PLAN_REPS, planOverBudget, canStart } from "./bisectModel";
-import { formatShortcutParts, getShortcutsForAction } from "../../shortcuts/index";
+import { useEvalsHost } from "./host";
+
+/** The key that starts the bisect, the way the list chord opens an item: the page binds it, the button draws it. */
+export const START_KEY = { action: "list.open", keys: "enter" } as const;
 
 export interface PlanSettings {
   freezes: string[];
@@ -52,28 +52,27 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
   const { plan, pending, error, freezeOptions, settings, onSettings, blockedBy, confirm, onConfirm, starting, startError, onStart } = props;
   const over = plan ? planOverBudget(plan, settings.budgetUsd) : false;
   const go = canStart(props);
-  // The keys Start answers to, as the shortcut registry names them. Kept here, not in the pure model: the
-  // registry pulls in the key listener, which must not load before a test's DOM does.
-  const startDefs = getShortcutsForAction("list.open");
-  const keys = startDefs.length ? formatShortcutParts(startDefs[0]) : [];
+  const host = useEvalsHost();
+  const { KeyCap, SegmentedToggle } = host.ui;
+  const keys = host.keyParts(START_KEY.action, START_KEY.keys);
   const set = (patch: Partial<PlanSettings>) => onSettings({ ...settings, ...patch });
   return (
-    <section className="ev-card evb-plan" data-evb-plan={plan ? "priced" : pending ? "pricing" : "none"} aria-busy={pending}>
+    <section className="ev-card ev-b-plan" data-evb-plan={plan ? "priced" : pending ? "pricing" : "none"} aria-busy={pending}>
       <h2>
         <VerdictGlyph state="dry" size={11} />
         The plan
       </h2>
 
-      <div className="evb-plan-row">
-        <span className="evb-label">Tier 1 render classes</span>
+      <div className="ev-b-plan-row">
+        <span className="ev-b-label">Tier 1 render classes</span>
         {!plan ? (
-          <span className="evb-pending">{error ? `Could not plan: ${error}` : "Reading the candidates..."}</span>
+          <span className="ev-b-pending">{error ? `Could not plan: ${error}` : "Reading the candidates..."}</span>
         ) : plan.classes === null ? (
-          <span className="evb-pending" data-evb-classes="unrendered">
+          <span className="ev-b-pending" data-evb-classes="unrendered">
             Not rendered yet: Start renders each candidate dry first (free, a few minutes), so until then each of the {plural(plan.candidates.length, "candidate")} counts as its own class.
           </span>
         ) : (
-          <span className="evb-classes" data-evb-classes={plan.classes.length}>
+          <span className="ev-b-classes" data-evb-classes={plan.classes.length}>
             {plan.classes.map((k) => (
               <span key={k.n} className="ev-chip" title={k.skip ?? `${k.shas.length} ${k.shas.length === 1 ? "commit renders" : "commits render"} alike; a probe replays ${shortSha(k.representative)}`} style={k.skip ? { textDecoration: "line-through" } : undefined}>
                 class {k.n}
@@ -84,52 +83,52 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
         )}
       </div>
 
-      <div className="evb-plan-row">
-        <span className="evb-label">Freezes</span>
+      <div className="ev-b-plan-row">
+        <span className="ev-b-label">Freezes</span>
         {freezeOptions.map((f) => (
-          <label key={f.id} className="evb-freeze">
+          <label key={f.id} className="ev-b-freeze">
             <input
               type="checkbox"
               checked={settings.freezes.includes(f.id)}
               onChange={(e) => set({ freezes: e.target.checked ? [...settings.freezes, f.id] : settings.freezes.filter((x) => x !== f.id) })}
             />
-            <span className="ev-mono text-[12px]">{f.name}</span>
-            <span className="evb-freeze-role" data-role={f.role}>
+            <span className="ev-mono ev-small">{f.name}</span>
+            <span className="ev-b-freeze-role" data-role={f.role}>
               {f.role === "flipped" ? "flipped" : "stable control"}
             </span>
           </label>
         ))}
       </div>
 
-      <div className="evb-plan-row">
-        <span className="evb-label">Reps per probe</span>
-        <span className="self-start">
+      <div className="ev-b-plan-row">
+        <span className="ev-b-label">Reps per probe</span>
+        <span className="ev-b-start">
           <SegmentedToggle value={String(settings.reps)} onChange={(k) => set({ reps: Number(k) })} items={PLAN_REPS.map((r) => ({ key: String(r), label: String(r) }))} />
         </span>
       </div>
 
-      <div className="evb-nums">
-        <div className="evb-field">
-          <label htmlFor="evb-budget">Budget, USD</label>
-          <input id="evb-budget" className="evb-input" type="number" min={0} step={0.1} placeholder={plan ? plan.budgetUsd.toFixed(2) : ""} value={settings.budgetUsd ?? ""} onChange={(e) => set({ budgetUsd: numberOrNull(e.target.value) })} />
+      <div className="ev-b-nums">
+        <div className="ev-b-field">
+          <label htmlFor="ev-b-budget">Budget, USD</label>
+          <input id="ev-b-budget" className="ev-b-input" type="number" min={0} step={0.1} placeholder={plan ? plan.budgetUsd.toFixed(2) : ""} value={settings.budgetUsd ?? ""} onChange={(e) => set({ budgetUsd: numberOrNull(e.target.value) })} />
         </div>
-        <div className="evb-field">
-          <label htmlFor="evb-minutes">Max minutes</label>
-          <input id="evb-minutes" className="evb-input" type="number" min={1} step={5} placeholder={plan ? String(plan.maxMinutes) : ""} value={settings.maxMinutes ?? ""} onChange={(e) => set({ maxMinutes: numberOrNull(e.target.value) })} />
+        <div className="ev-b-field">
+          <label htmlFor="ev-b-minutes">Max minutes</label>
+          <input id="ev-b-minutes" className="ev-b-input" type="number" min={1} step={5} placeholder={plan ? String(plan.maxMinutes) : ""} value={settings.maxMinutes ?? ""} onChange={(e) => set({ maxMinutes: numberOrNull(e.target.value) })} />
         </div>
       </div>
 
       {settings.allCommits && (
-        <div className="evb-plan-row" data-evb-all-commits>
-          <span className="evb-label">Commits</span>
-          <span className="text-[12px]">Every commit in the range, not only the ones touching declared sources (--all-commits).</span>
+        <div className="ev-b-plan-row" data-evb-all-commits>
+          <span className="ev-b-label">Commits</span>
+          <span className="ev-small">Every commit in the range, not only the ones touching declared sources (--all-commits).</span>
         </div>
       )}
 
       {plan && (
-        <div className="evb-cost" data-evb-cost style={pending ? { opacity: 0.55 } : undefined}>
+        <div className="ev-b-cost" data-evb-cost style={pending ? { opacity: 0.55 } : undefined}>
           {plan.summary}
-          <div className="evb-cost-figs">
+          <div className="ev-b-cost-figs">
             <span>
               <b>{plan.bound.classes}</b>
               {plan.bound.classes === 1 ? "class" : "classes"}
@@ -148,13 +147,13 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
         </div>
       )}
       {over && plan && (
-        <div className="evb-over" role="alert">
+        <div className="ev-b-over" role="alert">
           The bound ({usd(plan.bound.maxUsd)}) is over the budget ({usd(settings.budgetUsd ?? plan.budgetUsd)}), and the bisect would refuse to start. Raise the budget or cut freezes or reps.
         </div>
       )}
 
       {plan?.needsConfirm && (
-        <label className="evb-confirm" data-evb-confirm>
+        <label className="ev-b-confirm" data-evb-confirm>
           <input type="checkbox" checked={confirm} onChange={(e) => onConfirm(e.target.checked)} />
           <span>
             {plan.surface} is an agent surface: every rep runs a whole agent session, at about {usd(plan.bound.perRepUsd + plan.bound.judgePerRepUsd)} a rep. Start it anyway.
@@ -163,11 +162,11 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
       )}
 
       {blockedBy && (
-        <div className="evb-lock" role="status" data-evb-blocked={blockedBy.id}>
-          <span className="evb-lock-dot" aria-hidden />
+        <div className="ev-b-lock" role="status" data-evb-blocked={blockedBy.id}>
+          <span className="ev-b-lock-dot" aria-hidden />
           <span>
             {blockedBy.listed ? (
-              <EvalsLink className="evb-link" href={evalsHref.bisect(blockedBy.id)}>
+              <EvalsLink className="ev-b-link" href={evalsHref.bisect(blockedBy.id)}>
                 {blockedBy.id}
               </EvalsLink>
             ) : (
@@ -177,7 +176,7 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
             {!blockedBy.listed && " These pages cannot open it (a Multiplayer sim bisect, say); read or stop it from the checkout:"}
           </span>
           {!blockedBy.listed && (
-            <span className="evb-lock-cmds">
+            <span className="ev-b-lock-cmds">
               <CopyCommand command={`./evals bisect status ${blockedBy.id}`} />
               <CopyCommand command={`./evals bisect stop ${blockedBy.id}`} label="Copy stop" />
             </span>
@@ -185,8 +184,8 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
         </div>
       )}
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <button type="button" className="ev-btn ev-btn--lg ev-btn--go sol-btn-solid" disabled={!go} onClick={onStart} data-evb-start title={blockedBy ? `${blockedBy.id} is running; one bisect runs at a time` : undefined}>
+      <div className="ev-b-start-row">
+        <button type="button" className="ev-btn ev-btn--lg ev-btn--go" disabled={!go} onClick={onStart} data-evb-start title={blockedBy ? `${blockedBy.id} is running; one bisect runs at a time` : undefined}>
           {starting ? "Starting..." : "Start the bisect"}
           {keys.map((k) => (
             <KeyCap key={k} size="xs">
@@ -194,10 +193,10 @@ export function BisectPlanPanel(props: BisectPlanPanelProps) {
             </KeyCap>
           ))}
         </button>
-        {plan && <span className="text-[11.5px] ev-quiet">Spends up to {usd(settings.budgetUsd ?? plan.budgetUsd)}, stops between reps when it is gone.</span>}
+        {plan && <span className="ev-b-fine ev-quiet">Spends up to {usd(settings.budgetUsd ?? plan.budgetUsd)}, stops between reps when it is gone.</span>}
       </div>
       {startError && (
-        <div className="evb-over" role="alert">
+        <div className="ev-b-over" role="alert">
           Could not start: {startError}
         </div>
       )}

@@ -4,6 +4,8 @@
 // a call surface and an agent surface, a crashed rep, an unscored rep and
 // org-review's extra grade, the compare view, and the connected pages reading
 // it all through the fixture transport with the address landing on a gate.
+// The view reaches the app only through its host: codecast's anatomy tabs
+// come from the host's useRunPanels, and another host's panels replace them.
 
 import { afterAll, describe, expect, it, setDefaultTimeout } from "bun:test";
 import { act } from "react";
@@ -39,12 +41,14 @@ const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport")
 const { runFixture } = await import("../__fixtures__/run");
 const { fixtureWorldNow, evalsFixtureWorld } = await import("../__fixtures__/world");
 const { RunView } = await import("../RunView");
-const { runTabs, tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading } = await import("../runModel");
+const { tabOfHash, epochOfBatch, previousEpochRun, seedNeighbours, runCommands, compareCandidates, replyReading } = await import("../runModel");
 const { CompareView } = await import("../CompareView");
 const { diffWords, compareFooting } = await import("../runModel");
 const { orderGates, gateEvidenceWords } = await import("../runModel");
-const { guardCounts } = await import("../runModel");
-const { fileTree } = await import("../runModel");
+const { anatomyTabs } = await import("../runPanels");
+const { guardCounts } = await import("../GuardLog");
+const { fileTree } = await import("../RunFiles");
+const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
 const { RunPage } = await import("../pages/RunPage");
 const { ComparePage } = await import("../pages/ComparePage");
 const { formatShortcutParts, getShortcutsForAction } = await import("../../../shortcuts");
@@ -80,8 +84,6 @@ function props(c: RunFixtureCase, over: Partial<RunViewProps> = {}): RunViewProp
     target: null,
     anchorHref: (a) => `/evals/r/${c.run.row.id}#${a}`,
     onAnchor: noop,
-    file: null,
-    onOpenFile: noop,
     picking: false,
     onPicking: noop,
     overlayProduction: false,
@@ -99,18 +101,24 @@ describe("what the run page decides", () => {
     expect(replyReading(fx.call.run)).toBe("as the judge read it");
     expect(replyReading({ ...fx.call.run, score: null, row: { ...fx.call.run.row, status: "unscored" } })).toBe("not judged yet");
   });
-  it("gives a call rep Calls and no Agent or Guard, and an agent rep both", () => {
-    expect(runTabs(fx.call.run)).toEqual(["verdict", "moment", "calls", "files"]);
-    expect(runTabs(fx.agent.run)).toEqual(["verdict", "moment", "agent", "guard", "files"]);
+  it("gives a call rep Calls and no Agent or Guard, and an agent rep both, after the page's own two tabs", async () => {
+    expect(anatomyTabs(fx.call.run)).toEqual(["calls", "files"]);
+    expect(anatomyTabs(fx.agent.run)).toEqual(["agent", "guard", "files"]);
+    const { container, unmount } = await mount(<RunView {...props(fx.agent)} />);
+    expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment", "agent", "guard", "files"]);
+    await unmount();
   });
 
-  it("reads a gate or check address as the Verdict tab with that row, and a tab name as the tab", () => {
-    const tabs = runTabs(fx.agent.run);
-    expect(tabOfHash("#gate-no-leak", tabs)).toEqual({ tab: "verdict", target: "gate-no-leak" });
-    expect(tabOfHash("#check-criteria", tabs)).toEqual({ tab: "verdict", target: "check-criteria" });
-    expect(tabOfHash("#guard", tabs)).toEqual({ tab: "guard", target: null });
-    expect(tabOfHash("#guard", runTabs(fx.call.run))).toEqual({ tab: "verdict", target: null });
-    expect(tabOfHash("", tabs)).toEqual({ tab: "verdict", target: null });
+  it("reads a gate or check address as the Verdict tab with that row, and a tab name as the tab", async () => {
+    expect(tabOfHash("#gate-no-leak")).toEqual({ tab: "verdict", target: "gate-no-leak" });
+    expect(tabOfHash("#check-criteria")).toEqual({ tab: "verdict", target: "check-criteria" });
+    expect(tabOfHash("#guard")).toEqual({ tab: "guard", target: null });
+    expect(tabOfHash("")).toEqual({ tab: "verdict", target: null });
+    // A name the run has no tab for opens Verdict: a call rep has no Guard.
+    const { container, unmount } = await mount(<RunView {...props(fx.call, { tab: "guard" })} />);
+    expect(q(container, "[role=tabpanel]")!.getAttribute("data-ev-panel")).toBe("verdict");
+    expect(q(container, "[data-ev-tab=verdict]")!.getAttribute("aria-current")).toBe("page");
+    await unmount();
   });
 
   it("diffs a rep's prompts against the same freeze in the previous epoch, and says why when there is none", () => {
@@ -269,15 +277,59 @@ describe("RunView", () => {
     await unmount();
   });
 
-  it("Files: the tree, and the open file read-only", async () => {
-    const opened: string[] = [];
-    const file = { path: "run.json", data: { path: "run.json", size: 20, text: '{"model":"x"}', truncated: false }, loading: false, error: null };
-    const { container, unmount } = await mount(<RunView {...props(fx.call, { tab: "files", file, onOpenFile: (p) => opened.push(p) })} />);
-    expect(qa(container, "[data-ev-file]").length).toBe(fx.call.run.files.filter((f) => f.kind === "file").length);
+  it("Files: the tree, the open file read-only, and the open file kept while the reader visits another tab", async () => {
+    // The panel reads the open file itself (GET /run/:id/file), so it needs the transport's world.
+    useEvalsStore.setState({ connection: "connected", transport: await fixtureTransport("on", { latencyMs: 0 }), resources: {} });
+    const c = runFixture(fixtureWorldNow()).call;
+    const { container, rerender, unmount } = await mount(<RunView {...props(c, { tab: "files" })} />);
+    expect(qa(container, "[data-ev-file]").length).toBe(c.run.files.filter((f) => f.kind === "file").length);
+    expect(q(container, "[data-ev-tab=files] .ev-tab-count")!.textContent).toBe(String(c.run.files.filter((f) => f.kind === "file").length));
+    expect(text(q(container, "[data-ev-file-view]"))).toContain("Pick a file");
+    await act(async () => (q(container, "[data-ev-file='run.json']") as HTMLButtonElement).click());
+    for (let i = 0; i < 50 && !text(q(container, "[data-ev-file-view]")).includes('"model"'); i++) await act(async () => new Promise((r) => setTimeout(r, 20)));
     expect(q(container, "[data-ev-file='run.json']")!.getAttribute("aria-current")).toBe("true");
     expect(text(q(container, "[data-ev-file-view]"))).toContain('"model"');
-    await act(async () => (q(container, "[data-ev-file='call1/prompt.md']") as HTMLButtonElement).click());
-    expect(opened).toEqual(["call1/prompt.md"]);
+    await rerender(<RunView {...props(c, { tab: "calls" })} />);
+    expect(q(container, "[data-ev-files]")).toBeNull();
+    await rerender(<RunView {...props(c, { tab: "files" })} />);
+    expect(q(container, "[data-ev-file-view]")!.getAttribute("data-ev-file-view")).toBe("run.json");
+    // Another run opens with no file.
+    await rerender(<RunView {...props(runFixture(fixtureWorldNow()).gate, { tab: "files" })} />);
+    expect(q(container, "[data-ev-file-view]")!.getAttribute("data-ev-file-view")).toBe("");
+    await unmount();
+  });
+
+  it("draws another host's panels in place of codecast's anatomy, with their counts and flags, and none for a host without", async () => {
+    let seen: { run: string; previous: string | null } | null = null;
+    const host = {
+      ...codecastEvalsHost,
+      useRunPanels: (run: typeof fx.agent.run, ctx: { previousEpoch: { id: string | null } }) => {
+        seen = { run: run.row.id, previous: ctx.previousEpoch.id };
+        return [
+          { id: "funnel", label: "Funnel", count: 3, body: <div data-other-panel>the funnel</div> },
+          { id: "story", label: "Story", flag: "It stalled", body: <div>the story</div> },
+        ];
+      },
+    };
+    const { container, rerender, unmount } = await mount(
+      <EvalsHostProvider host={host}>
+        <RunView {...props(fx.call, { tab: "funnel" })} />
+      </EvalsHostProvider>,
+    );
+    expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment", "funnel", "story"]);
+    expect(q(container, "[data-other-panel]")).not.toBeNull();
+    expect(q(container, "[data-ev-call]")).toBeNull();
+    expect(text(q(container, "[data-ev-tab=funnel] .ev-tab-count"))).toBe("3");
+    expect(q(container, "[data-ev-tab=story] .ev-tab-flag")!.getAttribute("title")).toBe("It stalled");
+    expect(seen).toEqual({ run: fx.call.run.row.id, previous: previousEpochRun(fx.call.run.row, fx.call.freeze.runs, fx.call.freeze.epochs).id });
+    const { useRunPanels: _, ...bare } = host;
+    await rerender(
+      <EvalsHostProvider host={bare}>
+        <RunView {...props(fx.call, { tab: "calls" })} />
+      </EvalsHostProvider>,
+    );
+    expect(qa(container, "[data-ev-tab]").map((t) => t.getAttribute("data-ev-tab"))).toEqual(["verdict", "moment"]);
+    expect(q(container, "[role=tabpanel]")!.getAttribute("data-ev-panel")).toBe("verdict");
     await unmount();
   });
 

@@ -833,6 +833,47 @@ describe("runAssistant", () => {
     expect(faux.state.callCount).toBe(1);
   });
 
+  it("answers the person again when the last model call failed before it wrote anything", async () => {
+    const history: MessageRow[] = [
+      ask("Is Dana free?"),
+      { role: "assistant", model: "claude-sonnet-5-5", timestamp: 2, usage: { input_tokens: 40, output_tokens: 0 } },
+    ];
+    faux.setResponses([fauxAssistantMessage("Yes, at 3.")]);
+    const result = await run({ history });
+    expect(result.reason).toBe("done");
+    expect(faux.state.callCount).toBe(1);
+    expect(result.messages.map((row) => row.content)).toEqual(["Yes, at 3."]);
+  });
+
+  it("lets parallel paid calls see each other's reservations, so only what the ceiling covers spends", async () => {
+    const spentBy: string[] = [];
+    const paid = defineTool({
+      name: "paid",
+      description: "Costs 40 cents.",
+      parameters: Type.Object({ q: Type.String() }),
+      risk: "read",
+      run: async ({ q }, { charge, remainingUsd }) => {
+        // Reserve before the first await, the way a paid tool should.
+        if (remainingUsd() < 0.4) throw new Error("Not enough budget left for this search");
+        charge(0.4);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        spentBy.push(q);
+        return `paid ${q}`;
+      },
+    });
+    faux.setResponses([
+      fauxAssistantMessage([fauxToolCall("paid", { q: "a" }, { id: "call_a" }), fauxToolCall("paid", { q: "b" }, { id: "call_b" })], {
+        stopReason: "toolUse",
+      }),
+      fauxAssistantMessage("never"),
+    ]);
+    const result = await run({ history: [ask("Search twice")], tools: [paid], ceilingUsd: 0.5 });
+    expect(spentBy).toEqual(["a"]);
+    const results = result.messages.flatMap((row) => row.tool_results ?? []);
+    expect(results.map((r) => r.is_error)).toEqual([false, true]);
+    expect(result.costUsd).toBeLessThanOrEqual(0.5);
+  });
+
   it("answers a call to a tool that is gone without asking the gate", async () => {
     const { list } = tools();
     const asked: string[] = [];

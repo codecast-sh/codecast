@@ -17,6 +17,7 @@
 //     forever and every catch-up sweep pays for it again.
 
 import { v } from "convex/values";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { routingTeamForInstallation } from "./githubApp";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { internal, api } from "./_generated/api";
@@ -180,11 +181,20 @@ async function prsForSha(
   if (found.length) return found;
   if (!headSha) return [];
 
-  const all: Doc<"pull_requests">[] = await ctx.db
+  return (await openPRsInRepository(ctx, repository)).filter((pr) => pr.head_sha === headSha);
+}
+
+/**
+ * The open pull requests of a repository. A busy repository has thousands of
+ * closed PRs with their files and commits on the row: reading all of them cost
+ * every check_run delivery ~20 MB, and the wide read set made concurrent
+ * deliveries conflict with each other and with any PR write in the repository.
+ */
+async function openPRsInRepository(ctx: { db: any }, repository: string): Promise<Doc<"pull_requests">[]> {
+  return await ctx.db
     .query("pull_requests")
-    .withIndex("by_repository", (q: any) => q.eq("repository", repository))
+    .withIndex("by_repository_state", (q: any) => q.eq("repository", repository).eq("state", "open"))
     .collect();
-  return all.filter((pr) => pr.state === "open" && pr.head_sha === headSha);
 }
 
 /**
@@ -336,7 +346,7 @@ export const storeWebhookEvent = internalMutation({
     // installation that sent the delivery, so these are scoped like the derived
     // events; a repository we have no installation for resolves to nothing and
     // matches as it always did.
-    void ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+    await scheduleTriggerMatch(ctx, {
       event_type: args.event_type,
       action: args.action,
       repository,
@@ -1564,12 +1574,8 @@ export const processPushEvent = internalMutation({
 
     // A push to a base branch leaves every PR aimed at it a little further
     // behind, and GitHub says nothing about that. Ask again shortly.
-    const openPRs: Doc<"pull_requests">[] = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_repository", (q: any) => q.eq("repository", repository))
-      .collect();
-    for (const pr of openPRs) {
-      if (pr.state !== "open" || pr.base_ref !== branch) continue;
+    for (const pr of await openPRsInRepository(ctx, repository)) {
+      if (pr.base_ref !== branch) continue;
       await ctx.scheduler.runAfter(MERGE_STATE_DELAY_MS, internal.prShepherd.refreshMergeState, {
         pr_id: pr._id,
         attempt: 0,
@@ -2031,11 +2037,7 @@ async function handleIssueCommentCreated(ctx: any, payload: any): Promise<boolea
   const repository = normalizeRepository(payload.repository.full_name);
   const prNumber = issue.number;
 
-  const pr = await ctx.db
-    .query("pull_requests")
-    .withIndex("by_repository", (q: any) => q.eq("repository", repository))
-    .filter((q: any) => q.eq(q.field("number"), prNumber))
-    .first();
+  const pr = await prByNumber(ctx, repository, prNumber);
 
   if (!pr) {
     return false;

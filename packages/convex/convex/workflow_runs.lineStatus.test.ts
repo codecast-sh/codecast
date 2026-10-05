@@ -8,7 +8,7 @@ import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
-import { repairedLineStatus, runEndStatus } from "./workflow_runs";
+import { repairedClosedAt, repairedLineStatus, runEndStatus } from "./workflow_runs";
 
 const api = anyApi as any;
 const internal = anyApi as any;
@@ -151,6 +151,30 @@ describe("the gate (LE11, LE16)", () => {
   });
 });
 
+describe("a person's status wins (LM3)", () => {
+  test("dropping a cause stops its live run and withdraws nothing it should keep", async () => {
+    const { t, ids, read } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the cause was dropped by a person" });
+    expect((await read()).task.status).toBe("dropped");
+  });
+
+  test("the line's own drop station does not stop the run that is dropping", async () => {
+    const { t, ids } = await setup({ status: "in_review" }, { current_node_id: "drop" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run.status).toBe("running");
+  });
+
+  test("a session's close is not a person's: the run goes on", async () => {
+    const { t, ids } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped", conversation_id: "sess-line" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run.status).toBe("running");
+  });
+});
+
 describe("the repair (LE16)", () => {
   test("moves causes the old run end left in review, dry run first", async () => {
     const { t, ids, end, read } = await setup({ status: "in_review", closed_at: T0 + 2 }, { status: "completed" });
@@ -162,6 +186,8 @@ describe("the repair (LE16)", () => {
     expect(applied.moved).toHaveLength(1);
     const { task, history } = await read();
     expect(task.status).toBe("done");
+    // Closed when the run shipped (watch completed at T0 + 12), not when the repair ran.
+    expect(task.closed_at).toBe(T0 + 12);
     expect(history.map((h: any) => [h.old_value, h.new_value])).toEqual([["in_review", "done"]]);
     // Run again: nothing left to move.
     expect((await t.mutation(internal.workflow_runs.repairLineCauseStatus, { dry_run: false })).moved).toEqual([]);
@@ -176,6 +202,30 @@ describe("the repair (LE16)", () => {
     });
     const out = await t.mutation(internal.workflow_runs.repairLineCauseStatus, { dry_run: true });
     expect(out).toMatchObject({ moved: [], skipped: 1 });
+  });
+});
+
+describe("the repair restamps its own close (LE16)", () => {
+  test("a cause the first pass closed at repair time gets the ship's time", async () => {
+    const repairAt = T0 + 50_000_000;
+    const { t, ids, end, read } = await setup({ status: "done", closed_at: repairAt }, { status: "completed", updated_at: T0 + 100 });
+    await end(lineNodes("decide", "ship", "watch"));
+    await t.run(async (ctx) => {
+      await ctx.db.insert("task_history", { task_id: ids.taskId, user_id: ids.owner, actor_type: "system", action: "updated", field: "status", old_value: "in_review", new_value: "done", created_at: repairAt } as any);
+    });
+    const dry = await t.mutation(internal.workflow_runs.repairLineCauseStatus, { dry_run: true });
+    expect(dry.restamped).toEqual([{ task: "ct-1", from: repairAt, to: T0 + 12 }]);
+    await t.mutation(internal.workflow_runs.repairLineCauseStatus, { dry_run: false });
+    expect((await read()).task.closed_at).toBe(T0 + 12);
+    expect((await t.mutation(internal.workflow_runs.repairLineCauseStatus, { dry_run: true })).restamped).toEqual([]);
+  });
+
+  test("a person's close stands", () => {
+    const run = { status: "completed", updated_at: T0 + 100, node_statuses: lineNodes("watch") };
+    const at = T0 + 50_000_000;
+    expect(repairedClosedAt({ status: "done", closed_at: at }, run, [{ created_at: at, new_value: "done", actor_type: "user" }])).toBeNull();
+    expect(repairedClosedAt({ status: "done", closed_at: at }, run, [{ created_at: at, new_value: "done", actor_type: "system" }])).toBe(T0 + 10);
+    expect(repairedClosedAt({ status: "done", closed_at: T0 + 20 }, run, [{ created_at: T0 + 20, new_value: "done" }])).toBeNull();
   });
 });
 

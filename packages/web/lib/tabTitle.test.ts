@@ -22,3 +22,15 @@ test("tab titles forward the workspace boundary", () => {
   expect(tabTitle(tab as any, {}, {}, [], "me", initiatives, "user:me")).toBe("Private plan");
   expect(tabTitle(tab as any, {}, {}, [], "me", initiatives, "team:a")).not.toBe("Private plan");
 });
+
+test("a task, project or run tab reads its record's name, and never its id", () => {
+  const RUN = "th75y63rm5emhbrsb3y79g6rv58fn8qq";
+  const PROJECT = "sd7dqnq9hny1dtzy83as2av4z18c9z2z";
+  const records = { workflowRuns: { [RUN]: { task_short_id: "ct-56750", workflow_name: "line" } }, projects: { [PROJECT]: { title: "Codecast: Product" } } };
+  const tab = (path: string) => ({ id: "t", path, title: "", createdAt: 0 }) as any;
+  expect(tabTitle(tab(`/workflows/runs/${RUN}`), {}, {}, [], "me", {}, "team:a", records)).toBe("ct-56750 run");
+  expect(tabTitle(tab(`/projects/${PROJECT}?tab=line`), {}, {}, [], "me", {}, "team:a", records)).toBe("Codecast: Product");
+  expect(tabTitle(tab(`/workflows/runs/${RUN}`), {}, {})).toBe("Run");
+  expect(tabTitle(tab(`/projects/${PROJECT}`), {}, {})).toBe("Project");
+  expect(tabTitle(tab("/projects/pj-12"), {}, {})).toBe("pj-12");
+});
