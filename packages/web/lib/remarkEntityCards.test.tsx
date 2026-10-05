@@ -114,6 +114,7 @@ function fakeQuery(fn: unknown, args: any) {
   if (name === "messages:getSharedMessage") return args?.share_token === SHARE_TOKEN ? FAKE_SHARED_MESSAGE : null;
   if (name === "messages:webGet") return args?.id === MSG_CONVEX_ID ? FAKE_SHARED_MESSAGE : null;
   if (name === "linkPreviews:get") return args?.url === FAKE_PREVIEW.url ? FAKE_PREVIEW : null;
+  if (name === "transcripts:webGetCallRef") return args?.ref === "cl-117" ? { _id: "k117", short_id: "cl-117", title: "Recording test coordination markers", status: "ended", turns: null, line: null } : null;
   const rows = ROWS[name];
   if (!rows) return undefined;
   return rows.find((r) => r.short_id === args?.short_id || r._id === args?.id) ?? null;
@@ -180,6 +181,23 @@ describe("shared-object detection", () => {
     expect(html).toContain("<p>Picked up </p>");
     expect(html).toContain("<p> this morning.</p>");
     expect(html).toContain("Rich object preview cards in chat");
+  });
+
+  // A moment's card is a picture: in running text it would cut the sentence
+  // in two (#card-embeds-test, 2026-10-03), so only a moment on a line of its
+  // own is the frame card, and one in prose is the moment pill.
+  test("a call moment in a sentence stays the inline pill; one on its own line is the frame", () => {
+    const html = render("The share moved on to the cobalt slide by cl-117@2:45 in prose.\ncl-117@2:30");
+    expect(html.match(/data-call-moment=/g)?.length).toBe(1);
+    expect(html).toContain('data-call-moment="cl-117@2:30"');
+    expect(html).toMatch(/<p>The share moved on to the cobalt slide by .*entity-ref.* in prose\.<\/p>/s);
+    expect(html).toContain('data-card-count="1"');
+  });
+
+  test("a call moment inside emphasis stays inside it", () => {
+    const html = render("**watch cl-117@2:45 closely**");
+    expect(html).not.toContain("data-call-moment");
+    expect(html).toMatch(/<strong>watch .*closely<\/strong>/s);
   });
 
   test("prose paragraph plus a shared id paragraph: prose stays, card renders", () => {

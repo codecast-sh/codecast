@@ -24,7 +24,7 @@ const CODEX = CLOUD_AGENT_PROVIDERS.codex;
 
 export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void; deviceId?: string | null }) {
   const { device, machine } = usePinnedCloudAgentMachine(deviceId, useCloudAgentConnected(CODEX));
-  const { view, waiting, timedOut, signIn, recheck } = useCloudAgentLogin(CODEX.id, device);
+  const { view, waiting, timedOut, signIn, recheck, prompt } = useCloudAgentLogin(CODEX.id, device);
   const signedIn = view.state === "signed_in";
   const needsSignIn = view.state === "signed_out" || view.state === "expired";
   // A machine with no browser (a cloud host) signs in with a code, from a terminal there.
@@ -54,12 +54,20 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
       )}
       {signedIn && <CloudAgentConnectedSync spec={CODEX} onNavigate={onClose} />}
 
-      {needsSignIn && headless && (
-        <p className="rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
-          {view.state === "expired" ? <>The Codex sign-in on {machine} has expired.</> : <>{machine} has no Codex sign-in.</>}{" "}
-          It has no browser to finish one, so in a terminal there run{" "}
-          <CopyCommand command={CODEX.login.headlessArgv.join(" ")} /> and open the link it prints on any device. Then check again.
-        </p>
+      {(needsSignIn || waiting) && !signedIn && headless && (
+        <div className="space-y-2 rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
+          <p>
+            {view.state === "expired" ? <>The Codex sign-in on {machine} has expired.</> : <>{machine} has no Codex sign-in.</>}{" "}
+            It has no browser, so it signs in with a code you enter here.
+          </p>
+          {prompt ? <DeviceCodeSteps prompt={prompt} /> : (
+            <Button type="button" size="sm" onClick={() => void signIn({ deviceCode: true })} disabled={waiting} className="h-7 px-2.5 text-[11px]">
+              {waiting ? "Getting a code…" : "Sign in with a code"}
+            </Button>
+          )}
+          {waiting && <Spinner label="waiting for the sign-in" />}
+          <p className="text-[11px] text-sol-text-dim">Or in a terminal there: <CopyCommand command={CODEX.login.headlessArgv.join(" ")} /></p>
+        </div>
       )}
       {(needsSignIn || waiting) && !signedIn && !headless && (
         <ol className="space-y-3 rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
@@ -76,6 +84,11 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
           <Step n={2} state={step2}>
             Codex opens its sign-in page in the browser on {machine}. Sign in with the ChatGPT account your Codex Cloud tasks run on.
             {waiting && <Spinner label="waiting for the sign-in" />}
+            {prompt ? <DeviceCodeSteps prompt={prompt} /> : !waiting && (
+              <button type="button" onClick={() => void signIn({ deviceCode: true })} className="mt-1 block text-[11px] text-sol-text-dim underline underline-offset-2 hover:text-sol-text">
+                Not at {machine}? Sign in here with a code
+              </button>
+            )}
             {timedOut && <span className="mt-1 block text-[11px] text-amber-500">The sign-in didn't finish. Try again.</span>}
           </Step>
         </ol>
@@ -102,5 +115,15 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
         Tasks run in the repository's Codex environment. Set one up under <CloudAgentRepoAccessLink spec={CODEX} className="hover:text-sol-text" />.
       </p>
     </CloudConnectDialog>
+  );
+}
+
+/** The page and one-time code a device-code sign-in finishes with, on any device. */
+function DeviceCodeSteps({ prompt }: { prompt: { url: string; code: string } }) {
+  return (
+    <span className="mt-1.5 block space-y-1">
+      <a href={prompt.url} target="_blank" rel="noreferrer" className="block underline underline-offset-2">Open {prompt.url.replace(/^https:\/\//, "")}</a>
+      <span className="block">and enter <span className="select-all rounded bg-sol-bg px-1.5 py-0.5 font-mono text-[12px] font-bold tracking-wider text-sol-text">{prompt.code}</span></span>
+    </span>
   );
 }

@@ -437,13 +437,14 @@ const UNDO_CONFIG: UndoConfig = {
     declareViewNav("undo");
   },
   restoreView: (draft, field, value) => undoStoreBinding?.restoreView(draft, field, value),
-  afterReplay: (entry, dir, applied) => {
-    if (dir !== "undo") return;
-    // Tell sibling windows the exact restored values of the bridged fields,
-    // one message per row under one timestamp. The message is exact: these
-    // are the values the replay dispatched, so a sibling locks only them and
-    // the replay's acknowledgement retires every one. A redo re-runs the
-    // original action, which announces its own gesture.
+  afterReplay: (entry, dir, applied, how) => {
+    // A redo that re-ran the original action announced its own gesture.
+    if (how === "reinvoke") return;
+    // Tell sibling windows the exact values the replay wrote to the bridged
+    // fields (an undo's restore, or a redo's field restore), one message per
+    // row under one timestamp. The message is exact: these are the values the
+    // replay dispatched, so a sibling locks only them and the replay's
+    // acknowledgement retires every one.
     const byId = new Map<string, Partial<Record<BridgedField, number | boolean | null>>>();
     for (const cell of applied) {
       if ((cell.store !== "sessions" && cell.store !== "conversations") || !cell.field) continue;
@@ -471,7 +472,7 @@ const UNDO_CONFIG: UndoConfig = {
       if (readded.size > 0) broadcastGesture({ kind: "unforget", rows: [...readded.values()], ts }, userId);
       for (const [id, fields] of byId) broadcastGesture({ kind: "fields", id, fields, exact: true, ts }, userId);
     }
-    runUndoRevert(entry, applied);
+    if (dir === "undo") runUndoRevert(entry, applied);
   },
 };
 

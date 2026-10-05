@@ -1,7 +1,7 @@
 // Mounts the ghost cards in jsdom (org-staffing.md S5) against the fixture
-// tree and a proposal covering every kind: a proposed role stub (dashed,
+// tree and a proposal covering every kind: a proposed role stub (tinted,
 // proposed tag, action row led by the kind word, never a drop halo), an
-// accepted one (solid), a retire hatch, dashed chips carrying the delta with a
+// accepted one (solid), a retire hatch, chips carrying the delta with a
 // focused change's action row, a warning chip for a handle nothing answers
 // to, an adopt "this session" stub with its second line, and the health dots
 // (blocker filled, warn a ring, info none). Clicks on Accept, Edit, Skip and
@@ -22,7 +22,8 @@ async function verifyGhostCards() {
   const React = await import("react");
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   mock.module("../ConversationList", () => ({ AgentIcon: () => React.createElement("span", { "data-agent": true }) }));
-  mock.module("../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: { name: string }) => React.createElement("span", { "data-avatar": name }) }));
+  const realStream = await import("../tasks/TaskCommentStream");
+  mock.module("../tasks/TaskCommentStream", () => ({ ...realStream, Avatar: ({ name }: { name: string }) => React.createElement("span", { "data-avatar": name }) }));
   const { act } = React;
   const { createRoot } = await import("react-dom/client");
   const { ReactFlowProvider } = await import("@xyflow/react");
@@ -75,7 +76,7 @@ async function verifyGhostCards() {
   const q = (sel: string) => document.querySelector(sel) as HTMLElement | null;
   const qa = (sel: string) => Array.from(document.querySelectorAll(sel)) as HTMLElement[];
 
-  // A proposed role: dashed, translucent, tagged, with an action row that
+  // A proposed role: tinted, translucent, tagged, with an action row that
   // names its kind; a drop on it is never offered (no halo, no scale).
   const ghostRole = q("[data-card='ghost-role']")!;
   assert.equal(ghostRole.querySelector("[data-ghost-tag='proposed']") !== null, true, "proposed tag on the ghost role");

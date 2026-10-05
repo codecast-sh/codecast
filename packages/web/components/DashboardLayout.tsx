@@ -105,6 +105,8 @@ import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { useTipActions } from "../tips";
 import { GlobalCloseGuardDialog } from "./CloseGuardDialog";
 import { useLocalAuth } from "../lib/localAuth";
+import { ModRuntimes } from "./mods/ModRuntimes";
+import { useSyncMods } from "../lib/mods/useMods";
 
 const CommandPalette = lazy(() =>
   import("./CommandPalette").then((module) => ({ default: module.CommandPalette })),
@@ -248,9 +250,15 @@ export function DashboardLayout(props: DashboardLayoutProps) {
       </>
     );
   }
+  // The undo card's host sits above DashboardLayoutInner's branch returns:
+  // its doorways (⌘⌥Z, the held peek, a toast's History) are installed by
+  // useGlobalShortcutActions in every branch, a browser pane's page and the
+  // guest frame included, and an open card with nothing on screen silences
+  // every undo toast.
   return (
     <DashboardNestCtx.Provider value={true}>
       <DashboardLayoutInner {...props} />
+      <UndoTimelineHost />
     </DashboardNestCtx.Provider>
   );
 }
@@ -295,6 +303,8 @@ function HostFeeders() {
   // integrations panel and any project surface that shows where its tasks
   // came from — one subscription rather than one per opened card.
   useSyncIssueSyncSources();
+  // Codecast mods: every mod the viewer can see; ModRuntimes runs the enabled ones.
+  useSyncMods();
   // A profile with no timezone takes this device's (team day cuts, local clocks).
   useAdoptTimezone();
   // The workspace's agent definitions and chains: the compose "as" chooser,
@@ -348,7 +358,7 @@ function SessionCommandResultsFeeder() {
  *  badge, the call surfaces. */
 function WindowOnlyEffects() {
   useChatToasts();
-  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /></>;
+  return <><Suspense fallback={null}><CallSyncEffects /></Suspense><SeatKillDialog /><ModRuntimes /></>;
 }
 
 // The window's OS title: the surface, then the specific thing it shows,
@@ -871,7 +881,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // window. Isolated-worktree creation lives as a toggle inside the compose surface.
   useShortcutAction('session.create', handleNewFullSession);
 
-  useShortcutAction('session.compose', openCompose);
+  // Handlers receive the dispatch source ("key" | "named"); never let it reach
+  // openCompose's initialQuery.
+  useShortcutAction('session.compose', () => openCompose());
   useShortcutAction('session.composeDock', useInboxStore.getState().toggleComposeDock);
 
   // Persist user-driven resizes only, once, at drag end (useDragGatedLayoutPersist).
@@ -1466,7 +1478,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <FindBar />
       </ErrorBoundary>
       <RecentSwitcherHost />
-      <UndoTimelineHost />
     </div>
   );
 }

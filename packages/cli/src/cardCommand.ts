@@ -36,6 +36,8 @@ interface BuildOptions {
   task: string;
   evalResult?: string;
   proof?: string;
+  headline?: string;
+  context?: string;
   wrong?: string;
   change?: string;
   recommend?: string;
@@ -141,6 +143,8 @@ async function buildCard(deps: PublishDeps, options: BuildOptions): Promise<void
     proof,
     diff: await branchDiff(base),
     cost: runCost(Array.isArray(runs?.runs) ? runs.runs : []),
+    headline: options.headline,
+    context: options.context,
     wrong: options.wrong,
     change: options.change,
     recommend: options.recommend ? { verdict: options.recommend as ChangeVerdict, why: options.why?.trim() ?? "" } : null,
@@ -193,6 +197,8 @@ export function registerCardCommand(program: Command, deps: PublishDeps): void {
     .requiredOption("--task <ct-N>", "The cause the card is for")
     .option("--eval-result <file>", "The eval station's eval-result.json: verdicts, proven freezes, flipped examples")
     .option("--proof <file>", "A proof recorded outside evals: { before: Check[], after: Check[] }, red then green")
+    .option("--headline <text>", stdinText("The card's title in plain words, under 80 characters"))
+    .option("--context <text>", stdinText("One sentence: what the affected part of the product is and who sees it"))
     .option("--wrong <text>", stdinText("What is wrong, in the user's terms, one or two sentences"))
     .option("--change <text>", stdinText("What behaves differently after this change, one or two sentences"))
     .option("--recommend <verdict>", `${CHANGE_VERDICTS.join(" | ")}`)

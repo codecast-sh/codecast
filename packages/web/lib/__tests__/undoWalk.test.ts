@@ -5,6 +5,7 @@ import {
   PEEK_DELAY_MS,
   WALK_IDLE,
   createFieldUndoGuard,
+  fieldHoldsText,
   fieldOwnsStep,
   walk,
   walkTimer,
@@ -228,5 +229,64 @@ describe("createFieldUndoGuard", () => {
     at(150);
     guard.edited(field);
     expect(guard.declines("undo", field, { ...history, items: [{ id: "a", ts: 100, redoneAt: 200 }] }, () => {})).toBe(false);
+  });
+  // A field holding text keeps its own undo while it has one. A draft the
+  // app seeded (a triage step that lands on a session with one) has none:
+  // nobody edited it, and the browser's undo would do nothing.
+  describe("a field holding text", () => {
+    test("seeded and never edited, the press is the app's", () => {
+      const { guard } = setup();
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+
+    // Chromium's queryCommandEnabled answers for the frame: typing in any
+    // mounted field makes it true for every other one. Only an edit record
+    // of this field keeps the press; the browser's "nothing" drops it.
+    test("a frame-wide yes never keeps the press for a field nobody edited", () => {
+      const { guard, at } = setup();
+      const other = {};
+      at(5);
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(false);
+      expect(guard.declines("undo", field, history, () => {}, true)).toBe(false);
+      at(10);
+      guard.edited(field);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(true);
+      expect(guard.keepsWithText(field, () => {}, false)).toBe(false);
+    });
+
+    test("a kept press whose browser step lands in another field gives the field's later presses to the app", () => {
+      const { guard, at } = setup();
+      const other = {};
+      at(5);
+      guard.edited(field);
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(true);
+      // The browser's undo edited the other field: this one had nothing left.
+      guard.edited(other);
+      expect(guard.keepsWithText(field, () => {}, true)).toBe(false);
+    });
+
+    test("edited, however long ago, it keeps the press until it has nothing left", () => {
+      const { guard, flush, at } = setup();
+      let appSteps = 0;
+      at(10);
+      guard.edited(field);
+      expect(guard.keepsWithText(field, () => { appSteps += 1; })).toBe(true);
+      // No input came of the browser's undo: the field had nothing, the app steps.
+      flush();
+      expect(appSteps).toBe(1);
+      expect(guard.keepsWithText(field, () => {})).toBe(false);
+    });
+  });
+});
+
+describe("fieldHoldsText", () => {
+  test("reads inputs by value, editables by text, and nothing else", () => {
+    expect(fieldHoldsText({ tagName: "TEXTAREA", value: "draft" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "INPUT", value: "" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: " \n" } as any)).toBe(false);
+    expect(fieldHoldsText({ tagName: "DIV", isContentEditable: true, textContent: "note" } as any)).toBe(true);
+    expect(fieldHoldsText({ tagName: "DIV" } as any)).toBeNull();
   });
 });

@@ -5,11 +5,11 @@ import {
   callRecordingRunPrefix,
   callRecordingRunPrefixOfKey,
   callRecordingManifestKey,
+  callRecordingGetUrl,
   callRecordingsBucketFromEnv,
   FRESH_URL_SECONDS,
   liveFrameKey,
   mediaBucketFromEnv,
-  PRIVATE_OBJECT_GET_PARAMS,
   r2FreshGetUrl,
   r2ListKeys,
   r2Presign,
@@ -60,16 +60,22 @@ describe("presigned URLs", () => {
   });
 
   test("a recording's read URL tells the browser not to keep it, signed in, and stable in its window", async () => {
+    for (const k of ENV) delete process.env[k];
+    expect(await callRecordingGetUrl("calls/t1/c1.mp4", "fresh")).toBeNull();
+    process.env.R2_ENDPOINT = bucket.endpoint;
+    process.env.CALL_REC_R2_BUCKET = bucket.bucket;
+    process.env.CALL_REC_R2_ACCESS_KEY_ID = bucket.accessKeyId;
+    process.env.CALL_REC_R2_SECRET_ACCESS_KEY = bucket.secretAccessKey;
     const t0 = Date.parse("2026-10-02T10:00:00Z");
-    const a = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000, W, PRIVATE_OBJECT_GET_PARAMS);
-    const b = await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + W - 1, W, PRIVATE_OBJECT_GET_PARAMS);
+    const a = (await callRecordingGetUrl("calls/t1/c1.mp4", { stable: { at: t0 + 1_000, windowMs: W } }))!;
+    const b = (await callRecordingGetUrl("calls/t1/c1.mp4", { stable: { at: t0 + W - 1, windowMs: W } }))!;
     expect(a).toEqual(b);
     const u = new URL(a.url);
     expect(u.searchParams.get("response-cache-control")).toBe("private, no-store");
     // Part of the signature: the same URL without it is a different signature.
     const plain = new URL((await r2StableGetUrl(bucket, "calls/t1/c1.mp4", t0 + 1_000, W)).url);
     expect(u.searchParams.get("X-Amz-Signature")).not.toBe(plain.searchParams.get("X-Amz-Signature"));
-    const fresh = new URL((await r2FreshGetUrl(bucket, "calls/t1/c1.mp4", t0, PRIVATE_OBJECT_GET_PARAMS)).url);
+    const fresh = new URL((await callRecordingGetUrl("calls/t1/c1.mp4", "fresh"))!.url);
     expect(fresh.searchParams.get("response-cache-control")).toBe("private, no-store");
   });
 

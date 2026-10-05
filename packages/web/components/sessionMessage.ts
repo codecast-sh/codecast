@@ -46,6 +46,7 @@ export {
   isUserMessage,
   parseUserMessage,
   parseProposalMessage,
+  parseTaskCommentMessage,
   formatUserMessage,
   isTeammateMessage,
   stripTeammateFraming,

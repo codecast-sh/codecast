@@ -54,8 +54,8 @@ function fixtures(extra: Record<string, any[]> = {}) {
       { _id: "docs_d1", user_id: ME, team_id: TEAM, workspace: WS, project_id: P, title: "Launch notes", content: "# Launch notes\nthe body", doc_type: "note", created_at: 1, updated_at: NOW - 4 * H },
     ],
     conversations: [
-      // In scope by project_path.
-      { _id: S1, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Growth session", short_id: "jx1", project_path: "/repo/growth", git_remote_url: "git@github.com:acme/growth.git", updated_at: NOW - 2 * H, created_at: 1, message_count: 3 },
+      // In scope through the task it is bound to (S35: a folder decides nothing).
+      { _id: S1, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Growth session", short_id: "jx1", project_path: "/repo/growth", active_task_id: T1, git_remote_url: "git@github.com:acme/growth.git", updated_at: NOW - 2 * H, created_at: 1, message_count: 3 },
       // Out of scope: another project's path, no binding.
       { _id: S2, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Billing session", short_id: "jx2", project_path: "/repo/billing", updated_at: NOW - 1 * H, created_at: 1, message_count: 3 },
     ],
@@ -163,7 +163,7 @@ describe("F2 org.scopeFeed", () => {
     expect(next_cursor).toBeUndefined();
     expect(rows.map((r) => `${r.kind}:${r.short_id ?? r.id}`)).toEqual([
       "task:ct-1", // -1h
-      "session:jx1", // -2h by project_path
+      "session:jx1", // -2h, bound to ct-1
       "plan:pl-1", // -3h by project
       "doc:docs_d1", // -4h
       "task:ct-2", // -5h through the plan
@@ -222,6 +222,102 @@ describe("F2 org.scopeFeed", () => {
     expect(resolved.tasks.map((t) => t.short_id)).toEqual(["ct-2"]);
     const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["session"] });
     expect(rows.map((r) => r.short_id)).toEqual(["jx3"]);
+  });
+
+  // Goals in a scope (initiatives-projects-role-page.md I5): what the owner
+  // said, the moments on the record, and the calls that name the goal.
+  const G = "initiatives_g1";
+  const HIDDEN = "initiatives_g2";
+  const call = (id: string, short_id: string, ago: number, fields: Record<string, any>) => ({
+    _id: id, short_id, room_key: "channel:chat_channels_1", team_id: TEAM, started_by: MATE, status: "ended", started_at: NOW - ago, participants: [{ id: ME, name: "Me" }], routes: [], last_seq: 3, ...fields,
+  });
+  function goalFixtures(extra: Record<string, any[]> = {}) {
+    return fixtures({
+      teams: [{ _id: TEAM, name: "Acme", features: { calls: true } }],
+      initiatives: [
+        {
+          _id: G, user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-1", title: "Broker launch", status: "active", project_ids: [], health: "at_risk", created_at: 1, updated_at: NOW,
+          milestones: [
+            { key: "beta", title: "Private beta open", done_at: NOW - 2 * H },
+            // Not reached: no row.
+            { key: "ga", title: "General release", date: NOW + 100 * H },
+          ],
+          questions: [
+            { key: "seat", text: "Do we price per seat?", at: NOW - 30 * H, by: "@mate", answer: "Per seat", answered_at: NOW - 3 * H },
+            { key: "tier", text: "Is there a free tier?", at: NOW - 5 * H, by: "Mate" },
+          ],
+          decisions: [{ key: "brokers", text: "Ship to brokers first", at: NOW - 6 * H, by: "@me", source: { kind: "call", ref: "cl-7:14", quote: "brokers first" } }],
+        },
+        // Routed to the team, readable only by its owner: dropped from the scope.
+        { _id: HIDDEN, user_id: MATE, team_id: TEAM, workspace: `user:${MATE}`, short_id: "in-2", title: "Quiet goal", status: "active", project_ids: [], health: "none", created_at: 1, updated_at: NOW, decisions: [{ key: "x", text: "Hidden decision", at: NOW - H / 2 }] },
+      ],
+      initiative_updates: [
+        { _id: "iu1", initiative_id: G, user_id: ME, team_id: TEAM, workspace: WS, body: "Beta slipped a week\nWaiting on the pricing page.", health: "at_risk", by: { kind: "user", user_id: ME }, at: NOW - 1 * H },
+        { _id: "iu2", initiative_id: HIDDEN, user_id: MATE, team_id: TEAM, workspace: `user:${MATE}`, body: "Hidden update", health: "on_track", by: { kind: "user", user_id: MATE }, at: NOW },
+      ],
+      transcripts: [
+        // Names the goal by its title.
+        call("transcripts_c1", "cl-5", 4 * H, { title: "Weekly", summary: "The broker launch is a week late." }),
+        // Says nothing of the goal; a decision on its record cites it.
+        call("transcripts_c2", "cl-7", 7 * H, { title: "Planning", summary: "Sequencing." }),
+        // in-10 is not in-1.
+        call("transcripts_c3", "cl-8", H / 2, { title: "in-10 sync", summary: "Another goal." }),
+        // Names the goal, in a room the caller was never in and cannot enter.
+        call("transcripts_c4", "cl-9", H / 4, { room_key: "channel:chat_channels_priv", participants: [{ id: MATE, name: "Mate" }], title: "Side talk", summary: "in-1 is in trouble." }),
+      ],
+      ...extra,
+    });
+  }
+  const goalScope = (db: any, initiative_ids: string[]) => resolveScope(ctxOf(db), ME as any, { scope: { project_ids: [], plan_ids: [], initiative_ids }, team_id: TEAM });
+
+  test("a goal in an explicit scope brings its updates, the moments on its record and the calls that name it, in time order", async () => {
+    const db = goalFixtures();
+    const resolved = (await goalScope(db, ["in-1", G, "in-2", "in-404"]))!;
+    // Named twice, admitted once; the goal the caller cannot read and the one that is not there are dropped.
+    expect(resolved.initiative_ids).toEqual([G as any]);
+    const { rows, next_cursor } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW });
+    expect(next_cursor).toBeUndefined();
+    expect(rows.map((r) => `${r.kind}:${r.state}:${r.title}`)).toEqual([
+      "update:at_risk:Beta slipped a week", // -1h
+      "goal:reached:Private beta open", // -2h
+      "goal:answered:Do we price per seat?", // -3h, the moment it was answered, not asked
+      "call:ended:Weekly", // -4h, names the goal's title
+      "goal:asked:Is there a free tier?", // -5h
+      "goal:decided:Ship to brokers first", // -6h
+      "call:ended:Planning", // -7h, cited by the decision's source
+    ]);
+    expect(rows.every((r) => r.kind === "call" || r.short_id === "in-1")).toBe(true);
+    expect(rows[0]).toMatchObject({ id: "iu1", href: "/initiatives/in-1", actor: { name: "Me" }, preview: "Waiting on the pricing page." });
+    expect(rows[1]).toMatchObject({ id: `${G}:milestones:beta`, href: "/initiatives/in-1" });
+    expect(rows[2]).toMatchObject({ id: `${G}:questions:seat`, preview: "Per seat" });
+    expect(rows[3]).toMatchObject({ id: "transcripts_c1", short_id: "cl-5", href: "/calls/cl-5", actor: { name: "Mate" }, preview: "The broker launch is a week late." });
+    expect(rows[4]).toMatchObject({ id: `${G}:questions:tier`, actor: { name: "Mate" } });
+    expect(rows[5]).toMatchObject({ id: `${G}:decisions:brokers`, actor: { name: "@me" }, preview: "brokers first" });
+  });
+
+  test("goal rows page by the cursor with no gaps or repeats, and the kind filter narrows them", async () => {
+    const db = goalFixtures();
+    const resolved = (await goalScope(db, ["in-1"]))!;
+    const all = (await computeScopeFeed(ctxOf(db), resolved, { now: NOW })).rows.map((r) => r.id);
+    const seen: string[] = [];
+    let cursor: string | undefined;
+    for (let pages = 0; pages < 10; pages++) {
+      const page = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, limit: 2, cursor });
+      seen.push(...page.rows.map((r) => r.id));
+      if (!page.next_cursor) break;
+      cursor = page.next_cursor;
+    }
+    expect(seen).toEqual(all);
+    const only = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["goal"] });
+    expect(only.rows.map((r) => r.state)).toEqual(["reached", "answered", "asked", "decided"]);
+  });
+
+  test("a role's scope names no goals, and a scope without goals reads no calls", async () => {
+    const db = goalFixtures();
+    const { resolved } = await scoped(db);
+    expect(resolved.initiative_ids).toEqual([]);
+    const { rows } = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["goal", "call"] });
+    expect(rows).toEqual([]);
   });
 
   test("a session image gives the row a thumbnail", async () => {

@@ -3,7 +3,7 @@
 // per change kind, then the accept stub, supersession, skip and focus.
 import { isOrgQuietChange } from "@codecast/shared/contracts/orgProposal";
 import { describe, expect, it } from "bun:test";
-import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
+import { focusTargetNodeId, ghostNodeIdFor, ghostsFor, layoutOrgTree, personNodeId, rectsOverlap, refResolves, resolveOrgParentRef, roleNodeId, roleMetaLine, runningSessions, wrappedLines, sessionNodeId, ORG_SIZES, type OrgLayoutNode } from "./orgLayout";
 import { ORG_FIXTURE } from "./orgFixture";
 import { ORG_STAFFING_FIXTURE_PROPOSAL } from "./orgStaffingFixture";
 import type { OrgChange, OrgProposalChange } from "./orgStaffingTypes";
@@ -114,15 +114,15 @@ describe("ghostsFor", () => {
     expect(nodes.filter((n) => n.kind === "role").length).toBe(1);
   });
 
-  it("move: a dashed edge to the new parent and the old edge faded; accepted re-parents the row", () => {
+  it("move: a proposed edge to the new parent and the old edge faded; accepted re-parents the row", () => {
     const c = change({ kind: "move", handle: "growth", reports_to: "Samvit Jain" });
     const { nodes, edges, ghosts } = lay([c]);
     const old = edges.find((e) => e.target === GROWTH && e.kind === "tree")!;
     expect(old.source).toBe(ME);
     expect(old.faded).toBe(true);
-    const dashed = edges.find((e) => e.kind === "ghost" && e.change_id === c._id)!;
-    expect(dashed.source).toBe(SAM);
-    expect(dashed.target).toBe(GROWTH);
+    const proposed = edges.find((e) => e.kind === "ghost" && e.change_id === c._id)!;
+    expect(proposed.source).toBe(SAM);
+    expect(proposed.target).toBe(GROWTH);
     const role = byId(nodes).get(GROWTH)!;
     if (role.kind !== "role") throw new Error("role");
     expect(role.move?.to).toEqual({ kind: "user", user_id: "fixture-user-sam" });
@@ -148,7 +148,7 @@ describe("ghostsFor", () => {
     expect(acc.edges.find((e) => e.target === roleNodeId(child._id))?.source).toBe(ME);
   });
 
-  it("scope, trust, routine: a dashed chip carrying describeOrgChange's line on the handle's node; a limit draws nothing (S23.2)", () => {
+  it("scope, trust, routine: a chip carrying describeOrgChange's line on the handle's node; a limit draws nothing (S23.2)", () => {
     const cs = [
       change({ kind: "scope", handle: "growth", add: ["Platform"] }),
       change({ kind: "budget", handle: "growth", caps: { tokens_per_day: 800_000 } }),
@@ -164,9 +164,9 @@ describe("ghostsFor", () => {
       '@growth runs "Weekly growth review" every week',
     ]);
     expect(JSON.stringify(ghosts.chips)).not.toMatch(/800|tokens/);
-    // The card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
-    const role = byId(nodes).get(GROWTH)!;
-    expect(role.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
+    // The middle card grows by one chip row (on top of its standing line's row) so the layout never overlaps.
+    const role = byId(nodes).get(GROWTH) as Extract<OrgLayoutNode, { kind: "role" }>;
+    expect(role.mid).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
     // Accepted stays as a solid chip; applied drops.
     expect(lay([{ ...cs[2], status: "accepted" }]).ghosts.chips[GROWTH]?.[0].status).toBe("accepted");
@@ -179,7 +179,7 @@ describe("ghostsFor", () => {
     const c = change({ kind: "trust", handle: "nobody", trust: "decide" });
     const { ghosts, nodes } = lay([c]);
     expect(ghosts.chips[ME]?.[0].change_id).toBe(c._id);
-    expect(byId(nodes).get(ME)!.h).toBe(ORG_SIZES.person.h + ORG_SIZES.chipRow);
+    expect((byId(nodes).get(ME) as Extract<OrgLayoutNode, { kind: "person" }>).mid).toBe(ORG_SIZES.person.h + ORG_SIZES.chipRow);
   });
 
   it("file: a chip on the role whose scope names the plan or project, else the viewer", () => {
@@ -364,15 +364,22 @@ describe("a role's standing line", () => {
     const withLine = ORG_FIXTURE.roles.find((r) => r.standing?.state_line || r.standing?.state)!;
     expect(withLine).toBeDefined();
     const { nodes } = lay([]);
-    const node = byId(nodes).get(roleNodeId(withLine._id))!;
-    expect(node.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow);
+    type RoleNode = Extract<OrgLayoutNode, { kind: "role" }>;
+    const node = byId(nodes).get(roleNodeId(withLine._id)) as RoleNode;
+    expect(node.mid).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow);
+    // The box the layout reserves is the close card's (orgZoom): the middle
+    // height plus the line under the name on its own row, the charter, the
+    // open work line and the running sessions with the gap above them.
+    const running = runningSessions(withLine).length;
+    const metaLines = wrappedLines(roleMetaLine(withLine), ORG_SIZES.closeMetaChars);
+    expect(node.h).toBe(node.mid + ORG_SIZES.closeMetaRow + (metaLines - 1) * ORG_SIZES.closeMetaLine + (withLine.charter ? ORG_SIZES.charterRows : 0) + ORG_SIZES.workRow + (running ? running * ORG_SIZES.runningRow + 6 : 0));
     // Without a standing line the seat is the base height; with a chips row both stack.
     const bare = { ...ORG_FIXTURE, roles: ORG_FIXTURE.roles.map((r) => ({ ...r, standing: undefined })) };
-    const plain = layoutOrgTree(bare, none).nodes.find((n) => n.id === roleNodeId(withLine._id))!;
-    expect(plain.h).toBe(ORG_SIZES.role.h);
+    const plain = layoutOrgTree(bare, none).nodes.find((n) => n.id === roleNodeId(withLine._id)) as RoleNode;
+    expect(plain.mid).toBe(ORG_SIZES.role.h);
     const c = change({ kind: "trust", handle: withLine.handle, trust: "decide" });
-    const chipped = byId(lay([c]).nodes).get(roleNodeId(withLine._id))!;
-    expect(chipped.h).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
+    const chipped = byId(lay([c]).nodes).get(roleNodeId(withLine._id)) as RoleNode;
+    expect(chipped.mid).toBe(ORG_SIZES.role.h + ORG_SIZES.standingRow + ORG_SIZES.chipRow);
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
   });
 });

@@ -63,7 +63,11 @@ export const start = mutation({
       if (conv.inbox_pinned_at) blockers.push("Pinned sessions are not offered for resource offload");
       const children = await ctx.db.query("conversations").withIndex("by_parent_conversation_id", q => q.eq("parent_conversation_id", conv._id)).collect();
       const teammates = await ctx.db.query("conversations").withIndex("by_spawned_by", q => q.eq("spawned_by_conversation_id", conv._id)).collect();
-      if ([...children, ...teammates.filter(c => c.agent_team_name)].some(c => c.status !== "completed" && !c.inbox_killed_at)) blockers.push("This session has unfinished subagents");
+      // A child still working runs its own processes on this machine. A row with
+      // none is finished or ran inside the parent (a Task subagent, whose row is
+      // never marked completed) and moves with it.
+      const running = new Set(source.snapshot.processes.map(p => p.sessionId).filter(Boolean));
+      if ([...children, ...teammates.filter(c => c.agent_team_name)].some(c => c.status !== "completed" && !c.inbox_killed_at && running.has(c.session_id))) blockers.push("This session has unfinished subagents");
       const processes = source.snapshot.processes.filter(p => p.sessionId === selection.session_id);
       if (!processes.length) blockers.push("Exclusive process ownership is no longer measured");
       if (source.snapshot.processes.some(p => p.sharedSessionIds?.includes(selection.session_id))) blockers.push("This session shares a process with other sessions");
@@ -91,33 +95,59 @@ export const start = mutation({
       }
     }
     if (args.dry_run) return { checks, batches: [] };
-    const failed = checks.find(c => c.blockers.length || c.unconfirmed.length);
-    if (failed) return refuse([...failed.blockers, ...failed.unconfirmed.map(p => `Confirm: ${p}`)].join("; "));
+    // A session that fails its checks stays here with its own reason; the rest
+    // of the batch still moves. Without a batch identity there is nowhere to
+    // record a per-session refusal, so the request is refused whole.
+    const refusal = new Map(checks.filter(c => c.blockers.length || c.unconfirmed.length)
+      .map(c => [c.session_id, [...c.blockers, ...c.unconfirmed.map(p => `Confirm: ${p}`)].join("; ")]));
+    if (refusal.size && (!intent || !args.batch_ids)) return refuse([...refusal.values()][0]);
     const batches = [];
-    for (const [to_device_id, conversation_ids] of groups) {
-      const result = await performCreateBatch(ctx, userId, { conversation_ids, to_device_id, batch_id: args.batch_ids?.find(b => b.destination_id === to_device_id)?.batch_id, resource_offload: intent, wait_for_idle_ms: args.wait_for_idle_ms, interrupt_on_timeout: false }, now);
-      if (result.skipped.length) throw new Error("The selection changed during preflight; refresh and try again");
-      batches.push(result);
+    for (const [to_device_id] of groups) {
+      const batch_id = args.batch_ids?.find(b => b.destination_id === to_device_id)?.batch_id;
+      const here = args.selections.filter(s => s.destination_id === to_device_id);
+      const moving = here.filter(s => !refusal.has(s.session_id));
+      const refused = here.filter(s => refusal.has(s.session_id));
+      if (moving.length) {
+        const result = await performCreateBatch(ctx, userId, { conversation_ids: moving.map(s => s.conversation_id), to_device_id, batch_id, resource_offload: intent, wait_for_idle_ms: args.wait_for_idle_ms, interrupt_on_timeout: false }, now);
+        if (result.skipped.length) throw new Error("The selection changed during preflight; refresh and try again");
+        batches.push(result);
+      }
+      if (refused.length && intent && batch_id) {
+        await recordRefusal(ctx, userId, intent, [{ destination_id: to_device_id, batch_id }], (s) => refusal.get(s.session_id), { batchExists: moving.length > 0, position: moving.length });
+        if (!moving.length) batches.push({ batch_id });
+      }
     }
-    return { checks, batches };
+    const moved = batches.some(b => "rows" in b && b.rows.length > 0);
+    return { checks, batches, ...(moved || !refusal.size ? {} : { error: [...refusal.values()][0] }) };
   },
 });
 
-async function recordRefusal(ctx: { db: any }, userId: string, intent: ResourceOffloadIntent, ids: ResourceOffloadBatchId[], reason: string) {
+/**
+ * Record refused sessions as failed rows, so the run shows why each stayed.
+ * `reason` is one string for a whole refused request, or per selection (a
+ * selection it returns nothing for moved and is not recorded). `into` adds the
+ * rows to a batch that already holds the sessions that did move.
+ */
+async function recordRefusal(ctx: { db: any }, userId: string, intent: ResourceOffloadIntent, ids: ResourceOffloadBatchId[],
+  reason: string | ((s: ResourceOffloadIntent["selections"][number]) => string | undefined), into?: { batchExists: boolean; position: number }) {
   const now = Date.now();
   for (const batch of ids) {
-    await ctx.db.insert("migration_batches", { user_id: userId, batch_id: batch.batch_id,
-      to_device_id: batch.destination_id, created_at: now, updated_at: now, wait_for_idle_ms: intent.wait_for_idle_ms,
-      interrupt_on_timeout: false, concurrency: 0, executor_device_ids: [], resource_offload: intent });
-    let position = 0;
+    if (!into?.batchExists) {
+      await ctx.db.insert("migration_batches", { user_id: userId, batch_id: batch.batch_id,
+        to_device_id: batch.destination_id, created_at: now, updated_at: now, wait_for_idle_ms: intent.wait_for_idle_ms,
+        interrupt_on_timeout: false, concurrency: 0, executor_device_ids: [], resource_offload: intent });
+    }
+    let position = into?.position ?? 0;
     for (const selection of intent.selections.filter(s => s.destination_id === batch.destination_id)) {
+      const why = typeof reason === "string" ? reason : reason(selection);
+      if (!why) continue;
       const conv = await ctx.db.get(selection.conversation_id);
       if (!conv || conv.user_id !== userId) continue;
       await ctx.db.insert("session_migrations", { user_id: userId, batch_id: batch.batch_id,
         conversation_id: conv._id, session_id: selection.session_id, ...(conv.title ? { title: conv.title } : {}),
         ...(conv.short_id ? { short_id: conv.short_id } : {}), direction: "to_cloud", from_device_id: intent.source_device_id,
         to_device_id: batch.destination_id, executor_device_id: intent.source_device_id, status: "failed",
-        error: reason, stage: "preflight refused; session left in place", position: position++, attempt: 0,
+        error: why, stage: "preflight refused; session left in place", position: position++, attempt: 0,
         created_at: now, updated_at: now, finished_at: now });
     }
   }

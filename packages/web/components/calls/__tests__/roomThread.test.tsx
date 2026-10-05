@@ -176,6 +176,73 @@ test("an event row names who did what, explains an agent once, and the room's ow
   await r.unmount();
 });
 
+test("a deleted recording says which stretch went, its start and stop say they are gone, and every recording line holds the call clock", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const me = { user_id: "u-me", user_name: "Ashot P", text: "", mine: false, agent: null, transcript_id: "t1" };
+  const rows = [
+    { ...me, _id: "r1", at: START + 132_000, event: "record_on", event_run_id: "run1" },
+    { ...me, _id: "r2", at: START + 371_000, event: "record_off", event_reason: "pressed", event_run_id: "run1" },
+    // run1's save failed after its stop: said as its own line, with no moment.
+    { ...me, _id: "r2b", at: START + 1_600_000, event: "record_lost", event_reason: "failed", event_run_id: "run1", text: "LiveKit never finished saving this recording." },
+    { ...me, _id: "r3", at: START + 1_930_000, event: "record_on", event_run_id: "run2" },
+    { ...me, _id: "r4", at: START + 2_045_000, event: "record_off", event_reason: "huddle_ended", event_run_id: "run2" },
+    { ...me, _id: "r5", at: START + 4_000_000, event: "record_deleted", event_run_id: "run2", event_span: { from_ms: 1_930_000, to_ms: 2_045_000 } },
+  ];
+  // The page's clock: run1 still has video at its moments, run2 has none.
+  const momentAt = (at: number) => {
+    const ms = at - START;
+    return { label: `c${Math.round(ms / 1000)}`, onSeek: ms < 400_000 ? () => {} : null };
+  };
+  const selection = { isSelected: () => false, onTurnClick: () => {}, momentAt };
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ status: "ended", ended_at: START + 2_050_000 })} rows={rows as any} liveTranscriptId={null} surface="page" seated={false} selection={selection} />,
+  );
+  const lines = [...r.container.querySelectorAll(".rt-event")];
+  const words = lines.map((e) => e.querySelector(".flex-1")?.textContent);
+  expect(words).toEqual([
+    "You started recording",
+    "You stopped recording",
+    "Recording could not be saved. LiveKit never finished saving this recording.",
+    "You started recording (deleted)",
+    "Recording stopped when the huddle ended (deleted)",
+    "You deleted the recording from 32:10 to 34:05",
+  ]);
+  // A moment with video is a button; one without is plain time in the same
+  // column; the delete holds the column empty.
+  const clocks = lines.map((e) => {
+    const c = e.querySelector(".min-w-\\[3\\.25rem\\]");
+    return c ? [c.tagName, c.textContent] : null;
+  });
+  expect(clocks).toEqual([
+    ["BUTTON", "c132"],
+    ["BUTTON", "c371"],
+    ["SPAN", ""],
+    ["SPAN", "c1930"],
+    ["SPAN", "c2045"],
+    ["SPAN", ""],
+  ]);
+  await r.unmount();
+});
+
+// A picture of the call put on a public link is something the room hears,
+// with the moment it shows; a kind of line this build does not know says
+// nothing rather than reading as a transcription switch.
+test("a picture shared by link is a line with its moment; an unknown kind of line says nothing", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
+  const ann = { user_id: "u-ann", user_name: "Ann Lee", mine: false, agent: null, transcript_id: "t1" };
+  const rows = [
+    { ...ann, _id: "f1", at: START + 200_000, event: "frame_shared", text: "cl-117@2:30" },
+    { ...ann, _id: "f2", at: START + 210_000, event: "something_newer", text: "" },
+  ];
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ status: "ended", ended_at: START + 2_050_000 })} rows={rows as any} liveTranscriptId={null} surface="page" seated={false} />,
+  );
+  const words = [...r.container.querySelectorAll(".rt-event")].map((e) => e.querySelector(".flex-1")?.textContent);
+  expect(words).toEqual(["Ann shared a picture of 2:30 by link"]);
+  expect(r.container.textContent).not.toContain("switched transcription");
+  await r.unmount();
+});
+
 test("on the stage before transcription starts, an earlier call's events do not show", async () => {
   useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [] } as any);
   const own = { conversation_id: "conv_room", short_id: "jx7room", title: "Room agent", agent_type: "claude_code" };

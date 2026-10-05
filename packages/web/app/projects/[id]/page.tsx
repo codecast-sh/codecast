@@ -2,7 +2,7 @@
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShareControl } from "../../../components/ShareControl";
 import { useState, useMemo, useCallback } from "react";
-import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
@@ -13,6 +13,12 @@ import { TaskDetailContent } from "../../tasks/[id]/page";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { projectDotClass } from "../../../lib/projectColors";
+import { PROJECT_STATUS, PROJECT_STATUS_ORDER, projectStatusOf } from "../../../lib/projectStatus";
+import { projectTaskCounts } from "@codecast/shared/tasks";
+import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useIsPhone } from "../../../hooks/useIsPhone";
+import { useTasksBackfilled } from "../../../hooks/useInitiatives";
+import { cn } from "../../../lib/utils";
 import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { buildBurndown, buildProgressSeries } from "../../../lib/projectProgress";
 import { ProgressChart } from "../../../components/ProgressChart";
@@ -39,13 +45,11 @@ import {
   ListChecks,
   FileText,
   Pin,
-  Pencil,
-  Check,
-  X,
   ChevronRight,
   ChevronDown,
   Activity,
   CalendarClock,
+  CalendarDays,
   History,
   Megaphone,
   FolderOpen,
@@ -56,6 +60,8 @@ import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { ProjectLeadChip } from "../../../components/charter/ProjectLeadChip";
 import { useProjectLead } from "../../../hooks/useProjectLead";
 import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
+import { ProgressBar, TargetDate } from "../../../components/initiatives/InitiativeAtoms";
+import { IntentHeader, IntentIdChip, IntentPickChip, IntentTabs, useIntentTab, type IntentTab } from "../../../components/initiatives/IntentHeader";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 import { InlineEdit } from "../../../components/org/OrgScopePanel";
@@ -203,26 +209,28 @@ function SectionHeader({ icon: Icon, label, count }: { icon: typeof Target; labe
   );
 }
 
+// Which face of the project you're on. Tasks is the default: a project is
+// somewhere to work; the others are the ways you step back from it: overview
+// for shape, updates for narration, timeline for the record.
+const PROJECT_TABS = ["tasks", "overview", "updates", "timeline"] as const;
+type ProjectTab = (typeof PROJECT_TABS)[number];
+const PROJECT_ACCENT = "var(--sol-cyan)";
+const PROJECT_STATUS_OPTIONS = PROJECT_STATUS_ORDER.map((key) => {
+  const Icon = PROJECT_STATUS[key].icon;
+  return { key, label: PROJECT_STATUS[key].label, face: <Icon className={cn("w-3.5 h-3.5", PROJECT_STATUS[key].color)} /> };
+});
+
 function ProjectDetailContent() {
-  const router = useRouter();
   const params = useParams();
   const projectId = params.id as string;
 
   useSyncProjects();
   useSyncTasks();
 
-  // Which face of the project you're on. Tasks is the default: a project is
-  // somewhere to work; the others are the ways you step back from it —
-  // overview for shape, updates for narration, timeline for the record.
-  const searchParams = useSearchParams();
-  const tabParam = searchParams.get("tab");
-  const tab = tabParam === "overview" || tabParam === "updates" || tabParam === "timeline" ? tabParam : "tasks";
-  const setTab = useCallback((next: string) => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (next === "tasks") params.delete("tab"); else params.set("tab", next);
-    const qs = params.toString();
-    router.replace(qs ? `/projects/${projectId}?${qs}` : `/projects/${projectId}`);
-  }, [searchParams, router, projectId]);
+  const { tab, setTab } = useIntentTab(PROJECT_TABS, `/projects/${projectId}`);
+  const phone = useIsPhone();
+  const now = useCoarseNow(60_000);
+  const counted = useTasksBackfilled();
   useSyncPlans();
   useSyncDocs();
 
@@ -241,8 +249,6 @@ function ProjectDetailContent() {
   const wsPlans = useWorkspaceCollection<PlanItem>("plans");
   const wsDocs = useWorkspaceCollection<DocItem>("docs");
 
-  const [editingTitle, setEditingTitle] = useState(false);
-  const [titleDraft, setTitleDraft] = useState("");
   const updateProject = useInboxStore((s) => s.updateProject);
 
   // The org tree feeds the store per view, the way the org page mounts it;
@@ -323,20 +329,9 @@ function ProjectDetailContent() {
     [wsDocs, projectId]
   );
 
-  const handleStartEdit = useCallback(() => {
-    if (project) {
-      setTitleDraft(project.title);
-      setEditingTitle(true);
-    }
-  }, [project]);
-
-  const handleSaveTitle = useCallback(() => {
-    const trimmed = titleDraft.trim();
-    if (trimmed && trimmed !== project?.title) {
-      updateProject(projectId, { title: trimmed });
-    }
-    setEditingTitle(false);
-  }, [titleDraft, project?.title, projectId, updateProject]);
+  // How far along, by the rule the board and a goal's bar both count with
+  // (@codecast/shared/tasks projectTaskCounts).
+  const progress = useMemo(() => projectTaskCounts(wsTasks as any[], [projectId]), [wsTasks, projectId]);
 
   const handleStatusChange = useCallback((status: string) => {
     updateProject(projectId, { status });
@@ -371,103 +366,45 @@ function ProjectDetailContent() {
     );
   }
 
-  const statusCfg: Record<string, { icon: typeof Circle; color: string; label: string }> = {
-    active: { icon: CircleDot, color: "text-sol-cyan", label: "Active" },
-    planning: { icon: Circle, color: "text-sol-violet", label: "Planning" },
-    paused: { icon: PauseCircle, color: "text-sol-yellow", label: "Paused" },
-    done: { icon: CheckCircle2, color: "text-sol-green", label: "Done" },
-  };
-  const status = statusCfg[project.status] || statusCfg.active;
+  const status = projectStatusOf(project.status);
   const StatusIcon = status.icon;
 
   const hasContent = projectPlans.length > 0 || projectTasks.length > 0 || projectDocs.length > 0;
+  // The Tasks tab carries no count of its own: the list below reports what it
+  // is actually showing (the board hides agent-internal tasks by default), and
+  // the project's raw totals sit in the header's chips. Two numbers that
+  // disagree are worse than one.
+  const tabs: IntentTab<ProjectTab>[] = [
+    { key: "tasks", label: "Tasks", icon: ListChecks },
+    { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
+    { key: "updates", label: "Updates", icon: Megaphone },
+    { key: "timeline", label: "Timeline", icon: History },
+  ];
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Header */}
-      <div className="px-6 py-4 border-b border-sol-border/20">
-        <div className="flex items-center gap-3 mb-3 min-w-0">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${projectDotClass(project)}`} />
-          {editingTitle ? (
-            <div className="flex items-center gap-2 flex-1">
-              <input
-                type="text"
-                value={titleDraft}
-                onChange={(e) => setTitleDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSaveTitle();
-                  if (e.key === "Escape") setEditingTitle(false);
-                }}
-                autoFocus
-                className="flex-1 bg-transparent text-base font-medium text-sol-text outline-none border-b border-sol-cyan/40"
-              />
-              <button onClick={handleSaveTitle} className="text-sol-green hover:text-sol-green/80"><Check className="w-4 h-4" /></button>
-              <button onClick={() => setEditingTitle(false)} className="text-sol-text-dim hover:text-sol-text"><X className="w-4 h-4" /></button>
-            </div>
-          ) : (
-            <h1
-              className="text-base font-medium text-sol-text cursor-pointer hover:text-sol-text/80 transition-colors group flex items-center gap-2"
-              onClick={handleStartEdit}
-            >
-              {project.title}
-              <Pencil className="w-3 h-3 text-sol-text-dim opacity-0 group-hover:opacity-100 transition-opacity" />
-            </h1>
-          )}
-          {!editingTitle && <ProjectLeadChip projectId={project._id} editable />}
-          <ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: ((storeProjects as any)[project._id] ?? project).share_token }} className="ml-auto" />
-        </div>
-
-        {/* The project's folder (org-staffing.md S35): where its work lives.
-            It names the team of a new session there and groups evidence for
-            the review; it holds no session, so editing it moves nothing. */}
-        <div className="ml-5 mt-2 flex items-center gap-1.5 text-[11px] text-sol-text-dim" title="The folder this project's work lives in. It holds no session: a lead takes a session only for the task or plan it is bound to, or when someone files it there.">
-          <FolderOpen className="w-3 h-3 shrink-0" />
-          <span className="shrink-0">Folder</span>
-          <InlineEdit
-            value={project.project_path ?? ""}
-            placeholder="none"
-            canEdit
-            ariaLabel="Project folder"
-            className="font-mono text-[11px] text-sol-text-dim w-auto min-w-[8rem] max-w-full truncate"
-            onSave={(v) => { const next = v.trim(); if (next !== (project.project_path ?? "")) updateProject(projectId, { project_path: next || null }); }}
-          />
-        </div>
-
-        <RepositoryLinks projectId={project._id} />
-
-        {/* The goals this project carries (initiatives-projects-role-page.md
-            I1), under its lead. Nothing renders when it is in none. */}
-        <ProjectInitiatives projectId={project._id} label="Part of" />
-
-        <div className="flex items-center gap-4 ml-5">
-          {/* Status dropdown */}
-          <div className="relative group/status">
-            <button className={`flex items-center gap-1.5 text-xs ${status.color}`}>
-              <StatusIcon className="w-3.5 h-3.5" />
-              {status.label}
-            </button>
-            <div className="absolute left-0 top-full mt-1 bg-sol-bg border border-sol-border/40 rounded-md shadow-lg py-1 hidden group-hover/status:block z-10 min-w-[120px]">
-              {Object.entries(statusCfg).map(([key, cfg]) => {
-                const Icon = cfg.icon;
-                return (
-                  <button
-                    key={key}
-                    onClick={() => handleStatusChange(key)}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs hover:bg-sol-bg-alt transition-colors ${
-                      project.status === key ? "text-sol-text" : "text-sol-text-muted"
-                    }`}
-                  >
-                    <Icon className={`w-3 h-3 ${cfg.color}`} />
-                    {cfg.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {project.description && (
-            <span className="text-xs text-sol-text-dim">{project.description}</span>
-          )}
+    <div className="h-full flex flex-col" data-project-page={project._id} data-scope-tab-active={tab}>
+      {/* The header a goal's page wears (components/initiatives/IntentHeader):
+          the same title, the same line of chips, the same tab strip. */}
+      <IntentHeader
+        stripeClassName={projectDotClass(project)}
+        accent={PROJECT_ACCENT}
+        back={{ href: "/projects", label: "Back to projects" }}
+        glyph={<span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${projectDotClass(project)}`} />}
+        title={project.title}
+        onRename={(title) => updateProject(projectId, { title })}
+        renameLabel="Project title"
+        titleData={{ "data-project-title": "" }}
+        idChip={project.short_id ? <IntentIdChip id={project.short_id} accent={PROJECT_ACCENT} /> : null}
+        share={<ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: ((storeProjects as any)[project._id] ?? project).share_token }} />}
+        phone={phone}
+        // Line two, in a goal's order: status, who leads it, when it is due,
+        // how far along, what is filed here, and the goals it is part of.
+        chips={<>
+          <IntentPickChip data-project-pick="status" options={PROJECT_STATUS_OPTIONS} value={project.status} width="w-44" onPick={(key) => { if (key && key !== project.status) handleStatusChange(key); }}>
+            <StatusIcon className={cn("w-3.5 h-3.5", status.color)} />
+            <span style={{ color: "var(--sol-text-secondary)" }}>{status.label}</span>
+          </IntentPickChip>
+          <ProjectLeadChip projectId={project._id} editable />
 
           {/* Deadline. Click to change; the burndown projects against it. */}
           {editingDeadline ? (
@@ -497,83 +434,73 @@ function ProjectDetailContent() {
           ) : (
             <button
               onClick={() => setEditingDeadline(true)}
-              className={`flex items-center gap-1 text-xs tabular-nums whitespace-nowrap flex-shrink-0 transition-colors ${
-                project.target_date
-                  ? "text-sol-text-dim hover:text-sol-text"
-                  : "text-sol-text-dim/50 hover:text-sol-text-dim"
-              }`}
+              className="inline-flex items-center gap-1.5 -mx-1 px-1 h-6 rounded-md transition-colors hover:bg-sol-bg-highlight/70"
               title="Set the project deadline"
+              data-project-pick="target"
             >
-              <CalendarClock className="w-3 h-3" />
+              <CalendarDays className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />
               {project.target_date
-                ? `Due ${new Date(project.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}`
-                : "Set deadline"}
+                ? <TargetDate ts={project.target_date} now={now} done={project.status === "done"} />
+                : <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No deadline</span>}
             </button>
           )}
 
-          {/* Summary counts */}
-          <div className="flex items-center gap-3 text-[11px] text-sol-text-dim ml-auto cq-hide-compact">
+          <ProgressBar progress={progress} partial={!counted} className="w-[150px]" />
+
+          {/* What is filed here: plans, tasks, docs. */}
+          <span className="inline-flex items-center gap-3 text-[11.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-project-counts>
             {projectPlans.length > 0 && (
-              <span className="flex items-center gap-1">
-                <Target className="w-3 h-3" /> {projectPlans.length}
-              </span>
+              <span className="inline-flex items-center gap-1" title="Plans"><Target className="w-3 h-3" /> {projectPlans.length}</span>
             )}
-            <span className="flex items-center gap-1">
-              <ListChecks className="w-3 h-3" /> {projectTasks.length}
-            </span>
+            <span className="inline-flex items-center gap-1" title="Tasks"><ListChecks className="w-3 h-3" /> {projectTasks.length}</span>
             {projectDocs.length > 0 && (
-              <span className="flex items-center gap-1">
-                <FileText className="w-3 h-3" /> {projectDocs.length}
-              </span>
+              <span className="inline-flex items-center gap-1" title="Docs"><FileText className="w-3 h-3" /> {projectDocs.length}</span>
             )}
+          </span>
+
+          {/* The goals this project carries (initiatives-projects-role-page.md
+              I1), each with its first number. Nothing renders when it is in none. */}
+          <ProjectInitiatives projectId={project._id} size="xs" label="Part of" metrics="chip" />
+        </>}
+        extra={<>
+          {project.description && (
+            <p className="mt-2 max-w-[80ch] text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>{project.description}</p>
+          )}
+
+          {/* The project's folder (org-staffing.md S35): where its work lives.
+              It names the team of a new session there and groups evidence for
+              the review; it holds no session, so editing it moves nothing. */}
+          <div className="mt-2 flex items-center gap-1.5 text-[11px] text-sol-text-dim" title="The folder this project's work lives in. It holds no session: a lead takes a session only for the task or plan it is bound to, or when someone files it there.">
+            <FolderOpen className="w-3 h-3 shrink-0" />
+            <span className="shrink-0">Folder</span>
+            <InlineEdit
+              value={project.project_path ?? ""}
+              placeholder="none"
+              canEdit
+              ariaLabel="Project folder"
+              className="font-mono text-[11px] text-sol-text-dim w-auto min-w-[8rem] max-w-full truncate"
+              onSave={(v) => { const next = v.trim(); if (next !== (project.project_path ?? "")) updateProject(projectId, { project_path: next || null }); }}
+            />
           </div>
-        </div>
 
-        {/* The charter sits above the tabs: the direction every tab serves. */}
-        <CharterBlock
-          kind="project"
-          title={project.title}
-          charter={charter}
-          canEdit
-          onChange={handleCharterChange}
-          roles={charterRoles}
-          hideOwner
-          className="ml-5 mt-3"
-        />
+          <RepositoryLinks projectId={project._id} />
 
-        {/* Tasks is the working surface; Overview is the summary of everything
-            filed here — plans, their tasks, and docs. */}
-        <div className="flex items-center gap-1 ml-5 mt-3 -mb-1">
-          {/* The Tasks tab carries no count of its own: the list below reports
-              what it is actually showing (the board hides agent-internal tasks
-              by default), and the project's raw totals sit in the header row.
-              Two numbers that disagree are worse than one. */}
-          {([
-            { key: "tasks", label: "Tasks", icon: ListChecks, count: 0 },
-            { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
-            { key: "updates", label: "Updates", icon: Megaphone, count: 0 },
-            { key: "timeline", label: "Timeline", icon: History, count: 0 },
-          ] as const).map((t) => {
-            const Icon = t.icon;
-            const active = tab === t.key;
-            return (
-              <button
-                key={t.key}
-                onClick={() => setTab(t.key)}
-                className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs transition-colors ${
-                  active
-                    ? "bg-sol-bg-alt text-sol-text border border-sol-border/40"
-                    : "text-sol-text-dim hover:text-sol-text border border-transparent"
-                }`}
-              >
-                <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-                <span>{t.label}</span>
-                {t.count > 0 && <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>}
-              </button>
-            );
-          })}
-        </div>
-      </div>
+          {/* The charter sits above the tabs: the direction every tab serves. */}
+          <CharterBlock
+            kind="project"
+            title={project.title}
+            charter={charter}
+            canEdit
+            onChange={handleCharterChange}
+            roles={charterRoles}
+            hideOwner
+            className="mt-3"
+          />
+        </>}
+        // Tasks is the working surface; Overview is the summary of everything
+        // filed here: plans, their tasks, and docs.
+        tabs={<IntentTabs tabs={tabs} active={tab} onTab={setTab} accent={PROJECT_ACCENT} bare />}
+      />
 
       {/* The project's tasks, through the same list surface /tasks uses —
           same filters, grouping, board, palette and saved views. */}

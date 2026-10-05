@@ -215,7 +215,10 @@ export function useFloatingCircles(opts: {
     dragMoved.current = false;
     if (hideTimer.current) clearTimeout(hideTimer.current);
     hideTimer.current = null;
-    e.currentTarget.setPointerCapture(e.pointerId);
+    // Held on the face pressed, not the row the handler sits on: the release's
+    // click then still lands on the face, and a still press stays its click.
+    const handle = (e.target as Element).closest?.("[data-face-hit]") ?? e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
     bridge.setDragging(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the bridge is a per-window constant
   }, []);

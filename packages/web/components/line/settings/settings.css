@@ -1,0 +1,228 @@
+/* /line/settings: the line's file read as a spec sheet on the line floor
+   (line.css). Theme tokens only. A value the file sets is in full ink; a
+   default recedes and says so. --line-belt marks an edit travelling to the
+   machine, green a saved one for a moment, red a refusal, orange a warning.
+   One voice: the app's mono throughout. */
+.lset-floor { font-family: var(--font-mono), monospace; }
+
+.lset-body {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  max-width: 1080px;
+}
+@container line-floor (min-width: 900px) {
+  .lset-body { grid-template-columns: 148px minmax(0, 1fr); gap: 40px; }
+}
+
+/* The index: a short vertical belt with a stop per section. */
+.lset-index { display: none; }
+@container line-floor (min-width: 900px) {
+  .lset-index {
+    display: flex; flex-direction: column; gap: 2px;
+    position: sticky; top: 16px; align-self: start;
+    padding-left: 14px;
+    border-left: 2px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  }
+}
+.lset-index-link {
+  position: relative;
+  font-size: 11px; line-height: 26px;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+.lset-index-link::before {
+  content: ""; position: absolute; left: -19px; top: 10px;
+  width: 6px; height: 6px; border-radius: 9999px;
+  background: var(--sol-bg);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-border) 90%, transparent);
+}
+.lset-index-link:hover { color: var(--sol-text); }
+.lset-index-link:hover::before { box-shadow: 0 0 0 2px var(--line-belt); }
+
+.lset-main { min-width: 0; display: flex; flex-direction: column; gap: 34px; }
+
+/* The plate: which file, on which machine, and whether this page can write it. */
+.lset-plate {
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  border-left: 3px solid var(--line-belt);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 80%, transparent);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.lset-plate[data-writable="false"] { border-left-color: color-mix(in srgb, var(--sol-text-dim) 60%, transparent); }
+.lset-plate-file { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.lset-plate-path { font-size: 13px; font-weight: 600; color: var(--sol-text); }
+.lset-plate-root { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lset-plate-says { font-size: 12px; line-height: 1.55; color: var(--sol-text-muted); }
+.lset-plate-says b { color: var(--sol-text); font-weight: 600; }
+.lset-plate-warn { font-size: 11px; color: var(--sol-orange); }
+
+.lset-section { scroll-margin-top: 12px; }
+.lset-section-title {
+  font-size: 17px; font-weight: 600; letter-spacing: -0.02em;
+  color: var(--sol-text);
+}
+.lset-section-what { margin-top: 4px; margin-bottom: 14px; font-size: 12px; color: var(--sol-text-dim); max-width: 64ch; }
+
+/* A row: what it controls on the left, the value on the right, a hairline between rows. */
+.lset-rows { border-top: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); }
+.lset-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px 24px;
+  padding: 11px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+}
+@container line-floor (min-width: 700px) {
+  .lset-row { grid-template-columns: minmax(180px, 0.9fr) minmax(0, 1.3fr); }
+}
+.lset-key { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.lset-label { font-size: 13px; color: var(--sol-text); font-weight: 600; }
+.lset-what { font-size: 11px; line-height: 1.5; color: var(--sol-text-dim); }
+.lset-val { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.lset-val-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.lset-unit { font-size: 11px; color: var(--sol-text-dim); }
+
+/* The value: plain text that becomes a field. A default recedes. */
+.lset-value {
+  min-width: 0; max-width: 100%;
+  text-align: left;
+  font-size: 13px; line-height: 1.45;
+  color: var(--sol-text);
+  padding: 3px 8px; margin-left: -8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  overflow-wrap: anywhere;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+.lset-value:not(:disabled):hover { background: color-mix(in srgb, var(--sol-bg-alt) 90%, transparent); border-color: color-mix(in srgb, var(--sol-border) 60%, transparent); cursor: text; }
+.lset-value:focus-visible { outline: none; border-color: color-mix(in srgb, var(--line-belt) 70%, transparent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 20%, transparent); }
+.lset-value:disabled { cursor: default; }
+.lset-value[data-empty="true"] { color: var(--sol-text-dim); font-style: italic; }
+[data-source="default"] .lset-value { color: var(--sol-text-muted); }
+.lset-list { display: flex; flex-direction: column; gap: 2px; }
+
+.lset-edit { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0; }
+.lset-input {
+  width: 100%;
+  font: inherit; font-size: 13px; line-height: 1.45;
+  color: var(--sol-text);
+  background: var(--sol-bg);
+  border: 1px solid color-mix(in srgb, var(--line-belt) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--line-belt) 18%, transparent);
+  border-radius: 6px;
+  padding: 3px 8px; margin-left: -8px;
+  outline: none;
+  resize: vertical;
+}
+.lset-input[aria-invalid="true"] { border-color: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 18%, transparent); }
+.lset-field-error { font-size: 11px; color: var(--sol-red); }
+
+/* Where it came from: a file value is marked, a default only named. */
+.lset-src {
+  flex-shrink: 0; margin-left: auto;
+  font-size: 10px; line-height: 16px;
+  padding: 0 6px; border-radius: 9999px;
+  color: var(--sol-text-dim);
+  border: 1px dashed color-mix(in srgb, var(--sol-border) 90%, transparent);
+}
+.lset-src[data-src="file"] {
+  color: var(--sol-text);
+  border-style: solid;
+  background: color-mix(in srgb, var(--line-belt) 12%, transparent);
+  border-color: color-mix(in srgb, var(--line-belt) 40%, transparent);
+}
+.lset-note { font-size: 11px; line-height: 1.5; color: var(--sol-text-dim); }
+.lset-note::before { content: "until set: "; color: var(--sol-text-muted); }
+
+/* An edit's journey. */
+.lset-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-lamp { width: 7px; height: 7px; border-radius: 9999px; background: var(--line-belt); animation: lset-travel 1.4s ease-in-out infinite; }
+.lset-status[data-state="saved"] { color: var(--sol-green); animation: lset-fade 2.6s ease-in forwards; }
+.lset-status[data-state="saved"]::before { content: ""; width: 7px; height: 7px; border-radius: 9999px; background: var(--sol-green); }
+.lset-status[data-state="warn"] { color: var(--sol-orange); }
+.lset-status[data-state="refused"] { color: var(--sol-red); align-items: flex-start; }
+.lset-refused-text { line-height: 1.5; overflow-wrap: anywhere; }
+[data-refused="true"] .lset-value { text-decoration: underline wavy color-mix(in srgb, var(--sol-red) 60%, transparent); text-underline-offset: 4px; }
+.lset-dismiss { color: inherit; opacity: 0.6; padding: 0 2px; line-height: 1; }
+.lset-dismiss:hover { opacity: 1; }
+@keyframes lset-travel { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
+@keyframes lset-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .lset-lamp { animation: none; }
+  .lset-status[data-state="saved"] { animation: none; }
+}
+
+/* Finders: one card each, with its health on the right of its name. */
+.lset-finders { display: flex; flex-direction: column; gap: 10px; }
+.lset-finder {
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: color-mix(in srgb, var(--sol-bg-alt) 60%, transparent);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.lset-finder[data-silent="true"] { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sol-orange) 70%, transparent); }
+.lset-finder-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.lset-finder-source { font-size: 14px; font-weight: 600; color: var(--sol-text); }
+.lset-finder-id { font-size: 11px; color: var(--sol-text-dim); }
+.lset-finder-health { margin-left: auto; font-size: 11px; color: var(--sol-text-muted); white-space: nowrap; }
+.lset-finder-health b { color: var(--sol-text); font-weight: 700; }
+.lset-silent { color: var(--sol-orange); }
+.lset-finder-latest { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lset-finder-fields { display: grid; grid-template-columns: 1fr; gap: 2px 18px; }
+@container line-floor (min-width: 700px) { .lset-finder-fields { grid-template-columns: 1fr 1fr; } }
+.lset-finder-field { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.lset-finder-field dt { width: 82px; flex-shrink: 0; font-size: 11px; color: var(--sol-text-dim); }
+.lset-finder-field dd { min-width: 0; flex: 1; display: flex; }
+.lset-finder-field .lset-value { font-size: 12px; }
+.lset-remove { margin-left: 4px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-remove:hover { color: var(--sol-text); }
+.lset-remove[data-armed="true"] { color: var(--sol-red); }
+.lset-undeclared { font-size: 11px; color: var(--sol-text-dim); font-style: italic; }
+.lset-finders-foot { display: flex; align-items: center; gap: 12px; font-size: 11px; }
+.lset-finders-foot .lset-src { margin-left: 0; }
+.lset-add { margin-left: auto; font-size: 12px; color: var(--line-belt); }
+.lset-add:hover, .lset-add:focus-visible { text-decoration: underline; text-underline-offset: 3px; outline: none; }
+.lset-add-form {
+  display: grid; grid-template-columns: 1fr; gap: 8px 16px;
+  padding: 12px; border-radius: 8px;
+  border: 1px dashed color-mix(in srgb, var(--line-belt) 50%, transparent);
+}
+@container line-floor (min-width: 700px) { .lset-add-form { grid-template-columns: 1fr 1fr; } }
+.lset-add-field { display: flex; align-items: baseline; gap: 10px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-add-field span { width: 82px; flex-shrink: 0; }
+.lset-add-field .lset-input { margin-left: 0; box-shadow: none; border-color: color-mix(in srgb, var(--sol-border) 80%, transparent); }
+.lset-add-field .lset-input:focus { border-color: var(--line-belt); }
+.lset-add-actions { grid-column: 1 / -1; display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
+.lset-add-actions .lset-field-error { margin-right: auto; }
+.lset-ghost { font-size: 12px; color: var(--sol-text-dim); }
+.lset-ghost:hover { color: var(--sol-text); }
+.lset-primary {
+  font-size: 12px; padding: 4px 10px; border-radius: 6px;
+  color: var(--sol-bg); background: var(--line-belt);
+}
+.lset-primary:hover { filter: brightness(1.1); }
+
+.lset-dim { color: var(--sol-text-dim); }
+.lset-empty { font-size: 12px; line-height: 1.6; color: var(--sol-text-muted); }
+.lset-empty code { color: var(--sol-text); }
+
+/* A link in (?section=, ?station=) lands here: the target draws a ring that
+   fades, once, so the eye finds what the link was about. Color only, so it
+   reads the same under reduced motion. */
+.lset-section[data-lset-target="true"],
+[data-station-panel][data-lset-target="true"] {
+  border-radius: 8px;
+  outline: 1px solid transparent;
+  outline-offset: 8px;
+  animation: lset-arrive 2.6s ease-out 1;
+}
+.lset-section[data-lset-target="true"] .lset-section-title { animation: lset-arrive-title 2.6s ease-out 1; }
+@keyframes lset-arrive {
+  0%, 30% { outline-color: color-mix(in srgb, var(--sol-blue) 70%, transparent); background: color-mix(in srgb, var(--sol-blue) 5%, transparent); }
+  100% { outline-color: transparent; background: transparent; }
+}
+@keyframes lset-arrive-title { 0%, 30% { color: var(--sol-blue); } }

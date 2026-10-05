@@ -23,7 +23,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   // A decision's document page and a stack own their reading column.
   /^\/decisions(\/|$)/,
   // The line owns its canvas: six stations side by side, each its own scroll.
-  /^\/line$/,
+  // Its settings page is the same floor, with its own index and scroll.
+  /^\/line(\/settings)?$/,
   // Chat owns its whole canvas: three columns, each with its own scroll region.
   /^\/chat(\/|$)/,
   // The public rooms are the same three column surface.
@@ -68,6 +69,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/evals(\/|$)/,
   // Ops: its own tab bar, then a table, a timeline or a player edge to edge.
   /^\/ops(\/|$)/,
+  // A mod's pane: its own header and scroll, edge to edge (components/mods).
+  /^\/m\//,
 ];
 
 function routePath(pathname: string): string {

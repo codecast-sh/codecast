@@ -14,33 +14,11 @@ import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityCards";
 import { MarkdownImg, ImageRowParagraph } from "./tools/MarkdownImages";
 import { EntityAwareCode, EntityAwareLink } from "./EntityIdPill";
-import { CodeBlock } from "./CodeBlock";
 import { MarkdownReplyQuote } from "./ReplyQuote";
-import { tryRenderCastDiff } from "./InlineDiff";
-import { tryRenderCanvas } from "./HtmlSnippet";
-
-function extractTextFromHast(node: any): string {
-  if (!node) return '';
-  if (node.type === 'text') return node.value || '';
-  if (node.children) return node.children.map(extractTextFromHast).join('');
-  return '';
-}
+import { renderPre } from "../lib/fenceRenderers";
 
 export function renderMarkdownPre(node: any, children: any, props: any) {
-  const codeElement = node?.children?.[0];
-  if (codeElement && codeElement.type === "element" && codeElement.tagName === "code") {
-    const className = codeElement.properties?.className as string[] | undefined;
-    const language = className?.find((cls) => cls.startsWith("language-"))?.replace("language-", "");
-    const code = extractTextFromHast(codeElement);
-    if (code) {
-      const canvas = tryRenderCanvas(language, code);
-      if (canvas) return canvas;
-      const castDiff = tryRenderCastDiff(language, code);
-      if (castDiff) return castDiff;
-      return <CodeBlock code={code} language={language} />;
-    }
-  }
-  return <pre {...(props as any)}>{children as any}</pre>;
+  return renderPre(node, children, props);
 }
 
 // Stable plugin/component identities for message-body markdown. Inline literals at

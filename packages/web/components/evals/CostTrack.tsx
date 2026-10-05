@@ -4,9 +4,9 @@
 
 import { useState } from "react";
 import { HoverTip } from "../ActivityHeatmap";
-import type { SurfaceColumns } from "./Seismograph";
-import { usd } from "./parts";
 import { axisUsd, niceCeil } from "./charts/scale";
+import { usd } from "./format";
+import type { SurfaceColumns } from "./seismographModel";
 
 const H = 46;
 const TOP = 6;

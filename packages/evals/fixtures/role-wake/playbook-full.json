@@ -1,0 +1,131 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "S38: the brief is at its budget (56 daily readings, rules that say one thing three ways, sixteen closed threads) and the run has a reading and a decision to add. The brief it saves should be shorter than the one it read and inside the budget, keep the three milestone readings and every standing decision, and carry today's reading.",
+  "label": {
+    "tune": "none",
+    "playbook": {
+      "readingAfter": "2026-09-27",
+      "rules": [
+        4,
+        13
+      ],
+      "decisions": 6,
+      "milestones": [
+        "2026-08-18",
+        "2026-09-02",
+        "2026-09-21"
+      ],
+      "shorterThan": 11624
+    }
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@docs",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"_id\": \"or7docsfixture\",\n    \"short_id\": \"or-7\",\n    \"name\": \"Docs lead\",\n    \"given_name\": \"Wren\",\n    \"handle\": \"docs\",\n    \"status\": \"active\",\n    \"trust\": \"direct\",\n    \"reports_to\": {\n      \"kind\": \"user\",\n      \"user_id\": \"u7mara\"\n    },\n    \"review_backend\": null,\n    \"authority\": [],\n    \"standing_short_id\": \"jx7dcs1\",\n    \"standing_conversation_id\": \"jx7dcs1fixture\",\n    \"checked_at\": 1790499600000,\n    \"routine\": {\n      \"_id\": \"tr901fixture\",\n      \"short_id\": \"tr-901\",\n      \"title\": \"Check Docs lead's area\",\n      \"status\": \"scheduled\",\n      \"run_at\": 1790672400000,\n      \"last_run_at\": 1790499600000,\n      \"interval_ms\": 86400000,\n      \"wake\": {\n        \"every_ms\": 86400000,\n        \"precheck\": null,\n        \"focus\": null,\n        \"why\": null,\n        \"tuned_at\": null\n      }\n    }\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        {\n          \"id\": \"pj7docs\",\n          \"title\": \"Docs site\"\n        },\n        {\n          \"id\": \"pj7api\",\n          \"title\": \"API reference\"\n        }\n      ],\n      \"plans\": [\n        {\n          \"id\": \"pl31fixture\",\n          \"short_id\": \"pl-31\",\n          \"title\": \"Reference from schema\",\n          \"project_id\": \"pj7api\"\n        }\n      ],\n      \"whole_workspace\": false\n    },\n    \"tasks\": {\n      \"total\": 14,\n      \"open\": 6,\n      \"by_status\": {\n        \"backlog\": 2,\n        \"in_progress\": 2,\n        \"in_review\": 2,\n        \"done\": 8\n      },\n      \"by_priority\": {\n        \"high\": 2,\n        \"medium\": 4\n      }\n    },\n    \"plans\": [\n      {\n        \"short_id\": \"pl-31\",\n        \"title\": \"Reference from schema\",\n        \"status\": \"active\",\n        \"updated_at\": 1790578800000,\n        \"progress\": {\n          \"total\": 5,\n          \"done\": 3,\n          \"in_progress\": 1\n        }\n      }\n    ],\n    \"hands\": [\n      {\n        \"_id\": \"jx7ref2fixture\",\n        \"short_id\": \"jx7ref2\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"state\": \"working\",\n        \"state_line\": \"Opening the pull request with the v1 table kept\",\n        \"state_status\": null,\n        \"state_at\": 1790582400000,\n        \"updated_at\": 1790582400000,\n        \"waiting_since\": null,\n        \"task\": {\n          \"short_id\": \"ct-412\",\n          \"title\": \"Regenerate the webhooks reference\",\n          \"status\": \"in_review\"\n        }\n      },\n      {\n        \"_id\": \"jx7bil3fixture\",\n        \"short_id\": \"jx7bil3\",\n        \"title\": \"Rewrite the billing page for the new plans\",\n        \"state\": \"working\",\n        \"state_line\": \"Drafting the new plans table\",\n        \"state_status\": null,\n        \"state_at\": 1790578800000,\n        \"updated_at\": 1790578800000,\n        \"waiting_since\": null,\n        \"task\": {\n          \"short_id\": \"ct-418\",\n          \"title\": \"Billing page still describes the old plans\",\n          \"status\": \"in_progress\"\n        }\n      },\n      {\n        \"_id\": \"jx7stl4fixture\",\n        \"short_id\": \"jx7stl4\",\n        \"title\": \"Daily page staleness report\",\n        \"state\": \"done\",\n        \"state_line\": \"9 pages past a month unreviewed\",\n        \"state_status\": \"done\",\n        \"state_at\": 1790582400000,\n        \"updated_at\": 1790582400000,\n        \"waiting_since\": null,\n        \"task\": null\n      }\n    ],\n    \"initiatives\": [],\n    \"standing\": {\n      \"short_id\": \"jx7dcs1\",\n      \"state\": \"dormant\",\n      \"state_line\": \"Docs lead for Fernhill: billing rewrite under way; the webhooks reference waits on sd-55.\",\n      \"state_status\": \"working\",\n      \"state_at\": 1790499600000\n    },\n    \"people\": [],\n    \"changed\": [\n      {\n        \"kind\": \"task\",\n        \"short_id\": \"ct-412\",\n        \"title\": \"Regenerate the webhooks reference\",\n        \"status\": \"in_review\",\n        \"updated_at\": 1790582400000\n      }\n    ],\n    \"changed_since\": 1790499600000,\n    \"decisions\": {\n      \"open\": 0,\n      \"answered_today\": 1\n    },\n    \"usage\": {\n      \"day\": \"2026-09-28\",\n      \"wakes\": 1,\n      \"hands\": 0,\n      \"tokens\": 3900,\n      \"caps\": {\n        \"hands_per_day\": 6,\n        \"wakes_per_day\": 40,\n        \"tokens_per_day\": 400000\n      },\n      \"uncounted_sessions\": 0\n    },\n    \"generated_at\": 1790586000000\n  },\n  \"narrative\": \"Docs lead for Fernhill: billing rewrite under way; the webhooks reference waits on sd-55.\\nStatus: working\\n\\n## Where it stands\\n- Docs site: billing page rewrite under way in jx7bil3; the old plans are still live on it. (2026-09-27)\\n- API reference: webhooks section regenerated from the schema; the pull request waits on sd-55. (2026-09-27)\\n\\n## North metric\\nPages unreviewed a month after their feature shipped, from the morning staleness report (jx7stl4). Target 0.\\n- 2026-08-03: 34 pages; the onboarding guides reviewed, the exports pages newly past a month\\n- 2026-08-04: 34 pages; nothing cleared, the SDK changelog still waiting on its owner\\n- 2026-08-05: 33 pages; the quickstart reviewed, the SSO guide newly past a month\\n- 2026-08-06: 31 pages; the exports pages reviewed, the audit log pages newly past a month\\n- 2026-08-07: 31 pages; nothing cleared, the webhooks guide still waiting on its owner\\n- 2026-08-08: 31 pages; nothing cleared, the settings page still waiting on its owner\\n- 2026-08-09: 30 pages; the audit log pages reviewed, the concepts page newly past a month\\n- 2026-08-10: 30 pages; nothing cleared, the quickstart still waiting on its owner\\n- 2026-08-11: 30 pages; nothing cleared, the invite flow guide still waiting on its owner\\n- 2026-08-12: 29 pages; the concepts page reviewed, the onboarding guides newly past a month\\n- 2026-08-13: 29 pages; nothing cleared, the rate limits page still waiting on its owner\\n- 2026-08-14: 28 pages; the webhooks guide reviewed, the billing page newly past a month\\n- 2026-08-15: 28 pages; nothing cleared, the exports pages still waiting on its owner\\n- 2026-08-16: 28 pages; nothing cleared, the SDK changelog still waiting on its owner\\n- 2026-08-17: 28 pages; nothing cleared, the SSO guide still waiting on its owner\\n- 2026-08-18: 27 pages; the exports pages reviewed, the audit log pages newly past a month (milestone: the onboarding guides cleared)\\n- 2026-08-19: 26 pages; the settings page reviewed, the webhooks guide newly past a month\\n- 2026-08-20: 26 pages; nothing cleared, the settings page still waiting on its owner\\n- 2026-08-21: 26 pages; nothing cleared, the concepts page still waiting on its owner\\n- 2026-08-22: 26 pages; nothing cleared, the quickstart still waiting on its owner\\n- 2026-08-23: 25 pages; the SDK changelog reviewed, the invite flow guide newly past a month\\n- 2026-08-24: 24 pages; the concepts page reviewed, the onboarding guides newly past a month\\n- 2026-08-25: 24 pages; nothing cleared, the rate limits page still waiting on its owner\\n- 2026-08-26: 23 pages; the webhooks guide reviewed, the billing page newly past a month\\n- 2026-08-27: 23 pages; nothing cleared, the exports pages still waiting on its owner\\n- 2026-08-28: 23 pages; nothing cleared, the SDK changelog still waiting on its owner\\n- 2026-08-29: 21 pages; the quickstart reviewed, the SSO guide newly past a month\\n- 2026-08-30: 19 pages; the exports pages reviewed, the audit log pages newly past a month\\n- 2026-08-31: 18 pages; the settings page reviewed, the webhooks guide newly past a month\\n- 2026-09-01: 18 pages; nothing cleared, the settings page still waiting on its owner\\n- 2026-09-02: 17 pages; the audit log pages reviewed, the concepts page newly past a month (milestone: first week under 20)\\n- 2026-09-03: 16 pages; the invite flow guide reviewed, the quickstart newly past a month\\n- 2026-09-04: 15 pages; the SDK changelog reviewed, the invite flow guide newly past a month\\n- 2026-09-05: 15 pages; nothing cleared, the onboarding guides still waiting on its owner\\n- 2026-09-06: 15 pages; nothing cleared, the rate limits page still waiting on its owner\\n- 2026-09-07: 15 pages; nothing cleared, the billing page still waiting on its owner\\n- 2026-09-08: 14 pages; the onboarding guides reviewed, the exports pages newly past a month\\n- 2026-09-09: 14 pages; nothing cleared, the SDK changelog still waiting on its owner\\n- 2026-09-10: 14 pages; nothing cleared, the SSO guide still waiting on its owner\\n- 2026-09-11: 13 pages; the exports pages reviewed, the audit log pages newly past a month\\n- 2026-09-12: 13 pages; nothing cleared, the webhooks guide still waiting on its owner\\n- 2026-09-13: 12 pages; the rate limits page reviewed, the settings page newly past a month\\n- 2026-09-14: 12 pages; nothing cleared, the concepts page still waiting on its owner\\n- 2026-09-15: 11 pages; the invite flow guide reviewed, the quickstart newly past a month\\n- 2026-09-16: 11 pages; nothing cleared, the invite flow guide still waiting on its owner\\n- 2026-09-17: 11 pages; nothing cleared, the onboarding guides still waiting on its owner\\n- 2026-09-18: 11 pages; nothing cleared, the rate limits page still waiting on its owner\\n- 2026-09-19: 11 pages; nothing cleared, the billing page still waiting on its owner\\n- 2026-09-20: 11 pages; nothing cleared, the exports pages still waiting on its owner\\n- 2026-09-21: 11 pages; nothing cleared, the SDK changelog still waiting on its owner (milestone: the SDK pages cleared)\\n- 2026-09-22: 11 pages; nothing cleared, the SSO guide still waiting on its owner\\n- 2026-09-23: 11 pages; nothing cleared, the audit log pages still waiting on its owner\\n- 2026-09-24: 11 pages; nothing cleared, the webhooks guide still waiting on its owner\\n- 2026-09-25: 11 pages; nothing cleared, the settings page still waiting on its owner\\n- 2026-09-26: 11 pages; nothing cleared, the concepts page still waiting on its owner\\n- 2026-09-27: 11 pages; nothing cleared, the quickstart still waiting on its owner\\n\\n## Rules learned\\n- Check a page against the running product, not against its pull request. Learned from: the plans page was approved from its diff while the live page still showed the old prices. (2026-08-14)\\n- Open the live page before calling a rewrite done; a merged pull request is not a published page. Learned from: the SSO guide sat merged and unpublished for four days behind a failed deploy. (2026-08-19)\\n- Verify against production, never against the diff alone. Learned from: the rate limits page matched its pull request and contradicted the API. (2026-08-27)\\n- A page is reviewed when someone ran its steps, not when someone read it. Learned from: the quickstart read fine and failed at step three for every new account. (2026-08-22)\\n- Run the steps of a guide on a fresh account before marking it reviewed. Learned from: the invite flow guide assumed an admin seat nobody new has. (2026-09-03)\\n- Ask the feature's owner which pages a release touches before the release, not after. Learned from: the exports release changed three pages nobody had listed. (2026-08-25)\\n- Get the list of touched pages from the feature owner ahead of each release. Learned from: the audit log release shipped with two stale pages. (2026-09-08)\\n- Screenshots go stale first: check every image on a page when its feature changes. Learned from: the settings page text was right and its four screenshots showed the old layout. (2026-08-29)\\n- Do not generate the reference from a branch; generate from the schema on main. Learned from: a reference built from a feature branch documented two endpoints that never shipped. (2026-09-01)\\n- Changelog pages are written by the release owner; the docs role only links them. Learned from: a rewritten changelog entry contradicted the release notes. (2026-09-05)\\n- Link checks run against the deploy preview, which needs the docs deploy token. Learned from: the link checker passed locally while three links were dead in production. (2026-09-11)\\n- When two pages disagree, the one nearer the code is right until someone proves otherwise. Learned from: the concepts page was trusted over the reference and was the stale one. (2026-09-15)\\n- Trust the reference over a concepts page when they conflict. Learned from: a support answer quoted the concepts page and was wrong about retries. (2026-09-19)\\n- Ask the release owner for the touched pages one week ahead. Learned from: the v2 webhooks release named its pages the day it shipped. (2026-09-22)\\n\\n## Refuted\\n- Readers leave the quickstart because it is too long: the drop is at step three, where the token step fails, at every length tested. (2026-08-23)\\n- The search box returns stale pages because of the index: the index is fresh, the pages themselves were stale. (2026-08-26)\\n- Support tickets about billing come from the billing page: nine of ten quoted the pricing page instead. (2026-08-31)\\n- The reference generator drops deprecated fields: it keeps them; the schema had already removed them. (2026-09-04)\\n- Theo's pages go stale faster than others: they are simply the pages whose features ship most often. (2026-09-09)\\n- The SDK changelog needs a review cycle: nobody reads it after the first week, by the page views. (2026-09-13)\\n- Broken links come from renamed pages: all but two came from the deploy preview host changing. (2026-09-17)\\n- New accounts fail the quickstart because of a slow email: the token step fails with the email already delivered. (2026-08-21)\\n- The reference is stale because the generator is slow to run: it runs in a minute; nobody had been asked to run it. (2026-09-02)\\n\\n## Standing decisions\\n- Customer guides are Mara's to edit; raise a wrong guide to her and do not rewrite it. (Mara, 2026-08-12)\\n- The reference is generated from the schema on main, never written or patched by hand. (Mara, 2026-08-20)\\n- A page with a failing step is unpublished the same day rather than left with a warning. (Mara, 2026-08-28)\\n- Screenshots are regenerated by the capture script; no hand-made image goes on a page. (Theo, 2026-09-06)\\n- The docs role does not open pull requests against product code, only against the docs repo. (Mara, 2026-09-10)\\n\\n## Open threads\\n- The onboarding guides rewrite: done, all six published and reviewed on fresh accounts. (opened 2026-08-11)\\n- SSO guide stuck behind the failed deploy: closed, published 2026-08-19. (opened 2026-08-15)\\n- Quickstart step three fails for new accounts: fixed and re-run on a fresh account, closed. (opened 2026-08-21)\\n- Exports release pages: all three updated and closed. (opened 2026-08-24)\\n- Settings screenshots: regenerated by the capture script, closed. (opened 2026-08-29)\\n- Reference built from a feature branch: regenerated from main, closed. (opened 2026-09-01)\\n- Audit log release pages: both updated, closed. (opened 2026-09-08)\\n- Link checker needs the docs deploy token: Mara shared it on 2026-09-12, closed. (opened 2026-09-11)\\n- Concepts page against the reference: concepts page corrected, closed. (opened 2026-09-15)\\n- SDK changelog pages: cleared on 2026-09-21, closed. (opened 2026-09-16)\\n- Rate limits page contradicted the API: corrected against production and closed. (opened 2026-08-27)\\n- Invite flow guide assumed an admin seat: rewritten for a member seat, re-run on a fresh account, closed. (opened 2026-09-03)\\n- Changelog entry contradicted the release notes: reverted to the release owner's words, closed. (opened 2026-09-05)\\n- Search returned stale pages: the pages were refreshed and the index was never at fault, closed. (opened 2026-08-26)\\n- Pricing page quoted in billing tickets: handed to Mara, who owns it; closed here. (opened 2026-08-31)\\n- Deploy preview host changed and broke 14 links: 11 fixed by jx7th02, three fixed after the token arrived, closed. (opened 2026-09-17)\\n- Billing page still describes the old plans; jx7bil3 is rewriting it. (opened 2026-09-24, due 2026-10-02)\\n- sd-55: drop the v1 events table from the reference, or keep it marked deprecated; jx7ref2 waits on Mara. (opened 2026-09-27)\\n- Six customer guides link to the v1 events table; they are Mara's to move. (opened 2026-09-27, due 2026-10-10)\",\n  \"brief_doc_id\": \"doc7docsbrief\",\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"charter_doc_id\": null\n}"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7ref2"
+        ],
+        "out": "Regenerate the webhooks reference (jx7ref2) \u00b7 working \u00b7 46 messages\n\n[43] assistant: Waiting on sd-55 before I open the pull request.\n[44] user (Mara): Answered sd-55. Keep the v1 events table, marked deprecated, until the six guides that link to it have moved. Do not drop it before then.\n[45] assistant: Keeping the v1 table, marked deprecated. The generated page matches the schema event for event (23 of 23).\n[46] assistant: Opening the pull request now.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7stl4"
+        ],
+        "out": "Daily page staleness report (jx7stl4) \u00b7 done \u00b7 12 messages\n\n[10] user: Report every public page whose feature shipped more than a month ago and that nobody has reviewed since.\n[11] assistant: 9 pages are past a month unreviewed today (11 yesterday): the billing page, the v1 events table, the SSO setup guide and six SDK changelog pages.\n[12] assistant: Report posted. Done.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "No open decisions."
+      },
+      {
+        "argv": [
+          "decide",
+          "show",
+          "sd-55"
+        ],
+        "out": "sd-55 \u00b7 answered \u00b7 asked by jx7ref2\nDrop the v1 events table from the reference, or keep it marked deprecated?\nAnswer: Keep it marked deprecated until the six guides that link to it have moved \u00b7 Mara \u00b7 2026-09-28 08:10"
+      },
+      {
+        "argv": [
+          "stack",
+          "show",
+          "sd-55"
+        ],
+        "out": "sd-55 \u00b7 answered by Mara 2026-09-28 08:10: keep the v1 events table marked deprecated until the six guides move"
+      },
+      {
+        "argv": [
+          "sessions"
+        ],
+        "out": "Sessions \u00b7 you\nworking 2  \u00b7  done 1\n\nWorking (2)\n  jx7ref2  Regenerate the webhooks reference   Opening the pull request with the v1 table kept\n  jx7bil3  Rewrite the billing page for the new plans   Drafting the new plans table\nDone (1)\n  jx7stl4  Daily page staleness report   9 pages past a month unreviewed",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "trigger",
+          "ls"
+        ],
+        "out": "  tr-901   active   Check Docs lead's area  every 1d  inline\n           Reviews recent changes and pending items in the docs role's scope, then updates its brief\n           last: Billing rewrite under way; webhooks reference waits on sd-55; 11 pages stale.\n  tr-902   active   Docs lead: a session needs input  on session_needs_input  inline\n           Answers or routes a session under the docs role that stopped for a person"
+      },
+      {
+        "argv": [
+          "read",
+          "jx7dcs1"
+        ],
+        "out": "Docs lead (jx7dcs1) \u00b7 standing session \u00b7 dormant\n\n[201] assistant: Docs lead for Fernhill: billing rewrite under way; the webhooks reference waits on sd-55. Brief saved; nothing needs Mara.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decisions",
+          "list"
+        ],
+        "out": "No decisions recorded in this project."
+      },
+      {
+        "argv": [
+          "decisions"
+        ],
+        "out": "No decisions recorded in this project.",
+        "prefix": true
+      }
+    ]
+  }
+}

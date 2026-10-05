@@ -57,8 +57,6 @@ export function useLineComments({
 }): LineComments {
   const { user, isAuthenticated } = useCurrentUser();
   const createComment = useMutation(api.codeComments.create);
-  const resolveComment = useMutation(api.codeComments.resolve);
-  const unresolveComment = useMutation(api.codeComments.unresolve);
   const [composing, setComposing] = useState<ComposingLine | null>(null);
 
   const threadsByFile = useMemo(() => {
@@ -104,27 +102,24 @@ export function useLineComments({
     [createComment, repository, ref, conversationId, mirror, user?._id],
   );
 
-  const setThreadResolved = useCallback(
-    (thread: CodeCommentRow[], resolved: boolean) => {
-      for (const comment of thread) {
-        // An optimistic stub has no server row to resolve yet.
-        const id = serverCommentId(comment._id);
-        if (!id) continue;
-        void (resolved ? resolveComment : unresolveComment)({ comment_id: id });
-      }
-    },
-    [resolveComment, unresolveComment],
-  );
-
   return {
     threadsByFile,
     composing,
     openComposer: useCallback((file: string, anchor: DiffLineAnchor) => setComposing({ file, anchor }), []),
     closeComposer: useCallback(() => setComposing(null), []),
     post,
-    setThreadResolved,
+    setThreadResolved: setCodeThreadResolved,
     authed: isAuthenticated,
   };
+}
+
+/**
+ * Resolve or reopen a code review thread: one undoable gesture through the
+ * store, painted at once. An optimistic stub has no server row to settle yet.
+ */
+export function setCodeThreadResolved(thread: CodeCommentRow[], resolved: boolean): void {
+  const ids = thread.flatMap((comment) => serverCommentId(comment._id) ?? []);
+  if (ids.length > 0) useInboxStore.getState().resolveCodeCommentThread(ids, resolved);
 }
 
 /** The session a code page should attribute its comments to: the one named in

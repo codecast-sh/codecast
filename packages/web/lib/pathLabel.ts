@@ -8,6 +8,7 @@ import { browserPathLabel, isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "@codecast/shared/entities";
 import { conversationIdFromPath, directConversationId, shareTokenInPath } from "./desktopHandoff";
 import { changesDayLabel } from "./changesDay";
+import { modTabLabel } from "./mods/label";
 import { weekMonday } from "@codecast/shared/changes";
 import { evalsTabLabel } from "../components/evals/evalsPaths";
 import { isOpsPath, opsTabLabel } from "../components/ops/opsPaths";
@@ -61,6 +62,8 @@ export function pathLabel(path: string): string {
   // week of Mon 28 Sep"), which outranks the day a week URL keeps for the
   // return to day mode, else a day ("Changes, Fri 2 Oct"). With neither in
   // the query it is today's, and the bare name says so.
+  if (clean === "/mods") return "Mods";
+  if (clean.startsWith("/m/")) return modTabLabel(clean);
   if (clean === "/changes") {
     try {
       const q = new URLSearchParams(path.split("#")[0].split("?")[1] ?? "");
@@ -129,6 +132,7 @@ export function pathLabel(path: string): string {
     "/feed": "Feed",
     "/crosstalk": "Crosstalk",
     "/line": "The line",
+    "/line/settings": "Line settings",
     "/org": "Org",
     "/initiatives": "Initiatives",
     "/chat": "Chat",

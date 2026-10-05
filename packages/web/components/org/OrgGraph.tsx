@@ -29,7 +29,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useTheme } from "../ThemeProvider";
-import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES } from "./orgLayout";
+import { ghostNodeIdFor, ghostsFor, layoutOrgTree, parentRefOfNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgLayoutEdge, type OrgLayoutNode, type OrgLayoutView, focusTargetNodeId, type OrgFocusTarget, ORG_SIZES, roleNodeId } from "./orgLayout";
 import { ClusterCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type HealthRoleNodeData } from "./OrgNodeCards";
 import { computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
@@ -39,13 +39,26 @@ import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
 import type { FlowMap, RoleFlow } from "./orgFlow";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
+import { useInitiatives } from "../../hooks/useInitiatives";
+import { goalFocusedChange, goalsAnchor, layoutGoals, type GoalProject, type GoalsLayout } from "./goalsLayout";
+import { GOALS_EDGE_TYPES, GOALS_NODE_TYPES, type GoalsEdgeData } from "./GoalsNodeCards";
 
 /** The health map's card size, which its spine edges are drawn against. */
 const SPINE = { w: ORG_SIZES.healthRole.w, h: ORG_SIZES.healthRole.h };
 /** The health map fits its whole tree down to this zoom: cards and counts stay legible. */
 const FLOW_READABLE_ZOOM = 0.42;
 
-const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard };
+/** The goals lens fits its outline down to this zoom, then fits the width and pans down. */
+const GOALS_READABLE_ZOOM = 0.6;
+
+const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard, ...GOALS_NODE_TYPES };
+const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
+
+/** Which picture the canvas draws (org-staffing.md S36): who reports to whom, or who owns what. */
+export type OrgLens = "people" | "goals";
+const NO_LAYOUT: ReturnType<typeof layoutOrgTree> = { nodes: [], edges: [], width: 0, height: 0 };
 
 export type OrgReparentRequest = {
   subject: { kind: "session"; id: string; title: string } | { kind: "role"; id: string; title: string };
@@ -101,6 +114,14 @@ export type OrgGraphProps = {
   /** Edit on a role change opens the hire dialog prefilled (the page owns
    *  it); every other kind gets the inline form here on the canvas. */
   onEditRoleChange?: (change: OrgProposalChange) => void;
+  /** The lens (S36). `goals` draws the company's goals, the projects that
+   *  carry them and who owns each, with the proposal's goal changes as ghosts. */
+  lens?: OrgLens;
+  /** The goals lens' rows when they are not the store's (the dev preview, a
+   *  test): the lens reads the workspace's initiatives and projects otherwise. */
+  goalsData?: { initiatives: readonly InitiativeRow[]; projects: readonly GoalProject[] };
+  /** A double click on an owner in the goals lens: show that seat in the people lens. */
+  onOpenInPeople?: (nodeId: string) => void;
   /** False draws the chart as a still picture (the marketing hero): no zoom
    *  controls or edge cues, and no pan, zoom, drag or wheel capture. Default true. */
   chrome?: boolean;
@@ -136,7 +157,7 @@ function flagsSigOf(flags: Record<string, OrgHealth["roles"][number]["flags"]>):
 
 function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTargetId: string | null, draggingId: string | null, loading: ReadonlySet<string>, handlers: {
   onToggleCollapse: (id: string) => void; onExpandCluster: (id: string) => void; onCollapseCluster: (id: string) => void;
-}, canDrag: ((node: OrgLayoutNode) => boolean) | undefined, ghosts: GhostHandlers, flags: Record<string, OrgHealth["roles"][number]["flags"]>): Node[] {
+}, canDrag: ((node: OrgLayoutNode) => boolean) | undefined, ghosts: GhostHandlers, flags: Record<string, OrgHealth["roles"][number]["flags"]>, ledgers: Record<string, OrgHealth["roles"][number]["ledger"]>): Node[] {
   return layout.map((n) => {
     // A ghost stub is not a card the page can move: nothing to reparent yet.
     const stub = n.kind === "person" || n.kind === "role" || n.kind === "session" ? n.ghost : undefined;
@@ -156,8 +177,8 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
       : {};
     switch (n.kind) {
-      case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
-      case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, tenure: n.tenure } };
+      case "person": return { ...base, data: { ...common, ...decor, mid: n.mid, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
+      case "role": return { ...base, data: { ...common, ...decor, mid: n.mid, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, tenure: n.tenure, ledger: ledgers[n.id] } };
       case "session": return { ...base, data: { ...common, ...decor, session: n.session, parent: n.parent } };
       case "cluster": {
         const parentId = n.id.slice("cluster:".length);
@@ -168,7 +189,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true, flow } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, onDecideChange, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -186,15 +207,29 @@ function OrgGraphInner(props: OrgGraphProps) {
     () => (changes?.length ? ghostsFor(tree, changes, { viewerSession, ...scopeRows }) : undefined),
     [tree, changes, viewerSession?.id, viewerSession?.short_id, scopeRows], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  const layout = useMemo(() => layoutOrgTree(tree, view, ghosts), [tree, view, ghosts]);
+  // The goals lens lays out its own picture from the same tree and changes;
+  // the people layout then stands down, so only one is ever computed.
+  const storeGoals = useInitiatives();
+  const goals = useMemo<GoalsLayout | null>(
+    () => (lens === "goals" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, focusChangeId }) : null),
+    [lens, tree, goalsData, storeGoals, projects, changes, focusChangeId],
+  );
+  const layout = useMemo(() => (goals ? NO_LAYOUT : layoutOrgTree(tree, view, ghosts)), [goals, tree, view, ghosts]);
   const byId = useMemo(() => new Map(layout.nodes.map((n) => [n.id, n])), [layout]);
+  /** What the fit and the focus pan read: the drawn lens' cards. */
+  const boxes = goals?.nodes ?? layout.nodes;
   // Flags reach the cards by identity, so they are rebuilt only when a flag
   // changes (the signature), not on every health push (spend counters move).
   const flagsSig = useMemo(() => flagsSigOf(healthFlagsByNode(health)), [health]);
   const flagsByNode = useMemo(() => healthFlagsByNode(health), [flagsSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  // What each role's area holds today, for the close card's open work line: rebuilt when a count moves, not on every health push.
+  const ledgerSig = (health?.roles ?? []).map((r) => `${r.role_id}:${r.ledger.open_tasks}/${r.ledger.in_flight}/${r.ledger.active_plans}`).join("|");
+  const ledgerByNode = useMemo(() => Object.fromEntries((health?.roles ?? []).map((r) => [roleNodeId(r.role_id), r.ledger])), [ledgerSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The goals lens draws owner edges only for the card under the pointer or selected.
+  const [hoverId, setHoverId] = useState<string | null>(null);
   // The inline edit form for a non-role change, at the Edit click.
   const [editing, setEditing] = useState<{ change: OrgProposalChange; at: { x: number; y: number } } | null>(null);
 
@@ -213,7 +248,8 @@ function OrgGraphInner(props: OrgGraphProps) {
     },
   }), [focusChangeId, onFocusChange, onDecideChange, onEditRoleChange, changeById]);
   const flowNodes = useMemo(() => {
-    const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode);
+    if (goals) return goalsFlowNodes(goals, selectedId, ghostHandlers);
+    const nodes = toFlowNodes(layout.nodes, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode);
     if (!flow) return nodes;
     // The health map: a role draws its week instead of its sessions.
     return nodes.map((n) => {
@@ -222,9 +258,9 @@ function OrgGraphInner(props: OrgGraphProps) {
       const data: HealthRoleNodeData = { role: f.role, selected: n.id === selectedId, flow: f, days: flow.days };
       return { ...n, type: "healthRole", draggable: false, data };
     });
-  }, [layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, flow]);
+  }, [goals, layout, selectedId, dropTargetId, draggingId, loadingClusters, handlers, canDrag, ghostHandlers, flagsByNode, ledgerByNode, flow]);
   const flowEdges = useMemo<Edge[]>(
-    () => flow ? flowModeEdges(layout.edges, flow.map, flow.focusNodeId) : layout.edges.map((e) => ({
+    () => goals ? goalsFlowEdges(goals, hoverId ?? selectedId ?? (focusChangeId ? goals.changeNode[focusChangeId] ?? null : null)) : flow ? flowModeEdges(layout.edges, flow.map, flow.focusNodeId) : layout.edges.map((e) => ({
       id: e.id,
       source: e.source,
       target: e.target,
@@ -232,14 +268,14 @@ function OrgGraphInner(props: OrgGraphProps) {
       selectable: false,
       focusable: false,
       style: e.kind === "stack"
-        ? { stroke: "color-mix(in srgb, var(--sol-border) 45%, transparent)", strokeWidth: 1.25, strokeDasharray: "3 4" }
+        ? { stroke: "color-mix(in srgb, var(--sol-border) 40%, transparent)", strokeWidth: 1 }
         : e.kind === "ghost"
-          // A proposal's edge: the page's violet, dashed, at the ghost's opacity.
-          ? { stroke: GHOST.color, strokeWidth: 1.5, strokeDasharray: "6 4", opacity: GHOST.opacity }
+          // A proposal's edge: the page's violet at the ghost's opacity (solid: nothing on the chart is dashed).
+          ? { stroke: GHOST.color, strokeWidth: 1.5, opacity: GHOST.opacity }
           : { stroke: "color-mix(in srgb, var(--sol-border) 70%, transparent)", strokeWidth: 1.5, opacity: e.faded ? 0.3 : 1 },
       pathOptions: e.kind === "stack" ? undefined : { borderRadius: 14 },
     } as Edge)),
-    [layout, flow],
+    [goals, layout, flow, selectedId, hoverId, focusChangeId],
   );
 
   // Controlled nodes so a drag moves the card; every layout change re-seeds.
@@ -257,8 +293,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   // Flow's own measurement (which a hidden tab never delivers).
   const wrapRef = useRef<HTMLDivElement>(null);
   const userMoved = useRef(false);
-  const rootSig = layout.nodes.filter((n) => n.y === 0).map((n) => n.id).join("|");
+  const rootSig = goals ? `goals|${goals.nodes.length}` : layout.nodes.filter((n) => n.y === 0).map((n) => n.id).join("|");
   const fitted = useRef<string | null>(null);
+  const readableZoom = goals ? GOALS_READABLE_ZOOM : flow ? FLOW_READABLE_ZOOM : undefined;
   const focusId = useMemo(() => layout.nodes.find((n) => n.kind === "person" && n.person.is_me)?.id ?? null, [layout]);
   // Which root cards sit past the free canvas' edges: drives the fades and the
   // "+N more" pills. A programmatic setViewport does not fire the viewport
@@ -275,7 +312,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   const fit = useCallback((animate: boolean): boolean => {
     const el = wrapRef.current;
     if (!el || el.clientWidth === 0) return false;
-    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction, flow ? FLOW_READABLE_ZOOM : undefined);
+    const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, null, el.clientHeight * panelHeightFraction, readableZoom);
     if (!vp) return false;
     // Animated viewport moves ride frame timers, which a hidden tab never gets.
     const current = rf.getViewport();
@@ -284,7 +321,7 @@ function OrgGraphInner(props: OrgGraphProps) {
     }
     recomputeCue({ x: vp.x, y: vp.y, zoom: vp.zoom });
     return true;
-  }, [layout, panelWidth, panelHeightFraction, focusId, rf, recomputeCue, flow]);
+  }, [boxes, panelWidth, panelHeightFraction, focusId, rf, recomputeCue, readableZoom]);
   const panTo = useCallback((n: OrgLayoutNode, side: "left" | "right") => {
     const el = wrapRef.current;
     if (!el) return;
@@ -312,17 +349,20 @@ function OrgGraphInner(props: OrgGraphProps) {
   // fit below stands down while one is set, and the focus pan re-centres on
   // a panel change instead. Without that, the first ghost click with the
   // pane closed was panned to, then refit over as the panel opened.
-  const focusNodeId = useMemo(() => focusTargetNodeId(ghosts, focusTarget), [ghosts, focusTarget]);
+  const focusNodeId = useMemo(
+    () => (goals ? (focusTarget ? (focusTarget.kind === "change" ? goals.changeNode[focusTarget.id] ?? null : focusTarget.id) : null) : focusTargetNodeId(ghosts, focusTarget)),
+    [goals, ghosts, focusTarget],
+  );
   const focusSeq = focusTarget?.seq ?? 0;
   useWatchEffect(() => {
-    if (!viewportReady || layout.nodes.length === 0) return;
+    if (!viewportReady || boxes.length === 0) return;
     const key = `${rootSig}|${panelWidth}|${panelHeightFraction}`;
     if (fitted.current === key) return;
     const first = fitted.current === null;
     if (!first && focusNodeId) { fitted.current = key; return; }
     if (!first) userMoved.current = false;
     if (fit(!first)) fitted.current = key;
-  }, [viewportReady, rootSig, panelWidth, panelHeightFraction, layout.nodes.length, fit, focusNodeId]);
+  }, [viewportReady, rootSig, panelWidth, panelHeightFraction, boxes.length, fit, focusNodeId]);
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
@@ -338,7 +378,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!focusNodeId || !el || !viewportReady) return;
-    const vp = computeOrgViewport(layout.nodes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, flow ? FLOW_READABLE_ZOOM : undefined);
+    const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, readableZoom);
     if (!vp) return;
     userMoved.current = true;
     rf.setViewport({ x: vp.x, y: vp.y, zoom: vp.zoom }, { duration: document.hidden ? 0 : 280 });
@@ -350,7 +390,7 @@ function OrgGraphInner(props: OrgGraphProps) {
   useEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     const el = document.activeElement as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     if (editing) { setEditing(null); return; }
     if (selectedId) onSelect(null);
   }, editing || selectedId ? window : null);
@@ -417,21 +457,30 @@ function OrgGraphInner(props: OrgGraphProps) {
 
   const onNodeClick: NodeMouseHandler = useCallback((_e, node) => {
     if (node.type === "cluster") return;
+    if (goals) {
+      // A ghost goal or project is a change: a click focuses it, as a role ghost's does.
+      const g = goals.nodes.find((x) => x.id === node.id);
+      const ghost = g?.kind === "goal" ? g.goal.ghost : g?.kind === "project" ? g.project.ghost : undefined;
+      if (ghost) { onFocusChange?.(ghost.change_id === focusChangeId ? null : ghost.change_id); return; }
+      onSelect(node.id === selectedId ? null : node.id);
+      return;
+    }
     // A ghost stub is a change, not a node the page holds: a click focuses the
     // change (the pane opens on its rationale) instead of selecting.
     const n = byId.get(node.id);
     const stub = n && (n.kind === "person" || n.kind === "role" || n.kind === "session") ? n.ghost : undefined;
     if (stub) { onFocusChange?.(stub.change_id === focusChangeId ? null : stub.change_id); return; }
     onSelect(node.id === selectedId ? null : node.id);
-  }, [onSelect, selectedId, byId, onFocusChange, focusChangeId]);
+  }, [onSelect, selectedId, byId, onFocusChange, focusChangeId, goals]);
   const onNodeDoubleClick: NodeMouseHandler = useCallback((_e, node) => {
+    if (node.type === "owner") { onOpenInPeople?.(node.id); return; }
     const n = byId.get(node.id);
     if (n?.kind === "session") onOpenSession?.(n.session._id);
     // A seat opens the way a session does, and lands on the role page (I3);
     // collapse keeps its own toggle on the card and its row in the menu.
     else if (n?.kind === "role" && !n.ghost && n.role.standing?.conversation_id) onOpenSession?.(n.role.standing.conversation_id);
     else if (n && (n.kind === "person" || n.kind === "role")) onToggleCollapse(n.id);
-  }, [byId, onOpenSession, onToggleCollapse]);
+  }, [byId, onOpenSession, onToggleCollapse, onOpenInPeople]);
   const onContext: NodeMouseHandler = useCallback((e, node) => {
     const n = byId.get(node.id);
     if (n) onNodeContextMenu(e, n);
@@ -443,11 +492,13 @@ function OrgGraphInner(props: OrgGraphProps) {
       nodes={nodes}
       edges={edges}
       nodeTypes={ORG_NODE_TYPES}
-      edgeTypes={ORG_FLOW_EDGE_TYPES}
+      edgeTypes={ORG_EDGE_TYPES}
       onNodesChange={onNodesChange}
       onNodeClick={onNodeClick}
       onNodeDoubleClick={onNodeDoubleClick}
       onNodeContextMenu={onContext}
+      onNodeMouseEnter={goals ? (_e, n) => setHoverId(n.id) : undefined}
+      onNodeMouseLeave={goals ? () => setHoverId(null) : undefined}
       onPaneClick={() => onSelect(null)}
       onMoveStart={(event) => { if (event) userMoved.current = true; }}
       onNodeDragStart={onNodeDragStart}
@@ -470,7 +521,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           zoomable
           position="bottom-right"
           nodeStrokeWidth={0}
-          nodeColor={(n) => n.type === "person" ? "var(--sol-cyan)" : n.type === "role" ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
+          nodeColor={(n) => n.type === "person" || n.type === "goal" || n.type === "company" ? "var(--sol-cyan)" : n.type === "role" || n.type === "owner" ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
           maskColor="color-mix(in srgb, var(--sol-bg) 70%, transparent)"
           style={{ background: "var(--sol-bg-alt)", border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", borderRadius: 10 }}
         />
@@ -548,6 +599,36 @@ function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidd
       </button>
     </>
   );
+}
+
+/** The goals lens as React Flow nodes: nothing drags, a card carries its own ghost. */
+function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: GhostHandlers): Node[] {
+  return goals.nodes.map((n) => {
+    // The card showing the focused change's action strip rises over the tight row beneath it.
+    const focused = !!ghosts.focusChangeId && (n.kind === "goal" ? !!goalFocusedChange(ghosts.focusChangeId, n.goal.ghost, n.goal.chips) : n.kind === "project" ? n.project.ghost?.kind === "initiative_projects" && !!goalFocusedChange(ghosts.focusChangeId, n.project.ghost) : false);
+    const base = { id: n.id, type: n.kind, position: { x: n.x, y: n.y }, width: n.w, height: n.h, draggable: false, selectable: true, connectable: false, zIndex: focused ? 10 : 2 };
+    const selected = n.id === selectedId;
+    switch (n.kind) {
+      case "company": return { ...base, data: { selected, mid: n.mid, name: n.name, goals: n.goals, projects: n.projects } };
+      case "goal": return { ...base, data: { selected, mid: n.mid, goal: n.goal, metrics: n.metrics, rows: n.rows, refs: n.refs, running: n.running, ...ghosts } };
+      case "project": return { ...base, data: { selected, mid: n.mid, project: n.project, ...ghosts } };
+      case "owner": return { ...base, data: { selected, mid: n.mid, owner: n.owner, owns: n.owns, line: n.line } };
+    }
+  });
+}
+
+/** The goals lens' edges: every spine, and the owner edges of one card (the
+ *  one under the pointer, else the selected one). Each goal wears its owner's
+ *  face, so the resting chart draws no line across the canvas; pointing at a
+ *  goal shows its owner, pointing at an owner shows everything it owns. */
+function goalsFlowEdges(goals: GoalsLayout, litId: string | null): Edge[] {
+  const box = new Map(goals.nodes.map((n) => [n.id, { x: n.x, y: n.y, w: n.w, h: n.h, a: goalsAnchor(n) }]));
+  return goals.edges
+    .filter((e) => e.kind === "spine" || e.source === litId || e.target === litId)
+    .map((e) => {
+      const data: GoalsEdgeData = { s: box.get(e.source)!, t: box.get(e.target)!, ghost: e.ghost, faded: e.faded, ...(e.kind === "owner" ? { lane: goals.ownerLane } : {}) };
+      return { id: e.id, source: e.source, target: e.target, type: e.kind === "spine" ? "goalSpine" : "goalOwner", selectable: false, focusable: false, zIndex: e.kind === "owner" ? 1 : 0, data } as Edge;
+    });
 }
 
 export function OrgGraph(props: OrgGraphProps) {
