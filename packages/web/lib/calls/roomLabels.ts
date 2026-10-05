@@ -148,25 +148,43 @@ export function describeRoomLive(roomKey: string | null, s: Store): RoomDescript
  *  nothing about which one was the meeting with Pat. The guest is read from
  *  the voices first (the list row has only those), then from the call's
  *  guest record (its page), so both agree whenever the guest spoke. */
-export function callTitle(
-  call: {
-    title?: string | null;
-    room_key: string;
-    participants?: Array<{ id: string; name: string }>;
-    guests?: Array<{ name: string }>;
-  },
-  s: Store,
-  opts?: { untitled?: string },
-): string {
+/** The place names the server read for a call this client could not name
+ *  (transcripts.webCallPlaces, the same callPlaceNames `cast calls` prints
+ *  from), access checked there. */
+export type CallPlace = { session_title?: string | null; peer_name?: string | null; channel_name?: string | null };
+
+type TitledCall = {
+  title?: string | null;
+  room_key: string;
+  participants?: Array<{ id: string; name: string }>;
+  guests?: Array<{ name: string }>;
+  place?: CallPlace | null;
+};
+
+/** Whether the store alone cannot name this call's place: an untitled
+ *  session or channel huddle whose anchor this client never loaded. Only
+ *  those are asked of the server (useCallPlaces). */
+export function callNeedsPlace(call: TitledCall, s: Store): boolean {
+  if (call.title?.trim()) return false;
+  const kind = parseRoomKey(call.room_key)?.kind;
+  if (kind !== "session" && kind !== "channel") return false;
+  return !describeRoom(call.room_key, s).anchorTitle;
+}
+
+export function callTitle(call: TitledCall, s: Store, opts?: { untitled?: string }): string {
   if (call.title?.trim()) return call.title.trim();
   const parsed = parseRoomKey(call.room_key);
   const d = describeRoom(call.room_key, s);
   const guest =
     call.participants?.find((p) => isGuestParticipant(p.id, p.name))?.name ?? call.guests?.[0]?.name ?? null;
+  // The store's name first (it renames live), the server's when the store
+  // found nothing, and only then the guest: the precedence callDisplayTitle
+  // applies, so the web and `cast calls` call the same call the same thing.
+  const place = call.place ?? null;
   return callDisplayTitle(call, {
-    peerName: d.otherIds.length ? d.label : null,
-    sessionTitle: parsed?.kind === "session" && d.anchorTitle ? d.label : null,
-    channelName: parsed?.kind === "channel" && d.anchorTitle ? d.label.replace(/^#/, "") : null,
+    peerName: d.otherIds.length ? d.label : place?.peer_name ?? null,
+    sessionTitle: parsed?.kind === "session" && d.anchorTitle ? d.label : place?.session_title ?? null,
+    channelName: parsed?.kind === "channel" && d.anchorTitle ? d.label.replace(/^#/, "") : place?.channel_name ?? null,
     untitled: opts?.untitled ?? (guest ? meetingTitle(null, { name: guest }) : undefined),
     viewerId: s.currentUser?._id ? String(s.currentUser._id) : null,
   });

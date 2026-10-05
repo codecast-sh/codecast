@@ -4,11 +4,15 @@
 // so the fixture, the hooks and the tabs agree on one definition.
 import type { GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import type { WorkState } from "@codecast/shared/contracts";
+import type { RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import type { OrgReportsTo, StateCounts } from "../orgTypes";
+import { INITIATIVE_ACCENT } from "../../../lib/initiativeColors";
 
 // "run" (docs/architecture/the-line.md L10): a task's or plan's passage along the line.
-export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run";
-export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run"];
+// "goal" and "call" (initiatives-projects-role-page.md I5): a moment on a
+// goal's record, and a call that names a goal in scope.
+export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run" | "goal" | "call";
+export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run", "goal", "call"];
 
 export type FeedActor = { name: string; image?: string; is_bot?: boolean };
 
@@ -110,7 +114,7 @@ export type RoleBrief = {
     standing_short_id: string | null; standing_conversation_id: string | null;
     checked_at: number | null;
     /** The role's routine (org-staffing.md S25), or null before provision. */
-    routine: { _id: string; short_id: string | null; title: string; status: string; run_at: number | null; last_run_at: number | null; interval_ms: number | null } | null;
+    routine: { _id: string; short_id: string | null; title: string; status: string; run_at: number | null; last_run_at: number | null; interval_ms: number | null; /** How the check runs as the role may tune it (S38). */ wake?: RoleWake } | null;
   };
   facts: BriefFacts;
   narrative: string;
@@ -134,4 +138,6 @@ export const FEED_KIND_META: Record<FeedKind, { label: string; plural: string; c
   update: { label: "update", plural: "Updates", color: "var(--sol-violet)" },
   commit: { label: "commit", plural: "Commits", color: "var(--sol-text-muted)" },
   run: { label: "run", plural: "Runs", color: "var(--sol-green)" },
+  goal: { label: "goal", plural: "Goals", color: INITIATIVE_ACCENT },
+  call: { label: "call", plural: "Calls", color: "var(--sol-red)" },
 };

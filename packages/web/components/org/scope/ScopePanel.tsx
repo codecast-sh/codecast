@@ -27,6 +27,8 @@ import { useRoleScope } from "../../../hooks/useRoleScope";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { EntityIdPill } from "../../EntityIdPill";
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
+import { parsePlaybook, playbookIsEmpty, roleWakeOf, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
+import { RolePlaybook, RoleWakeLine } from "./RolePlaybook";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeTriggersTab } from "./ScopeTriggersTab";
@@ -209,7 +211,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
         )}
       </section>
 
-      <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />
+      <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} wake={p.brief?.role.routine ? p.brief.role.routine.wake ?? roleWakeOf(p.brief.role.routine) : null} />
 
       {me && (
         <section data-scope-section="goals">
@@ -243,9 +245,10 @@ const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase trackin
 /** The briefing (F5.1): where each project stands and what the role is
  *  doing, in words. The only number on it is inside the activity line; the
  *  mount test holds it to that. */
-export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean }) {
+export function ScopeOverviewTab({ role, now, narrative, briefLoaded, wake }: { role: OrgRole; now: number; narrative: string | null | undefined; briefLoaded: boolean; wake?: RoleWake | null }) {
   const { model } = useRoleScope(role.short_id);
   const standing = useMemo(() => parseStandingSection(narrative), [narrative]);
+  const playbook = useMemo(() => parsePlaybook(narrative), [narrative]);
   const projects = model?.projects ?? role.scope_names.projects.map((p) => ({ id: p.id, ref: p.short_id ?? p.id, title: p.title }));
   const written = projectsWithLines(standing, projects.map((p) => ({ ...p, short_id: p.ref })));
   return (
@@ -275,6 +278,20 @@ export function ScopeOverviewTab({ role, now, narrative, briefLoaded }: { role: 
         <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>What it is doing</h3>
         <RoleDoing role={role} className="px-2.5 text-[13px]" />
       </section>
+
+      {/* What it has learned, and how it wakes (org-staffing.md S38). */}
+      {!playbookIsEmpty(playbook) && (
+        <section data-scope-section="playbook">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Its playbook</h3>
+          <RolePlaybook playbook={playbook} narrative={narrative} now={now} />
+        </section>
+      )}
+      {wake && (
+        <section data-scope-section="wake">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>How it wakes</h3>
+          <RoleWakeLine wake={wake} className="px-2.5" />
+        </section>
+      )}
     </div>
   );
 }

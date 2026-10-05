@@ -1,5 +1,7 @@
 # Codex Cloud support: implementation report
 
+> **Status (2026-10-04):** Living record of what shipped for Codex Cloud and the OpenAI Agents API (pl-798). The one open item is VM environments (ct-56164).
+
 *Final report for plan pl-798, 2026-10-02. Proposal: [codex-cloud-support.md](codex-cloud-support.md). API facts: [codex-cloud-spike-findings.md](codex-cloud-spike-findings.md).*
 
 ## The short version

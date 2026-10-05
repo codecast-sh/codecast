@@ -96,6 +96,7 @@ import {
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
   isSessionUnread,
+  guestIdentity,
   type SessionActivityFacts,
   type InboxBucket,
   type InboxTally,
@@ -183,6 +184,18 @@ export type CreateModalKind = 'task' | 'plan' | 'doc' | 'chat' | 'huddle';
 
 // A trigger strip request (see triggerStripRequest): taskId null means the
 // conversation's all-triggers view; expand asks the strip to open.
+/** The fields the triggers page's form edits (agentTasks.webUpdate's args). */
+export type TriggerEdit = {
+  prompt?: string;
+  title?: string;
+  mode?: string;
+  agent_type?: string;
+  project_path?: string;
+  schedule_type?: "once" | "recurring" | "event";
+  interval_ms?: number;
+  run_at?: number;
+  event_filter?: import("@codecast/shared/contracts").TriggerScopeFilter;
+};
 export type TriggerStripRequest = { convId: string; taskId: string | null; expand: boolean; nonce: number };
 /** accountSwitch.requestAccountSwitch's args, as the store action forwards them. */
 export type AccountSwitchArgs = {
@@ -210,6 +223,7 @@ function stampSessionCommand(draft: { sessionCommands: Record<string, any> }, ro
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
+import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 import { conversationRefInPath, conversationTabPath } from "../lib/pathLabel";
 import { directConversationId } from "../lib/desktopHandoff";
@@ -260,6 +274,8 @@ import { createOrgSlice, ORG_SYNC_REGISTRY, projectLeadScopeOutcome, pushRoleFie
 import { writeAsServerShape } from "./serverShape";
 import { replaceContents } from "./simSlot";
 import { createInitiativeSlice, type InitiativeSliceActions } from "./initiativeSlice";
+import { createLineWorkflowSlice, type LineWorkflowSliceActions } from "./lineWorkflowSlice";
+import { createLineSlice, type LineSliceActions } from "./lineSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
@@ -296,6 +312,7 @@ export type {
 export type { ThreadInboxRow, ThreadKind, ThreadLastReply } from "./threadTypes";
 export { threadRowId } from "./threadTypes";
 import type { ThreadsCursor } from "./threadTypes";
+import { isTriggerEditable } from "../lib/triggerEditable";
 export type { ThreadsCursor } from "./threadTypes";
 
 // Critical UI prefs mirrored to localStorage so they're available
@@ -1150,6 +1167,13 @@ const SHARE_COLLECTIONS: Record<PublicShareKind, string[]> = {
   stack: ["decisionStacks"],
   trigger: ["agentTasks", "foreignTriggers"],
   run: ["workflowRuns"],
+};
+
+/** A close parked behind the open-subtasks dialog (lib/taskActions closeTaskWithGuard). */
+export type TaskCloseGuard = {
+  status: 'done' | 'dropped';
+  statusId?: string;
+  parents: Array<{ shortId: string; open: TaskItem[] }>;
 };
 
 export type TaskItem = {
@@ -2724,10 +2748,12 @@ export function isSessionHardBlocked(
 // stale key. `waiting` here is the no-in-flight verdict; the chokepoint
 // layers the tiny in-flight set on top (an in-flight send forces a session
 // OUT of needs-input).
+const _workStateCache = new WeakMap<object, WorkState>();
 const _classifyCache = new WeakMap<object, SessionVerdict>();
-export function classifySession(s: InboxSession): SessionVerdict {
-  let c = _classifyCache.get(s);
-  if (!c) {
+/** Who acts next on a session, from its shipped live fields (the same placement the inbox sections use). */
+export function sessionWorkState(s: InboxSession): WorkState {
+  let ws = _workStateCache.get(s);
+  if (!ws) {
     // The shipped live fields as they stand — no clock, no re-derivation.
     const live: LiveFacts = {
       agent_status: s.agent_status ?? null,
@@ -2736,8 +2762,15 @@ export function classifySession(s: InboxSession): SessionVerdict {
       awaiting_input: !!s.awaiting_input,
       daemon_alive: !!s.is_connected,
     };
-    const ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
-    c = verdictOfWorkState(ws);
+    ws = placeProjectableRow(projectableRowOf(s, live), false, inboxEpoch(s.updated_at ?? 0)).work_state;
+    _workStateCache.set(s, ws);
+  }
+  return ws;
+}
+export function classifySession(s: InboxSession): SessionVerdict {
+  let c = _classifyCache.get(s);
+  if (!c) {
+    c = verdictOfWorkState(sessionWorkState(s));
     _classifyCache.set(s, c);
   }
   return c;
@@ -3981,8 +4014,9 @@ export function resolveComposeProjectPath(opts: {
     !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
       ? conversation.projectPath || conversation.gitRoot
       : undefined;
+  // The viewed session may run in a worktree; a new session starts from its checkout.
   const convPath =
-    rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? rawConvPath : undefined;
+    rawConvPath && (!machineRoster || pathOnMyMachines(machineRoster, rawConvPath)) ? projectRootOf(rawConvPath) : undefined;
   return context?.projectPath || context?.gitRoot || teamPath || convPath || activeProjectPath || recentProjects?.[0]?.path || undefined;
 }
 
@@ -4877,6 +4911,9 @@ export type CallRoomFlags = {
   transcribe_off: boolean;
   /** When the opt-out was switched on; null while transcription is on. */
   transcribe_off_at: number | null;
+  /** The live record's public link is on: the transcript reaches anyone
+   *  holding it as it is written. Absent on rows from an older server. */
+  words_public?: boolean;
   /** The room is being recorded on LiveKit's servers (callRecordings): a run
    *  is starting or filming. What every call surface's red mark paints, for
    *  everyone in the room. Absent on rows from a server that predates it. */
@@ -4952,7 +4989,7 @@ export type RoomKnock = {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, LineWorkflowSliceActions, LineSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -5214,8 +5251,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // -- Close-guard: one shared dialog for "close a parent with open subtasks".
   // Any surface (list, kanban, palette, plan board, detail) sets this via
   // closeTaskWithGuard; a single CloseGuardDialog in DashboardLayout renders it.
-  taskCloseGuard: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null;
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => void;
+  // Every parent a close is waiting on, in the order the gesture named them:
+  // a bulk close asks once for all of them.
+  taskCloseGuard: TaskCloseGuard | null;
+  setTaskCloseGuard: (g: TaskCloseGuard | null) => void;
 
   // -- Fork navigation --
   // Forks are first-class conversations; we navigate to them by URL. No overlay state.
@@ -5593,6 +5632,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   createSavedView: (opts: { name: string; page: "tasks" | "docs" | "plans" | "workspace"; prefs: any; shared?: boolean; icon?: string; client_key?: string; team_id?: string }) => any;
   updateSavedView: (id: string, fields: Record<string, any>) => void;
   deleteSavedView: (id: string) => void;
+  /** Turn a mod on or off (lib/mods). The running set follows the row at once. */
+  setModEnabled: (id: string, enabled: boolean) => void;
 
   // -- Tabs --
   tabs: AppTab[];
@@ -5675,6 +5716,9 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // and the Head of People's review, org-staffing.md S29): the row's interval
   // flips on the draft, the named side effect runs agentTasks.webUpdate.
   setTriggerInterval: (taskId: string, intervalMs: number) => void;
+  // The triggers page's edit form: prompt, title and schedule in one gesture.
+  // False when the trigger already ran or ended (the server refuses those).
+  editTrigger: (taskId: string, fields: TriggerEdit) => boolean;
   // Remove rows from a NON-localFirst collection without planting tombstones —
   // for transient per-scope collections whose server answer of "nothing" is
   // itself the deletion (pendingMessageStatus). A localFirst collection must
@@ -5808,6 +5852,13 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   deleteTeam: (teamId: string, confirmName: string) => Promise<void>;
   dispatchDeleteTeam: (teamId: string, confirmName: string, fallbackTeamId: string | undefined) => Promise<unknown>;
   restoreTeamRow: (team: any, previousActiveTeamId: string | undefined) => void;
+  /** Team settings and membership, painted on the teams / teamMembers rows at
+   *  once; each resolves (or rejects) with the server's answer. */
+  renameTeam: (teamId: string, name: string) => Promise<unknown>;
+  updateTeamIcon: (teamId: string, fields: { icon?: string; icon_color?: string }) => Promise<unknown>;
+  updateTeamTaskStatuses: (teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) => Promise<unknown>;
+  setTeamMemberRole: (teamId: string, userId: string, role: "member" | "admin") => Promise<unknown>;
+  removeTeamMember: (teamId: string, userId: string) => Promise<unknown>;
   updateBucket: (id: string, fields: { name?: string; color?: string; sort_order?: number; archived_at?: number | null }) => void;
   assignSessionToBucket: (conversationId: string, bucketId: string | null) => void;
 
@@ -5817,6 +5868,14 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   deleteComment: (commentId: string) => Promise<unknown>;
   askAgentInThread: (conversationId: string, opts?: { messageId?: string; filePath?: string; lineNumber?: number }) => Promise<unknown>;
   resolveCommentThread: (conversationId: string, anchor: { messageId?: string; filePath?: string; lineNumber?: number }, resolved: boolean) => void;
+  resolveCodeCommentThread: (commentIds: string[], resolved: boolean) => void;
+  /** Bind (or wake, or put to sleep) the session that owns a pull request
+   *  (prShepherd.setShepherd), painted on the pullRequests row at once. */
+  setPrShepherd: (prId: string, conversationId: string | undefined, enabled: boolean) => void;
+  /** Start an agent session on a task (tasks.assignToAgent); resolves to the spawn. */
+  assignTaskToAgent: (shortId: string, agentType: string, initialMessage?: string) => Promise<unknown>;
+  editCodeComment: (commentId: string, content: string) => void;
+  deleteCodeComment: (commentId: string) => void;
 
   // -- Sidebar nav expanded sections --
   sidebarNavExpanded: Record<string, boolean>;
@@ -6070,7 +6129,10 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  with the server's reason. */
   deleteCallRecording: (recordingId: string) => Promise<unknown>;
   /** Drop the exclude tombstones of recording rows a push no longer sends. */
-  settleCallRecordingTombstones: (released: string[]) => void;
+  settleCallRecordingTombstones: (released: string[], collection?: "callRecordings" | "callFrameShares") => void;
+  /** Take a picture of a call off its public link (callRecordings
+   *  .deleteCallFrameShare): the row leaves on the press. */
+  deleteCallFrameShare: (shareId: string) => Promise<unknown>;
   /** Whether the call's share link hands out the room's video
    *  (callRecordings.setCallShareVideo). Rejects with the server's reason,
    *  and the switch falls back with it. */
@@ -8499,7 +8561,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   closeCreateModal: () => set({ createModal: null, createModalDefaults: null }),
 
   taskCloseGuard: null,
-  setTaskCloseGuard: (g: { shortId: string; status: 'done' | 'dropped'; open: TaskItem[]; statusId?: string } | null) => set({ taskCloseGuard: g }),
+  setTaskCloseGuard: (g: TaskCloseGuard | null) => set({ taskCloseGuard: g }),
 
   optimisticForkChildren: [],
   recentProjects: [],
@@ -8596,6 +8658,36 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const last = typeof t.last_run_at === "number" ? t.last_run_at : Date.now();
     t.interval_ms = intervalMs;
     if (t.status === "scheduled") t.run_at = Math.max(Date.now(), last + intervalMs);
+  }),
+  // Mirrors the server's applyTaskUpdate on the draft. The stored
+  // event_filter is the server's to write (it resolves the project's repo),
+  // so an event schedule only clears the cadence fields here.
+  editTrigger: action(function (this: Draft, taskId: string, fields: TriggerEdit) {
+    const t = (this.agentTasks as any)[taskId] ?? (this.foreignTriggers as any)[taskId];
+    if (t && !isTriggerEditable(t.status)) return false;
+    if (!t) return true;
+    if (fields.title !== undefined) t.title = fields.title.trim() || t.title;
+    if (fields.prompt?.trim()) t.prompt = fields.prompt.trim();
+    if (fields.mode !== undefined) t.mode = fields.mode === "apply" ? "apply" : "propose";
+    if (fields.agent_type !== undefined) t.agent_type = fields.agent_type || "claude";
+    if (fields.project_path !== undefined) t.project_path = fields.project_path || undefined;
+    if (fields.schedule_type === "recurring" && fields.interval_ms) {
+      t.schedule_type = "recurring";
+      t.interval_ms = fields.interval_ms;
+      t.run_at = fields.run_at ?? Date.now() + fields.interval_ms;
+    } else if (fields.schedule_type === "event") {
+      t.schedule_type = "event";
+      t.run_at = undefined;
+      t.interval_ms = undefined;
+    } else if (fields.schedule_type === "once") {
+      t.schedule_type = "once";
+      t.run_at = fields.run_at ?? Date.now();
+      t.interval_ms = undefined;
+    } else if (fields.schedule_type === undefined) {
+      if (fields.interval_ms !== undefined) t.interval_ms = fields.interval_ms;
+      if (fields.run_at !== undefined) t.run_at = fields.run_at;
+    }
+    return true;
   }),
   dropRows: sync(function (this: Draft, key: string, ids: string[]) {
     const coll = (this as any)[key];
@@ -9901,7 +9993,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   resumeSession: (convId: string) => get().convCommand(convId, "resumeSession"),
 
-  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession"),
+  // The press time rides along so the daemon can tell an Escape aimed at the
+  // previous turn from one for the turn a queued message started after it.
+  sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now() }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -10307,6 +10401,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   deleteSavedView: action(function (this: Draft, id: string) {
     delete (this.savedViews as any)[id];
+  }),
+
+  setModEnabled: action(function (this: Draft, id: string, enabled: boolean) {
+    const row = ((this as any).mods ?? {})[id];
+    if (row) Object.assign(row, { enabled, updated_at: Date.now() });
   }),
 
   updateClientLayout: action(function (this: Draft, key: string, value: any) {
@@ -12203,6 +12302,35 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (this.clientState.ui.active_team_id === teamId) this.clientState.ui.active_team_id = fallbackTeamId;
   }),
 
+  renameTeam: asyncAction(function (this: Draft, teamId: string, name: string) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (team) team.name = name;
+  }),
+
+  updateTeamIcon: asyncAction(function (this: Draft, teamId: string, fields: { icon?: string; icon_color?: string }) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (!team) return;
+    if (fields.icon !== undefined) team.icon = fields.icon;
+    if (fields.icon_color !== undefined) team.icon_color = fields.icon_color;
+  }),
+
+  updateTeamTaskStatuses: asyncAction(function (this: Draft, teamId: string, statuses: { id: string; name: string; category: string; color?: string }[]) {
+    const team = (this.teams ?? []).find((t: any) => t?._id === teamId);
+    if (team) team.task_statuses = statuses;
+  }),
+
+  // teamMembers holds the active team's roster, keyed by user id.
+  setTeamMemberRole: asyncAction(function (this: Draft, teamId: string, userId: string, role: "member" | "admin") {
+    if (this.clientState.ui?.active_team_id !== teamId) return;
+    const member = (this.teamMembers ?? []).find((m: any) => String(m?._id) === userId);
+    if (member) member.role = role;
+  }),
+
+  removeTeamMember: asyncAction(function (this: Draft, teamId: string, userId: string) {
+    if (this.clientState.ui?.active_team_id !== teamId) return;
+    this.teamMembers = (this.teamMembers ?? []).filter((m: any) => String(m?._id) !== userId);
+  }),
+
   restoreTeamRow: sync(function (this: Draft, team: any, previousActiveTeamId: string | undefined) {
     if (!(this.teams ?? []).some((t: any) => t?._id === team?._id)) this.teams = [...(this.teams ?? []), team];
     if (!this.clientState.ui) this.clientState.ui = {} as ClientUI;
@@ -12327,6 +12455,39 @@ const inboxStoreConfig = (set: any, get: any) => ({
       comment.resolved_at = resolved ? now : undefined;
       comment.resolved_by = resolved ? me?._id : undefined;
     }
+  }),
+
+  // Resolve or reopen one code review thread (the PR, commit and file pages).
+  // Only the flag is painted: the server stamps resolved_at itself, and the
+  // flag is what commentResolved reads first. The server settles the whole
+  // thread, root and replies, from any one of its comments.
+  resolveCodeCommentThread: action(function (this: Draft, commentIds: string[], resolved: boolean) {
+    for (const id of commentIds) {
+      const row = (this as any).codeComments?.[id];
+      if (row) row.resolved = resolved;
+    }
+  }),
+
+  editCodeComment: action(function (this: Draft, commentId: string, content: string) {
+    const row = (this as any).codeComments?.[commentId];
+    if (row) row.content = content;
+  }),
+
+  // The server folds shepherd_state from these and keeps enabled off for a
+  // closed pull request; the paint follows the same rule.
+  setPrShepherd: action(function (this: Draft, prId: string, conversationId: string | undefined, enabled: boolean) {
+    const row = (this as any).pullRequests?.[prId];
+    if (!row) return;
+    row.shepherd_enabled = enabled && row.state === "open";
+    if (conversationId) row.shepherd_conversation_id = conversationId;
+  }),
+
+  // The session lands through the inbox feed; nothing to paint first.
+  assignTaskToAgent: asyncAction(function (this: Draft, _shortId: string, _agentType: string, _initialMessage?: string) {}),
+
+  deleteCodeComment: action(function (this: Draft, commentId: string) {
+    const rows = (this as any).codeComments;
+    if (rows?.[commentId]) delete rows[commentId];
   }),
 
   // Opt-in agent reply: drop an optimistic "thinking" agent comment so the UI
@@ -13261,7 +13422,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // back through restoreCallGuest (lib/calls/guestDoorActions).
   removeCallGuest: asyncAction(function (this: Draft, roomKey: string, guestId: string, revokeLink?: boolean) {
     dropGuestKnock(this, guestId);
-    const identity = `guest:${guestId}`;
+    const identity = guestIdentity(guestId);
     const room = ((this.liveRooms ?? []) as any[]).find((r) => r?.room_key === roomKey);
     if (room?.guests?.some((g: any) => g.identity === identity)) room.guests = room.guests.filter((g: any) => g.identity !== identity);
     return { roomKey, guestId, revokeLink: !!revokeLink };
@@ -13302,11 +13463,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // call the server no longer sends is gone for good, ids never come back),
   // so their excludes have nothing left to hold out. Without this they would
   // pile up in the persisted pending map.
-  settleCallRecordingTombstones: sync(function (this: Draft, released: string[]) {
+  settleCallRecordingTombstones: sync(function (this: Draft, released: string[], collection: "callRecordings" | "callFrameShares" = "callRecordings") {
     for (const id of released) {
-      const key = `callRecordings:${id}`;
+      const key = `${collection}:${id}`;
       if (this.pending[key]?.type === "exclude") delete this.pending[key];
     }
+  }),
+  // A picture of the call taken off its public link: the row leaves on the
+  // draft (its exclude tombstone holds it out of an older push) and the
+  // dispatch deletes the public object. Taking one down is any reader's and
+  // a picture already gone is acknowledged, so there is no refusal to undo.
+  deleteCallFrameShare: asyncAction(function (this: Draft, shareId: string) {
+    delete ((this as any).callFrameShares as Record<string, unknown>)[shareId];
+    return { shareId };
   }),
   // The switch moves on the press and holds through a push computed before
   // the write committed (a field lock on video_shared); a refusal lifts the
@@ -13339,6 +13508,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // Initiative writes (store/initiativeSlice.ts); the collections themselves
   // are registry slots.
   ...createInitiativeSlice(),
+  ...createLineWorkflowSlice(),
+
+  // Line profile edits (store/lineSlice.ts): paint projects.line_profile, ride to the daemon.
+  ...createLineSlice(),
 
   // Ops writes (store/opsSlice.ts): group triage, sources, app grants.
   ...createOpsSlice(),

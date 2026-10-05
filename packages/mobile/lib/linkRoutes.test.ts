@@ -14,6 +14,8 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/plans/pl-88')).toBe('/plan/pl-88');
     expect(mobileRouteForUrl('https://codecast.sh/conversation/abc123')).toBe('/session/abc123');
     expect(mobileRouteForUrl('https://www.codecast.sh/docs/xyz')).toBe('/doc/xyz');
+    expect(mobileRouteForUrl('https://codecast.sh/decisions/sd-289')).toBe('/decisions/sd-289');
+    expect(mobileRouteForUrl('https://codecast.sh/decisions/stacks/ds-4')).toBeNull();
   });
 
   test('share links of every kind land on the /share resolver screen', () => {

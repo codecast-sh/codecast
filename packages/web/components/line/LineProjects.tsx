@@ -36,7 +36,8 @@ export function useLineProject(rollup: RollupRow[], projects: LineProject[]) {
     params.set("project", paramOf(next, projects));
     router.replace(`${pathname ?? "/line"}?${params.toString()}`, { scroll: false });
   }, [router, pathname, search, projects]);
-  return { key, select, href: `${pathname ?? "/line"}?project=${encodeURIComponent(paramOf(key, projects))}` };
+  const param = paramOf(key, projects);
+  return { key, select, param, href: `${pathname ?? "/line"}?project=${encodeURIComponent(param)}` };
 }
 
 /** The order the switcher and its keys walk: the roll-up, then each line. */

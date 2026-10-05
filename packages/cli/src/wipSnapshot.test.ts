@@ -458,55 +458,117 @@ describe("applySnapshotFastForward (cast remote back)", () => {
     expect(res.appliedWork).toBe(true);
   });
 
-  test("local commits the Mac never saw: refuses and changes nothing", async () => {
+  test("local commits made meanwhile: the host's change still comes home, on top of them", async () => {
     const { local, remoteRepo, ref } = await remoteWithWork();
     fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac\n");
     runRemoteScript(remoteRepo, ref);
     git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
-    // Diverge: a local commit that isn't in the Mac's history.
     fs.writeFileSync(path.join(local, "local-only.txt"), "mine\n");
     git(local, ["add", "-A"]);
     git(local, ["commit", "-qm", "local only commit"]);
-    const before = { head: git(local, ["rev-parse", "HEAD"]), log: git(local, ["log", "--oneline"]) };
+    const head = git(local, ["rev-parse", "HEAD"]);
 
     const res = await applySnapshotFastForward(local, ref);
-    expect(res.ok).toBe(false);
-    if (res.ok) return;
-    expect(res.reason).toContain("diverged");
-    // Nothing touched — the local commit is safe.
-    expect(git(local, ["rev-parse", "HEAD"])).toBe(before.head);
-    expect(git(local, ["log", "--oneline"])).toBe(before.log);
+    expect(res.ok && res.conflicts).toEqual([]);
+    expect(git(local, ["rev-parse", "HEAD"])).toBe(head);
+    expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("mac\n");
     expect(fs.existsSync(path.join(local, "local-only.txt"))).toBe(true);
   });
 
-  test("a dirty local tree is backed up to a ref before being overwritten", async () => {
+  test("a shared folder: another session's uncommitted edit stays exactly as it is", async () => {
     const { local, remoteRepo, ref } = await remoteWithWork();
     fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "from the mac\n");
     runRemoteScript(remoteRepo, ref);
     git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
-    // Local has its own uncommitted edit — after a move this is the NORMAL state,
-    // since the move no longer commits the source's work away.
-    fs.writeFileSync(path.join(local, "tracked.txt"), "precious local edit\n");
+    fs.writeFileSync(path.join(local, "other-session.txt"), "someone else's work in progress\n");
 
-    const res = await applySnapshotFastForward(local, ref, { now: 12345 });
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.backupRef).toBe("refs/codecast/backup/12345");
-    // The Mac's version won...
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok && res.appliedWork).toBe(true);
     expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("from the mac\n");
-    // ...but nothing was lost: the clobbered edit is recoverable from the ref.
-    expect(git(local, ["show", `${res.backupRef}:tracked.txt`])).toBe("precious local edit");
+    expect(fs.readFileSync(path.join(local, "other-session.txt"), "utf-8")).toBe("someone else's work in progress\n");
+    expect(git(local, ["log", "--oneline"])).not.toContain("wip snapshot");
   });
 
-  test("a clean local tree needs no backup", async () => {
+  test("the same lines edited on both sides: merged three-way, the conflict named, nothing reset", async () => {
     const { local, remoteRepo, ref } = await remoteWithWork();
-    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac\n");
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac line\n");
     runRemoteScript(remoteRepo, ref);
     git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    fs.writeFileSync(path.join(local, "tracked.txt"), "laptop line\n");
+
     const res = await applySnapshotFastForward(local, ref);
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.backupRef).toBeUndefined();
+    expect(res.ok && res.conflicts).toEqual(["tracked.txt"]);
+    const merged = fs.readFileSync(path.join(local, "tracked.txt"), "utf-8");
+    expect(merged).toContain("laptop line");
+    expect(merged).toContain("mac line");
+  });
+
+  test("a move that pushed a wip snapshot: the branch never lands on it, and only the host's own edits come home", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    // The move: the laptop's uncommitted work travels as a snapshot the host checks out.
+    fs.writeFileSync(path.join(local, "tracked.txt"), "laptop work before the move\n");
+    const pushed = (await createWipSnapshot(local))!;
+    git(remoteRepo, ["fetch", "-q", local, pushed.sha]);
+    git(remoteRepo, ["reset", "-q", "--hard", pushed.sha]);
+    // On the host the session adds a file; meanwhile a sibling here edits another.
+    fs.writeFileSync(path.join(remoteRepo, "made-on-host.txt"), "host work\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    fs.writeFileSync(path.join(local, "sibling.txt"), "sibling work\n");
+    const head = git(local, ["rev-parse", "HEAD"]);
+
+    for (const start of [pushed.sha, undefined]) {
+      fs.rmSync(path.join(local, "made-on-host.txt"), { force: true });
+      const res = await applySnapshotFastForward(local, ref, { start });
+      expect(res.ok && res.conflicts).toEqual([]);
+      expect(git(local, ["rev-parse", "HEAD"])).toBe(head);
+      expect(git(local, ["log", "--oneline"])).not.toContain("wip snapshot");
+      expect(fs.readFileSync(path.join(local, "made-on-host.txt"), "utf-8")).toBe("host work\n");
+      expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("laptop work before the move\n");
+      expect(fs.readFileSync(path.join(local, "sibling.txt"), "utf-8")).toBe("sibling work\n");
+    }
+  });
+
+  test("an overlap alongside a file only the host has: both land, the overlap is named", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "mac line\n");
+    fs.writeFileSync(path.join(remoteRepo, "host-only.txt"), "new on host\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    fs.writeFileSync(path.join(local, "tracked.txt"), "laptop line\n");
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok && res.conflicts).toEqual(["tracked.txt"]);
+    expect(fs.readFileSync(path.join(local, "host-only.txt"), "utf-8")).toBe("new on host\n");
+    expect(git(local, ["diff", "--cached", "--name-only"])).toBe("");
+  });
+
+  test("a file the host created that this folder already has: identical is skipped, different is merged with markers, the rest still lands", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    fs.writeFileSync(path.join(remoteRepo, "same.txt"), "same\n");
+    fs.writeFileSync(path.join(remoteRepo, "notes.md"), "host notes\n");
+    fs.writeFileSync(path.join(remoteRepo, "tracked.txt"), "host edit\n");
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    fs.writeFileSync(path.join(local, "same.txt"), "same\n");
+    fs.writeFileSync(path.join(local, "notes.md"), "laptop notes\n");
+
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok && res.conflicts).toEqual(["notes.md"]);
+    expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("host edit\n");
+    expect(fs.readFileSync(path.join(local, "same.txt"), "utf-8")).toBe("same\n");
+    const notes = fs.readFileSync(path.join(local, "notes.md"), "utf-8");
+    expect(notes).toContain("laptop notes");
+    expect(notes).toContain("host notes");
+  });
+
+  test("a host that changed nothing changes nothing here", async () => {
+    const { local, remoteRepo, ref } = await remoteWithWork();
+    runRemoteScript(remoteRepo, ref);
+    git(local, ["fetch", "--force", remoteRepo, `${ref}:${ref}`]);
+    fs.writeFileSync(path.join(local, "tracked.txt"), "local edit\n");
+    const res = await applySnapshotFastForward(local, ref);
+    expect(res.ok && res.appliedWork).toBe(false);
+    expect(fs.readFileSync(path.join(local, "tracked.txt"), "utf-8")).toBe("local edit\n");
   });
 
   test("a missing/garbage ref reports rather than throws", async () => {

@@ -522,7 +522,7 @@ export function SessionsView() {
 
   if (sessions === undefined) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100 flex items-center justify-center">
         <div className="text-zinc-500 font-mono text-sm">loading sessions...</div>
       </div>
     );
@@ -547,7 +547,7 @@ export function SessionsView() {
   const bulkPruneCount = bulkRows.length - bulkKillCount;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
         <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">

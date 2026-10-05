@@ -107,6 +107,8 @@ const BlogPublish = lazy(() => import("@/app/(marketing)/blog/a-url-for-everythi
 const BlogAgentsTalk = lazy(() => import("@/app/(marketing)/blog/agents-that-talk-to-each-other/page"));
 const BlogPullRequests = lazy(() => import("@/app/(marketing)/blog/the-pull-request-that-knows-its-sessions/page"));
 const BlogTeamSees = lazy(() => import("@/app/(marketing)/blog/what-your-team-sees/page"));
+const BlogWorktrees = lazy(() => import("@/app/(marketing)/blog/one-repository-twenty-checkouts/page"));
+const BlogJumps = lazy(() => import("@/app/(marketing)/blog/fewer-bigger-jumps/page"));
 const CompareIndex = lazy(() => import("@/app/(marketing)/compare/page"));
 const Compare = lazy(() => import("@/app/(marketing)/compare/ComparePage"));
 
@@ -123,6 +125,8 @@ const JoinTeam = lazy(() => import("@/app/join/[code]/page"));
 const Inbox = lazy(() => import("@/app/inbox/page"));
 const Feed = lazy(() => import("@/app/feed/page"));
 const Changes = lazy(() => import("@/app/changes/page"));
+const Mods = lazy(() => import("@/app/mods/page"));
+const ModPane = lazy(() => import("@/app/m/page"));
 const Crosstalk = lazy(() => import("@/app/crosstalk/page"));
 const Browser = lazy(() => import("@/app/browser/page"));
 const Org = lazy(() => import("@/app/org/page"));
@@ -135,6 +139,7 @@ const Search = lazy(() => import("@/app/search/page"));
 const Notifications = lazy(() => import("@/app/notifications/page"));
 const Questions = lazy(() => import("@/app/questions/page"));
 const Line = lazy(() => import("@/app/line/page"));
+const LineSettings = lazy(() => import("@/app/line/settings/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
 const DecisionStacks = lazy(() => import("@/app/decisions/stacks/page"));
 const DecisionStack = lazy(() => import("@/app/decisions/stacks/[id]/page"));
@@ -232,6 +237,7 @@ const People = lazy(() => import("@/app/people/page"));
 const CallPanel = lazy(() => import("@/app/call-panel/page"));
 const MeetingOffer = lazy(() => import("@/app/meeting-offer/page"));
 const CallRing = lazy(() => import("@/app/call-ring/page"));
+const AgentDock = lazy(() => import("@/app/agent-dock/page"));
 const ShareCursors = lazy(() => import("@/app/share-cursors/page"));
 
 // Settings
@@ -282,6 +288,8 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/agents-that-talk-to-each-other", component: cast(BlogAgentsTalk), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-pull-request-that-knows-its-sessions", component: cast(BlogPullRequests), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/what-your-team-sees", component: cast(BlogTeamSees), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/one-repository-twenty-checkouts", component: cast(BlogWorktrees), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/fewer-bigger-jumps", component: cast(BlogJumps), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare", component: cast(CompareIndex), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "compare/:slug", component: cast(Compare), layout: "marketing", guestOk: true, guestKind: "public" },
 
@@ -300,6 +308,10 @@ export const ROUTES: RouteEntry[] = [
   { path: "feed", component: cast(Feed), layout: "dashboardShell", tab: "/feed" },
   // The daily edition owns its 1180px reading column (changes-page.md 4).
   { path: "changes", component: cast(Changes), layout: "dashboardShell", tab: "/changes", fullWidth: true },
+  // Codecast mods: the list, and one mod's pane (components/mods).
+  { path: "mods", component: cast(Mods), layout: "dashboardShell", tab: "/mods" },
+  { path: "m/:mod", component: cast(ModPane), layout: "dashboardShell", tab: "/m/:mod", fullWidth: true },
+  { path: "m/:mod/:pane", component: cast(ModPane), layout: "dashboardShell", tab: "/m/:mod/:pane", fullWidth: true },
   { path: "crosstalk", component: cast(Crosstalk), layout: "dashboardShell", tab: "/crosstalk", fullWidth: true },
   // A web page as a pane. Full-bleed via pageLayout FULL_WIDTH_PATTERNS (like
   // /chat), so no fullWidth flag here.
@@ -324,6 +336,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "questions", component: cast(Questions), layout: "dashboardShell", tab: "/questions" },
   // Full-bleed via lib/pageLayout FULL_WIDTH_PATTERNS, like /questions.
   { path: "line", component: cast(Line), layout: "dashboardShell", tab: "/line" },
+  { path: "line/settings", component: cast(LineSettings), layout: "dashboardShell", tab: "/line/settings" },
   { path: "decisions/stacks", component: cast(DecisionStacks), layout: "dashboardShell", tab: "/decisions/stacks" },
   { path: "decisions/stacks/:id", component: cast(DecisionStack), layout: "dashboardShell", tab: "/decisions/stacks/:id" },
   { path: "decisions/:id", component: cast(DecisionDetail), layout: "dashboardShell", tab: "/decisions/:id" },
@@ -467,6 +480,11 @@ export const ROUTES: RouteEntry[] = [
   //    for the same reason: a ring must reach somebody who is in another app
   //    entirely, which a card inside an app window cannot do. --
   { path: "call-ring", component: cast(CallRing), layout: "palette" },
+
+  // -- The agent dock (TransparentWindowLayout): the pill on the screen's
+  //    edge with a dot per live agent and the card beside it. On by
+  //    default, turned off per machine. --
+  { path: "agent-dock", component: cast(AgentDock), layout: "palette" },
 
   // -- The share cursors glass (TransparentWindowLayout): teammates' pointers
   //    drawn on the sharer's own screen, over what the share captures. --

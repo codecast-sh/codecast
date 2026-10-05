@@ -8,38 +8,27 @@ import { Text } from "@/components/Themed";
 import { Theme, themedStyles, useTheme } from "@/constants/Theme";
 import { joinCall, startHuddle } from "@/lib/calls/callManager";
 
-// The huddle affordance for anything with a room: one tap joins the room
-// (same key web's chips use) — and rings `ring` if given (a DM or group
-// thread rings its people). When
-// teammates are already in it, the button shows their count so it reads as
-// "join them", not "start something". Renders nothing when calling is not
-// configured, or when calls are off for the room's team (a per-team opt-in;
-// callConfig lists the caller's teams that have it on) — no dead
-// affordance.
-export function HuddleButton({
-  roomKey,
-  teamId,
-  ring,
-  anchorTitle,
-  channelMemberCount,
-}: {
+type HuddleTarget = {
   roomKey: string;
   teamId?: string | null;
   ring?: string[];
   anchorTitle?: string;
   channelMemberCount?: number;
-}) {
-  const Theme = useTheme();
+};
+
+// What a huddle affordance needs, wherever it is drawn (a header button, a row
+// in an action sheet): whether calling is on for the room's team, who is in the
+// room, a label that reads "join them" when someone is, and the press itself.
+export function useHuddleAction({ roomKey, teamId, ring, anchorTitle, channelMemberCount }: HuddleTarget) {
   const router = useRouter();
   // Both off the store the sync bridge feeds: whether calling is on for the
   // team, and who is in this room (every live room in my teams carries its
-  // members), so the button paints its final state on the first frame.
+  // members), so the affordance paints its final state on the first frame.
   const enabled = useInboxStore((s) => {
     const config = s.callConfig as { enabled: boolean; teams?: string[] } | null;
     return config?.enabled === true && !!teamId && (config.teams ?? []).includes(String(teamId));
   });
   const inRoom = useInboxStore((s) => s.liveRooms.find((r: any) => r.room_key === roomKey)?.members.length ?? 0);
-  if (!enabled) return null;
   const isChannel = parseRoomKey(roomKey)?.kind === "channel";
   const start = () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -50,40 +39,60 @@ export function HuddleButton({
     }
     router.push("/call");
   };
+  const press = () => {
+    if (inRoom === 0 && isChannel && (channelMemberCount ?? 0) > CHANNEL_HUDDLE_WARNING_SIZE) {
+      Alert.alert(
+        `Buzz everyone in ${anchorTitle || "this channel"}?`,
+        `This channel has ${channelMemberCount} members. Starting a huddle will buzz all ${channelMemberCount! - 1} other members.`,
+        [{ text: "Cancel", style: "cancel" }, { text: "Start and buzz everyone", onPress: start }],
+      );
+    } else {
+      start();
+    }
+  };
+  const label = inRoom > 0
+    ? `Join huddle, ${inRoom} in it`
+    : isChannel || ring?.length
+      ? "Start a huddle and ring everyone here"
+      : "Start a huddle here";
+  return {
+    enabled,
+    inRoom,
+    label,
+    press,
+    pressDisabled: isChannel && inRoom === 0 && channelMemberCount === undefined,
+  };
+}
+
+// The huddle affordance for anything with a room: one tap joins the room
+// (same key web's chips use) — and rings `ring` if given (a DM or group
+// thread rings its people). When teammates are already in it, the button
+// shows their count so it reads as "join them", not "start something".
+// Renders nothing when calling is not configured, or when calls are off for
+// the room's team (a per-team opt-in; callConfig lists the caller's teams that
+// have it on) — no dead affordance.
+export function HuddleButton(target: HuddleTarget) {
+  const Theme = useTheme();
+  const huddle = useHuddleAction(target);
+  if (!huddle.enabled) return null;
   return (
     <TouchableOpacity
-      disabled={isChannel && inRoom === 0 && channelMemberCount === undefined}
-      onPress={() => {
-        if (inRoom === 0 && isChannel && (channelMemberCount ?? 0) > CHANNEL_HUDDLE_WARNING_SIZE) {
-          Alert.alert(
-            `Buzz everyone in ${anchorTitle || "this channel"}?`,
-            `This channel has ${channelMemberCount} members. Starting a huddle will buzz all ${channelMemberCount! - 1} other members.`,
-            [{ text: "Cancel", style: "cancel" }, { text: "Start and buzz everyone", onPress: start }],
-          );
-        } else {
-          start();
-        }
-      }}
-      style={[styles.btn, inRoom > 0 && styles.btnLive]}
+      disabled={huddle.pressDisabled}
+      onPress={huddle.press}
+      style={[styles.btn, huddle.inRoom > 0 && styles.btnLive]}
       hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
       activeOpacity={0.6}
-      accessibilityLabel={
-        inRoom > 0
-          ? `Join huddle, ${inRoom} in it`
-          : isChannel || ring?.length
-            ? "Start a huddle and ring everyone here"
-            : "Start a huddle here"
-      }
+      accessibilityLabel={huddle.label}
     >
-      <Ionicons name="headset-outline" size={17} color={inRoom > 0 ? Theme.green : Theme.textMuted} />
-      {inRoom > 0 && <Text style={styles.count}>{inRoom}</Text>}
+      <Ionicons name="headset-outline" size={17} color={huddle.inRoom > 0 ? Theme.green : Theme.textMuted} />
+      {huddle.inRoom > 0 && <Text style={styles.count}>{huddle.inRoom}</Text>}
     </TouchableOpacity>
   );
 }
 
 // Session screens: the room of one conversation.
-export function SessionHuddleButton({ conversationId, teamId }: { conversationId: string; teamId?: string | null }) {
-  return <HuddleButton roomKey={sessionRoomKey(conversationId)} teamId={teamId} />;
+export function useSessionHuddle(conversationId: string, teamId?: string | null) {
+  return useHuddleAction({ roomKey: sessionRoomKey(conversationId), teamId });
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({

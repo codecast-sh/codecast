@@ -186,7 +186,7 @@ export function callDisplayTitle(
   const title = call.title?.trim();
   if (title) return title;
   const parsed = parseRoomKey(call.room_key);
-  if (parsed?.kind === "rec") return "Untitled recording";
+  if (parsed?.kind === "rec") return "Untitled voice note";
   if (names.peerName) return `Call with ${names.peerName}`;
   if (parsed?.kind === "session" && names.sessionTitle) return `Huddle in ${names.sessionTitle}`;
   if (parsed?.kind === "channel" && names.channelName) return `Huddle in #${names.channelName}`;

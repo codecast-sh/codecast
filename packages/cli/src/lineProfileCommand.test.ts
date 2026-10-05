@@ -121,3 +121,25 @@ project = "Infrastructure"
     expect(publishGroups(resolveLineProfile(values))).toEqual({ groups: [], unprojected: ["p"] });
   });
 });
+
+// Every publish carries the rest of the resolved profile: values, where each
+// came from, the loader's notes and warnings, and the file relative to its root.
+describe("publishFacts", () => {
+  test("Union's profile without its finders, the file repo relative", async () => {
+    const { parseLineProfileText, resolveLineProfile } = await import("./lineProfile");
+    const { publishFacts } = await import("./lineProfileCommand");
+    const { values, warnings } = parseLineProfileText(`[line]\nproject = "Agent Quality"\nwatch_days = 14\n[line.commands]\ncheck = "bun test"\n[[line.finders]]\nid = "c"\nsource = "s"\nkind = "bug or regression"\nfingerprint = "x"\n`);
+    const facts = publishFacts(resolveLineProfile(values, { root: "/src/union", file: "/src/union/.codecast/line.toml", warnings }));
+    expect(facts).not.toHaveProperty("finders");
+    expect(facts).toMatchObject({ project: "Agent Quality", watch_days: 14, size_budget: 400, file: ".codecast/line.toml", commands: { check: "bun test", prove: null } });
+    expect(facts.sources).toMatchObject({ project: "file", watch_days: "file", size_budget: "default", "commands.check": "file", finders: "file" });
+    expect(facts.notes).toContain("no prove command: the prove station passes with a note");
+    expect(facts.warnings[0]).toContain("is a sentence");
+  });
+
+  test("a repo with no profile publishes the defaults and a null file", async () => {
+    const { resolveLineProfile } = await import("./lineProfile");
+    const { publishFacts } = await import("./lineProfileCommand");
+    expect(publishFacts(resolveLineProfile({}, { root: "/src/x" })).file).toBeNull();
+  });
+});

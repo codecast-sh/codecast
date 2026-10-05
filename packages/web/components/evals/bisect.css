@@ -86,12 +86,11 @@ select.evb-input { font-family: var(--font-ui); }
 .evb-answer-say { font-size: 14px; line-height: 1.45; color: var(--sol-text); max-width: 70ch; }
 .evb-arrow { display: inline-flex; align-items: center; gap: 6px; }
 
-/* Confidence as three cells, the reached one inked. */
-.evb-confidence { display: inline-grid; grid-template-columns: repeat(3, auto); border: 1px solid var(--ev-rule); border-radius: 6px; overflow: hidden; font-size: 11.5px; }
-.evb-confidence > span { padding: 4px 10px; color: var(--sol-text-dim); }
-.evb-confidence > span + span { border-left: 1px solid var(--ev-rule); }
-.evb-confidence > span[data-on] { color: var(--sol-bg); background: var(--sol-text); font-weight: 600; }
-.evb-confidence > span[data-on="unattributable"] { background: var(--sol-magenta); }
+/* Confidence as a read-only gauge: the reached word and a three-bar meter, nothing that looks pressable. */
+.evb-confidence { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 600; color: var(--sol-text); cursor: help; }
+.evb-confidence rect { fill: color-mix(in srgb, var(--sol-text-dim) 30%, transparent); }
+.evb-confidence rect[data-on] { fill: var(--sol-text); }
+.evb-confidence[data-evb-confidence="unattributable"] { color: var(--sol-magenta); }
 
 .evb-reason { font-size: 12.5px; line-height: 1.5; color: var(--sol-text); padding: 8px 12px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-magenta) 45%, transparent); background: color-mix(in srgb, var(--sol-magenta) 6%, transparent); }
 /* An empty source answer: no candidate left, and the one way to widen it. */
@@ -110,7 +109,8 @@ select.evb-input { font-family: var(--font-ui); }
 .evb-prior-row[data-evb-live] .evb-prior-word::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--sol-blue); vertical-align: 1px; }
 @container evals (max-width: 720px) { .evb-prior-row { grid-template-columns: minmax(0, 1fr) auto; } .evb-prior-ends { display: none; } }
 /* The one-bisect lock, named above Start. */
-.evb-lock { display: flex; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.5; color: var(--sol-text); padding: 9px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 6%, transparent); }
+.evb-lock { display: flex; flex-wrap: wrap; gap: 9px; align-items: flex-start; font-size: 12px; line-height: 1.5; color: var(--sol-text); padding: 9px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 6%, transparent); }
+.evb-lock-cmds { display: flex; flex-direction: column; gap: 4px; flex-basis: 100%; padding-left: 17px; }
 .evb-lock-dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--sol-blue); }
 
 /* ── Candidate rows ──────────────────────────────────────────────────────── */
@@ -208,7 +208,9 @@ select.evb-input { font-family: var(--font-ui); }
 /* Wells: one per rep per freeze, popping in as reps land. */
 .evb-wells { display: flex; flex-direction: column; gap: 3px; padding: 6px 7px; border-radius: 6px; background: color-mix(in srgb, var(--sol-card) 80%, transparent); border: 1px solid var(--ev-rule); }
 .evb-wells-label { font-size: 9.5px; color: var(--sol-text-dim); margin-bottom: 1px; display: flex; flex-direction: column; gap: 0; line-height: 1.35; }
-.evb-wells-tally { white-space: nowrap; }
+/* The counts wrap between themselves, never inside one, so a long tally stays inside the control column. */
+.evb-wells-tally { display: flex; flex-wrap: wrap; column-gap: 0.6ch; }
+.evb-wells-tally > span { white-space: nowrap; }
 .evb-wells-row { display: flex; gap: 2px; align-items: center; }
 .evb-wells-role { width: 8px; flex: none; font: 8.5px var(--font-mono); color: var(--sol-text-dim); text-align: left; }
 .evb-wells-row[data-role="control"] > :not(.evb-wells-role) { opacity: 0.62; }
@@ -232,7 +234,7 @@ select.evb-input { font-family: var(--font-ui); }
   padding: 7px 10px; border-radius: 6px; border: 1px dashed color-mix(in srgb, var(--sol-yellow) 70%, transparent);
   background: color-mix(in srgb, var(--sol-yellow) 12%, transparent);
 }
-.evb-log { font: 11px/1.55 var(--font-mono); font-variant-ligatures: none; color: var(--sol-text-muted); background: var(--sol-bg-inset, var(--sol-bg-alt)); border: 1px solid var(--ev-rule); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; }
+.evb-log { font: 11px/1.55 var(--font-mono); font-variant-ligatures: none; color: var(--sol-text-muted); background: var(--sol-bg-inset, var(--sol-bg-alt)); border: 1px solid var(--ev-rule); border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto; display: flex; flex-direction: column-reverse; }
 .evb-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .evb-step { display: grid; grid-template-columns: 64px 64px minmax(0, 1fr); gap: 10px; padding: 5px 0; font-size: 12px; align-items: baseline; }
 .evb-step + .evb-step { border-top: 1px solid var(--ev-rule); }
@@ -275,5 +277,6 @@ select.evb-input { font-family: var(--font-ui); }
 .evb-table tbody tr { cursor: pointer; transition: background 120ms ease; }
 .evb-table tbody tr:hover { background: var(--sol-bg-highlight); }
 .evb-table td.evb-num { font-variant-numeric: tabular-nums; text-align: right; }
+.evb-table th.evb-num { text-align: right; }
 .evb-live { display: inline-flex; align-items: center; gap: 6px; }
 .evb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sol-text); }

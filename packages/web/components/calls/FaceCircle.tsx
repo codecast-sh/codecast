@@ -217,6 +217,7 @@ export function CircleFace({
       src={image}
       alt=""
       className="face-avatar-img"
+      draggable={false}
       fallback={
         <span className="face-avatar-fallback" style={{ fontSize: Math.max(12, diameter / 2.6) }}>
           {(name || "?").charAt(0).toUpperCase()}

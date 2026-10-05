@@ -449,8 +449,12 @@ export interface AgentClientDescriptor {
    * text, and a client is free to answer it by reading the machine's own
    * clipboard. That is behaviour a managed pane must not have: the pane is
    * driven by injection, so whatever the human last copied rides along.
+   *
+   * `idleOnly` marks a client that accepts a paste but treats it as less than
+   * the human's own words: it is typed only at an idle composer, where no
+   * dialog can be up to take a keystroke as its answer, and pasted otherwise.
    */
-  typedComposerInput?: { newlineKey: string };
+  typedComposerInput?: { newlineKey: string; idleOnly?: boolean };
   /**
    * How this client runs non-interactively (print / exec / run). Required: a
    * new client must say how `cast exec` invokes it. `flag` is `-p` on the main
@@ -602,6 +606,16 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
+    // Why: Claude Code 2.1.277+ (remote flag tengu_virtual_pancake) wraps a
+    // paste long enough to collapse into a "[Pasted text]" chip in
+    // <pasted_content> and tells the model to act on it only where the user's
+    // own words outside the block ask, so a long message sent from codecast
+    // reached the agent as third party text it would not act on. Typed input
+    // is never wrapped (2.1.289: an 81-line typed message arrived whole). A
+    // typed lone key answers a permission dialog where a paste is refused
+    // (ct-52703), so typing waits for an idle composer and mid-turn delivery
+    // still pastes.
+    typedComposerInput: { newlineKey: "C-j", idleOnly: true },
     // All verified by driving the real CLI in a sandbox HOME (2026-08-12/13).
     // Plugins live in settings.json; MCP lives in ~/.claude.json (`enabledPlugins`
     // read back null there) — the two files must not be conflated. `~/.agents/skills`

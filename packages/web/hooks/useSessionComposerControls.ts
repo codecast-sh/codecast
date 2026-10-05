@@ -2,7 +2,6 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { AgentStatus } from "@codecast/shared/contracts";
 
 // The session controls a composer drives, shared by every surface that shows
@@ -31,10 +30,10 @@ export function useSessionEscape(
   conversationId: string | undefined,
   o: { active: boolean; isOwner: boolean },
 ): () => boolean {
-  const convCommand = useInboxStore((s) => s.convCommand);
+  const sendEscape = useInboxStore((s) => s.sendEscape);
   return useCallback(() => {
     if (!conversationId || !o.isOwner || !o.active) return false;
-    void convCommand(conversationId as Id<"conversations">, "sendEscapeToSession", { pressed_at: Date.now() }).catch((err) => {
+    void sendEscape(conversationId).catch((err) => {
       if (isParkedDispatchError(err)) {
         toast.info("Escape queued — it will send when the connection recovers");
         return;
@@ -42,5 +41,5 @@ export function useSessionEscape(
       toast.error(err instanceof Error ? err.message : "Failed to send Escape");
     });
     return true;
-  }, [conversationId, o.isOwner, o.active, convCommand]);
+  }, [conversationId, o.isOwner, o.active, sendEscape]);
 }

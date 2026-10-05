@@ -17,7 +17,7 @@ describe('evalSignals', () => {
       ['regression', 'evals:title:separated-worse'],
       ['regression', 'evals:title:length'],
       ['regression', 'evals:title:json'],
-      ['prompt_miss', 'evals:title:abcdef1234567890'],
+      ['prompt_miss', 'evals:title:abcdef12'],
     ]);
     for (const s of out) {
       expect(s.subject).toBe('title');
@@ -25,6 +25,9 @@ describe('evalSignals', () => {
       expect(s.detail).toContain('title  pass 5/5');
     }
     expect(evalSignals({ ...held, regression: true })[0].fingerprint).toBe(out[0].fingerprint);
+    // A signal leaves the laptop, so it names a failing freeze by its prefix only, the fingerprint included.
+    expect(out[3].detail).toContain('freeze abcdef12 failed');
+    expect(signalArgv(out[3]).join(' ')).not.toContain('abcdef1234567890');
   });
 
   test('no evidence url leaves the flag off', () => {

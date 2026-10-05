@@ -312,7 +312,12 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
     if (patch.status === "decommissioned") { for (const m of memberships) await ctx.db.delete(m._id); }
     else if (!memberships.length) await ctx.db.insert("team_memberships", { user_id: current.bot_user_id, team_id: current.team_id, role: "member", joined_at: Date.now(), visibility: "full" });
   }
-  if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(patch.status === "scheduled" && current.interval_ms ? { run_at: Date.now() + current.interval_ms, cadence_slot_at: undefined } : {}) });
+  // A routine that starts again, or goes back to the cadence it had before a
+  // tune (S38), runs one interval from now. A tune taken back mid-run leaves
+  // the slot to the arming after that run.
+  const interval = patch.interval_ms ?? current.interval_ms;
+  const rearm = interval && (patch.status === "scheduled" || ("interval_ms" in patch && current.status === "scheduled"));
+  if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(rearm ? { run_at: Date.now() + interval, cadence_slot_at: undefined } : {}) });
   else await ctx.db.patch(w.id, patch);
   if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId, ownerRows ?? []);
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);

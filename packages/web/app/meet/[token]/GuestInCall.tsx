@@ -15,7 +15,7 @@ import {
 import { DeviceSelect, NoticePills } from "./MeetChrome";
 import { LogoMark } from "../../../components/Logo";
 import { RecordingMark, RecordingStopControl } from "../../../components/calls/RecordingMark";
-import { guestNoticeLines, humanizeConvexError, type GuestNotice } from "@codecast/shared/contracts";
+import { guestNoticeLines, humanizeConvexError, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
@@ -32,6 +32,7 @@ export function GuestInCall({
   transcribed,
   recording,
   videoPublic = false,
+  wordsPublic = false,
   accepted,
   reconnecting,
   ended: endedAs,
@@ -49,6 +50,8 @@ export function GuestInCall({
   recording: boolean;
   /** The recording's video will be on the call's public link. */
   videoPublic?: boolean;
+  /** The transcript is on the call's public link as it is written. */
+  wordsPublic?: boolean;
   /** The notice the guest joined under. What the room keeps beyond it (a
    *  recording or a transcript that started since, or one running that this
    *  notice did not say) is said in words on the way in, not left to a mark
@@ -112,21 +115,29 @@ export function GuestInCall({
   // a recording that starts while they are inside, a transcript switched on,
   // or either already running when the notice they joined under said less.
   // A thing that stops is forgotten, so starting it again is said again.
-  // A recording whose video goes to the call's public link is more than one
-  // the guest was told of, so it is said again when that changes.
+  // A recording whose video, or a transcript whose words, go to the call's
+  // public link is more than one the guest was told of, so it is said again
+  // when that changes.
   const [told, setTold] = useState<GuestNotice>(() => accepted ?? { recording: false, transcribed: false });
   useWatchEffect(() => {
     setTold((t) =>
-      (t.recording && !recording) || (t.transcribed && !transcribed) || (t.video_public && !videoPublic)
-        ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed, video_public: !!t.video_public && videoPublic }
+      (t.recording && !recording) || (t.transcribed && !transcribed) || (t.video_public && !videoPublic) || (t.words_public && !wordsPublic)
+        ? {
+            recording: t.recording && recording,
+            transcribed: t.transcribed && transcribed,
+            video_public: !!t.video_public && videoPublic,
+            words_public: !!t.words_public && wordsPublic,
+          }
         : t,
     );
     if (!recording) setAskStop(false);
-  }, [recording, transcribed, videoPublic]);
-  const recordingNews = recording && (!told.recording || (videoPublic && !told.video_public));
-  const fresh = guestNoticeLines({ recording: recordingNews, transcribed: transcribed && !told.transcribed, video_public: videoPublic }, "short");
+  }, [recording, transcribed, videoPublic, wordsPublic]);
+  const news = noticeNews(told, { recording, transcribed, video_public: videoPublic, words_public: wordsPublic });
+  const fresh = guestNoticeLines({ recording: news.rec, transcribed: news.words, video_public: videoPublic, words_public: wordsPublic }, "short");
   const dismiss = (key: "rec" | "words") =>
-    setTold((t) => (key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true }));
+    setTold((t) =>
+      key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true, words_public: wordsPublic },
+    );
   // Stop is for everyone, so it is asked once more, from the mark in the bar
   // or from the line that said it started.
   const [askStop, setAskStop] = useState(false);
@@ -192,7 +203,7 @@ export function GuestInCall({
         </span>
         <div className="min-w-2 flex-1" />
         {recording && <GuestRecordingControl asking={askStop} onAsk={setAskStop} onStop={onStopRecording} />}
-        <NoticePills transcribed={transcribed} />
+        <NoticePills transcribed={transcribed} wordsPublic={wordsPublic} />
         <div role="radiogroup" aria-label="View" className="ml-1 flex shrink-0 items-center rounded-lg bg-white/[0.04] p-0.5 max-sm:hidden">
           {STAGE_VIEWS.map((v) => (
             <button

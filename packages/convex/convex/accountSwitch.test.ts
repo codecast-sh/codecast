@@ -167,7 +167,8 @@ describe("usage predicates", () => {
   });
 
   test("worstUsagePercent takes the max across windows, null without data", () => {
-    expect(worstUsagePercent(usage(28, 27, 42), now)).toBe(42);
+    expect(worstUsagePercent(usage(28, 27, 42), now)).toBe(28); // a model-scoped week is not the account's
+    expect(worstUsagePercent(usage(28, 47, 42), now)).toBe(47);
     expect(worstUsagePercent(usage(90, 10), now)).toBe(90);
     expect(worstUsagePercent(undefined, now)).toBeNull();
     expect(worstUsagePercent({ fetched_at: 1 }, now)).toBeNull();
@@ -627,8 +628,49 @@ describe("decideAutoSwitch", () => {
         { profile: "personal", at: 1784253233513 }, // 01:53:53Z
         { profile: "fresh", at: 1784260922168 }, // 04:02:02Z
       ],
+      // The parked sessions ran Fable, so fresh's pegged Fable week spent them.
+      models: ["claude-fable-5-1"],
     });
     expect(d).toEqual({ action: "switch", profile: "union" });
+  });
+
+  test("a pegged model week benches an account only for sessions on that model", () => {
+    // 2026-10-04: an Opus fleet hopped joannagerkin (97% of its week) ->
+    // apetrosian (99%) -> ..., each spent within minutes, while claude2 sat at
+    // 1% of its week with only its Fable week pegged.
+    const day = 86_400_000;
+    const at = Date.parse("2026-10-04T14:28:00Z");
+    const profiles = [
+      {
+        name: "jordanbelman357",
+        email: "jordan@x.com",
+        usage: { fetched_at: at - 60_000, session: { percent: 100, resets_at: at + 3600_000 }, weekly: { percent: 37, resets_at: at + 6 * day } },
+      },
+      {
+        name: "joannagerkin",
+        email: "joanna@x.com",
+        usage: {
+          fetched_at: at - 60_000,
+          session: { percent: 0 },
+          weekly: { percent: 97, resets_at: at + 2 * day },
+          weekly_scoped: { percent: 29, resets_at: at + 2 * day, label: "Fable" },
+        },
+      },
+      {
+        name: "claude2",
+        email: "claude2@x.com",
+        usage: {
+          fetched_at: at - 60_000,
+          session: { percent: 0, resets_at: at + 3600_000 },
+          weekly: { percent: 1, resets_at: at + 6 * day },
+          weekly_scoped: { percent: 100, label: "Fable" },
+        },
+      },
+    ];
+    const decide = (models: string[]) =>
+      decideAutoSwitch({ now: at, parkedAt: at - 120_000, activeEmail: "jordan@x.com", profiles, attempts: [], models });
+    expect(decide(["claude-opus-5-5"])).toEqual({ action: "switch", profile: "claude2" });
+    expect(decide(["claude-fable-5-1"])).toEqual({ action: "switch", profile: "joannagerkin" });
   });
 
   test("only a snapshot newer than the attempt plus the settle margin counts as evidence", () => {

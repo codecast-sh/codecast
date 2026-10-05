@@ -25,17 +25,17 @@
         "detail": "got \"Hey can you look at why…\""
       },
       {
-        "name": "title · opener is a greeting",
+        "name": "Real case 1",
         "ok": false,
         "detail": "fails before the change"
       },
       {
-        "name": "title · pasted stack trace",
+        "name": "Real case 2",
         "ok": false,
         "detail": "fails before the change"
       },
       {
-        "name": "title · long opener with a plan",
+        "name": "Real case 3",
         "ok": false,
         "detail": "fails before the change"
       }
@@ -47,17 +47,17 @@
         "detail": "12 of 12 pass"
       },
       {
-        "name": "title · opener is a greeting",
+        "name": "Real case 1",
         "ok": true,
         "detail": "passes after the change"
       },
       {
-        "name": "title · pasted stack trace",
+        "name": "Real case 2",
         "ok": true,
         "detail": "passes after the change"
       },
       {
-        "name": "title · long opener with a plan",
+        "name": "Real case 3",
         "ok": true,
         "detail": "passes after the change"
       }
@@ -87,17 +87,17 @@
     {
       "name": "Verify",
       "ok": true,
-      "detail": "cast check convex: 0 errors. bun test convex/lib/titlePrompt.test.ts: 12 pass."
+      "detail": "The builder handed it over as done"
     },
     {
       "name": "Eval",
       "ok": true,
-      "detail": "Session title: separated better (p 0.004)"
+      "detail": "Session title: clearly better than before"
     },
     {
       "name": "Review",
       "ok": true,
-      "detail": "Diff matches the cause; rewrites the instruction at its own site, no filter added."
+      "detail": "An independent reviewer approved it"
     }
   ],
   "diff": {

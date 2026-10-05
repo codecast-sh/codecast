@@ -241,6 +241,15 @@ describe("run history fields", () => {
     ]);
   });
 
+  // The order and seed come back from result.json, so a planted value must
+  // never reach the shell as code when the founder pastes the line.
+  test("an order or seed that would run code is single-quoted", () => {
+    const [, full] = replayCommands("s", "1;id" as unknown as number, ["a", "$(id)", "`id`"], null);
+    expect(full).toBe("bun run sim s --seed '1;id' '--order=a $(id) `id`'");
+    const r = Bun.spawnSync(["sh", "-c", `printf '%s\\n' ${full.slice("bun run sim ".length)}`], { stdout: "pipe" });
+    expect(r.stdout.toString()).toBe("s\n--seed\n1;id\n--order=a $(id) `id`\n");
+  });
+
   // bun run drops an empty argument, so `--order ""` reached sim.ts as a bare
   // flag and exited 2. The printed line must survive the real `bun run sim`,
   // empty order included (a failure before any delivery, or a shrink to nothing).

@@ -148,10 +148,21 @@ No env var is set on Union's side and no secret is shared. What Union needs
 is in its committed `outreach/backend/codecast.json`, which `cast sources add`
 writes.
 
-State on 2026-10-04: the codecast side of signed requests and codecast.json
-(the signature module, the key set route, signed connections, `--base-url`,
-the codecast.json writer) is in the codecast working tree, not deployed. The
-Union side (`routes/codecast.ts`, `lib/codecastIngest.ts`,
+State on 2026-10-04: codecast's prod deployment signs (the key set route
+publishes `ck-2026-10`), so step 1 is done. Keyless setup is proven end to end
+on prod in a personal workspace, against Union's router run locally alone
+(`routes/codecast.ts` behind `middleware/auth.ts`, no
+`CODECAST_CONNECTOR_KEY`) behind a public tunnel: `cast sources add app
+--base-url` asked for no token and wrote the source and workspace into
+codecast.json; before the router's codecast.json named it, the manifest was
+refused and the source showed `error` naming what to add; after,
+`cast connector refresh` cleared it and `cast connector read <source>
+invariants.list` returned all 61 invariants. Unsigned, tampered signature,
+stale timestamp, replayed nonce, an unlisted source id and a listed source id
+the request was not signed for were each refused with a 401 saying why
+(`refusedBy: codecast_signature`). The platform SDK sink built from
+codecast.json alone posted an error that landed as a group and opened a cause.
+The Union side (`routes/codecast.ts`, `lib/codecastIngest.ts`,
 `lib/codecastConfig.ts`, `lib/codecastSignature.ts`, `codecast.json`,
 `lib/aiveryRoutePolicy.ts`, the auth, config, service identity, `errorLog`
 and `jobs` edits) is uncommitted in the `~/src/union-mobile` main checkout
@@ -209,8 +220,8 @@ connection, no role.
   calls, not through this role's triggers; the role reads them with
   `cast chat` and `cast calls` when an event needs that context.
 - Admin chat with page context is out of scope (X9).
-- CI: Aivery's `ci_status` wake covers every workflow run; codecast's
-  `pr_check_failed` covers pull requests only. A failure on main needs an
-  `http` source and a workflow step that posts a `check` item (X9).
+- CI: Aivery's `ci_status` wake covers every workflow run; codecast covers
+  pull requests with `pr_check_failed` and the default branch with
+  `check_failed` from the system `github-ci` source (X7, X9).
 - AgentWatch findings and spotlights move to the line's own sessions;
   `history.search` with `source=findings` still reads them.

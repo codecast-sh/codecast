@@ -54,7 +54,8 @@ describe("the 2026-10-02 codecast day", () => {
     expect(web.commit_shas).toEqual(["0de614861"]);
     expect(web.area).toBe("web");
     expect(web.headline).toBe("Line pages, share pages, org staffing and app updates");
-    expect(web.conversation_ids).toEqual([COMMITTER]);
+    // The committer landed other sessions' work: edits name the authors, not the trailer.
+    expect(web.conversation_ids).toEqual([]);
     expect(holding(r.stories, "926be8efb")[0].commit_shas).toEqual(["926be8efb"]);
   });
 
@@ -159,7 +160,7 @@ describe("rules (a) to (c) in isolation", () => {
     expect(r.stories[0].task_ids).toEqual(["ct1"]);
   });
 
-  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that still name it", () => {
+  test("a session crossing SPREAD_AREAS mid-day trades its anchored story for rule (b) stories that leave it to edits to name", () => {
     const areas = ["web", "cli", "convex", "mobile"];
     const cs = areas.map((a, i) => commit({ sha: `w${i}`, subject: `feat(${a}): step ${i}`, conversation_id: "s9", timestamp: T0 + i * 20 * MIN, paths: { [`packages/${a}/x.ts`]: 10 } }));
     const visible = [{ conversation_id: "s9" }];
@@ -170,7 +171,10 @@ describe("rules (a) to (c) in isolation", () => {
     expect(evening.stories.map((s) => s.anchor)).not.toContain("s9");
     expect(evening.stories.map((s) => s.story_key)).not.toContain(morning.stories[0].story_key);
     expect(evening.stories).toHaveLength(areas.length);
-    for (const s of evening.stories) expect(s.conversation_ids).toEqual(["s9"]);
+    for (const s of evening.stories) {
+      expect(s.conversation_ids).toEqual([]);
+      expect(s.private_conversation_count).toBe(0);
+    }
   });
 
   test("a batch commit's thin areas ride with its largest slice and never stand as a story of their own", () => {
@@ -241,6 +245,17 @@ describe("rules (a) to (c) in isolation", () => {
     const r = build({ commits: [a, b], visible: [{ conversation_id: "s1" }], prs: [{ id: "pr1", conversation_ids: ["s1"] }, { id: "pr2", shas: ["b"] }, { id: "pr3", conversation_ids: ["private"] }] });
     expect(holding(r.stories, "a")[0].pr_ids).toEqual(["pr1"]);
     expect(holding(r.stories, "b")[0].pr_ids).toEqual(["pr2", "pr9"]);
+  });
+
+  test("a squash or merge commit joins the pull request its subject names, unless a private session made it", () => {
+    const squash = commit({ sha: "sq", subject: "Stop asking for fields the card never asked for (#3827)", paths: { "packages/web/a.ts": 5 } });
+    const merge = commit({ sha: "mg", subject: "Merge pull request #12 from acme/feat-x", timestamp: T0 + 300 * MIN, paths: { "packages/cli/a.ts": 5 } });
+    const hidden = commit({ sha: "hd", subject: "feat(mobile): private (#40)", conversation_id: "secret", timestamp: T0 + 600 * MIN, paths: { "packages/mobile/a.ts": 5 } });
+    const prs = [{ id: "pr3827", number: 3827 }, { id: "pr12", number: 12 }, { id: "pr40", number: 40 }, { id: "pr7", number: 7 }];
+    const r = build({ commits: [squash, merge, hidden], visible: [], prs });
+    expect(holding(r.stories, "sq")[0].pr_ids).toEqual(["pr3827"]);
+    expect(holding(r.stories, "mg")[0].pr_ids).toEqual(["pr12"]);
+    expect(holding(r.stories, "hd")[0].pr_ids).toEqual([]);
   });
 
   test("a private session's own task and PR links stay out of the story, and the bulk risk still fires", () => {

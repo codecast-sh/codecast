@@ -1,5 +1,6 @@
-import { expect, test } from "bun:test";
-import { buildOffloadPlan, type OffloadPlanInput } from "./resourceOffload";
+import { describe, expect, test } from "bun:test";
+import { assignDestinations, buildOffloadPlan, loadShift, SPREAD_CEILING, type OffloadPlanInput } from "./resourceOffload";
+import type { OffloadCandidate, OffloadPlan } from "../components/resources/types";
 import type { ResourcePoint } from "@codecast/shared/contracts";
 const point = (at: number): ResourcePoint => ({ at, cpuPercent: 95, memoryTotal: 1000, memoryAvailable: 500, memoryAvailableIsEstimate: true, pressure: "normal", load1: 20, logicalCpus: 8, processCount: 1 });
 function input(): OffloadPlanInput {
@@ -10,7 +11,7 @@ test("recommendations need fresh source evidence and retain unknown host capacit
   const args = input();
   const plan = buildOffloadPlan(args)!;
   expect(plan.candidates).toHaveLength(1);
-  expect(plan.destinations[0].headroom).toBeUndefined();
+  expect(plan.destinations[0].sample).toBeUndefined();
   expect(plan.candidates[0].perDestination.linux.readiness).toBe("preflight_required");
   expect(plan.candidates[0].relief).toEqual({ cpu: 10, rssLow: 0, rssHigh: 100 });
   args.source.receivedAt = -200000;
@@ -34,4 +35,43 @@ test("Apple-only tooling cannot be recommended to Linux", () => {
   expect(row.perDestination.linux.readiness).toBe("blocked");
   expect(row.suggestedDestinationId).toBeUndefined();
   expect(row.requiresMac).toBeDefined();
+});
+
+test("loadShift spreads session CPU over the machine's cores and moves memory by resident size", () => {
+  const sample = { ...point(0), cpuPercent: 80, logicalCpus: 8, memoryTotal: 1000, memoryAvailable: 100 };
+  expect(loadShift(sample, { cpu: 400, rss: 300 }, -1)).toEqual({ before: { cpu: 80, memory: 90 }, after: { cpu: 30, memory: 60 } });
+  expect(loadShift({ ...sample, cpuPercent: 10 }, { cpu: 400, rss: 300 }, 1).after).toEqual({ cpu: 60, memory: 120 });
+  expect(loadShift({ ...sample, cpuPercent: undefined }, { cpu: 400, rss: 0 }, -1).after.cpu).toBeUndefined();
+});
+
+describe("assignDestinations", () => {
+  const ok = { readiness: "preflight_required" as const, blockers: [], pending: [] };
+  const cand = (id: string, rss: number, to = ["a", "b"]): OffloadCandidate => ({ sessionId: id, reason: "", confidence: "low", relief: { cpu: 0, rssHigh: rss }, staysLocal: [], disruption: "idle", perDestination: Object.fromEntries(to.map((d) => [d, ok])) });
+  const host = (deviceId: string, available: number, extra: Partial<OffloadPlan["destinations"][number]> = {}) => ({ deviceId, name: deviceId, role: "cloud_linux" as const, online: true, sample: { ...point(0), cpuPercent: 10, memoryTotal: 1000, memoryAvailable: available }, ...extra });
+  const plan = (destinations: OffloadPlan["destinations"], candidates: OffloadCandidate[]) => ({ deviceId: "mac", sourceSample: point(0), incident: { level: "elevated", reason: "", since: 0 }, generatedAt: 0, destinations, candidates, notOffered: [] }) as unknown as OffloadPlan;
+
+  test("auto fills the preferred host to the ceiling, then spills onto the next", () => {
+    const cs = [cand("x", 300), cand("y", 300), cand("z", 300)];
+    const got = assignDestinations(plan([host("a", 900), host("b", 900)], cs), cs, "auto");
+    expect([...got.values()].sort()).toEqual(["a", "a", "b"]);
+    expect(SPREAD_CEILING).toBe(80);
+  });
+  test("auto keeps a batch on one host when it fits, preferring the online, measured, cheaper one", () => {
+    const cs = [cand("x", 100), cand("y", 100)];
+    const got = assignDestinations(plan([host("b", 900, { costPerHour: 2 }), host("a", 900, { costPerHour: 1 })], cs), cs, "auto");
+    expect([...got.values()]).toEqual(["a", "a"]);
+    const asleep = assignDestinations(plan([host("a", 900, { online: false, asleep: true }), host("b", 900)], cs), cs, "auto");
+    expect([...asleep.values()]).toEqual(["b", "b"]);
+  });
+  test("a session that fits nowhere goes where it pushes load least; blocked hosts are skipped", () => {
+    const big = cand("x", 950);
+    expect(assignDestinations(plan([host("a", 100), host("b", 500)], [big]), [big], "auto").get("x")).toBe("b");
+    const onlyB = cand("y", 10, ["b"]);
+    expect(assignDestinations(plan([host("a", 900), host("b", 900)], [onlyB]), [onlyB], "auto").get("y")).toBe("b");
+  });
+  test("a named host takes every session it can; the rest keep their own suggestion", () => {
+    const cs = [cand("x", 10), { ...cand("y", 10, ["b"]), suggestedDestinationId: "b" }];
+    const got = assignDestinations(plan([host("a", 900), host("b", 900)], cs), cs, "a");
+    expect(Object.fromEntries(got)).toEqual({ x: "a", y: "b" });
+  });
 });

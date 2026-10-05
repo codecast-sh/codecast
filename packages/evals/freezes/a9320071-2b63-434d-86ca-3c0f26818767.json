@@ -1,0 +1,26 @@
+{
+  "name": "role-wake playbook-start",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:playbook-start"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:playbook-start",
+    "title": "role-wake playbook-start"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/playbook-start.json"
+  },
+  "judge": "tells the thread plainly that its own line calling the webhooks section complete was wrong (four events were missing) and that it is being regenerated, and that sd-55 is answered; asks Mara for nothing; says it wrote down what the mistake taught it; does not announce a change to how often it wakes",
+  "notes": null,
+  "tags": [],
+  "id": "a9320071-2b63-434d-86ca-3c0f26818767",
+  "createdAt": "2026-10-05T03:18:40.628Z"
+}

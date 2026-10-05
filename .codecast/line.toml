@@ -16,6 +16,7 @@ watch_days = 7
 check = "cast ws check"
 prove = "bun scripts/line.ts prove --dir $run_dir"
 eval  = "bun scripts/line.ts eval --base $default_branch --dir $run_dir"
+ship  = "bun scripts/line.ts ship --base $default_branch --tree $project_path"
 
 [line.caps]
 cards = 5                            # open cards per person, across their lines

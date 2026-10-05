@@ -120,6 +120,7 @@ afterAll(() => {
 const ME = "u-me";
 const ANN = "u-ann";
 const BO = "u-bo";
+const CY = "u-cy";
 
 function entry(id: string, name: string, over: Partial<FaceEntry> = {}): FaceEntry {
   return {
@@ -485,7 +486,7 @@ describe("two densities, one row", () => {
     expect(opened).toBe(1);
   });
 
-  test("a face dragged to move the float does not pin its card on release", async () => {
+  test("the float drags from a face or the strip's frame, never from a control, and a drag pins no card", async () => {
     // A face is a handle as well as a button: the click its release fires
     // after the window moved is swallowed, and a still press is a click.
     const drags: boolean[] = [];
@@ -495,25 +496,69 @@ describe("two densities, one row", () => {
     proto.hasPointerCapture ??= () => false;
     const Pointer = (dom.window as any).PointerEvent ?? dom.window.MouseEvent;
     const h = await mount(
-      <FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) }} />,
+      <FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) }}>
+        <div className="strip-body"><button type="button" className="strip-btn">End</button></div>
+      </FloatingFaceRow>,
     );
     const face = h.q(`.face-seat[data-face-id="${ANN}"] .face`)!;
-    const press = async (moveBy: number) => {
+    // The picture is never a drag of its own: it would carry off the press.
+    expect(face.querySelector("img")?.getAttribute("draggable") ?? "false").toBe("false");
+    const press = async (el: Element, moveBy: number, click = true) => {
       await act(async () => {
-        face.dispatchEvent(new Pointer("pointerdown", { bubbles: true, button: 0, pointerId: 1, screenX: 100, screenY: 100 }));
+        el.dispatchEvent(new Pointer("pointerdown", { bubbles: true, button: 0, pointerId: 1, screenX: 100, screenY: 100 }));
         dom.window.document.dispatchEvent(new Pointer("pointermove", { bubbles: true, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
-        face.dispatchEvent(new Pointer("pointerup", { bubbles: true, button: 0, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
-        face.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new Pointer("pointerup", { bubbles: true, button: 0, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
+        if (click) el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
       });
       await act(async () => {
         await new Promise((r) => setTimeout(r, 5));
       });
     };
-    await press(60);
+    await press(face, 60);
     expect(drags).toEqual([true, false]);
     expect(h.q("[data-member-card]")).toBeNull();
-    await press(0);
+    await press(face, 0);
     expect(h.q("[data-member-card]")?.textContent ?? "").toContain("Ann");
+    drags.length = 0;
+    await press(h.q(".strip-body")!, 60, false);
+    expect(drags).toEqual([true, false]);
+    drags.length = 0;
+    await press(h.q(".strip-btn")!, 0, false);
+    expect(drags).toEqual([]);
+  });
+
+  test("pointed at, the float's others circle opens them as a stack, and a press spreads them", async () => {
+    const row = rowOf([me({ state: "live-with-me" as FaceState }), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" }), entry(BO, "Bo"), entry(CY, "Cy")], [link(ANN, "call")]);
+    const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging() {} }} />);
+    const seat = (id: string) => h.q(`.face-seat[data-face-id="${id}"]`) as HTMLElement;
+    expect(seat(BO).hasAttribute("data-folded")).toBe(true);
+    // jsdom lays nothing out: point the hit test at the circle by hand.
+    const others = h.q(".face-row-others") as HTMLElement;
+    others.getBoundingClientRect = () => ({ left: 0, top: 0, right: 30, bottom: 30, width: 30, height: 30, x: 0, y: 0, toJSON() {} }) as DOMRect;
+    await act(async () => {
+      dom.window.dispatchEvent(new dom.window.Event("resize"));
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 15, clientY: 15 }));
+    });
+    expect(seat(BO).hasAttribute("data-folded")).toBe(false);
+    expect(seat(BO).hasAttribute("data-stacked")).toBe(true);
+    expect(seat(CY).hasAttribute("data-stacked")).toBe(true);
+    // A stacked face opens no card; its press spreads the team.
+    await h.click(seat(BO).querySelector(".face")!);
+    expect(h.q("[data-member-card]")).toBeNull();
+    expect(seat(BO).hasAttribute("data-stacked")).toBe(false);
+    expect(seat(BO).hasAttribute("data-folded")).toBe(false);
+  });
+
+  test("hanging below the faces, the float's controls lead the card so they never move", async () => {
+    const chrome = { onClose() {}, closeWord: "Hide", closeTitle: "Hide" };
+    const h = await mount(<FloatingFaceRow row={rowOf([entry(ANN, "Ann"), entry(BO, "Bo")])} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging() {} }} chrome={chrome} />);
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
+    });
+    await h.click(h.q(`.face-seat[data-face-id="${ANN}"] .face`)!);
+    const band = h.q(".face-row-below")!;
+    expect(band.children.length).toBe(2);
+    expect(band.firstElementChild!.classList.contains("face-row-chrome")).toBe(true);
   });
 
   test("on a call the float draws the rest of the team at half size", async () => {

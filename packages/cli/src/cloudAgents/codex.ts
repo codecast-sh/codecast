@@ -33,7 +33,7 @@ import { CloudApiError, cloudApiVerdict, cloudRequestName } from "./http.js";
 import { arrayOf, bool, checkEach, maybe, num, object, oneOf, optional, recordOf, str, unknownValue, type Infer, type Shape } from "./shape.js";
 import { secondsToMs } from "./poll.js";
 import { isRunningTurnStatus, MirrorTranscript, turnError } from "./transcript.js";
-import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentCreated, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
+import { CloudAgentBusyError, CloudAgentSetupError, type CloudAgentAdapter, type CloudAgentApplyPlan, type CloudAgentCreated, type CloudAgentGit, type CloudAgentHandle, type CloudAgentListItem, type CloudAgentLogin, type CloudAgentDeviceCode, type CloudAgentLoginCommand, type CloudAgentMirror } from "./types.js";
 import type { CloudAgentSession } from "./sessions.js";
 
 const CODEX = CLOUD_AGENT_PROVIDERS.codex;
@@ -639,7 +639,7 @@ export interface CodexCloudAdapterOptions {
   /** ~/.codex/auth.json (or CODECAST_CODEX_HOME's), or null when there is none. Read only, never written. */
   readAuth?: () => string | null;
   /** Run the machine's own `codex login` (a utility tmux pane). */
-  runLogin?: (command: CloudAgentLoginCommand) => Promise<void>;
+  runLogin?: (command: CloudAgentLoginCommand) => Promise<CloudAgentDeviceCode | void>;
   fetchImpl?: typeof fetch;
   now?: () => number;
   /** Waits between reads of a pull request Codex is still opening (tests). */
@@ -682,7 +682,7 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     this.login = {
       whoami: (api) => this.whoami(api),
       localAccount: () => decodeCodexAuth(this.readAuth()).email,
-      start: () => this.startLogin(),
+      start: (opts) => this.startLogin(opts?.deviceCode === true),
     };
   }
 
@@ -914,10 +914,11 @@ export class CodexCloudAdapter implements CloudAgentAdapter<CodexCloudApi, Codex
     return { account: usage?.email ?? summary.email, ...(plan ? { plan: planTypeLabel(plan) } : {}) };
   }
 
-  private async startLogin(): Promise<void> {
+  private async startLogin(deviceCode: boolean): Promise<CloudAgentDeviceCode | void> {
     if (!this.opts.runLogin) throw new Error("this codecast cannot run codex login");
-    await this.opts.runLogin({
+    return await this.opts.runLogin({
       ...CODEX.login,
+      deviceCode,
       missing: "The Codex CLI isn't installed on this computer. Install it (npm i -g @openai/codex), then sign in.",
     });
   }

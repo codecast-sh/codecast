@@ -3,6 +3,8 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { entityIdArgs, useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
+import { useQueryNoThrow } from "./useQueryNoThrow";
+import { callNeedsPlace, type CallPlace } from "../lib/calls/roomLabels";
 
 // The viewer's calls and recordings, local first: transcripts.webListCalls
 // feeds `callList` and transcripts.webGetCall feeds `callDetails` (both
@@ -55,4 +57,26 @@ export function useCallDetail(transcriptId: string | undefined): any | null | un
   );
   const row = useInboxStore((s: any) => (transcriptId ? s.callDetails?.[transcriptId] : undefined));
   return useMemo(() => (refused ? null : row ?? undefined), [row, refused]);
+}
+
+const NO_PLACES: Record<string, CallPlace> = {};
+
+/** The server's place names for the calls the store cannot name
+ *  (roomLabels.callNeedsPlace), keyed by call id, for callTitle's `place`.
+ *  An enrichment: while it is out, or if it never answers, a row keeps the
+ *  name the store gives it. The ids are read as one string out of the store
+ *  so a write that changes none of the answers re-renders nothing. */
+export function useCallPlaces(calls: any[]): Record<string, CallPlace> {
+  const ids = useInboxStore((s: any) =>
+    calls
+      .filter((c) => c && isConvexId(String(c._id ?? "")) && callNeedsPlace(c, s))
+      .map((c) => String(c._id))
+      .sort()
+      .join(","),
+  );
+  const { data } = useQueryNoThrow(
+    api.transcripts.webCallPlaces,
+    ids ? { transcript_ids: ids.split(",") as any } : "skip",
+  );
+  return (data as Record<string, CallPlace> | undefined) ?? NO_PLACES;
 }

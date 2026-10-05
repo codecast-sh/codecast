@@ -39,8 +39,7 @@ describe("switchUsagePercent", () => {
   test("matches worstUsagePercent on a fresh snapshot with future resets", () => {
     const snap = usage({
       session: { percent: 16, resets_at: now + 3600_000 },
-      weekly: { percent: 42, resets_at: now + 86_400_000 },
-      weekly_scoped: { percent: 77, resets_at: now + 86_400_000, label: "Fable" },
+      weekly: { percent: 77, resets_at: now + 86_400_000 },
     });
     expect(switchUsagePercent(snap, now)).toBe(77);
     expect(worstUsagePercent(snap, now)).toBe(77);
@@ -99,11 +98,51 @@ describe("rankByHeadroom", () => {
   });
 });
 
+describe("model-scoped windows cap their model, not the account", () => {
+  // 2026-10-04: claude2/claude3/jamesapeterson955 sat at 1-4% of their week
+  // with a pegged Fable week, and were skipped as spent while auto-switch moved
+  // an Opus fleet through accounts at 99% of their week, one every few minutes.
+  const fablePegged = {
+    name: "claude2",
+    email: "claude2@x.com",
+    usage: usage({
+      session: { percent: 0, resets_at: now + 3600_000 },
+      weekly: { percent: 1, resets_at: now + 6 * 86_400_000 },
+      weekly_scoped: { percent: 100, label: "Fable" },
+    }),
+  };
+  const nearlySpent = {
+    name: "joannagerkin",
+    email: "joanna@x.com",
+    usage: usage({
+      session: { percent: 0 },
+      weekly: { percent: 97, resets_at: now + 2 * 86_400_000 },
+      weekly_scoped: { percent: 29, resets_at: now + 2 * 86_400_000, label: "Fable" },
+    }),
+  };
+
+  test("a pegged Fable week does not make the account exhausted", () => {
+    expect(isUsageExhausted(fablePegged.usage, now)).toBe(false);
+    expect(isUsageExhausted(fablePegged.usage, now, ["claude-opus-5-5"])).toBe(false);
+    expect(isUsageExhausted(fablePegged.usage, now, ["claude-fable-5-1"])).toBe(true);
+    expect(usageStanding(fablePegged.usage, now)).toEqual({ percent: 1, pegged: false, stale: false });
+  });
+
+  test("the switch picks the account with the most room in its own week", () => {
+    const picks = fallbackProfiles([nearlySpent, fablePegged, { name: "active", email: "a@x.com" }], "a@x.com", now);
+    expect(picks.map((p) => p.name)).toEqual(["claude2", "joannagerkin"]);
+  });
+
+  test("the meters still show the Fable window, and name it when it is the one pegged", () => {
+    expect(peggedWindowLabel(fablePegged.usage, now)).toBe("Fable (7d)");
+  });
+});
+
 describe("usageStanding — the one standing the bars and the switcher share", () => {
   test("a fresh account reads its worst live window, not pegged, not stale", () => {
     const snap = usage({
       session: { percent: 16, resets_at: now + 3600_000 },
-      weekly_scoped: { percent: 77, resets_at: now + 86_400_000, label: "Fable" },
+      weekly: { percent: 77, resets_at: now + 86_400_000 },
     });
     expect(usageStanding(snap, now)).toEqual({ percent: 77, pegged: false, stale: false });
     expect(standingLabel(snap, now)).toBe("77% used");
@@ -112,7 +151,7 @@ describe("usageStanding — the one standing the bars and the switcher share", (
   test("a spent account is pegged, and labels as 'at limit'", () => {
     const snap = usage({
       session: { percent: 12, resets_at: now + 3600_000 },
-      weekly_scoped: { percent: 100, resets_at: now + 86_400_000, label: "Fable" },
+      weekly: { percent: 100, resets_at: now + 86_400_000 },
     });
     expect(usageStanding(snap, now).pegged).toBe(true);
     expect(standingLabel(snap, now)).toBe("at limit");
@@ -122,7 +161,7 @@ describe("usageStanding — the one standing the bars and the switcher share", (
     const snap: CcUsage = {
       fetched_at: now - 6 * 3600_000,
       session: { percent: 2, resets_at: now + 3600_000 },
-      weekly_scoped: { percent: 100, resets_at: now - 3 * 3600_000, label: "Fable" },
+      weekly: { percent: 100, resets_at: now - 3 * 3600_000 },
     };
     // The bar's raw per-window number still displays 2, but the STANDING both
     // sides read is "unknown/stale" — so no green summary beside a skip.

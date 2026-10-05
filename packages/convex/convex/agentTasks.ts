@@ -2167,6 +2167,10 @@ type TaskUpdateArgs = {
   project_path?: string;
   max_runtime_ms?: number;
   precheck?: string;
+  // A role's own tuning of its check (org-staffing.md S38), written only by
+  // orgRoles.performTuneRoutine: "" clears the focus.
+  role_focus?: string;
+  tune_why?: string;
   // Routing. Editable so a trigger bound the wrong way is repaired in place
   // rather than cancelled and recreated, which loses its history and its id.
   // null clears the field: originating_conversation_id null IS `--spawn`.
@@ -2192,6 +2196,8 @@ const EDITABLE_FIELDS = [
   "project_path",
   "max_runtime_ms",
   "precheck",
+  "role_focus",
+  "tune_why",
   "originating_conversation_id",
   "target_conversation_id",
   "wake_creator",
@@ -2213,6 +2219,8 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
     status: task.status,
     max_runtime_ms: task.max_runtime_ms,
     precheck: task.precheck,
+    role_focus: task.role_focus,
+    tune_why: task.tune_why,
     originating_conversation_id: task.originating_conversation_id,
     target_conversation_id: task.target_conversation_id,
     wake_creator: task.wake_creator,
@@ -2226,13 +2234,22 @@ function snapshotEditable(task: Doc<"agent_tasks">) {
 // appends an agent_task_revisions row (pre-edit snapshot + who/where/what),
 // so `cast trigger history` can show both the audit trail and any prior
 // version. A no-op edit (nothing actually differs) writes neither.
+//
+// A role tunes its check from inside the run that check started (S38), when
+// the row is "running". The cadence, the gate, the focus and the reason touch
+// nothing the live run reads, so an edit of those alone is taken then too: the
+// arming after the run (nextArmingAfterRun) counts the next slot with the new
+// interval.
+const RUNNING_SAFE_FIELDS: ReadonlySet<string> = new Set(["interval_ms", "precheck", "role_focus", "tune_why"]);
+
 export async function applyTaskUpdate(
   ctx: TaskCtx,
   task: Doc<"agent_tasks">,
   args: TaskUpdateArgs,
   actor: { userId: Id<"users">; source: "cli" | "web" },
 ): Promise<{ ok: boolean; changed: string[] }> {
-  if (task.status !== "scheduled" && task.status !== "paused") return { ok: false, changed: [] };
+  const whileRunning = task.status === "running" && Object.entries(args).every(([k, value]) => value === undefined || RUNNING_SAFE_FIELDS.has(k));
+  if (task.status !== "scheduled" && task.status !== "paused" && !whileRunning) return { ok: false, changed: [] };
 
   const patch: Record<string, unknown> = {};
   if (args.title !== undefined) patch.title = args.title.trim() || task.title;
@@ -2253,6 +2270,8 @@ export async function applyTaskUpdate(
   if (args.max_runtime_ms !== undefined) patch.max_runtime_ms = args.max_runtime_ms;
   // "" removes the gate — `cast trigger update tr-42 --precheck ""`.
   if (args.precheck !== undefined) patch.precheck = args.precheck.trim() || undefined;
+  if (args.role_focus !== undefined) patch.role_focus = args.role_focus.trim() || undefined;
+  if (args.tune_why !== undefined) patch.tune_why = args.tune_why.trim() || undefined;
 
   // Routing. Clearing the binding (null) turns an inject trigger into a spawn
   // trigger and back; --wake rides along. The old home's armed_trigger_kind is

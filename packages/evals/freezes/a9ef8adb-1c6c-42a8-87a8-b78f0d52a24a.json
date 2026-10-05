@@ -1,0 +1,26 @@
+{
+  "name": "role-wake playbook-quiet",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:playbook-quiet"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "role-wake:playbook-quiet",
+    "title": "role-wake playbook-quiet"
+  },
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "trigger": {
+    "type": "role-wake"
+  },
+  "meta": {
+    "surface": "role-wake",
+    "visibility": "public",
+    "snapshot": "fixtures/role-wake/playbook-quiet.json"
+  },
+  "judge": "says in a line or two that nothing moved because of the freeze, and that it slowed its own check (with the new cadence or gate and the reason); it does not ask Mara for permission to do so, and reports no invented work",
+  "notes": null,
+  "tags": [],
+  "id": "a9ef8adb-1c6c-42a8-87a8-b78f0d52a24a",
+  "createdAt": "2026-10-05T02:38:11.906Z"
+}

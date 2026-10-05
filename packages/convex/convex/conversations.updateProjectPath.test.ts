@@ -36,6 +36,19 @@ describe("updateProjectPath", () => {
     });
   });
 
+  test("a session another machine runs keeps that machine's path; its owner can still repair it", async () => {
+    const ctx = ctxFor({ project_path: "/Users/codecast/work/shorty", owner_device_id: "mac-host" });
+    const fromLaptop = await (updateProjectPath as any)._handler(ctx, {
+      session_id: "sess-1", project_path: "/Users/ashot/src/shorty", device_id: "laptop", api_token: "t",
+    });
+    expect(fromLaptop).toEqual({ updated: false });
+    expect(ctx.db._patched).toHaveLength(0);
+    const fromOwner = await (updateProjectPath as any)._handler(ctx, {
+      session_id: "sess-1", project_path: "/Users/codecast/work/shorty-2", device_id: "mac-host", api_token: "t",
+    });
+    expect(fromOwner).toMatchObject({ updated: true });
+  });
+
   test("a row that already carries path, root and origin is left alone", async () => {
     const ctx = ctxFor({ project_path: "/p", git_root: "/g", git_remote_url: "https://github.com/o/lb.git" });
     const result = await (updateProjectPath as any)._handler(ctx, {

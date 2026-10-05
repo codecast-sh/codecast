@@ -8,6 +8,7 @@ import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { roleIdentity } from "@codecast/shared/contracts/orgIdentity";
 import { autonomyOn, autonomyWords } from "@codecast/shared/contracts/roleAutonomy";
 import { formatDateSmart, relTimeShort } from "@codecast/shared/time";
+import { WAKE_TUNE_HINT, playbookGuideLines, roleWakeOf, wakeWords, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 
 /** A role in one line, as every `cast role` and `cast brief` read heads it. */
 export function roleLine(r: any): string {
@@ -22,6 +23,14 @@ export function routineLine(r: { short_id: string | null; status: string; run_at
   if (!r.run_at) return "";
   const ms = r.run_at - now;
   return ` · next check ${ms > 60_000 ? `in ${relTimeShort(now - ms, now)}` : "due now"} (${r.short_id ?? "trigger"})`;
+}
+
+/** How the role's check runs (org-staffing.md S38), read off its trigger:
+ *  the cadence, the gate, the focus and why it last changed, then the one
+ *  command that changes them. Nothing for a role with no trigger yet. */
+export function wakeLine(routine: { interval_ms?: number | null; wake?: RoleWake } | null | undefined): string[] {
+  if (!routine) return [];
+  return [`  ${c.dim}its check runs ${wakeWords(routine.wake ?? roleWakeOf(routine))} · ${WAKE_TUNE_HINT}${c.reset}`];
 }
 
 /** The role's standing session as the org card reads it: id, work state, pinned
@@ -146,6 +155,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     `  ${c.dim}scope: ${briefScopeLine(f.scope, brief.role.handle)}${c.reset}`,
     authorityLine(brief.role, now),
     standingSessionLine(brief.role, f.standing, now),
+    ...wakeLine(brief.role.routine),
     `  tasks: ${f.tasks.total} in scope, ${f.tasks.open} open${st ? ` · ${st}` : ""}${pr ? ` · priority ${pr}` : ""}`,
     ...briefPlanLines(f.plans),
     ...briefInitiativeLines(f.initiatives ?? [], now),
@@ -160,5 +170,7 @@ export function briefTextLines(brief: any, now: number): string[] {
     "",
     `  ${c.bold}## Brief${c.reset}`,
     ...String(brief.narrative || "(no narrative yet: cast brief edit -)").split("\n").map((line) => `  ${line}`),
+    // The playbook (S38): how full the brief is, and the shape of what it lacks.
+    ...playbookGuideLines(brief.narrative).map((line, i) => `${i === 0 ? "\n" : ""}  ${c.dim}${line}${c.reset}`),
   ];
 }

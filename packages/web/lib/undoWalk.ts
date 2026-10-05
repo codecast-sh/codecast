@@ -134,12 +134,17 @@ export function fieldOwnsStep(dir: "undo" | "redo", lastEditAt: number | undefin
  * (the field's edits are all undone). Then the press is the app's after all,
  * and the field's edit time is dropped so later presses go straight there.
  *
- * `nativeCan` is the browser's own answer when it has a reliable one
- * (Chromium's queryCommandEnabled, which the desktop app needs: its declined
+ * `nativeCan` is the browser's own answer (a rich editor's history, or
+ * Chromium's queryCommandEnabled, which the desktop app needs: its declined
  * key reaches the native undo through the main process, later than any
- * timer). Without one, a native undo or redo always fires an input, so when
- * none arrived by the next task the browser had nothing and `fallback` runs
- * the app's step.
+ * timer). Chromium answers for the whole frame, not the field: any field
+ * typed in and still mounted makes it true. So only `false` is taken as the
+ * field's own answer, and a press is kept only by a field this page saw
+ * edited. A kept press whose browser undo lands in another field (heard as
+ * that field's input) shows the declining field had nothing left, and its
+ * edit record goes. Without an answer, a native undo or redo always fires an
+ * input, so when none arrived by the next task the browser had nothing and
+ * `fallback` runs the app's step.
  */
 export function createFieldUndoGuard(opts: { now: () => number; defer: (fn: () => void) => void }) {
   const edits = new WeakMap<object, number>();
@@ -147,9 +152,14 @@ export function createFieldUndoGuard(opts: { now: () => number; defer: (fn: () =
   // more than once (each binding it matches), and gets one fallback.
   const checking = new WeakSet<object>();
   let inputs = 0;
+  // The field the last press was kept for, until the next input says where
+  // the browser's step landed.
+  let kept: object | null = null;
   return {
     edited(field: object): void {
       inputs += 1;
+      if (kept && kept !== field) edits.delete(kept);
+      kept = null;
       edits.set(field, opts.now());
     },
     /** True when the press is the field's; `fallback` runs if the field turns out to have nothing. */
@@ -161,20 +171,88 @@ export function createFieldUndoGuard(opts: { now: () => number; defer: (fn: () =
       nativeCan?: boolean,
     ): boolean {
       if (!fieldOwnsStep(dir, edits.get(field), history)) return false;
-      if (nativeCan === false) {
-        edits.delete(field);
-        return false;
-      }
-      if (nativeCan === true || checking.has(field)) return true;
-      checking.add(field);
-      const seen = inputs;
-      opts.defer(() => {
-        checking.delete(field);
-        if (inputs !== seen) return;
-        edits.delete(field);
-        fallback();
-      });
-      return true;
+      return fieldHasStep(field, fallback, nativeCan);
+    },
+    /**
+     * The same question for a field holding text, which keeps its own undo
+     * whatever the entries' ages, as long as it has one. Text the app put
+     * there (a draft seeded on mount, a value set from code) and nobody
+     * edited has none: the browser's undo would do nothing, so the press is
+     * the app's, whatever the frame-wide `nativeCan` says.
+     */
+    keepsWithText(field: object, fallback: () => void, nativeCan?: boolean): boolean {
+      if (!edits.has(field)) return false;
+      return fieldHasStep(field, fallback, nativeCan);
     },
   };
+
+  function fieldHasStep(field: object, fallback: () => void, nativeCan: boolean | undefined): boolean {
+    if (nativeCan === false) {
+      edits.delete(field);
+      return false;
+    }
+    kept = field;
+    if (nativeCan === true || checking.has(field)) return true;
+    checking.add(field);
+    const seen = inputs;
+    opts.defer(() => {
+      checking.delete(field);
+      if (inputs !== seen) return;
+      edits.delete(field);
+      fallback();
+    });
+    return true;
+  }
+}
+
+/** Whether a focused field holds text, as the key dispatcher judges a field
+ *  empty; null for a region that is input-like with no value to read. */
+export function fieldHoldsText(el: Element): boolean | null {
+  const f = el as { tagName?: string; isContentEditable?: boolean; value?: string; textContent?: string | null };
+  if (f.tagName === "INPUT" || f.tagName === "TEXTAREA") return (f.value ?? "") !== "";
+  if (f.isContentEditable) return !!(f.textContent ?? "").trim();
+  return null;
+}
+
+/**
+ * A rich editor that keeps its own history and edits its DOM itself:
+ * select-all+Backspace runs in its keymap and fires no input event, and its
+ * own undo fires none either. The field guard dates such a field from the
+ * editor's `update` and asks the editor, not the browser, whether it has a
+ * step left. TipTap (over ProseMirror) hangs its editor off its
+ * contenteditable as `.editor`; any other such editor (CodeMirror in the
+ * vault) registers the same shape on its editable element.
+ */
+export type RichEditor = {
+  on(event: "update", fn: () => void): unknown;
+  can(): { undo?: () => boolean; redo?: () => boolean };
+};
+
+const registeredEditors = new WeakMap<object, RichEditor>();
+
+/** Declare `el` an editor with its own history. Returns the unregister. */
+export function registerRichEditor(el: Element, editor: RichEditor): () => void {
+  registeredEditors.set(el, editor);
+  return () => {
+    if (registeredEditors.get(el) === editor) registeredEditors.delete(el);
+  };
+}
+
+export function richEditorOf(el: unknown): RichEditor | null {
+  if (el && typeof el === "object") {
+    const registered = registeredEditors.get(el);
+    if (registered) return registered;
+  }
+  const ed = (el as { editor?: Partial<RichEditor> } | null)?.editor;
+  return ed && typeof ed.on === "function" && typeof ed.can === "function" ? (ed as RichEditor) : null;
+}
+
+/** The editor's own answer to "is there a step left", when it gives one. */
+export function richEditorCanStep(ed: RichEditor, dir: "undo" | "redo"): boolean | undefined {
+  try {
+    const can = ed.can()[dir];
+    return typeof can === "function" ? !!can() : undefined;
+  } catch {
+    return undefined;
+  }
 }

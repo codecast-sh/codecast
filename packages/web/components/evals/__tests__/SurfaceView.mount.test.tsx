@@ -41,11 +41,12 @@ const { heroConvexStub } = await import("../../../app/(marketing)/heroFly/convex
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { surfaceFixture } = await import("../__fixtures__/surface");
-const { SurfaceView, DEFAULT_SURFACE_FILTERS, nextPins, orderedPair } = await import("../SurfaceView");
-const { surfaceColumns } = await import("../Seismograph");
-const { ledgerOrder } = await import("../FreezeLedger");
+const { SurfaceView } = await import("../SurfaceView");
+const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair } = await import("../surfaceModel");
+const { surfaceColumns } = await import("../seismographModel");
+const { ledgerOrder } = await import("../surfaceModel");
 const { niceCeil, axisUsd } = await import("../charts/scale");
-const { separationTitle } = await import("../parts");
+const { separationTitle } = await import("../verdictModel");
 const { SurfacePage } = await import("../pages/SurfacePage");
 type SurfaceViewProps = import("../SurfaceView").SurfaceViewProps;
 
@@ -157,10 +158,11 @@ describe("what brought the investigator here", () => {
     const { container, unmount } = await mount(<SurfaceView {...p} />);
     const line = container.querySelector("[data-ev-latest-verdict]")!;
     expect(line.getAttribute("data-ev-latest-verdict")).toBe(v.separation.kind);
-    expect(line.textContent).toContain(`${v.baseline!.batches.length} pooled`);
+    expect(line.textContent).toContain(`${v.baseline!.batches.length} nightly batches, night by night per freeze`);
+    expect(line.textContent).not.toContain("pooled");
     // The verdict and its baseline are two lines, so neither wraps through the other.
-    expect(line.querySelector(".ev-sf-verdictline-base")?.textContent).toMatch(/^weighed against \d+ pooled/);
-    // The pooled batches are marked under the seismograph's axis, so "vs pooled 3" can be seen on the chart.
+    expect(line.querySelector(".ev-sf-verdictline-base")?.textContent).toMatch(/^weighed against \d+ nightly batches/);
+    // The baseline's nights are marked under the seismograph's axis, so "vs 3 nights" can be seen on the chart.
     expect(container.querySelector("[data-ev-baseline]")?.getAttribute("data-ev-baseline")).toBe(String(v.baseline!.batches.length));
     await act(async () => void (container.querySelector("[data-ev-compare-baseline]") as HTMLElement).click());
     expect(calls.pins.at(-1)?.[0]).toBe(v.batch);

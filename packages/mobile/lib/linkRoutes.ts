@@ -57,6 +57,7 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   task: '/task',
   plan: '/plan',
   doc: '/doc',
+  decision: '/decisions',
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
 };
