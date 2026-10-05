@@ -43,9 +43,14 @@ function* message(value: unknown): Generator<void> {
     yield;
   }
   for (const image of value.images ?? []) {
-    fields(image,['mediaType','data','localPath','toolUseId']);
+    fields(image,['mediaType','data','localPath','toolUseId','source']);
     strings(image,['data','localPath','toolUseId']);
     requireValue(typeof image.mediaType === 'string' && (typeof image.data === 'string') !== (typeof image.localPath === 'string'));
+    if (image.source !== undefined) {
+      fields(image.source,['bytes','width','height']);
+      requireValue(Number.isSafeInteger(image.source.bytes) && image.source.bytes >= 0);
+      for (const key of ['width','height']) requireValue(image.source[key] === undefined || Number.isSafeInteger(image.source[key]) && image.source[key] > 0);
+    }
     yield;
   }
   for (const file of value.files ?? []) {

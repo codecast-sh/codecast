@@ -1,5 +1,6 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
 import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
+import { ChevronRight } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
@@ -139,12 +140,25 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
   useSeedOwnership(sessionId, !!seat?.seedOwnership);
   const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
-  // A seat opens on the agent talking to the person: its provisioning prompt
-  // folds away (scopes-and-feed.md F4.1). A deep link to a message keeps the
-  // whole window, because its target may sit above the cut.
-  const shown = useMemo(
+  // A seat opens on the agent talking to the person: its provisioning prompt,
+  // and whatever came before it, fold into one row at the top
+  // (scopes-and-feed.md F4.1). They are still the session's context, so the
+  // row opens them in place. A deep link to a message keeps the whole window,
+  // because its target may sit above the cut.
+  const [earlierOpenFor, setEarlierOpenFor] = useState<string | null>(null);
+  const earlierOpen = earlierOpenFor === sessionId;
+  const cut = useMemo(
     () => (seat && !targetMessageId ? windowConversationSince(conversation as WindowedConversation | null, bootstrapCut(conversation as WindowedConversation | null)) : null),
     [seat, targetMessageId, conversation],
+  );
+  const shown = earlierOpen ? null : cut;
+  const earlierCount = cut?.reachedStart ? (cut.conversation.loaded_start_index ?? 0) - ((conversation as any)?.loaded_start_index ?? 0) : 0;
+  const seatLead = seat?.layout.leadNode;
+  const leadNode = useMemo(
+    () => (earlierCount > 0
+      ? <>{seatLead}<SeatEarlier count={earlierCount} open={earlierOpen} onToggle={() => setEarlierOpenFor(earlierOpen ? null : sessionId)} /></>
+      : seatLead),
+    [seatLead, earlierCount, earlierOpen, sessionId],
   );
   // The seat's session header rests on one row and opens on demand (I3):
   // at rest the one state word that is true, Session view and the expander.
@@ -224,6 +238,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           conversation={(shown?.conversation ?? conversation) as ConversationData}
           embedded
           {...seat?.layout}
+          leadNode={leadNode}
           headerLeft={seatHeadState}
           headerEnd={seat ? seatHeaderEnd : headerEnd}
           headerExtra={shareControls}
@@ -256,6 +271,18 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
 });
 
 export type InboxConversationProps = React.ComponentProps<typeof InboxConversation>;
+
+/** The seat's history above its provisioning prompt, folded to one row: the
+ *  role's brief, and the earlier work of an agent the role was seated on. */
+function SeatEarlier({ count, open, onToggle }: { count: number; open: boolean; onToggle: () => void }) {
+  const what = count === 1 ? "The role's brief" : `The role's brief and ${count - 1} earlier ${count === 2 ? "message" : "messages"}`;
+  return (
+    <button type="button" onClick={onToggle} className="w-full flex items-center gap-1.5 px-4 py-1 text-left text-[11.5px] border-t transition-colors hover:bg-sol-bg-highlight/40" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 18%, transparent)" }} aria-expanded={open} data-seat-earlier={open ? "open" : "folded"}>
+      <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
+      {open ? `Hide ${what.charAt(0).toLowerCase()}${what.slice(1)}` : what}
+    </button>
+  );
+}
 
 /** The pane's own props, handed through the role page to the conversation it
  *  mounts, plus the way out to the plain view. */

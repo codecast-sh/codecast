@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
+import { buildLineFlow, defaultLineKey, goalChip, groupBuild, lineHeadline, lineRollup, runName, scopeLine, silentText, ALL_PROJECTS, DAY, HOUR, NO_PROJECT, type LineCauseTask, type LineDecision, type LineFlowRun, type LineProject, type LineSignal } from "./lineFlow";
 
 const NOW = 1_800_000_000_000;
 
@@ -255,6 +255,18 @@ describe("groupBuild", () => {
     const f = flow({ tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [{ ...live("a", "implement"), workflow_name: "line" }, { ...live("b", "card_write"), workflow_name: "line" }, { ...live("c", "implement"), workflow_name: "feature" }] });
     expect(Object.fromEntries(f.build.items.map((b) => [b.run._id, b.stepIndex]))).toEqual({ a: 2, b: 4, c: null });
   });
+  it("a run of a project's customized line keeps its steps and says which line it ran", () => {
+    const projects = [{ _id: "p1", short_id: "pj-a", title: "Web" }];
+    const f = flow({ projects, tasks: ["a", "b", "c"].map((id) => cause(id)), runs: [
+      { ...live("a", "implement"), workflow_name: "Line for Web", workflow_slug: "line-pj-a" },
+      { ...live("b", "verify"), workflow_name: "line" },
+      { ...live("c", "implement"), workflow_name: "Other", workflow_slug: "line-pj-zz" },
+    ] });
+    const by = Object.fromEntries(f.build.items.map((b) => [b.run._id, b]));
+    expect([by.a.stepIndex, by.a.line]).toEqual([2, { kind: "customized", project: projects[0] }]);
+    expect([by.b.stepIndex, by.b.line]).toEqual([3, { kind: "shipped" }]);
+    expect([by.c.stepIndex, by.c.line]).toEqual([null, null]);
+  });
 });
 
 describe("per project lines (line-profile.md LP1, LP3)", () => {
@@ -278,9 +290,9 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
   };
   const projects: LineProject[] = [
     { _id: "pA", short_id: "pj-a", title: "Agent Quality", line_profile: { finders: [
-      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"] },
-      { id: "guards", source: "union.guard", kind: ["prompt_miss"], runs: "daily" },
-    ], root: "/src/union", default: true, changed_at: NOW } },
+      { id: "clusters", source: "agentwatch", kind: ["prompt_miss", "bug"], fingerprint: "union:cluster:<id>" },
+      { id: "guards", source: "union.guard", kind: ["prompt_miss"], fingerprint: "union:guard:<id>", runs: "daily" },
+    ], root: "/src/union", default: true, changed_at: NOW - 30 * DAY } },
     { _id: "pB", short_id: "pj-b", title: "Infrastructure", project_path: "/src/infra" },
     { _id: "pC", short_id: "pj-c", title: "Quiet" },
   ];
@@ -297,12 +309,16 @@ describe("per project lines (line-profile.md LP1, LP3)", () => {
   });
 
   it("a declared finder is a Sense row even when silent, and an undeclared source is flagged", () => {
-    const f = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders });
+    const f = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders, findersSince: projects[0].line_profile!.changed_at });
     const bySource = Object.fromEntries(f.sense.items.map((s) => [s.source, s]));
     expect(bySource.agentwatch).toMatchObject({ day: 2, silent: false, undeclared: false, finder: { id: "clusters" } });
     expect(bySource["union.guard"]).toMatchObject({ day: 0, week: 0, newest: null, silent: true, finder: { id: "guards" } });
     expect(f.sense.state.why).toBe("signals arriving, 1 of 2 finders silent");
-    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any" }] });
+    // A finder in a profile changed inside the window may be new: it has not filed yet, it is not silent.
+    const fresh = flow({ ...scopeLine(rows, "pA"), finders: projects[0].line_profile!.finders, findersSince: NOW - DAY });
+    expect(fresh.sense.items.find((s) => s.source === "union.guard")).toMatchObject({ newest: null, silent: false });
+    expect(silentText(fresh.sense.items.find((s) => s.source === "union.guard")!, NOW)).toBe("nothing filed yet");
+    const loose = flow({ signals: [signal("x", { source: "person" })], finders: [{ id: "g", source: "union.guard", kind: "any", fingerprint: "g" }] });
     expect(loose.sense.items.find((s) => s.source === "person")?.undeclared).toBe(true);
   });
 

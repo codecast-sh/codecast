@@ -10,6 +10,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { copyToClipboard, copyToClipboardWhenReady } from "../../lib/utils";
 import { guestLinkUrl, removeGuest } from "../../lib/calls/guestDoorActions";
+import { sayRefusal } from "../../lib/calls/sayRefusal";
 import { useGuestDoor } from "../../hooks/useGuestDoor";
 import { GUEST_LINK_TTL_CHOICES, guestLinkExpiry, meetingTitle } from "../../lib/calls/roomGuests";
 import { firstName } from "./speakers";
@@ -71,7 +72,9 @@ export function GuestRemoveButton({
   const out = (revokeLink: boolean) => (e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirm(false);
-    removeGuest(roomKey, guestId, { revokeLink });
+    // The guest's face card offers this on the desktop float too, which has
+    // no toasts (lib/calls/sayRefusal).
+    void removeGuest(roomKey, guestId, revokeLink, sayRefusal(`Could not remove ${who}`));
   };
   if (confirm) {
     const armed = `${base} bg-sol-red/80 text-white hover:bg-sol-red`;

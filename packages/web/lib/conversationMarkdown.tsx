@@ -14,22 +14,7 @@ export const MD_COMPONENTS_NO_IMG = { ...MD_COMPONENTS_CODE_LINK, pre: MESSAGE_M
 
 export const MD_COMPONENTS_NO_PRE = { ...MD_COMPONENTS_CODE_LINK, img: MESSAGE_MD_COMPONENTS.img };
 
-export function hasRichMarkdown(text: string): boolean {
-  if (/\b(ct|pl)-[a-z0-9]+\b/i.test(text)) return true;
-  const markers = [
-    /^#{1,3}\s+\S/m,           // headers
-    /\|.+\|.+\|/,              // tables
-    /^```\w*/m,                 // fenced code blocks
-    /^\d+\.\s+\*\*[^*]+\*\*/m, // numbered list with bold
-    /^-\s+\[[ x]\]/im,         // task lists
-  ];
-  let hits = 0;
-  for (const m of markers) {
-    if (m.test(text)) hits++;
-    if (hits >= 2) return true;
-  }
-  return false;
-}
+export { hasRichMarkdown } from "./richMarkdown";
 
 export const CMD_MD_COMPONENTS = {
   code: EntityAwareCode,

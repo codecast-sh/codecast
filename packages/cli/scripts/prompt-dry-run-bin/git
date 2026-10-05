@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+# `git` for a prompt dry run (scripts/prompt-dry-run.ts puts this directory
+# first on the run's PATH, beside the guard `cast`). Without a cut it is the
+# real git, untouched.
+#
+# A served dir with a `cut` file (packages/evals/src/served.ts writeCut) is a
+# world as it stood at its capture, and git history is part of that world.
+# The file holds `at <iso>`, `epoch <unix seconds>` and, per repository root
+# the capture pinned, `git<TAB><root><TAB><sha>`. Inside any repository, every
+# git call then runs against a shadow git dir kept under
+# $RUN_DIR/git-cut/<key>: it borrows the real repository's objects
+# (alternates) and holds only the refs that existed at the cut. The default
+# branch (main, origin/main, origin/HEAD, HEAD) points at the pinned commit,
+# or for a root the capture did not pin, at the last first-parent commit
+# before the cut; every other branch or tag is kept only when its tip is no
+# newer than the cut. So `git log origin/main` stops at the capture, and
+# `git show <sha>` of a commit no kept ref reaches is refused as git refuses
+# a bad object. fetch and pull do nothing. The shadow has no working tree, so
+# status, diff and a grep with no revision fail; the note says to name
+# origin/main. The working tree's files themselves are not cut.
+#
+# $RUN_DIR/git.log gets one line per call in a repository: PINNED (answered
+# from the cut history) or CUT (refused, or a no-op fetch), then the argv.
+set -u
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GIT=""
+IFS=: read -ra dirs <<< "${PATH:-}"
+for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/git" ] && { GIT="$dir/git"; break; }; done
+[ -n "$GIT" ] || { echo "dry run: no real git on PATH" >&2; exit 127; }
+
+SERVE="${DRY_RUN_SERVE_DIR:-}"
+CUT="$SERVE/cut"
+# No cut, or a caller that chose its own repository: the real git.
+if [ -z "$SERVE" ] || [ ! -f "$CUT" ] || [ -n "${GIT_DIR:-}" ]; then exec "$GIT" "$@"; fi
+
+AT="$(sed -n 's/^at //p' "$CUT" | head -1)"
+EPOCH="$(sed -n 's/^epoch //p' "$CUT" | head -1 | tr -dc 0-9)"
+[ -n "$EPOCH" ] || exec "$GIT" "$@"
+
+# The global options before the subcommand, so the repository is found where git would find it.
+pre=()
+i=1
+while [ $i -le $# ]; do
+  a="${!i}"
+  case "$a" in
+    -C|-c) n=$((i + 1)); pre+=("$a" "${!n:-}"); i=$((i + 2)) ;;
+    -*) pre+=("$a"); i=$((i + 1)) ;;
+    *) break ;;
+  esac
+done
+sub="${!i:-}"
+top="$("$GIT" ${pre[@]+"${pre[@]}"} rev-parse --show-toplevel 2>/dev/null)" || top=""
+[ -n "$top" ] || exec "$GIT" "$@"
+prefix="$("$GIT" ${pre[@]+"${pre[@]}"} rev-parse --show-prefix 2>/dev/null)" || prefix=""
+
+logged_argv() {
+  local a q="'\\''" out=()
+  for a in "$@"; do
+    if [[ "$a" =~ ^[A-Za-z0-9_./:=@%+,-]+$ ]]; then out+=("$a"); else out+=("'${a//\'/$q}'"); fi
+  done
+  printf '%s' "${out[*]-}"
+}
+LOG="${RUN_DIR:-$PWD}/git.log"
+mark_call() { local m="$1"; shift; printf '%s %s\n' "$m" "$(logged_argv "$@")" >> "$LOG"; }
+
+# The pinned commit and the default branch's name.
+pin="$(awk -F'\t' -v root="$top" '$1 == "git" && $2 == root { print $3; exit }' "$CUT")"
+default="$("$GIT" -C "$top" symbolic-ref -q refs/remotes/origin/HEAD 2>/dev/null)" || default=""
+if [ -z "$default" ]; then
+  for r in refs/remotes/origin/main refs/remotes/origin/master; do "$GIT" -C "$top" rev-parse -q --verify "$r" >/dev/null && { default="$r"; break; }; done
+fi
+branch="${default##*/}"; [ -n "$branch" ] || branch=main
+if [ -z "$pin" ]; then pin="$("$GIT" -C "$top" rev-list -1 --first-parent --before="@$EPOCH" "${default:-HEAD}" 2>/dev/null)"; fi
+if [ -z "$pin" ]; then
+  mark_call CUT "$@"
+  echo "dry run: $top has no history on ${default:-HEAD} before $AT, when this run's record was captured" >&2
+  exit 128
+fi
+
+key="$(printf '%s\x1f%s' "$top" "$pin" | shasum -a 256 | cut -c1-16)"
+shadow="${RUN_DIR:-$PWD}/git-cut/$key"
+if [ ! -d "$shadow" ]; then
+  common="$("$GIT" -C "$top" rev-parse --path-format=absolute --git-common-dir)"
+  mkdir -p "${shadow%/*}"
+  tmp="$shadow.tmp.$$"
+  "$GIT" init -q --bare "$tmp"
+  printf '%s\n' "$common/objects" > "$tmp/objects/info/alternates"
+  {
+    "$GIT" -C "$top" for-each-ref --format='%(creatordate:unix) %(objectname) %(refname)' refs/heads refs/remotes refs/tags |
+      while read -r ts sha ref; do
+        case "$ref" in */HEAD|"refs/heads/$branch"|"refs/remotes/origin/$branch") continue ;; esac
+        [ -n "$ts" ] && [ "$ts" -le "$EPOCH" ] && printf 'update %s %s\n' "$ref" "$sha"
+      done
+    printf 'update refs/heads/%s %s\nupdate refs/remotes/origin/%s %s\n' "$branch" "$pin" "$branch" "$pin"
+  } | GIT_DIR="$tmp" "$GIT" update-ref --stdin
+  GIT_DIR="$tmp" "$GIT" symbolic-ref HEAD "refs/heads/$branch"
+  GIT_DIR="$tmp" "$GIT" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/$branch"
+  mv "$tmp" "$shadow" 2>/dev/null || rm -rf "$tmp"
+fi
+export GIT_DIR="$shadow"
+
+case "$sub" in
+  fetch|pull)
+    mark_call CUT "$@"
+    echo "dry run: git $sub does nothing here; this repository's history is cut at $AT, when this run's record was captured" >&2
+    exit 0 ;;
+esac
+
+# A commit named outright (a sha, a sha~2, a range end, sha:path) that no kept
+# ref reaches did not exist on any branch at the cut: refused as git refuses an
+# unknown object.
+for ((j = i + 1; j <= $#; j++)); do
+  a="${!j}"
+  [[ "$a" == -* ]] && continue
+  pieces="${a//.../$'\n'}"; pieces="${pieces//../$'\n'}"
+  while IFS= read -r p; do
+    rev="${p%%[:~^@]*}"
+    [[ "$rev" =~ ^[0-9a-f]{7,40}$ ]] || continue
+    [ "$("$GIT" cat-file -t "$rev" 2>/dev/null)" = commit ] || continue
+    if [ -z "$("$GIT" for-each-ref --contains "$rev" --count=1 --format=x 2>/dev/null)" ]; then
+      mark_call CUT "$@"
+      echo "fatal: bad object $rev" >&2
+      echo "dry run: $rev is on no branch of this repository as of $AT, when this run's record was captured" >&2
+      exit 128
+    fi
+  done <<< "$pieces"
+done
+
+mark_call PINNED "$@"
+# The shadow has no working tree, so a path is read from the repository root, not from a subdirectory.
+[ -z "$prefix" ] || echo "dry run: git answers from $top's history as of $AT; paths are read from the repository root, not from $prefix" >&2
+err="${RUN_DIR:-$PWD}/.git-err.$$"
+"$GIT" "$@" 2> "$err"
+code=$?
+cat "$err" >&2
+if [ $code -ne 0 ] && grep -q "must be run in a work tree" "$err"; then
+  echo "dry run: git here answers from this repository's history as of $AT, with no working tree; name a revision (git grep <pattern> origin/main, git show origin/main:<path>)" >&2
+fi
+rm -f "$err"
+exit $code

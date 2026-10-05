@@ -127,7 +127,7 @@ function wireHost(hub: ReturnType<typeof createHub>, id = "host") {
   return { store, host };
 }
 
-function wireFollower(hub: ReturnType<typeof createHub>, id: string) {
+function wireFollower(hub: ReturnType<typeof createHub>, id: string, onOwnEcho?: (updates: any[]) => void) {
   const store = makeStore();
   const channel = hub.channel();
   const follower = createReplicationFollower({
@@ -137,6 +137,7 @@ function wireFollower(hub: ReturnType<typeof createHub>, id: string) {
     isCollectionKey: isCollection,
     applyUpdates: (updates) => (store.useStore.getState() as any)._applyReplication(updates),
     helloRetryMs: 5,
+    onOwnEcho,
   });
   (store.useStore.getState() as any)._setActionTee(
     (name: string, patches: any[], state: any) => follower.mutTee(name, patches, state),
@@ -183,6 +184,21 @@ describe("replication runtime", () => {
     const last = updates[updates.length - 1].updates.find((u) => u.key === "sessions")!;
     expect(last.upserts?.map((r: any) => r._id)).toEqual(["b"]);
     expect(last.removes).toBeUndefined();
+  });
+
+  it("a follower hears the host's echo of its own write, without applying it", async () => {
+    const hub = createHub();
+    const h = wireHost(hub);
+    (h.store.useStore.getState() as any).feed([{ _id: "a", title: "A", updated_at: 1 }]);
+    const echoes: any[][] = [];
+    const f = wireFollower(hub, "w1", (updates) => echoes.push(updates));
+    await tick();
+    (f.store.useStore.getState() as any).rename("a", "mine");
+    await tick();
+    await tick();
+    expect(rows(h.store).a.title).toBe("mine");
+    expect(echoes.length).toBe(1);
+    expect(echoes[0]!.find((u: any) => u.key === "sessions")).toBeTruthy();
   });
 
   it("a follower's optimistic action reaches the host and other followers", async () => {

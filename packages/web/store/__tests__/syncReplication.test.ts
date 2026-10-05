@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { useInboxStore } from "../inboxStore";
-import { applyUpdatesToStore } from "../syncReplication";
+import { syncLogScopeMetaKey, useInboxStore } from "../inboxStore";
+import { applyUpdatesToStore, followerActionTee, forgetSeenBeforeOwnEcho } from "../syncReplication";
 import {
   CLIENT_SYNC_REGISTRY,
   REPLICATION_CLASSIFICATION,
@@ -137,5 +137,132 @@ describe("replicated facts and locks", () => {
     // A clear made after the kill lands.
     useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_killed_at: null } }, 40);
     expect((useInboxStore.getState().sessions as any)[id].inbox_killed_at).toBeNull();
+  });
+
+  // ct-57027: a follower's write reached this host as a mut and is held here
+  // under a mirrored lock. The server refused it, so no echo retires that
+  // lock; the follower's rollback releases it and puts the prior value back.
+  it("a sibling's refused write releases the mirrored lock and restores the prior value", () => {
+    const id = "f".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, title: "server" }], { isDelta: true });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "refused" } }, 10);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]?.value).toBe("refused");
+
+    const tee = followerActionTee({ post: (m: any) => posted.push(m), onMessage: () => () => {} } as any, "w1");
+    const posted: any[] = [];
+    const after = { ...useInboxStore.getState(), sessions: { [id]: { _id: id, title: "server" } } };
+    tee("rename", [{ op: "replace", path: ["sessions", id, "title"], value: "server" }], after, {
+      refused: [{ key: `sessions:${id}:title`, storeKey: "sessions", recordId: id, field: "title", ts: 10, value: "refused", prior: "server", hadPrior: true }],
+    });
+    expect(posted[0].updates[0].release).toEqual({ [id]: { title: "refused" } });
+
+    applyUpdatesToStore(posted[0].updates, { optimistic: true });
+    expect((useInboxStore.getState().sessions as any)[id].title).toBe("server");
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]).toBeUndefined();
+  });
+
+  // A later write on the field (this window's own, or a newer sibling's) has
+  // moved past the refused value: the release leaves it alone.
+  it("a refused-write release leaves a field that has moved on", () => {
+    const id = "g".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, title: "server" }], { isDelta: true });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "newer" } }, 20);
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "server" } }, 30, { [id]: { title: "refused" } });
+    expect((useInboxStore.getState().sessions as any)[id].title).toBe("newer");
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]?.value).toBe("newer");
+  });
+});
+
+// A lock released after the update it blocked has landed would strand that
+// update: nothing delivers the row again, so the window keeps its own older
+// value while the host and the server hold the newer one. A lock retired by
+// its acknowledgement hands the row the newest server value it hid.
+describe("a lock retired by its acknowledgement lands the value it hid", () => {
+  const SCOPE = "user:ack-scope";
+  const field = "inbox_stashed_at";
+  const seedLocked = (id: string, cursor: number, ack?: Array<{ s: string; p: number }>) => {
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, [field]: null }], { isDelta: true });
+    useInboxStore.setState((s: any) => ({
+      syncMeta: { ...s.syncMeta, [syncLogScopeMetaKey(SCOPE)]: { cursor } },
+      pending: { ...s.pending, [`sessions:${id}:${field}`]: { type: "field", value: null, ts: Date.now(), ...(ack ? { ack } : {}) } },
+    }));
+  };
+
+  it("a follower's lock released by the host's cursor after the page's rows", () => {
+    const id = "q".repeat(32);
+    seedLocked(id, 8, [{ s: SCOPE, p: 9 }]);
+    // The page's row (another device stashed again at 10) arrives first.
+    applyUpdatesToStore([{ key: "sessions", upserts: [{ _id: id, session_id: `s-${id}`, updated_at: 2, [field]: 777 }] }]);
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBeNull();
+    applyUpdatesToStore([{ key: "syncMeta", hasValue: true, value: { [syncLogScopeMetaKey(SCOPE)]: { cursor: 10 } } }]);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:${field}`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(777);
+  });
+
+  it("an acknowledgement that arrives after the cursor already passed it", () => {
+    const id = "w".repeat(32);
+    seedLocked(id, 8);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 2, [field]: 777 }], { isDelta: true });
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBeNull();
+    useInboxStore.setState((s: any) => ({ syncMeta: { ...s.syncMeta, [syncLogScopeMetaKey(SCOPE)]: { cursor: 10 } } }));
+    useInboxStore.getState().stampSyncAck({ conversations: { [id]: { [field]: null } } }, [{ scope_key: SCOPE, position: 9 }], Date.now() + 1, { local: true });
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:${field}`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(777);
+  });
+
+  // The host: the bridge landed a follower's write, the cursor retired its
+  // lock and the range brought another device's newer value. The follower's
+  // replicated mut of the same write arrives last and must not put it back.
+  it("a sibling's replicated write that arrives after its acknowledgement retired is dropped", () => {
+    const id = "z".repeat(32);
+    seedLocked(id, 8, [{ s: SCOPE, p: 9 }]);
+    const ts = (useInboxStore.getState().pending as any)[`sessions:${id}:${field}`].ts;
+    useInboxStore.getState().retireAckedPending(SCOPE, 10);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 2, [field]: 777 }], { isDelta: true });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { [field]: null } }, ts);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:${field}`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(777);
+    // A newer write of the sibling's still lands.
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { [field]: null } }, ts + 1);
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBeNull();
+  });
+
+  // A follower undoes and redoes within moments. The redo's lock records a
+  // host row sent before the host applied the redo (it carries the undo's
+  // value, this window's own previous step). The host then echoes the redo
+  // back: from there every host row postdates it, so what the lock recorded
+  // before is not the server's word, and the acknowledgement must not land it.
+  it("a follower's lock forgets what it recorded before the host echoed its own write", () => {
+    const id = "e".repeat(32);
+    seedLocked(id, 8, [{ s: SCOPE, p: 9 }]);
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [id]: { ...s.sessions[id], [field]: 85150 } },
+      pending: { ...s.pending, [`sessions:${id}:${field}`]: { ...s.pending[`sessions:${id}:${field}`], value: 85150 } },
+    }));
+    // A host row from before the host applied the redo: the undo's null.
+    applyUpdatesToStore([{ key: "sessions", upserts: [{ _id: id, session_id: `s-${id}`, updated_at: 2, [field]: null }] }]);
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(85150);
+    // The host's rebroadcast of the redo itself.
+    forgetSeenBeforeOwnEcho([{ key: "sessions", fields: { [id]: { [field]: 85150 } } }]);
+    applyUpdatesToStore([{ key: "syncMeta", hasValue: true, value: { [syncLogScopeMetaKey(SCOPE)]: { cursor: 10 } } }]);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:${field}`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(85150);
+  });
+
+  it("a host row after the echo is still the value the lock lands", () => {
+    const id = "f".repeat(32);
+    seedLocked(id, 8, [{ s: SCOPE, p: 9 }]);
+    forgetSeenBeforeOwnEcho([{ key: "sessions", fields: { [id]: { [field]: null } } }]);
+    applyUpdatesToStore([{ key: "sessions", upserts: [{ _id: id, session_id: `s-${id}`, updated_at: 2, [field]: 777 }] }]);
+    applyUpdatesToStore([{ key: "syncMeta", hasValue: true, value: { [syncLogScopeMetaKey(SCOPE)]: { cursor: 10 } } }]);
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBe(777);
+  });
+
+  it("a lock that hid nothing newer leaves the row on its value", () => {
+    const id = "y".repeat(32);
+    seedLocked(id, 8, [{ s: SCOPE, p: 9 }]);
+    applyUpdatesToStore([{ key: "syncMeta", hasValue: true, value: { [syncLogScopeMetaKey(SCOPE)]: { cursor: 10 } } }]);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:${field}`]).toBeUndefined();
+    expect((useInboxStore.getState().sessions as any)[id][field]).toBeNull();
   });
 });

@@ -14,6 +14,8 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/plans/pl-88')).toBe('/plan/pl-88');
     expect(mobileRouteForUrl('https://codecast.sh/conversation/abc123')).toBe('/session/abc123');
     expect(mobileRouteForUrl('https://www.codecast.sh/docs/xyz')).toBe('/doc/xyz');
+    expect(mobileRouteForUrl('https://codecast.sh/decisions/sd-289')).toBe('/decisions/sd-289');
+    expect(mobileRouteForUrl('https://codecast.sh/decisions/stacks/ds-4')).toBeNull();
   });
 
   test('share links of every kind land on the /share resolver screen', () => {
@@ -24,6 +26,14 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/share/message/abc123def')).toBe('/share/message/abc123def');
     // A sub-kind word with no token is a malformed link, not a token.
     expect(mobileRouteForUrl('https://codecast.sh/share/doc')).toBeNull();
+  });
+
+  test('the assistant lane opens at its own address', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/simple')).toBe('/simple');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/approvals')).toBe('/simple/approvals');
+    expect(mobileRouteForUrl('https://codecast.sh/simple/c/jx7abc123?x=1')).toBe('/simple/c/jx7abc123');
+    expect(mobileRouteForUrl('/simple/plan/')).toBe('/simple/plan');
+    expect(mobileRouteForUrl('https://codecast.sh/simpler')).toBeNull();
   });
 
   test('invites, chat and calls land on the chat tab', () => {
@@ -122,8 +132,9 @@ describe('redirectSystemPath (+native-intent)', () => {
   const { redirectSystemPath } = require('../app/+native-intent');
 
   test('web URLs re-route to their screens', () => {
+    // A conversation stops at app/open, which waits for the lane (lib/laneOpen).
     expect(redirectSystemPath({ path: 'https://codecast.sh/conversation/abc123', initial: true }))
-      .toBe('/session/abc123');
+      .toBe('/open/session/abc123');
     expect(redirectSystemPath({ path: 'https://codecast.sh/share/doc/1a221088-1fc3-48c8-a814-71119676adf0', initial: false }))
       .toBe('/share/doc/1a221088-1fc3-48c8-a814-71119676adf0');
   });

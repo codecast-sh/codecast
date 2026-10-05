@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, query } from "./functions";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
+import { TASK_PRIORITIES } from "@codecast/shared/tasks";
 import type { Id } from "./_generated/dataModel";
 import { resolveScope } from "./org";
 import { capsFor, cardsCapOf, countersFor, roleStartsOnItsOwn } from "./lib/orgCaps";
@@ -91,7 +92,7 @@ function isReadyCause(task: any): boolean {
   return task.source === "signal" && task.readiness === "ready" && !!task.goal_ref?.trim();
 }
 
-const SEVERITIES = new Set<Severity>(["urgent", "high", "medium", "low", "none"]);
+const SEVERITIES = new Set<Severity>(TASK_PRIORITIES);
 function severityOf(task: any): Severity {
   return SEVERITIES.has(task.priority) ? task.priority : "none";
 }

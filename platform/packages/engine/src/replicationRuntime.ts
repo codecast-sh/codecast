@@ -159,6 +159,11 @@ export type ReplicationFollowerOptions = {
   /** Called whenever the follower reaches (true) or loses (false) a synced
    *  stream — the app's "is a host present" signal (solo fallback, badges). */
   onSynced?: (synced: boolean) => void;
+  /** The host's rebroadcast of this window's own write: the host has applied
+   *  it, so every host row this window takes from here on postdates it. Its
+   *  content is not applied (see applyMessages); the app may use the moment,
+   *  e.g. to forget values its locks recorded from host rows sent before. */
+  onOwnEcho?: (updates: ReplicationUpdate[]) => void;
 };
 
 export type ReplicationFollower = {
@@ -221,7 +226,10 @@ export function createReplicationFollower(opts: ReplicationFollowerOptions): Rep
       // already holds these values, and re-applying them through the sync path
       // would retire the field locks early (a value match reads as an echo),
       // reopening the stale-push window the locks exist to close.
-      if (m.origin === selfId) continue;
+      if (m.origin === selfId) {
+        opts.onOwnEcho?.(m.updates);
+        continue;
+      }
       opts.applyUpdates(m.updates, m.origin);
     }
   };

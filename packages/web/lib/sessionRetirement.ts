@@ -14,8 +14,8 @@ export function isSessionDismissed(s: Pick<RetirementStamps, "inbox_dismissed_at
 // covers the web's kill action AND `cast kill` (cliSetSessionVisibility patches
 // inbox_dismissed_at, then forces the kill transition). The exception is the
 // killSession MUTATION (conversations.ts), which stamps inbox_killed_at ALONE:
-// that's the path behind the web's convCommand("killSession") — the /sessions
-// kill button and the panel's kill-and-complete. Anything asking "is this
+// that's the path behind the web's convCommand("killSession") (the Killed
+// shelf's kill-and-complete) and older clients. Anything asking "is this
 // killed?" must read this field or it silently misses those.
 export function isSessionKilled(s: Pick<RetirementStamps, "inbox_killed_at">): boolean {
   return !!s.inbox_killed_at;

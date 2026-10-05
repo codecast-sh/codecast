@@ -29,17 +29,19 @@ export function isBootstrapMessage(m: { role?: string; content?: unknown } | und
   return isBootstrapPrompt(text);
 }
 
-/** Where to cut: just after the last provisioning prompt in the loaded
- *  window. A seat seated on an existing agent (org-staffing.md S16) carries
- *  the prompt mid-history, and the thread as this role starts there; a fresh
- *  seat carries it first. A prompt with nothing after it cuts itself, so the
- *  page opens on the lead alone. Undefined when the window holds no prompt
- *  (older pages not loaded yet, or a session that never had one). */
+/** Where to cut: just after the FIRST provisioning prompt, once the window
+ *  reaches the session's start. Everything before it is not this role's
+ *  thread: a fresh seat carries only the prompt there, and a seat placed on an
+ *  existing agent (org-staffing.md S16) carries that agent's earlier work. A
+ *  later prompt is a re-brief (a restart frame) inside the role's own thread,
+ *  so it never cuts: it renders folded in place (classify `role_brief`). A
+ *  prompt with nothing after it cuts itself, so the page opens on the lead
+ *  alone. Undefined while older pages are unloaded, or when the session never
+ *  had a prompt. */
 export function bootstrapCut(conversation: WindowedConversation | null | undefined): number | undefined {
+  if ((conversation?.loaded_start_index ?? 0) > 0) return undefined;
   const messages = conversation?.messages ?? [];
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (!isBootstrapMessage(messages[i])) continue;
-    return messages[i + 1]?.timestamp ?? messages[i].timestamp + 1;
-  }
-  return undefined;
+  const i = messages.findIndex((m) => isBootstrapMessage(m));
+  if (i < 0) return undefined;
+  return messages[i + 1]?.timestamp ?? messages[i].timestamp + 1;
 }

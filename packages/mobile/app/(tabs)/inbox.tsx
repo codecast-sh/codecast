@@ -19,7 +19,7 @@ import {
 } from '@codecast/web/store/inboxStore';
 import {
   AGENT_MODEL_CONFIG, compareMachineChips, featuredModelOptions, launchRailOptions, toConvexAgentType,
-  type AgentClientId, type DeviceModelInventory,
+  type AgentClientId, type LocalAgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
@@ -27,6 +27,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { usePinnedLaunchOptions } from '@codecast/web/hooks/usePinnedAgents';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
+import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
 import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
 import { useInstantSessionRows, mergeSearchRows, type SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
 import { labelHexColor } from '@/lib/labelColors';
@@ -38,6 +39,7 @@ import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } 
 import { useQuery } from 'convex/react';
 import { mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
 import { bootMark } from '@/lib/bootProfile';
+import { showActionSheet } from '@/lib/actionSheet';
 
 // Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
@@ -108,7 +110,7 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
 // Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
 // has one. Tints the selected pill's border/background/label; the logo tile
 // itself is the shared AgentLogoSvg (same marks as web's AgentTypeIcon).
-const agentAccents: Record<AgentClientId, string> = {
+const agentAccents: Record<LocalAgentClientId, string> = {
   claude: Theme.orange,
   codex: Theme.green,
   cursor: Theme.violet,
@@ -1020,6 +1022,12 @@ export default function InboxScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [userOnly, setUserOnly] = useState(false);
+  // Search and the label/project chips stay folded away until asked for: the
+  // header is the title and one menu. Search opens from its icon or by
+  // pulling the list down past its first row; chips open from the filter icon
+  // and stay open on their own while a filter is narrowing the list.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [chipsOpen, setChipsOpen] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const router = useRouter();
   const isSearching = searchQuery.trim().length >= 2;
@@ -1033,7 +1041,7 @@ export default function InboxScreen() {
   // (and re-laying-out the whole list) about once a second, pegging a core on
   // an idle phone. Subscribe to the structural signatures instead; the body
   // reads the raw maps off the store at render, same as web's Sidebar. The
-  // sync hooks themselves live in StoreSyncBridge (tabs layout) so server
+  // sync hooks themselves live in StoreSyncBridge (root layout) so server
   // pushes don't re-render this screen at all.
   const sessionsSig = useInboxStore((s) => sessionsWakeSig(s.sessions));
   const pendingSendSig = useInboxStore((s) => pendingSendWakeSig(s.pendingMessages));
@@ -1159,6 +1167,11 @@ export default function InboxScreen() {
     setSearchQuery('');
     setDebouncedQuery('');
   }, []);
+
+  const closeSearch = useCallback(() => {
+    clearSearch();
+    setSearchOpen(false);
+  }, [clearSearch]);
 
   const handleStash = useCallback((conversationId: string) => {
     stashSession(conversationId);
@@ -1481,16 +1494,25 @@ export default function InboxScreen() {
           <FontAwesome name={showStashed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
           <RNText style={styles.dismissedToggleText}>Stashed ({filteredStashed.length})</RNText>
         </TouchableOpacity>
-        {showStashed && filteredStashed.length > 0 && (
-          <TouchableOpacity
-            onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
-            style={styles.killAllBtn}
-            activeOpacity={0.7}
-          >
-            <RNText style={styles.killAllText}>Kill all</RNText>
-          </TouchableOpacity>
-        )}
+        <RNView style={styles.hiddenToggleDivider} />
+        <TouchableOpacity
+          style={styles.hiddenToggle}
+          onPress={() => setShowKilled(prev => !prev)}
+          activeOpacity={0.7}
+        >
+          <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
+          <RNText style={styles.dismissedToggleText}>Killed ({filteredKilled.length})</RNText>
+        </TouchableOpacity>
       </RNView>
+      {showStashed && filteredStashed.length > 0 && (
+        <TouchableOpacity
+          onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
+          style={styles.killAllBtn}
+          activeOpacity={0.7}
+        >
+          <RNText style={styles.killAllText}>Kill all stashed</RNText>
+        </TouchableOpacity>
+      )}
       {showStashed && (
         <RNView style={styles.dismissedSection}>
           {filteredStashed.length === 0 ? (
@@ -1509,15 +1531,6 @@ export default function InboxScreen() {
           )}
         </RNView>
       )}
-
-      <TouchableOpacity
-        style={styles.hiddenToggle}
-        onPress={() => setShowKilled(prev => !prev)}
-        activeOpacity={0.7}
-      >
-        <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-        <RNText style={styles.dismissedToggleText}>Killed ({filteredKilled.length})</RNText>
-      </TouchableOpacity>
       {showKilled && (
         <RNView style={styles.dismissedSection}>
           {filteredKilled.length === 0 ? (
@@ -1554,24 +1567,25 @@ export default function InboxScreen() {
     ...(visibleBuckets.length > 0 ? [{ key: "bucket", label: "By label", icon: "tag" }] : []),
     ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: "sitemap" }] : []),
   ] as Array<{ key: InboxViewMode; label: string; icon: any }>), [visibleBuckets.length, hasPlanSessions]);
-  const currentViewOption = viewModeOptions.find((o) => o.key === viewMode) ?? viewModeOptions[0];
 
-  const openViewModePicker = useCallback(() => {
-    if (Platform.OS === 'ios') {
-      const options = [...viewModeOptions.map((o) => (o.key === viewMode ? `✓ ${o.label}` : o.label)), 'Cancel'];
-      ActionSheetIOS.showActionSheetWithOptions(
-        { options, cancelButtonIndex: options.length - 1, title: 'Sort inbox' },
-        (index) => {
-          if (index < viewModeOptions.length) setInboxViewMode(viewModeOptions[index].key);
-        },
-      );
-    } else {
-      Alert.alert('Sort inbox', undefined, [
-        ...viewModeOptions.map((o) => ({ text: o.key === viewMode ? `✓ ${o.label}` : o.label, onPress: () => setInboxViewMode(o.key) })),
-        { text: 'Cancel', style: 'cancel' as const },
-      ]);
-    }
-  }, [viewModeOptions, viewMode, setInboxViewMode]);
+  const hasChips = labelChips.length > 0 || projectCounts.length > 1;
+  const filterActive = !!(activeBucketFilter || activeProjectFilter);
+  const showChips = !isSearching && hasChips && (chipsOpen || filterActive);
+
+  // The header's one menu: the view lens first (the current one checked),
+  // then the places that used to be their own header buttons. Routes are cast
+  // because expo's typed-route union only regenerates when Metro runs.
+  const openInboxMenu = useCallback(() => {
+    showActionSheet('Inbox', [
+      ...viewModeOptions.map((o) => ({ label: o.label, selected: o.key === viewMode, onPress: () => setInboxViewMode(o.key) })),
+      ...(orgOn === true ? [{ label: 'Open the org', onPress: () => router.push({ pathname: '/org' } as never) }] : []),
+      { label: 'Record a meeting', onPress: () => router.push({ pathname: '/record' } as never) },
+    ]);
+  }, [viewModeOptions, viewMode, setInboxViewMode, orgOn, router]);
+
+  // Pull-to-reveal: the list opens scrolled past a search row that sits above
+  // its first section, so a short pull shows it and a longer one refreshes.
+  const SEARCH_REVEAL_HEIGHT = 44;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -1582,79 +1596,88 @@ export default function InboxScreen() {
             <RNText style={styles.countBadgeText}>{activeSessions.length}</RNText>
           </RNView>
         )}
+        {/* Title-side badges (counts that link elsewhere) sit here. */}
+        {!isSearching && <DecisionsBadge />}
         <RNView style={{ flex: 1 }} />
-        {/* The recorder lives here rather than on a tab of its own: the bar
-            already carries five and a sixth squeezes every label (the same
-            reason chat sits inside Team). The inbox is the landing screen, so
-            this is still one tap from opening the app. The route is cast for
-            the same reason the chat pushes are: expo's typed-route union only
-            regenerates when Metro runs, so a new route is unknown to tsc. */}
-        {/* The org sits here for the same reason the recorder does: no room
-            for a sixth tab, and the inbox is one tap from opening the app. */}
-        {!isSearching && orgOn === true && (
+        {!searchOpen && (
           <TouchableOpacity
-            style={styles.recordBtn}
-            onPress={() => router.push({ pathname: '/org' } as never)}
+            style={styles.headerIconBtn}
+            onPress={() => setSearchOpen(true)}
             activeOpacity={0.7}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityLabel="Open the org"
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            accessibilityLabel="Search conversations"
           >
-            <FontAwesome name="sitemap" size={14} color={Theme.textMuted} />
+            <FontAwesome name="search" size={15} color={Theme.textMuted} />
           </TouchableOpacity>
         )}
-        {!isSearching && (
+        {hasChips && !isSearching && (
           <TouchableOpacity
-            style={styles.recordBtn}
-            onPress={() => router.push({ pathname: '/record' } as never)}
+            style={[styles.headerIconBtn, (chipsOpen || filterActive) && styles.headerIconBtnActive]}
+            onPress={() => {
+              // Closing the row while a chip narrows the list clears it, so a
+              // hidden filter never silently hides sessions.
+              if (showChips) { setChipsOpen(false); setActiveBucketFilter(null); setActiveProjectFilter(null); }
+              else setChipsOpen(true);
+            }}
             activeOpacity={0.7}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            accessibilityLabel="Record a meeting"
+            hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+            accessibilityLabel={showChips ? "Hide filters" : "Filter by label or project"}
           >
-            <FontAwesome name="microphone" size={15} color={Theme.textMuted} />
+            <FontAwesome name="filter" size={15} color={filterActive ? Theme.cyan : Theme.textMuted} />
           </TouchableOpacity>
         )}
-        {!isSearching && (
-          <TouchableOpacity style={styles.viewModeBtn} onPress={openViewModePicker} activeOpacity={0.7} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <FontAwesome name={currentViewOption.icon} size={11} color={Theme.textMuted} />
-            <RNText style={styles.viewModeBtnText}>{currentViewOption.label}</RNText>
-            <FontAwesome name="angle-down" size={11} color={Theme.textMuted0} />
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={styles.headerIconBtn}
+          onPress={openInboxMenu}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 6, right: 8 }}
+          accessibilityLabel="Inbox options"
+        >
+          <FontAwesome name="ellipsis-h" size={16} color={Theme.textMuted} />
+        </TouchableOpacity>
       </RNView>
 
-      <RNView style={styles.searchContainer}>
-        <RNView style={styles.searchInputRow}>
-          <FontAwesome name="search" size={14} color={Theme.textMuted0} style={{ marginRight: 8 }} />
-          <TextInput
-            style={styles.searchInput}
-            value={searchQuery}
-            onChangeText={handleSearchChange}
-            placeholder="Search all conversations..."
-            placeholderTextColor={Theme.textMuted0}
-            returnKeyType="search"
-            autoCorrect={false}
-            autoCapitalize="none"
-          />
-          {searchQuery.length > 0 && (
-            <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
-              <FontAwesome name="times-circle" size={16} color={Theme.textMuted0} />
+      {(searchOpen || searchQuery.length > 0) && (
+        <RNView style={styles.searchContainer}>
+          <RNView style={styles.searchBarRow}>
+            <RNView style={styles.searchInputRow}>
+              <FontAwesome name="search" size={14} color={Theme.textMuted0} style={{ marginRight: 8 }} />
+              <TextInput
+                style={styles.searchInput}
+                value={searchQuery}
+                onChangeText={handleSearchChange}
+                placeholder="Search all conversations..."
+                placeholderTextColor={Theme.textMuted0}
+                returnKeyType="search"
+                autoCorrect={false}
+                autoCapitalize="none"
+                autoFocus
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={clearSearch} hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}>
+                  <FontAwesome name="times-circle" size={16} color={Theme.textMuted0} />
+                </TouchableOpacity>
+              )}
+            </RNView>
+            <TouchableOpacity onPress={closeSearch} hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}>
+              <RNText style={styles.searchCancel}>Cancel</RNText>
+            </TouchableOpacity>
+          </RNView>
+          {isSearching && (
+            <TouchableOpacity
+              style={[styles.userOnlyToggle, userOnly && styles.userOnlyToggleActive]}
+              onPress={() => setUserOnly(prev => !prev)}
+              activeOpacity={0.7}
+            >
+              <RNText style={[styles.userOnlyText, userOnly && styles.userOnlyTextActive]}>
+                User messages only
+              </RNText>
             </TouchableOpacity>
           )}
         </RNView>
-        {isSearching && (
-          <TouchableOpacity
-            style={[styles.userOnlyToggle, userOnly && styles.userOnlyToggleActive]}
-            onPress={() => setUserOnly(prev => !prev)}
-            activeOpacity={0.7}
-          >
-            <RNText style={[styles.userOnlyText, userOnly && styles.userOnlyTextActive]}>
-              User messages only
-            </RNText>
-          </TouchableOpacity>
-        )}
-      </RNView>
+      )}
 
-      {!isSearching && (labelChips.length > 0 || projectCounts.length > 1) && (
+      {showChips && (
         <RNView style={styles.chipRowContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipRow}>
             {/* Manual labels lead, auto-derived project chips follow — web's
@@ -1717,8 +1740,15 @@ export default function InboxScreen() {
             />
           }
           contentContainerStyle={activeSessions.length === 0 ? styles.emptyList : styles.listContent}
+          contentOffset={searchOpen ? undefined : { x: 0, y: SEARCH_REVEAL_HEIGHT }}
           showsVerticalScrollIndicator={false}
         >
+          {!searchOpen && (
+            <TouchableOpacity style={styles.searchReveal} onPress={() => setSearchOpen(true)} activeOpacity={0.7}>
+              <FontAwesome name="search" size={13} color={Theme.textMuted0} />
+              <RNText style={styles.searchRevealText}>Search all conversations</RNText>
+            </TouchableOpacity>
+          )}
           {listData}
           {ListFooter}
         </ScrollView>
@@ -1778,26 +1808,36 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '700',
     color: Theme.bg,
   },
-  recordBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    marginRight: 4,
-  },
-  viewModeBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 9,
-    paddingVertical: 4,
+  headerIconBtn: {
+    width: 34,
+    height: 30,
     borderRadius: 8,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  headerIconBtnActive: {
     backgroundColor: Theme.bg,
   },
-  viewModeBtnText: {
-    fontSize: 12,
-    fontWeight: '500',
-    color: Theme.textMuted,
+  searchBarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  searchCancel: {
+    fontSize: 14,
+    color: Theme.blue,
+  },
+  searchReveal: {
+    height: 44,
+    marginHorizontal: Spacing.md,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  searchRevealText: {
+    fontSize: 14,
+    color: Theme.textMuted0,
   },
   labelChipInner: {
     flexDirection: 'row',
@@ -1859,10 +1899,16 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingVertical: 14,
     flexGrow: 1,
   },
+  hiddenToggleDivider: {
+    width: StyleSheet.hairlineWidth,
+    height: 18,
+    backgroundColor: Theme.borderLight,
+  },
   killAllBtn: {
+    alignSelf: 'center',
     paddingHorizontal: 12,
     paddingVertical: 5,
-    marginRight: Spacing.lg,
+    marginBottom: Spacing.sm,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: Theme.red + '60',
@@ -1947,6 +1993,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingBottom: Spacing.xs,
   },
   searchInputRow: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: Theme.bg,

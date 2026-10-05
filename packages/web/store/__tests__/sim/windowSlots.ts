@@ -34,6 +34,9 @@ const NO_WARM: SlotClass = { shared: "message-page warming (warmVisibleSessions)
 const AUDIO: SlotClass = { shared: "audio output; bun has no AudioContext, so it stays null" };
 const IMAGE_URLS: SlotClass = { shared: "storage id to image URL cache: the mapping is immutable and production keeps it origin-wide (localStorage); the sim serves no storage" };
 
+/** The engine's source, as a path under packages/web (the vendored mirror). */
+export const ENGINE = "../../platform/packages/engine/src/";
+
 /** "<path under packages/web>:<binding>" to its class. */
 export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // store/inboxStore.ts
@@ -125,6 +128,30 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
     shared: "written by an undo replay's beforeReplay and read by its afterReplay in the same synchronous call, inside one window's turn",
   },
   "store/undoStack.ts:liveEntryToasts": { shared: "ids of the undo toasts on screen; the sim renders no toasts" },
+
+  // The store's engine (@platform/engine, mirrored under platform/packages).
+  // Each browser window keeps its own undo history: ⌘Z in one window never
+  // reaches a gesture another window recorded.
+  ...Object.fromEntries(
+    ["undoStack", "redoStack", "history", "version", "snapshot", "suppressDepth", "refreshTarget", "groupDepth", "groupChildren", "groupToast", "groupExternals", "recordingHolds"].map(
+      (name) => [`${ENGINE}undoStack.ts:${name}`, "window" as SlotClass],
+    ),
+  ),
+  ...Object.fromEntries(
+    ["keyboardWindowMs", "stackLimit", "historyLimit", "stampFields", "notifier"].map((name) => [
+      `${ENGINE}undoStack.ts:${name}`,
+      { shared: "undo configuration and notifier, set once as the store loads" },
+    ]),
+  ),
+  [`${ENGINE}undoStack.ts:idCounter`]: { shared: "process-wide counter: entry ids stay unique across windows and no window reads another's value" },
+  [`${ENGINE}undoStack.ts:listeners`]: NO_REACT,
+  [`${ENGINE}undoStack.ts:rekeyHooks`]: { shared: "rekey hooks registered once at module load" },
+  [`${ENGINE}undoStack.ts:resetListeners`]: { shared: "reset listeners registered once at module load" },
+  [`${ENGINE}undoStack.ts:rebaseHooks`]: { shared: "each window's controller registers one as its store loads; it rebases only the entries its own controller holds" },
+  [`${ENGINE}syncProtocol.ts:lockIdCounter`]: { shared: "process-wide counter: lock ids stay unique across windows" },
+  [`${ENGINE}wakeSig.ts:__refSeq`]: { shared: "process-wide counter: ref ids stay unique across windows" },
+  [`${ENGINE}react.ts:_clocks`]: NO_REACT,
+  [`${ENGINE}case.ts:VERBATIM`]: CONSTANT,
   ...Object.fromEntries(
     ["snapshot", "lastSteadyFocus", "returnTo", "trackedDoc", "flash", "listeners", "flashListeners"].map((name) => [
       `lib/undoTimelineOpen.ts:${name}`,
@@ -289,6 +316,7 @@ const SEAMS: Record<string, () => SlotSeam> = {
   "store/inboxStore.ts": () => inboxStoreSeam(load<typeof import("../../inboxStore")>("../../inboxStore").__inboxStoreWindowBindings),
   "store/gestureBridge.ts": () => load<typeof import("../../gestureBridge")>("../../gestureBridge").__gestureBridgeSimSlots() as SlotSeam,
   "store/viewNav.ts": () => load<typeof import("../../viewNav")>("../../viewNav").__viewNavSimSlots() as SlotSeam,
+  [`${ENGINE}undoStack.ts`]: () => load<typeof import("@platform/engine")>("@platform/engine").__undoStackWindowSlots(),
   // No seam of its own: the module's getters plus its existing test setter.
   "store/syncActivity.ts": () => {
     const m = load<typeof import("../../syncActivity")>("../../syncActivity");

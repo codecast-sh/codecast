@@ -208,6 +208,20 @@ describe("noRepeat", () => {
     expect(held.stopped).toBe(false);
   });
 
+  // A declined press (a text field's own undo) belongs to the browser, and so
+  // does every repeat of it: holding the chord keeps undoing typing.
+  test("repeats of a declined press reach the browser", () => {
+    const d = new ShortcutDispatcher<UndoAction>();
+    let calls = 0;
+    d.register("undo", () => { calls++; return false; });
+    const handler = createKeydownHandler(cat, d);
+    handler(makeEvent({ key: "z", ctrlKey: true }));
+    const held = makeEvent({ key: "z", ctrlKey: true, repeat: true });
+    handler(held);
+    expect(held.prevented).toBe(false);
+    expect(calls).toBe(1);
+  });
+
   test("other bindings still repeat", () => {
     const d = new ShortcutDispatcher<UndoAction>();
     let calls = 0;

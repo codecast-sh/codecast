@@ -7,7 +7,7 @@
 // UndoTimelineHost mounts beside RecentSwitcherHost and renders nothing until
 // a doorway opens the card (lib/undoTimelineOpen): the palette row, the chord,
 // the "Undid" toast's History action, the held peek.
-import { useCallback, useMemo, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { redoTo, undoTo } from "../../store/undoStack";
@@ -17,20 +17,19 @@ import { useUndoHistory } from "../../hooks/useUndoHistory";
 import { useOpenSession } from "../../hooks/useOpenSession";
 import { useOpenRecentVisit } from "../../hooks/useOpenRecentVisit";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { getShortcutsForAction, matchShortcut, useShortcuts, type ShortcutAction } from "../../shortcuts";
+import { getShortcutsForAction, matchShortcut, useShortcuts } from "../../shortcuts";
+import { UNDO_CARD_CHORDS } from "../../shortcuts/keyOwnership";
 import { orgPreviewEnabled } from "../org/staffingModel";
 import { UndoTimelineView, type UndoTimelineViewProps } from "./UndoTimelineView";
+import { useUndoWalk } from "../../hooks/useUndoWalk";
 import type { ResolvedVisit } from "../../lib/recentVisits";
 
-/** The chords that keep working while focus is inside the card. The card
- *  owns its plain keys (data-owns-keys), so these are handed on by name. */
-const CARD_CHORDS: ShortcutAction[] = ["ui.undo", "ui.redo", "ui.undoHistory"];
 
-function useCardChords(): (e: ReactKeyboardEvent) => boolean {
+function useCardChords(): (e: KeyboardEvent) => boolean {
   const { dispatchAction } = useShortcuts();
-  return useCallback((e: ReactKeyboardEvent) => {
-    for (const action of CARD_CHORDS) {
-      const def = getShortcutsForAction(action).find((d) => matchShortcut(e.nativeEvent, d));
+  return useCallback((e: KeyboardEvent) => {
+    for (const action of UNDO_CARD_CHORDS) {
+      const def = getShortcutsForAction(action).find((d) => matchShortcut(e, d));
       if (!def) continue;
       e.preventDefault();
       if (!(def.noRepeat && e.repeat)) dispatchAction(action);
@@ -99,7 +98,17 @@ export function UndoTimelineHost() {
   if (!state.open) return null;
   // Read per render, so an in-app navigation that drops the flag drops the fixture.
   const preview = typeof window !== "undefined" && orgPreviewEnabled(window.location.search, !!import.meta.env.DEV);
-  // Keyed on the mode: a peek pinned interactive remounts and takes focus.
-  return preview ? <UndoTimelinePreview key={state.mode} mode={state.mode} /> : <UndoTimeline key={state.mode} mode={state.mode} />;
+  // Not keyed on the mode: a peek pinned by a press on it turns interactive in
+  // place (the view takes focus then), so the press's click still lands on
+  // the row button it was aimed at.
+  return preview ? <UndoTimelinePreview mode={state.mode} /> : <UndoTimeline mode={state.mode} />;
 }
 
+
+/** Both halves of a frame's way back to its history, for a frame outside the
+ *  dashboard (which mounts them itself): the keys and the held peek
+ *  (useUndoWalk) and the card a toast's History opens. */
+export function UndoReach() {
+  useUndoWalk();
+  return <UndoTimelineHost />;
+}

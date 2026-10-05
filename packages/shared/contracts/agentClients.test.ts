@@ -2,6 +2,10 @@ import { describe, expect, it } from "bun:test";
 import {
   AGENT_CLIENTS,
   AGENT_LAUNCH_OPTIONS,
+  LOCAL_AGENT_CLIENTS,
+  HostedAgentClientError,
+  isHostedAgentType,
+  localAgentClient,
   pinnedAgentIds,
   pinnedLaunchOptions,
   launchRailOptions,
@@ -90,8 +94,8 @@ describe("parseExecutionAgentClientId", () => {
 });
 
 describe("print mode", () => {
-  it("declares a print mode for every client", () => {
-    for (const [id, d] of Object.entries(AGENT_CLIENTS)) {
+  it("declares a print mode for every local client", () => {
+    for (const [id, d] of Object.entries(LOCAL_AGENT_CLIENTS)) {
       expect(d.printMode, id).toBeDefined();
       expect(["flag", "subcommand"]).toContain(d.printMode.kind);
       expect(d.printMode.token.length).toBeGreaterThan(0);
@@ -138,9 +142,9 @@ describe("fenced execution transports", () => {
 // relies on (eight clients, honest labels, launch rail hides picker-only models
 // and prepends the "default" effort stop).
 describe("new-session launch options", () => {
-  it("derives one launch option per registry client, in declaration order", () => {
+  it("derives one launch option per local registry client, in declaration order", () => {
     expect(AGENT_LAUNCH_OPTIONS.map((a) => a.id)).toEqual(
-      Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>,
+      Object.keys(LOCAL_AGENT_CLIENTS) as Array<keyof typeof LOCAL_AGENT_CLIENTS>,
     );
     for (const opt of AGENT_LAUNCH_OPTIONS) {
       expect(opt.convexType).toBe(AGENT_CLIENTS[opt.id].convexId);
@@ -279,6 +283,17 @@ describe("capabilitySupport", () => {
       command: "unsupported",
       subagent: "unsupported",
       mcp: "native",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
+    // The hosted assistant runs in codecast's backend and reads no file on
+    // any machine: every kind is honestly unsupported.
+    codecast: {
+      snippet: "unsupported",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
       plugin: "unsupported",
       hook: "unsupported",
     },
@@ -484,7 +499,7 @@ describe("pinned agents", () => {
     const ids = pinnedAgentIds(undefined);
     expect(ids).not.toContain("gemini");
     expect(ids).toContain("claude");
-    expect(ids).toEqual((Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>).filter((id) => AGENT_CLIENTS[id].pinnedByDefault !== false));
+    expect(ids).toEqual((Object.keys(LOCAL_AGENT_CLIENTS) as Array<keyof typeof LOCAL_AGENT_CLIENTS>).filter((id) => LOCAL_AGENT_CLIENTS[id].pinnedByDefault !== false));
   });
 
   it("a user's list wins, in registry order, dropping unknown ids", () => {
@@ -495,5 +510,34 @@ describe("pinned agents", () => {
   it("a picker keeps the agent a session already runs", () => {
     expect(pinnedLaunchOptions(["claude"], "gemini").map((o) => o.id)).toEqual(["claude", "gemini"]);
     expect(pinnedLaunchOptions(undefined, null).map((o) => o.id)).toEqual(pinnedAgentIds(undefined));
+  });
+});
+
+// The hosted assistant (plan pl-840) is a registry client with no machine
+// behind it: it names itself and translates like any client, but no picker
+// offers it, no execution boundary accepts it, and every local-run lookup
+// refuses it rather than inventing a binary or a pane.
+describe("the hosted codecast client", () => {
+  it("translates both ways and is the only hosted client", () => {
+    expect(fromConvexAgentType("codecast")).toBe("codecast");
+    expect(toConvexAgentType("codecast")).toBe("codecast");
+    expect(AGENT_CLIENTS.codecast.displayName).toBe("Codecast assistant");
+    expect(Object.keys(AGENT_CLIENTS).filter((id) => isHostedAgentType(id))).toEqual(["codecast"]);
+    expect(isHostedAgentType("claude_code")).toBe(false);
+    expect(isHostedAgentType(undefined)).toBe(false);
+  });
+
+  it("stays out of every local path: pickers, pins, execution and local lookups", () => {
+    expect("codecast" in LOCAL_AGENT_CLIENTS).toBe(false);
+    expect(AGENT_LAUNCH_OPTIONS.some((o) => o.id === ("codecast" as string))).toBe(false);
+    expect(pinnedAgentIds(["codecast", "claude"])).toEqual(["claude"]);
+    expect(() => parseExecutionAgentClientId("codecast")).toThrow(InvalidExecutionAgentTypeError);
+    expect(() => localAgentClient("codecast")).toThrow(HostedAgentClientError);
+    expect(localAgentClient("codex")).toBe(LOCAL_AGENT_CLIENTS.codex);
+    expect(agentSupportsExecutionTransport("codecast", "hosted")).toBe(true);
+    expect(agentSupportsExecutionTransport("codecast", "tmux")).toBe(false);
+    expect(agentSupportsFork("codecast")).toBe(false);
+    expect(agentForksNatively("codecast")).toBe(false);
+    expect(capabilitySupport("skill", "codecast")).toBe("unsupported");
   });
 });

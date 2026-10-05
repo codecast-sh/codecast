@@ -10,7 +10,6 @@
 .ev-sf-head-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .ev-sf-crumb { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--sol-text-dim); }
 .ev-sf-crumb a:hover { color: var(--sol-text); }
-.ev-sf-title { display: flex; align-items: center; gap: 10px; font-size: 20px; font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; color: var(--sol-text); margin: 0; }
 .ev-sf-head-nums { display: flex; gap: 28px; flex-shrink: 0; padding-top: 18px; }
 .ev-sf-num-label { margin-top: 6px; font-size: 11px; color: var(--sol-text-dim); }
 
@@ -87,30 +86,6 @@
 .ev-sf-keys > span { display: inline-flex; align-items: center; gap: 4px; }
 .ev-sf-note { margin: 0; padding: 12px 2px; font-size: 12px; line-height: 1.5; }
 
-.ev-sf-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 24px;
-  padding: 0 9px;
-  font-size: 11.5px;
-  color: var(--sol-text-muted);
-  background: var(--sol-bg-alt);
-  border: 1px solid var(--ev-rule);
-  border-radius: 5px;
-  cursor: pointer;
-}
-.ev-sf-btn:hover { color: var(--sol-text); border-color: var(--sol-border); }
-.ev-sf-btn--primary {
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--sol-bg);
-  background: var(--sol-text);
-  border-color: var(--sol-text);
-}
-.ev-sf-btn--primary:hover { color: var(--sol-bg); background: color-mix(in srgb, var(--sol-text) 86%, var(--sol-cyan)); }
 .ev-sf-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--sol-text-dim); cursor: pointer; }
 .ev-sf-iconbtn:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
 
@@ -227,7 +202,7 @@ tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: 
 .ev-sf-compare-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ev-sf-compare-head > .ev-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ev-sf-compare-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }
-.ev-sf-compare-actions .ev-sf-btn { white-space: nowrap; }
+.ev-sf-compare-actions .ev-btn { white-space: nowrap; }
 .ev-sf-sets { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
 .ev-sf-set { min-width: 0; padding: 10px 12px; border: 1px solid var(--ev-rule); border-radius: 7px; background: var(--sol-bg); }
 .ev-sf-set-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-muted); }
@@ -309,7 +284,7 @@ tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: 
 /* The baseline's mark, as the seismograph draws it under its axis. */
 .ev-sf-basemark { flex: none; width: 14px; height: 6px; border-left: 2px solid var(--sol-cyan); border-right: 2px solid var(--sol-cyan); background: linear-gradient(var(--sol-cyan), var(--sol-cyan)) center / 100% 1px no-repeat; opacity: 0.8; }
 .ev-sf-nowrap { white-space: nowrap; }
-.ev-sf-verdictline .ev-sf-btn { height: 22px; }
+.ev-sf-verdictline .ev-btn { height: 22px; }
 
 /* A freeze that flipped between the pinned pair: a mark before its name, and its row first. */
 .ev-sf-pairflip { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }

@@ -6,7 +6,7 @@
 // context transfer document (formatHandoff) to stdout or -o.
 
 import {
-  AGENT_CLIENTS,
+  LOCAL_AGENT_CLIENTS,
   InvalidExecutionAgentTypeError,
   parseExecutionAgentClientId,
   toConvexAgentType,
@@ -51,7 +51,7 @@ export function resolveHandoffAgent(to: string | undefined): ConvexAgentType | u
     return toConvexAgentType(parseExecutionAgentClientId(raw));
   } catch (err) {
     if (err instanceof InvalidExecutionAgentTypeError) {
-      const known = [SAME_AGENT, ...Object.keys(AGENT_CLIENTS)].join(", ");
+      const known = [SAME_AGENT, ...Object.keys(LOCAL_AGENT_CLIENTS)].join(", ");
       throw new Error(`Unknown agent "${to}". One of: ${known}`);
     }
     throw err;

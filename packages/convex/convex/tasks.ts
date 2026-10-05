@@ -1,6 +1,6 @@
-import { v, type Validator } from "convex/values";
+import { v, type ObjectType, type Validator } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { internalMutation, mutation, query } from "./functions";
+import { internalMutation, mutation, query, type MutationCtx } from "./functions";
 import { verifyApiToken } from "./apiTokens";
 import { patchTask } from "./lib/taskWrite";
 import { resolveActor, roleOfConversation } from "./lib/actor";
@@ -10,7 +10,7 @@ import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
-import { fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
+import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
   MAX_TASK_DEPTH,
@@ -42,7 +42,7 @@ import { projectTasks } from "./lib/projectWork";
 import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
-import { enqueuePendingMessage, tellRole } from "./pendingMessages";
+import { canSendProductMessage, enqueuePendingMessage, tellRole } from "./pendingMessages";
 import { addConversationToWorkItem, linkConversationToEntityBestEffort, linkedEntityIdsForConversation } from "./conversationLinks";
 import { agentCommentLevelOf, dropThreadRead, taskCommentAuthorKind, taskCommentIsNews, taskThreadParticipants, touchThread, type TaskCommentAuthorKind } from "./threadReads";
 import { extractMentionHandles } from "@codecast/shared/chat";
@@ -75,7 +75,7 @@ import {
   visibleInTeamList,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
-import { claimTaskOwnership, type TaskOwnerRef } from "./lib/taskOwner";
+import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -2267,6 +2267,33 @@ export const update = mutation({
 // moves for, so the Threads inbox and the notification never disagree about
 // what is news. `tokenOwner` is who the write ran under: an agent posts under
 // its owner's token, and its own comments never ring its owner.
+/**
+ * Relay a person's comment into the session that owns the task (lib/taskOwner)
+ * while that session is working, framed as a <task-comment> so the agent knows
+ * whose words they are and that a reply belongs on the task. A quiet owner is
+ * left alone: waking a cold session rebuilds its whole context for one line,
+ * and the comment waits on the task where it reads it next. Returns the
+ * conversation it reached, or null.
+ */
+async function deliverCommentToOwner(
+  ctx: any,
+  task: any,
+  c: { commentId: Id<"task_comments">; actorId: Id<"users">; from: string; text: string; imageIds?: string[] },
+): Promise<Id<"conversations"> | null> {
+  if (!task.short_id || !c.text.trim()) return null;
+  const [owner] = await boundSessionsOf(ctx, task);
+  if (!owner) return null;
+  if (!(await isSessionWorking(ctx, owner, Date.now()))) return null;
+  if (!(await canSendProductMessage(ctx, c.actorId, owner))) return null;
+  await enqueuePendingMessage(ctx, owner, c.actorId, {
+    content: formatTaskCommentMessage({ task: task.short_id, title: task.title ?? "", from: c.from, body: c.text.trim() }),
+    client_id: `task-comment:${c.commentId}`,
+    ...(c.imageIds?.length ? { image_storage_ids: c.imageIds as Id<"_storage">[] } : {}),
+    human: true,
+  });
+  return owner._id;
+}
+
 export async function insertTaskComment(
   ctx: any,
   taskId: Id<"tasks">,
@@ -2325,6 +2352,13 @@ export async function insertTaskComment(
       actorId,
       activityAt: now,
     });
+    // A person's words, not posted from a session: they reach the session
+    // doing the task while it works, so commenting on the task talks to the
+    // work. A bot account's comment is an agent's and never relays.
+    if (actorId && !fields.conversation_id && !actor?.is_bot) {
+      const deliveredTo = await deliverCommentToOwner(ctx, task, { commentId: id, actorId, from: fields.author, text: fields.text, imageIds: fields.image_storage_ids });
+      if (deliveredTo) await ctx.db.patch(id, { delivered_to_conversation_id: deliveredTo });
+    }
     if (notify) {
       await ctx.runMutation(internal.notificationRouter.emit, {
         event_type: "task_commented",
@@ -3435,191 +3469,199 @@ export async function releaseBlockFields(ctx: { db: any }, task: any): Promise<R
   return fields;
 }
 
+const webUpdateArgs = {
+  short_id: v.string(),
+  status: v.optional(v.string()),
+  // Team status id refining the category; "" clears back to the default.
+  status_id: v.optional(v.string()),
+  priority: v.optional(v.string()),
+  title: v.optional(v.string()),
+  description: v.optional(v.string()),
+  assignee: v.optional(v.string()),
+  labels: v.optional(v.array(v.string())),
+  project_id: v.optional(v.string()),
+  project_path: v.optional(v.string()),
+  execution_status: v.optional(v.string()),
+  triage_status: v.optional(v.string()),
+  // Short id of the parent task; empty string detaches back to the top level.
+  parent: v.optional(v.string()),
+  // Close-guard resolution when closing a parent with open subtasks.
+  subtask_resolution: v.optional(v.union(v.literal("cascade"), v.literal("only_parent"))),
+  // Manual list rank (fractional midpoints; see schema).
+  sort_order: v.optional(v.number()),
+  // Short id of the canonical task; empty string clears the link.
+  duplicate_of: v.optional(v.string()),
+  // A person's review verdict from the board (the-line.md L3). A web write
+  // has no session behind it, so the verdict counts as outside every role.
+  review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
+  review_note: v.optional(v.string()),
+};
+
 export const webUpdate = mutation({
-  args: {
-    short_id: v.string(),
-    status: v.optional(v.string()),
-    // Team status id refining the category; "" clears back to the default.
-    status_id: v.optional(v.string()),
-    priority: v.optional(v.string()),
-    title: v.optional(v.string()),
-    description: v.optional(v.string()),
-    assignee: v.optional(v.string()),
-    labels: v.optional(v.array(v.string())),
-    project_id: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-    execution_status: v.optional(v.string()),
-    triage_status: v.optional(v.string()),
-    // Short id of the parent task; empty string detaches back to the top level.
-    parent: v.optional(v.string()),
-    // Close-guard resolution when closing a parent with open subtasks.
-    subtask_resolution: v.optional(v.union(v.literal("cascade"), v.literal("only_parent"))),
-    // Manual list rank (fractional midpoints; see schema).
-    sort_order: v.optional(v.number()),
-    // Short id of the canonical task; empty string clears the link.
-    duplicate_of: v.optional(v.string()),
-    // A person's review verdict from the board (the-line.md L3). A web write
-    // has no session behind it, so the verdict counts as outside every role.
-    review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
-    review_note: v.optional(v.string()),
-  },
+  args: webUpdateArgs,
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-
-    const task = await ctx.db
-      .query("tasks")
-      .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
-      .first();
-    if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
-
-    // The category every status side effect below keys on. args.status alone
-    // is not enough: a status_id-only write still moves the category.
-    const statusWrite = await resolveStatusWrite(ctx, task.team_id, task.status, args);
-    const nextStatus = statusWrite.status;
-
-    const now = Date.now();
-    const updates: any = { updated_at: now };
-    if (statusWrite.statusId.set) updates.status_id = statusWrite.statusId.value;
-    // Reparent through the single entry point (access, workspace, cycle,
-    // depth). Same semantics as the CLI path: "" detaches.
-    if (args.parent !== undefined) {
-      if (!args.parent) {
-        updates.parent_id = undefined;
-      } else {
-        const taskWorkspace = task.team_id
-          ? { type: "team" as const, teamId: task.team_id }
-          : { type: "personal" as const, userId: task.user_id };
-        const parent = await resolveParentTask(ctx, userId, args.parent, {
-          workspace: taskWorkspace,
-          child: task,
-        });
-        updates.parent_id = parent._id;
-      }
-    }
-    if (nextStatus) updates.status = nextStatus;
-    if (args.priority) updates.priority = args.priority;
-    if (args.title) {
-      updates.title = args.title;
-      updates.short_title = undefined;
-    }
-    if (args.description !== undefined) updates.description = args.description;
-    if (args.assignee !== undefined) {
-      updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, await assigneeScopeOf(ctx, task)) || args.assignee;
-    }
-    if (args.labels) updates.labels = args.labels;
-    if (args.project_id !== undefined) {
-      if (!args.project_id) {
-        updates.project_id = undefined;
-      } else {
-        const projectId = ctx.db.normalizeId("projects", args.project_id);
-        if (!projectId) notFound("Project not found");
-        const project = await requireAccessibleProject(ctx, userId, projectId);
-        const taskWorkspace = task.team_id
-          ? { type: "team" as const, teamId: task.team_id }
-          : { type: "personal" as const, userId: task.user_id };
-        requireSameWorkspace(project, taskWorkspace, "project");
-        updates.project_id = projectId;
-      }
-    }
-    if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
-    if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
-    if (args.execution_status === "" && isBlockedExecution(task.execution_status)) {
-      Object.assign(updates, await releaseBlockFields(ctx, task));
-    }
-    if (args.sort_order !== undefined) updates.sort_order = args.sort_order;
-    if (args.duplicate_of !== undefined) {
-      if (!args.duplicate_of) {
-        updates.duplicate_of = undefined;
-      } else {
-        // The canonical task must exist, be visible to this user, and not be
-        // the task itself — a dangling or self link renders as a dead chip.
-        const canonical = await ctx.db
-          .query("tasks")
-          .withIndex("by_short_id", (q) => q.eq("short_id", args.duplicate_of!))
-          .first();
-        if (!canonical || !(await canAccessTask(ctx, userId, canonical))) notFound("Canonical task not found");
-        if (canonical._id === task._id) throw new Error("A task can't duplicate itself");
-        updates.duplicate_of = args.duplicate_of;
-      }
-    }
-    if (args.triage_status) {
-      updates.triage_status = args.triage_status;
-      if (args.triage_status === "active") updates.promoted = true;
-    }
-
-    if (nextStatus === "done" || nextStatus === "dropped") {
-      updates.closed_at = now;
-    }
-    if (nextStatus === "in_progress") {
-      updates.attempt_count = (task.attempt_count || 0) + 1;
-      updates.last_attempted_at = now;
-    }
-    if (args.review_verdict) {
-      updates.review_verdict = {
-        verdict: args.review_verdict,
-        at: now,
-        ...(args.review_note ? { note: args.review_note } : {}),
-      };
-    } else if (nextStatus === "done" && task.status === "in_review") {
-      // Dragging a task out of In Review into Done is the person's approve:
-      // that column holds work waiting on exactly this judgement.
-      updates.review_verdict = { verdict: "approve", at: now, note: "closed from the board" };
-    }
-
-    // Close-guard: refuses done/dropped on a parent with open subtasks unless
-    // resolved; returns the subtree to cascade-close. Runs before any write.
-    const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
-    // A person on the board moves past a hold (the-line.md L5); the note
-    // after the write names the decision it moved past.
-    const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
-
-    const resolvedAssignee = updates.assignee || args.assignee;
-    // Record history for changed fields
-    const trackFields: [string, any, any][] = [];
-    if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
-    if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
-    if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
-    if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
-    if (updates.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", updates.review_verdict.verdict]);
-    if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
-    const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
-    if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
-
-    for (const [field, oldVal, newVal] of trackFields) {
-      await ctx.db.insert("task_history", {
-        task_id: task._id,
-        user_id: userId,
-        actor_type: "user",
-        action: "updated",
-        field,
-        old_value: String(oldVal),
-        new_value: String(newVal),
-        created_at: now,
-      });
-    }
-
-    await patchTask(ctx, task, updates);
-    if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, (await ctx.db.get(userId))?.name || "unknown", userId);
-    if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, userId, task);
-    await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
-    if (parentChanged) {
-      await reconcilePlanMembership(ctx, task._id, task.plan_id as Id<"plans"> | undefined, !!updates.parent_id);
-    }
-
-    if (nextStatus && nextStatus !== task.status) {
-      if (task.plan_id) {
-        await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
-      }
-      await notifyTaskStatus(ctx, userId, task as any, nextStatus);
-    }
-    if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
-      await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
-    }
-
-    return { success: true };
+    return await updateTaskAs(ctx, userId, args);
   },
 });
+
+/** Update a task as `userId`, the way the web's update does: access, the
+ *  status write, history, the close guard and notifications. The hosted
+ *  assistant's update_task runs this same path. */
+export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webUpdateArgs>) {
+  const task = await ctx.db
+    .query("tasks")
+    .withIndex("by_short_id", (q) => q.eq("short_id", args.short_id))
+    .first();
+  if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error("Task not found");
+
+  // The category every status side effect below keys on. args.status alone
+  // is not enough: a status_id-only write still moves the category.
+  const statusWrite = await resolveStatusWrite(ctx, task.team_id, task.status, args);
+  const nextStatus = statusWrite.status;
+
+  const now = Date.now();
+  const updates: any = { updated_at: now };
+  if (statusWrite.statusId.set) updates.status_id = statusWrite.statusId.value;
+  // Reparent through the single entry point (access, workspace, cycle,
+  // depth). Same semantics as the CLI path: "" detaches.
+  if (args.parent !== undefined) {
+    if (!args.parent) {
+      updates.parent_id = undefined;
+    } else {
+      const taskWorkspace = task.team_id
+        ? { type: "team" as const, teamId: task.team_id }
+        : { type: "personal" as const, userId: task.user_id };
+      const parent = await resolveParentTask(ctx, userId, args.parent, {
+        workspace: taskWorkspace,
+        child: task,
+      });
+      updates.parent_id = parent._id;
+    }
+  }
+  if (nextStatus) updates.status = nextStatus;
+  if (args.priority) updates.priority = args.priority;
+  if (args.title) {
+    updates.title = args.title;
+    updates.short_title = undefined;
+  }
+  if (args.description !== undefined) updates.description = args.description;
+  if (args.assignee !== undefined) {
+    updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, await assigneeScopeOf(ctx, task)) || args.assignee;
+  }
+  if (args.labels) updates.labels = args.labels;
+  if (args.project_id !== undefined) {
+    if (!args.project_id) {
+      updates.project_id = undefined;
+    } else {
+      const projectId = ctx.db.normalizeId("projects", args.project_id);
+      if (!projectId) notFound("Project not found");
+      const project = await requireAccessibleProject(ctx, userId, projectId);
+      const taskWorkspace = task.team_id
+        ? { type: "team" as const, teamId: task.team_id }
+        : { type: "personal" as const, userId: task.user_id };
+      requireSameWorkspace(project, taskWorkspace, "project");
+      updates.project_id = projectId;
+    }
+  }
+  if (args.project_path !== undefined) updates.project_path = args.project_path || undefined;
+  if (args.execution_status !== undefined) updates.execution_status = args.execution_status || undefined;
+  if (args.execution_status === "" && isBlockedExecution(task.execution_status)) {
+    Object.assign(updates, await releaseBlockFields(ctx, task));
+  }
+  if (args.sort_order !== undefined) updates.sort_order = args.sort_order;
+  if (args.duplicate_of !== undefined) {
+    if (!args.duplicate_of) {
+      updates.duplicate_of = undefined;
+    } else {
+      // The canonical task must exist, be visible to this user, and not be
+      // the task itself — a dangling or self link renders as a dead chip.
+      const canonical = await ctx.db
+        .query("tasks")
+        .withIndex("by_short_id", (q) => q.eq("short_id", args.duplicate_of!))
+        .first();
+      if (!canonical || !(await canAccessTask(ctx, userId, canonical))) notFound("Canonical task not found");
+      if (canonical._id === task._id) throw new Error("A task can't duplicate itself");
+      updates.duplicate_of = args.duplicate_of;
+    }
+  }
+  if (args.triage_status) {
+    updates.triage_status = args.triage_status;
+    if (args.triage_status === "active") updates.promoted = true;
+  }
+
+  if (nextStatus === "done" || nextStatus === "dropped") {
+    updates.closed_at = now;
+  }
+  if (nextStatus === "in_progress") {
+    updates.attempt_count = (task.attempt_count || 0) + 1;
+    updates.last_attempted_at = now;
+  }
+  if (args.review_verdict) {
+    updates.review_verdict = {
+      verdict: args.review_verdict,
+      at: now,
+      ...(args.review_note ? { note: args.review_note } : {}),
+    };
+  } else if (nextStatus === "done" && task.status === "in_review") {
+    // Dragging a task out of In Review into Done is the person's approve:
+    // that column holds work waiting on exactly this judgement.
+    updates.review_verdict = { verdict: "approve", at: now, note: "closed from the board" };
+  }
+
+  // Close-guard: refuses done/dropped on a parent with open subtasks unless
+  // resolved; returns the subtree to cascade-close. Runs before any write.
+  const cascadeIds = await guardParentClose(ctx, task, nextStatus, args.subtask_resolution);
+  // A person on the board moves past a hold (the-line.md L5); the note
+  // after the write names the decision it moved past.
+  const hold = await holdingDecisionFor(ctx, task, nextStatus, statusWrite.statusId);
+
+  const resolvedAssignee = updates.assignee || args.assignee;
+  // Record history for changed fields
+  const trackFields: [string, any, any][] = [];
+  if (nextStatus && nextStatus !== task.status) trackFields.push(["status", task.status, nextStatus]);
+  if (args.priority && args.priority !== task.priority) trackFields.push(["priority", task.priority, args.priority]);
+  if (args.title && args.title !== task.title) trackFields.push(["title", task.title, args.title]);
+  if (args.assignee !== undefined && resolvedAssignee !== task.assignee) trackFields.push(["assignee", task.assignee || "", resolvedAssignee || ""]);
+  if (updates.review_verdict) trackFields.push(["review_verdict", task.review_verdict?.verdict ?? "", updates.review_verdict.verdict]);
+  if (args.execution_status !== undefined && args.execution_status !== (task.execution_status || "")) trackFields.push(["execution_status", task.execution_status || "", args.execution_status || ""]);
+  const parentChanged = "parent_id" in updates && String(updates.parent_id ?? "") !== String(task.parent_id ?? "");
+  if (parentChanged) trackFields.push(["parent", task.parent_id ?? "", updates.parent_id ?? ""]);
+
+  for (const [field, oldVal, newVal] of trackFields) {
+    await ctx.db.insert("task_history", {
+      task_id: task._id,
+      user_id: userId,
+      actor_type: "user",
+      action: "updated",
+      field,
+      old_value: String(oldVal),
+      new_value: String(newVal),
+      created_at: now,
+    });
+  }
+
+  await patchTask(ctx, task, updates);
+  if (hold) await noteMovedPastHold(ctx, task, hold, nextStatus ?? task.status, (await ctx.db.get(userId))?.name || "unknown", userId);
+  if (cascadeIds.length > 0) await cascadeClose(ctx, cascadeIds, nextStatus!, userId, task);
+  await rollUpParentStart(ctx, { ...task, parent_id: "parent_id" in updates ? updates.parent_id : task.parent_id }, nextStatus);
+  if (parentChanged) {
+    await reconcilePlanMembership(ctx, task._id, task.plan_id as Id<"plans"> | undefined, !!updates.parent_id);
+  }
+
+  if (nextStatus && nextStatus !== task.status) {
+    if (task.plan_id) {
+      await recalcPlanProgress(ctx, task.plan_id, task._id, nextStatus);
+    }
+    await notifyTaskStatus(ctx, userId, task as any, nextStatus);
+  }
+  if (args.assignee !== undefined && resolvedAssignee !== task.assignee) {
+    await announceAssignment(ctx, { task, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
+  }
+
+  return { success: true };
+}
 
 export const webAddComment = mutation({
   args: {
@@ -3876,182 +3918,189 @@ export const spawnSessionForTaskInternal = internalMutation({
   },
 });
 
+const webCreateArgs = {
+  title: v.string(),
+  description: v.optional(v.string()),
+  task_type: v.optional(v.string()),
+  status: v.optional(v.string()),
+  // Team status id refining the category (kanban "add to column").
+  status_id: v.optional(v.string()),
+  priority: v.optional(v.string()),
+  project_id: v.optional(v.string()),
+  labels: v.optional(v.array(v.string())),
+  plan_id: v.optional(v.string()),
+  team_id: v.optional(v.id("teams")),
+  workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+  assignee: v.optional(v.string()),
+  project_path: v.optional(v.string()),
+  // Short id (or id) of the parent task — the web quick-add / create-modal
+  // subtask path. Resolved through resolveParentTask like every surface.
+  parent: v.optional(v.string()),
+  // Optimistic-create idempotency key (see schema.tasks.client_key).
+  client_key: v.optional(v.string()),
+};
+
 export const webCreate = mutation({
-  args: {
-    title: v.string(),
-    description: v.optional(v.string()),
-    task_type: v.optional(v.string()),
-    status: v.optional(v.string()),
-    // Team status id refining the category (kanban "add to column").
-    status_id: v.optional(v.string()),
-    priority: v.optional(v.string()),
-    project_id: v.optional(v.string()),
-    labels: v.optional(v.array(v.string())),
-    plan_id: v.optional(v.string()),
-    team_id: v.optional(v.id("teams")),
-    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
-    assignee: v.optional(v.string()),
-    project_path: v.optional(v.string()),
-    // Short id (or id) of the parent task — the web quick-add / create-modal
-    // subtask path. Resolved through resolveParentTask like every surface.
-    parent: v.optional(v.string()),
-    // Optimistic-create idempotency key (see schema.tasks.client_key).
-    client_key: v.optional(v.string()),
-  },
+  args: webCreateArgs,
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-
-    // Idempotency: a retried or replayed create carries the same client_key,
-    // so return the row it already made instead of inserting a duplicate.
-    if (args.client_key) {
-      const existing = await ctx.db
-        .query("tasks")
-        .withIndex("by_client_key", (q) => q.eq("user_id", userId).eq("client_key", args.client_key))
-        .first();
-      if (existing) return { id: existing._id, short_id: existing.short_id };
-    }
-
-    // A task created onto a plan lives in the plan's workspace: when the
-    // caller names a plan but no explicit workspace, inherit the plan's
-    // (canAccessPlan already proves membership for a team plan). An explicit
-    // workspace still has to match the plan — requireSameWorkspace below.
-    let plan: any = null;
-    if (args.plan_id) {
-      plan = await ctx.db
-        .query("plans")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
-        .first();
-      if (!plan || !(await canAccessPlan(ctx, userId, plan))) notFound("Plan not found");
-    }
-    const inheritFromPlan = plan && !args.workspace && !args.team_id;
-
-    // A subtask lives in its parent's workspace: with no explicit workspace or
-    // plan, the parent row decides. resolveParentTask below re-validates the
-    // final workspace, so a mismatched explicit workspace still fails.
-    let parentPeek: any = null;
-    if (args.parent) {
-      parentPeek = await ctx.db
-        .query("tasks")
-        .withIndex("by_short_id", (q) => q.eq("short_id", args.parent!))
-        .first()
-        ?? await (async () => {
-          const id = ctx.db.normalizeId("tasks", args.parent!);
-          return id ? await ctx.db.get(id) : null;
-        })();
-    }
-    const inheritFromParent = parentPeek && !inheritFromPlan && !args.workspace && !args.team_id;
-
-    // Otherwise the workspace comes from the client's explicit picker or the
-    // directory mapping — never from the user's active team. An unmapped
-    // project_path with no explicit workspace lands personal ("Only Me"),
-    // matching sessions.
-    const db = await createDataContext(ctx, inheritFromPlan
-      ? (plan.team_id
-          ? { userId, workspace: "team", team_id: plan.team_id }
-          : { userId, workspace: "personal" })
-      : inheritFromParent
-        ? (parentPeek.team_id
-            ? { userId, workspace: "team", team_id: parentPeek.team_id }
-            : { userId, workspace: "personal" })
-        : { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
-
-    // Now the real resolution: access, same-workspace, cycle, depth.
-    let parentDoc: any = null;
-    if (args.parent) {
-      parentDoc = await resolveParentTask(ctx, userId, args.parent, { workspace: db.workspace });
-    }
-
-    let project_id: Id<"projects"> | undefined;
-    if (args.project_id) {
-      const pid = ctx.db.normalizeId("projects", args.project_id);
-      if (!pid) notFound("Project not found");
-      const project = await requireAccessibleProject(ctx, userId, pid);
-      requireSameWorkspace(project, db.workspace, "project");
-      project_id = pid;
-    }
-
-    let plan_id: Id<"plans"> | undefined;
-    if (plan) {
-      requireSameWorkspace(plan, db.workspace, "plan");
-      plan_id = plan._id;
-    }
-    // Decomposition stays inside the parent's container: no explicit
-    // plan/project means the parent's.
-    if (parentDoc) {
-      if (!plan_id && parentDoc.plan_id) plan_id = parentDoc.plan_id;
-      if (!project_id && parentDoc.project_id) project_id = parentDoc.project_id;
-    }
-
-    const short_id = await nextShortId(ctx.db, "ct");
-
-    const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfWorkspace(db.workspace));
-
-    // Category + custom-status resolution against the resolved workspace's
-    // team. Also validates args.status (this path used to skip the assert and
-    // let a bad value surface as a raw schema error at insert).
-    const statusWrite = await resolveStatusWrite(
-      ctx,
-      db.workspace.type === "team" ? db.workspace.teamId : undefined,
-      undefined,
-      args,
-    );
-
-    const now = Date.now();
-    const id = await db.insert("tasks", {
-      project_id,
-      plan_id,
-      parent_id: parentDoc?._id,
-      client_key: args.client_key,
-      short_id,
-      title: args.title,
-      description: args.description,
-      task_type: (args.task_type || "task") as any,
-      status: (statusWrite.status || "open") as any,
-      status_id: statusWrite.statusId.set ? statusWrite.statusId.value : undefined,
-      // Created directly in done/dropped (the modal offers every status):
-      // terminal rows always carry closed_at, same as a close would stamp.
-      closed_at: isTerminalTaskStatus(statusWrite.status) ? now : undefined,
-      priority: (args.priority || "medium") as any,
-      labels: args.labels,
-      assignee: resolvedAssignee,
-      source: "human",
-      attempt_count: 0,
-      retry_count: 0,
-      max_retries: 3,
-    } as any);
-
-    // A subtask created directly in progress flips its parent chain.
-    if (parentDoc) {
-      await rollUpParentStart(ctx, { parent_id: parentDoc._id, user_id: userId }, statusWrite.status);
-    }
-
-    // Subtasks carry plan_id for context but never join plan.task_ids — the
-    // parent is the plan's unit of progress.
-    if (plan_id && !parentDoc) {
-      const plan = await ctx.db.get(plan_id);
-      if (plan) {
-        const taskIds = plan.task_ids || [];
-        await ctx.db.patch(plan_id, { task_ids: [...taskIds, id], updated_at: now });
-      }
-    }
-
-    await ctx.db.insert("task_history", {
-      task_id: id,
-      user_id: userId,
-      actor_type: "user",
-      action: "created",
-      created_at: now,
-    });
-    if (resolvedAssignee) {
-      await announceAssignment(ctx, { task: (await ctx.db.get(id)) as any, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
-    }
-
-    await schedulePushNewTask(ctx, project_id, id);
-
-    return { id, short_id };
+    return await createTaskAs(ctx, userId, args);
   },
 });
+
+/** Create a task as `userId`, the way the web's create does: the hosted
+ *  assistant's create_task runs this same path for the person it works for. */
+export async function createTaskAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webCreateArgs>) {
+  // Idempotency: a retried or replayed create carries the same client_key,
+  // so return the row it already made instead of inserting a duplicate.
+  if (args.client_key) {
+    const existing = await ctx.db
+      .query("tasks")
+      .withIndex("by_client_key", (q) => q.eq("user_id", userId).eq("client_key", args.client_key))
+      .first();
+    if (existing) return { id: existing._id, short_id: existing.short_id };
+  }
+
+  // A task created onto a plan lives in the plan's workspace: when the
+  // caller names a plan but no explicit workspace, inherit the plan's
+  // (canAccessPlan already proves membership for a team plan). An explicit
+  // workspace still has to match the plan — requireSameWorkspace below.
+  let plan: any = null;
+  if (args.plan_id) {
+    plan = await ctx.db
+      .query("plans")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
+      .first();
+    if (!plan || !(await canAccessPlan(ctx, userId, plan))) notFound("Plan not found");
+  }
+  const inheritFromPlan = plan && !args.workspace && !args.team_id;
+
+  // A subtask lives in its parent's workspace: with no explicit workspace or
+  // plan, the parent row decides. resolveParentTask below re-validates the
+  // final workspace, so a mismatched explicit workspace still fails.
+  let parentPeek: any = null;
+  if (args.parent) {
+    parentPeek = await ctx.db
+      .query("tasks")
+      .withIndex("by_short_id", (q) => q.eq("short_id", args.parent!))
+      .first()
+      ?? await (async () => {
+        const id = ctx.db.normalizeId("tasks", args.parent!);
+        return id ? await ctx.db.get(id) : null;
+      })();
+  }
+  const inheritFromParent = parentPeek && !inheritFromPlan && !args.workspace && !args.team_id;
+
+  // Otherwise the workspace comes from the client's explicit picker or the
+  // directory mapping — never from the user's active team. An unmapped
+  // project_path with no explicit workspace lands personal ("Only Me"),
+  // matching sessions.
+  const db = await createDataContext(ctx, inheritFromPlan
+    ? (plan.team_id
+        ? { userId, workspace: "team", team_id: plan.team_id }
+        : { userId, workspace: "personal" })
+    : inheritFromParent
+      ? (parentPeek.team_id
+          ? { userId, workspace: "team", team_id: parentPeek.team_id }
+          : { userId, workspace: "personal" })
+      : { userId, workspace: args.workspace, team_id: args.team_id, project_path: args.project_path });
+
+  // Now the real resolution: access, same-workspace, cycle, depth.
+  let parentDoc: any = null;
+  if (args.parent) {
+    parentDoc = await resolveParentTask(ctx, userId, args.parent, { workspace: db.workspace });
+  }
+
+  let project_id: Id<"projects"> | undefined;
+  if (args.project_id) {
+    const pid = ctx.db.normalizeId("projects", args.project_id);
+    if (!pid) notFound("Project not found");
+    const project = await requireAccessibleProject(ctx, userId, pid);
+    requireSameWorkspace(project, db.workspace, "project");
+    project_id = pid;
+  }
+
+  let plan_id: Id<"plans"> | undefined;
+  if (plan) {
+    requireSameWorkspace(plan, db.workspace, "plan");
+    plan_id = plan._id;
+  }
+  // Decomposition stays inside the parent's container: no explicit
+  // plan/project means the parent's.
+  if (parentDoc) {
+    if (!plan_id && parentDoc.plan_id) plan_id = parentDoc.plan_id;
+    if (!project_id && parentDoc.project_id) project_id = parentDoc.project_id;
+  }
+
+  const short_id = await nextShortId(ctx.db, "ct");
+
+  const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfWorkspace(db.workspace));
+
+  // Category + custom-status resolution against the resolved workspace's
+  // team. Also validates args.status (this path used to skip the assert and
+  // let a bad value surface as a raw schema error at insert).
+  const statusWrite = await resolveStatusWrite(
+    ctx,
+    db.workspace.type === "team" ? db.workspace.teamId : undefined,
+    undefined,
+    args,
+  );
+
+  const now = Date.now();
+  const id = await db.insert("tasks", {
+    project_id,
+    plan_id,
+    parent_id: parentDoc?._id,
+    client_key: args.client_key,
+    short_id,
+    title: args.title,
+    description: args.description,
+    task_type: (args.task_type || "task") as any,
+    status: (statusWrite.status || "open") as any,
+    status_id: statusWrite.statusId.set ? statusWrite.statusId.value : undefined,
+    // Created directly in done/dropped (the modal offers every status):
+    // terminal rows always carry closed_at, same as a close would stamp.
+    closed_at: isTerminalTaskStatus(statusWrite.status) ? now : undefined,
+    priority: (args.priority || "medium") as any,
+    labels: args.labels,
+    assignee: resolvedAssignee,
+    source: "human",
+    attempt_count: 0,
+    retry_count: 0,
+    max_retries: 3,
+  } as any);
+
+  // A subtask created directly in progress flips its parent chain.
+  if (parentDoc) {
+    await rollUpParentStart(ctx, { parent_id: parentDoc._id, user_id: userId }, statusWrite.status);
+  }
+
+  // Subtasks carry plan_id for context but never join plan.task_ids — the
+  // parent is the plan's unit of progress.
+  if (plan_id && !parentDoc) {
+    const plan = await ctx.db.get(plan_id);
+    if (plan) {
+      const taskIds = plan.task_ids || [];
+      await ctx.db.patch(plan_id, { task_ids: [...taskIds, id], updated_at: now });
+    }
+  }
+
+  await ctx.db.insert("task_history", {
+    task_id: id,
+    user_id: userId,
+    actor_type: "user",
+    action: "created",
+    created_at: now,
+  });
+  if (resolvedAssignee) {
+    await announceAssignment(ctx, { task: (await ctx.db.get(id)) as any, assignee: resolvedAssignee, actorUserId: userId, via: "human" });
+  }
+
+  await schedulePushNewTask(ctx, project_id, id);
+
+  return { id, short_id };
+}
 
 // Team-scoped list for web
 export const webTeamList = query({

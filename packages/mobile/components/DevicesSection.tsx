@@ -60,8 +60,9 @@ export function useDevices() {
   }, [devices]);
 }
 
-/** Full devices list for the Settings screen. */
-export function DevicesSection() {
+/** Full devices list for the Settings screen. The settings page that hosts it
+ *  carries the title in its nav bar, so it can drop the section heading. */
+export function DevicesSection({ showTitle = true }: { showTitle?: boolean } = {}) {
   const Theme = useTheme();
   const { devices } = useDevices();
   const sorted = useMemo(
@@ -77,7 +78,7 @@ export function DevicesSection() {
 
   return (
     <RNView style={styles.section}>
-      <RNText style={styles.sectionTitle}>Devices</RNText>
+      {showTitle && <RNText style={styles.sectionTitle}>Devices</RNText>}
       <RNView style={styles.card}>
         {sorted.length === 0 ? (
           <RNView style={styles.setting}>

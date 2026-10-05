@@ -27,7 +27,7 @@
 // and callGuests all reach it without an import cycle.
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import { CALL_MEMBER_STALE_MS, GUEST_ADMISSION_LAPSE_MS, guestDisplayName, guestIdentity } from "@codecast/shared/contracts";
+import { CALL_MEMBER_STALE_MS, GUEST_ADMISSION_LAPSE_MS, MAX_ROOM_GUESTS, guestDisplayName, guestIdentity } from "@codecast/shared/contracts";
 
 /** After an admission ends, the roster is checked now and then again at each
  *  of these delays: past a reconnect's backoff, and past the life of the last
@@ -70,6 +70,16 @@ export async function roomGuestRows(
     })
     .collect();
   return rows.sort((a, b) => String(a._id).localeCompare(String(b._id)));
+}
+
+/** Whether a room already holds MAX_ROOM_GUESTS admitted guests. Admissions,
+ *  not presence: a guest whose page went quiet still holds a place until the
+ *  sweep puts them out, so the cap cannot be slipped by letting pages lapse.
+ *  The cap itself is what bounds this read. Every way into the call (the
+ *  door's admit, a guest resuming after a blink) asks here, and says "full"
+ *  in its own audience's words. */
+export async function roomGuestsFull(ctx: any, roomKey: string, now: number): Promise<boolean> {
+  return (await roomGuestRows(ctx, roomKey, "admitted", now, { all: true })).length >= MAX_ROOM_GUESTS;
 }
 
 /** Write new states for some of a room's guests and, for those it puts out

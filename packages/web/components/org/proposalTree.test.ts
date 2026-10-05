@@ -21,6 +21,32 @@ const CHANGES = [
 ];
 
 describe("proposalTreeRows", () => {
+  test("goals draw as their tree: owners by name resolve to people, children follow the goal they feed", () => {
+    const goals = [{ _id: "g-live", short_id: "in-2", title: "Win the private network", status: "active", project_ids: [], health: "none", workspace: "team:x", user_id: "u", created_at: 0, updated_at: 0 }] as any;
+    const rows = proposalTreeRows(ORG_FIXTURE, [
+      change("c-shape", 1, { kind: "initiative_shape", initiative: "in-2", parent: "Broker introductions", title: "Win the private network" }),
+      change("c-top", 2, { kind: "initiative", title: "Broker introductions", description: "d", projects: ["Union"], owner: "Ashot Petrosian" }),
+      change("c-rev", 3, { kind: "initiative", title: "Make revenue", description: "d", projects: ["Deals"], owner: "Samvit Jain", parent: "Broker introductions", metrics: [{ name: "Fees", target: "$1" }] }),
+      change("c-who", 4, { kind: "initiative", title: "Hire", description: "d", projects: ["People"], owner: "Nobody Here", parent: "Broker introductions" }),
+    ], { goals });
+    expect(rows.map((r) => r.change_id)).toEqual(["c-top", "c-shape", "c-rev", "c-who"]);
+    const [top, shape, rev, who] = rows;
+    expect(top).toMatchObject({ tag: "new", node: { kind: "goal", name: "Broker introductions", proposed: true }, parent: null, owner: { kind: "person", name: "Ashot Petrosian" }, unresolved: false });
+    expect(shape).toMatchObject({ tag: "moves here", node: { kind: "goal", id: "g-live", short_id: "in-2" }, parent: { kind: "goal", id: "c-top" } });
+    expect(rev).toMatchObject({ parent: { id: "c-top" }, owner: { kind: "person", name: "Samvit Jain" }, detail: "Fees → $1 · Deals" });
+    expect(who).toMatchObject({ owner: { kind: "unknown", name: "Nobody Here" }, unresolved: true });
+  });
+
+  test("several changes to one existing goal read as one line", () => {
+    const goals = [{ _id: "g4", short_id: "in-4", title: "Proud relationships", status: "active", project_ids: [], health: "none", workspace: "team:x", user_id: "u", created_at: 0, updated_at: 0 }] as any;
+    const rows = proposalTreeRows(ORG_FIXTURE, [
+      change("s", 1, { kind: "initiative_shape", initiative: "in-4", metrics: [{ name: "Trust breaks", target: "0" }] }),
+      change("p", 2, { kind: "initiative_projects", initiative: "in-4", projects: ["Agent Quality"] }),
+    ], { goals });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ tag: "measured, projects added", detail: "Trust breaks → 0 · Agent Quality" });
+  });
+
   test("a status change draws the record itself, with its new status and reason", () => {
     const [row] = proposalTreeRows(ORG_FIXTURE, [change("c-task", 1, { kind: "task_status", task: "ct-9", status: "done", reason: "shipped on main", title: "Remove the pilot" })]);
     expect(row.node).toEqual({ kind: "record", id: "ct-9", name: "Remove the pilot", record: "task" });

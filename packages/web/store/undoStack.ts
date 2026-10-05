@@ -17,12 +17,16 @@
 //   "Can't undo X: changed since".
 // - While the timeline tier is hidden, the "Undid" toast offers a quiet
 //   History action once there is more history than the step it announces.
+// - An account boundary resets the history; the card and every undo toast
+//   come down with it.
 // - While the timeline card is open it narrates the steps, so the notifier
 //   stays silent, and opening it takes down the status toast already showing.
+//   A gesture recorded while the held peek shows still gets its own Undo
+//   toast: the peek narrates steps, and it closes as the gesture ends the walk.
 //   A ⌘Z that stops at an entry whose undo widens access is the one notice
 //   the card cannot narrate by moving its head, so it flashes that row.
 import { toast } from "sonner";
-import { getUndoHistory, setUndoNotifier, subscribeUndoHistory, undoEntry, undoRowCount, type UndoEntry, type UndoNotifier } from "@platform/engine";
+import { getUndoHistory, onUndoReset, setUndoNotifier, subscribeUndoHistory, undoEntry, undoRowCount, type UndoEntry, type UndoNotifier } from "@platform/engine";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { countdownToast } from "../lib/persistentToast";
 import { splitLabelNote } from "./undo/labels";
@@ -82,6 +86,15 @@ undoTimeline.subscribe(() => {
   liveEntryToasts.clear();
 });
 
+// A reset history (the store's account boundary) takes everything that shows
+// it down with it: the card, the status toast, and every entry's Undo toast.
+onUndoReset(() => {
+  undoTimeline.close();
+  retireToast(UNDO_STATUS_TOAST_ID);
+  for (const id of liveEntryToasts) retireToast(undoEntryToastId(id));
+  liveEntryToasts.clear();
+});
+
 /** Codecast's notifier: sonner toasts, silent while the timeline is open. */
 export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   notify: (message) => {
@@ -89,7 +102,11 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
     toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined });
   },
   notifyWithUndo: (label, entryId) => {
-    if (undoTimeline.isOpen()) return;
+    // A newly recorded gesture is not a step the card narrates. The held
+    // peek is on its way out (the gesture's key or click ends the walk), so
+    // only the interactive card, which lists the entry with its own way
+    // back, stands in for the entry's Undo toast.
+    if (undoTimeline.isOpen() && undoTimeline.getMode() === "interactive") return;
     liveEntryToasts.add(entryId);
     const forget = () => { liveEntryToasts.delete(entryId); };
     const [title, description] = splitLabelNote(label);
@@ -104,7 +121,9 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
   },
   onConfirmStop: (entry, message) => {
     if (undoTimeline.isOpen()) undoTimeline.flashRow(entry.id);
-    else toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: undefined });
+    // The message points at the entry's toast, which is long gone by the
+    // time a ⌘Z reaches it, so this toast carries that Undo itself.
+    else toast(message, { id: UNDO_STATUS_TOAST_ID, description: undefined, action: { label: "Undo", onClick: () => undoEntry(entry.id) }, className: undefined });
   },
   onHistoryStep: (kind, steps, entry) => {
     if (undoTimeline.isOpen()) return;
@@ -125,6 +144,24 @@ export const CODECAST_UNDO_NOTIFIER: UndoNotifier = {
 };
 setUndoNotifier(CODECAST_UNDO_NOTIFIER);
 
+/**
+ * Give a gesture exactly one toast. When `fn` records an undo entry the toast
+ * is that entry's own, with its Undo button, taken down once the entry is
+ * undone: a spec with `toast: true` has raised it already, and otherwise
+ * `message` raises it. A gesture that recorded nothing shows `message` plainly.
+ */
+export function gestureToast<T>(message: string, fn: () => T): T {
+  const before = getUndoHistory().head;
+  const out = fn();
+  const head = getUndoHistory().head;
+  if (head && head !== before) {
+    if (!liveEntryToasts.has(head)) CODECAST_UNDO_NOTIFIER.notifyWithUndo!(message, head);
+  } else {
+    toast.success(message);
+  }
+  return out;
+}
+
 export {
   pushUndo,
   performUndo,
@@ -137,6 +174,8 @@ export {
   showUndoToast,
   canUndo,
   canRedo,
+  deferUndoGesture,
+  commitPendingUndoGestures,
   getUndoHistory,
   subscribeUndoHistory,
   getUndoKeyboardWindowMs,

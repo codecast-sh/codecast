@@ -20,7 +20,9 @@
 // deleted (callRecordings.purgeTeamRecordings, TEAM_RECORDINGS_PURGE_GRACE_MS
 // after the delete, so an operator's restoreTeam inside it stays whole).
 // Either way the frames shared from its files (`cast call snap --share`,
-// public images in Convex storage) go with it. Account deletion leaves recordings
+// public images in Convex storage) go with it; a deleted team's go at the
+// delete itself, since a public URL cannot wait behind a check, so shared
+// frames do not survive a restore. Account deletion leaves recordings
 // alone for the same reason it leaves the call records: a call belongs to
 // its team, not to whoever was in it.
 
@@ -133,8 +135,10 @@ export function r2Presign(
 // That is also how late a revocation lands: a URL is a bearer link, the same
 // for every reader in its window, so somebody removed from the team (or a
 // share link turned off) can keep using one they already hold for up to two
-// windows. Readers that do not need a stable URL (the CLI's frame grab, a
-// share page's video redirect) sign fresh and short instead: r2FreshGetUrl.
+// windows. Readers that do not need a stable URL (the CLI's frame grab) sign
+// fresh and short instead: r2FreshGetUrl. A share page's video redirect signs
+// stable on a short window of its own, so a player that re-asks while
+// scrubbing is sent to the same object URL.
 // The window is the caller's (call recordings sign on the shared
 // CALL_RECORDING_URL_WINDOW_MS, the one their pages refresh on), so the two
 // never drift apart.
@@ -165,11 +169,13 @@ export async function r2StableGetUrl(
  *  ranges of a private call in its disk cache, to be found there after the
  *  run is deleted or the viewer has left the team. The override is part of
  *  the signature, so a stable URL stays byte identical within its window.
- *  Never for the media bucket, whose public video is meant to be cached. */
-export const PRIVATE_OBJECT_GET_PARAMS: Readonly<Record<string, string>> = { "response-cache-control": "private, no-store" };
+ *  Never for the media bucket, whose public video is meant to be cached.
+ *  Private to this file: a recording is read only through
+ *  callRecordingSigner, so no reader can forget it. */
+const PRIVATE_OBJECT_GET_PARAMS: Readonly<Record<string, string>> = { "response-cache-control": "private, no-store" };
 
 /** A GET URL signed now, for a reader that uses it at once and never needs
- *  the same bytes twice: one ffmpeg seek, one redirect. Short, so it is
+ *  the same bytes twice: one ffmpeg seek. Short, so it is
  *  useless soon after the access check that minted it. */
 export const FRESH_URL_SECONDS = 10 * 60;
 export async function r2FreshGetUrl(
@@ -179,6 +185,32 @@ export async function r2FreshGetUrl(
   params?: Record<string, string>,
 ): Promise<{ url: string; expiresAt: number }> {
   return { url: await r2Presign(b, "GET", key, FRESH_URL_SECONDS, new Date(nowMs), params), expiresAt: nowMs + FRESH_URL_SECONDS * 1000 };
+}
+
+/** When a recording's read URL is signed: `stable` within a window (a
+ *  reactive query, whose answer must not change every second), or `fresh`
+ *  now and short (a reader that uses it at once: one seek, one redirect). */
+export type CallRecordingSignWhen = { stable: { at: number; windowMs: number } } | "fresh";
+export type CallRecordingSigner = (key: string) => Promise<{ url: string; expiresAt: number }>;
+
+/** The one way to read a call recording: the recordings bucket, signed with
+ *  PRIVATE_OBJECT_GET_PARAMS. Null when the bucket is not configured, so a
+ *  caller signing many keys resolves it once. The caller has already passed
+ *  the access check (canReadCall, or the public share token rule). */
+export function callRecordingSigner(when: CallRecordingSignWhen): CallRecordingSigner | null {
+  const b = callRecordingsBucketFromEnv();
+  if (!b) return null;
+  return (key) =>
+    when === "fresh"
+      ? r2FreshGetUrl(b, key, Date.now(), PRIVATE_OBJECT_GET_PARAMS)
+      : r2StableGetUrl(b, key, when.stable.at, when.stable.windowMs, PRIVATE_OBJECT_GET_PARAMS);
+}
+
+/** One recording object's read URL (callRecordingSigner), or null when the
+ *  bucket is not configured. */
+export async function callRecordingGetUrl(key: string, when: CallRecordingSignWhen): Promise<{ url: string; expiresAt: number } | null> {
+  const sign = callRecordingSigner(when);
+  return sign ? sign(key) : null;
 }
 
 /** Every key under `prefix` (S3 ListObjectsV2, followed page by page). A

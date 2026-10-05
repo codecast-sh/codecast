@@ -143,12 +143,12 @@ function barHtml(o: BrandOpts): string {
   html.__cc_min { margin-top: 0 !important; }
   html.__cc_min #__cc_bar { transform: translateY(-100%); box-shadow: none; pointer-events: none; }
   html.__cc_min #__cc_pill { display: inline-flex; }
-  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist {
+  #__cc_bar, .__cc_panel, #__cc_hint, #__cc_pill, #__cc_mlist, #__cc_notes, #__cc_qbtn {
     --cc-bg: rgba(253,252,250,.9); --cc-ink: #002b36; --cc-mut: #586e75; --cc-dim: rgba(0,43,54,.48);
     --cc-line: rgba(88,110,117,.22); --cc-hov: rgba(0,43,54,.06); --cc-card: #ffffff; --cc-soft: #faf9f7;
     --cc-inbd: rgba(0,43,54,.22); --cc-blue: #268bd2; --cc-green: #859900; --cc-coral: #e86c5d;
     --cc-shadow: rgba(0,43,54,.16); }
-  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill, html.__cc_dark #__cc_mlist {
+  html.__cc_dark #__cc_bar, html.__cc_dark .__cc_panel, html.__cc_dark #__cc_hint, html.__cc_dark #__cc_pill, html.__cc_dark #__cc_mlist, html.__cc_dark #__cc_notes, html.__cc_dark #__cc_qbtn {
     --cc-bg: rgba(0,43,54,.85); --cc-ink: #fdf6e3; --cc-mut: #93a1a1; --cc-dim: rgba(253,246,227,.45);
     --cc-line: rgba(147,161,161,.18); --cc-hov: rgba(147,161,161,.1); --cc-card: #08404e; --cc-soft: #073642;
     --cc-inbd: rgba(147,161,161,.32); --cc-blue: #268bd2; --cc-green: #859900;
@@ -243,7 +243,7 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel .__cc_in2:focus { border-color: var(--cc-coral); box-shadow: 0 0 0 3px rgba(232,108,93,.15); }
   .__cc_panel .__cc_draft { margin: 2px 8px 8px; padding: 0; }
   .__cc_panel .__cc_dtop { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50% 50% 50% 4px; background: var(--cc-coral); color: #ffffff; font-weight: 600;
+  .__cc_panel .__cc_dnum { width: 18px; height: 18px; border-radius: 50%; background: #b58900; color: #000000; font-weight: 700;
     font-size: 10px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
   .__cc_panel .__cc_dsnip { color: var(--cc-dim); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
   .__cc_panel .__cc_x { all: unset; cursor: pointer; padding: 2px 7px; border-radius: 6px; opacity: .5; font-size: 14px; }
@@ -396,6 +396,51 @@ function barHtml(o: BrandOpts): string {
     z-index: 2147483647; background: var(--cc-ink); color: var(--cc-card); padding: 11px 18px; border-radius: 999px;
     font: 500 12px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; box-shadow: 0 6px 20px rgba(0,0,0,.3); white-space: nowrap; }
   html.__cc_pinmode, html.__cc_pinmode * { cursor: crosshair !important; }
+  /* Notes: the codecast gallery's pins on a page. A numbered yellow dot where
+     the reader clicked, its note as a dark label beside it, and the note's
+     editor opening at the dot. */
+  #__cc_notes { position: absolute; top: 0; left: 0; width: 100%; height: 0; overflow: visible; z-index: 2147483646;
+    pointer-events: none; font: 400 12px/1.45 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-align: left; letter-spacing: normal; text-transform: none; }
+  #__cc_notes .__cc_np { position: absolute; width: 0; height: 0; }
+  #__cc_notes .__cc_nd { all: unset; box-sizing: border-box; position: absolute; left: -12px; top: -12px; width: 24px; height: 24px;
+    border-radius: 50%; background: #b58900; color: #000000; border: 2px solid rgba(0,0,0,.6);
+    box-shadow: 0 0 0 2px rgba(0,0,0,.45); font: 700 11px/20px "JetBrains Mono", ui-monospace, Menlo, monospace;
+    text-align: center; cursor: pointer; pointer-events: auto; transition: transform .12s ease; animation: __cc_npop .18s ease; }
+  #__cc_notes .__cc_nd:hover { transform: scale(1.1); }
+  #__cc_notes .__cc_np.__cc_on .__cc_nd { border-color: #ffffff; }
+  #__cc_notes .__cc_nl { position: absolute; left: 16px; top: -10px; max-width: 16rem; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; border-radius: 4px; background: rgba(0,0,0,.75); color: rgba(255,255,255,.85); padding: 2px 6px;
+    font-size: 11px; line-height: 16px; }
+  #__cc_notes .__cc_ne { position: absolute; width: 288px; box-sizing: border-box; padding: 8px; border-radius: 8px;
+    background: var(--cc-card); color: var(--cc-ink); border: 1px solid var(--cc-line); box-shadow: 0 12px 32px var(--cc-shadow);
+    pointer-events: auto; cursor: auto; animation: __cc_npop .14s ease; }
+  #__cc_notes .__cc_neh { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; font-size: 10px; color: var(--cc-dim); }
+  #__cc_notes .__cc_neh .__cc_sp { flex: 1; }
+  #__cc_notes .__cc_nx { all: unset; cursor: pointer; padding: 0 4px; border-radius: 4px; font-size: 14px; line-height: 16px; color: var(--cc-dim); }
+  #__cc_notes .__cc_nx:hover { color: #dc322f; background: var(--cc-hov); }
+  #__cc_notes .__cc_nsnip { margin: 0 0 6px; padding: 1px 0 1px 8px; border-left: 2px solid #b58900; color: var(--cc-mut);
+    font-style: italic; font-size: 11px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  #__cc_notes .__cc_neta { display: block; width: 100%; box-sizing: border-box; min-height: 44px; max-height: 200px; resize: none; margin: 0;
+    padding: 6px 8px; border: none; border-radius: 6px; outline: none; background: var(--cc-soft); color: var(--cc-ink);
+    font: inherit; box-shadow: none; }
+  html.__cc_dark #__cc_notes .__cc_neta { background: rgba(147,161,161,.08); }
+  #__cc_notes .__cc_neta:focus { box-shadow: inset 0 0 0 1.5px rgba(181,137,0,.55); }
+  #__cc_notes .__cc_nef { display: flex; align-items: center; justify-content: flex-end; gap: 4px; margin-top: 6px; }
+  #__cc_notes .__cc_nef button { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+    border-radius: 5px; font-size: 11px; color: var(--cc-mut); }
+  #__cc_notes .__cc_nef button:hover { background: var(--cc-hov); color: var(--cc-ink); }
+  #__cc_notes .__cc_nef .__cc_nlead { margin-right: auto; padding-left: 2px; }
+  #__cc_notes .__cc_nef .__cc_nok { background: #b58900; color: #000000; font-weight: 600; }
+  #__cc_notes .__cc_nef .__cc_nok:hover { background: #c99a0a; color: #000000; }
+  #__cc_notes kbd { font: 600 9px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; padding: 2px 4px; border-radius: 3px;
+    border: 1px solid currentColor; opacity: .55; }
+  #__cc_qbtn { all: unset; box-sizing: border-box; position: absolute; z-index: 2147483646; transform: translate(-50%,-100%);
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; cursor: pointer;
+    background: var(--cc-ink); color: var(--cc-card); box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    font: 600 11px/1 "JetBrains Mono", ui-monospace, Menlo, monospace; animation: __cc_npop .12s ease; }
+  #__cc_qbtn svg { color: #b58900; }
+  @keyframes __cc_npop { from { opacity: 0; transform: scale(.85); } }
   /* Bottom-sheet mode. The media query catches real narrow layout viewports;
      the .__cc_sheet class is the same rules applied by JS from screen.width,
      because an artifact WITHOUT a viewport meta lays out at ~980px on phones
@@ -531,6 +576,168 @@ function barHtml(o: BrandOpts): string {
   if(pillB)pillB.addEventListener("click",function(e){e.stopPropagation();setMin(false,true);});
   var minPref=sGet(minKey);
   if(minPref==="1"||(framed&&minPref!=="0"))setMin(true,false);
+  // --- notes layer ---
+  // The codecast gallery's way of commenting on a picture, on a page: pin
+  // mode turns a click into a numbered dot, its note opens beside the dot, and
+  // a written note shows as a label until clicked again. Selecting text offers
+  // a note anchored to those words. The notes come from a source: this page's
+  // own discussion drafts, or, framed in a codecast conversation, that
+  // conversation's quote batch, which the parent window owns and mirrors here.
+  var NL=(function(){
+    var src=null,layer=null,hintEl=null,qb=null,on=false,nodes={},edKey=null,edNode=null;
+    var bubble='${iconSvg(12, BUBBLE_PATH)}';
+    var docSize=function(){var d=document.documentElement;return{w:Math.max(d.scrollWidth,1),h:Math.max(d.scrollHeight,1)};};
+    var rnd=function(v){return Math.round(Math.min(1,Math.max(0,v))*1000)/1000;};
+    var place=function(box,pin){
+      // Open toward the middle of the viewport so the editor stays on screen.
+      var r=pin.getBoundingClientRect();
+      box.style.left=box.style.right=box.style.top=box.style.bottom="";
+      if(r.left>window.innerWidth-310)box.style.right="16px";else box.style.left="16px";
+      if(r.top>window.innerHeight-190)box.style.bottom="8px";else box.style.top="-8px";
+    };
+    var editor=function(nt){
+      var box=el("div","__cc_ne");
+      box.addEventListener("click",function(e){e.stopPropagation();});
+      box.addEventListener("mousedown",function(e){e.stopPropagation();});
+      var hd=el("div","__cc_neh");
+      hd.appendChild(el("span",null,src.label(nt)));
+      hd.appendChild(el("span","__cc_sp"));
+      var x=el("button","__cc_nx","×");x.type="button";x.title="Remove this note";
+      x.addEventListener("mousedown",function(e){e.preventDefault();});
+      x.addEventListener("click",function(){src.remove(nt.key);});
+      hd.appendChild(x);box.appendChild(hd);
+      if(nt.snippet)box.appendChild(el("div","__cc_nsnip",nt.snippet));
+      var ta=document.createElement("textarea");ta.className="__cc_neta";ta.rows=2;
+      ta.placeholder="Add a note… (optional)";ta.value=nt.body||"";
+      var opened=ta.value,t=null,closing=false;
+      var flush=function(){clearTimeout(t);t=null;src.body(nt.key,ta.value);};
+      var close=function(){if(closing)return;closing=true;flush();src.edit(null);};
+      var grow=function(){ta.style.height="auto";ta.style.height=Math.min(ta.scrollHeight,200)+"px";};
+      ta.addEventListener("input",function(){grow();clearTimeout(t);t=setTimeout(flush,300);});
+      ta.addEventListener("keydown",function(e){
+        e.stopPropagation();
+        if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();close();}
+        else if(e.key==="Escape"){e.preventDefault();ta.value=opened;close();}
+      });
+      ta.addEventListener("blur",close);
+      box.appendChild(ta);
+      var ft=el("div","__cc_nef");
+      if(src.lead)src.lead(ft,flush);
+      var ok=el("button","__cc_nok");ok.type="button";ok.innerHTML="Save <kbd>↵</kbd>";
+      ok.addEventListener("mousedown",function(e){e.preventDefault();});
+      ok.addEventListener("click",close);
+      ft.appendChild(ok);box.appendChild(ft);
+      setTimeout(function(){try{ta.focus({preventScroll:true});var n=ta.value.length;ta.setSelectionRange(n,n);grow();}catch(e){}},0);
+      return box;
+    };
+    var draw=function(){
+      if(!src)return;
+      var list=src.notes(),ed=src.editing(),sz=docSize(),seen={};
+      if(!layer){if(!list.length)return;layer=el("div");layer.id="__cc_notes";host().appendChild(layer);}
+      list.forEach(function(nt){
+        var k=nt.key;seen[k]=1;
+        var p=nodes[k];
+        if(!p){
+          p=nodes[k]=el("div","__cc_np");
+          var dot=el("button","__cc_nd");dot.type="button";
+          dot.addEventListener("mousedown",function(e){e.stopPropagation();});
+          dot.addEventListener("click",function(e){e.stopPropagation();src.edit(src.editing()===k?null:k);});
+          p.appendChild(dot);p.appendChild(el("div","__cc_nl"));
+          layer.appendChild(p);
+        }
+        p.style.left=(nt.x*sz.w)+"px";p.style.top=(nt.y*sz.h)+"px";
+        p.firstChild.textContent=String(nt.n);
+        p.firstChild.title=nt.body||"Pinned note (click to edit)";
+        p.firstChild.setAttribute("aria-label","Note "+nt.n+(nt.body?": "+nt.body:""));
+        var lab=p.childNodes[1];lab.textContent=nt.body||"";lab.style.display=nt.body&&ed!==k?"":"none";
+        p.classList.toggle("__cc_on",ed===k);
+      });
+      Object.keys(nodes).forEach(function(k){if(!seen[k]){nodes[k].remove();delete nodes[k];}});
+      if(edNode&&(edKey!==ed||!nodes[ed])){edNode.remove();edNode=null;edKey=null;}
+      if(ed&&!edNode&&nodes[ed]){
+        var nt=null;list.forEach(function(n){if(n.key===ed)nt=n;});
+        edKey=ed;edNode=editor(nt);nodes[ed].appendChild(edNode);place(edNode,nodes[ed]);
+      }
+    };
+    var setPin=function(v,tell){
+      on=!!v&&!!src;
+      document.documentElement.classList.toggle("__cc_pinmode",on);
+      if(on&&!hintEl){hintEl=el("div",null,src.hint);hintEl.id="__cc_hint";host().appendChild(hintEl);}
+      if(!on&&hintEl){hintEl.remove();hintEl=null;}
+      if(tell&&src&&src.pinMode)src.pinMode(on);
+    };
+    var hideQ=function(){if(qb){qb.remove();qb=null;}};
+    var mine="#__cc_bar,.__cc_panel,#__cc_hint,#__cc_pins,#__cc_notes,#__cc_qbtn,#__cc_pill";
+    document.addEventListener("click",function(e){
+      if(!on)return;
+      var t=e.target;
+      if(t&&t.closest&&t.closest(mine))return;
+      e.preventDefault();e.stopPropagation();
+      var sz=docSize();
+      var snip=t&&t.textContent?t.textContent.replace(/\\s+/g," ").trim().slice(0,160):"";
+      src.add({x:rnd(e.pageX/sz.w),y:rnd(e.pageY/sz.h)},snip,t);
+      if(!src.sticky)setPin(false,true);
+    },true);
+    document.addEventListener("keydown",function(e){if(e.key==="Escape"){hideQ();if(on)setPin(false,true);}});
+    document.addEventListener("mousedown",function(e){if(qb&&e.target!==qb&&!qb.contains(e.target))hideQ();});
+    // A text selection offers a note on those words, pinned at the end of the
+    // selection.
+    document.addEventListener("mouseup",function(e){
+      if(!src||on)return;
+      var t=e.target;
+      if(t&&t.closest&&t.closest(mine))return;
+      setTimeout(function(){
+        var s=window.getSelection(),txt=s?String(s).replace(/\\s+/g," ").trim():"";
+        hideQ();
+        if(!txt||!s.rangeCount)return;
+        var rs=s.getRangeAt(0).getClientRects(),r=rs.length?rs[rs.length-1]:s.getRangeAt(0).getBoundingClientRect();
+        var px=r.right+window.pageXOffset,py=r.top+r.height/2+window.pageYOffset;
+        qb=el("button");qb.id="__cc_qbtn";qb.type="button";qb.innerHTML=bubble+"Comment";
+        var first=s.getRangeAt(0).getBoundingClientRect();
+        qb.style.left=(first.left+first.width/2+window.pageXOffset)+"px";qb.style.top=(first.top+window.pageYOffset-8)+"px";
+        qb.addEventListener("mousedown",function(ev){ev.preventDefault();ev.stopPropagation();});
+        qb.addEventListener("click",function(ev){
+          ev.stopPropagation();var sz=docSize();
+          var anchorEl=s.anchorNode&&(s.anchorNode.nodeType===1?s.anchorNode:s.anchorNode.parentElement);
+          src.add({x:rnd(px/sz.w),y:rnd(py/sz.h)},txt.slice(0,500),anchorEl);
+          hideQ();try{s.removeAllRanges();}catch(x){}
+        });
+        host().appendChild(qb);
+      },0);
+    });
+    var rszT=null;
+    window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(draw,150);});
+    window.addEventListener("load",function(){draw();});
+    return{
+      use:function(s2){if(on)setPin(false,false);src=s2;hideQ();draw();},
+      is:function(s2){return src===s2;},
+      draw:draw,
+      pin:setPin,
+      on:function(){return on;}
+    };
+  })();
+  // Framed in a codecast conversation, the parent speaks first: its notes
+  // message hands this page's notes over to the conversation's quote batch,
+  // and every gesture here goes back to it as a message.
+  var qNotes=[],qEditing=null;
+  var toParent=function(m){try{window.parent.postMessage(m,"*");}catch(e){}};
+  var quoteSrc={sticky:true,hint:"Click anywhere to pin a note for the agent · Esc to stop",
+    notes:function(){return qNotes;},editing:function(){return qEditing;},
+    label:function(nt){return "Note "+nt.n+" · on your next message";},
+    add:function(pt,snip){toParent({type:"codecast:note-add",point:pt,snippet:snip||undefined});},
+    body:function(k,b){toParent({type:"codecast:note-body",id:k,body:b});},
+    edit:function(k){toParent({type:"codecast:note-edit",id:k});},
+    remove:function(k){toParent({type:"codecast:note-remove",id:k});},
+    pinMode:function(v){toParent({type:"codecast:pin-mode",on:v});}};
+  window.addEventListener("message",function(e){
+    if(!framed||e.source!==window.parent)return;
+    var d=e.data;if(!d||d.type!=="codecast:notes")return;
+    qNotes=(d.notes||[]).map(function(n){return{key:String(n.id),n:+n.n||0,x:+n.x||0,y:+n.y||0,body:String(n.body||""),snippet:n.snippet?String(n.snippet):""};});
+    qEditing=d.editing?String(d.editing):null;
+    if(!NL.is(quoteSrc))NL.use(quoteSrc);
+    if(!!d.pinMode!==NL.on())NL.pin(!!d.pinMode,false);
+    NL.draw();
+  });
   if(!CC.metaUrl)return;
   var api=function(path,body){return fetch(CC.apiBase+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();});};
   // View beacon — one per page load; carries the gate email when present.
@@ -731,11 +938,12 @@ function barHtml(o: BrandOpts): string {
     if(typeof an.y==="number")return{x:docW-26,y:an.y*docH};
     return null;
   };
-  var pinLayer=null,hint=null,pinMode=false;
+  var pinLayer=null;
   var pinsOn=function(){if(!pinLayer){pinLayer=document.createElement("div");pinLayer.id="__cc_pins";host().appendChild(pinLayer);}return pinLayer;};
   var renderPins=function(){
     var savedPos=saved.map(function(c){return{c:c,p:posFor(parseAnchor(c))};}).filter(function(s){return !!s.p;});
-    if(!pinLayer&&!savedPos.length&&!drafts.some(function(d){return d.px!=null;}))return;
+    NL.draw();
+    if(!pinLayer&&!savedPos.length)return;
     pinsOn().innerHTML="";
     savedPos.forEach(function(s){
       var p=el("div","__cc_pin __cc_spin","");
@@ -743,14 +951,6 @@ function barHtml(o: BrandOpts): string {
       p.title=s.c.author_name+": "+s.c.text.slice(0,80);
       p.setAttribute("data-cid",s.c.id);
       p.addEventListener("click",function(e){e.stopPropagation();openC(null,s.c.id,true);});
-      pinLayer.appendChild(p);
-    });
-    drafts.forEach(function(d,i){
-      if(d.px==null)return;
-      var p=el("div","__cc_pin",String(i+1));
-      p.style.left=d.px+"px";p.style.top=d.py+"px";
-      p.title=d.text?d.text:"Draft comment "+(i+1);
-      p.addEventListener("click",function(e){e.stopPropagation();openC(i);});
       pinLayer.appendChild(p);
     });
   };
@@ -781,12 +981,6 @@ function barHtml(o: BrandOpts): string {
   // Fraction-based pin positions depend on the laid-out document size.
   var rszT=null;
   window.addEventListener("resize",function(){clearTimeout(rszT);rszT=setTimeout(renderPins,150);});
-  var exitPin=function(){pinMode=false;document.documentElement.classList.remove("__cc_pinmode");if(hint){hint.remove();hint=null;}};
-  var enterPin=function(){
-    closeAll();pinMode=true;document.documentElement.classList.add("__cc_pinmode");
-    if(!hint){hint=el("div",null,"Tap anywhere to pin your comment — Esc cancels");hint.id="__cc_hint";host().appendChild(hint);}
-  };
-  document.addEventListener("keydown",function(e){if(e.key==="Escape"){exitPin();closeAll();}});
   var selPath=function(n){try{
     var parts=[],d=0;
     while(n&&n.nodeType===1&&d<4&&n!==document.body&&n!==document.documentElement){
@@ -798,23 +992,35 @@ function barHtml(o: BrandOpts): string {
     }
     return parts.join(">");
   }catch(e){return "";}};
-  document.addEventListener("click",function(e){
-    if(!pinMode)return;
-    var t=e.target;
-    if(t&&t.closest&&t.closest("#__cc_bar,.__cc_panel,#__cc_hint,#__cc_pins"))return;
-    e.preventDefault();e.stopPropagation();
-    var snip="";try{snip=String(window.getSelection()||"").trim();}catch(x){}
-    if(!snip&&t&&t.textContent)snip=t.textContent.replace(/\\s+/g," ").trim();
-    snip=snip.slice(0,120);
-    var docH=Math.max(document.documentElement.scrollHeight,1);
-    var docW=Math.max(document.documentElement.scrollWidth,1);
-    var a={y:Math.round(e.pageY/docH*1000)/1000,x:Math.round(e.pageX/docW*1000)/1000};
-    if(snip)a.snippet=snip;
-    var sp=t?selPath(t):"";
-    if(sp)a.sel=sp;
-    drafts.push({text:"",anchor:a,px:e.pageX,py:e.pageY});
-    exitPin();renderPins();openC(drafts.length-1);
-  },true);
+  // Drafts with a spot on the page draw through the notes layer: a numbered
+  // dot with the draft's editor at it. Posting stays the discussion panel's
+  // job, where the name and the send live, so the editor links there.
+  var dSeq=0,draftEd=null;
+  var newDraft=function(a){var d={id:"d"+(++dSeq),text:"",anchor:a};drafts.push(d);return d;};
+  var hasSpot=function(d){return !!(d.anchor&&typeof d.anchor.x==="number"&&typeof d.anchor.y==="number");};
+  var draftSrc={sticky:false,hint:"Click anywhere to pin your comment · Esc cancels",
+    notes:function(){var out=[];drafts.forEach(function(d,i){if(hasSpot(d))out.push({key:d.id,n:i+1,x:d.anchor.x,y:d.anchor.y,body:d.text,snippet:d.anchor.snippet||""});});return out;},
+    editing:function(){return draftEd;},
+    label:function(nt){return "Draft "+nt.n+" · not posted yet";},
+    add:function(pt,snip,t){
+      var a={x:pt.x,y:pt.y};if(snip)a.snippet=snip.slice(0,120);
+      var sp=t?selPath(t):"";if(sp)a.sel=sp;
+      closeAll();draftEd=newDraft(a).id;NL.draw();syncSend();
+    },
+    body:function(k,b){drafts.forEach(function(d){if(d.id===k)d.text=b;});syncSend();},
+    edit:function(k){draftEd=k;NL.draw();},
+    remove:function(k){drafts=drafts.filter(function(d){return d.id!==k;});if(draftEd===k)draftEd=null;renderPins();syncSend();if(!cpanel.hidden)renderC();},
+    lead:function(ft,flush){
+      var b=el("button","__cc_nlead",ownerKey?"Review & send…":"Review & post…");b.type="button";
+      b.title="Open the discussion to post your drafts";
+      b.addEventListener("mousedown",function(e){e.preventDefault();});
+      b.addEventListener("click",function(e){e.stopPropagation();flush();var k=draftEd;draftEd=null;NL.draw();
+        var i=-1;drafts.forEach(function(d,j){if(d.id===k)i=j;});openC(i>=0?i:null);});
+      ft.appendChild(b);
+    }};
+  NL.use(draftSrc);
+  var enterPin=function(){closeAll();if(!NL.is(draftSrc))NL.use(draftSrc);NL.pin(true,false);};
+  document.addEventListener("keydown",function(e){if(e.key==="Escape")closeAll();});
   var syncSend=function(){
     var n=drafts.filter(function(d){return d.text.trim();}).length;
     var b=document.getElementById("__cc_sendbtn");
@@ -902,7 +1108,7 @@ function barHtml(o: BrandOpts): string {
     drafts.forEach(function(d,i){
       var card=el("div","__cc_draft");card.setAttribute("data-i",String(i));
       var top=el("div","__cc_dtop");
-      if(d.px!=null){
+      if(hasSpot(d)){
         top.appendChild(el("span","__cc_dnum",String(i+1)));
         if(d.anchor&&d.anchor.snippet)top.appendChild(el("span","__cc_dsnip","\\u201C"+d.anchor.snippet.slice(0,60)+(d.anchor.snippet.length>60?"…":"")+"\\u201D"));
         else top.appendChild(el("span","__cc_dlabel","Pinned"));
@@ -928,7 +1134,7 @@ function barHtml(o: BrandOpts): string {
     pinB.addEventListener("click",function(){enterPin();});
     var genB=iconBtn("__cc_btn",noteSvg,"General note");
     genB.title="A comment about the whole page";
-    genB.addEventListener("click",function(){drafts.push({text:"",anchor:null,px:null,py:null});renderC(drafts.length-1);});
+    genB.addEventListener("click",function(){newDraft(null);renderC(drafts.length-1);});
     addrow.appendChild(pinB);addrow.appendChild(genB);
     body.appendChild(addrow);
     if(drafts.length){
@@ -1094,6 +1300,7 @@ function barHtml(o: BrandOpts): string {
     if(scrollToCid){var sc=cpanel.querySelector('[data-cid="'+scrollToCid+'"]');if(sc)sc.scrollIntoView({block:"nearest"});}
   };
   var openC=function(focusIdx,scrollToCid,highlight){
+    if(draftEd){draftEd=null;NL.draw();}
     show(cpanel);renderC(focusIdx,scrollToCid,highlight?scrollToCid:null);
     // First open: the saved list may not be loaded yet (count of 0 skips the
     // boot fetch). Refresh, then re-render only if nothing is being typed.
@@ -1113,8 +1320,8 @@ function barHtml(o: BrandOpts): string {
           var docW=Math.max(document.documentElement.scrollWidth,1);
           a.y=Math.round((r0.top+r0.height/2+window.pageYOffset)/docH*1000)/1000;
           a.x=Math.round((r0.left+r0.width/2+window.pageXOffset)/docW*1000)/1000;
-          drafts.push({text:"",anchor:a,px:Math.round(r0.left+r0.width/2+window.pageXOffset),py:Math.round(r0.top+window.pageYOffset)});
-        }catch(x){drafts.push({text:"",anchor:a,px:null,py:null});}
+          newDraft(a);
+        }catch(x){newDraft(a);}
         renderPins();
         openC(drafts.length-1);
       }else{

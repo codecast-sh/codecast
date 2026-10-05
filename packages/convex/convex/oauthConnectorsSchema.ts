@@ -6,6 +6,7 @@
 
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
+import { storedRefreshFailure } from "./lib/tokenRefresh";
 
 export const oauthConnectorTables = {
   app_installations: defineTable({
@@ -67,6 +68,8 @@ export const oauthConnectorTables = {
     last_webhook_at: v.optional(v.number()),
     last_sync_at: v.optional(v.number()),
     last_error: v.optional(v.string()),
+    /** What kind of refresh failure `last_error` records (lib/tokenRefresh). */
+    last_error_kind: v.optional(storedRefreshFailure),
     /** Non-secret settings a token connector needs beside its secret: a
      *  Sentry org slug, a PostHog host, an app's base url (external-data.md
      *  X1). Secrets stay in access_token_enc. */

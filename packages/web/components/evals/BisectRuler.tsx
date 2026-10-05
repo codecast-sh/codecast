@@ -9,15 +9,17 @@
 import { useLayoutEffect, useRef, type CSSProperties } from "react";
 import type { BisectPlan, BisectProbe, BisectRep, BisectState } from "@codecast/shared/contracts/evalsApi";
 import { EntityIdPill } from "../EntityIdPill";
-import { commitSessionId } from "./CommitPanel";
 import { Well } from "./charts/Well";
-import { EvalsLink, VerdictGlyph, shortSha, type VerdictState } from "./parts";
-import { endpointLabel, repState, repTally, rulerModel, type RulerModel, type RulerTile } from "./bisectModel";
+import { EvalsLink, VerdictGlyph } from "./parts";
+import { endpointLabel, repState, repTally, rulerModel, type RulerModel, type RulerTile, commitSessionId } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
+import { offBranchWords, shortSha } from "./format";
+import type { VerdictState } from "./verdictModel";
 
 const W = 124;
-const CW = 84;
+/** The control column: wide enough that "good control" and "bad control" each sit on one line, so both cards line up. */
+const CW = 92;
 const GAP = 12;
 
 /** Where tile i starts inside the row (the good control column sits before it). */
@@ -42,8 +44,9 @@ function ProbeWells({ probe, freezes, delayFrom = 0 }: { probe: BisectProbe; fre
             `${landed} of ${all} landed`
           ) : (
             <>
-              <span className="ev-pass">{passed} pass</span> <span className={failed ? "ev-fail" : undefined}>{failed} fail</span>
-              {crashed > 0 && <span className="evb-wells-crashed"> {crashed} crashed</span>}
+              <span className="ev-pass">{passed} pass</span>{" "}
+              <span className={failed ? "ev-fail" : undefined}>{failed} fail</span>
+              {crashed > 0 && <>{" "}<span className="evb-wells-crashed">{crashed} crashed</span></>}
             </>
           )}
         </span>
@@ -125,7 +128,7 @@ function Tile({ tile, freezes, stalled, spaced }: { tile: RulerTile; freezes: Bi
           ) : tile.recorded ? (
             <span className="evb-tag" title="Read for free from a recorded batch">recorded</span>
           ) : null}
-          {c.kind === "commit" && !c.commit.onMain && <span className="evb-tag" title={c.commit.mainSha ? `main twin ${c.commit.mainSha}` : "no main twin"}>off-branch</span>}
+          {c.kind === "commit" && !c.commit.onMain && <span className="evb-tag" title={offBranchWords(c.commit).title}>off-branch</span>}
           {session && (
             <span className="evb-tile-session">
               <EntityIdPill type="session" id={session} compact />

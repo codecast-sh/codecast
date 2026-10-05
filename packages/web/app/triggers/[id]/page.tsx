@@ -39,6 +39,7 @@ import {
   triggerEventLabel,
 } from "../../../components/triggerCadence";
 import { ARMED_STATUSES, taskDisplayTitle, type TaskRow } from "../../../components/triggerTasks";
+import { isTriggerEditable } from "../../../lib/triggerEditable";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -224,7 +225,7 @@ export default function TriggerDetailPage() {
   const isForeign = t.is_own === false;
   const isArmed = ARMED_STATUSES.has(t.status);
   const isTerminal = t.status === "completed" || t.status === "failed";
-  const isEditable = t.status === "scheduled" || t.status === "paused";
+  const isEditable = isTriggerEditable(t.status);
   const msUntil = t.status === "scheduled" && t.run_at !== undefined ? t.run_at - now : undefined;
   const cycleProgress =
     t.schedule_type === "recurring" && t.interval_ms && msUntil !== undefined

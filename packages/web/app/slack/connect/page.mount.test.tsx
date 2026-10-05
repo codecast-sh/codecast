@@ -17,7 +17,9 @@ let providerOptions: any;
 let providerStarts: string[];
 const complete = async (args: { code: string; state: string }) => { actionCalls.push(args); return answer(); };
 const convex = await import("convex/react");
-mock.module("convex/react", () => ({ ...convex, useConvexAuth: () => auth, useAction: () => complete }));
+// useQueries answers nothing: the sign-in buttons' optional providers query
+// stays unresolved, as on a backend that never answers it.
+mock.module("convex/react", () => ({ ...convex, useConvexAuth: () => auth, useAction: () => complete, useQueries: () => ({}) }));
 mock.module("next/navigation", () => ({
   useRouter: () => {
     const navigate = useNavigate();

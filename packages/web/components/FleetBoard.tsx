@@ -301,7 +301,7 @@ function FleetDrillIn() {
     // handlers and composer autofocus. The drill-in is the conversation
     // surface itself, presented as an overlay — not a dialog that owns the
     // keyboard against it. Escape/backdrop dismissal is handled above.
-    <div className="absolute inset-0 z-30 flex" role="dialog">
+    <div className="absolute inset-0 z-30 flex" role="dialog" aria-modal="false">
       <div className="absolute inset-0 bg-sol-bg/70 backdrop-blur-[2px]" onClick={handleClose} />
       <div className="relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl">
         <ErrorBoundary name="FleetDrillIn" level="panel">

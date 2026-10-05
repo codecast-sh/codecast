@@ -23,6 +23,9 @@ export const LEARNING = {
   redirects: 30,
   said_chars: 600,
   before_chars: 300,
+  /** Rules a role taught itself (its playbook, org-staffing.md S38) one pass reads, newest first, each clipped. */
+  rules: 12,
+  rule_chars: 400,
   lessons_per_pass: 8,
   lesson_chars: 1200,
   /** Structural signals already taught, kept on the instance so one stall teaches once. */
@@ -34,7 +37,7 @@ export const LEARNING = {
   canary_soak_ms: 3 * DAY,
 } as const;
 
-export const LESSON_KINDS = ["redirect", "setup", "routine", "evidence"] as const;
+export const LESSON_KINDS = ["redirect", "setup", "routine", "evidence", "rule"] as const;
 export type LessonKind = (typeof LESSON_KINDS)[number];
 export type LearnedLesson = { kind: LessonKind; about: string; lesson: string };
 
@@ -44,7 +47,9 @@ export type LearnedLesson = { kind: LessonKind; about: string; lesson: string };
 export type Redirect = { before?: string; said: string };
 /** A stall or failure read off the instance's record. `key` is what the instance remembers; `line` is in the template's own words. */
 export type StructuralSignal = { key: string; kind: Exclude<LessonKind, "redirect">; about: string; line: string; detail?: string };
-export type LearningDigest = { redirects: Redirect[]; signals: StructuralSignal[] };
+/** A rule the role wrote in its own playbook, with the mistake that taught it. `key` is what the instance remembers, so a rule teaches once. */
+export type LearnedRule = { key: string; rule: string; mistake?: string };
+export type LearningDigest = { redirects: Redirect[]; signals: StructuralSignal[]; rules?: LearnedRule[] };
 export type LearningRoutine = { id: string; external?: boolean; retired?: boolean; trigger: { status: string; run_count?: number; last_run_at?: number; last_run_failed?: boolean; last_run_summary?: string } | null };
 
 const days = (ms: number) => Math.max(1, Math.floor(ms / DAY));
@@ -85,17 +90,38 @@ export function structuralSignals(manifest: OrgTemplate, input: { state: Instanc
   return out.filter((s) => !seen.has(s.key));
 }
 
+/**
+ * The rules in a role's playbook the instance has not been taught from yet,
+ * newest first. A rule is the role's own generalization of a mistake, which
+ * is the closest thing in a workspace to a lesson already; it still goes to
+ * the model as a signal, never to the publisher as written.
+ */
+export function playbookRuleSignals(rules: ReadonlyArray<{ text: string; mistake: string | null; written_at: number | null }>, seen: readonly string[] = []): LearnedRule[] {
+  const known = new Set(seen);
+  return [...rules]
+    .sort((a, b) => (b.written_at ?? 0) - (a.written_at ?? 0))
+    .map((r) => ({ key: `rule:${textKey(`${r.text} ${r.mistake ?? ""}`)}`, rule: r.text, ...(r.mistake ? { mistake: r.mistake } : {}) }))
+    .filter((r) => r.rule.length >= 12 && !known.has(r.key))
+    .slice(0, LEARNING.rules);
+}
+/** A short stable key for a sentence: case, spacing and punctuation do not change it. */
+function textKey(text: string): string {
+  let h = 5381;
+  for (const ch of text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()) h = ((h << 5) + h + ch.codePointAt(0)!) >>> 0;
+  return h.toString(36);
+}
+
 // ── The extraction request ──────────────────────────────────────────────────
 
 export const LEARNING_SYSTEM = `You improve a role template that many workspaces hire. A template is a standing job handed to an agent: a charter, routines that run on a schedule, setup steps a person or the role does once, and evidence checks that gate the routines.
 
-You are given what happened on one workspace's hire of the template: what people typed to the role, each with the role's line before it, and where its setup, routines and evidence stalled or failed.
+You are given what happened on one workspace's hire of the template: what people typed to the role, each with the role's line before it, where its setup, routines and evidence stalled or failed, and the rules the role wrote down for itself, each with the mistake that taught it.
 
-Find what the template itself should do differently so the same thing does not happen on the next workspace: an instruction that was missing or misleading, a setup step that asks too much or explains too little, a routine that fails or goes unused, a check that goes stale. Most of what people say to a role is them steering their own work, a new task or a preference about their own product, and teaches the template nothing. When nothing generalizes, the empty answer is the right one.
+Find what the template itself should do differently so the same thing does not happen on the next workspace: an instruction that was missing or misleading, a setup step that asks too much or explains too little, a routine that fails or goes unused, a check that goes stale. Most of what people say to a role is them steering their own work, a new task or a preference about their own product, and teaches the template nothing. A rule the role taught itself is mostly about its own workspace too; it is a lesson only when any workspace's hire of this template would make the same mistake without it. When nothing generalizes, the empty answer is the right one.
 
 Every lesson leaves this workspace and is read by the template's publisher, who must learn nothing about the workspace from it. Write each lesson as a statement about the template in your own words: what went wrong in general terms, and what the template should say or do instead. Carry over no name of a person, company, product or project, no address, link or domain, no id or number that points at something in the workspace, nobody's words in quotation, and no code. The template's own vocabulary, the ids listed under Template, is fine to use.
 
-Reply with JSON only: an array of {"kind": "redirect" | "setup" | "routine" | "evidence", "about": one of the template's ids or "charter", "lesson": one to three sentences}. Reply [] when nothing generalizes.`;
+Reply with JSON only: an array of {"kind": "redirect" | "setup" | "routine" | "evidence" | "rule" (a lesson drawn from the role's own rules), "about": one of the template's ids or "charter", "lesson": one to three sentences}. Reply [] when nothing generalizes.`;
 
 const clip = (text: string, chars: number) => (text.length > chars ? `${text.slice(0, chars)}…` : text);
 
@@ -110,7 +136,8 @@ export function learningRequest(manifest: OrgTemplate, digest: LearningDigest): 
   ].join("\n\n");
   const signals = digest.signals.map((s) => (s.detail ? `${s.line} The role's summary of it: ${clip(s.detail, LEARNING.said_chars)}` : s.line));
   const redirects = digest.redirects.map((r, i) => `${i + 1}. ${r.before ? `The role had said: ${clip(r.before, LEARNING.before_chars)}\n   ` : ""}A person then typed: ${clip(r.said, LEARNING.said_chars)}`);
-  return { system: LEARNING_SYSTEM, prompt: `# Template\n\n${template}\n\n# Where this hire stalled or failed\n\n${list(signals)}\n\n# What people typed to the role\n\n${redirects.length ? redirects.join("\n") : "Nothing."}` };
+  const rules = (digest.rules ?? []).map((r) => `${clip(r.rule, LEARNING.rule_chars)}${r.mistake ? ` It learned this from: ${clip(r.mistake, LEARNING.rule_chars)}` : ""}`);
+  return { system: LEARNING_SYSTEM, prompt: `# Template\n\n${template}\n\n# Where this hire stalled or failed\n\n${list(signals)}\n\n# What people typed to the role\n\n${redirects.length ? redirects.join("\n") : "Nothing."}\n\n# Rules the role taught itself\n\n${list(rules)}` };
 }
 
 /** The reply as lessons: malformed entries are dropped, an unknown `about` falls back to the charter. */

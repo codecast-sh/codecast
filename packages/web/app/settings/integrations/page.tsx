@@ -12,16 +12,10 @@
 // It replaces the old /settings/integrations/github-app page, whose installed
 // accounts and repository list now live inside the GitHub card.
 //
-// This page also finishes an OAuth connection. The connectors redirect back
-// here with a confirm token in the URL FRAGMENT, because the redirect lands in
-// whatever browser the provider chose and only the signed-in session that
-// started the flow may complete it. The token is read once, spent, and cleared
-// from the address bar.
+// This page also finishes an OAuth connection (hooks/useConnectorReturn): the
+// connectors redirect back here with a confirm token in the URL fragment, which
+// is read once, spent in this signed-in session, and cleared.
 
-import { useState } from "react";
-import { useAction } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { toast } from "sonner";
 import { User, Users } from "lucide-react";
 import {
   APP_DESCRIPTORS,
@@ -32,21 +26,14 @@ import {
 } from "@codecast/shared/contracts";
 import { useSettingsData } from "../../../hooks/useSyncSettings";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
-import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useConnectorReturn } from "../../../hooks/useConnectorReturn";
 import { SettingsCallout, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { IntegrationCard } from "../../../components/integrations/IntegrationCard";
 import { SourcesSection } from "../../../components/ops/SourcesSection";
 import { BrowserExtensionSetup } from "../../../components/settings/BrowserExtensionSetup";
 import { TeamSwitcher } from "../../../components/TeamSwitcher";
 import { useInboxStore } from "../../../store/inboxStore";
-import {
-  describeConnectorError,
-  parseConnectorReturn,
-  strippedUrl,
-  type ConnectorReturn,
-} from "../../../lib/connectorReturn";
-
-const api = _api as any;
+import { describeConnectorError } from "../../../lib/connectorReturn";
 
 /** The entries at one scope, keyed by app, for the cards of that ledger. */
 function entriesAt(result: AppConnectionsResult | undefined, scope: AppConnectionScope) {
@@ -61,40 +48,7 @@ export default function IntegrationsPage() {
   const connections = useSettingsData("connections");
   const { user } = useCurrentUser();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const confirmConnector = useAction(api.oauthConnectors.confirmConnection);
-  const confirmGoogle = useAction(api.googleOAuth.confirmConnection);
-  const [notice, setNotice] = useState<ConnectorReturn | null>(null);
-
-  // Read the callback ONCE, on mount, then clear it. Re-reading it would let a
-  // back-navigation replay a confirmation the user already spent.
-  useWatchEffect(() => {
-    const hit = parseConnectorReturn(window.location.hash, window.location.search);
-    if (!hit) return;
-    window.history.replaceState(
-      null,
-      "",
-      strippedUrl(window.location.pathname, window.location.search, window.location.hash),
-    );
-    if (hit.kind !== "confirm") {
-      setNotice(hit);
-      if (hit.kind === "success") toast.success("GitHub App installed");
-      return;
-    }
-    // Google's connector and the generic one take the same two arguments and
-    // differ only in which module owns the installation row.
-    const confirm = hit.provider === "gmail" ? confirmGoogle : confirmConnector;
-    const name = APP_DESCRIPTORS[hit.provider].name;
-    void (async () => {
-      try {
-        const res = await confirm({ installation_id: hit.installationId, confirm_token: hit.confirmToken });
-        if (res?.ok) toast.success(`${name} connected`);
-        else setNotice({ kind: "error", provider: hit.provider, reason: res?.error ?? "The confirmation failed" });
-      } catch (e: any) {
-        setNotice({ kind: "error", provider: hit.provider, reason: e?.message ?? `Couldn't confirm ${name}` });
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- one read of the landing URL
-  }, []);
+  const notice = useConnectorReturn();
 
   const result = connections.data as AppConnectionsResult | undefined;
   const loading = result === undefined && !connections.error;

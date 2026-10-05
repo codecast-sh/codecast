@@ -13,6 +13,7 @@ import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { requireRole, userCanAccessRole } from "./lib/orgAccess";
+import { canReadRun } from "./workflow_runs";
 import { countersFor } from "./lib/orgCaps";
 import { mergeReportLine } from "./lib/orgRoutine";
 import { MERGE_AUTHORITY_ID, MERGE_AUTHORITY_LABEL, mergeAllowance, mergeGrantOf } from "./lib/lineMerge";
@@ -85,14 +86,35 @@ async function requireToken(ctx: any, apiToken: string): Promise<Id<"users">> {
   return auth.userId;
 }
 
-async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promise<{ run: any; role: any }> {
+/**
+ * Who authorizes this merge. A role's line merges under the role's merge
+ * authority and allowance. A run with no role behind it merges because a
+ * person answered Ship on its card: that answer is the authorization, so it
+ * counts against no role's limit.
+ */
+async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promise<{ run: any; role: any; shippedBy: string | null }> {
   const run = await ctx.db.get(runRef as Id<"workflow_runs">);
   if (!run) throw new Error(`No run ${runRef}`);
   const role = await roleOfRun(ctx, run);
-  if (!role) throw new Error("This run was not started by a role's line, so it has no merge authority to merge under");
-  if (!(await userCanAccessRole(ctx, userId, role))) throw new Error("Forbidden");
-  return { run, role };
+  if (role) {
+    if (!(await userCanAccessRole(ctx, userId, role))) throw new Error("Forbidden");
+    return { run, role, shippedBy: null };
+  }
+  if (!(await canReadRun(ctx, userId, run))) throw new Error("Forbidden");
+  const shippedBy = await personShipped(ctx, run);
+  if (!shippedBy) throw new Error("No role started this run and no person answered Ship on its card, so nothing authorizes the merge");
+  return { run, role: null, shippedBy };
 }
+
+/** The person who answered Ship on the run's card gate, or null. */
+async function personShipped(ctx: any, run: any): Promise<string | null> {
+  const decision: any = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  if (!decision || decision.status !== "answered" || decision.answered_by?.kind !== "user") return null;
+  const label: string = decision.options?.[decision.answer_index ?? -1]?.label ?? "";
+  return /^ship\b/i.test(label.trim()) ? decision.answered_by.id : null;
+}
+
+const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null };
 
 /** Before the merge: may this run's line merge now? Never writes. */
 export const check = query({
@@ -101,7 +123,7 @@ export const check = query({
     const userId = await requireToken(ctx, args.api_token);
     const { run, role } = await runAndRole(ctx, userId, args.run_id);
     const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
-    return { role: { short_id: role.short_id, handle: role.handle, name: role.name }, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...mergeAllowance(role, Date.now()) };
+    return { role: role ? { short_id: role.short_id, handle: role.handle, name: role.name } : null, task: task ? { short_id: task.short_id, title: task.title, pr_url: prUrlFromEvidence(task.verification_evidence) } : null, ...(role ? mergeAllowance(role, Date.now()) : PERSON_ALLOWANCE) };
   },
 });
 
@@ -111,6 +133,20 @@ export const check = query({
  *  a person; the push has already landed, so this is the count, not a gate). */
 export async function recordMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; sha: string; branch: string; into: string; pr_url?: string }, now = Date.now()): Promise<any> {
   const { run, role } = await runAndRole(ctx, userId, args.run_id);
+  if (!role) {
+    // Shipped by a person: record the merge on the run and the task, no role to count it against.
+    await ctx.db.patch(run._id, { merge: { sha: args.sha, branch: args.branch, into: args.into, at: now, ...(args.pr_url ? { pr_url: args.pr_url } : {}) } });
+    const task: any = run.task_id ? await ctx.db.get(run.task_id) : null;
+    if (task) {
+      await insertTaskComment(ctx, task._id, {
+        author: "line",
+        text: `merged ${args.branch} into ${args.into} at ${args.sha.slice(0, 10)}${args.pr_url ? ` (${args.pr_url})` : ""}, shipped at the card`,
+        comment_type: "review",
+        conversation_id: run.primary_conversation_id ?? undefined,
+      });
+    }
+    return { used: 0, limit: null, over: false, reported: false };
+  }
   const allowance = mergeAllowance(role, now);
   const counters = countersFor(role, now);
   const used = (counters.merges ?? 0) + 1;

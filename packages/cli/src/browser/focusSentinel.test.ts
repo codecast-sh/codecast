@@ -10,6 +10,7 @@ import {
   HUMAN_APP_SWITCH_GRACE_MS,
   HUMAN_CLICK_GRACE_S,
   isAppSwitchChord,
+  startFocusSentinel,
   isAgentChromeCommand,
   shouldRestoreFocus,
   stampAt,
@@ -120,4 +121,16 @@ describe("stampAt", () => {
       shouldRestoreFocus({ agentChrome: true, msSinceDeliberateRaise: Date.now() - old, msSinceAppSwitch: 60_000, secondsSinceClick: 60 }),
     ).toBe(true);
   });
+});
+
+test("a cloud host never arms the sentinel: its daemon has no window-server session, where the input probe blocks forever", async () => {
+  const prev = process.env.CODECAST_REMOTE_DEVICE;
+  process.env.CODECAST_REMOTE_DEVICE = "1";
+  const lines: string[] = [];
+  try {
+    expect(await startFocusSentinel((l) => lines.push(l))).toBeNull();
+    expect(lines).toEqual([]);
+  } finally {
+    if (prev === undefined) delete process.env.CODECAST_REMOTE_DEVICE; else process.env.CODECAST_REMOTE_DEVICE = prev;
+  }
 });

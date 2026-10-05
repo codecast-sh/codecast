@@ -12,7 +12,12 @@
 // prose; the body tells the agent how to read the whole transcript. The agent
 // gets the summary and a pointer, never the transcript itself.
 
+import { describeClockSpans, parseClockSpans } from "./callRecordings";
+
 export const HUDDLE_DIGEST_CLIENT_ID_PREFIX = "call-digest:";
+
+/** A stretch of the call that was filmed, in call time (ms since it began). */
+export type HuddleVideoStretch = { fromMs: number; toMs: number };
 
 export type HuddleDigestInput = {
   title: string | null | undefined;
@@ -23,6 +28,10 @@ export type HuddleDigestInput = {
   actionItems: string[];
   // Why there is no summary, when there is none.
   summaryStatus: "done" | "failed" | "skipped" | "pending" | null | undefined;
+  // The stretches Record filmed (videoStretches), when it was pressed. A
+  // huddle filmed in silence, or with transcription off, still leaves a
+  // digest: the video is what it left behind.
+  video?: readonly HuddleVideoStretch[] | null;
 };
 
 export function huddleMinutes(startedAt: number, endedAt: number | null | undefined): number {
@@ -55,12 +64,27 @@ export function huddleSummaryFallback(status: HuddleDigestInput["summaryStatus"]
       : "Summary pending.";
 }
 
-// The markdown both surfaces show: a bold title, the lead line, the summary,
-// the action items.
+const VIDEO_LINE = /^Recorded on video: ([^\n]+)\.$/;
+
+/** The digest's video line, `Recorded on video: 4:40-7:20.`: plain words for
+ *  every reader of the markdown (an agent, the phone, Slack), and the one
+ *  place a card reads the stretches back from (parseHuddleDigestContent). */
+export function huddleVideoLine(video: readonly HuddleVideoStretch[]): string {
+  return `Recorded on video: ${describeClockSpans(video)}.`;
+}
+
+// The markdown both surfaces show: a bold title, the lead line, the video
+// line when Record was pressed, the summary, the action items. A filmed
+// huddle nobody spoke in has no summary to excuse: the video line says what
+// it left.
 export function formatHuddleDigest(d: HuddleDigestInput): string {
   const parts = [`**${huddleDigestTitle(d.title)}**`, huddleDigestLead(d)];
-  const body = (d.summary ?? "").trim() || huddleSummaryFallback(d.summaryStatus);
-  const out = [`${parts[0]} · ${parts[1]}`, "", body];
+  const video = d.video?.length ? d.video : null;
+  const summary = (d.summary ?? "").trim();
+  const body = summary || (video && d.summaryStatus === "skipped" ? "" : huddleSummaryFallback(d.summaryStatus));
+  const out = [`${parts[0]} · ${parts[1]}`];
+  if (video) out.push("", huddleVideoLine(video));
+  if (body) out.push("", body);
   if (d.actionItems.length > 0) {
     out.push("", "Action items:", ...d.actionItems.map((a) => `- ${a}`));
   }
@@ -71,9 +95,23 @@ export type HuddleDigestHead = {
   title: string;
   /** "12 min huddle with Alice and Bob" — the line under the title. */
   lead: string;
-  /** The digest without its lead line: the summary and the action items. */
+  /** The digest without its lead line or its video line: the summary and
+   *  the action items. */
   body: string;
+  /** The filmed stretches, when the huddle was recorded on video. */
+  video: HuddleVideoStretch[] | null;
 };
+
+/** The video line at the head of a digest body, split off: the stretches and
+ *  the body without it. A body with no such line is returned whole. */
+function splitVideoLine(body: string): { body: string; video: HuddleVideoStretch[] | null } {
+  const nl = body.indexOf("\n");
+  const first = (nl === -1 ? body : body.slice(0, nl)).trim();
+  const m = VIDEO_LINE.exec(first);
+  const video = m ? parseClockSpans(m[1]) : null;
+  if (!video) return { body, video: null };
+  return { body: nl === -1 ? "" : body.slice(nl).replace(/^\n+/, ""), video };
+}
 
 /** The inverse of formatHuddleDigest's first line. A client that holds the chat
  *  row's markdown uses this to paint the title and lead as a header of its own
@@ -88,7 +126,7 @@ export function parseHuddleDigestContent(content: string): HuddleDigestHead | nu
   return {
     title: m[1],
     lead: m[2],
-    body: nl === -1 ? "" : content.slice(nl).replace(/^\n+/, ""),
+    ...splitVideoLine(nl === -1 ? "" : content.slice(nl).replace(/^\n+/, "")),
   };
 }
 
@@ -101,6 +139,8 @@ export type HuddleSummaryTag = {
   speakers: string[];
   // The digest markdown, without the tag or the agent's instructions.
   body: string;
+  /** The filmed stretches, when the huddle was recorded on video. */
+  video: HuddleVideoStretch[] | null;
 };
 
 const ATTR_QUOTE = /"/g;
@@ -122,10 +162,13 @@ export function formatHuddleSummaryTag(
   // The session already received these words live while the huddle ran (its
   // own room feeds it by default). Saying so is what keeps the digest a
   // record instead of a second ask — an agent told "here is what was decided"
-  // twice does the work twice.
-  opts: { heardLive?: boolean } = {},
+  // twice does the work twice. `callRef` is the call's short id (`cl-42`),
+  // what the snap command names it by when it has one.
+  opts: { heardLive?: boolean; callRef?: string | null } = {},
 ): string {
   const digest = formatHuddleDigest(d);
+  const video = d.video?.length ? d.video : null;
+  const ref = opts.callRef || transcriptId;
   const attrs = [
     `transcript="${attr(transcriptId)}"`,
     `title="${attr(huddleDigestTitle(d.title))}"`,
@@ -141,6 +184,9 @@ export function formatHuddleSummaryTag(
     digest,
     "",
     `Read the whole transcript with \`${huddleTranscriptCommand(transcriptId)}\` (\`cast call ${transcriptId}\` for the summary and action items alone).`,
+    ...(video
+      ? [`It was recorded on video: \`cast call snap ${ref}:<line>\` shows the frame at a line said while it was filmed (\`${ref}@m:ss\` at a time).`]
+      : []),
     "</huddle-summary>",
   ].join("\n");
 }
@@ -165,7 +211,8 @@ export function parseHuddleSummaryTag(text: string | null | undefined): HuddleSu
   let inner = trimmed.slice(open[0].length).replace(/<\/huddle-summary>[\s\S]*$/, "");
   // Drop the lead sentence and the trailing command line; keep the digest.
   inner = inner
-    .replace(/^A huddle just ended[^\n]*\n\n?/, "")
+    .replace(/^(?:A huddle just ended|The huddle in this session's room just ended)[^\n]*\n\n?/, "")
+    .replace(/\n*It was recorded on video: [^\n]*\s*$/, "")
     .replace(/\n*Read the whole transcript with[^\n]*\s*$/, "")
     .trim();
   return {
@@ -177,5 +224,6 @@ export function parseHuddleSummaryTag(text: string | null | undefined): HuddleSu
       .map((s) => s.trim())
       .filter(Boolean),
     body: inner,
+    video: parseHuddleDigestContent(inner)?.video ?? null,
   };
 }

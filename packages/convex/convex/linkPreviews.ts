@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import { requireUser } from "./lib/auth";
 import { parseLinkPreviewUrl } from "@codecast/shared/entities";
 import { linkPreviewStale, parseLinkPreviewMeta, type LinkPreviewMeta } from "./lib/linkPreviewMeta";
+import { fetchPublicPage } from "./lib/publicFetch";
 
 // Link previews: a web link standing alone on its line in a message renders
 // as a card drawn from the page's own meta tags. One row per URL, shared by
@@ -75,43 +76,22 @@ export const record = internalMutation({
   },
 });
 
-/** The page's head, following redirects by hand so every hop passes the same
- *  public-host check as the link itself. */
+/** The page's head. Every redirect hop passes the same public-host check as
+ *  the link itself (lib/publicFetch). */
 async function fetchHead(start: string): Promise<{ html: string; url: string } | null> {
-  let url = start;
-  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    const resp = await fetch(url, {
-      redirect: "manual",
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: {
-        // Many sites serve their tags only to a crawler they recognize.
-        "User-Agent": "Mozilla/5.0 (compatible; CodecastBot/1.0; +https://codecast.sh) facebookexternalhit/1.1",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-    if (resp.status >= 300 && resp.status < 400) {
-      const next = parseLinkPreviewUrl(new URL(resp.headers.get("location") ?? "", url).href);
-      if (!next) return null;
-      url = next;
-      continue;
-    }
-    if (!resp.ok || !resp.body) return null;
-    if (!/html/i.test(resp.headers.get("content-type") ?? "")) return null;
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let html = "";
-    let bytes = 0;
-    while (bytes < MAX_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      html += decoder.decode(value, { stream: true });
-      if (/<\/head\s*>|<body[\s>]/i.test(html)) break;
-    }
-    await reader.cancel().catch(() => {});
-    return { html, url };
-  }
-  return null;
+  const page = await fetchPublicPage(start, {
+    maxBytes: MAX_BYTES,
+    timeoutMs: FETCH_TIMEOUT_MS,
+    maxRedirects: MAX_REDIRECTS,
+    headers: {
+      // Many sites serve their tags only to a crawler they recognize.
+      "User-Agent": "Mozilla/5.0 (compatible; CodecastBot/1.0; +https://codecast.sh) facebookexternalhit/1.1",
+      Accept: "text/html,application/xhtml+xml",
+    },
+    accept: /html/i,
+    stopAt: /<\/head\s*>|<body[\s>]/i,
+  });
+  return page ? { html: page.text, url: page.url } : null;
 }
 
 export const fetchPreview = internalAction({

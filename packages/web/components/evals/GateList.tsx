@@ -5,23 +5,7 @@
 import { Link2 } from "lucide-react";
 import type { GateResultJson } from "@codecast/shared/contracts/evalsApi";
 import { VerdictGlyph } from "./parts";
-
-export const gateAnchor = (id: string) => `gate-${id}`;
-
-/** Failing gates first, each group in the order the score lists them. */
-export function orderGates(gates: readonly GateResultJson[]): GateResultJson[] {
-  return [...gates.filter((g) => !g.pass), ...gates.filter((g) => g.pass)];
-}
-
-/**
- * What a gate's evidence says, in words: a vacuous hold says it had nothing to
- * check. A summary states its own count ("4 calls caught at the boundary"), so
- * `scanned` is shown only beside the excerpts, as the platform's run page does.
- */
-export function gateEvidenceWords(g: GateResultJson): string {
-  if (g.pass && g.evidence.vacuous) return "held, nothing to check";
-  return g.evidence.summary;
-}
+import { gateAnchor, orderGates, gateEvidenceWords } from "./runModel";
 
 /** A row's link to itself: a plain click moves the address in place (the page lands on it), a modified click is the browser's. */
 export function AnchorLink({ anchor, href, onAnchor, label }: { anchor: string; href: string; onAnchor: (anchor: string) => void; label: string }) {

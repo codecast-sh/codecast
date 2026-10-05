@@ -36,7 +36,30 @@ export type StandingLine = {
 export const STANDING_HEADING = /^#{1,6}\s*Where it stands\s*$/i;
 const ANY_HEADING = /^#{1,6}\s/;
 const LIST_LINE = /^(?:[-*+]|\d+[.)])\s+(.+?)\s*$/;
-const TRAILING_DATE = /\s*\(?\s*(\d{4}-\d{2}-\d{2})\s*\)?\s*$/;
+export const TRAILING_DATE = /\s*\(?\s*(\d{4}-\d{2}-\d{2})\s*\)?\s*$/;
+
+/** A list line without its bullet, or null for any other line. */
+export const listItem = (line: string): string | null => line.trim().match(LIST_LINE)?.[1] ?? null;
+
+/** A day as written (YYYY-MM-DD) at UTC midnight, or null when it is no date. */
+export function dayAt(day: string): number | null {
+  const at = Date.parse(`${day}T00:00:00Z`);
+  return Number.isNaN(at) ? null : at;
+}
+
+/** Every line under a heading, as written, in order. The section ends at the
+ *  next heading of any level; a brief that repeats the heading reads as one
+ *  section. The playbook's sections (rolePlaybook.ts) read through here too. */
+export function sectionRows(narrative: string | null | undefined, heading: RegExp): string[] {
+  const out: string[] = [];
+  let inside = false;
+  for (const line of (narrative ?? "").split("\n")) {
+    if (heading.test(line)) { inside = true; continue; }
+    if (ANY_HEADING.test(line)) { inside = false; continue; }
+    if (inside) out.push(line);
+  }
+  return out;
+}
 const DATE_AFTER_NAME = /\s*[(,]\s*(\d{4}-\d{2}-\d{2})\s*\)?\s*$/;
 // The source mark a handoff writes at the end of a copied line, before the
 // date: "(from @growth)". Read off the text so the sentence stays clean.
@@ -49,9 +72,8 @@ export const STANDING_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const strip = (s: string) => s.replace(/^\*\*(.+?)\*\*$/, "$1").replace(/^`(.+?)`$/, "$1").trim();
 
 export function parseStandingLine(line: string): StandingLine | null {
-  const m = line.trim().match(LIST_LINE);
-  if (!m) return null;
-  const raw = m[1];
+  const raw = listItem(line);
+  if (raw === null) return null;
   const colon = raw.indexOf(":");
   if (colon <= 0) return null;
   let project = strip(raw.slice(0, colon));
@@ -61,8 +83,8 @@ export function parseStandingLine(line: string): StandingLine | null {
   const take = (text: string, re: RegExp): string => {
     const m = text.match(re);
     if (!m) return text;
-    const at = Date.parse(`${m[1]}T00:00:00Z`);
-    if (Number.isNaN(at)) return text;
+    const at = dayAt(m[1]);
+    if (at === null) return text;
     written_on = m[1]; written_at = at;
     return text.slice(0, m.index).trim();
   };
@@ -105,16 +127,7 @@ export function withStandingLines(narrative: string | null | undefined, lines: s
 /** Every line under the section, in the order written. The section ends at
  *  the next heading of any level. */
 export function parseStandingSection(narrative: string | null | undefined): StandingLine[] {
-  const out: StandingLine[] = [];
-  let inside = false;
-  for (const line of (narrative ?? "").split("\n")) {
-    if (STANDING_HEADING.test(line)) { inside = true; continue; }
-    if (ANY_HEADING.test(line)) { inside = false; continue; }
-    if (!inside) continue;
-    const parsed = parseStandingLine(line);
-    if (parsed) out.push(parsed);
-  }
-  return out;
+  return sectionRows(narrative, STANDING_HEADING).flatMap((line) => parseStandingLine(line) ?? []);
 }
 
 const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");

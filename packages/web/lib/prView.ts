@@ -248,7 +248,9 @@ export function serverCommentId(id: string | undefined): string | undefined {
 }
 
 export function commentResolved(comment: CodeCommentRow): boolean {
-  return comment.resolved === true || comment.resolved_at !== undefined;
+  // The server writes both together; the flag is the one a local resolve or
+  // reopen paints (resolveCodeCommentThread), so it wins when present.
+  return typeof comment.resolved === "boolean" ? comment.resolved : comment.resolved_at !== undefined;
 }
 
 /** A thread is open while any comment in it is unresolved, so a reply after

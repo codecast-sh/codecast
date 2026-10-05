@@ -1,0 +1,487 @@
+/* /welcome's three screens, in the simple lane's voice (simple.css tokens).
+   The motion: the orb carries across screens as one shared element, the old
+   screen leaves the way the person is heading, and the new one rises in
+   order. Moves between screens are view transitions (page.tsx moveTo);
+   everything else is plain CSS, and simple.css's reduced-motion rule stills
+   all of it. */
+
+.wl-frame {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  padding-bottom: calc(2.5rem + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 768px) {
+  .wl-frame { padding-bottom: 4rem; }
+}
+
+/* ── Top: the mark, and how far along ────────────────────────────────── */
+
+.wl-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 3.5rem;
+}
+
+@media (min-width: 768px) {
+  .wl-top { height: 4.5rem; }
+}
+
+.wl-rail {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wl-rail li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.wl-rail li::before {
+  content: "";
+  display: block;
+  width: 1.1rem;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sl-ink) 12%, transparent);
+  transition: width 420ms var(--sl-ease), background-color 420ms var(--sl-ease);
+}
+
+.wl-rail li.is-done::before { background: color-mix(in srgb, var(--sl-tide) 55%, transparent); }
+
+.wl-rail li.is-here::before {
+  width: 2.2rem;
+  background: var(--sl-tide);
+  transform-origin: left center;
+  animation: wl-fill 700ms var(--sl-ease) 120ms both;
+}
+
+.wl-rail-name { display: none; }
+
+.wl-rail li.is-here .wl-rail-name {
+  display: inline;
+  margin-right: 0.2rem;
+  color: var(--sl-soft);
+  font-size: 0.82rem;
+  font-weight: 560;
+  animation: sl-rise 420ms var(--sl-ease) 200ms both;
+}
+
+/* ── The stage ───────────────────────────────────────────────────────── */
+
+.wl-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  width: 100%;
+  max-width: 31rem;
+  margin: 0 auto;
+  padding: 1.25rem 0 1rem;
+  view-transition-name: wl-stage;
+}
+
+.wl-screen { display: flex; flex-direction: column; }
+
+.wl-screen .sl-hello { margin-top: 0; }
+.wl-screen .sl-page-title { margin-top: 0; }
+
+.wl-wait {
+  margin: 0;
+  color: var(--sl-faint);
+  font-size: 0.92rem;
+  animation: sl-rise 520ms var(--sl-ease) 300ms both;
+}
+
+/* ── The orb ─────────────────────────────────────────────────────────── */
+
+.wl-orb {
+  position: relative;
+  width: 4.25rem;
+  height: 4.25rem;
+  margin: 0 0 1.75rem 0.15rem;
+  view-transition-name: wl-orb;
+}
+
+.wl-orb::before {
+  content: "";
+  position: absolute;
+  inset: -0.2rem;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--sl-tide) 55%, transparent);
+  opacity: 0;
+}
+
+.wl-orb[data-mood="signin"]::before { animation: sl-ripple 2.8s var(--sl-ease) 600ms infinite; }
+
+.wl-orb-core {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: conic-gradient(from 210deg, var(--sl-tide), color-mix(in srgb, var(--sl-tide) 40%, var(--sl-sun)), var(--sl-sun), var(--sl-tide));
+  box-shadow: 0 16px 36px -16px color-mix(in srgb, var(--sl-tide) 75%, transparent);
+  animation: wl-spin 18s linear infinite, sl-pop 520ms var(--sl-ease) both;
+}
+
+.wl-orb-core::after {
+  content: "";
+  position: absolute;
+  inset: 0.95rem;
+  border-radius: 999px;
+  background: var(--sl-paper);
+  transition: inset 520ms var(--sl-ease);
+}
+
+.wl-orb[data-mood="loading"] .wl-orb-core { animation: wl-spin 18s linear infinite, wl-breathe 1.6s ease-in-out infinite; }
+
+/* Something to start: the ring thickens and glows. */
+.wl-orb[data-mood="start"] .wl-orb-core {
+  box-shadow: 0 0 0 7px var(--sl-tide-wash), 0 18px 44px -14px color-mix(in srgb, var(--sl-tide) 85%, transparent);
+}
+.wl-orb[data-mood="start"] .wl-orb-core::after { inset: 1.25rem; }
+
+/* Mail and calendar, circling in on the connect screen. */
+.wl-orb-moon {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  margin: -0.95rem 0 0 -0.95rem;
+  border-radius: 999px;
+  background: var(--sl-sheet);
+  border: 1px solid var(--sl-line-strong);
+  box-shadow: var(--sl-shadow);
+  color: var(--sl-tide-ink);
+  opacity: 0;
+  transform: scale(0.3);
+  transition: background-color 360ms var(--sl-ease), color 360ms var(--sl-ease), border-color 360ms var(--sl-ease);
+}
+
+.wl-orb[data-mood="connect"] .wl-orb-moon.is-mail {
+  --wl-to: translate(3.35rem, -1.15rem);
+  animation: wl-orbit-in 680ms cubic-bezier(0.34, 1.4, 0.5, 1) 260ms both, wl-bob 4.2s ease-in-out 1s infinite;
+}
+
+.wl-orb[data-mood="connect"] .wl-orb-moon.is-cal {
+  --wl-to: translate(3.1rem, 1.35rem);
+  animation: wl-orbit-in 680ms cubic-bezier(0.34, 1.4, 0.5, 1) 380ms both, wl-bob 4.2s ease-in-out 1.6s infinite;
+}
+
+.wl-orb[data-connected] .wl-orb-moon {
+  background: var(--sl-tide-solid);
+  border-color: var(--sl-tide-solid);
+  color: var(--sl-on-tide);
+}
+
+/* ── Sign in ─────────────────────────────────────────────────────────── */
+
+.wl-auth-list {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.wl-auth-list.has-lead { grid-template-columns: 1fr 1fr; }
+.wl-auth-list.has-lead .wl-auth.is-google { grid-column: 1 / -1; }
+
+.wl-auth {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  min-height: 3.25rem;
+  padding: 0 1.1rem;
+  border: 1px solid var(--sl-line-strong);
+  border-radius: 999px;
+  background: var(--sl-sheet);
+  color: var(--sl-ink);
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: var(--sl-shadow);
+  transition: transform 180ms var(--sl-ease), box-shadow 180ms var(--sl-ease), border-color 180ms var(--sl-ease), background-color 180ms var(--sl-ease);
+}
+
+.wl-auth:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--sl-shadow-lift); border-color: color-mix(in srgb, var(--sl-tide) 40%, transparent); }
+.wl-auth:active:not(:disabled) { transform: scale(0.98); }
+.wl-auth:disabled { opacity: 0.5; cursor: default; }
+
+/* Google's own button: light on light, dark on dark (its brand guidance). */
+.wl-auth.is-google {
+  min-height: 3.6rem;
+  font-size: 1.05rem;
+  background: #fff;
+  color: #1f1f1f;
+  border-color: #747775;
+}
+
+.dark .wl-auth.is-google {
+  background: #131314;
+  color: #e3e3e3;
+  border-color: #8e918f;
+}
+
+.wl-auth.is-quiet {
+  min-height: 2.75rem;
+  font-size: 0.9rem;
+  font-weight: 560;
+  background: transparent;
+  box-shadow: none;
+  color: var(--sl-ink-2);
+}
+
+.wl-auth.is-quiet svg { width: 1.05rem; height: 1.05rem; }
+
+.wl-aside {
+  margin: 1.15rem 0 0;
+  color: var(--sl-soft);
+  font-size: 0.9rem;
+}
+
+.wl-aside a,
+.wl-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sl-tide-ink);
+  font: inherit;
+  font-weight: 560;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, var(--sl-tide) 45%, transparent);
+  cursor: pointer;
+}
+
+.wl-aside a:hover,
+.wl-link:hover { text-decoration-color: currentColor; }
+
+/* Where Google cannot be connected yet: one quiet line above the asks. */
+.wl-coming { margin: -0.75rem 0 0; }
+
+/* ── Connect ─────────────────────────────────────────────────────────── */
+
+.wl-services { overflow: hidden; margin-bottom: 1.1rem; }
+
+.wl-promise {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin: 0 0 1.4rem;
+  color: var(--sl-ink-2);
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.wl-promise svg { flex: none; margin-top: 0.1rem; color: var(--sl-tide-ink); }
+
+.wl-error { margin: 0 0 1rem; }
+
+.wl-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3.1rem;
+}
+
+.wl-connect { min-height: 3.1rem; padding: 0 1.35rem 0 0.6rem; font-size: 1rem; }
+
+.wl-g {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  background: #fff;
+}
+
+.wl-g-mark { width: 1.1rem; height: 1.1rem; }
+
+.wl-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.45rem 1.1rem 0.45rem 0.45rem;
+  border-radius: 999px;
+  background: var(--sl-tide-wash);
+  color: var(--sl-ink);
+  font-size: 0.95rem;
+  animation: sl-pop 360ms var(--sl-ease) both;
+}
+
+.wl-connected b { font-weight: 620; overflow-wrap: anywhere; }
+
+.wl-connected-tick {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 2.1rem;
+  border-radius: 999px;
+  background: var(--sl-tide-solid);
+  color: var(--sl-on-tide);
+  animation: wl-tick 560ms cubic-bezier(0.34, 1.5, 0.5, 1) 80ms both;
+}
+
+/* ── The first useful thing ──────────────────────────────────────────── */
+
+.wl-lead {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  width: 100%;
+  padding: 1.25rem 1.3rem 1.15rem;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--sl-tide) 38%, transparent);
+  border-radius: 24px;
+  background: linear-gradient(155deg, var(--sl-tide-wash-2), var(--sl-sheet) 62%);
+  box-shadow: var(--sl-shadow-lift);
+  color: var(--sl-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 200ms var(--sl-ease), box-shadow 200ms var(--sl-ease), border-color 200ms var(--sl-ease);
+}
+
+/* One pass of light across the card as it arrives, to say "this one". */
+.wl-lead::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--sol-card) 55%, transparent) 50%, transparent 65%);
+  transform: translateX(-110%);
+  animation: wl-sheen 1.3s var(--sl-ease) 700ms both;
+}
+
+.wl-lead:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--sl-tide) 60%, transparent); }
+.wl-lead:active { transform: scale(0.985); }
+
+.wl-lead-text {
+  font-size: 1.32rem;
+  font-weight: 620;
+  line-height: 1.25;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
+}
+
+.wl-lead-text::before { content: "\201C"; color: var(--sl-tide-ink); }
+.wl-lead-text::after { content: "\201D"; color: var(--sl-tide-ink); }
+
+.wl-lead-go {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: 999px;
+  background: var(--sl-tide-solid);
+  color: var(--sl-on-tide);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.wl-lead-go svg { transition: transform 200ms var(--sl-ease); }
+.wl-lead:hover .wl-lead-go svg { transform: translateX(3px); }
+
+.wl-asks {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.wl-ask {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  width: 100%;
+  padding: 0.85rem 0.95rem 0.85rem 1.05rem;
+  border: 1px solid var(--sl-line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--sl-sheet) 80%, transparent);
+  color: var(--sl-ink-2);
+  font: inherit;
+  font-size: 0.98rem;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 160ms var(--sl-ease), border-color 160ms var(--sl-ease), transform 160ms var(--sl-ease);
+}
+
+.wl-ask svg { flex: none; color: var(--sl-faint); transition: transform 180ms var(--sl-ease), color 180ms var(--sl-ease); }
+.wl-ask:hover { background: var(--sl-tide-wash); border-color: color-mix(in srgb, var(--sl-tide) 35%, transparent); color: var(--sl-ink); }
+.wl-ask:hover svg { color: var(--sl-tide-ink); transform: translate(2px, -2px); }
+.wl-ask:active { transform: scale(0.985); }
+
+.wl-own { margin-top: 1.25rem; }
+
+.wl-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.5rem 1.4rem; margin-top: 1.5rem; }
+
+/* The send-off: the tapped ask lifts away and the rest dims while the
+   conversation opens. Each replaces the element's rise animation, so these
+   win over its held end state. */
+.wl-screen[data-leaving] .sl-rise:not([data-sent]) { animation: wl-dim 240ms var(--sl-ease) forwards; }
+.wl-screen[data-leaving] [data-sent] { animation: wl-send 260ms var(--sl-ease) forwards; }
+
+/* ── Moving between screens (view transitions) ───────────────────────── */
+
+html[data-welcome-move]::view-transition-old(root),
+html[data-welcome-move]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+::view-transition-group(wl-stage) {
+  animation-duration: 560ms;
+  animation-timing-function: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+html[data-welcome-move="forward"]::view-transition-old(wl-stage) { animation: wl-leave-forward 300ms cubic-bezier(0.4, 0, 1, 1) both; }
+html[data-welcome-move="forward"]::view-transition-new(wl-stage) { animation: wl-enter-forward 520ms cubic-bezier(0.2, 0.7, 0.2, 1) 90ms both; }
+html[data-welcome-move="back"]::view-transition-old(wl-stage) { animation: wl-leave-back 300ms cubic-bezier(0.4, 0, 1, 1) both; }
+html[data-welcome-move="back"]::view-transition-new(wl-stage) { animation: wl-enter-back 520ms cubic-bezier(0.2, 0.7, 0.2, 1) 90ms both; }
+
+/* The orb glides to its new place with a little overshoot, as one object. */
+::view-transition-group(wl-orb) {
+  animation-duration: 680ms;
+  animation-timing-function: cubic-bezier(0.34, 1.25, 0.5, 1);
+}
+
+::view-transition-old(wl-orb),
+::view-transition-new(wl-orb) { animation-duration: 380ms; }
+
+@keyframes wl-leave-forward { to { opacity: 0; transform: translateX(-32px); filter: blur(6px); } }
+@keyframes wl-enter-forward { from { opacity: 0; transform: translateX(40px); } }
+@keyframes wl-leave-back { to { opacity: 0; transform: translateX(32px); filter: blur(6px); } }
+@keyframes wl-enter-back { from { opacity: 0; transform: translateX(-40px); } }
+
+@keyframes wl-fill { from { transform: scaleX(0.25); opacity: 0.4; } }
+@keyframes wl-spin { to { rotate: 360deg; } }
+@keyframes wl-breathe { 0%, 100% { opacity: 0.55; scale: 0.94; } 50% { opacity: 1; scale: 1; } }
+@keyframes wl-orbit-in {
+  from { opacity: 0; transform: rotate(-80deg) translate(0.4rem, 0) scale(0.3); }
+  to { opacity: 1; transform: var(--wl-to) scale(1); }
+}
+@keyframes wl-bob {
+  0%, 100% { opacity: 1; transform: var(--wl-to) scale(1); }
+  50% { opacity: 1; transform: var(--wl-to) translateY(-3px) scale(1); }
+}
+@keyframes wl-tick { from { transform: scale(0) rotate(-45deg); } }
+@keyframes wl-sheen { to { transform: translateX(110%); } }
+@keyframes wl-dim { to { opacity: 0.35; filter: blur(1px); } }
+@keyframes wl-send { to { opacity: 0; transform: translateY(-14px) scale(0.98); } }

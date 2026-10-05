@@ -40,6 +40,8 @@ export type VisibleConversation = {
 /** A pull request layer 0 can join to a story by session or by commit. */
 export type ChangePr = {
   id: string;
+  /** Its number, which a squash or merge commit names on its subject instead of carrying the pull request's shas. */
+  number?: number;
   conversation_ids?: string[];
   shas?: string[];
 };

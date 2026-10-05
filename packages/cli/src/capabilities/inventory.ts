@@ -56,7 +56,7 @@ import * as path from "path";
 import { timeSyncFs } from "../slowSync.js";
 import { scanWorkerHost } from "../workers/bridge.js";
 import { visitScan, scanCanFallback } from "../workers/scanClient.js";
-import { AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
+import { AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, observedScopeRank, SNIPPET_CATALOG} from "@codecast/shared/contracts";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
 // Both of these are the shared contract's, re-exported so this module's existing
@@ -848,7 +848,7 @@ function readClientItems(
  *  two, which the fleet diff renders as drift that is not there. */
 function sharedSkillDirs(home: string): string[] {
   const dirs = new Set<string>();
-  for (const client of Object.values(AGENT_CLIENTS)) {
+  for (const client of Object.values(LOCAL_AGENT_CLIENTS)) {
     const shared = client.agentFileTargets?.skillsDir?.shared;
     if (shared) dirs.add(fromHomeTemplate(home, shared));
   }

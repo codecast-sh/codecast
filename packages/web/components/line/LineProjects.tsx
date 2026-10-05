@@ -8,11 +8,14 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { ALL_PROJECTS, NO_PROJECT, defaultLineKey, type LineProject, type RollupRow } from "../../lib/lineFlow";
 import { cn } from "../../lib/utils";
+import { lineProjectParam } from "../../lib/line/lineStations";
 import { centerInRow, edgeAttrs, useScrollEdges } from "./useScrollEdges";
 
 /** The URL names a line by its project's short id (or id), "none" or "all". */
-const paramOf = (key: string, projects: LineProject[]) =>
-  key === ALL_PROJECTS || key === NO_PROJECT ? key : projects.find((p) => p._id === key)?.short_id ?? key;
+const paramOf = (key: string, projects: LineProject[]) => {
+  const p = key === ALL_PROJECTS || key === NO_PROJECT ? null : projects.find((x) => x._id === key);
+  return p ? lineProjectParam(p) : key;
+};
 
 /**
  * The selected line: the `?project=` the URL names, else the project of the
@@ -36,7 +39,8 @@ export function useLineProject(rollup: RollupRow[], projects: LineProject[]) {
     params.set("project", paramOf(next, projects));
     router.replace(`${pathname ?? "/line"}?${params.toString()}`, { scroll: false });
   }, [router, pathname, search, projects]);
-  return { key, select, href: `${pathname ?? "/line"}?project=${encodeURIComponent(paramOf(key, projects))}` };
+  const param = paramOf(key, projects);
+  return { key, select, param, href: `${pathname ?? "/line"}?project=${encodeURIComponent(param)}` };
 }
 
 /** The order the switcher and its keys walk: the roll-up, then each line. */

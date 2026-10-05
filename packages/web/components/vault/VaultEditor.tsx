@@ -27,6 +27,7 @@
 import { useCallback, useRef, useState, type MutableRefObject } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { codeMirrorUndoGuard } from "./codeMirrorUndo";
 import { Compartment, EditorState, type Extension } from "@codemirror/state";
 import {
   EditorView,
@@ -566,12 +567,15 @@ export function VaultEditor({
     const doc = sepRef.current === "\r\n" ? initial.split("\r\n").join("\n") : initial;
     setWords(parseNote(initial).wordCount);
 
+    // The app's undo chord asks this editor's own history (codeMirrorUndo.ts).
+    const undoGuard = codeMirrorUndoGuard();
     const view = new EditorView({
       parent: host,
       state: EditorState.create({
         doc,
         extensions: [
           history(),
+          undoGuard.extension,
           drawSelection(),
           dropCursor(),
           highlightSpecialChars(),
@@ -645,6 +649,7 @@ export function VaultEditor({
     // of the clean state instead of registering as an unsaved edit.
     savedRef.current = view.state.doc.toString();
     baseEtagRef.current = useVaultStore.getState().bodies[path]?.etag ?? "";
+    const unregisterHistory = undoGuard.register(view);
     view.focus();
 
     const stopTheme = observeTheme(() =>
@@ -653,6 +658,7 @@ export function VaultEditor({
 
     return () => {
       stopTheme();
+      unregisterHistory();
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = null;
       // Leaving the editor inside the autosave window must not drop the edit —
