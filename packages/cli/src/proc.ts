@@ -179,11 +179,16 @@ export function findOnPath(
 
 /** PATH as a login shell would have it. Agents and the daemon often start
  *  with a bare PATH that lacks Homebrew, so a tool installed there would read
- *  as missing. */
+ *  as missing. `~/.local/bin` is in the list because it is where an installer
+ *  that needs no admin rights puts its binary (herdr's does, and so does any
+ *  `pip --user`), which is exactly the machine whose Homebrew is unwritable.
+ *  The real PATH comes first, so a tool found today keeps the same hit. */
 export const TOOL_PATH =
   process.platform === "win32"
     ? process.env.PATH ?? process.env.Path ?? ""
-    : [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"].filter(Boolean).join(nodePath.delimiter);
+    : [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", process.env.HOME && nodePath.join(process.env.HOME, ".local/bin")]
+        .filter(Boolean)
+        .join(nodePath.delimiter);
 
 /** How to name a package manager in a command a person will paste: by name
  *  when their PATH has it, by absolute path when only the login shell's does
@@ -238,6 +243,14 @@ export function installHintFor(pkg: string, opts: { winget?: string } = {}): str
  * for what was really "the aws CLI is not installed". Keep the non-frame
  * lines, from the top.
  */
+/**
+ * The last meaningful line of a child's error output: where a failing command
+ * names its cause. A Bun crash ends with its version banner, so that is skipped.
+ */
+export function lastErrorLine(text: string | undefined | null): string {
+  return (text ?? "").split("\n").map((l) => l.trim()).filter((l) => l && !/^Bun v\d\S* \(/.test(l)).pop() ?? "";
+}
+
 export function childErrorDetail(stderr: string, stdout = "", maxLen = 500): string {
   return (stderr || stdout || "")
     .split("\n")

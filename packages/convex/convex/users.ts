@@ -4,22 +4,22 @@ import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { wakeDevicesFor } from "./cloud";
 import { internal } from "./_generated/api";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { paginationOptsValidator } from "convex/server";
 import type { PaginationOptions, PaginationResult, RegisteredQuery } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
-import type { QueryCtx } from "./_generated/server";
-import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots } from "./devices";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevice } from "./devices";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
-import { fromConvexAgentType, AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
+import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
 import { normalizeTimezone } from "./lib/teamDay";
 import { startedBefore } from "./pathStats";
 import { verifyApiToken } from "./apiTokens";
-import { hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
+import { findSessionCommandByRequest, hasRecentPendingDaemonCommand, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { canAccessTask, canAccessDoc, patchConversationVisibility } from "./lib/access";
@@ -1301,7 +1301,7 @@ export const updateDefaultModel = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    if (!(args.agent in AGENT_CLIENTS)) throw new Error(`Unknown agent client: ${args.agent}`);
+    if (!(args.agent in LOCAL_AGENT_CLIENTS)) throw new Error(`Unknown agent client: ${args.agent}`);
     if (args.model !== null) {
       const opt = findModelOption(args.agent, args.model);
       // Launchability is the bar: a default the daemon can't put on the launch
@@ -4324,7 +4324,7 @@ export const setPinnedAgents = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const unknown = args.agents.filter((id) => !(id in AGENT_CLIENTS));
+    const unknown = args.agents.filter((id) => !(id in LOCAL_AGENT_CLIENTS));
     if (unknown.length) throw new Error(`Unknown agent client: ${unknown.join(", ")}`);
     await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)] });
   },
@@ -4419,22 +4419,56 @@ export const sendConfigCommand = mutation({
       v.literal("config_read"),
       v.literal("config_write"),
       v.literal("config_create"),
-      v.literal("config_delete")
+      v.literal("config_delete"),
+      v.literal("line_profile_edit")
     ),
     args_json: v.optional(v.string()),
+    // The one machine that should answer (a project's file lives on the
+    // device that published its profile). Unset broadcasts, as before.
+    target_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const commandId = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: args.command,
-      args: args.args_json,
-      created_at: Date.now(),
-    });
-    return { command_id: commandId };
+    return { command_id: await enqueueConfigCommand(ctx, userId, args.command, args.args_json, args.target_device_id) };
   },
 });
+
+/**
+ * A config command for the viewer's own daemon. A target names one of the
+ * viewer's machines (the only daemons that run their commands); unset
+ * broadcasts. Shared by sendConfigCommand and dispatch's editLineProfile,
+ * whose request id lets the web's sessionCommands feed settle the edit.
+ */
+export async function enqueueConfigCommand(
+  ctx: Pick<MutationCtx, "db">,
+  userId: Id<"users">,
+  command: "config_list" | "config_read" | "config_write" | "config_create" | "config_delete" | "line_profile_edit",
+  argsJson: string | undefined,
+  targetDeviceId?: string,
+  requestId?: string,
+): Promise<Id<"daemon_commands">> {
+  if (targetDeviceId && !(await ownDevice(ctx, userId, targetDeviceId))) {
+    throw new ConvexError("That machine is not yours: only its owner can send it commands");
+  }
+  // A store action's request id binds its sessionCommands row to this command;
+  // an outbox retry of the same request answers the command already queued.
+  if (requestId !== undefined) {
+    const existing = await findSessionCommandByRequest(ctx, userId, requestId);
+    if (existing) {
+      if (existing.command !== command) throw new ConvexError("Request ID is already bound to a different command");
+      return existing._id;
+    }
+  }
+  return await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command,
+    args: argsJson,
+    created_at: Date.now(),
+    ...(targetDeviceId ? { target_device_id: targetDeviceId } : {}),
+    ...(requestId !== undefined ? { request_id: requestId } : {}),
+  });
+}
 
 export const getCommandResult = query({
   args: {

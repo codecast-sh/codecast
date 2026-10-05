@@ -27,15 +27,16 @@ import {
   type LayerZeroStory,
   type ShipEvent,
   type VisibleConversation,
+  clipToSentence,
 } from "@codecast/shared/changes";
-import { teamVisibleInputs, type ChangesInputMode } from "./lib/changesAccess";
+import { teamVisibleInputs, teamVisibleRecentInsights, type ChangesInputMode } from "./lib/changesAccess";
 import { teamDayBounds } from "./lib/teamDay";
 import { SHIP_LOOKAHEAD_DAYS } from "./lib/changesDirty";
 import { isHarnessScratch, normalizeRepository } from "./lib/gitRefs";
 import { canonicalCommandArguments } from "./localFirstCommands";
 
 /** Bumped by the story prompt (changesProse.ts) so every story's inputs_hash moves and prose regenerates. */
-export const STORY_PROMPT_VERSION = "story-3";
+export const STORY_PROMPT_VERSION = "story-7";
 
 /** Commits per page (spec 7.1 step 1). A commit someone opened on /commit carries its patches (up to
  *  1 MiB a row), so a page also stops at a byte budget well under the 16 MiB read cap. */
@@ -47,6 +48,20 @@ const BODY_CHARS = 600;
 const GATE_CHUNK = 50;
 /** Pull request rows carry files and patches (up to 1 MB each), so they are read a few at a time. */
 const PR_CHUNK = 8;
+/** Commits one author lookup reads. */
+const AUTHOR_CHUNK = 40;
+/** How long before a commit a session's edits to its files make it an author. */
+const AUTHOR_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+/** How long after a commit a session's insight may be written: a session's insight is rewritten as it goes on. */
+const AUTHOR_LOOKAHEAD_MS = 3 * 24 * 60 * 60 * 1000;
+/** Checkouts searched per commit, those with the most sessions at work around it first. */
+const AUTHOR_ROOTS = 6;
+/** Sessions an author lookup weighs: a past day's, through its lookahead. */
+const AUTHOR_CANDIDATES = 400;
+/** Authors kept per commit, most files first. */
+const AUTHORS_PER_COMMIT = 2;
+/** Sessions a story names: its own and its commits' authors together. */
+const STORY_SESSIONS = 4;
 /** external_events rows per page. */
 const EVENT_PAGE = 500;
 /** A release the morning after still says what carried the day's stories. */
@@ -82,7 +97,7 @@ export function projectCommit(c: Doc<"commits">): ChangeCommit {
   return {
     sha: c.sha,
     subject,
-    ...(body ? { body: body.slice(0, BODY_CHARS) } : {}),
+    ...(body ? { body: clipToSentence(body, BODY_CHARS) } : {}),
     author_name: c.author_name,
     author_email: c.author_email,
     timestamp: c.timestamp,
@@ -128,6 +143,66 @@ export type GateRow = {
   pr_ids: Id<"pull_requests">[];
 };
 
+/**
+ * The sessions that wrote each commit, by its files: a team-visible session
+ * that edited one of the commit's paths in the two days before it. In a
+ * checkout where one session commits everyone's work, the trailer names the
+ * committer, and the story's why, turns and screenshots live in the sessions
+ * that typed the change. Commits carry repository-relative paths and edits
+ * absolute ones, so each candidate's checkout root joins them. Reads paths,
+ * times and session ids only, never an edit's text.
+ */
+export const readAuthors = internalQuery({
+  args: {
+    team_id: v.id("teams"),
+    repository: v.string(),
+    since: v.number(),
+    until: v.number(),
+    commits: v.array(v.object({ sha: v.string(), timestamp: v.number(), paths: v.array(v.string()) })),
+  },
+  handler: async (ctx, args): Promise<Record<string, Id<"conversations">[]>> => {
+    const repository = normalizeRepository(args.repository);
+    const candidates = (await teamVisibleRecentInsights(ctx, args.team_id, args.since, AUTHOR_CANDIDATES, args.until)).filter(
+      (c) => !!c.checkout_root && (!c.repository || normalizeRepository(c.repository) === repository),
+    );
+    const known = new Set(candidates.map((c) => String(c.conversation_id)));
+    const out: Record<string, Id<"conversations">[]> = {};
+    for (const c of args.commits) {
+      // The checkouts of sessions at work around the commit, busiest first.
+      const busy = new Map<string, number>();
+      for (const s of candidates) {
+        if (s.started_at > c.timestamp || s.insight.generated_at < c.timestamp - AUTHOR_LOOKBACK_MS) continue;
+        const root = s.checkout_root!.replace(/\/+$/, "");
+        busy.set(root, (busy.get(root) ?? 0) + 1);
+      }
+      const roots = [...busy].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, AUTHOR_ROOTS).map(([root]) => root);
+      const score = new Map<string, { id: Id<"conversations">; files: number }>();
+      for (const path of c.paths) {
+        const hit = new Set<string>();
+        for (const root of roots) {
+          const rows: Doc<"file_changes">[] = await ctx.db
+            .query("file_changes")
+            .withIndex("by_file_path", (q) => q.eq("file_path", `${root}/${path}`))
+            .order("desc")
+            .take(30);
+          for (const row of rows) {
+            const id = String(row.conversation_id);
+            if (row.timestamp > c.timestamp || row.timestamp < c.timestamp - AUTHOR_LOOKBACK_MS) continue;
+            if (row.change_type === "commit" || row.change_type === "delete" || !known.has(id) || hit.has(id)) continue;
+            hit.add(id);
+            const s = score.get(id) ?? { id: row.conversation_id, files: 0 };
+            s.files += 1;
+            score.set(id, s);
+          }
+        }
+      }
+      const top = [...score.values()].sort((a, b) => b.files - a.files || String(a.id).localeCompare(String(b.id))).slice(0, AUTHORS_PER_COMMIT);
+      if (top.length) out[c.sha] = top.map((t) => t.id);
+    }
+    return out;
+  },
+});
+
 /** The sessions among `conversation_ids` the team may draw on, through teamVisibleInputs(). */
 export const readVisible = internalQuery({
   args: { team_id: v.id("teams"), conversation_ids: v.array(v.id("conversations")) },
@@ -164,6 +239,7 @@ export const readPrs = internalQuery({
       .filter((pr): pr is Doc<"pull_requests"> => !!pr && String(pr.team_id) === String(args.team_id) && normalizeRepository(pr.repository) === repository)
       .map((pr) => ({
         id: String(pr._id),
+        number: pr.number,
         updated_at: pr.updated_at,
         conversation_ids: pr.linked_session_ids.map(String),
         shas: [...new Set([...(pr.commits ?? []).map((c) => c.sha), ...(pr.head_sha ? [pr.head_sha] : [])])],
@@ -509,7 +585,19 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
   const commits = await readAllCommits(ctx, window);
   const { ships, merged } = await readShips(ctx, window);
 
-  const convIds = [...new Set(commits.map((c) => c.conversation_id).filter((id): id is string => !!id))] as Id<"conversations">[];
+  // Who wrote each main-branch commit, beside the session its trailer names.
+  const authors: Record<string, Id<"conversations">[]> = {};
+  const authored = commits.filter((c) => !c.branch || c.branch === day.default_branch || c.branch === "main" || c.branch === "master");
+  for (const batch of chunks(authored, AUTHOR_CHUNK)) {
+    Object.assign(authors, await ctx.runQuery(internal.changes.readAuthors, {
+      team_id, repository, since: day.start - AUTHOR_LOOKBACK_MS, until: day.end + AUTHOR_LOOKAHEAD_MS,
+      commits: batch.map((c) => ({ sha: c.sha, timestamp: c.timestamp, paths: c.top_paths ?? [] })),
+    }));
+  }
+  const convIds = [...new Set([
+    ...commits.map((c) => c.conversation_id).filter((id): id is string => !!id),
+    ...Object.values(authors).flat().map(String),
+  ])] as Id<"conversations">[];
   const gate: GateRow[] = [];
   for (const ids of chunks(convIds, GATE_CHUNK)) {
     gate.push(...(await ctx.runQuery(internal.changes.readVisible, { team_id, conversation_ids: ids })));
@@ -542,7 +630,10 @@ export async function runBuildDay(ctx: ActionCtx, args: { team_id: Id<"teams">; 
   });
 
   const writes: StoryWrite[] = result.stories.map((s) => {
-    const rows = s.conversation_ids.map((id) => gateById.get(id)!);
+    // The story's own sessions, then its commits' authors: grouping stays on
+    // the trailers, and the authors only add what the story can tell.
+    const named = [...new Set([...s.conversation_ids, ...s.commit_shas.flatMap((sha) => (authors[sha] ?? []).map(String))])];
+    const rows = named.filter((id) => gateById.has(id)).slice(0, STORY_SESSIONS).map((id) => gateById.get(id)!);
     const storyPrs = s.pr_ids.map((id) => prById.get(id)).filter((p): p is PrRow => !!p);
     return {
       story_key: s.story_key,

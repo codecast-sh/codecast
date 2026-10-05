@@ -10,7 +10,6 @@ import type {
   EpochResponse,
   FreezeInfo,
   FreezeResponse,
-  LedgerCell,
   LedgerRow,
   MomentMessage,
   MovedEvent,
@@ -22,6 +21,7 @@ import type {
   SurfaceOverview,
   SurfaceResponse,
 } from '@codecast/shared/contracts/evalsApi';
+import { flipCounts } from '@codecast/shared/contracts/evalsApi';
 import type { ConvoMessage, Freeze } from '@platform/evals';
 import { diffRuns } from '@platform/evals/render';
 
@@ -29,7 +29,7 @@ import { sessionsDir } from '../../../web/store/__tests__/sim/history';
 import { codecastFreezeStore } from '../adapters/freezes';
 import { PASS_AT } from '../adapters/judge';
 import { describeFreeze, freezeMeta, loadLabel, loadSnapshot, productionReplyOf, type LoadedSnapshot } from '../adapters/resolver';
-import { batchSet, batchStats, batchVerdict, footingChange, footingOf, majority, scoreOrZero } from '../commands/verdict';
+import { batchFlips, batchSet, batchStats, batchVerdict, majority, scoreOrZero } from '../commands/verdict';
 import { attribute } from '../history/attribution';
 import { epochPromptDiffs, epochsOf, folderPromptReader, footingMarkers, promptPairs, timeline } from '../history/epochs';
 import { flipExamples, flipsBetween, gradedSet } from '../history/flips';
@@ -154,8 +154,25 @@ export const stalenessWords = kept(askWorker, 30_000);
 
 // ── Overview ───────────────────────────────────────────────────────────────
 
-/** A batch's reps as the strip's faint dots. */
-const dotsOf = (set: RunRow[], batch: string) => set.map((r) => ({ batch, at: r.stamp, score: r.score, status: r.status }));
+/** How finely the wall's strip can tell two scores apart: its plot is about 44 px tall, so a fortieth of the axis is about a pixel. */
+const DOT_STEPS = 40;
+
+/**
+ * A batch's reps as the strip's faint dots, at the strip's own resolution:
+ * reps of one status within a fortieth of the axis draw as one dot, so one is
+ * sent. Unscored and dry reps draw nothing and are left out. The surface page
+ * reads every rep from GET /surface.
+ */
+function dotsOf(set: RunRow[], batch: string): SurfaceOverview['dots'] {
+  const seen = new Set<string>();
+  return set.flatMap((r) => {
+    if (r.score === null || r.status === 'dry') return [];
+    const key = `${r.status}:${Math.round(r.score * DOT_STEPS)}`;
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [{ batch, at: r.stamp, score: r.score, status: r.status }];
+  });
+}
 
 /** How many of a surface's newest graded batches report their flips on the home wall. */
 const FLIP_BATCHES = 4;
@@ -177,14 +194,15 @@ function surfaceOverview(meta: SurfaceMeta, rows: RunRow[], cadence: string, now
   const newest = line.at(-1);
   // Each batch weighed once: the latest batch is usually among the newest graded ones the flips read.
   const verdicts = new Map<string, BatchVerdict>();
-  const verdictOf = (batch: string) => verdicts.get(batch) ?? verdicts.set(batch, batchVerdict(meta, batch, mine, { earlierOnly: true })).get(batch)!;
+  const flapping = flipHistory(kept.map((k) => k.batch), mine);
+  const verdictOf = (batch: string) => verdicts.get(batch) ?? verdicts.set(batch, withFlipHistory(batchVerdict(meta, batch, mine), flapping, mine)).get(batch)!;
   const moved: MovedEvent[] = [
     ...epochs.slice(1).map((e): MovedEvent => ({ at: e.firstBatchAt, surface: meta.id, kind: 'epoch', epoch: e.n, batch: e.firstBatch, changedFreezes: e.changedFreezes.length })),
     ...footing.map((m): MovedEvent => ({ at: m.batchAt, surface: meta.id, kind: 'footing', batch: m.batch, change: m.kind, from: m.from, to: m.to })),
     ...graded.slice(-FLIP_BATCHES).flatMap(({ batch, at }): MovedEvent[] => {
       const flips = verdictOf(batch).flips;
-      const broke = flips.filter((f) => f.direction === 'broke').length;
-      return flips.length ? [{ at, surface: meta.id, kind: 'flips', batch, broke, fixed: flips.length - broke }] : [];
+      const { broke, fixed, noise } = flipCounts(flips);
+      return flips.length ? [{ at, surface: meta.id, kind: 'flips', batch, broke, fixed, noise: noise.length }] : [];
     }),
   ];
   return {
@@ -202,6 +220,38 @@ function surfaceOverview(meta: SurfaceMeta, rows: RunRow[], cadence: string, now
       landing: !!newest && newest.reps.some((r) => r.status === 'unscored' && now - Date.parse(r.stamp) < LANDING_MS),
     },
     moved,
+  };
+}
+
+/**
+ * How often each freeze flipped across a window's graded batches (bisect
+ * probes left out, as the ledger leaves them), and in how many it ran: the
+ * same flips the surface's ledger counts, so the wall can say a flip is a
+ * freeze that flaps.
+ */
+function flipHistory(batches: string[], mine: RunRow[]): Map<string, { flips: number; batches: number }> {
+  const out = new Map<string, { flips: number; batches: number }>();
+  const at = (id: string) => out.get(id) ?? out.set(id, { flips: 0, batches: 0 }).get(id)!;
+  for (const batch of batches) {
+    const set = gradedSet(mine, batch);
+    if (!set.length || set.every((r) => r.cadence === 'bisect')) continue;
+    for (const id of new Set(set.map((r) => r.freezeId))) at(id).batches += 1;
+    for (const f of batchFlips(batch, mine)) at(f.freezeId).flips += 1;
+  }
+  return out;
+}
+
+/** A verdict's flips with each freeze's flip history and whether both sides rendered one prompt. */
+function withFlipHistory(v: BatchVerdict, history: Map<string, { flips: number; batches: number }>, mine: RunRow[]): BatchVerdict {
+  if (!v.flips.length) return v;
+  const sha = new Map(mine.map((r) => [r.id, r.promptSha]));
+  const prompts = (ids: string[]) => new Set(ids.map((id) => sha.get(id) ?? null));
+  return {
+    ...v,
+    flips: v.flips.map((f) => {
+      const both = new Set([...prompts(f.before), ...prompts(f.after)]);
+      return { ...f, history: history.get(f.freezeId) ?? { flips: 0, batches: 0 }, samePrompt: f.before.length > 0 && f.after.length > 0 && both.size === 1 && !both.has(null) };
+    }),
   };
 }
 
@@ -259,7 +309,8 @@ export async function overview(rows: RunRow[], cadence = 'all', words = stalenes
   const sim = simFailureEvent(sims);
   const moved = [
     ...core.surfaces.flatMap((b) => b.moved),
-    ...bisects.filter((b) => b.finishedAt).map((b): MovedEvent => ({ at: b.finishedAt!, surface: b.surface, kind: 'bisect', id: b.id, outcome: b.outcome })),
+    // A bisect that ended with no answer and nothing spent ran nothing: it moved nothing either.
+    ...bisects.filter((b) => b.finishedAt && (b.outcome !== null || b.spentUsd > 0)).map((b): MovedEvent => ({ at: b.finishedAt!, surface: b.surface, kind: 'bisect', id: b.id, outcome: b.outcome })),
     ...(sim ? [sim] : []),
   ]
     .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
@@ -286,16 +337,18 @@ export interface SurfaceFilter {
 }
 
 /**
- * The freeze ledger: one row per freeze, one well per batch. A well's flip
- * compares its majority with the same freeze's previous well on the same
- * footing, so a model or judge change never reads as a flip.
+ * The freeze ledger: one row per freeze, one well per batch. A well's flip is
+ * the flip its batch's verdict reports for that freeze (batchFlips over the
+ * surface's whole history), so the plate, `./evals check` and the wall mark
+ * the same flips: no bisect probe or batch on another footing is ever the
+ * well a flip is weighed against.
  */
-export function ledgerOf(rows: RunRow[], batches: string[]): LedgerRow[] {
+export function ledgerOf(rows: RunRow[], batches: string[], history: RunRow[]): LedgerRow[] {
   const byFreeze = new Map<string, LedgerRow>();
-  const prev = new Map<string, { majority: boolean; footing: ReturnType<typeof footingOf> }>();
   for (const batch of batches) {
     const set = gradedSet(rows, batch);
     const m = majority(set);
+    const flips = new Map(batchFlips(batch, history).map((f) => [f.freezeId, f.direction]));
     for (const freezeId of new Set(set.map((r) => r.freezeId))) {
       const reps = set.filter((r) => r.freezeId === freezeId);
       const first = reps[0]!;
@@ -304,14 +357,9 @@ export function ledgerOf(rows: RunRow[], batches: string[]): LedgerRow[] {
         row = { freezeId, name: first.freezeName, visibility: first.visibility, flips: 0, cells: {} };
         byFreeze.set(freezeId, row);
       }
-      const now = m.get(freezeId) ?? null;
-      const footing = footingOf(first);
-      const before = prev.get(freezeId);
-      const flip = now !== null && before && !footingChange(before.footing, footing) && before.majority !== now ? (now ? 'fixed' : 'broke') : null;
+      const flip = flips.get(freezeId) ?? null;
       if (flip) row.flips += 1;
-      const cell: LedgerCell = { reps: reps.length, passed: reps.filter((r) => r.status === 'pass').length, mean: reps.reduce((s, r) => s + scoreOrZero(r), 0) / reps.length, majority: now, flip };
-      row.cells[batch] = cell;
-      if (now !== null) prev.set(freezeId, { majority: now, footing });
+      row.cells[batch] = { reps: reps.length, passed: reps.filter((r) => r.status === 'pass').length, mean: reps.reduce((s, r) => s + scoreOrZero(r), 0) / reps.length, majority: m.get(freezeId) ?? null, flip };
     }
   }
   return [...byFreeze.values()].sort((a, b) => b.flips - a.flips || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -349,9 +397,9 @@ export async function surfaceView(rows: RunRow[], id: string, f: SurfaceFilter):
     batches,
     epochs: epochsOf(mine, id),
     footing: footingMarkers(mine),
-    ledger: ledgerOf(shown, names),
+    ledger: ledgerOf(shown, names, mine),
     commits: first ? commitsTouching(id, new Date(Date.parse(first) - DAY).toISOString(), last) : [],
-    latest: newest ? batchVerdict(meta, newest, mine, { earlierOnly: true }) : null,
+    latest: newest ? withFlipHistory(batchVerdict(meta, newest, mine), flipHistory(names, mine), mine) : null,
   };
 }
 
@@ -523,14 +571,14 @@ export function epochView(rows: RunRow[], surface: string, n: number): EpochResp
 }
 
 /** Tier 0 attribution, kept per index version: it reads only records, and its flip examples read every flipped rep's folder. */
-export const attributionView = (rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits = false): Promise<Attribution> =>
-  onRows(rows, `attribution|${surface}|${good ?? ''}|${bad ?? ''}|${allCommits ? 'all' : 'declared'}`, () => buildAttribution(rows, surface, good, bad, allCommits));
+export const attributionView = (rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits = false, freeze?: string): Promise<Attribution> =>
+  onRows(rows, `attribution|${surface}|${good ?? ''}|${bad ?? ''}|${allCommits ? 'all' : 'declared'}|${freeze ?? ''}`, () => buildAttribution(rows, surface, good, bad, allCommits, freeze));
 
-async function buildAttribution(rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits: boolean): Promise<Attribution> {
+async function buildAttribution(rows: RunRow[], surface: string, good: string | undefined, bad: string | undefined, allCommits: boolean, freeze: string | undefined): Promise<Attribution> {
   metaOf(surface);
   let a: Attribution;
   try {
-    a = attribute({ surface, rows: rowsOf(rows, surface), good: good || undefined, bad: bad || undefined, allCommits });
+    a = attribute({ surface, rows: rowsOf(rows, surface), good: good || undefined, bad: bad || undefined, allCommits, ...(freeze ? { freezes: [freeze] } : {}) });
   } catch (e) {
     throw new BadRequest(e instanceof Error ? e.message : String(e));
   }

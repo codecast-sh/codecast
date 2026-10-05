@@ -13,6 +13,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { hasOpenModal } from "../../shortcuts";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
 // A stack as a checklist (D5): the members in the stack's order, one of them
 // current. Keys 1 to 9 answer the current member (its card claims them),
@@ -44,8 +45,7 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
     if (!keys || !paneActive) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable || t.tagName === "SELECT")) return;
+      if (keyBelongsElsewhere(e.target)) return;
       if (e.key === "n" || e.key === "ArrowRight") { e.preventDefault(); move(1); }
       else if (e.key === "p" || e.key === "ArrowLeft") { e.preventDefault(); move(-1); }
     };

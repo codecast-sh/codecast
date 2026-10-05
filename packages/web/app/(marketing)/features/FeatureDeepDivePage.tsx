@@ -3,14 +3,14 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
-import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { useRouteMeta } from "../pageMeta";
 import { SOL } from "../blog/blogChrome";
 import { featureHref, getFeatureDeepDive } from "./catalog";
 import { FEATURE_PAGES } from "./pages";
 
 /**
- * /features/<slug>: the shared shell (meta, nav, footer) around one deep dive.
+ * /features/<slug>: the shared shell (meta, nav) around one deep dive; the
+ * marketing layout adds the footer.
  * The body is the page's own component, so each feature can look like itself.
  */
 export default function FeatureDeepDivePage() {
@@ -19,7 +19,7 @@ export default function FeatureDeepDivePage() {
   useRouteMeta(feature ? featureHref(feature.slug) : "/features");
   const Body = FEATURE_PAGES[slug];
   return (
-    <div className="min-h-screen w-full overflow-x-hidden">
+    <div className="min-h-screen w-full overflow-x-clip">
       <MarketingNav active="/features" />
       {feature && Body ? (
         <Body />
@@ -29,7 +29,6 @@ export default function FeatureDeepDivePage() {
           <Link href="/features" className="text-sm underline" style={{ color: SOL.blue }}>All features</Link>
         </main>
       )}
-      <MarketingFooter />
     </div>
   );
 }

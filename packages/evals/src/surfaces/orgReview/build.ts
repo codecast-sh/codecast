@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { buildOrgAnalyzerPrompt, summarizeInputs } from '../../../../cli/src/orgInitRun';
 import { REPO_ROOT } from '../../paths';
-import { recordSentence } from '../../served';
+import { recordSentence, type Cut } from '../../served';
 
 // One org-review sample's briefing (the port of ~/.cache/org-eval/bin/mkrun.ts):
 // the analyzer prompt built from the working tree (the prompt under test) over
@@ -18,11 +18,12 @@ export type OrgMode = 'init' | 'review';
 export const CHECK_SCRIPT = join(REPO_ROOT, 'packages', 'evals', 'src', 'surfaces', 'orgReview', 'checkProposal.ts');
 
 /** What to write instead of posting. The text is mkrun's, with its two paths pointed here; `frozen` is what the served dir freezes. */
-export function harnessNote(proposalsDir: string, frozen: string[]): string {
+export function harnessNote(proposalsDir: string, frozen: string[], cut?: Cut | null): string {
+  const history = cut ? ` Git history in every repository stands at ${cut.at}, when the record was saved: \`git log\`, \`git show\` and \`git grep\` answer from it (name \`origin/main\` to read a file), and no later commit exists.` : '';
   return `
 ## Dry run (harness note)
 
-This run grades the briefing, so nothing is posted. ${recordSentence(frozen)} Do everything else the briefing asks, the records included. Where you would post a proposal, write its spec to \`${proposalsDir}/op-<n>.json\` (n counting from 1, across every turn) instead of running \`cast org propose\`, check it with \`bun ${CHECK_SCRIPT} <that file>\` until it prints \`"errors": []\`, and write \`op-<n>\` where its short id would go. Run every command in the foreground and wait for it; never start a command in the background, because a turn that ends waiting on one ends this run with no message. Each of your turns ends with the message you would send the person, verbatim and nothing else, with any card lines where they would go; the person's reply, when one comes, arrives as the next message.
+This run grades the briefing, so nothing is posted. ${recordSentence(frozen)}${history} Do everything else the briefing asks, the records included. Where you would post a proposal, write its spec to \`${proposalsDir}/op-<n>.json\` (n counting from 1, across every turn) instead of running \`cast org propose\`, check it with \`bun ${CHECK_SCRIPT} <that file>\` until it prints \`"errors": []\`, and write \`op-<n>\` where its short id would go. Run every command in the foreground and wait for it; never start a command in the background, because a turn that ends waiting on one ends this run with no message. Each of your turns ends with the message you would send the person, verbatim and nothing else, with any card lines where they would go; the person's reply, when one comes, arrives as the next message.
 `;
 }
 
@@ -47,7 +48,7 @@ export interface OrgBriefing {
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-export function buildBriefing(o: { inputsText: string; workspace: string; served: string; proposalsDir: string; frozen: string[]; mode?: OrgMode; now?: Date }): OrgBriefing {
+export function buildBriefing(o: { inputsText: string; workspace: string; served: string; proposalsDir: string; frozen: string[]; cut?: Cut | null; mode?: OrgMode; now?: Date }): OrgBriefing {
   const inputs = JSON.parse(o.inputsText) as { workspace?: { name?: string } };
   const mode = o.mode ?? 'review';
   const name = inputs.workspace?.name ?? o.workspace;
@@ -55,7 +56,7 @@ export function buildBriefing(o: { inputsText: string; workspace: string; served
   const promptSha = sha(prompt);
   return {
     prompt,
-    briefing: prompt + harnessNote(o.proposalsDir, o.frozen),
+    briefing: prompt + harnessNote(o.proposalsDir, o.frozen, o.cut),
     hashes: { inputs: sha(o.inputsText).slice(0, 12), prompt: promptSha.slice(0, 12), served: o.served, mode, built_at: (o.now ?? new Date()).toISOString(), workspace: o.workspace, promptSha },
   };
 }

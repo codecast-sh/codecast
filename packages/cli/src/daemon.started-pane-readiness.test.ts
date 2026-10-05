@@ -195,6 +195,12 @@ describe("classifyStartedPane", () => {
     expect(classifyStartedPane(LAUNCH_ECHO + "\nbash: claude: command not found\n", claudePrompt)).toBe("fatal");
     expect(classifyStartedPane("zsh: command not found: compdef\n" + LAUNCH_ECHO + "\n", claudePrompt)).toBe("booting");
   });
+
+  test("rc noise between the typeahead echo and readline's re-echo is not a launch error", () => {
+    const pane = `${LAUNCH_ECHO}\n-bash: /opt/homebrew/bin/brew: No such file or directory\n~/work/app (main):${LAUNCH_ECHO}\n\n Quick safety check: Is this a project you created or one you trust?\n ❯ No, exit\n`;
+    expect(classifyStartedPane(pane, claudePrompt)).toBe("trust");
+    expect(classifyStartedPane(`${LAUNCH_ECHO}\n-bash: x: No such file or directory\n~ $ ${LAUNCH_ECHO}\nbash: claude: command not found\n`, claudePrompt)).toBe("fatal");
+  });
 });
 
 describe("discovery binds the assigned session id at prompt readiness", () => {

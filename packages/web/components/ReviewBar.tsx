@@ -12,6 +12,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { useReviewComposer } from "./reviewContext";
 import { cancelReview } from "../lib/reviewActions";
 import { sortPendingComments } from "../lib/quoteFormat";
+import { PageFavicon } from "./PublishedPageEmbed";
 import "./ReviewNavigation.css";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -67,7 +68,7 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
               <button
                 type="button"
                 className="cc-review-tray-item-main cc-review-tray-jump"
-                title={c.image ? "Jump to the message with this image" : "Jump to quoted passage"}
+                title={c.image ? "Jump to the message with this image" : c.page ? "Jump to the message with this page" : "Jump to quoted passage"}
                 disabled={!composer?.jumpToComment}
                 onClick={() => composer?.jumpToComment?.(c)}
               >
@@ -81,7 +82,9 @@ export function ReviewBar({ conversationId }: { conversationId: string }) {
                         )}
                       </span>
                     )
-                    : <span className="cc-comment-quote-mark">❝</span>}
+                    : c.page
+                      ? <PageFavicon className="mr-1.5 h-3.5 w-3.5 align-[-2px]" />
+                      : <span className="cc-comment-quote-mark">❝</span>}
                   {(c.quote || "").replace(/\s+/g, " ").trim().slice(0, 140)}
                 </span>
                 {c.body ? <span className="cc-review-tray-note block">{c.body}</span> : null}

@@ -105,6 +105,39 @@ describe("parsePiSessionFile — active-branch resolution (synthetic /tree branc
   });
 });
 
+describe("parsePiSessionFile — per-message usage", () => {
+  const messages = parsePiSessionFile(fixture("usage.jsonl"));
+  const assistants = messages.filter((m) => m.role === "assistant" && !m.toolResults);
+
+  test("maps pi's input/output/cacheRead/cacheWrite onto the Claude usage shape", () => {
+    expect(assistants[0].usage).toEqual({
+      input_tokens: 3,
+      output_tokens: 11,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 9639,
+    });
+    expect(assistants[1].usage).toEqual({
+      input_tokens: 3,
+      output_tokens: 289,
+      cache_read_input_tokens: 9639,
+      cache_creation_input_tokens: 20,
+    });
+  });
+
+  test("leaves usage off a turn that has none, and off tool results", () => {
+    expect(assistants[2].usage).toBeUndefined();
+    expect(messages.filter((m) => m.toolResults).every((m) => m.usage === undefined)).toBe(true);
+  });
+
+  test("each pi entry is one model call, so no turn id is needed to count it once", () => {
+    expect(assistants.every((m) => m.apiMessageId === undefined)).toBe(true);
+  });
+
+  test("older fixtures with an empty usage block carry no usage", () => {
+    expect(parsePiSessionFile(fixture("linear-bash-tool.jsonl")).every((m) => m.usage === undefined)).toBe(true);
+  });
+});
+
 describe("parsePiSessionFile — degenerate input", () => {
   test("empty content -> []", () => {
     expect(parsePiSessionFile("")).toEqual([]);

@@ -22,7 +22,6 @@ import {
   resolveLocalSession,
   loadRemoteHost,
   performMoveToRemote,
-  verifyRemoteSync,
   type MoveResult,
   type RemoteHost,
   type SyncVerification,
@@ -140,20 +139,14 @@ export function moveNotice(opts: {
 }
 
 /**
- * The `back` direction's verification line.
- *
- * describeVerification is written for the OUTBOUND move, where a dirty
- * destination means the push didn't land cleanly. Coming back, the Mac keeps its
- * uncommitted work — we copy it home rather than committing it there (ct-39063) —
- * so a dirty remote is the expected outcome, not a warning about the machine we
- * just left. What matters here is only that the commits match.
+ * The `back` direction's verification line. Coming home, the host's work is
+ * applied as a change onto this folder as it is now (other sessions may have
+ * edited it, or committed, meanwhile), so the branches are not expected to
+ * match; what the line proves is what came back and whether it overlapped.
  */
-export function describeBackSync(v: SyncVerification, backupRef?: string): string {
-  const saved = backupRef ? `; local tree before the pull saved at ${backupRef}` : "";
-  if (!v.headsMatch) {
-    return `WARNING: this machine is at ${v.localHead.slice(0, 8)} but the Mac is at ${v.remoteHead ? v.remoteHead.slice(0, 8) : "unknown"} on branch ${v.branch} — the pull may be incomplete${saved}`;
-  }
-  return `branch ${v.branch} at ${v.localHead.slice(0, 8)}, matching the Mac, with its uncommitted work restored here as uncommitted${saved}`;
+export function describeBackSync(r: { appliedWork?: boolean; conflicts?: string[] }): string {
+  if (r.conflicts?.length) return `WARNING: the host's changes overlap edits made here meanwhile in ${r.conflicts.join(", ")}; conflict markers are left in place`;
+  return r.appliedWork ? "the host's changes are applied here as uncommitted work, on top of this folder's current state" : "the host made no changes to bring back";
 }
 
 /** Queue the notice onto the conversation's normal delivery rail (it arrives
@@ -240,8 +233,7 @@ export function registerRemoteCommand(program: Command): void {
         console.error(`CONFLICT: ${r.reason}`);
         process.exit(2);
       }
-      console.log(`pulled to ${move.localCwd}`);
-      if (r.backupRef) console.log(`  (local tree before this pull saved at ${r.backupRef})`);
+      console.log(`pulled to ${move.localCwd}: ${describeBackSync(r)}`);
     });
 
   remote
@@ -372,13 +364,10 @@ export function registerRemoteCommand(program: Command): void {
       if (!conv?._id) { console.error(`No conversation for ${sessionId}`); process.exit(1); }
 
       console.log(`bringing ${sessionId} back to local (${move.localCwd})`);
-      console.log("  [1/2] pull transcript + working tree (git ff)");
+      console.log("  [1/2] pull transcript + the host's changes");
       const pr = await pullSession(sessionId, host, move);
       if (!pr.ff) { console.error(`CONFLICT: ${pr.reason}`); process.exit(2); }
-      // After a clean fast-forward local and the Mac sit on the same commit —
-      // verify it. Roles reversed from the outbound move, so the line is too.
-      const verification = verifyRemoteSync(host, move.localCwd, move.remoteCwd);
-      const backLine = describeBackSync(verification, pr.backupRef);
+      const backLine = describeBackSync(pr);
       console.log(`        ${backLine}`);
       console.log("  [2/2] flip ownership back to this device + resume locally");
       await client.mutation(api.devices.moveSessionToDevice, {

@@ -7,9 +7,10 @@
 // wide instead of eight). Roles nest the same way. A stack ends in a cluster
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
-import type { OrgChange, OrgChangeKind, OrgChangeStatus, OrgProposalChange } from "./orgStaffingTypes";
+import { roleWords, type OrgChange, type OrgChangeKind, type OrgChangeStatus, type OrgProposalChange } from "./orgStaffingTypes";
 import { editedOrgChange, isOrgQuietChange, seatSentence, type OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
 import { changeLine, chipLine, roleTenureChip, standingLineOf } from "./orgMeta";
+import type { ZoomLevel } from "./orgZoom";
 
 export type OrgNodeKind = "person" | "role" | "session" | "cluster";
 
@@ -18,12 +19,12 @@ export type OrgNodeKind = "person" | "role" | "session" | "cluster";
 // S5). `ghostsFor` merges them into a copy of the tree (a proposed role is a
 // stub role under its proposed parent; an accepted move or retire is already
 // applied) and hands back, per node id, what the cards paint on top: a ghost
-// stub, a retire overlay, a proposed move, dashed chips. The layout carries
+// stub, a retire overlay, a proposed move, chips. The layout carries
 // those onto its nodes and edges so the canvas needs no second lookup.
 
 /** One change as a card paints it: its id, status and one-line description. */
 export type OrgGhostMeta = { change_id: string; status: OrgChangeStatus; line: string };
-/** A dashed chip on a node: scope, budget, trust, routine, file, projects, a
+/** A chip on a node: scope, budget, trust, routine, file, projects, a
  *  project charter on its owner role, a move's own line, and any change whose
  *  handle nothing live answers to (`unresolved`, drawn as a warning on the
  *  viewer's own card so it can still be skipped or edited). `chip` is the
@@ -48,12 +49,13 @@ export const EMPTY_GHOSTS: Readonly<Omit<OrgGhostPlan, "merged">> = { stubs: {},
 type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhostMove; chips?: OrgGhostChip[] };
 
 export type OrgLayoutNode =
+  // `h` is the card's height at the zoom level the layout was asked for (orgZoom).
   | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
   | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string } } & GhostDecor)
   | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef } & GhostDecor)
   | { id: string; kind: "cluster"; x: number; y: number; w: number; h: number; parent: OrgParentRef; remaining: number; loaded: number; total: number; counts: StateCounts; fullyLoaded: boolean };
 
-/** `ghost`: a dashed edge into a stub, or a proposed move's edge to the new
+/** `ghost`: a proposed edge into a stub, or a proposed move's edge to the new
  *  parent (then `change_id` names the move). `faded`: the old edge of a
  *  proposed move, drawn at 30%. */
 export type OrgLayoutEdge = { id: string; source: string; target: string; kind: "tree" | "stack" | "ghost"; faded?: boolean; change_id?: string;
@@ -81,6 +83,10 @@ export const ORG_SIZES = {
   cluster: { w: 220, h: 58 },
   /** Extra card height when a node carries ghost chips. */
   chipRow: 24,
+  /** A quiet chip's line (OrgNodeCards.GhostChips `quiet`): what a goal card books per change on it. */
+  quietChipRow: 20,
+  /** A card lists this many changes as lines, then one line counting the rest. */
+  quietChipMax: 3,
   /** Extra role card height when its standing agent has a line to show
    *  (StandingLine: 6px margin plus one 10.5px line at 1.5). The card draws
    *  the line on the same predicate (standingLineOf), so the layout and the
@@ -96,6 +102,20 @@ export const ORG_SIZES = {
    *  sentence wraps, so its row is sized from its length (seatRowHeight). */
   seatLine: 14,
   seatChars: 36,
+  /** Close zoom level rows (orgZoom), which the close layout adds to a card:
+   *  a role's charter (two lines) and up to three running sessions, one line each. */
+  charterRows: 32,
+  runningRow: 15,
+  runningMax: 3,
+  /** At close the line under the name (who they are, how many sessions) moves
+   *  to a row of its own, the card's full width, so nothing on it is clipped:
+   *  its first line with the gap above it, each further line, and how many
+   *  characters fit a line (10.5px in 208px). */
+  closeMetaRow: 22,
+  closeMetaLine: 16,
+  closeMetaChars: 32,
+  /** A role's open work at close: the tasks and plans its area holds (org.health's ledger). */
+  workRow: 17,
   siblingGap: 40,
   levelGap: 56,
   stackGap: 8,
@@ -127,6 +147,36 @@ export function parentRefOfNodeId(id: string): OrgParentRef | null {
 }
 
 // ---------------------------------------------------------------- hierarchy
+
+/** The sessions a close card lists: the ones working now, newest first, three at most. */
+export const runningSessions = (holder: { sessions: OrgSession[] }): OrgSession[] => holder.sessions.filter((x) => x.state === "working").slice(0, ORG_SIZES.runningMax);
+/** The list's rows plus the 6px it stands off what is above it (OrgNodeCards.RunningList). */
+const runningRows = (holder: { sessions: OrgSession[] }) => { const n = runningSessions(holder).length; return n ? n * ORG_SIZES.runningRow + 6 : 0; };
+/** How many lines a text takes wrapped by word at `chars` a line, one to three (the cards clamp at three). */
+export function wrappedLines(text: string, chars: number): number {
+  let lines = 1, used = 0;
+  for (const word of text.trim().split(/\s+/)) {
+    const need = used ? used + 1 + word.length : word.length;
+    if (used && need > chars) { lines += 1; used = word.length; } else used = need;
+    // A word longer than a line breaks inside itself.
+    while (used > chars) { lines += 1; used -= chars; }
+  }
+  return Math.min(3, lines);
+}
+
+/** A role's line under its name, as the close card prints it whole: its title, whether its seat is started, its sessions. */
+export const roleMetaLine = (r: OrgRole, ghost?: boolean): string =>
+  [roleWords(r).subtitle, r.status === "paused" ? "paused" : null, ...(ghost ? [] : [r.standing ? "started" : "not started", r.total > 0 ? `${r.total} session${r.total === 1 ? "" : "s"}` : null])].filter(Boolean).join(" \u00b7 ");
+/** How many lines a card's changes take as quiet lines: one each up to the cap, then one more for the rest. */
+export const quietChipLines = (n: number) => (n <= ORG_SIZES.quietChipMax ? n : ORG_SIZES.quietChipMax + 1);
+/** At close a card's changes are lines instead of a row of chips: what that adds to the chips row. */
+const closeChipsExtra = (n: number) => (n ? Math.max(0, quietChipLines(n) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow) : 0);
+/** What the close card adds under a role's middle card: the line under its
+ *  name on its own row, its changes as lines, its charter, its open work and
+ *  its running sessions. */
+const roleCloseExtra = (r: OrgRole, chips: number, ghost: boolean) =>
+  ORG_SIZES.closeMetaRow + (wrappedLines(roleMetaLine(r, ghost), ORG_SIZES.closeMetaChars) - 1) * ORG_SIZES.closeMetaLine + closeChipsExtra(chips) + (r.charter?.trim() ? ORG_SIZES.charterRows : 0) + (ghost ? 0 : ORG_SIZES.workRow) + runningRows(r);
+const personCloseExtra = (p: OrgPerson, chips: number) => ORG_SIZES.closeMetaRow + closeChipsExtra(chips) + runningRows(p);
 
 type Branch = {
   id: string;
@@ -208,7 +258,9 @@ function subtreeCount(b: Branch): number {
   return n;
 }
 
-export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<OrgGhostPlan, "chips" | "stubs">): Branch[] {
+export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<OrgGhostPlan, "chips" | "stubs">, level: ZoomLevel = "close"): Branch[] {
+  // The close card says more, so it is taller; the far and middle cards share the middle height.
+  const close = level === "close" && !view.structureOnly;
   const filed = bucketedIds(tree);
   const chipRow = (id: string) => (ghosts?.chips[id]?.length ? ORG_SIZES.chipRow : 0);
   // A seat's bot is a team member too, but the seat is drawn inside its
@@ -251,8 +303,9 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // Resolved once, with the whole tree in hand; the row's height already
     // books ORG_SIZES.tenureRow for a program, so the two agree by construction.
     const tenure = roleTenureChip(r.tenure, tree);
+    const mid = view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id);
     const b: Branch = {
-      id, kind: "role", w: ORG_SIZES.role.w, h: view.structureOnly ? ORG_SIZES.healthRole.h : ORG_SIZES.role.h + (standingLineOf(r.standing) ? ORG_SIZES.standingRow : 0) + (r.tenure?.kind === "program" ? ORG_SIZES.tenureRow : 0) + seatRowHeight(ghosts?.stubs[id]?.seat) + chipRow(id), role: r,
+      id, kind: "role", w: ORG_SIZES.role.w, h: mid + (close ? roleCloseExtra(r, ghosts?.chips[id]?.length ?? 0, !!ghosts?.stubs[id]) : 0), role: r,
       ...(tenure ? { tenure } : {}),
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed || view.structureOnly ? null : stackFor({ kind: "role", role_id: r._id }, r, view, filed),
@@ -268,7 +321,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     const b: Branch = {
-      id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id), person: p,
+      id, kind: "person", w: ORG_SIZES.person.w, h: ORG_SIZES.person.h + chipRow(id) + (close ? personCloseExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
       children: collapsed ? [] : kids.map(roleBranch),
       stack: collapsed || view.structureOnly ? null : stackFor({ kind: "user", user_id: p.user_id }, p, view, filed),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
@@ -343,12 +396,12 @@ export type OrgLayout = { nodes: OrgLayoutNode[]; edges: OrgLayoutEdge[]; width:
 /**
  * Lay the tree out. With `ghosts` (from `ghostsFor`, built from the SAME
  * tree) the merged tree is laid out instead and every node and edge carries
- * its ghost decoration: stubs, retire overlays, chips, the dashed edge of a
+ * its ghost decoration: stubs, retire overlays, chips, the proposed edge of a
  * proposed move and the faded old one.
  */
-export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan): OrgLayout {
+export function layoutOrgTree(tree: OrgTree, view: OrgLayoutView, ghosts?: OrgGhostPlan, /** The zoom level the cards are sized for (orgZoom); the close card is the tallest. */ level: ZoomLevel = "close"): OrgLayout {
   if (view.structureOnly && !ghosts) return layoutOrgColumns(buildBranches(tree, view));
-  const roots = buildBranches(ghosts?.merged ?? tree, view, ghosts);
+  const roots = buildBranches(ghosts?.merged ?? tree, view, ghosts, level);
   for (const r of roots) measure(r, ghosts?.stubs);
   const nodes: OrgLayoutNode[] = [];
   const edges: OrgLayoutEdge[] = [];
@@ -570,7 +623,7 @@ export function ghostChipOf(c: OrgProposalChange, unresolved = false, name: (cha
  * edits laid over the proposal (editedOrgChange). Per kind:
  * - role: a stub role under its proposed parent; ghost while proposed, solid
  *   once accepted, gone once org.tree carries a live role with the handle.
- * - move: proposed = a dashed edge to the new parent (the old one fades);
+ * - move: proposed = a violet edge to the new parent (the old one fades);
  *   accepted = the row re-parented until the tree agrees.
  * - retire: proposed = an overlay on the node; accepted = the role dropped
  *   and its reports re-homed under its parent, until the tree agrees.

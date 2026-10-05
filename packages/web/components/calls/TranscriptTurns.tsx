@@ -7,11 +7,14 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { firstName, fmtClock, speakerColor, speakerShortName } from "./speakers";
+import { useLongPress } from "../../hooks/useLongPress";
+import { firstName, speakerColor, speakerShortName } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { GuestTag } from "./GuestTag";
 import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { groupTurns, turnsAnchor, type Turn } from "./transcriptTurnModel";
 import { CallLinkButton } from "./CallLinkButton";
+import { lineFilmed } from "@codecast/shared/contracts";
 
 /** The start of the line a click landed on, read from its `data-seq`; the
  *  turn's own start when it landed on the speaker row or between lines. */
@@ -26,13 +29,13 @@ function clickedLineMs(t: Turn, target: EventTarget | null): number {
  *  line being said, a dim REC red over the stretches that were filmed, and
  *  clear elsewhere. The other lines of the turn being said step back a
  *  shade, so the eye lands on the one line. */
-function lineClass(s: { seq: number; t0: number }, followed: boolean, inActive: boolean, activeSeq: number | null | undefined, filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
+function lineClass(s: { seq: number; t0: number; t1?: number }, followed: boolean, inActive: boolean, activeSeq: number | null | undefined, filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
   const base = "text-[13px] leading-relaxed";
   if (!followed) return `${base} text-sol-text`;
   const rail =
     activeSeq === s.seq
       ? "border-sol-cyan text-sol-text"
-      : `${filmed?.some((f) => s.t0 >= f.fromMs && s.t0 < f.toMs) ? "border-sol-red/25" : "border-transparent"} ${inActive ? "text-sol-text-secondary" : "text-sol-text"}`;
+      : `${filmed && lineFilmed(filmed, s) ? "border-sol-red/25" : "border-transparent"} ${inActive ? "text-sol-text-secondary" : "text-sol-text"}`;
   return `${base} -ml-2 border-l-2 pl-1.5 transition-colors ${rail}`;
 }
 
@@ -43,6 +46,7 @@ export function TranscriptTurnList({
   turns,
   isSelected,
   onTurnClick,
+  onTurnHold,
   compact,
   activeIndex,
   activeSeq,
@@ -55,6 +59,10 @@ export function TranscriptTurnList({
    *  landed on one (a turn can hold minutes of one speaker, and "click a line
    *  to see that moment" means that line), else the turn's start. */
   onTurnClick?: (index: number, e: React.MouseEvent, atMs: number) => void;
+  /** A finger held on a turn (useLongPress), where a finger has no Shift key
+   *  to start a selection with. Only touch and pen presses hold; the click
+   *  the hold ends in is spent. */
+  onTurnHold?: (index: number) => void;
   /** Time plus words, no speaker name. A recording has one microphone. */
   compact?: boolean;
   /** The turn the media is in, if any. */
@@ -69,6 +77,8 @@ export function TranscriptTurnList({
   callId?: string;
 }) {
   const selectable = !!onTurnClick;
+  const hold = useLongPress((index: number) => onTurnHold?.(index));
+  const holds = selectable && !!onTurnHold;
   const followed = activeSeq !== undefined;
   const link = (t: Turn) => {
     const anchor = callId ? turnsAnchor([t]) : null;
@@ -91,9 +101,27 @@ export function TranscriptTurnList({
                 tabIndex: 0,
                 "aria-pressed": selected,
                 "aria-label": compact
-                  ? `Line at ${fmtClock(t.t0)}`
-                  : `Turn by ${speakerShortName(t.speaker_name)} at ${fmtClock(t.t0)}`,
-                onClick: (e: React.MouseEvent) => onTurnClick(t.index, e, clickedLineMs(t, e.target)),
+                  ? `Line at ${formatCallTime(t.t0)}`
+                  : `Turn by ${speakerShortName(t.speaker_name, t.speaker_id)} at ${formatCallTime(t.t0)}`,
+                onClick: (e: React.MouseEvent) => {
+                  if (hold.takeSpent()) return;
+                  onTurnClick(t.index, e, clickedLineMs(t, e.target));
+                },
+                ...(holds
+                  ? {
+                      onPointerDown: (e: React.PointerEvent) => {
+                        if (e.pointerType !== "mouse") hold.start(t.index);
+                      },
+                      onPointerUp: hold.cancel,
+                      onPointerLeave: hold.cancel,
+                      onPointerCancel: hold.cancel,
+                      // The phone's own long press (select text, a callout)
+                      // would land on the same finger.
+                      onContextMenu: (e: React.MouseEvent) => {
+                        if ((e.nativeEvent as PointerEvent).pointerType !== "mouse") e.preventDefault();
+                      },
+                    }
+                  : {}),
                 onKeyDown: (e: React.KeyboardEvent) => {
                   if (e.key === "Enter" || e.key === " ") {
                     e.preventDefault();
@@ -104,7 +132,7 @@ export function TranscriptTurnList({
             : {})}
           className={`group -mx-2 rounded-md px-2 py-1 ${
             selectable ? "cursor-pointer transition-colors " : ""
-          }${
+          }${holds ? "[@media(pointer:coarse)]:select-none [@media(pointer:coarse)]:[-webkit-touch-callout:none] " : ""}${
             selected
               ? "bg-sol-violet/10 ring-1 ring-inset ring-sol-violet/40"
               : active
@@ -117,7 +145,7 @@ export function TranscriptTurnList({
           {compact ? (
             <div className="flex gap-3">
               <span className="w-10 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-sol-text-dim">
-                {fmtClock(t.t0)}
+                {formatCallTime(t.t0)}
               </span>
               <div className="min-w-0 flex-1">
                 {t.segments.map((s) => (
@@ -133,7 +161,7 @@ export function TranscriptTurnList({
               <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
                 {firstName(t.speaker_name)}
                 {isGuestParticipant(t.speaker_id, t.speaker_name) && <GuestTag className="ml-1.5 align-[1px]" />}
-                <span className="ml-2 font-normal text-sol-text-dim">{fmtClock(t.t0)}</span>
+                <span className="ml-2 font-normal text-sol-text-dim">{formatCallTime(t.t0)}</span>
                 {link(t)}
               </div>
               {t.segments.map((s) => (

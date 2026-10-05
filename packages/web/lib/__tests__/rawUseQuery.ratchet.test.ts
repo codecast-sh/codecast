@@ -34,7 +34,7 @@ const RAW_USE_QUERY = /(?<![A-Za-z0-9_$])useQuery\s*\(/;
  * *.degrade.test.tsx) mount each page over a backend missing every function,
  * and each enrichment they caught re-throwing moved onto useQueryNoThrow.
  */
-const PIN = 25;
+const PIN = 24;
 
 const result = checkRatchet({
   name: "raw useQuery outside hooks",

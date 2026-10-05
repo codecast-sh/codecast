@@ -287,7 +287,11 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     expect(o.cadence).toBe('all');
     const echo = o.surfaces.find((s: any) => s.id === 'echo');
     expect(echo.strip.map((s: any) => s.batch)).toEqual([batch.a, batch.b]);
-    expect(echo.dots.length).toBe(6);
+    // Six reps, but the strip draws one dot per status and pixel row of score: three passes at 1, three fails at 0.
+    expect(echo.dots.map((d: any) => [d.batch, d.status, d.score])).toEqual([
+      [batch.a, 'pass', 1],
+      [batch.b, 'fail', 0],
+    ]);
     expect(echo.latest.batch).toBe(batch.b);
     expect(echo.latest.flips.map((f: any) => f.direction)).toEqual(['broke']);
     expect(echo.freezes).toEqual({ public: 1, private: 1 });
@@ -434,6 +438,14 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     const wide = await ok<any>('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, allCommits: '1' });
     expect(wide.answer).toMatchObject({ kind: 'source', confidence: 'pinned', noDeclaredSourceMoved: false, rangeCommits: 1 });
     expect((await call('GET', '/attribution', { surface: 'echo', good: '$(rm -rf ~)', bad: batch.b })).status).toBe(400);
+    // A freeze limit rides the query too (the launcher's "Attribute this freeze"), so the free answer weighs what the plan will.
+    const limited = await ok<any>('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, freeze: F.slice(0, 8) });
+    expect(limited.flipped.map((f: any) => f.freezeId)).toEqual([F]);
+    expect(limited.answer).toMatchObject({ kind: 'source', confidence: 'pinned' });
+    // A freeze the surface never ran (G is another surface's) is refused, never weighed as "nothing flipped", and so is a ref
+    // shorter than a freeze prefix, which would match several freezes: the same check, and the same 400, as the bisect POSTs.
+    expect((await call('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, freeze: G.slice(0, 8) })).status).toBe(400);
+    expect((await call('GET', '/attribution', { surface: 'echo', good: batch.a, bad: batch.b, freeze: F.slice(0, 1) })).status).toBe(400);
   });
 
   test('/commit/:sha: the commit, its files and diff; a bad sha is refused before git sees it', async () => {
@@ -444,7 +456,21 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     expect(c.files).toEqual([{ path: 'packages/evals/src/testSurface.ts', status: 'M', additions: 1, deletions: 1 }]);
     expect(c.diff).toContain('+// v2: the prompt changed');
     expect(c.whole).toBe(false);
+    expect(c.truncated).toBe(false);
     for (const bad of ['zzzzzzz', '--output=x', 'deadbeefdeadbeef', 'HEAD']) expect((await call('GET', `/commit/${encodeURIComponent(bad)}`)).status).toBe(400);
+  });
+
+  test('/commit/:sha: a commit past PATCH_TEXT_MAX sends its first 2 MiB and says so, with its whole file list', async () => {
+    // Built with plumbing and left on no ref, so the scratch history the other tests read is unchanged.
+    const big = join(bin, 'big.txt');
+    writeFileSync(big, 'a lockfile line that keeps going\n'.repeat(100_000));
+    const blob = git('hash-object', '-w', big);
+    const mk = Bun.spawnSync(['git', 'mktree'], { cwd: repo, stdin: Buffer.from(`100644 blob ${blob}\tbig.txt\n`) });
+    const commit = git('commit-tree', mk.stdout.toString().trim(), '-p', sha.c2, '-m', 'vendor: a huge refresh');
+    const c = await ok<any>('GET', `/commit/${commit}`, { whole: '1' });
+    expect(c.truncated).toBe(true);
+    expect(c.diff.length).toBe(2 * 1024 * 1024);
+    expect(c.files.map((f: any) => f.path)).toContain('big.txt');
   });
 
   test('/patch/:sha: a kept tree patch with its files; a name that is not a sha256 is refused, an unknown one is a 404', async () => {
@@ -464,7 +490,18 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     expect(await ok<any>('GET', `/patch/${simName}`)).toEqual({ sha: simName, files: [{ path: 'packages/evals/src/testSurface.ts', additions: 2, deletions: 1 }], diff: simText, truncated: false });
   });
 
+  test('/search: freezes and runs by id prefix, from the index', async () => {
+    const s = await ok<any>('GET', '/search', { q: F.slice(0, 6) });
+    expect(s.freezes.map((f: any) => [f.id, f.surface])).toEqual([[F, 'echo']]);
+    const prefix = `echo-${F.slice(0, 8)}-seed1-`;
+    const runs = await ok<any>('GET', '/search', { q: prefix });
+    expect(runs.runs.length).toBeGreaterThan(1);
+    expect(runs.runs.every((r: any) => r.id.startsWith(prefix) && r.surface === 'echo')).toBe(true);
+    expect(await ok<any>('GET', '/search', { q: 'ec' })).toEqual({ freezes: [], runs: [] });
+  });
+
   test('/changes: a cursor, then only what landed after it', async () => {
+    const repsBefore = (await ok<any>('GET', '/overview', { cadence: 'all' })).surfaces.find((s: any) => s.id === 'echo').strip.find((b: any) => b.batch === batch.b).reps;
     const first = await ok<any>('GET', '/changes', { since: '0' });
     expect(first.runs).toEqual([]);
     expect(first.bisects.length).toBe(1);
@@ -476,7 +513,7 @@ describe('GET routes against a fixture EVALS_HOME', () => {
     expect(next.cursor).toBeGreaterThan(first.cursor);
     // The wall's memo is keyed on the index, so the rep that landed is on it at once.
     const o = await ok<any>('GET', '/overview', { cadence: 'all' });
-    expect(o.surfaces.find((s: any) => s.id === 'echo').dots.length).toBe(7);
+    expect(o.surfaces.find((s: any) => s.id === 'echo').strip.find((b: any) => b.batch === batch.b).reps).toBe(repsBefore + 1);
   });
 
   test('/bisects and /bisect/:id: the list, steps after a cursor, a stall flag and the log tail', async () => {
@@ -523,23 +560,68 @@ describe('POST routes build argv arrays only', () => {
     expect([held.status, (held.body as any).error]).toEqual([400, 'bisect echo-20260930-100000 is running; one runs at a time']);
     // A holder whose process is gone (a crash) holds nothing.
     writeFileSync(lock, JSON.stringify({ id: 'echo-20260930-100000', pid: 2 ** 22 + 12345 }));
-    const r = await ok<any>('POST', '/bisect', {}, { surface: 'echo', good: batch.a, bad: batch.b, freezes: [F.slice(0, 8)], reps: 3, budgetUsd: 2.5, maxMinutes: 30 });
+    // The records pin a..b to one commit: the free plan says so here, before anything spawns.
+    const spawned = recordedArgv().length;
+    const pinned = await call('POST', '/bisect', {}, { surface: 'echo', good: batch.a, bad: batch.b });
+    expect(pinned.status).toBe(400);
+    expect((pinned.body as any).error).toContain('nothing to search');
+    expect(recordedArgv().length).toBe(spawned);
+    // A later commit on the declared source, built with plumbing on no ref: a..c3 holds two candidates.
+    const blob = git('hash-object', '-w', '/dev/null');
+    const index = join(bin, 'index-c3');
+    const env = { ...process.env, GIT_INDEX_FILE: index };
+    Bun.spawnSync(['git', 'read-tree', sha.c2], { cwd: repo, env });
+    Bun.spawnSync(['git', 'update-index', '--cacheinfo', `100644,${blob},packages/evals/src/testSurface.ts`], { cwd: repo, env });
+    const tree = Bun.spawnSync(['git', 'write-tree'], { cwd: repo, env }).stdout.toString().trim();
+    const c3 = git('commit-tree', tree, '-p', sha.c2, '-m', 'echo: empty the prompt');
+    const r = await ok<any>('POST', '/bisect', {}, { surface: 'echo', good: batch.a, bad: c3, freezes: [F.slice(0, 8)], reps: 3, budgetUsd: 2.5, maxMinutes: 30 });
     expect(r.tmux).toBe(`evals-bisect-${r.id}`);
-    const argv = recordedArgv().at(-1)!;
-    expect(argv.slice(0, 8)).toEqual(['tmux', 'new-session', '-d', '-s', `evals-bisect-${r.id}`, '-c', REPO_ROOT, '--']);
-    expect(argv.slice(9)).toEqual([join(bin, 'tool.ts'), 'bisect', 'start', 'echo', '--good', batch.a, '--bad', batch.b, '--freeze', F.slice(0, 8), '--reps', '3', '--budget', '2.5', '--max-minutes', '30', '--id', r.id]);
+    // The pane is teed into job.log before the tool is exec'd in it, so nothing it prints is lost with the window.
+    const tmux = recordedArgv().filter((a) => a[0] === 'tmux').slice(-3);
+    expect(tmux[0]!.slice(0, 8)).toEqual(['tmux', 'new-session', '-d', '-s', `evals-bisect-${r.id}`, '-c', REPO_ROOT, '--']);
+    expect(tmux[1]!.slice(0, 5)).toEqual(['tmux', 'pipe-pane', '-t', `=evals-bisect-${r.id}:`, '-o']);
+    expect(tmux[1]![5]).toBe(`cat >> '${join(home, 'bisects', r.id, 'job.log')}'`);
+    const argv = tmux[2]!;
+    expect(argv.slice(0, 8)).toEqual(['tmux', 'respawn-pane', '-k', '-t', `=evals-bisect-${r.id}:`, '-c', REPO_ROOT, '--']);
+    expect(argv.slice(9)).toEqual([join(bin, 'tool.ts'), 'bisect', 'start', 'echo', '--good', batch.a, '--bad', c3, '--freeze', F.slice(0, 8), '--reps', '3', '--budget', '2.5', '--max-minutes', '30', '--id', r.id]);
+    // The page the founder is sent to has a bisect to read at once: the placeholder, planning, from the free plan.
+    rmSync(lock, { force: true });
+    const placed = JSON.parse(readFileSync(join(home, 'bisects', r.id, 'state.json'), 'utf8'));
+    expect(placed).toMatchObject({ id: r.id, surface: 'echo', status: 'planning', pending: true, tmux: `evals-bisect-${r.id}` });
+    expect(placed.plan.candidates.length).toBeGreaterThan(1);
+    // The fake tmux has no session, so the job has ended without a runner: it reads as failed, with what the job printed.
+    writeFileSync(join(home, 'bisects', r.id, 'job.log'), '\u001b[2mloading\u001b[0m\r\nerror: Cannot find module x\r\n');
+    const read = await ok<any>('GET', `/bisect/${r.id}`);
+    expect(read.state.status).toBe('failed');
+    expect(read.logTail).toEqual(['loading', 'error: Cannot find module x']);
+    const listed = await ok<any>('GET', '/bisects');
+    expect(listed.bisects.find((b: any) => b.id === r.id).status).toBe('failed');
+    expect(listed.running).toBeNull();
   });
 
-  test('/sim/shrink starts `bun run sim --shrink <artifact folder>` for a failure only', async () => {
-    const r = await ok<any>('POST', '/sim/shrink', {}, { session: SIM_SESSION, run: SIM_RUN });
+  test('/sim/shrink starts `bun run sim --shrink <artifact folder>` for a failure of a scenario the suite holds', async () => {
+    // A failing run of a real scenario (the catalog is the checkout's own sim.ts --list).
+    const live = 'memberRemovedMidTurn-interleave-9';
+    json(join(simHome, 'sessions', SIM_SESSION, live, 'result.json'), { scenario: 'memberRemovedMidTurn', mode: 'interleave', seed: 9, step: 'settle #1', delivery: 3, invariant: { id: 'INV-followers', meaning: 'followers match' }, order: 'conn:w1 sched', labels: {}, text: 'failed' });
+    const r = await ok<any>('POST', '/sim/shrink', {}, { session: SIM_SESSION, run: live });
     expect(r.job).toMatch(/^shrink-/);
     const argv = recordedArgv().at(-1)!;
-    expect(argv.slice(0, 2)).toEqual(['tmux', 'new-session']);
-    expect(argv.slice(-3)).toEqual([join(REPO_ROOT, 'packages', 'web', 'scripts', 'sim.ts'), '--shrink', join(simHome, 'sessions', SIM_SESSION, SIM_RUN)]);
+    expect(argv.slice(0, 2)).toEqual(['tmux', 'respawn-pane']);
+    expect(argv.slice(-3)).toEqual([join(REPO_ROOT, 'packages', 'web', 'scripts', 'sim.ts'), '--shrink', join(simHome, 'sessions', SIM_SESSION, live)]);
+    // demoScenario is not in the suite: sim.ts --shrink would exit at once with no trace, so the child refuses before it spawns.
+    const spawned = recordedArgv().length;
+    const gone = await call('POST', '/sim/shrink', {}, { session: SIM_SESSION, run: SIM_RUN });
+    expect(gone.status).toBe(400);
+    expect(JSON.stringify(gone.body)).toContain('no longer in the suite');
+    expect(recordedArgv().length).toBe(spawned);
     expect((await call('POST', '/sim/shrink', {}, { session: SIM_SESSION, run: 'demoScenario-scripted-1' })).status).toBe(400);
     expect((await call('POST', '/sim/shrink', {}, { session: '..', run: SIM_RUN })).status).toBe(400);
     const changes = await ok<any>('GET', '/changes', { since: '0' });
-    expect(changes.jobs.find((j: any) => j.id === r.job)).toMatchObject({ kind: 'shrink', status: 'failed', run: SIM_RUN });
+    expect(changes.jobs.find((j: any) => j.id === r.job)).toMatchObject({ kind: 'shrink', status: 'failed', run: live, logTail: [] });
+    // The run page reads the job back after a reload: its outcome and the lines it printed.
+    writeFileSync(join(simHome, 'jobs', `${r.job}.log`), 'replaying memberRemovedMidTurn\nerror: the recorded order no longer fails\n');
+    const page = await ok<any>('GET', `/sim/run/${SIM_SESSION}/${live}`);
+    expect(page.lastShrink).toMatchObject({ id: r.job, status: 'failed', logTail: ['replaying memberRemovedMidTurn', 'error: the recorded order no longer fails'] });
   });
 
   test('/sim/sweep starts `bun run sim <filter> --sweep N`; a filter that names nothing is refused', async () => {

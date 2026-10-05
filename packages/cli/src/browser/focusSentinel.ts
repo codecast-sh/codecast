@@ -32,6 +32,7 @@
  */
 
 import { execFileAsync } from "../proc.js";
+import { isRemoteDevice } from "../remote/device.js";
 import { frontAsnAsync, pidForAsnAsync } from "./focusGuard.js";
 import { raiseAppByPid } from "./raiseApp.js";
 import { readState } from "./instance.js";
@@ -139,6 +140,10 @@ export async function commandOfPidAsync(pid: number): Promise<string> {
  * idle cost stays at one small spawn a second.
  */
 export async function startFocusSentinel(log: (line: string) => void): Promise<NodeJS.Timeout | null> {
+  // A cloud host has no human at its screen to protect, and its daemon runs
+  // with no window-server session: the CoreGraphics input probe below blocks
+  // forever there (a Mac host's daemon froze on it right after boot).
+  if (isRemoteDevice()) return null;
   const input = await loadHumanInput();
   if (!input) {
     if (process.platform === "darwin") log("[FOCUS] sentinel off: human-input detector unavailable");

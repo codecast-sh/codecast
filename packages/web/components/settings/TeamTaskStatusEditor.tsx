@@ -15,8 +15,6 @@
  * with zero task writes.
  */
 import { useMemo, useState } from "react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { ArrowDown, ArrowUp, ListChecks, Plus, Trash2 } from "lucide-react";
@@ -63,7 +61,7 @@ export function TeamTaskStatusEditor({
   configured: TeamTaskStatus[] | undefined;
   isAdmin: boolean;
 }) {
-  const updateTaskStatuses = useMutation(api.teams.updateTaskStatuses);
+  const updateTaskStatuses = useInboxStore((s) => s.updateTeamTaskStatuses);
   const saved = useMemo(() => teamTaskStatuses(configured), [configured]);
   const draftKey = String(teamId);
   const [draft, setDraftState] = useState<TeamTaskStatus[] | null>(
@@ -139,7 +137,7 @@ export function TeamTaskStatusEditor({
     }
     setSaving(true);
     try {
-      await updateTaskStatuses({ team_id: teamId, statuses: normalized });
+      await updateTaskStatuses(teamId, normalized);
       setDraft(null);
       setOpenId(null);
       toast.success("Task statuses saved");

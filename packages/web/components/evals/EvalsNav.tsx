@@ -1,15 +1,19 @@
 // The area's local nav: the mark, the three sections (Surfaces, Bisects,
-// Multiplayer sim), a search box that takes a surface, run id, batch, freeze
-// id prefix or sha, and a status line for the machine the evals are read from.
+// Multiplayer sim), a search box that takes a surface, a run id or its prefix,
+// a batch, a freeze id prefix or a sha, and a status line for the machine the
+// evals are read from.
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import type { FreezeResponse, OverviewResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsStore } from "../../store/evalsStore";
+import { useEvalsResource } from "../../lib/evals/hooks";
+import { useDebounce } from "../../hooks/useDebounce";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { evalsHref, evalsSearchTargets, evalsSection, type EvalsSearchKnown, type EvalsView } from "./evalsPaths";
-import { EvalsLink, shortSha } from "./parts";
+import { EvalsLink } from "./parts";
+import { shortSha } from "./format";
 
 const SECTIONS = [
   { key: "surfaces", label: "Surfaces", href: evalsHref.home() },
@@ -66,11 +70,20 @@ function useSearchKnown(): EvalsSearchKnown {
 
 function EvalsSearch() {
   const router = useRouter();
-  const known = useSearchKnown();
+  const loaded = useSearchKnown();
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState(0);
   const input = useRef<HTMLInputElement>(null);
+  // Freezes and runs no page has loaded come from the index, by id prefix.
+  const asked = useDebounce(q.trim(), 200);
+  const found = useEvalsResource("GET /search", asked.length >= 3 ? { query: { q: asked } } : null).data;
+  const known = useMemo<EvalsSearchKnown>(() => {
+    if (!found) return loaded;
+    const freezes = new Map(loaded.freezes.map((f) => [f.id, f]));
+    for (const f of found.freezes) if (!freezes.has(f.id)) freezes.set(f.id, f);
+    return { ...loaded, freezes: [...freezes.values()], runs: found.runs };
+  }, [loaded, found]);
   const targets = useMemo(() => evalsSearchTargets(q, known), [q, known]);
   // The surfaces and their batches come from the wall's answer: fetch it when
   // the box is used, so it works from any view (cached, shared with the wall).

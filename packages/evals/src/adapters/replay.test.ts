@@ -190,7 +190,7 @@ describe('snapshot', () => {
 });
 
 describe('rescore', () => {
-  test("grades a rep's route gates again from its harness files and keeps the surface's own gates and checks", async () => {
+  test("grades a rep's route gates again from its harness files and keeps the surface's own gates and checks when its freeze is not here", async () => {
     const dir = join(mkdtempSync(join(tmpdir(), 'evals-rescore-')), 'org-review-0bc4cd18-seed1-2026-10-02T17-44-53-948Z');
     const sub = join(dir, 'agent1', 'agent');
     mkdirSync(sub, { recursive: true });
@@ -200,7 +200,8 @@ describe('rescore', () => {
     writeFileSync(join(sub, 'out.json'), JSON.stringify({ is_error: false, total_cost_usd: 7, modelUsage: { [model]: { outputTokens: 10 }, other: { outputTokens: 99 } } }));
     writeFileSync(join(sub, 'stream.jsonl'), JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm', model, content: [] } }));
     writeFileSync(join(sub, 'calls.log'), 'SERVED org inputs --team U --json\nLIVE task show ct-1\nREFUSED brief edit -\n');
-    writeFileSync(join(dir, 'run.json'), JSON.stringify({ model, dry: false, freezeId: 'f' }));
+    // A freeze this machine does not hold: the surface's own gates are kept as scored.
+    writeFileSync(join(dir, 'run.json'), JSON.stringify({ model, dry: false, freezeId: 'zzzzzzzz-no-such-freeze' }));
     const gate = (id: string, pass: boolean) => ({ id, pass, decidedBy: 'mechanical', evidence: { summary: '' } });
     // Stored as the 2026-10-02 first batch was: zeroed by the brief edit, and by a subagent-heavy usage.
     const stored = { pass: false, score: 0, passMark: 0.7, gates: [gate('model-as-pinned', false), gate('ok', true), gate('frozen-reads', true), gate('no-unexpected-writes', false), gate('no-wrong-close', true)], checks: [{ id: 'records', weight: 1, score: 0.8 }], missedFloors: [], judgeCostUsd: null, judgeModel: null, scoredAt: 'x', scenario: 'org-review-0bc4cd18', title: 't', seed: 1 };

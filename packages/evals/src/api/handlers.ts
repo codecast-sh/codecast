@@ -1,10 +1,12 @@
-import { mkdirSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import {
+  EVALS_BATCH_TOKEN_RE,
   EVALS_SHA_RE,
   matchEvalsRoute,
+  resolveEvalsBatchRef,
+  searchRows,
   type BisectPlan,
   type BisectPlanRequest,
   type BisectStartRequest,
@@ -20,15 +22,17 @@ import {
 } from '@codecast/shared/contracts/evalsApi';
 
 import { indexedRuns, indexProgress, refreshRunIndex, runIndexPath } from '../history/runIndex';
-import { evalsHome, REPO_ROOT } from '../paths';
+import { evalsHome, REPO_ROOT, writeJsonAtomic } from '../paths';
 import { surfaceMeta } from '../registry';
 import { gitHead } from '../state';
-import { bisectPaths, listBisects, newBisectId } from '../bisect/state';
-import { bisectPlanArgs, bisectStartArgs, readBisect, runningBisect, stopBisect } from './bisects';
+import { planFrom } from '../bisect/plan';
+import { startRefusal } from '../bisect/runner';
+import { bisectPaths, listBisects, newBisectId, writePendingState } from '../bisect/state';
+import { bisectPlanArgs, bisectStartArgs, launchPath, readBisect, runningBisect, settlePendingBisects, stopBisect } from './bisects';
 import { OutsideRunFolder, runFile } from './files';
 import { BadSha, commitDetail, patchDetail, verifiedSha } from './git';
 import { simCatalog, simJobs, simRun, simSessionSummaries, SimRequestError, startShrink, startSweep } from './simHistory';
-import { evalsTool, launch, runTool } from './spawn';
+import { evalsTool, hasTmux, launch, runTool } from './spawn';
 import { attributionView, BadRequest, batchesView, compareView, epochView, freezeView, NotFound, overview, rowById, runView, stalenessWords, surfaceView } from './views';
 
 // The api child's dispatch (evals-ui.md section 3.4): one handler per route
@@ -85,13 +89,32 @@ const posNum = (v: unknown, what: string): number | undefined => {
   return n;
 };
 
-/** A batch of the surface or a commit in this repo (EVALS_SHA_RE, then `git rev-parse --verify <sha>^{commit}`): what a bisect endpoint may be. */
+/** A batch of the surface (by name or by its address hash) or a commit in this repo (EVALS_SHA_RE, then `git rev-parse --verify <sha>^{commit}`): what a bisect endpoint may be. */
 function endpointRef(all: RunRow[], surface: string, ref: unknown, what: string): string {
   if (typeof ref !== 'string' || !ref) throw new BadRequest(`${what} is required`);
   if (all.some((r) => r.surface === surface && r.batch === ref)) return ref;
+  // A page address names a labelled batch by its hash (evalsBatchRef); the batch is the one that hashes to it.
+  if (EVALS_BATCH_TOKEN_RE.test(ref)) {
+    const named = resolveEvalsBatchRef(ref, new Set(all.flatMap((r) => (r.surface === surface && r.batch ? [r.batch] : []))));
+    if (!named) throw new BadRequest(`${what} ${ref} names no ${surface} batch`);
+    return named;
+  }
   if (!EVALS_SHA_RE.test(ref)) throw new BadRequest(`${what} ${ref} is neither a ${surface} batch nor a sha`);
   verifiedSha(ref);
   return ref;
+}
+
+/**
+ * Freezes a request names, as ids or id prefixes of 8 or more characters,
+ * each one the surface has run: the plan, the bisect and the free answer take
+ * the same refs, so the launcher's two asks cannot read different freezes.
+ */
+function ranFreezes(all: RunRow[], surface: string, refs: unknown[]): string[] {
+  if (refs.some((f) => typeof f !== 'string' || !/^[0-9a-f-]{8,36}$/.test(f))) throw new BadRequest('freezes are freeze ids, or id prefixes of 8 or more characters');
+  const ran = new Set(all.filter((r) => r.surface === surface).map((r) => r.freezeId));
+  const unknown = (refs as string[]).filter((f) => ![...ran].some((id) => id.startsWith(f)));
+  if (unknown.length) throw new BadRequest(`${surface} never ran freeze ${unknown.join(', ')}`);
+  return refs as string[];
 }
 
 /** A bisect request as the CLI will get it: a known surface, real endpoints, freezes the surface ran, bounded numbers. */
@@ -100,11 +123,8 @@ async function bisectRequest(body: unknown): Promise<BisectStartRequest> {
   const b = body as Partial<BisectStartRequest>;
   if (typeof b.surface !== 'string' || !surfaceMeta(b.surface)) throw new BadRequest(`no surface ${String(b.surface)}`);
   const all = await rows();
-  const freezes = b.freezes ?? [];
-  if (!Array.isArray(freezes) || freezes.some((f) => typeof f !== 'string' || !/^[0-9a-f-]{8,36}$/.test(f))) throw new BadRequest('freezes are freeze ids');
-  const ran = new Set(all.filter((r) => r.surface === b.surface).map((r) => r.freezeId));
-  const unknown = freezes.filter((f) => ![...ran].some((id) => id.startsWith(f)));
-  if (unknown.length) throw new BadRequest(`${b.surface} never ran freeze ${unknown.join(', ')}`);
+  if (b.freezes !== undefined && !Array.isArray(b.freezes)) throw new BadRequest('freezes are a list of freeze ids');
+  const freezes = ranFreezes(all, b.surface, b.freezes ?? []);
   return {
     surface: b.surface,
     good: endpointRef(all, b.surface, b.good, 'good'),
@@ -144,7 +164,7 @@ async function changes(since: number): Promise<ChangesResponse> {
   return {
     cursor: now,
     runs: all.filter((r) => (seen.get(r.id)?.at ?? 0) > since),
-    bisects: listBisects().filter((b) => Date.parse(b.updatedAt) > since),
+    bisects: (settlePendingBisects(), listBisects()).filter((b) => Date.parse(b.updatedAt) > since),
     jobs: simJobs().filter((j) => Date.parse(j.updatedAt) > since),
   };
 }
@@ -197,7 +217,8 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     const surface = need(query, 'surface');
     const all = await rows();
     const ref = (k: 'good' | 'bad') => (query[k] ? endpointRef(all, surface, query[k], k) : undefined);
-    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits));
+    const freeze = query.freeze ? ranFreezes(all, surface, [query.freeze])[0] : undefined;
+    return attributionView(all, surface, ref('good'), ref('bad'), flag(query.allCommits), freeze);
   },
   'GET /commit/:sha': ({ params, query }) => {
     if (query.surface && !surfaceMeta(query.surface)) throw new NotFound(`no surface ${query.surface}`);
@@ -209,6 +230,7 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     return p;
   },
   'GET /changes': ({ query }) => changes(Number(query.since) || 0),
+  'GET /search': async ({ query }) => searchRows(await rows(), query.q ?? ''),
   'POST /bisect/plan': async ({ body }) => {
     const req: BisectPlanRequest = await bisectRequest(body);
     const out = await runTool(bisectPlanArgs(req));
@@ -223,13 +245,28 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     if (surfaceMeta(req.surface)!.route === 'agent' && !req.confirm) throw new BadRequest(`${req.surface} is an agent surface: confirm the spend to start it`);
     const holder = runningBisect();
     if (holder) throw new BadRequest(`bisect ${holder} is running; one runs at a time`);
+    // The free plan, as the runner will first make it: a refusal reaches the page here, and the
+    // placeholder state the page opens on carries it while the runner loads the records.
+    const plan = planFrom(req, { rows: await rows() });
+    const refused = startRefusal(plan, req.confirm);
+    if (refused) throw new BadRequest(refused);
     const id = newBisectId(req.surface);
     const paths = bisectPaths(id);
-    mkdirSync(paths.dir, { recursive: true });
-    const launched = launch(`evals-bisect-${id}`, [...evalsTool(), ...bisectStartArgs(req, id)], { cwd: REPO_ROOT, log: paths.log });
-    return { id, tmux: launched.tmux };
+    const session = `evals-bisect-${id}`;
+    writePendingState(id, plan, hasTmux() ? session : null);
+    try {
+      const launched = launch(session, [...evalsTool(), ...bisectStartArgs(req, id)], { cwd: REPO_ROOT, log: paths.job });
+      writeJsonAtomic(launchPath(id), launched);
+      return { id, tmux: launched.tmux };
+    } catch (e) {
+      rmSync(paths.dir, { recursive: true, force: true });
+      throw e;
+    }
   },
-  'GET /bisects': () => ({ bisects: listBisects(), running: runningBisect() }),
+  'GET /bisects': () => {
+    settlePendingBisects();
+    return { bisects: listBisects(), running: runningBisect() };
+  },
   'GET /bisect/:id': ({ params, query }) => {
     const b = readBisect(params.id, Number(query.since) || 0);
     if (!b) throw new NotFound(`no bisect ${params.id}`);
@@ -247,10 +284,10 @@ const HANDLERS: { [K in EvalsRouteKey]: Handler<K> } = {
     if (!r) throw new NotFound(`no sim run ${params.run} in session ${params.session}`);
     return r;
   },
-  'POST /sim/shrink': ({ body }) => {
+  'POST /sim/shrink': async ({ body }) => {
     const b = (body ?? {}) as { session?: unknown; run?: unknown };
     if (typeof b.session !== 'string' || typeof b.run !== 'string') throw new BadRequest('a shrink names a session and a run');
-    return { job: startShrink(b.session, b.run).id };
+    return { job: (await startShrink(b.session, b.run)).id };
   },
   'POST /sim/sweep': async ({ body }) => {
     const b = (body ?? {}) as { filter?: unknown; seeds?: unknown };

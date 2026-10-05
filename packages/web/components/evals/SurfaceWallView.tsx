@@ -9,72 +9,27 @@
 // only while `active` (the page is the active pane).
 
 import { useCallback, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import type { BatchStats, BisectSummary, OverviewResponse, SimSessionSummary, StalenessWord, SurfaceOverview } from "@codecast/shared/contracts/evalsApi";
+import { flipCounts, type BatchStats, type BisectSummary, type OverviewResponse, type SimSessionSummary, type StalenessWord, type SurfaceOverview } from "@codecast/shared/contracts/evalsApi";
 import { useContainerWidth, HoverTip } from "../ActivityHeatmap";
-import { timeAxisLabels } from "../ActivityCharts";
 import { EmptyState } from "../EmptyState";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { KeyHint } from "../changes/useChangesKeys";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
 import { useShortcutAction, useShortcutContext } from "../../shortcuts";
-import { DAY_MS, dayList, dayStart, linear } from "./charts/scale";
+import { DAY_MS, dayStart, linear } from "./charts/scale";
 import { ScoreStrip } from "./charts/ScoreStrip";
 import { evalsHref } from "./evalsPaths";
 import { WhatMoved } from "./WhatMoved";
-import { bisectStatusWord, isBisectLive, isBisectStalled } from "./bisectModel";
+import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled } from "./bisectModel";
 import { EVALS_STALL_MS } from "../../lib/evals/hooks";
-import { EvalsLink, SeparationMark, VerdictGlyph, baselineWords, newestBaseline, pLabel, plural, separationTitle, shortModel, shortSha, usd } from "./parts";
+import { EvalsLink, SeparationMark, StallChip, VerdictGlyph } from "./parts";
 import "./wall.css";
-
-/** All first: the agent surfaces and most call batches carry no cadence, so a nightly default would hide them. */
-export const WALL_CADENCES = [
-  { key: "all", label: "All" },
-  { key: "nightly", label: "Nightly" },
-  { key: "named", label: "By hand" },
-] as const;
-export const DEFAULT_WALL_CADENCE = "all";
+import { pLabel, plural, shortModel, shortSha, usd } from "./format";
+import { baselineWords, noiseFlipWords, noiseFlipsShort, separationTitle } from "./verdictModel";
+import { WALL_CADENCES, isWorse, wallOrder, rowHref, attributeHref, wallWindowFrom, wallAxisTicks, wallSpend, wallWindowDays } from "./wallModel";
+import { simOutcome } from "./simModel";
 
 const SEPARATION_SHORT = { better: "better", worse: "worse", "not-separated": "not separated", "too-few": "too few reps" } as const;
-
-const isWorse = (s: SurfaceOverview) => s.latest?.separation.kind === "worse";
-const latestAt = (s: SurfaceOverview) => (s.latest ? Date.parse(s.latest.set.batchAt) : 0);
-
-/** The wall's order: rows that separated worse first (newest first), then call surfaces, then agent surfaces, each in the api's order. */
-export function wallOrder(surfaces: readonly SurfaceOverview[]): SurfaceOverview[] {
-  const rank = (s: SurfaceOverview) => (isWorse(s) ? 0 : s.route === "call" ? 1 : 2);
-  return surfaces
-    .map((s, i) => ({ s, i }))
-    .sort((a, b) => rank(a.s) - rank(b.s) || (rank(a.s) === 0 ? latestAt(b.s) - latestAt(a.s) : 0) || a.i - b.i)
-    .map((x) => x.s);
-}
-
-/**
- * A worse row's pair: its latest batch as the bad end and the newest batch of
- * its baseline as the good end. Null when the row did not separate worse.
- */
-export function worsePair(s: SurfaceOverview): { surface: string; good: string | null; bad: string } | null {
-  if (!isWorse(s) || !s.latest) return null;
-  return { surface: s.id, good: newestBaseline(s.latest, s.strip), bad: s.latest.batch };
-}
-
-/** The newest worse pair on the wall: the surface whose latest batch separated worse most recently. Null when nothing did. */
-export function newestWorsePair(surfaces: readonly SurfaceOverview[]): { surface: string; good: string | null; bad: string } | null {
-  const worse = surfaces.filter(isWorse).sort((a, b) => latestAt(b) - latestAt(a))[0];
-  return worse ? worsePair(worse) : null;
-}
-
-/** Where a row opens: a worse row lands with its red batch and that batch's baseline pinned, so the surface page opens on the comparison the wall made. */
-export function rowHref(s: SurfaceOverview): string {
-  const pair = worsePair(s);
-  return pair ? evalsHref.surface(s.id, { batch: pair.bad, compare: pair.good }) : evalsHref.surface(s.id);
-}
-
-/** Where `b` goes: the newest worse pair, else the launcher for the selected surface, which picks its own red batch. */
-export function attributeHref(surfaces: readonly SurfaceOverview[], selected: string | null): string {
-  const pair = newestWorsePair(surfaces);
-  if (pair) return evalsHref.bisectNew(pair);
-  return evalsHref.bisectNew({ surface: selected });
-}
 
 // ── One row ─────────────────────────────────────────────────────────────────
 
@@ -146,8 +101,8 @@ function WallRow({ s, index, selected, from, to, stripWidth, cursor, onCursor, o
   const set = s.latest?.set ?? null;
   const rate = set?.passRate ?? null;
   const worse = isWorse(s);
-  const broke = s.latest?.flips.filter((f) => f.direction === "broke").length ?? 0;
-  const fixed = (s.latest?.flips.length ?? 0) - broke;
+  // A flip on a freeze that flaps, or under the same rendered prompt, says nothing about a change: it is shown, not counted.
+  const { broke, fixed, noise } = flipCounts(s.latest?.flips ?? []);
   const sep = s.latest?.separation ?? null;
   const baseWords = baselineWords(s.latest?.baseline ?? null);
   const sepTitle = s.latest ? separationTitle(s.latest) : undefined;
@@ -205,7 +160,7 @@ function WallRow({ s, index, selected, from, to, stripWidth, cursor, onCursor, o
             }}
             tip={stripTip}
             delayMs={index * 30}
-            label={`${s.id}: batch median scores over ${daysWord(from, to)}`}
+            label={`${s.id}: batch median scores over ${plural(wallWindowDays(from, to), "day")}`}
           />
         ) : (
           <span className="ev-wall-nobatch">No batch in this window.</span>
@@ -232,6 +187,12 @@ function WallRow({ s, index, selected, from, to, stripWidth, cursor, onCursor, o
               {broke > 0 && <span className="ev-fail">{broke} broke</span>}
               {broke > 0 && fixed > 0 && ", "}
               {fixed > 0 && <span className="ev-pass">{fixed} fixed</span>}
+            </span>
+          )}
+          {noise.length > 0 && (
+            <span className="ev-quiet" title={noise.map(noiseFlipWords).join("\n")} data-ev-noise-flips={noise.length}>
+              {", "}
+              {noiseFlipsShort(noise)}
             </span>
           )}
         </span>
@@ -289,7 +250,6 @@ function SpendStrip({ days, from, to, width }: { days: OverviewResponse["spendBy
   );
 }
 
-
 function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
   const share = b.budgetUsd > 0 ? Math.min(1, b.spentUsd / b.budgetUsd) : 0;
   const stalled = isBisectStalled(b, now, EVALS_STALL_MS);
@@ -300,15 +260,13 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
         <span className="ev-mono">{b.surface}</span>
         <span className="ev-quiet">{bisectStatusWord(b.status)}</span>
         {stalled && (
-          <span className="evb-stall-chip" title="No new step for five minutes: check its tmux session or log" data-ev-bisect-stalled>
-            stalled?
-          </span>
+          <StallChip since={b.updatedAt} data-ev-bisect-stalled />
         )}
         <span className="flex-1" />
         <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(b.startedAt), now).replace(" ago", "")}</span>
       </span>
       <span className="ev-wall-ribbon-range ev-mono">
-        {shortSha(b.good)} .. {shortSha(b.bad)}
+        {endpointLabel(b.good)} to {endpointLabel(b.bad)}
       </span>
       <span className="ev-wall-ribbon-budget" title={`${usd(b.spentUsd)} of a ${usd(b.budgetUsd)} budget`}>
         <span className="ev-wall-ribbon-track">
@@ -324,15 +282,14 @@ function BisectRibbon({ b, now }: { b: BisectSummary; now: number }) {
 
 function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
   if (!sim) return <div className="ev-wall-foot-empty">No Multiplayer sim session on this machine yet.</div>;
+  const outcome = simOutcome(sim);
   return (
     <EvalsLink href={evalsHref.sim()} className="ev-wall-simline" data-ev-sim-line={sim.id}>
-      <svg width={12} height={12} viewBox="-7 -7 14 14" aria-hidden className={sim.failed ? "ev-fail" : "ev-pass"}>
-        {sim.failed ? <circle r={4.9} fill="none" stroke="currentColor" strokeWidth={1.6} /> : <circle r={5.5} fill="currentColor" />}
-      </svg>
+      <VerdictGlyph state={outcome.state} title={outcome.words} />
       <span className="ev-wall-simline-text" title={`${plural(sim.runs, "run")} across ${plural(sim.scenarios, "scenario")}`}>
         {sim.unsessioned ? "An unsessioned run" : plural(sim.scenarios, "scenario")}
         {", "}
-        <span className={sim.failed ? "ev-fail" : undefined}>{sim.failed ? `${sim.failed} failed` : "none failed"}</span>
+        <span className={outcome.bad ? "ev-fail" : undefined}>{outcome.words}</span>
       </span>
       <span className="flex-1" />
       <span className="ev-quiet ev-tabular">{formatRelativeTime(Date.parse(sim.startedAt), now).replace(" ago", "")}</span>
@@ -340,42 +297,6 @@ function SimLine({ sim, now }: { sim: SimSessionSummary | null; now: number }) {
     </EvalsLink>
   );
 }
-
-// ── The wall ────────────────────────────────────────────────────────────────
-
-const MAX_WINDOW_DAYS = 30;
-const MIN_WINDOW_DAYS = 2;
-
-/**
- * Where the shared axis starts: just before the oldest batch on the wall
- * (the oldest spend day when there is none), kept between 2 and 30 days
- * before now. A home whose runs span four days would otherwise draw every
- * strip in the last eighth of its width.
- */
-export function wallWindowFrom(data: Pick<OverviewResponse, "surfaces" | "spendByDay">, now: number): number {
-  const widest = now - MAX_WINDOW_DAYS * DAY_MS;
-  const narrowest = now - MIN_WINDOW_DAYS * DAY_MS;
-  let oldest = Infinity;
-  for (const s of data.surfaces) for (const b of s.strip) oldest = Math.min(oldest, Date.parse(b.batchAt));
-  // Spend is kept per day, so it places the window only when no batch can.
-  if (!Number.isFinite(oldest)) for (const d of data.spendByDay) oldest = Math.min(oldest, dayStart(d.day));
-  if (!Number.isFinite(oldest)) return widest;
-  // A margin of 3% of the span keeps the oldest batch off the strip's edge.
-  return Math.min(narrowest, Math.max(widest, oldest - (now - oldest) * 0.03));
-}
-
-/** The widest axis label ("Sep 29", six 11px mono characters) plus a gutter, so daily ticks in a narrow pane drop labels instead of overlapping. */
-export const WALL_AXIS_LABEL_GAP = 48;
-
-/** The date labels over the strip column: the strip's own x scale, one label at most every WALL_AXIS_LABEL_GAP px. */
-export function wallAxisTicks(from: number, to: number, stripWidth: number): { label: string; x: number }[] {
-  const days = dayList(from, to);
-  const x = linear(from, to, 2, Math.max(stripWidth, 40) - 2);
-  // The first day began before the window does; its midnight sits left of the strip.
-  return timeAxisLabels(days, (i) => x(dayStart(days[i])), WALL_AXIS_LABEL_GAP).filter((t) => t.x >= 0);
-}
-
-const daysWord = (from: number, to: number) => `${Math.round((to - from) / DAY_MS)} days`;
 
 
 export interface SurfaceWallViewProps {
@@ -402,7 +323,8 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
   const worse = rows.filter(isWorse).length;
   const landing = rows.filter((s) => s.landing).length;
   const openBisects = data.bisects.filter((b) => isBisectLive(b.status));
-  const spend7 = rows.reduce((t, s) => t + s.spend7dUsd, 0);
+  const spend = useMemo(() => wallSpend(data.spendByDay, from, to), [data.spendByDay, from, to]);
+  const windowWords = plural(spend.days, "day");
 
   // ── Keys: j/k walk the rows, Enter opens one, b attributes the newest worse pair.
   const index = selected ? rows.findIndex((s) => s.id === selected) : -1;
@@ -442,7 +364,7 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
       <div className="ev-wall-layout">
         <section className="ev-wall-main" aria-label="Surfaces">
           <header className="ev-wall-head">
-            <h1 className="ev-title">
+            <h1 className="ev-page-title">
               <VerdictGlyph state={worse ? "fail" : "pass"} title={worse ? `${worse} ${worse === 1 ? "surface" : "surfaces"} separated worse` : "Nothing separated worse"} />
               Surfaces
             </h1>
@@ -450,7 +372,7 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
               {rows.length} surfaces
               {worse > 0 && <span className="ev-fail">, {worse} separated worse</span>}
               {landing > 0 && <>, {landing} landing</>}
-              , {usd(spend7)} in 7 days
+              , {usd(spend.usd)} in {windowWords}
             </span>
             <span className="flex-1" />
             <span className="ev-wall-keys" aria-label="Keys">
@@ -470,7 +392,7 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
           {rows.length === 0 ? (
             <EmptyState title="No surface has a run yet" description="Run ./evals check from the checkout and the wall fills in as the index reads the run folders." />
           ) : (
-            <div role="table" className="ev-wall-table" aria-label={`Every surface over the last ${daysWord(from, to)}`} onMouseLeave={() => setCursor(null)}>
+            <div role="table" className="ev-wall-table" aria-label={`Every surface over the last ${windowWords}`} onMouseLeave={() => setCursor(null)}>
               <div role="row" className="ev-wall-row ev-wall-row--head">
                 <div role="columnheader">Surface</div>
                 <div role="columnheader" className="ev-wall-axis" ref={axisRef} title="Each step is one batch's median score; the dots are its reps, the hairline the 0.7 pass mark">
@@ -502,8 +424,8 @@ export function SurfaceWallView({ data, now, cadence, onCadence, onOpen, active 
                   <SpendStrip days={data.spendByDay} from={from} to={to} width={stripWidth} />
                 </div>
                 <div role="cell" className="ev-wall-rate">
-                  <span className="ev-wall-sub">{daysWord(from, to)}</span>
-                  <span className="ev-tabular">{usd(data.spendByDay.reduce((t, d) => t + d.usd + d.judgeUsd, 0))}</span>
+                  <span className="ev-wall-sub">{windowWords}</span>
+                  <span className="ev-tabular">{usd(spend.usd)}</span>
                 </div>
               </div>
             </div>

@@ -20,7 +20,7 @@ export function SimCatalogPage(_props: { view: Extract<EvalsView, { view: "sim" 
       const job = changes.jobs.find((j) => j.id === jobId.current);
       if (!job) return;
       if (job.status === "running") return setSweep({ state: "running", job });
-      setSweep(job.status === "done" ? { state: "done", job } : { state: "failed", error: `The sweep ${job.status}${job.progress.text ? `: ${job.progress.text}` : ""}` });
+      setSweep(job.status === "done" ? { state: "done", job } : { state: "failed", error: `The sweep ${job.status}${job.progress.text ? `: ${job.progress.text}` : ""}`, logTail: job.logTail ?? [] });
       catalog.reload();
       sessions.reload();
     },

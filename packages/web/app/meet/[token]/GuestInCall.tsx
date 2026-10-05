@@ -14,8 +14,8 @@ import {
 } from "../../../components/calls/stageHost";
 import { DeviceSelect, NoticePills } from "./MeetChrome";
 import { LogoMark } from "../../../components/Logo";
-import { RecordingMark, RecordingStopControl } from "../../../components/calls/RecordingMark";
-import { guestNoticeLines, humanizeConvexError, type GuestNotice } from "@codecast/shared/contracts";
+import { PLACE, RecordingMark, RecordingStopControl } from "../../../components/calls/RecordingMark";
+import { guestNoticeLines, humanizeConvexError, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 
 // The call, for a guest: the member's stage (StageViews: the same tiles, the
 // same views, the same speaking ring and guest marks), with the chrome a
@@ -32,6 +32,7 @@ export function GuestInCall({
   transcribed,
   recording,
   videoPublic = false,
+  wordsPublic = false,
   accepted,
   reconnecting,
   ended: endedAs,
@@ -49,6 +50,8 @@ export function GuestInCall({
   recording: boolean;
   /** The recording's video will be on the call's public link. */
   videoPublic?: boolean;
+  /** The transcript is on the call's public link as it is written. */
+  wordsPublic?: boolean;
   /** The notice the guest joined under. What the room keeps beyond it (a
    *  recording or a transcript that started since, or one running that this
    *  notice did not say) is said in words on the way in, not left to a mark
@@ -112,21 +115,34 @@ export function GuestInCall({
   // a recording that starts while they are inside, a transcript switched on,
   // or either already running when the notice they joined under said less.
   // A thing that stops is forgotten, so starting it again is said again.
-  // A recording whose video goes to the call's public link is more than one
-  // the guest was told of, so it is said again when that changes.
+  // A recording whose video, or a transcript whose words, go to the call's
+  // public link is more than one the guest was told of, so it is said again
+  // when that changes.
   const [told, setTold] = useState<GuestNotice>(() => accepted ?? { recording: false, transcribed: false });
   useWatchEffect(() => {
     setTold((t) =>
-      (t.recording && !recording) || (t.transcribed && !transcribed) || (t.video_public && !videoPublic)
-        ? { recording: t.recording && recording, transcribed: t.transcribed && transcribed, video_public: !!t.video_public && videoPublic }
+      (t.recording && !recording) || (t.transcribed && !transcribed) || (t.video_public && !videoPublic) || (t.words_public && !wordsPublic)
+        ? {
+            recording: t.recording && recording,
+            transcribed: t.transcribed && transcribed,
+            video_public: !!t.video_public && videoPublic,
+            words_public: !!t.words_public && wordsPublic,
+          }
         : t,
     );
     if (!recording) setAskStop(false);
-  }, [recording, transcribed, videoPublic]);
-  const recordingNews = recording && (!told.recording || (videoPublic && !told.video_public));
-  const fresh = guestNoticeLines({ recording: recordingNews, transcribed: transcribed && !told.transcribed, video_public: videoPublic }, "short");
+  }, [recording, transcribed, videoPublic, wordsPublic]);
+  const news = noticeNews(told, { recording, transcribed, video_public: videoPublic, words_public: wordsPublic });
+  const fresh = guestNoticeLines({ recording: news.rec, transcribed: news.words, video_public: videoPublic, words_public: wordsPublic }, "short");
   const dismiss = (key: "rec" | "words") =>
-    setTold((t) => (key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true }));
+    setTold((t) =>
+      key === "rec" ? { ...t, recording: true, video_public: videoPublic } : { ...t, transcribed: true, words_public: wordsPublic },
+    );
+  // The transcription pill in the bar says only a word, and a touch screen
+  // shows no tooltip, so a press on it brings the line back (the same line,
+  // with its Mute), and a second press puts it away again.
+  const explainWords = () =>
+    news.words ? dismiss("words") : setTold((t) => ({ ...t, transcribed: false, words_public: false }));
   // Stop is for everyone, so it is asked once more, from the mark in the bar
   // or from the line that said it started.
   const [askStop, setAskStop] = useState(false);
@@ -192,7 +208,7 @@ export function GuestInCall({
         </span>
         <div className="min-w-2 flex-1" />
         {recording && <GuestRecordingControl asking={askStop} onAsk={setAskStop} onStop={onStopRecording} />}
-        <NoticePills transcribed={transcribed} />
+        <NoticePills transcribed={transcribed} wordsPublic={wordsPublic} onExplain={explainWords} />
         <div role="radiogroup" aria-label="View" className="ml-1 flex shrink-0 items-center rounded-lg bg-white/[0.04] p-0.5 max-sm:hidden">
           {STAGE_VIEWS.map((v) => (
             <button
@@ -253,7 +269,10 @@ export function GuestInCall({
       )}
       {c.audioBlocked && c.phase === "connected" && (
         <Banner tone="cyan" icon={<Volume2 className="h-3.5 w-3.5" />} actions={[{ label: "Turn on sound", onClick: () => void call.startAudio() }]}>
-          Your browser is holding the call's sound until you click.
+          {/* Tap on a touch screen, click with a mouse: the verb follows the
+              pointer (CSS, so it is right on the first paint). */}
+          Your browser is holding the call's sound until you <span className="[@media(pointer:coarse)]:hidden">click</span>
+          <span className="hidden [@media(pointer:coarse)]:inline">tap</span>.
         </Banner>
       )}
       {/* Wraps rather than truncates: this is the notice a guest's consent
@@ -503,8 +522,9 @@ function DevicesButton({ call, disabled }: { call: GuestCall; disabled?: boolean
       {open && (
         // On a phone the button is off the bar's centre and a popover hung
         // from it runs off one edge, so there it is pinned to the screen's
-        // sides, just above the bar, instead.
-        <div className="absolute bottom-full left-1/2 z-20 mb-3 flex w-[min(320px,calc(100vw-24px))] -translate-x-1/2 flex-col gap-2 rounded-xl bg-sol-bg-alt p-3 shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-bottom-1 duration-150 motion-reduce:animate-none max-sm:fixed max-sm:inset-x-3 max-sm:bottom-[calc(76px+env(safe-area-inset-bottom))] max-sm:mb-0 max-sm:w-auto max-sm:translate-x-0">
+        // sides, just above the bar, instead (PLACE, the recording
+        // questions' placement, which carries that rule).
+        <div className={`absolute z-20 flex w-[min(320px,calc(100vw-24px))] flex-col gap-2 rounded-xl bg-sol-bg-alt p-3 shadow-2xl ring-1 ring-white/[0.08] animate-in fade-in slide-in-from-bottom-1 duration-150 motion-reduce:animate-none ${PLACE.above}`}>
           <DeviceSelect kind="mic" devices={devices.mic} choice={c.choice} onChoose={choose} />
           <DeviceSelect kind="camera" devices={devices.camera} choice={c.choice} onChoose={choose} />
           {canPickSpeaker() && devices.speaker.length > 0 && <DeviceSelect kind="speaker" devices={devices.speaker} choice={c.choice} onChoose={choose} />}

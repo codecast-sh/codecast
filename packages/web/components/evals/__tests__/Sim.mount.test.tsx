@@ -35,8 +35,10 @@ const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider, useShortcuts } = await import("../../../shortcuts/ShortcutProvider");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
-const { SimCatalogView, cellFailure, gridRows, markersFor } = await import("../SimCatalogView");
-const { SimRunView, PLAY_STEP_MS } = await import("../SimRunView");
+const { SimCatalogView } = await import("../SimCatalogView");
+const { cellFailure, gridRows, markersFor } = await import("../simModel");
+const { SimRunView } = await import("../SimRunView");
+const { PLAY_STEP_MS } = await import("../simModel");
 const { SimRunPage } = await import("../pages/SimRunPage");
 const { SimCatalogPage } = await import("../pages/SimCatalogPage");
 

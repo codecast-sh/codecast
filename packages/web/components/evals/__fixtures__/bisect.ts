@@ -193,7 +193,8 @@ export function fixtureBisect(kind: FixtureBisectKind, plan: BisectPlan, opts: {
         at += 6 * MIN;
         const inClass = candidates.filter((c) => c.renderClass === culpritClass.n);
         answer = { kind: "range", candidates: inClass, separation: { kind: "not-separated", p: 0.21 }, tier: 2 };
-        step("answer", null, `${inClass.length} commits render alike and a replay cannot tell them apart: the answer is a range, p 0.21.`);
+        // runner.ts's own range line, which the result card prints as it is.
+        step("answer", null, `range of ${inClass.length} candidate(s): the confirmation did not separate worse (not-separated, p=0.2100)`);
         tail = ["confirm: not separated, p 0.21", "answer written to state.json"];
       }
     }

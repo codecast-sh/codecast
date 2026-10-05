@@ -37,14 +37,14 @@ import { requireUser } from "./lib/requireUser";
 import { channelMemberIds, isRestricted } from "./chatAccess";
 import { bucketTs } from "./presenceState";
 import { teamFeatureOffMessage, teamHasFeature } from "./teamFeatures";
-import { huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
-import { noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, recordingOutage, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
+import { ensureOwnRoute, huddleAlive, idleLiveTranscriptsForRoom, resumeOrEndHuddle } from "./transcripts";
+import { liveRoomRun, noteRecordedPeople, nudgeRecordingForShare, recordingConfigured, recordingOutage, roomFilming, roomRecordingState, stopRoomRecording } from "./lib/callRecordingRuns";
 import { liveTranscriptFor, postEvent } from "./callChat";
 import { admittedGuests, guestKnocks, projectGuest } from "./callGuests";
 import { endGuestAdmissions } from "./lib/callGuestAdmission";
 import { signLivekitJwt } from "./lib/livekitJwt";
+import { livekitConfigFromEnv } from "./lib/livekitServer";
 import { publicPersonLabel, teammateLabel } from "./lib/personLabel";
-export { signLivekitJwt };
 import {
   CALL_PUSH_CATEGORY,
   CALL_PUSH_SOUND,
@@ -138,8 +138,8 @@ export async function roomSeatClass(
 export const getCallConfig = query({
   args: {},
   handler: async (ctx) => {
-    const url = process.env.LIVEKIT_URL;
-    const configured = !!(url && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+    const livekit = livekitConfigFromEnv();
+    const configured = livekit !== null;
     const userId = await getAuthUserId(ctx);
     let teams: string[] = [];
     if (configured && userId) {
@@ -152,7 +152,7 @@ export const getCallConfig = query({
       }
     }
     const enabled = configured && (userId ? teams.length > 0 : true);
-    return { enabled, url: enabled ? url : undefined, teams };
+    return { enabled, url: enabled ? livekit?.url : undefined, teams };
   },
 });
 
@@ -316,6 +316,12 @@ async function holdPrewarmSeat(
   // outranks the call they are in. The client refuses this too — the answer is
   // here as well because the cost of getting it wrong is somebody's live call.
   if (liveMembers(mine, now).length > 0) return { room_key: roomKey, prewarm: false };
+  // A RECORDED ROOM TAKES NO GUESSES. Everyone in a recorded room is told, and
+  // a prewarm is a muted, unseated connection nobody sees on the stage, which
+  // the composite could still draw as a name tile. The client skips recorded
+  // rooms itself (roomPrewarm); the refusal lives here too so an older bundle
+  // or another client cannot slip a silent participant into a recording.
+  if (await liveRoomRun(ctx, roomKey)) return { room_key: roomKey, prewarm: false };
   // One at a time: a second face, a second DM, and the last one is dropped.
   for (const m of mine) {
     if (m.room_key !== roomKey) await ctx.db.delete(m._id);
@@ -1029,6 +1035,9 @@ export const setRoomTranscribeOff = mutation({
       const live = await liveTranscriptFor(ctx, args.room_key);
       if (live) {
         if (String(live.started_by) !== String(userId)) await ctx.db.patch(live._id, { started_by: userId });
+        // A record that only Record began owes the room its own session
+        // route; transcription on is what pays it.
+        await ensureOwnRoute(ctx, live, userId);
         await postEvent(ctx, { room_key: args.room_key, team_id: seat.team_id, user_id: userId, event: "transcribe_on" });
       }
     }
@@ -1214,14 +1223,18 @@ export const getLiveRooms = query({
         // auto-scribe from starting it again.
         transcribe_off: !!state?.transcribe_off,
         transcribe_off_at: state?.transcribe_off ? state.transcribe_off_at ?? state.updated_at : null,
+        // The live record's public link is on: its transcript reaches anyone
+        // holding the link as it is written. Said beside "transcribed" on the
+        // stage, as the guests' notice says it (callGuests.roomNotice).
+        words_public: !state?.transcribe_off && !!state?.words_public,
         // Somebody pressed Record and it has not been stopped: what everyone
         // who can see the room, inside it or about to walk in, is told.
         // Byte-stable: it flips on a press and a stop, never with the clock.
-        recording: !!recordingRun && recordingRun.status !== "stopping",
+        recording: roomFilming(recordingRun),
         // The run behind the flag, for whoever may be in the room: who
         // pressed, when the room began to be filmed (the clock), and
         // "stopping" while LiveKit finishes the file, which the flag alone
-        // cannot say. The same facts getRoomRecording answers, carried here
+        // cannot say. The run as roomRecordingState reads it, carried here
         // so the room's recording has one feed and one home on the client.
         // Withheld, like the room's title, from a viewer who can only see
         // that the room exists. Byte-stable the same way: it moves on a
@@ -1281,10 +1294,9 @@ export const authForToken = internalQuery({
 export const mintAccessToken = action({
   args: { room_key: v.string() },
   handler: async (ctx, args): Promise<{ url: string; token: string }> => {
-    const url = process.env.LIVEKIT_URL;
-    const apiKey = process.env.LIVEKIT_API_KEY;
-    const apiSecret = process.env.LIVEKIT_API_SECRET;
-    if (!url || !apiKey || !apiSecret) throw new Error("Calling is not configured");
+    const livekit = livekitConfigFromEnv();
+    if (!livekit) throw new Error("Calling is not configured");
+    const { url, apiKey, apiSecret } = livekit;
     const grant = await ctx.runQuery(internal.calls.authForToken, {
       room_key: args.room_key,
     });

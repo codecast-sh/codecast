@@ -2,7 +2,8 @@ import { useRef, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { fmtClock } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
+import { RECORDING_SHARED_WORDS, STOP_RECORDING_ASK } from "../../lib/calls/roomRecordingEnd";
 import "./recorder.css";
 
 // THE RED MARK: a huddle is being recorded. One look on every call surface
@@ -34,11 +35,6 @@ export function recordingMarkTitle(status: RecordingMarkStatus, by?: string | nu
   const where = shared ? ` ${RECORDING_SHARED_WORDS}` : "";
   return `This call is being recorded.${who}${where} Anyone in the call can stop it`;
 }
-
-/** What the room is told when the run's video will be on the call's public
- *  link (callRecordings: a link whose video was chosen before this press):
- *  faces and screens, guests' included, then reach anyone with the link. */
-export const RECORDING_SHARED_WORDS = "The video is shared by the call's public link.";
 
 const SAVING_DOT = "h-[7px] w-[7px] shrink-0 rounded-full bg-sol-text-dim";
 
@@ -115,17 +111,14 @@ export function RecordingMark({
  *  shared with every other one in the app, so only this span re-renders. */
 function RecordingClock({ startedAt }: { startedAt: number }) {
   const now = useCoarseNow(1000);
-  return <span className="tabular-nums">{fmtClock(Math.max(0, now - startedAt))}</span>;
+  return <span className="tabular-nums">{formatCallTime(Math.max(0, now - startedAt))}</span>;
 }
 
 // ── Stopping, asked once more ────────────────────────────────────────────
 
-/** The question every Stop asks, in the words every surface uses (the toast
- *  that cannot draw this component says the same two lines). */
-export const STOP_RECORDING_ASK = {
-  title: "Stop recording for everyone?",
-  body: "The video so far is kept with the call.",
-} as const;
+// The question every Stop asks lives with the phone's words
+// (lib/calls/roomRecordingEnd); re-exported for this file's importers.
+export { STOP_RECORDING_ASK };
 
 /** The question and its two answers. `dense` is one line for a face row
  *  card: the question, Stop, Keep. Focus is the host's to place; Stop is
@@ -164,7 +157,7 @@ export function StopRecordingQuestion({
         dense ? "px-1.5 py-0.5 text-[10px]" : "px-2.5 py-1.5 text-[11.5px]"
       }`}
     >
-      {dense ? "Keep" : "Keep recording"}
+      {dense ? "Keep" : STOP_RECORDING_ASK.keep}
     </button>
   );
   if (dense) {
@@ -194,13 +187,24 @@ export function StopRecordingQuestion({
   );
 }
 
-const PLACE = {
+// On a phone a box hung from its control runs off an edge whenever the
+// control is off the screen's centre (the guest's REC pill sits near the
+// right, the stage's badge near the left), so below `sm` every placement is
+// pinned to the screen's sides instead: under the guest's bar for a control
+// at the top, over the stage's control bar for one at the bottom. The same
+// rule the guest's devices popover uses. Each placement's own width gives way
+// to the screen's (`max-sm:w-auto`).
+const PHONE_BELOW = "max-sm:fixed max-sm:inset-x-3 max-sm:top-[calc(env(safe-area-inset-top)+56px)] max-sm:mt-0 max-sm:w-auto";
+const PHONE_ABOVE =
+  "max-sm:fixed max-sm:inset-x-3 max-sm:bottom-[calc(76px+env(safe-area-inset-bottom))] max-sm:top-auto max-sm:mb-0 max-sm:w-auto max-sm:translate-x-0";
+
+export const PLACE = {
   /** Under the control, its right edge on the control's. */
-  below: "right-0 top-full mt-2",
+  below: `right-0 top-full mt-2 ${PHONE_BELOW}`,
   /** Under the control, its left edge on the control's. */
-  "below-start": "left-0 top-full mt-2",
+  "below-start": `left-0 top-full mt-2 ${PHONE_BELOW}`,
   /** Over the control, centred on it (a control bar at the bottom). */
-  above: "bottom-full left-1/2 mb-3 -translate-x-1/2",
+  above: `bottom-full left-1/2 mb-3 -translate-x-1/2 ${PHONE_ABOVE}`,
 } as const;
 
 /**

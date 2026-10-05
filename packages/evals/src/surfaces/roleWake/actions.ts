@@ -1,6 +1,11 @@
 import type { GateResult } from '@platform/evals';
 
+import { orgEveryToMs } from '@codecast/shared/contracts/orgProposal';
+import { briefBudget, briefBudgetWords, parsePlaybook, wakeTuneRefusal } from '@codecast/shared/contracts/rolePlaybook';
+
 import { gate, type AgentResult } from '../../surface';
+
+const DAY_MS = 86_400_000;
 
 // What a standing session's turn did through `cast`, read the two ways a dry
 // run records it: a write the guard refused (calls.log `REFUSED <argv>`), and
@@ -24,10 +29,28 @@ export interface StandingLabel {
   replies?: string[];
   /** Its opening asks it to keep its role in durable memory: the opening turn writes a file in its memory dir or a CLAUDE.md. */
   savesMemory?: boolean;
+  /** What the turn does to its own wake (org-staffing.md S38): leaves it as it is, or slows its check within the bounds a role sets itself. */
+  tune?: 'none' | 'slower';
+  /** What the brief the turn saves must hold in its playbook (S38). */
+  playbook?: PlaybookLabel;
+}
+
+/** A playbook a check must leave behind, each key held only when named. */
+export interface PlaybookLabel {
+  /** The newest reading in the brief the turn read, by day: the saved brief holds a newer one. (The run dates its lines by the day it runs, not the fixture's.) */
+  readingAfter?: string;
+  /** How many rules it holds, at least and at most: the turn learned one, and did not pad. */
+  rules?: [number, number];
+  /** Standing decisions it holds, at least. */
+  decisions?: number;
+  /** Milestone readings, by day, that survive a condense. */
+  milestones?: string[];
+  /** The brief it started from, in characters: the saved one is shorter. */
+  shorterThan?: number;
 }
 
 /** The verbs that write: what a turn sends, posts, decides or changes. */
-const WRITE = /\bcast\s+((?:anchor\s+say|chat\s+(?:reply|send)|trigger\s+(?:pause|cancel|rm|delete|update|resume|add)|role\s+(?:pause|resume|retire|wake)|decide(?!\s+(?:ls|show)\b)|send)\b[^\n`]*)/g;
+const WRITE = /\bcast\s+((?:anchor\s+say|chat\s+(?:reply|send)|trigger\s+(?:pause|cancel|rm|delete|update|resume|add)|role\s+(?:pause|resume|retire|wake|tune)|decide(?!\s+(?:ls|show)\b)|send)\b[^\n`]*)/g;
 
 /** The code in a message: fenced blocks and inline spans, where a named command sits. Prose that mentions a verb is not a command. An inline span may run over lines inside one paragraph, as markdown allows (a command with a heredoc body); WRITE still reads only its first line. */
 const codeIn = (text: string): string[] => [...text.matchAll(/```[^\n]*\n([\s\S]*?)```|`((?:[^`\n]|\n(?!\s*\n))+)`/g)].map((m) => m[1] ?? m[2] ?? '');
@@ -159,6 +182,19 @@ function decisionGate(writes: string[]): GateResult {
   return gate('raises-decision', raised.length > 0, raised.length ? `raised: ${raised.map((w) => `cast ${w}`).join('; ')}` : 'named no `cast decide`, so the choice was never put to the people who own it');
 }
 
+/** The role's own check, tuned: `role tune` with a cadence, a gate or a focus. A trigger verb on its routine is the wrong door (it reads the person's whole roster). */
+function tuneGate(writes: string[], want: NonNullable<StandingLabel['tune']>): GateResult {
+  const tunes = writes.filter((w) => /^role\s+tune\b/.test(w));
+  const wrongDoor = writes.filter((w) => /^trigger\s+(update|pause|cancel|rm|delete|add)\b\s*\S/.test(w));
+  const named = (ws: string[]) => ws.map((w) => `cast ${w}`).join('; ');
+  if (wrongDoor.length) return gate('wake-tune', false, `changed a trigger directly instead of its own check: ${named(wrongDoor)}`);
+  if (want === 'none') return gate('wake-tune', tunes.length === 0, tunes.length ? `changed its wake though the pace of the work had not changed: ${named(tunes)}` : 'left its wake as it was');
+  const everyMs = (w: string) => orgEveryToMs(/--every[\s=]+["']?(\d+[mhdw])\b/.exec(w)?.[1] ?? '');
+  const slower = tunes.filter((w) => { const ms = everyMs(w); return (ms !== null && ms > DAY_MS && !wakeTuneRefusal(ms)) || /--precheck[\s=]+\S/.test(w); });
+  const reasoned = slower.filter((w) => /--why[\s=]+\S/.test(w));
+  return gate('wake-tune', reasoned.length > 0, reasoned.length ? `slowed its check: ${named(reasoned)}` : slower.length ? `slowed its check without a reason: ${named(slower)}` : tunes.length ? `tuned, but not slower within its bounds: ${named(tunes)}` : 'left a daily check running on an area with nothing to check');
+}
+
 /** A memory file: one under a `memory/` dir, or a CLAUDE.md, where a session's durable notes live. */
 const MEMORY_FILE = /(?:^|\/)(?:memory\/[^/]+|CLAUDE\.md)$/;
 
@@ -190,6 +226,32 @@ export function standingGates(agents: AgentResult[], label: StandingLabel | unde
   if (label.raisesDecision) gates.push(decisionGate(writes));
   if (label.replies) gates.push(repliesGate(writes, label.replies));
   if (label.savesMemory) gates.push(memoryGate(agents));
+  if (label.tune) gates.push(tuneGate(writes, label.tune));
   if (label.rereads) gates.push(rereadGate(readsMade(agents, from), [...agents.flatMap((a) => a.turns.slice(from - 1).flat()), ...extra].join('\n'), label.rereads));
   return gates;
+}
+
+/** The brief fits its budget (S38): a role reads it at every wake, so one that outgrew it is condensed before it is saved. */
+export function budgetGate(brief: string): GateResult {
+  const b = briefBudget(brief);
+  return gate('brief-budget', !b.over, `the brief is ${briefBudgetWords(b)}`);
+}
+
+/** The playbook the saved brief holds, against what the fixture says the turn should have left in it. */
+export function playbookGate(brief: string, want: PlaybookLabel): GateResult {
+  const p = parsePlaybook(brief);
+  const readings = p.metric?.readings ?? [];
+  const missing: string[] = [];
+  if (want.readingAfter && !readings.some((r) => (r.written_on ?? '') > want.readingAfter!)) missing.push(`no metric reading newer than ${want.readingAfter}`);
+  if (want.rules && (p.rules.length < want.rules[0] || p.rules.length > want.rules[1])) missing.push(`${p.rules.length} rule(s), wanted ${want.rules[0]} to ${want.rules[1]}`);
+  // Readable and parseable (S38): every entry carries its date, and a rule the mistake that taught it.
+  const undated = [...p.rules, ...p.refuted, ...p.decisions, ...p.threads].filter((e) => !e.written_on);
+  if (undated.length) missing.push(`${undated.length} entr${undated.length === 1 ? 'y carries' : 'ies carry'} no date (${undated[0]!.raw.slice(0, 60)})`);
+  const untaught = p.rules.filter((r) => !r.mistake);
+  if (untaught.length) missing.push(`${untaught.length} rule(s) without what taught it (${untaught[0]!.raw.slice(0, 60)})`);
+  if (want.decisions && p.decisions.length < want.decisions) missing.push(`${p.decisions.length} standing decision(s), wanted at least ${want.decisions}`);
+  const lost = (want.milestones ?? []).filter((day) => !readings.some((r) => r.written_on === day));
+  if (lost.length) missing.push(`lost the milestone reading(s) of ${lost.join(', ')}`);
+  if (want.shorterThan && brief.trim().length >= want.shorterThan) missing.push(`${brief.trim().length} characters, no shorter than the ${want.shorterThan} it started from`);
+  return gate('playbook-kept', missing.length === 0, missing.length ? missing.join('; ') : `${readings.length} reading(s), ${p.rules.length} rule(s), ${p.refuted.length} refuted, ${p.decisions.length} decision(s), ${p.threads.length} thread(s)`);
 }

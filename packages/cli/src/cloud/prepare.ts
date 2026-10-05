@@ -27,6 +27,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { lastErrorLine } from "../proc.js";
 import * as path from "node:path";
 import {
   ensureUp,
@@ -62,6 +63,7 @@ import {
 import { ensureHostGitReady, noPushReason, parseOrigin, type HostGitState } from "./hostGit.js";
 import { requiredHostTools, runHostTools, summarizeHostTools, type HostToolsReport } from "./hostTools.js";
 import { readProjectRegistrations } from "./mirror/projectRefresh.js";
+import type { HostCastPlatform } from "../hosts/updateHost.js";
 import {
   cloudCopyFiles,
   cloudSeedRef,
@@ -419,10 +421,24 @@ export interface ReadyHostHomeOptions {
   loginsDeps?: PushAgentLoginsOptions["deps"];
   toolsDeps?: ToolsForPrepareOptions["deps"];
   mirrorDeps?: MirrorForPrepareOptions["mirror"];
+  /** Injection for tests: the host cast step (default: hosts/updateHost castForPrepare). */
+  castStep?: (host: RemoteHost, platform: HostCastPlatform, log: Progress) => string;
+  /** Injection for tests: free bytes in the host home (default: `df` over ssh). */
+  diskStep?: (host: RemoteHost) => number;
+}
+
+/** Below this the host cannot take a mirror, a login or a worktree install. */
+export const HOST_MIN_FREE_BYTES = 1024 ** 3;
+
+function hostFreeBytes(host: RemoteHost): number {
+  const line = ssh(host, "df -Pk ~ | tail -1", 60_000).trim().split(/\s+/);
+  return Number(line[3]) * 1024;
 }
 
 export interface ReadyHostHomeReport {
   mirror: string;
+  /** The host cast step's line, when the host is one this laptop registered. */
+  cast?: string;
   /** The host git setup's result, when the step ran and the host answered. */
   git?: HostGitState;
   /** The agent logins push (step 1), when it ran. */
@@ -481,7 +497,8 @@ export function gitForPrepare(
 
 /**
  * The host-home steps every wake/prepare runs, in a fixed order, each
- * non-fatal and logged: (1) agent logins (the Claude credential, the agent
+ * non-fatal and logged: (0) the host's cast brought up to this laptop's, so
+ * the host half of every later step is current, (1) agent logins (the Claude credential, the agent
  * auth bundle with the repo checkout as codex trust path, then the tools
  * the repo and the mirrored home need), (2) host git readiness, (3) the
  * home mirror. Callers: prepareCloudHost, `cast cloud wake`,
@@ -491,8 +508,22 @@ export function gitForPrepare(
 export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions = {}): Promise<ReadyHostHomeReport> {
   const log = opts.onProgress ?? (() => {});
   const cloudId = opts.cloudId ?? host.address;
+  // A full disk fails every later step, the last of them after many minutes
+  // and as a crash (2026-10-05: a worktree install died as a bare Bun banner).
+  const free = (opts.diskStep ?? hostFreeBytes)(host);
+  if (Number.isFinite(free) && free < HOST_MIN_FREE_BYTES) {
+    throw new Error(`the host's disk is full (${(free / 1024 ** 2).toFixed(0)} MiB free): remove old worktrees there with cast ws ls and cast ws destroy`);
+  }
   let logins: AgentLoginsReport | undefined;
   let tools: HostToolsReport | undefined;
+  // Only a host this laptop registered is one it provisions and so keeps current.
+  const entry = readHosts().find((h) => h.id === cloudId);
+  let cast: string | undefined;
+  if (entry) {
+    // Lazy: hosts/updateHost reaches browser/provisionLinux, which imports this module.
+    const { castForPrepare, hostCastPlatform } = await import("../hosts/updateHost.js");
+    cast = (opts.castStep ?? castForPrepare)(host, hostCastPlatform(entry), log);
+  }
   // The declared machine setup first: packages and services the repo's own setup may need.
   if (!opts.skipLogins) {
     try {
@@ -513,7 +544,7 @@ export async function readyHostHome(host: RemoteHost, opts: ReadyHostHomeOptions
   }
   const git = opts.skipGit ? undefined : gitForPrepare(host, cloudId, log, { localGitRoot: opts.localGitRoot, repoPath: opts.repoPath, gitIdentity: opts.gitIdentity });
   const mirror = await mirrorForPrepare(host, cloudId, log, { force: opts.force, localGitRoot: opts.localGitRoot, mirror: opts.mirrorDeps });
-  return { mirror, ...(git ? { git } : {}), ...(logins ? { logins } : {}), ...(tools ? { tools } : {}) };
+  return { mirror, ...(cast ? { cast } : {}), ...(git ? { git } : {}), ...(logins ? { logins } : {}), ...(tools ? { tools } : {}) };
 }
 
 /**
@@ -640,7 +671,7 @@ export function hostSupportsStartPoint(host: RemoteHost): boolean {
     help = ssh(host, `${HOST_PATH}; cast ws acquire --help`, 60_000);
   } catch (err) {
     const e = err as { stderr?: string | Buffer; message?: string };
-    const detail = (e.stderr?.toString() || e.message || String(err)).trim().split("\n").filter(Boolean).pop() ?? "";
+    const detail = lastErrorLine(e.stderr?.toString() || e.message || String(err));
     throw new Error(`cannot check whether the host's cast supports seeded worktrees${detail ? `: ${detail}` : ""}`);
   }
   const supported = help.includes("--start-point");
@@ -771,7 +802,7 @@ export async function acquireRemoteWorkspace(
     { encoding: "utf-8", stdio: "pipe", env: process.env, timeout: 15 * 60_000, maxBuffer: 64 * 1024 * 1024 });
   const acquireArgs = `--input-root ${shq(inputRoot)} --skip-pool --json`;
   const failed = (result: ReturnType<typeof sshRun>): Error => {
-    const detail = (result.stderr || "").trim().split("\n").filter(Boolean).pop() ?? "";
+    const detail = lastErrorLine(result.stderr);
     return new Error(`cast ws acquire ${name} failed on the host (${result.signal ?? `exit ${result.status}`})${detail ? `: ${detail}` : ""}; workspace retained for inspection`);
   };
   let ws: RemoteWorkspace;
@@ -836,7 +867,7 @@ export async function acquireRemoteRootCheckout(host: RemoteHost, repoPath: stri
     if (result.status === 127 || /error: unknown command/i.test(result.stderr ?? "")) {
       throw new Error(`host cast predates shared checkouts — re-provision it: cast hosts provision ${host.address}`);
     }
-    const detail = (result.stderr || "").trim().split("\n").filter(Boolean).pop() ?? "";
+    const detail = lastErrorLine(result.stderr);
     throw new Error(`cast ws root failed on the host (${result.signal ?? `exit ${result.status}`})${detail ? `: ${detail}` : ""}; the checkout is on ${branch} for inspection`);
   }
   const ws = parseAcquireOutput(ROOT_WORKSPACE_NAME, result.stdout);

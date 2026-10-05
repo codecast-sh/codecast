@@ -2250,6 +2250,17 @@ export async function rotateOauthCredential(
     return { ok: false, reason: "token response missing access_token/expires_in", dead: false };
   }
   const expiresAt = now + expiresInSec * 1000;
+  // A grant we rotated is the same account as the token it rotated from. Carry
+  // the proof over: an unproved new token is named by ~/.claude.json's label,
+  // and a label lagging the login filed jordanbelman357's grant as "claude"
+  // (2026-10-04), so that profile's meter read the wrong account.
+  const inherited = verifiedIdentityFor(oauth?.accessToken);
+  if (inherited) {
+    const cache = readIdentityCache();
+    cache.tokens[tokenKey(accessToken)] = { ...inherited, verified_at: now };
+    writeIdentityCache(cache);
+    invalidateAccountsCache();
+  }
   // Only override the three fields a refresh actually changes; preserve the
   // rest of the blob verbatim (subscriptionType, rateLimitTier, scopes, …).
   return {
@@ -2348,6 +2359,8 @@ export async function resnapshotIfActiveFresher(
   const raw = await readActiveCredentialAsync();
   const activeOauth = oauthOf(raw);
   if (!raw || !activeOauth) return null;
+  // Name the profile from the credential's proved identity, not the label.
+  await verifyActiveIdentity();
   const oauthAccount = activeOauthAccountForSave(raw);
   const identity: CredentialIdentity = {
     ...identityOfOauthAccount(oauthAccount),
@@ -2415,7 +2428,9 @@ export interface ProfileAudit {
   verdict: "ok" | "mislabeled" | "duplicate" | "unverifiable";
   reason?: string;
   /** Set by repairProfileIdentities: what it did about a bad verdict. */
-  repair?: "dropped-credential" | "relabelled";
+  repair?: "dropped-credential" | "relabelled" | "moved";
+  /** With repair "moved": the profile of the account the login belongs to. */
+  moved_to?: string;
 }
 
 /** Probe every saved profile's stored credential and say whose it actually is.
@@ -2483,11 +2498,32 @@ export async function repairProfileIdentities(
   for (const row of audit) {
     if (row.verdict === "duplicate") {
       deleteProfileSecret(row.name);
+      deleteProfileStore(row.name);
       row.repair = "dropped-credential";
       dirty = true;
     } else if (row.verdict === "mislabeled") {
       const raw = await readProfileSecretAsync(row.name);
       const parsed = raw ? safeParse(raw) : null;
+      // The account it holds has a profile of its own whose login is dead:
+      // that is where this login belongs. Relabelling instead would leave the
+      // profile's real account with no profile, while its setup token and
+      // live sessions still carry the old name.
+      const home = audit.find((r) => r !== row && r.labelled_uuid === row.actual_uuid && r.verdict === "unverifiable");
+      if (parsed && home) {
+        parsed.oauthAccount = { accountUuid: row.actual_uuid, emailAddress: row.actual_email };
+        writeProfileSecret(home.name, JSON.stringify(parsed));
+        writeProfileStoreCredentials(home.name, JSON.stringify(parsed.credentials));
+        const { login_expired_at: _revived, ...homeMeta } = index.profiles[home.name];
+        index.profiles[home.name] = { ...homeMeta, ...profileMeta(parseProfile(JSON.stringify(parsed))) };
+        // The wrong account must never launch under this profile's name.
+        deleteProfileSecret(row.name);
+        deleteProfileStore(row.name);
+        index.profiles[row.name] = { ...index.profiles[row.name], login_expired_at: Date.now() };
+        row.repair = "moved";
+        row.moved_to = home.name;
+        dirty = true;
+        continue;
+      }
       if (parsed) {
         parsed.oauthAccount = { accountUuid: row.actual_uuid, emailAddress: row.actual_email };
         writeProfileSecret(row.name, JSON.stringify(parsed));

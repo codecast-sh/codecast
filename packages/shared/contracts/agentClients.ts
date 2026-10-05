@@ -38,12 +38,18 @@ import {
   dynamicModelOption,
 } from "./modelOptions";
 
-/** The single named union for a supported agent CLI client — the daemon's
- *  agent-type spelling and the registry key. */
-export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+/** The single named union for a supported agent client — the daemon's
+ *  agent-type spelling and the registry key. Every id but `codecast` is a
+ *  local CLI a daemon launches (LocalAgentClientId); `codecast` is the hosted
+ *  assistant, whose turns run in codecast's backend (plan pl-840). */
+export type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "codecast";
 
-/** Runtime transports that may create/deliver for a fenced execution binding. */
-export type AgentExecutionTransport = "tmux" | "app-server" | "external";
+/** The clients a daemon launches, watches and drives through a pane. */
+export type LocalAgentClientId = Exclude<AgentClientId, "codecast">;
+
+/** Runtime transports that may create/deliver for a fenced execution binding.
+ *  `hosted` is codecast's own backend: no device, no binding, no daemon. */
+export type AgentExecutionTransport = "tmux" | "app-server" | "external" | "hosted";
 
 /**
  * How a client runs non-interactively — the `cast exec` / `claude -p` analog.
@@ -74,7 +80,8 @@ export type ConvexAgentType =
   | "opencode"
   | "pi"
   | "grok"
-  | "muse";
+  | "muse"
+  | "codecast";
 
 const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   claude: "claude_code",
@@ -85,6 +92,7 @@ const CONVEX_BY_ID: Record<AgentClientId, ConvexAgentType> = {
   pi: "pi",
   grok: "grok",
   muse: "muse",
+  codecast: "codecast",
 };
 
 /** Client id → Convex spelling (`claude` → `claude_code`). */
@@ -98,9 +106,10 @@ export function toConvexAgentType(id: AgentClientId): ConvexAgentType {
  * normalize to `claude` — matching the historic `modelAgentKey` fallback so the
  * model helpers can route through this one function without a behavior change.
  *
- * `opencode` (phase 1), `pi` (phase 2), `grok`, and `muse` are first-class
- * clients with their own descriptors and map to themselves; everything
- * unrecognized falls through the `default` case to `claude`.
+ * `opencode` (phase 1), `pi` (phase 2), `grok`, `muse` and the hosted
+ * `codecast` are first-class clients with their own descriptors and map to
+ * themselves; everything unrecognized falls through the `default` case to
+ * `claude`.
  */
 export function fromConvexAgentType(agentType: string | null | undefined): AgentClientId {
   switch (agentType) {
@@ -118,6 +127,8 @@ export function fromConvexAgentType(agentType: string | null | undefined): Agent
       return "grok";
     case "muse":
       return "muse";
+    case "codecast":
+      return "codecast";
     default:
       return "claude";
   }
@@ -151,9 +162,10 @@ function formatUnknownAgentType(value: unknown): string {
  *
  * Compatibility aliases are exhaustive and explicit. In particular, `cowork`
  * remains an intentional alias for the Claude client, while nullish and unknown
- * values fail closed instead of entering the historical Claude fallback.
+ * values fail closed instead of entering the historical Claude fallback. The
+ * hosted `codecast` client is refused too: nothing on a machine executes it.
  */
-export function parseExecutionAgentClientId(agentType: unknown): AgentClientId {
+export function parseExecutionAgentClientId(agentType: unknown): LocalAgentClientId {
   switch (agentType) {
     case "claude":
     case "claude_code":
@@ -423,8 +435,8 @@ export interface AgentPaneReadiness {
   settleMs?: number;
 }
 
-/** Everything the daemon, convex, and web need to know about one client. */
-export interface AgentClientDescriptor {
+/** What every client declares, local or hosted. */
+interface AgentClientCommon {
   /** Stable internal id — the daemon's agent-type spelling and the registry key. */
   id: AgentClientId;
   /** The spelling the Convex schema / wire protocol uses. */
@@ -436,6 +448,27 @@ export interface AgentClientDescriptor {
   pinnedByDefault?: boolean;
   /** Exact fenced transports that are valid for this agent family. */
   executionTransports: readonly AgentExecutionTransport[];
+  /** Model/effort picker config, or undefined for clients with no model UI. */
+  modelConfig?: AgentModelConfig;
+  /** Non-model capabilities that are opt-in per client. */
+  capabilities: AgentClientCapabilities;
+  /** Where this client reads capabilities from disk. Absent for clients whose
+   *  layouts nobody has verified (gemini, opencode, pi) — honest absence, so
+   *  `capabilitySupport` reports every kind unsupported there instead of a
+   *  driver writing files the client never loads. */
+  agentFileTargets?: AgentFileTargets;
+}
+
+/** A client that runs in codecast's backend: no binary, no pane, no
+ *  transcript on disk, nothing a daemon resumes. Only the common facts. */
+export interface HostedAgentClientDescriptor extends AgentClientCommon {
+  id: "codecast";
+}
+
+/** Everything the daemon, convex, and web need to know about one local
+ *  client: the facts above plus how a machine launches, watches and drives it. */
+export interface AgentClientDescriptor extends AgentClientCommon {
+  id: LocalAgentClientId;
   /** Executable launched to start a fresh session. */
   binary: string;
   /** Static args always passed at launch, before the conditional permission /
@@ -449,8 +482,12 @@ export interface AgentClientDescriptor {
    * text, and a client is free to answer it by reading the machine's own
    * clipboard. That is behaviour a managed pane must not have: the pane is
    * driven by injection, so whatever the human last copied rides along.
+   *
+   * `idleOnly` marks a client that accepts a paste but treats it as less than
+   * the human's own words: it is typed only at an idle composer, where no
+   * dialog can be up to take a keystroke as its answer, and pasted otherwise.
    */
-  typedComposerInput?: { newlineKey: string };
+  typedComposerInput?: { newlineKey: string; idleOnly?: boolean };
   /**
    * How this client runs non-interactively (print / exec / run). Required: a
    * new client must say how `cast exec` invokes it. `flag` is `-p` on the main
@@ -491,15 +528,6 @@ export interface AgentClientDescriptor {
   paneReadiness?: AgentPaneReadiness;
   /** Prefix for the tmux session names the daemon's resume path creates. */
   tmuxPrefix: string;
-  /** Model/effort picker config, or undefined for clients with no model UI. */
-  modelConfig?: AgentModelConfig;
-  /** Non-model capabilities that are opt-in per client. */
-  capabilities: AgentClientCapabilities;
-  /** Where this client reads capabilities from disk. Absent for clients whose
-   *  layouts nobody has verified (gemini, opencode, pi) — honest absence, so
-   *  `capabilitySupport` reports every kind unsupported there instead of a
-   *  driver writing files the client never loads. */
-  agentFileTargets?: AgentFileTargets;
   /** Parse a raw transcript blob into the daemon's ParsedMessage[] shape. Wired up
    *  by the daemon (cli package); typed loosely and optional so shared stays free
    *  of daemon types and the descriptor is usable without it. */
@@ -578,12 +606,12 @@ const MUSE_MODEL: AgentModelConfig = {
 };
 
 /**
- * The eight supported clients, populated from the facts currently hardcoded across
+ * The eight local clients, populated from the facts currently hardcoded across
  * the daemon (binaries, resume commands, transcript roots, watcher kinds, tmux
- * prefixes, prompt-ready glyphs). Nothing consumes the registry at runtime yet —
- * ct-39077 folds the daemon's branch sites into lookups against these entries.
+ * prefixes, prompt-ready glyphs). Every daemon, launch, tmux, watcher and
+ * picker path iterates THIS map, so the hosted client never reaches one.
  */
-export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
+export const LOCAL_AGENT_CLIENTS: Record<LocalAgentClientId, AgentClientDescriptor> = {
   claude: {
     id: "claude",
     displayName: "Claude",
@@ -602,6 +630,16 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
     tmuxPrefix: "cc",
     modelConfig: CLAUDE_MODEL,
     capabilities: { panePromptMonitoring: true, fork: true, reconstitute: true, bracketedPaste: true },
+    // Why: Claude Code 2.1.277+ (remote flag tengu_virtual_pancake) wraps a
+    // paste long enough to collapse into a "[Pasted text]" chip in
+    // <pasted_content> and tells the model to act on it only where the user's
+    // own words outside the block ask, so a long message sent from codecast
+    // reached the agent as third party text it would not act on. Typed input
+    // is never wrapped (2.1.289: an 81-line typed message arrived whole). A
+    // typed lone key answers a permission dialog where a paste is refused
+    // (ct-52703), so typing waits for an idle composer and mid-turn delivery
+    // still pastes.
+    typedComposerInput: { newlineKey: "C-j", idleOnly: true },
     // All verified by driving the real CLI in a sandbox HOME (2026-08-12/13).
     // Plugins live in settings.json; MCP lives in ~/.claude.json (`enabledPlugins`
     // read back null there) — the two files must not be conflated. `~/.agents/skills`
@@ -1064,6 +1102,59 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
   },
 };
 
+/** The hosted assistant (plan pl-840). A conversation with this agent_type
+ *  is run by Convex actions (convex/assistant), never claimed by a device.
+ *  No model picker: the person's plan picks the model (contracts/assistant).
+ *  No fork or reconstitute: the history is the server's own and no local
+ *  client can take it over. */
+export const HOSTED_AGENT_CLIENTS: { codecast: HostedAgentClientDescriptor } = {
+  codecast: {
+    id: "codecast",
+    displayName: "Codecast assistant",
+    convexId: "codecast",
+    executionTransports: ["hosted"],
+    capabilities: { panePromptMonitoring: false },
+  },
+};
+
+/** Every client, local and hosted. Read the common facts (display name,
+ *  capabilities, model config) here; reach the local-run facts through
+ *  LOCAL_AGENT_CLIENTS or localAgentClient. */
+export const AGENT_CLIENTS: Record<LocalAgentClientId, AgentClientDescriptor> & typeof HOSTED_AGENT_CLIENTS = {
+  ...LOCAL_AGENT_CLIENTS,
+  ...HOSTED_AGENT_CLIENTS,
+};
+
+/** Error raised when a hosted client reaches a path that launches, resumes or
+ *  watches a local process. */
+export class HostedAgentClientError extends Error {
+  readonly code = "HOSTED_AGENT_CLIENT" as const;
+  constructor(readonly agentType: AgentClientId) {
+    super(`${agentType} runs hosted; no machine launches, resumes or watches it`);
+    this.name = "HostedAgentClientError";
+  }
+}
+
+/** Whether a client id (or a Convex agent_type spelling) is a hosted client. */
+export function isHostedAgentType(agentType: string | null | undefined): boolean {
+  return !!agentType && AGENT_CLIENTS[fromConvexAgentType(agentType)].executionTransports.includes("hosted");
+}
+
+/** The local descriptor for a client id, for paths that only ever run local
+ *  clients. Throws for a hosted id rather than handing back facts it lacks. */
+export function localAgentClient(id: AgentClientId): AgentClientDescriptor {
+  return LOCAL_AGENT_CLIENTS[localAgentTypeOf(id)];
+}
+
+/** The client a machine runs for an agent_type (either spelling), for every
+ *  writer of a daemon start or resume. Throws HostedAgentClientError for a
+ *  hosted conversation, which no machine runs. */
+export function localAgentTypeOf(agentType: string | null | undefined): LocalAgentClientId {
+  const id = fromConvexAgentType(agentType);
+  if (id === "codecast") throw new HostedAgentClientError(id);
+  return id;
+}
+
 // ── Model helpers ─────────────────────────────────────────────────────────────
 // These live here (with the registry) rather than in modelOptions.ts so the
 // registry stays the single source of truth and the module graph is acyclic
@@ -1076,7 +1167,7 @@ export const AGENT_CLIENTS: Record<AgentClientId, AgentClientDescriptor> = {
  * preserve the pre-existing call-site typing.
  */
 export const AGENT_MODEL_CONFIG: Record<string, AgentModelConfig> = Object.fromEntries(
-  (Object.entries(AGENT_CLIENTS) as [AgentClientId, AgentClientDescriptor][])
+  (Object.entries(AGENT_CLIENTS) as [AgentClientId, AgentClientCommon][])
     .filter(([, d]) => d.modelConfig)
     .map(([id, d]) => [id, d.modelConfig as AgentModelConfig]),
 );
@@ -1084,15 +1175,16 @@ export const AGENT_MODEL_CONFIG: Record<string, AgentModelConfig> = Object.fromE
 /** One new-session agent choice: both id spellings plus the picker label, so
  *  each surface keys off whichever spelling its wire calls take. */
 export interface AgentLaunchOption {
-  id: AgentClientId;
+  id: LocalAgentClientId;
   convexType: ConvexAgentType;
   label: string;
 }
 
 /** The agent row of every new-session surface (web AgentSwitcher, mobile
- *  sheet), derived from the registry in declaration order — adding a client
- *  descriptor is all it takes to appear in the pickers. */
-export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLIENTS).map((d) => ({
+ *  sheet), derived from the local registry in declaration order — adding a
+ *  client descriptor is all it takes to appear in the pickers. The hosted
+ *  assistant is started from its own lane, never launched on a machine. */
+export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(LOCAL_AGENT_CLIENTS).map((d) => ({
   id: d.id,
   convexType: d.convexId,
   label: d.displayName,
@@ -1100,9 +1192,9 @@ export const AGENT_LAUNCH_OPTIONS: AgentLaunchOption[] = Object.values(AGENT_CLI
 
 /** The agents a user has pinned: their own list (users.pinned_agents) once
  *  they have set one, else every client pinned by default. Unknown ids drop. */
-export function pinnedAgentIds(pins: readonly string[] | null | undefined): AgentClientId[] {
-  if (pins) return (Object.keys(AGENT_CLIENTS) as AgentClientId[]).filter((id) => pins.includes(id));
-  return (Object.values(AGENT_CLIENTS) as AgentClientDescriptor[]).filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
+export function pinnedAgentIds(pins: readonly string[] | null | undefined): LocalAgentClientId[] {
+  if (pins) return (Object.keys(LOCAL_AGENT_CLIENTS) as LocalAgentClientId[]).filter((id) => pins.includes(id));
+  return Object.values(LOCAL_AGENT_CLIENTS).filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
 }
 
 /** The agent row a picker shows: the pinned agents, plus `keep` (the agent a
@@ -1177,7 +1269,7 @@ export function canSessionBecomeAgent(targetAgentType: string | undefined, messa
 /** Whether the daemon forks this client through its own resume flags. */
 export function agentForksNatively(agentType: string | undefined): boolean {
   const d = AGENT_CLIENTS[fromConvexAgentType(agentType)];
-  return d.capabilities.fork === true && typeof d.forkCmd === "function";
+  return d.capabilities.fork === true && "forkCmd" in d && typeof d.forkCmd === "function";
 }
 
 /**

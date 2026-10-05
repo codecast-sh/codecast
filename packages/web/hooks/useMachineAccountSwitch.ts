@@ -4,52 +4,18 @@
 // sessionCommands row on the click; the daemon's report settles the command,
 // and the heartbeat's active_email confirms the account actually moved. Every
 // surface (the header chip, Settings) reads the same row, so neither can toast
-// success on queue and a reload keeps the switch in view.
+// success on queue and a reload keeps the switch in view. The state lives in
+// useMachineSwitchState (shared with mobile); this adds the web's toasts.
 
 import { toast } from "sonner";
 import { persistentToast } from "../lib/persistentToast";
-import {
-  humanizeSwitchError,
-  machineSwitchPendingCopy,
-  machineSwitchSuccessCopy,
-  profileIsFleetAccount,
-  resolveMachineSwitch,
-  type MachineSwitchPhase,
-} from "../lib/machineAccountSwitch";
-import { DISPATCH_REFUSED, latestSessionCommand, requestAccountSwitchCommand, type SessionCommandRow } from "../lib/sessionCommands";
+import { machineSwitchPendingCopy, machineSwitchSuccessCopy, type MachineSwitchPhase } from "../lib/machineAccountSwitch";
+import { DISPATCH_REFUSED } from "../lib/sessionCommands";
 import { useInboxStore } from "../store/inboxStore";
-import { useCoarseNow } from "./useCoarseNow";
 import { useWatchEffect } from "./useWatchEffect";
+import { useMachineSwitchState, type MachineSwitchOutcome } from "./useMachineSwitchState";
 
-export type MachineSwitchOutcome = {
-  kind: "success" | "error";
-  profile: string;
-  email?: string;
-  message: string;
-};
-
-const machineSwitchRow = (deviceId: string) => (row: SessionCommandRow) =>
-  row.kind === "switch" && row.device_id === deviceId && !!(row.profile || row.email);
-
-/** A switch's phase from its row and the machine's reported account. */
-export function machineSwitchStatus(
-  row: SessionCommandRow | undefined,
-  fleet: { activeEmail?: string; launchProfile?: string },
-  now: number,
-): { phase: MachineSwitchPhase; error?: string } {
-  if (!row) return { phase: "idle" };
-  if (row.result === DISPATCH_REFUSED || (row.error && !row.confirmed_at)) {
-    return { phase: "failed", error: humanizeSwitchError(row.error ?? "Switch failed") };
-  }
-  if (row.confirmed_at) return { phase: "succeeded" };
-  return resolveMachineSwitch({
-    pending: { profile: row.profile ?? row.email ?? "", email: row.email, startedAt: row.requested_at },
-    activeEmail: fleet.activeEmail,
-    launchProfile: fleet.launchProfile,
-    command: row,
-    now,
-  });
-}
+export { machineSwitchStatus, type MachineSwitchOutcome } from "./useMachineSwitchState";
 
 // Each outcome is said once per window, by whichever mounted surface sees it
 // first.
@@ -63,13 +29,8 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
   clearOutcome: () => void;
 } {
   const deviceId = opts.deviceId ?? "";
-  const fleet = { activeEmail: opts.activeEmail, launchProfile: opts.launchProfile };
-  const row = useInboxStore((s) => (deviceId ? latestSessionCommand(s.sessionCommands, machineSwitchRow(deviceId)) : undefined));
-  const settled = !row || !!row.confirmed_at || row.result === DISPATCH_REFUSED || !!row.error;
-  const now = useCoarseNow(settled ? 30_000 : 1_000);
-  const resolved = machineSwitchStatus(row, fleet, now);
-  const pending = !!row && (resolved.phase === "waiting" || resolved.phase === "slow" || resolved.phase === "confirming");
-  const profile = row?.profile ?? row?.email ?? "";
+  const state = useMachineSwitchState(opts);
+  const { row, resolved, pending, profile } = state;
   const toastId = `acct-switch-${deviceId}`;
 
   useWatchEffect(() => {
@@ -104,38 +65,21 @@ export function useMachineAccountSwitch(opts: { deviceId?: string; activeEmail?:
     }
   }, [row, resolved.phase, resolved.error]);
 
-  const outcome: MachineSwitchOutcome | null =
-    !row || pending ? null
-    : resolved.phase === "failed" ? { kind: "error", profile, message: resolved.error ?? "Switch failed" }
-    : resolved.phase === "succeeded" && profileIsFleetAccount({ name: profile, email: row.email }, fleet)
-      ? { kind: "success", profile, email: row.email, message: `Now using ${profile}` }
-      : null;
-
   const switchTo = async (target: string, email?: string) => {
     if (!deviceId) {
       toast.error("No online daemon to switch accounts");
       return;
     }
-    const cur = latestSessionCommand(useInboxStore.getState().sessionCommands, machineSwitchRow(deviceId));
-    if (cur && ["waiting", "slow", "confirming"].includes(machineSwitchStatus(cur, fleet, Date.now()).phase)) return;
-    if (profileIsFleetAccount({ name: target, email }, fleet)) {
-      toast.success(`Already on "${target}"`);
-      return;
-    }
-    toast.message(machineSwitchPendingCopy("waiting", target), { id: toastId, ...persistentToast });
-    // A refusal settles the row failed and the effect above says why; a
-    // parked request stays pending until the outbox delivers it.
-    await requestAccountSwitchCommand({ profile: target, device_id: deviceId, continue_blocked: false }, { profile: target, email })
-      .catch(() => {});
+    const res = await state.request(target, email, () =>
+      toast.message(machineSwitchPendingCopy("waiting", target), { id: toastId, ...persistentToast }));
+    if (res === "already") toast.success(`Already on "${target}"`);
   };
 
   return {
     switchTo,
-    switching: pending ? profile : null,
-    phase: pending ? resolved.phase : outcome?.kind === "error" ? "failed" : outcome?.kind === "success" ? "succeeded" : "idle",
-    outcome,
-    clearOutcome: () => {
-      if (row && !pending) useInboxStore.getState().dismissSessionCommand(row._id);
-    },
+    switching: state.switching,
+    phase: state.phase,
+    outcome: state.outcome,
+    clearOutcome: state.clearOutcome,
   };
 }

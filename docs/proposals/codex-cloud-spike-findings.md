@@ -1,5 +1,7 @@
 # Codex Cloud Phase 0 spike findings (2026-09-29)
 
+> **Status (2026-10-04):** Historical record of the Phase 0 spike for pl-798. Its findings were built into `packages/cli/src/cloudAgents/codex.ts`; the scrubbed payloads remain the test fixtures in `packages/cli/src/__fixtures__/codexCloud/`.
+
 These are live results against `chatgpt.com/backend-api/wham` on a Pro account, using the one existing environment (`acme/example`, legacy machine `wham-public/wham-universal`). Scrubbed payloads are in `packages/cli/src/__fixtures__/codexCloud/`. Replaced with placeholders: environment ids, GitHub repository and account ids, emails, environment variables, secrets, and the repositories' source (partial_repo_snapshot contents, diffs and terminal output), since this repository is public. Kept as recorded: the task, turn and attempt ids and the repository name `acme/example` with its owner login, which the tests name and which work only with the account's own sign-in. The spike client is `/tmp/wham/w.ts`.
 
 Every capability the proposal needs works. Details below.

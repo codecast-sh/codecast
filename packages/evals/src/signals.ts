@@ -1,14 +1,15 @@
 import { spawnSync } from 'node:child_process';
 
-import { EVALS_SHA_RE, type BisectState, type Candidate } from '@codecast/shared/contracts/evalsApi';
+import { EVALS_SHA_RE, evalsBatchRef, type BisectState, type Candidate } from '@codecast/shared/contracts/evalsApi';
 import { evalsSignalFingerprint } from '@codecast/shared/contracts/signalFingerprint';
 
 // The eval finder (docs/architecture/the-line-end-to-end.md LE3): what `check
 // --signal` files through `cast signal add` once a run set is graded. A
 // separated-worse verdict and every failed gate are regressions on the
 // surface; a freeze its reps fail by majority is a prompt miss on that moment.
-// The fingerprint names the surface and the check or freeze, so the same
-// failure on the next night lands on the same cause. A finished bisect files
+// The fingerprint names the surface and the check or the freeze's id prefix
+// (the 8 characters every run folder name carries), so the same failure on
+// the next night lands on the same cause. A finished bisect files
 // one more regression naming what it traced the drop to.
 //
 // A signal leaves this laptop, so its detail names only the surface, the
@@ -43,7 +44,9 @@ export interface EvalSignal {
  * laptop that ran the evals, so the path is relative and opens in the app.
  */
 export function evalsSurfacePath(surface: string, batch?: string | null): string {
-  const q = batch ? `?${new URLSearchParams({ batch })}` : '';
+  // A labelled batch rides as its hash, as in the web's addresses: a signal's url reaches Convex.
+  const ref = evalsBatchRef(batch);
+  const q = ref ? `?${new URLSearchParams({ batch: ref })}` : '';
   return `/evals/s/${encodeURIComponent(surface)}${q}`;
 }
 
@@ -72,13 +75,13 @@ export function evalSignals(v: SurfaceVerdict, evidenceUrl?: string): EvalSignal
       detail: detail(`At least one rep of ${v.surface} failed the ${gate} gate, which scores the run zero.`),
     });
   }
-  for (const freeze of v.failingFreezes) {
+  for (const freeze of v.failingFreezes.map((f) => f.slice(0, 8))) {
     out.push({
       ...base,
       kind: 'prompt_miss',
       fingerprint: evalsSignalFingerprint(v.surface, freeze),
-      title: `${v.surface} misses frozen moment ${freeze.slice(0, 8)}`,
-      detail: detail(`Most reps of freeze ${freeze} failed. Read them: ./evals freeze results ${freeze.slice(0, 8)}`),
+      title: `${v.surface} misses frozen moment ${freeze}`,
+      detail: detail(`Most reps of freeze ${freeze} failed. Read them: ./evals freeze results ${freeze}`),
     });
   }
   return out;

@@ -3,9 +3,9 @@ import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
-import { parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns } from "./cloudPlacement";
+import { CLOUD_UNPARK_PATCH, parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns, unparkForMove } from "./cloudPlacement";
 import { cloudSeedArg, cloudStartFromArg, effectiveStartFrom, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
-import { cloudPlacementFor, deviceWakesOnUse,
+import { cloudPlacementFor,
   checkoutInUseMessage,
   posixRepoBasename,
 } from "@codecast/shared/contracts";
@@ -62,7 +62,7 @@ import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRun
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
-import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
+import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isOrphanOrSubagent, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedTriggerHomeOfKind, isArmedLoopHome } from "./dormancy";
@@ -1508,6 +1508,43 @@ export const createConversation = mutation({
   },
 });
 
+/** The row a person's new conversation starts as: the owner's team and
+ *  privacy for its path (resolveCreationPrivacy), active, empty, with its
+ *  short id. createQuickSession hands the row to a daemon; the hosted
+ *  assistant (assistant/entry.ts) runs it in this backend. `extra` carries
+ *  what only one caller sets (a cloud parking, a title). */
+export async function insertStartedConversation(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  fields: {
+    agent_type: Doc<"conversations">["agent_type"];
+    session_id: string;
+    started_at: number;
+    project_path?: string;
+    git_root?: string;
+    extra?: Partial<Omit<Doc<"conversations">, "_id" | "_creationTime">>;
+  },
+): Promise<Id<"conversations">> {
+  const privacy = await resolveCreationPrivacy(ctx, userId, fields.git_root || fields.project_path);
+  const conversationId = await ctx.db.insert("conversations", {
+    user_id: userId,
+    agent_type: fields.agent_type,
+    session_id: fields.session_id,
+    project_path: fields.project_path,
+    git_root: fields.git_root,
+    started_at: fields.started_at,
+    updated_at: fields.started_at,
+    message_count: 0,
+    ...privacy,
+    status: "active",
+    ...fields.extra,
+  });
+  await ctx.db.patch(conversationId, {
+    short_id: conversationId.toString().slice(0, 7),
+  });
+  return conversationId;
+}
+
 export const createQuickSession = mutation({
   args: {
     agent_type: v.optional(v.union(
@@ -1548,7 +1585,6 @@ export const createQuickSession = mutation({
     const sessionId = args.session_id || crypto.randomUUID();
     const agentType = args.agent_type || "claude_code";
 
-    const privacy = await resolveCreationPrivacy(ctx, userId, args.git_root || args.project_path);
     if (args.cloud_device_id) await resolveCloudDevice(ctx, userId, args.cloud_device_id);
     const cloudWorkspace = args.cloud_device_id ? (args.cloud_workspace ?? "isolated") : undefined;
     const cloudStartFrom = args.cloud_device_id ? effectiveStartFrom(cloudWorkspace, args.cloud_start_from, undefined) : undefined;
@@ -1559,24 +1595,15 @@ export const createQuickSession = mutation({
       if (occupant) throw new Error(checkoutInUseMessage(occupant.cloud_checkout_path ?? occupant.project_path ?? repo!, occupant));
     }
 
-    const conversationId = await ctx.db.insert("conversations", {
-      user_id: userId,
+    const conversationId = await insertStartedConversation(ctx, userId, {
       agent_type: agentType,
       session_id: sessionId,
+      started_at: now,
       project_path: args.project_path,
       git_root: args.git_root,
-      started_at: now,
-      updated_at: now,
-      message_count: 0,
-      ...privacy,
-      status: "active",
-      ...(args.cloud_device_id
+      extra: args.cloud_device_id
         ? { owner_device_id: args.cloud_device_id, cloud_placement: "pending" as const, cloud_workspace: cloudWorkspace, cloud_start_from: cloudStartFrom }
-        : {}),
-    });
-
-    await ctx.db.patch(conversationId, {
-      short_id: conversationId.toString().slice(0, 7),
+        : undefined,
     });
 
     if (args.cloud_device_id) {
@@ -5344,6 +5371,10 @@ export const updateProjectPath = mutation({
     // without git info (codex rollouts before 2026-09) gains its repository
     // identity in the same sweep. Older daemons omit it.
     git_remote_url: v.optional(v.string()),
+    // The reporting machine. A session another machine runs (moved to a cloud
+    // host, say) keeps that machine's path: the copy of its transcript left
+    // behind here must not pull it back to this folder.
+    device_id: v.optional(v.string()),
     api_token: v.string(),
   },
   handler: async (ctx, args) => {
@@ -5359,6 +5390,9 @@ export const updateProjectPath = mutation({
       .first();
 
     if (!conversation) {
+      return { updated: false };
+    }
+    if (args.device_id && conversation.owner_device_id && conversation.owner_device_id !== args.device_id) {
       return { updated: false };
     }
 
@@ -6950,6 +6984,7 @@ export function cliSessionClassifier(ctx: any, now: number) {
       status: conv.status,
       updatedAt: conv.updated_at,
       daemonAlive,
+      agentType: conv.agent_type,
       now,
     });
     let awaitingInput = false;
@@ -8708,6 +8743,7 @@ async function enrichInboxSessionRow(
     status: conv.status,
     updatedAt: conv.updated_at,
     daemonAlive,
+    agentType: conv.agent_type,
     now,
   });
   let isIdle = activity.isIdle;
@@ -10326,6 +10362,7 @@ function deriveLivenessAt(
   const settle = maps.settleFactsMap.get(cid);
   const facts = {
     status: conv.status,
+    agent_type: conv.agent_type,
     updated_at: conv.updated_at,
     message_count: conv.message_count ?? 0,
     has_pending_messages: !!conv.has_pending_messages,
@@ -11379,6 +11416,10 @@ export const markSessionCompleted = mutation({
     // standing member that goes dormant is never flipped to "completed"; it is
     // retired only by decommissionAnchor, which clears `persistent` first.
     if (conv.persistent) return;
+    // A move in flight stopped this agent itself (the runner's quiesce): the
+    // session is moving, not ending. Completing it here left every session
+    // whose move then failed marked ended on its own machine.
+    if (conv.migration) return;
     if (conv.status === "active") {
       if (conv.has_pending_messages) {
         return;
@@ -12300,21 +12341,16 @@ export const reconfigureSession = mutation({
     // un-park to the host (a plain start there), else → re-park.
     let unpark = false;
     let hostTarget: any = null;
+    const patch: Record<string, any> = { updated_at: Date.now() };
     if (!args.cloud_device_id && conv.cloud_placement === "pending" && args.target_device_id) {
       const target = await ctx.db
         .query("devices")
         .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", args.target_device_id))
         .first();
-      if (target && !deviceWakesOnUse(target)) unpark = true;
+      const unparkFields = await unparkForMove(ctx, conv, target);
+      unpark = Object.keys(unparkFields).length > 0;
+      if (unpark) Object.assign(patch, unparkFields, { owner_device_id: undefined, session_error: undefined });
       else if (target && target.device_id === conv.owner_device_id) hostTarget = target;
-    }
-
-    const patch: Record<string, any> = { updated_at: Date.now() };
-    if (unpark) {
-      patch.cloud_placement = undefined;
-      patch.cloud_placement_token = undefined;
-      patch.owner_device_id = undefined;
-      patch.session_error = undefined;
     }
     if (args.agent_type) patch.agent_type = args.agent_type;
     // An agent flip invalidates the previous agent's model/effort stamps
@@ -12370,11 +12406,7 @@ export const reconfigureSession = mutation({
       const locals = devices.filter((d: any) => !d.is_remote);
       const paths = [patch.git_root ?? conv.git_root, patch.project_path ?? conv.project_path];
       unparkToHost = cloudPlacementFor({ target: hostTarget, locals, paths }) === "native";
-      if (unparkToHost) {
-        patch.cloud_placement = undefined;
-        patch.cloud_placement_token = undefined;
-        patch.session_error = undefined;
-      }
+      if (unparkToHost) Object.assign(patch, CLOUD_UNPARK_PATCH, { session_error: undefined });
     }
 
     await ctx.db.patch(args.conversation_id, patch);
@@ -12387,7 +12419,7 @@ export const reconfigureSession = mutation({
       await advanceCommentsAccessRevision(ctx, conv);
     }
 
-    if (unpark || unparkToHost) await supersedeCloudSpawns(ctx, conv.user_id, args.conversation_id);
+    if (unparkToHost) await supersedeCloudSpawns(ctx, conv.user_id, args.conversation_id);
     // The folder moved under a park: the cloud_spawn a laptop may already be
     // running was chosen for (and would place) the OLD repo — supersede it and
     // ask again with a fresh token.
@@ -13486,6 +13518,8 @@ export async function enqueueKillAndResume(
   opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string } = {},
 ) {
   const now = Date.now();
+  // Throws for a hosted conversation: no daemon kills or resumes it.
+  const agentType = localAgentTypeOf(conv.agent_type);
   if (opts.requestId !== undefined && await findSessionCommandByRequest(ctx, userId, opts.requestId)) {
     return { deduplicated: true };
   }
@@ -13493,7 +13527,7 @@ export async function enqueueKillAndResume(
     session_id: conv.session_id,
     conversation_id: conv._id,
     project_path: conv.project_path ?? conv.git_root,
-    agent_type: fromConvexAgentType(conv.agent_type),
+    agent_type: agentType,
     ...(opts.forceReconstitute ? { force_reconstitute: true } : {}),
     ...(opts.switchAgent ? { switch_agent: true, force_reconstitute: true } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),

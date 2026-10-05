@@ -20,7 +20,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { teamVisibleConvTeam } from "./privacy";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
 import { enqueuePendingMessage, reachableRole, tellRole } from "./pendingMessages";
@@ -511,6 +511,22 @@ export function normalizeVerdict(row: DecisionRow, raw: Verdict): Verdict | { er
 
 export type AnsweredBy = { kind: "user" | "role" | "policy"; id: string; user_id?: Id<"users">; grant_id?: Id<"decision_grants"> };
 
+export const HOSTED_ANSWER_REFUSED = "Only the owner can answer a hosted assistant's question";
+
+// A hosted conversation's question is its consent gate
+// (docs/architecture/hosted-assistant.md): only the conversation's owner
+// answers or dismisses it, in person. An asked teammate, a role under a grant
+// and a stack default are all refused. Every resolve path checks this before
+// it writes: finalizeAnswer (CLI, web resolve, a run's gate, a stack
+// default), answerCore (so the CLI gets the reason back as an error), the
+// stack's auto default (which skips the row) and the web's dispatch rail. Returns why the answer is refused, or null.
+export async function hostedAnswerRefusal(ctx: Ctx, row: { conversation_id?: Id<"conversations"> }, by: AnsweredBy): Promise<string | null> {
+  const conversation: any = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+  if (!conversation || !isHostedAgentType(conversation.agent_type)) return null;
+  if (by.kind === "user" && String(by.user_id) === String(conversation.user_id)) return null;
+  return HOSTED_ANSWER_REFUSED;
+}
+
 // The one place a decision is resolved, for every path (web resolve, CLI
 // answer, a role under a grant, a stack auto default, a dismissal). First
 // writer wins: a row that is no longer pending is left alone.
@@ -526,6 +542,8 @@ export async function finalizeAnswer(
   opts: { deliver: boolean; now?: number },
 ): Promise<{ already_resolved: boolean; answer_label?: string; delivered?: boolean; resumed_run?: boolean }> {
   if (row.status !== "pending") return { already_resolved: true };
+  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  if (refusal) throw new Error(refusal);
   const now = opts.now ?? Date.now();
   const label = answerLabel(row, verdict);
   await ctx.db.patch(row._id, {
@@ -562,6 +580,12 @@ async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: A
     content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
     client_id: `decision-answer:${row._id}`,
     human: by.kind === "user",
+    // Only the owner answers a hosted conversation's question
+    // (hostedAnswerRefusal), so this always wakes it as an approval; every
+    // other conversation ignores the cause. It is a scheduling hint, never
+    // consent: a hosted turn executes a write only after reading its
+    // session_decisions row.
+    wake_cause: "approval",
   });
 }
 
@@ -1411,6 +1435,8 @@ export async function answerCore(
   const now = Date.now();
   const by = await answererFor(ctx, auth, row, args.session_id, now);
   if ("error" in by) return by;
+  const refusal = await hostedAnswerRefusal(ctx, row, by);
+  if (refusal) return { error: refusal };
   const verdict = normalizeVerdict(row, { status: "answered", answer_index: args.answer_index, answer_json: args.answer_json, answer_text: args.answer_text });
   if ("error" in verdict) return verdict;
   const result = await finalizeAnswer(ctx, row, verdict, by, { deliver: true, now });

@@ -10,12 +10,14 @@
 // owner is still a member, when its visible team is this team, and when its
 // effective visibility mode is above `minimal`. The mode decides what prose
 // may use: `summary` allows the insight's headline and summary, `full` (the
-// feed's `full` or `detailed`) allows its turns too. An insight written while the session sat in another
+// feed's `full` or `detailed`) allows its turns, its images and its edits to
+// instruction text too. An insight written while the session sat in another
 // team is withheld even when the session itself passes.
 
 import type { Doc, Id } from "../_generated/dataModel";
 import { conversationRepository, createTeamFeedFilter, getOwnerMembership, resolveVisibilityMode, teamVisibleConvTeam } from "../privacy";
 import { effectiveMembershipVisibility, type TeamVisibilityLevel } from "../teamVisibility";
+import { sessionArtifacts, sessionImages, sessionInstructionEdits, type InstructionEdit, type SessionArtifact } from "./sessionMedia";
 
 type DbCtx = { db: any };
 
@@ -133,10 +135,15 @@ export async function teamVisibleRecentInsights(
   teamId: Id<"teams">,
   since: number,
   limit = 200,
+  /** The window's far edge: a past day's sessions, not the newest `limit` since it. */
+  until = Infinity,
 ): Promise<Array<TeamVisibleInput & { insight: ChangesInsight }>> {
   const rows: Doc<"session_insights">[] = await ctx.db
     .query("session_insights")
-    .withIndex("by_team_generated_at", (q: any) => q.eq("team_id", teamId).gte("generated_at", since))
+    .withIndex("by_team_generated_at", (q: any) => {
+      const from = q.eq("team_id", teamId).gte("generated_at", since);
+      return until === Infinity ? from : from.lte("generated_at", until);
+    })
     .order("desc")
     .take(limit);
   const inputs = await teamVisibleInputs(ctx, teamId, rows.map((r) => r.conversation_id));
@@ -147,6 +154,54 @@ export async function teamVisibleRecentInsights(
     // never stands in for it.
     if (input?.insight && String(input.insight._id) === String(row._id)) {
       out.push(input as TeamVisibleInput & { insight: ChangesInsight });
+    }
+  }
+  return out;
+}
+
+/** What a story may show from one session: images it posted, its edits to instruction text, and the pages and canvases it made. */
+export type ChangesMedia = {
+  images: Array<{ url: string; timestamp: number; context: string }>;
+  edits: InstructionEdit[];
+  /** Pages it published and canvases it drew. */
+  artifacts?: SessionArtifact[];
+};
+
+const MEDIA_IMAGES_PER_SESSION = 4;
+const MEDIA_EDITS_PER_SESSION = 3;
+const MEDIA_EDIT_CHARS = 900;
+const MEDIA_ARTIFACTS_PER_SESSION = 3;
+const MEDIA_CONTEXT_CHARS = 220;
+
+/** A message's words around an image: its text with image markup and links dropped, clipped. */
+function imageContext(content: string | undefined): string {
+  const text = (content ?? "").replace(/!\[[^\]]*\]\([^)]*\)/g, " ").replace(/\s+/g, " ").trim();
+  return text.length > MEDIA_CONTEXT_CHARS ? `${text.slice(0, MEDIA_CONTEXT_CHARS - 1)}…` : text;
+}
+
+/**
+ * The media a story may draw on, per conversation, read only for sessions the
+ * team sees in full: the same mode that lets their turns into prose. A
+ * session at `summary` contributes nothing here, however much it made.
+ */
+export async function teamVisibleMedia(
+  ctx: DbCtx & { storage?: { getUrl: (id: any) => Promise<string | null> } },
+  inputs: ReadonlyArray<Pick<TeamVisibleInput, "conversation_id" | "mode">>,
+  window: { since: number; until: number },
+): Promise<Map<string, ChangesMedia>> {
+  const out = new Map<string, ChangesMedia>();
+  for (const input of inputs) {
+    if (input.mode !== "full") continue;
+    const found = await sessionImages(ctx, input.conversation_id, { ...window, max: MEDIA_IMAGES_PER_SESSION });
+    const images = [];
+    for (const img of found) {
+      const message: Doc<"messages"> | null = await ctx.db.get(img.message_id);
+      images.push({ url: img.url, timestamp: img.timestamp, context: imageContext(message?.content) });
+    }
+    const edits = await sessionInstructionEdits(ctx, input.conversation_id, { ...window, max: MEDIA_EDITS_PER_SESSION, chars: MEDIA_EDIT_CHARS });
+    const artifacts = await sessionArtifacts(ctx, input.conversation_id, { ...window, max: MEDIA_ARTIFACTS_PER_SESSION });
+    if (images.length || edits.length || artifacts.length) {
+      out.set(String(input.conversation_id), { images: images.reverse(), edits, ...(artifacts.length ? { artifacts } : {}) });
     }
   }
   return out;

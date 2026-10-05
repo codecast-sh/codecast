@@ -30,6 +30,7 @@ import { useLinkedSessions } from "../../../../../hooks/useLinkedSessions";
 import { useQueryNoThrow } from "../../../../../hooks/useQueryNoThrow";
 import { useSyncPRExternalEvents, useExternalEvents } from "../../../../../hooks/useSyncExternalEvents";
 import { useCodeComments, useSyncPRCodeComments } from "../../../../../hooks/useSyncCodeComments";
+import { setCodeThreadResolved } from "../../../../../hooks/useLineComments";
 import { useSyncPullRequest, usePullRequest } from "../../../../../hooks/useSyncTimeline";
 import { usePRDetails } from "../../../../../hooks/usePRDetails";
 import { usePRLookup } from "../../../../../hooks/usePRLookup";
@@ -44,7 +45,6 @@ import {
   prViewOf,
   type PrView,
   groupCommentsByFileLine,
-  isOptimisticComment,
   newCommentClientId,
   pendingNotes,
   prStateKey,
@@ -59,6 +59,7 @@ import { usePageMeta } from "../../../../(marketing)/pageMeta";
 import { accentVar } from "../../../../../lib/externalEvents";
 import { TitlebarStrip } from "../../../../../lib/pageLayout";
 import "../../../../../components/pr/pr.css";
+import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 
 // `api` is a proxy, so naming a function prod has not deployed yet still
 // produces a reference; the call then fails and useQueryNoThrow reports it as
@@ -150,9 +151,7 @@ export function PRContent({
   const reviews = useMemo(() => (reviewsQuery.data as any[]) ?? [], [reviewsQuery.data]);
 
   const createComment = useMutation(api.codeComments.create);
-  const resolveComment = useMutation(api.codeComments.resolve);
-  const unresolveComment = useMutation(api.codeComments.unresolve);
-  const setShepherd = useMutation(api.prShepherd.setShepherd);
+  const setPrShepherd = useInboxStore((s) => s.setPrShepherd);
 
   // The view is the path and the target is the fragment, so every view of
   // this page, down to a run of lines, is a link. A fragment changes in place
@@ -293,16 +292,6 @@ export function PRContent({
     [createComment, noteMode, pr, repository, user?._id],
   );
 
-  const setThreadResolved = useCallback(
-    (thread: CodeCommentRow[], resolved: boolean) => {
-      for (const comment of thread) {
-        if (isOptimisticComment(comment._id)) continue;
-        void (resolved ? resolveComment : unresolveComment)({ comment_id: comment._id });
-      }
-    },
-    [resolveComment, unresolveComment],
-  );
-
   const lineThreads: FileLineThreads = useMemo(
     () => ({
       threadsFor: (filename) => threadsByFile.get(filename),
@@ -336,7 +325,7 @@ export function PRContent({
               parent_id: serverCommentId((items as CodeCommentRow[])[0]?._id),
             })
           }
-          onResolve={(resolved) => setThreadResolved(items as CodeCommentRow[], resolved)}
+          onResolve={(resolved) => setCodeThreadResolved(items as CodeCommentRow[], resolved)}
           onClose={() => setComposing(null)}
           onFinishReview={() => setReviewOpen("bar")}
           linkHref={prViewHref(repository, number, "files", family, formatDiffHash({ file: filename, anchor }))}
@@ -348,7 +337,7 @@ export function PRContent({
         if (anchor) setComposing({ file: filename, anchor });
       },
     }),
-    [threadsByFile, isAuthenticated, post, setThreadResolved, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo],
+    [threadsByFile, isAuthenticated, post, repository, pr?.head_sha, noteMode, setNoteMode, notes.length, landing, number, family, goTo],
   );
 
   // What the tree shows beside each file: open threads, waiting notes, viewed.
@@ -375,7 +364,7 @@ export function PRContent({
     if (!rootRef.current?.offsetParent) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement | null;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+    if (keyBelongsElsewhere(el)) return;
     const hit = PR_TABS.find((t) => t.digit === e.key);
     if (hit) { setTab(hit.key); return; }
     if (e.key === "r" && isAuthenticated) {
@@ -488,7 +477,7 @@ export function PRContent({
         onOpenComments={openThreadStops.length ? () => jumpTo(openThreadStops[0].file, openThreadStops[0].key) : undefined}
         sessionChoices={sessionChoices}
         onSetShepherd={(conversationId, enabled) =>
-          void setShepherd({ pr_id: pr._id, conversation_id: conversationId, enabled })
+          setPrShepherd(pr._id, conversationId, enabled)
         }
         actions={({ editTitle }) => (
           <>
@@ -541,7 +530,7 @@ export function PRContent({
               onPostComment={(content) => post({ content })}
               onResolve={(commentId, resolved) => {
                 const target = comments.find((c) => c._id === commentId);
-                if (target) setThreadResolved([target], resolved);
+                if (target) setCodeThreadResolved([target], resolved);
               }}
               onNavigate={(path) => router.push(path)}
               anchorLink={(anchor) => flow.shareUrl(prViewHref(repository, number, "conversation", family, `#${anchor}`))}

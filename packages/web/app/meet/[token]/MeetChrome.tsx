@@ -1,6 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { AudioLines, Camera, Mic, Volume2 } from "lucide-react";
-import { guestNoticeLines, type GuestNotice } from "@codecast/shared/contracts";
+import { guestNoticeLines, noticeNews, type GuestNotice } from "@codecast/shared/contracts";
 import type { DeviceChoice } from "../../../lib/calls/guestRoom";
 import { LogoMark } from "../../../components/Logo";
 
@@ -35,18 +35,38 @@ export function MeetShell({ children, bar }: { children: ReactNode; bar?: ReactN
 export function CallNotice({
   transcribed,
   recording,
+  videoPublic = false,
+  wordsPublic = false,
   compact = false,
   since,
 }: {
   transcribed: boolean;
   recording: boolean;
+  /** The recording's video goes to the call's public link: part of what the
+   *  guest agrees to, so it is said wherever the recording is. */
+  videoPublic?: boolean;
+  /** The transcript goes to the call's public link, said wherever the
+   *  transcription is, the same way. */
+  wordsPublic?: boolean;
+  /** The short lines alone (the waiting card's). Otherwise each line leads
+   *  with its short form, the sentence the eye lands on before Ask to join,
+   *  and the rest (who keeps it, who can watch, what can be shared) is one
+   *  press away under it: accurate, and not a wall a guest scrolls past. */
   compact?: boolean;
   /** The notice the guest asked to join under, when they already have: a
    *  row that was not part of it is marked as new, so a recording that
    *  started while they waited is not just one more line in a list. */
   since?: GuestNotice | null;
 }) {
-  const lines = guestNoticeLines({ recording, transcribed }, compact ? "short" : "long");
+  const notice: GuestNotice = { recording, transcribed, video_public: recording && videoPublic, words_public: transcribed && wordsPublic };
+  const lines = guestNoticeLines(notice, "short");
+  const long = compact ? null : guestNoticeLines(notice, "long");
+  const [open, setOpen] = useState<Partial<Record<"rec" | "words", boolean>>>({});
+  const news = noticeNews(since, notice);
+  // A recording or a transcript they were told of that went to the public
+  // link since is news of its own, and worded as that rather than as a
+  // fresh start.
+  const nowPublic = { rec: !!since?.recording && news.rec, words: !!since?.transcribed && news.words };
   if (lines.length === 0) {
     return (
       <p className="text-[11.5px] leading-relaxed text-sol-text-muted">
@@ -58,7 +78,7 @@ export function CallNotice({
     <div className="flex flex-col gap-1.5">
       {lines.map((l) => {
         const rec = l.key === "rec";
-        const fresh = !!since && (rec ? !since.recording : !since.transcribed);
+        const fresh = rec ? news.rec : news.words;
         return (
           <div
             key={l.key}
@@ -76,10 +96,22 @@ export function CallNotice({
             <span className="text-[11.5px] leading-relaxed text-sol-text-secondary">
               {fresh && (
                 <span className={`mr-1.5 font-medium ${rec ? "text-sol-red" : "text-sol-cyan"}`}>
-                  {rec ? "Started while you waited." : "Turned on while you waited."}
+                  {nowPublic[l.key] ? "Now shared by public link." : rec ? "Started while you waited." : "Turned on while you waited."}
                 </span>
               )}
-              {l.text}
+              {long && open[l.key] ? long.find((x) => x.key === l.key)!.text : l.text}
+              {long && (
+                <button
+                  type="button"
+                  onClick={() => setOpen((o) => ({ ...o, [l.key]: !o[l.key] }))}
+                  aria-expanded={!!open[l.key]}
+                  className={`ml-1.5 inline-flex items-center gap-0.5 whitespace-nowrap rounded underline decoration-dotted underline-offset-2 transition-colors ${
+                    rec ? "text-sol-red/80 hover:text-sol-red" : "text-sol-cyan/80 hover:text-sol-cyan"
+                  }`}
+                >
+                  {open[l.key] ? "Less" : rec ? "What happens to the video" : "Who reads it"}
+                </button>
+              )}
             </span>
           </div>
         );
@@ -90,24 +122,51 @@ export function CallNotice({
 
 /** The live pill in the call's bar while it is transcribed. Recording wears
  *  the red mark every call surface wears (GuestInCall, RecordingMark), which
- *  is also where a guest stops it. */
-export function NoticePills({ transcribed }: { transcribed: boolean }) {
-  return (
+ *  is also where a guest stops it.
+ *
+ *  A phone has room for the word and not the rest ("transcribed", without
+ *  ", public"), and a touch screen never shows a tooltip, so the pill is a
+ *  button when the host can say more: a press brings back the notice line the
+ *  guest was told on the way in (`onExplain`), the whole sentence, public
+ *  link included. */
+export function NoticePills({
+  transcribed,
+  wordsPublic = false,
+  onExplain,
+}: {
+  transcribed: boolean;
+  wordsPublic?: boolean;
+  onExplain?: () => void;
+}) {
+  if (!transcribed) return null;
+  const notice = { recording: false, transcribed: true, words_public: wordsPublic };
+  const label = guestNoticeLines(notice, "label")[0].text;
+  const title = guestNoticeLines(notice, "short")[0].text;
+  const body = (
     <>
-      {transcribed && (
-        <span
-          className="flex shrink-0 items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2 py-0.5 font-mono text-[11px] text-sol-cyan"
-          title={guestNoticeLines({ recording: false, transcribed: true }, "short")[0].text}
-        >
-          <AudioLines className="h-3 w-3" />
-          <span className="max-sm:hidden">transcribed</span>
-        </span>
-      )}
+      <AudioLines className="h-3 w-3 shrink-0" />
+      <span className="max-sm:hidden">{label}</span>
+      <span className="text-[10px] sm:hidden">{guestNoticeLines({ ...notice, words_public: false }, "label")[0].text}</span>
     </>
+  );
+  const pill = "flex shrink-0 items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2 py-0.5 font-mono text-[11px] text-sol-cyan max-sm:gap-1 max-sm:px-1.5";
+  if (!onExplain) {
+    return (
+      <span className={pill} title={title}>
+        {body}
+      </span>
+    );
+  }
+  return (
+    <button type="button" onClick={onExplain} className={`${pill} transition-colors hover:bg-sol-cyan/20`} title={title} aria-label={title}>
+      {body}
+    </button>
   );
 }
 
-const DEVICE_META = {
+// `empty` is also what the lobby's preview says when the camera list is
+// empty, so the picture and the picker under it name the same fact one way.
+export const DEVICE_META = {
   mic: { icon: Mic, label: "Microphone", empty: "No microphone found" },
   camera: { icon: Camera, label: "Camera", empty: "No camera found" },
   speaker: { icon: Volume2, label: "Speaker", empty: "System default" },

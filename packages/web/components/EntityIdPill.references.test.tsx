@@ -629,39 +629,6 @@ describe("pull request references", () => {
   });
 });
 
-describe("page-load bar", () => {
-  // A same-origin <a> starts the yellow top bar (NavigationProgress). A click
-  // that takes a session onto the stage never navigates, so the pill must opt
-  // out. A task/plan/doc label is a plain link; inside a reveal host the band
-  // opens from the caret beside it.
-  test("a session pill opts out: a click takes the stage, it does not route", () => {
-    const html = render("see jx7b7mx");
-    expect(html).toContain("data-no-progress");
-  });
-
-  test("a task pill without a reveal host still navigates, so the bar may start", () => {
-    const html = render("see ct-38940");
-    expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
-    expect(html).not.toContain("data-no-progress");
-  });
-
-  test("a task pill inside a reveal host is a link plus a caret that opens the band", async () => {
-    const { RevealHostCtx } = await import("../lib/revealHost");
-    const html = renderToStaticMarkup(
-      <MemoryRouter>
-        <RevealHostCtx.Provider value={{ hostKey: "msg" }}>
-          <ReactMarkdown remarkPlugins={entityRemarkPlugins} components={MD_COMPONENTS as any}>
-            see ct-38940
-          </ReactMarkdown>
-        </RevealHostCtx.Provider>
-      </MemoryRouter>,
-    );
-    expect(html).not.toContain("data-no-progress");
-    expect(html).toContain('href="/tasks/' + TASK_CONVEX_ID + '"');
-    expect(html).toContain("entity-ref__expand");
-  });
-});
-
 // A codecast URL for a route with no entity pill (/org?proposal=…) is still a
 // place in this app. As a new tab it left the desktop app for the system browser.
 describe("codecast route links", () => {

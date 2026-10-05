@@ -14,7 +14,7 @@ import { bridge, isElectron } from "../lib/desktop";
 import { getUndoHistory, performRedo, performUndo } from "../store/undoStack";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { fireUndoHistoryMilestone } from "../lib/undoHistory";
-import { WALK_IDLE, createFieldUndoGuard, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
+import { WALK_IDLE, createFieldUndoGuard, fieldHoldsText, richEditorCanStep, richEditorOf, walk, walkTimer, walkView, type RichEditor, type WalkEvent, type WalkState } from "../lib/undoWalk";
 
 const CARD_SELECTOR = "[data-undo-timeline]";
 /** The shortcut context live while the card peeks or fades: it routes H to
@@ -41,9 +41,12 @@ function landingTop(dir: "undo" | "redo"): string | undefined {
 
 const CAPTURE: AddEventListenerOptions = { capture: true };
 
-/** Whether the browser has an undo (redo) of its own left, where it can say
- *  reliably: Chromium answers queryCommandEnabled from its undo stack. */
-function nativeCanStep(dir: "undo" | "redo"): boolean | undefined {
+/** Whether the field has an undo (redo) of its own left, where that can be
+ *  said reliably: a rich editor answers from its own history, and Chromium
+ *  answers queryCommandEnabled from the browser's undo stack. */
+function nativeCanStep(dir: "undo" | "redo", field: Element): boolean | undefined {
+  const editor = richEditorOf(field);
+  if (editor) return richEditorCanStep(editor, dir);
   if (typeof document === "undefined" || typeof navigator === "undefined") return undefined;
   if (!isElectron() && !/\bChrom(e|ium)\//.test(navigator.userAgent)) return undefined;
   try {
@@ -98,11 +101,20 @@ export function useUndoWalk(): void {
     // when the browser finds nothing left in the field, the press comes back
     // here. A named step (the palette's row, typed into its input) is no edit
     // of the field it was picked from, so it never defers.
+    // A field holding text keeps its own undo while it has one; text the app
+    // put there that nobody edited (a draft seeded as a triage step lands on
+    // its session) has none, so the press is the app's. A region with no value
+    // to read keeps the chord.
     const focus = typeof document !== "undefined" ? document.activeElement : null;
     if (source === "key" && focus && isEditableTarget(focus)) {
-      const declined = fields.current!.declines(dir, focus, getUndoHistory(), () => {
+      const fallback = () => {
         if (document.activeElement === focus) step(dir, source);
-      }, nativeCanStep(dir));
+      };
+      const text = fieldHoldsText(focus);
+      if (text === null) return false;
+      const declined = text
+        ? fields.current!.keepsWithText(focus, fallback, nativeCanStep(dir, focus))
+        : fields.current!.declines(dir, focus, getUndoHistory(), fallback, nativeCanStep(dir, focus));
       if (declined) return false;
     }
     const landed = landingTop(dir);
@@ -182,6 +194,33 @@ export function useUndoWalk(): void {
 
   useEventListener("input", (e: Event) => {
     if (e.target instanceof Element) fields.current!.edited(e.target);
+  }, undefined, CAPTURE);
+
+  // A rich editor edits without input events (richEditorOf): it reports its
+  // own changes, heard from the first time it takes focus. Only a change made
+  // while the user's key, paste, cut or drop on that field is in flight is
+  // the user's edit; a draft seeded from the store or a collaborator's edit
+  // is not, as a value set from code is no edit of a plain field.
+  const watched = useRef(new WeakSet<RichEditor>());
+  const userEvent = useRef<Node | null>(null);
+  useEffect(() => {
+    const mark = (e: Event) => {
+      const target = e.target instanceof Node ? e.target : null;
+      userEvent.current = target;
+      setTimeout(() => { if (userEvent.current === target) userEvent.current = null; }, 0);
+    };
+    const kinds = ["keydown", "beforeinput", "paste", "cut", "drop"] as const;
+    for (const k of kinds) window.addEventListener(k, mark, CAPTURE);
+    return () => { for (const k of kinds) window.removeEventListener(k, mark, CAPTURE); };
+  }, []);
+  useEventListener("focusin", (e: FocusEvent) => {
+    const field = e.target;
+    const editor = richEditorOf(field);
+    if (!editor || !(field instanceof Element) || watched.current.has(editor)) return;
+    watched.current.add(editor);
+    editor.on("update", () => {
+      if (userEvent.current && field.contains(userEvent.current)) fields.current!.edited(field);
+    });
   }, undefined, CAPTURE);
 
   // Leaving the window drops the key state with it.

@@ -9,6 +9,7 @@ import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEART
 import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
+import { isHostedAgentType } from "./agentClients";
 import type { WorkState } from "./workState";
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
@@ -1284,8 +1285,26 @@ export function isSessionIdle(input: SessionIdleInput): boolean {
     : !recentlyUpdated;
 }
 
+/** A session waiting on something nothing serves: active, no live daemon,
+ *  and a trailing user turn or queued input gone quiet. A hosted conversation
+ *  (agent_type "codecast") runs in codecast's backend, so a missing daemon is
+ *  never why it waits. One rule for the server's enrichment and this
+ *  overlay. */
+export function isUnservedSession(input: {
+  status: string;
+  agentType: string | null | undefined;
+  daemonAlive: boolean;
+  lastRoleIsUser: boolean;
+  hasPending: boolean;
+  recentlyUpdated: boolean;
+}): boolean {
+  return input.status === "active" && !input.daemonAlive && !isHostedAgentType(input.agentType) &&
+    (input.lastRoleIsUser || input.hasPending) && !input.recentlyUpdated;
+}
+
 export interface LiveFactsRow {
   status?: string | null;
+  agent_type?: string | null;
   updated_at: number;
   message_count?: number | null;
   has_pending_messages?: boolean | null;
@@ -1336,9 +1355,9 @@ export function deriveLiveAt(row: LiveFactsRow, t: number): LiveFacts {
   const daemonAlive = agentStatus !== "stopped" && row.daemon_alive_until != null && t < row.daemon_alive_until;
   const recentlyUpdated = t - row.updated_at < AGENT_IDLE_GRACE_MS;
   const lastRoleIsUser = !!row.last_role_is_user;
-  const isUnresponsive = (agentStatus !== "hibernated" || hasPending) && (row.status ?? "active") === "active" && !daemonAlive && (
-    (lastRoleIsUser && !recentlyUpdated) || (hasPending && !recentlyUpdated)
-  );
+  const isUnresponsive = (agentStatus !== "hibernated" || hasPending) && isUnservedSession({
+    status: row.status ?? "active", agentType: row.agent_type, daemonAlive, lastRoleIsUser, hasPending, recentlyUpdated,
+  });
   let isIdle = isSessionIdle({
     agentStatus,
     agentStatusUpdatedAt: row.agent_status_updated_at ?? undefined,

@@ -3,13 +3,12 @@
 // null when the key is missing or the call fails; the caller decides what a
 // missing answer means.
 
+import { priceFor, usageCost } from "@platform/agent/meter";
+
 /** The small model the server's summaries and briefs run on. */
 export const CHEAP_MODEL = "claude-haiku-4-5-20251001";
-/** Its list price in dollars per million tokens, for the cost a caller reports. */
-export const CHEAP_MODEL_PRICE = { input: 1, output: 5 };
 /** The current Sonnet, for work the cheap model is too small for. It refuses any temperature. */
 export const STRONG_MODEL = "claude-sonnet-5-5";
-export const STRONG_MODEL_PRICE = { input: 3, output: 15 };
 
 export interface ModelUsage {
   input_tokens: number;
@@ -129,10 +128,13 @@ export function cheapModelCost(usage: ModelUsage): number {
   return modelCost(CHEAP_MODEL, usage);
 }
 
-/** Dollars for a usage on `model`. A model without a listed price is charged at Sonnet's, so a cap never undercounts. */
+/**
+ * Dollars for a usage on `model`, from the one price table (`PRICE_OVERRIDES`
+ * in @platform/agent). A model it does not list is charged at its dearest
+ * entry, so a cap never undercounts.
+ */
 export function modelCost(model: string, usage: ModelUsage): number {
-  const price = model === CHEAP_MODEL ? CHEAP_MODEL_PRICE : STRONG_MODEL_PRICE;
-  return (usage.input_tokens * price.input + usage.output_tokens * price.output) / 1_000_000;
+  return usageCost({ input: usage.input_tokens, output: usage.output_tokens, cacheRead: 0, cacheWrite: 0 }, priceFor(model));
 }
 
 // The JSON value the reply starts with. A model that answers `[]` and then

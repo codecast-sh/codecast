@@ -245,10 +245,26 @@ export function replyOf(dir: string): string | null {
   return text || null;
 }
 
+/**
+ * The last `n` lines of a log as plain text: terminal colour codes and the
+ * carriage returns a tmux pane writes are dropped, and so are blank lines.
+ * Empty when there is no log.
+ */
+export function tailLines(path: string, n = 20): string[] {
+  const text = readText(path);
+  if (!text) return [];
+  return text
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b[()][0-9A-Za-z]|\r/g, '')
+    .split('\n')
+    .filter((l) => l.trim())
+    .slice(-n);
+}
+
 /** The last lines of run.log, or null when the rep left none. */
 export function logTailOf(dir: string, lines = 40): string | null {
-  const text = readText(join(dir, 'run.log'));
-  return text ? text.split('\n').filter(Boolean).slice(-lines).join('\n') : null;
+  const tail = tailLines(join(dir, 'run.log'), lines);
+  return tail.length ? tail.join('\n') : null;
 }
 
 /** The folder's tree, depth first, at most `cap` entries; symlinks are listed, never followed. */

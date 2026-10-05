@@ -1,9 +1,10 @@
 #!/usr/bin/env node
+import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath } from "@codecast/shared/contracts";
-import { codePasteSignInUrl, pairDeliveryAcks } from "@codecast/shared/contracts";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedPollAnswer } from "./typedPollAnswer.js";
@@ -264,7 +265,10 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
-import { hasTmux, isTmuxSessionMissingError } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError, listCodecastPanesAsync } from "./tmux.js";
+import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
+import { herdViewerAlive } from "./herdViewer.js";
+import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
 import { configureDaemonWorkers, closeDaemonWorkers, daemonWorkersEnabled } from "./workers/bridge.js";
 import { collectScan, visitScan, scanCanFallback } from "./workers/scanClient.js";
 import { ScanCancelled, yieldScanBatch } from "./scanBatch.js";
@@ -277,6 +281,7 @@ import {
   PASTE_START,
   clientAcceptsBracketedPaste,
   deliverTextIntoPane,
+  typedNewlineKey,
   pasteAndSubmitText,
   prepareInjectedContent,
 } from "./tmuxPaste.js";
@@ -319,6 +324,7 @@ import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, recordStableContext, type BuiltStableContext } from "./stableContext.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
 import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import { collectMachineResources } from "./systemResources.js";
 import {
@@ -359,7 +365,7 @@ import {
   grokStableRulesFragment,
 } from "./resumeCommand.js";
 import { ClaudeCloudWatcher, cloudEventUuid } from "./claudeCloud.js";
-import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
+import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAgentAdapters, logTag as cloudAgentLogTag, readMetaJson, withMirrorSynced, writeMirrorSynced, type CloudAgentDeviceCode, type CloudAgentGit, type CloudAgentLoginCommand } from "./cloudAgents/index.js";
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
@@ -383,6 +389,7 @@ import { MintFlowControl, submitApprovalCode } from "./mintFlowControl.js";
 import { getProviderKeyPublicKey, applyProviderKeyCommand, decryptProviderKeyPayload, type ProviderKeyVerifier } from "./providerKeyCrypto.js";
 import type { LoopFreezeSummary, LoopFreezeState } from "./loopFreezeState.js";
 import { defaultConfigDir } from "./config/configDir.js";
+import { readTitleCache, saveTitleCache, type TitleCache } from "./titleCache.js";
 import { findTmuxSessionsById } from "./tmuxSessionLookup.js";
 
 // A file a person changed in the web's config editor. It goes in the change
@@ -1190,9 +1197,6 @@ interface ConversationCache {
   [sessionId: string]: string;
 }
 
-interface TitleCache {
-  [sessionId: string]: string;
-}
 
 interface PendingMessages {
   [sessionId: string]: Array<{
@@ -1631,6 +1635,11 @@ export function normalizeHookStatus(raw: HookStatusWire): HookStatusData {
 }
 type AppServerThreadStatus = { type?: string; activeFlags?: string[] };
 const lastHookStatus = new Map<string, HookStatusData>();
+/** The status codecast last published for a session, else the last one a hook
+ *  reported. */
+function currentAgentStatus(sessionId: string): AgentStatus | undefined {
+  return lastSentAgentStatus.get(sessionId) ?? lastHookStatus.get(sessionId)?.status;
+}
 const pendingInteractivePrompts = new Map<string, { timestamp: number; options: Array<{ label: string; description?: string }>; isConfirmation?: boolean }>();
 // Last synthetic-prompt uuid emitted per session. The heartbeat clears the pending
 // guard whenever the pane momentarily stops showing a menu, so a resumed session that
@@ -3272,6 +3281,66 @@ export function refreshLocalProjectRoots(): Promise<void> {
   localRootsRefresh = { home, promise };
   return promise;
 }
+/**
+ * The canonical path the web may read or write for `p`, or null when the
+ * fence refuses it (configFence.ts). The roots are cached for the heartbeat,
+ * and a project only a session started in the last few minutes names is not
+ * in that cache yet, so a miss recomputes once before it is refused.
+ */
+/**
+ * Republish a project's line profile after the app edited it, off the command
+ * queue. One run per root at a time; edits landing while it runs ask for one
+ * more, so a burst of edits publishes the last file once or twice, never once
+ * per edit. Every edit that asked hears the outcome of the run that covered
+ * it (`onDone`), which the daemon reports back on that edit's command so the
+ * app knows its copy has caught up, or why it has not.
+ */
+const lineRepublishes = new Map<string, { again: boolean; waiting: Array<(outcome: { ok: boolean; detail?: string }) => void> }>();
+function republishLineProfileSoon(root: string, onDone?: (outcome: { ok: boolean; detail?: string }) => void): void {
+  const running = lineRepublishes.get(root);
+  if (running) {
+    running.again = true;
+    if (onDone) running.waiting.push(onDone);
+    return;
+  }
+  const entry = { again: false, waiting: onDone ? [onDone] : [] };
+  lineRepublishes.set(root, entry);
+  void (async () => {
+    let outcome: { ok: boolean; detail?: string } = { ok: true };
+    try {
+      do {
+        entry.again = false;
+        const res = await runCastCommand(["line", "profile", "--publish", "--json"], { env: { CODECAST_CWD: root }, timeoutMs: 120_000 });
+        outcome = res.code === 0 ? { ok: true } : { ok: false, detail: (res.stderr || res.stdout).trim().split("\n").pop()?.slice(0, 300) || `exit ${res.code}` };
+      } while (entry.again);
+    } catch (err) {
+      outcome = { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    } finally {
+      lineRepublishes.delete(root);
+    }
+    if (!outcome.ok) log(`[CONFIG] Republish of ${root}'s line profile failed: ${outcome.detail}`);
+    for (const done of entry.waiting) done(outcome);
+  })();
+}
+
+/** Report a command's outcome to the server (a later report replaces an earlier one). */
+async function postCommandResult(siteUrl: string, apiToken: string, commandId: string, result?: string, error?: string): Promise<void> {
+  await fetch(`${siteUrl}/cli/command-result`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ api_token: apiToken, command_id: commandId, result, error }),
+  });
+}
+
+async function fencedTarget(p: string, kind: FenceKind): Promise<string | null> {
+  const realTarget = fenceTargetOf(p);
+  if (!realTarget) return null;
+  const home = process.env.HOME || "";
+  if (fenceAdmits(realTarget, { home, roots: computeLocalProjectRoots(), kind })) return realTarget;
+  invalidateLocalProjectRoots();
+  await refreshLocalProjectRoots();
+  return fenceAdmits(realTarget, { home, roots: computeLocalProjectRoots(), kind }) ? realTarget : null;
+}
 export function computeLocalProjectRoots(): string[] {
   const home = process.env.HOME || "";
   if (!localRootsSnapshot || localRootsSnapshot.home !== home || Date.now() - localRootsSnapshot.at > 30_000) void refreshLocalProjectRoots();
@@ -3808,19 +3877,27 @@ let loginFlowActive = false;
 // fresh flow's pending stamp.
 let loginFlowGeneration = 0;
 
-function credentialHashOf(raw: string | null): string | null {
-  return raw ? createHash("sha256").update(raw).digest("hex") : null;
-}
-
 // The last meaningful line of the dying pane — the CLI's own error is the most
 // honest "why" we can report ("Login cancelled", a network error, …).
+/** True once `claude auth login` has said it signed in. */
+export function loginPaneSucceeded(pane: string): boolean {
+  return /login successful/i.test(pane);
+}
+
 export function summarizeLoginPaneTail(pane: string): string | null {
   const lines = pane
     .split("\n")
     .map((l) => l.replace(/\s+/g, " ").trim())
     .filter((l) => l.length > 0);
-  const tail = lines[lines.length - 1];
-  return tail ? tail.slice(0, 160) : null;
+  // The CLI writes its error on the prompt's own line ("Paste code here if
+  // prompted > Login failed: …"); the prompt alone says nothing.
+  const tail = lines[lines.length - 1]?.replace(/^.*paste code here if prompted >\s*/i, "");
+  if (!tail) return null;
+  // A refused code: it was mistyped, already used, or expired (they last minutes).
+  if (/login failed: request failed with status code 400/i.test(tail)) {
+    return "Claude refused that code. Codes work once and expire within minutes; open the sign-in page again for a fresh one.";
+  }
+  return tail.slice(0, 160);
 }
 
 // A sign-in pane's command (`command` is shell text, its inputs already
@@ -3849,6 +3926,37 @@ function loginUrlPath(): string {
   return path.join(CONFIG_DIR, "login-flow.url");
 }
 
+// Who the running sign-in is for, on disk, so a daemon that restarts while
+// `claude auth login` waits (a restart, an auto-update) can adopt the pane.
+function loginFlowMetaPath(): string {
+  return path.join(CONFIG_DIR, "login-flow.json");
+}
+
+/**
+ * The approval code for a sign-in that is waiting at its prompt. A sign-in
+ * this process did not start (it restarted mid-flow) is adopted first: its
+ * pane is still there, so a watcher picks it up and reports the outcome.
+ */
+async function submitLoginCode(code: string): Promise<string> {
+  if (!loginFlowActive) {
+    let meta: { email?: string; profile?: string } = {};
+    try {
+      await tmuxExec(["has-session", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 });
+      meta = JSON.parse(fs.readFileSync(loginFlowMetaPath(), "utf-8"));
+    } catch {
+      throw new Error("This sign-in has ended. Start again.");
+    }
+    const gen = ++loginFlowGeneration;
+    loginFlowActive = true;
+    log(`[LOGIN-FLOW] adopted the running sign-in${meta.profile ? ` for profile "${meta.profile}"` : ""}`);
+    void watchLoginFlow(meta.email, gen, meta.profile, false, true)
+      .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
+  }
+  await submitApprovalCode(args => tmuxExec(args, { timeout: 3000 }), LOGIN_FLOW_TMUX, code);
+  return "login_code_submitted";
+}
+
 /** A utility tmux pane running one command (a sign-in the CLI wants a TTY for); a pane of that name is replaced. */
 async function startUtilityPane(name: string, command: string): Promise<void> {
   await killTmuxSessionAndTree(name).catch(() => {});
@@ -3863,13 +3971,32 @@ async function startUtilityPane(name: string, command: string): Promise<void> {
  * machine with no browser of its own (a cloud host) cannot finish that sign-in,
  * so the dialog says how to sign in there instead.
  */
-async function runCloudAgentLogin({ argv, headlessArgv, missing }: CloudAgentLoginCommand): Promise<void> {
+async function runCloudAgentLogin({ argv, headlessArgv, missing, deviceCode }: CloudAgentLoginCommand): Promise<CloudAgentDeviceCode | void> {
   // A CLI that is not there would die in the pane, and the dialog would wait out its whole sign-in for nothing.
   if (!whichBin(argv[0], agentSpawnPath())) throw new Error(missing);
+  const pane = `${argv[0]}-login-flow`;
+  // The person is on another device, or this machine has no browser: the
+  // headless sign-in prints a page and a code that finish it anywhere.
+  if (headlessArgv && (deviceCode || isRemoteDevice())) {
+    await startUtilityPane(pane, agentLoginPaneCommand(headlessArgv.map(shellEscapeForSh).join(" ")));
+    log(`[LOGIN-FLOW] started \`${headlessArgv.join(" ")}\` (tmux ${pane})`);
+    const deadline = Date.now() + 30_000;
+    let text = "";
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 1000));
+      try {
+        text = (await tmuxExec(["capture-pane", "-p", "-J", "-t", pane], { timeout: 3000 })).stdout;
+      } catch {
+        break;
+      }
+      const prompt = deviceCodePrompt(text);
+      if (prompt) return prompt;
+    }
+    throw new Error(summarizeLoginPaneTail(text) ?? `${headlessArgv.join(" ")} printed no sign-in code`);
+  }
   if (isRemoteDevice()) {
     throw new Error(`${deviceLabel()} has no browser to finish the sign-in. In a terminal there, run this, then open the link it prints on any device: ${(headlessArgv ?? argv).join(" ")}`);
   }
-  const pane = `${argv[0]}-login-flow`;
   await startUtilityPane(pane, agentLoginPaneCommand(argv.map(shellEscapeForSh).join(" ")));
   log(`[LOGIN-FLOW] started \`${argv.join(" ")}\` (tmux ${pane})`);
 }
@@ -3896,13 +4023,12 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   const gen = ++loginFlowGeneration;
   loginFlowActive = true;
   try {
-    const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
-    const baselineHash = credentialHashOf(await readCredential());
     fs.rmSync(loginUrlPath(), { force: true });
+    fs.writeFileSync(loginFlowMetaPath(), JSON.stringify({ email, profile }), { mode: 0o600 });
     const hook = writeBrowserHook("login-browser-hook.sh", loginUrlPath());
     await startUtilityPane(LOGIN_FLOW_TMUX, buildLoginFlowCommand(email, profile ? profileStoreDir(profile) : undefined, hook));
     log(`[LOGIN-FLOW] started browser sign-in${email ? ` for ${email}` : ""}${profile ? ` into profile "${profile}"` : ""} (tmux ${LOGIN_FLOW_TMUX})${force ? " [forced relaunch]" : ""}`);
-    void watchLoginFlow(baselineHash, email, gen, profile, openBrowser)
+    void watchLoginFlow(email, gen, profile, openBrowser)
       .catch((err) => log(`[LOGIN-FLOW] watcher failed: ${err instanceof Error ? err.message : String(err)}`))
       .finally(() => { if (gen === loginFlowGeneration) loginFlowActive = false; });
     return "login_flow_started";
@@ -3912,28 +4038,33 @@ async function startLoginFlow(email: string | undefined, force = false, profile?
   }
 }
 
-// Poll until the credential store proves the sign-in (hash changed + healthy),
-// the pane dies (the CLI exited — success or failure, the grace re-check
-// tells them apart), or the timeout lapses (abandoned browser tab).
+// Poll until the CLI says it signed in with a healthy credential on file, the
+// pane dies (the CLI exited: its last words say whether it signed in), or the
+// timeout lapses (abandoned browser tab).
 async function watchLoginFlow(
-  baselineHash: string | null,
   requestedEmail: string | undefined,
   gen: number,
   profile?: string,
   openBrowser = true,
+  // Adopted from an earlier daemon: its URL was reported already.
+  adopted = false,
 ): Promise<void> {
   const deadline = Date.now() + LOGIN_FLOW_TIMEOUT_MS;
   let lastPane = "";
-  let urlHandled = false;
+  let urlHandled = adopted;
   const readCredential = profile ? () => readProfileStoreCredentialsAsync(profile) : readActiveCredentialAsync;
 
   // The keychain and the pane are read off the loop: this polls every 2s for
   // the whole sign in, and a busy keychain answered `security` in 2 to 3s.
+  // The CLI's own "Login successful." is the proof the sign-in happened: a
+  // changed credential alone is not, because an account switch rewrites the
+  // keychain too, and on 2026-10-04 one did mid-flow, confirming a sign-in
+  // nobody finished, under the wrong account, and reviving 26 sessions on it.
+  // A re-login into the same account can leave the blob byte-identical, so
+  // the hash is no proof either way; health says the credential is usable.
   const confirmedNow = async (): Promise<boolean> => {
-    const raw = await readCredential();
-    if (!raw) return false;
-    const health = credentialHealth(raw, Date.now());
-    return credentialHashOf(raw) !== baselineHash && health.pushable;
+    if (!loginPaneSucceeded(lastPane)) return false;
+    return credentialHealth(await readCredential(), Date.now()).pushable;
   };
 
   const finishRejected = async (reason: string): Promise<void> => {
@@ -3987,7 +4118,6 @@ async function watchLoginFlow(
     // Superseded by a forced relaunch — the pane under our name is the NEW
     // flow's; touching or reporting anything now would sabotage it.
     if (gen !== loginFlowGeneration) return;
-    if (await confirmedNow()) return finishConfirmed();
     if (!urlHandled) urlHandled = handleSignInUrl(loginUrlPath(), lastPane, openBrowser, (url) => {
       log("[LOGIN-FLOW] sign-in URL ready");
       syncServiceRef?.reportLoginFlowUrl(url).catch((err) => {
@@ -3999,17 +4129,18 @@ async function watchLoginFlow(
     try {
       lastPane = (await tmuxExec(["capture-pane", "-p", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 })).stdout;
     } catch {
-      // The CLI exited. The credential store is the arbiter now — and not by
-      // the changed-hash test alone: a re-login into the SAME still-valid
-      // account can leave the blob byte-identical (verified live 2026-08-11 —
-      // the CLI printed "Login successful." and exited with an unchanged
-      // keychain item). A healthy pushable credential after a clean exit
-      // means the machine is signed in, whatever the hash says.
-      const health = credentialHealth(await readCredential(), Date.now());
-      if (health.pushable) return finishConfirmed();
+      // A slow tmux under load fails a capture too; only a missing session
+      // means the CLI is gone (the mint flow's rule, 2026-09-01).
+      try {
+        await tmuxExec(["has-session", "-t", LOGIN_FLOW_TMUX], { timeout: 3000 });
+        continue;
+      } catch {}
+      // The CLI exited; its last capture says whether it signed in.
+      if (await confirmedNow()) return finishConfirmed();
       const tail = summarizeLoginPaneTail(lastPane);
-      return finishRejected(tail && !/paste code here/i.test(tail) ? tail : "the sign-in window closed before completing");
+      return finishRejected(tail ?? "the sign-in window closed before completing");
     }
+    if (await confirmedNow()) return finishConfirmed();
   }
   if (gen !== loginFlowGeneration) return;
   return finishRejected("timed out waiting for the browser sign-in");
@@ -4222,9 +4353,7 @@ async function watchMintFlow(profile: string, email: string | undefined, gen: nu
       const tail = summarizeLoginPaneTail(lastPane);
       return finish(
         "rejected",
-        tail && !/paste code here/i.test(tail)
-          ? tail
-          : "claude setup-token exited before the browser approval completed",
+        tail ?? "claude setup-token exited before the browser approval completed",
       );
     }
     lastPane = pane;
@@ -5195,7 +5324,7 @@ export function resumeOwnerVerdict(input: {
 // the owner-defer path: a missing id there means a permanently unkillable pane.
 export function derivedPaneNamesForConversation(conversationId: string): string[] {
   const convSuffix = conversationId.slice(-12);
-  return Object.keys(AGENT_CLIENTS).map((agent) => `cc-${agent}-${convSuffix}`);
+  return Object.keys(LOCAL_AGENT_CLIENTS).map((agent) => `cc-${agent}-${convSuffix}`);
 }
 
 // Everything killConversationBackends clears per session, in one place so the
@@ -5558,6 +5687,9 @@ async function executeRemoteCommand(
 
   let result: string | undefined;
   let error: string | undefined;
+  // Work that must follow this command's report (a line edit's republish,
+  // whose own report has to land after the first one).
+  let afterReport: (() => void) | undefined;
 
   // Single-owner guard: skip session-targeted commands for conversations owned
   // by ANOTHER device (local peer OR a remote Mac the session was moved to),
@@ -5857,6 +5989,11 @@ async function executeRemoteCommand(
       }
       case "start_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        // A hosted conversation runs in codecast's backend; no machine starts it.
+        if (isHostedAgentType(parsed.agent_type)) {
+          error = "hosted conversation: no machine starts it";
+          break;
+        }
         const rawAgentType = parsed.agent_type;
         // Registry-driven normalization (accepts either the convex spelling or the
         // client id; unknown/claude → "claude"). Replaces a hand-rolled ternary that
@@ -6766,6 +6903,7 @@ async function executeRemoteCommand(
         // Settings "save as profile" button). Pure save — no swap, no kills.
         if (typeof parsed.save_as === "string" && parsed.save_as) {
           try {
+            await verifyActiveIdentity();
             const meta = saveProfile(parsed.save_as);
             result = JSON.stringify({ saved: meta.name, email: meta.email ?? null });
             log(`[ACCOUNTS] Saved active account as profile "${meta.name}"${meta.email ? ` (${meta.email})` : ""}`);
@@ -7035,13 +7173,8 @@ async function executeRemoteCommand(
           typeof parsed.profile === "string" && /^[a-z0-9][a-z0-9._-]{0,40}$/i.test(parsed.profile) ? parsed.profile : undefined;
         // The approval code from the code-paste page, typed into the waiting CLI.
         if (typeof parsed.login_code === "string") {
-          if (!loginFlowActive) {
-            error = "This sign-in has ended. Start again.";
-            break;
-          }
           try {
-            await submitApprovalCode(args => tmuxExec(args, { timeout: 3000 }), LOGIN_FLOW_TMUX, parsed.login_code);
-            result = "login_code_submitted";
+            result = await submitLoginCode(parsed.login_code);
           } catch (err) {
             error = err instanceof Error ? err.message : String(err);
           }
@@ -7064,6 +7197,12 @@ async function executeRemoteCommand(
       case "fork_session":
       case "resume_session": {
         const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        // Refused before any delivery or resume bookkeeping: a hosted
+        // conversation runs in codecast's backend and no machine resumes it.
+        if (isHostedAgentType(parsed.agent_type)) {
+          error = "hosted conversation: no machine resumes it";
+          break;
+        }
         const sessionId = parsed.session_id;
         const conversationId = parsed.conversation_id;
         const resumeOptions: ResumeOptions = {
@@ -7782,24 +7921,17 @@ async function executeRemoteCommand(
           error = "Missing file_path";
           break;
         }
-        const home = process.env.HOME || "";
-        const allowed = [path.join(home, ".claude"), path.join(home, ".codex")];
-        const resolved = path.resolve(readPath);
-        // Suffix arms stay (config_list advertises project files for viewing);
-        // the includes() arms are gone — '/anything/.claude/x' matched another
-        // user's home on a shared box, same hole the write fence closed.
-        const isAllowed = allowed.some((a) => resolved.startsWith(a + path.sep) || resolved === a) ||
-          readPath.endsWith("/CLAUDE.md") || readPath.endsWith("/AGENTS.md") ||
-          readPath.endsWith("/.mcp.json") || readPath.endsWith("/settings.json") ||
-          readPath.endsWith("/settings.local.json") || readPath.endsWith("/config.toml");
-        if (!isAllowed) {
+        // The fence (configFence.ts), "read": what the writers admit, plus an
+        // agent config basename anywhere (config_list advertises project files).
+        const readTarget = await fencedTarget(readPath, "read");
+        if (!readTarget) {
           error = "Path not allowed";
           break;
         }
-        if (!fs.existsSync(resolved)) {
+        if (!fs.existsSync(readTarget)) {
           result = JSON.stringify({ content: null, exists: false });
         } else {
-          const content = fs.readFileSync(resolved, "utf-8");
+          const content = fs.readFileSync(readTarget, "utf-8");
           result = JSON.stringify({ content, exists: true });
         }
         break;
@@ -7810,62 +7942,11 @@ async function executeRemoteCommand(
           error = "Missing file_path or content";
           break;
         }
-        // The old predicate accepted any path merely CONTAINING '/.claude/' or
-        // ENDING in settings.json — which matches another user's home on a
-        // shared box and any settings.json anywhere on disk. The fence now:
-        //   1. this user's ~/.claude and ~/.codex subtrees, canonically resolved
-        //      (realpath, so a symlink cannot walk the write out of the tree);
-        //   2. the small set of agent config basenames inside a project root
-        //      this daemon actually tracks — kept because config_list advertises
-        //      project CLAUDE.md/.mcp.json for editing, and a fence that breaks
-        //      the feature it guards just gets widened again later;
-        //   3. nothing else.
-        const home = process.env.HOME || "";
-        const resolved = path.resolve(writePath);
-        const dirReal = (() => {
-          try {
-            return fs.realpathSync(path.dirname(resolved));
-          } catch {
-            // Parent does not exist yet. Resolve the nearest existing ancestor
-            // so a symlinked segment cannot smuggle the write elsewhere.
-            let probe = path.dirname(resolved);
-            const tail: string[] = [];
-            while (!fs.existsSync(probe)) {
-              tail.unshift(path.basename(probe));
-              const up = path.dirname(probe);
-              if (up === probe) return null;
-              probe = up;
-            }
-            try {
-              return path.join(fs.realpathSync(probe), ...tail);
-            } catch {
-              return null;
-            }
-          }
-        })();
-        if (!dirReal) {
-          error = "Path not allowed";
-          break;
-        }
-        const realTarget = path.join(dirReal, path.basename(resolved));
-        const underOwnConfig = [path.join(home, ".claude"), path.join(home, ".codex")]
-          .some((a) => realTarget === a || realTarget.startsWith(a + path.sep));
-        const AGENT_CONFIG_BASENAMES = new Set([
-          "CLAUDE.md", "AGENTS.md", ".mcp.json", "settings.json", "settings.local.json", "config.toml",
-        ]);
-        const underTrackedProject = (): boolean =>
-          AGENT_CONFIG_BASENAMES.has(path.basename(realTarget)) &&
-          computeLocalProjectRoots().some((root) => realTarget.startsWith(root + path.sep));
-        // The roots are cached for the heartbeat. A project only a session
-        // started in the last few minutes names is not in that cache yet, so
-        // a miss recomputes once before it is refused.
-        let allowed = underOwnConfig || underTrackedProject();
-        if (!allowed) {
-          invalidateLocalProjectRoots();
-          await refreshLocalProjectRoots();
-          allowed = underTrackedProject();
-        }
-        if (!allowed) {
+        // The fence (configFence.ts): this user's ~/.claude and ~/.codex and
+        // agent config basenames inside a tracked project root, nothing else,
+        // all on the canonical path. A line profile is line_profile_edit's alone.
+        const realTarget = await fencedTarget(writePath, "config");
+        if (!realTarget) {
           error = "Path not allowed";
           break;
         }
@@ -7883,6 +7964,36 @@ async function executeRemoteCommand(
         withHarnessCause(EDITED_IN_CODECAST, () => writeHarnessFile(realTarget, writeContent, "edit"));
         result = JSON.stringify({ success: true });
         log(`[CONFIG] Wrote ${realTarget}`);
+        break;
+      }
+      case "line_profile_edit": {
+        // The app's edit of a project's .codecast/line.toml: key-level edits
+        // applied in place (comments survive), validated by the profile
+        // loader before anything is written, then republished so the app's
+        // copy follows. The read, edit and write stay inline so edits land in
+        // order; the republish (a cast cold start) runs off the command queue
+        // and the reply says it is pending. args: LineProfileEditArgs.
+        // Result: LineProfileEditReply.
+        const { runLineProfileEdit } = await import("./lineProfileEdit.js");
+        try {
+          let answered: string | undefined;
+          const reply = await runLineProfileEdit(commandArgs ? JSON.parse(commandArgs) : {}, {
+            admit: (file) => fencedTarget(file, "line_profile"),
+            write: (file, content) => atomicWriteFile(file, content, fs.existsSync(file) ? {} : { mode: 0o644 }),
+            // After the reply is reported, the republish runs and reports again
+            // on this command with how it went.
+            publish: (root) => {
+              afterReport = () => republishLineProfileSoon(root, (published) => {
+                if (answered) void postCommandResult(siteUrl, config.auth_token!, commandId, JSON.stringify({ ...JSON.parse(answered), published })).catch(() => {});
+              });
+              return { ok: "pending" };
+            },
+          });
+          result = answered = JSON.stringify(reply);
+          log(`[CONFIG] Edited ${reply.file}${reply.changed ? "; republishing" : " (unchanged)"}`);
+        } catch (err) {
+          error = err instanceof Error ? err.message : String(err);
+        }
         break;
       }
       case "config_create": {
@@ -8014,7 +8125,7 @@ async function executeRemoteCommand(
         log(`[CLOUD] placing ${conversationId.slice(0, 12)} on the cloud host (${workspace === "shared" ? "shared checkout" : `isolated worktree from ${startFrom === "origin_main" ? "origin/main" : "this checkout"}`}, async child)`);
         const child = runCastCommand(
           cloudStartArgs({ conversation_id: conversationId, cloud_device_id: cloudDeviceId, workspace, start_from: startFrom, leave_out: Array.isArray(parsed.leave_out) ? parsed.leave_out : undefined }),
-          { timeoutMs: 25 * 60 * 1000 },
+          { timeoutMs: CLOUD_START_RUN_MS },
         );
         cloudSpawnInFlight.set(conversationId, child);
         let res: Awaited<typeof child>;
@@ -8036,7 +8147,7 @@ async function executeRemoteCommand(
           // A context over the cap names what would have to stay behind; the
           // banner asks the human whether to leave it out.
           const tooLarge = res.stdout.split("\n").map((l) => { try { return JSON.parse(l)?.context_too_large; } catch { return undefined; } }).find(Boolean);
-          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch(() => {});
+          syncServiceRef?.reportCloudPlacementFailure(conversationId, parsed.placement_token, error, tooLarge).catch((err) => log(`[CLOUD] ${conversationId.slice(0, 12)}: ${err instanceof Error ? err.message : String(err)}`, "warn"));
         }
         break;
       }
@@ -8125,7 +8236,7 @@ async function executeRemoteCommand(
           error = "quiesce_session: missing conversation_id/session_id";
           break;
         }
-        const status = lastSentAgentStatus.get(sessionId) ?? lastHookStatus.get(sessionId)?.status;
+        const status = currentAgentStatus(sessionId);
         if (mode === "idle" && MID_TURN_AGENT_STATUSES.has(status ?? "")) {
           result = JSON.stringify({ quiesced: false, reason: `status-${status}` });
           log(`[MIGRATE] quiesce ${sessionId.slice(0, 8)} refused — turn in progress (${status})`);
@@ -8256,11 +8367,12 @@ async function executeRemoteCommand(
         // provider whose it is; "start" runs the provider's own sign-in in a
         // utility pane (it opens the browser here) and returns at once, and
         // the dialog checks until it lands. No token leaves the machine.
-        const { provider, op } = (commandArgs ? JSON.parse(commandArgs) : {}) as { provider?: string; op?: string };
+        const { provider, op, device_code } = (commandArgs ? JSON.parse(commandArgs) : {}) as { provider?: string; op?: string; device_code?: boolean };
         if (!provider || (op !== "check" && op !== "start")) { error = "cloud_agent_login needs a provider and op check|start"; break; }
         if (op === "start") {
-          await cloudAgents.startLogin(provider);
-          result = JSON.stringify({ state: "started" });
+          // A device-code start answers the page (url) and the code (detail) to finish it on any device.
+          const prompt = await cloudAgents.startLogin(provider, { deviceCode: device_code === true });
+          result = JSON.stringify({ state: "started", ...(prompt ? { url: prompt.url, detail: prompt.code } : {}) });
         } else {
           result = JSON.stringify(await cloudAgents.checkLogin(provider));
         }
@@ -8285,16 +8397,7 @@ async function executeRemoteCommand(
 
   // Report result
   try {
-    await fetch(`${siteUrl}/cli/command-result`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_token: config.auth_token,
-        command_id: commandId,
-        result,
-        error,
-      }),
-    });
+    await postCommandResult(siteUrl, config.auth_token, commandId, result, error);
   } catch {
     // Ignore
   } finally {
@@ -8302,6 +8405,7 @@ async function executeRemoteCommand(
     // executed_at, and the server refuses to release one of those.
     dropClaim(commandId);
   }
+  afterReport?.();
 }
 
 async function flushRemoteLogs(): Promise<void> {
@@ -8519,22 +8623,6 @@ function recordProjectMapping(key: string, localDir: string): void {
   } catch {}
 }
 
-function readTitleCache(): TitleCache {
-  const cacheFile = path.join(CONFIG_DIR, "titles.json");
-  if (!fs.existsSync(cacheFile)) {
-    return {};
-  }
-  try {
-    return JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as TitleCache;
-  } catch {
-    return {};
-  }
-}
-
-function saveTitleCache(cache: TitleCache): void {
-  const cacheFile = path.join(CONFIG_DIR, "titles.json");
-  fs.writeFileSync(cacheFile, JSON.stringify(cache, null, 2));
-}
 
 export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
 // Muse's tail classifier lives in the ingest worker module (the single home —
@@ -14818,8 +14906,13 @@ export function extractTmuxLiveRegion(paneContent: string): string {
 // fancy shell themes, a ❯ prompt glyph — both false-positive readiness
 // signals). When no echo is visible the agent TUI has scrolled it away — along
 // with the noise above it — so the full capture is safe to scan.
+// The LAST echo: the launch is typed into a login shell before its rc files
+// run, so the terminal echoes it as typeahead, the rc noise prints, and
+// readline echoes it again after the prompt. Cutting at the first echo read a
+// mirrored ~/.bash_profile's brew error as a failed launch on every cloud
+// session (2026-10-04).
 export function paneContentAfterLaunchEcho(paneContent: string): string {
-  const idx = paneContent.indexOf("env -u CLAUDECODE");
+  const idx = paneContent.lastIndexOf("env -u CLAUDECODE");
   if (idx < 0) return paneContent;
   const nl = paneContent.indexOf("\n", idx);
   return nl >= 0 ? paneContent.slice(nl + 1) : "";
@@ -15168,7 +15261,7 @@ const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode"
 // whitelist for a client it cannot read.
 export function glyphlessPromptPattern(agentType: AgentClientId | undefined): RegExp | null {
   return agentType && GLYPHLESS_PROMPT_CLIENTS.has(agentType)
-    ? AGENT_CLIENTS[agentType].promptReadyPattern
+    ? localAgentClient(agentType).promptReadyPattern
     : null;
 }
 
@@ -16774,7 +16867,20 @@ class InputBlockedError extends Error {
   }
 }
 
-function assertPromptAbsent(pane: string): void {
+// Is this "menu" the message being delivered, sitting in the composer? Typed
+// text renders in the composer as itself, so a message that is a numbered list
+// scrolls to "❯ 1. …" over its "2. …" rows: exactly a dialog with its cursor on
+// option 1. Every option is then a run of the payload's own text (the last one
+// cut off at the frame), which a real dialog's options never are unless the
+// message quotes them.
+export function promptIsOwnText(prompt: { options: Array<{ label: string }> }, ownText: string | undefined): boolean {
+  if (!ownText) return false;
+  const flat = (text: string) => text.replace(/\s+/g, " ").trim();
+  const own = flat(ownText);
+  return prompt.options.every((option) => flat(option.label).length > 0 && own.includes(flat(option.label)));
+}
+
+function assertPromptAbsent(pane: string, ownText?: string): void {
   // A blank capture is a pane between a clear and its next draw (claude clears
   // the screen as it boots), not a dialog: refused for a short retry, never
   // held for a human answer. Holding it cost 29 of 39 launches a 45s hold on
@@ -16785,7 +16891,8 @@ function assertPromptAbsent(pane: string): void {
   // cursor), but skipping the detectors here keeps a future parse from parking
   // delivery on a dialog the launch path already knows how to dismiss.
   if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane)) return;
-  if (parseInteractivePrompt(pane, true)) throw new InputBlockedError("terminal is waiting for a human answer");
+  const prompt = parseInteractivePrompt(pane, true);
+  if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer");
 }
 
 // The check every paste runs before it touches the pane, whoever wrote the
@@ -16793,12 +16900,12 @@ function assertPromptAbsent(pane: string): void {
 // not care who is typing, and keying this on the author is how a typed
 // message pasted into a dialog that had just refused a session message
 // (2026-09-15). Card answers (polls) never reach this: they answer the dialog.
-function inputGuard(capture: () => Promise<string>): () => Promise<void> {
+function inputGuard(capture: () => Promise<string>, ownText?: string): () => Promise<void> {
   let blocked: InputBlockedError | undefined;
   return async () => {
     if (blocked) throw blocked;
     try {
-      assertPromptAbsent(await capture());
+      assertPromptAbsent(await capture(), ownText);
     } catch (err) {
       blocked = err instanceof InputBlockedError
         ? err
@@ -17542,6 +17649,8 @@ export async function awaitTmuxComposerPayload(
     allowRePaste?: boolean;
     budgetMs?: number;
     exec?: typeof tmuxExec;
+    /** The payload was typed, not pasted (see typedNewlineKey). */
+    typed?: boolean;
   },
 ): Promise<"matched" | "unwatchable"> {
   const exec = opts.exec ?? tmuxExec;
@@ -17612,6 +17721,11 @@ export async function awaitTmuxComposerPayload(
     // as long as the viewer stayed open (2026-09-24). A tail on screen looks
     // the same as a paste that lost its start, so it is never accepted as is:
     // the check reads the whole composer at full size, once.
+    // Typed text is the exception. Claude's fullscreen composer has a fixed
+    // height, so a long typed message always shows only its tail there, at any
+    // window size, and keystrokes written in order to an idle composer do not
+    // lose their start the way a stalled paste can.
+    if (opts.typed && composerShowsOnlyPayloadTail(composer, payload)) return "matched";
     if (!readAtFullSize && composerShowsOnlyPayloadTail(composer, payload)) {
       readAtFullSize = true;
       if (await matchAtFullWindowSize(exec, target, matches, deadline)) return "matched";
@@ -17634,7 +17748,7 @@ export async function awaitTmuxComposerPayload(
   throw new Error("AGENT_STDIN_NOT_READY: composer never showed the pasted payload, leaving message pending for retry");
 }
 
-type TmuxInjectionOptions = { delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
+type TmuxInjectionOptions = { readTranscript?: () => Promise<string>; delivery?: TmuxDeliveryIdentity; journal?: TmuxDeliveryJournal; gateBudgetMs?: number; receiptSettleMs?: number };
 
 export async function injectViaTmux(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
   try {
@@ -17739,10 +17853,32 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // -p` only emits the markers for a program that asked for the mode) — see
   // prepareInjectedContent and the bracketedPaste capability.
   const sanitized = prepareInjectedContent(content, { bracketed });
+  const receiptJournal = opts?.delivery ? opts.journal ?? tmuxDeliveryJournal() : null;
+  const receipt = opts?.delivery ? receiptJournal!.get(opts.delivery.messageId) : null;
+  if (receipt && receipt.phase !== "paste" && receiptSettled(receipt, opts?.receiptSettleMs)) {
+    let transcript: string;
+    try {
+      if (opts?.readTranscript) transcript = await opts.readTranscript();
+      else {
+        const { stdout } = await tmuxExec(["display-message", "-p", "-t", target, "#{@codecast_session_id}"]);
+        const file = stdout.trim() ? await awaitRecentSessionFile(stdout.trim()) : null;
+        if (!file) throw new Error("local transcript not found");
+        transcript = await fs.promises.readFile(file.path, "utf8");
+      }
+    } catch (error) {
+      throw new TmuxDeliveryUncertainError(`cannot reconcile the earlier submit: ${String(error)}`);
+    }
+    if (transcriptContainsDelivery(transcript, agentType ?? "claude", sanitized, receipt.pasteAt)) {
+      receiptJournal!.begin(opts!.delivery!, receipt.generation, sanitized);
+      receiptJournal!.advance(receipt.messageId, "verified");
+      if (syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: receipt.messageId, status: "delivered", deliveredAt: Date.now() });
+      return;
+    }
+  }
   const delivery = opts?.delivery ? await prepareTmuxDelivery(
     target, opts.delivery, tmuxExec,
     async id => syncServiceRef ? pendingMessageFinished(syncServiceRef, id) : false,
-    opts.journal,
+    receiptJournal!,
     { settleMs: opts.receiptSettleMs },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
@@ -17751,7 +17887,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
   const beforeInput = inputGuard(async () =>
-    (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout);
+    (await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${captureLines}`])).stdout, sanitized);
   const exec: typeof tmuxExec = async (args, opts) => {
     if (args[0] === "send-keys" || args[0] === "paste-buffer") await beforeInput();
     return tmuxExec(args, opts);
@@ -17759,7 +17895,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
 
   // Closed-loop pre-flight: classify the live UI region only (transcript ignored),
   // dispatch the correct clearing key per modal, re-classify until paste-safe.
-  await ensureTmuxReady(target, agentType, assertPromptAbsent, captureLines);
+  await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized), captureLines);
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -17768,7 +17904,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // "text not found" reads as "submitted" (ct-49607).
   const contentPrefix = sanitized.split("\n", 1)[0].slice(0, 40);
 
-  const doPaste = () => deliverTextIntoPane(exec, target, sanitized, { bracketed, agentType });
+  // An idle composer is typed into where the client prefers it (Claude: a long
+  // paste reaches the model as text it will not act on); see typedNewlineKey.
+  const doPaste = () => deliverTextIntoPane(exec, target, sanitized, { bracketed, agentType, idle: liveState === "idle" });
+  const typed = () => typedNewlineKey(agentType, sanitized, liveState === "idle") !== null;
   const enterDelay = Math.max(100, Math.min(1000, Math.ceil(sanitized.length / 100) * 50));
 
   // Why: a retry must never paste a second copy. An earlier attempt can leave
@@ -17874,6 +18013,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     // match doubles as paste confirmation for the post-submit verifier.
     gate = await awaitTmuxComposerPayload(target, sanitized, {
       bracketedPaste: bracketed,
+      typed: typed(),
       prePaste,
       rePaste: delivery ? async () => { throw new TmuxDeliveryUncertainError("the paste has not appeared intact"); } : doPaste,
       allowRePaste: !delivery,
@@ -18312,53 +18452,13 @@ async function injectViaKitty(
     throw new Error(`Kitty window not found for TTY ${normalizedTty}`);
   }
   const match = `--match id:${windowId}`;
-
-  if (keystrokes) {
-    const escaped = content.replace(/'/g, "'\\''");
-    await execAsync(`kitty @ send-text ${match} '${escaped}'`);
-    return;
-  }
-
-  const poll = parsePollMessage(content);
-  if (poll) {
-    // Free-text answer: decline the AUQ menu once (Escape) and type at the prompt. See
-    // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
-    const declineText = pollDeclineText(poll);
-    if (declineText !== null) {
-      await execAsync(`kitty @ send-key ${match} escape`);
-      await new Promise(r => setTimeout(r, 500));
-      if (declineText) {
-        await kittySendText(match, declineText, bracketed);
-        await new Promise(r => setTimeout(r, 150));
-        await execAsync(`kitty @ send-key ${match} enter`);
-      }
-      log(`Injected poll free-text answer (declined menu) via Kitty for TTY ${normalizedTty}`);
-      return;
-    }
-    for (const step of pollMenuSteps(poll)) {
-      await execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(step.key)}`);
-      await new Promise(r => setTimeout(r, 500));
-    }
-    if (poll.text) {
-      await new Promise(r => setTimeout(r, 300));
-      await kittySendText(match, poll.text, bracketed);
-      await new Promise(r => setTimeout(r, 150));
-      await execAsync(`kitty @ send-key ${match} enter`);
-    }
-    log(`Injected poll response via Kitty for TTY ${normalizedTty}`);
-    return;
-  }
-
-  const beforeInput = inputGuard(async () =>
-    (await execAsync(`kitty @ get-text ${match} --extent screen`)).stdout);
-  await pasteAndSubmitText({
-    paste: () => kittySendText(match, content, bracketed, beforeInput),
-    submit: async () => {
-      await beforeInput?.();
-      await execAsync(`kitty @ send-key ${match} enter`);
-    },
-  });
-  log(`Injected message via Kitty for TTY ${normalizedTty}`);
+  await injectThroughPane({
+    name: `Kitty for TTY ${normalizedTty}`,
+    sendText: (text, beforeInput) => kittySendText(match, text, bracketed, beforeInput),
+    sendKey: (key) => execAsync(`kitty @ send-key ${match} ${mapKeyForKitty(key)}`),
+    sendKeystrokes: (keys) => execAsync(`kitty @ send-text ${match} '${keys.replace(/'/g, "'\\''")}'`),
+    readScreen: async () => (await execAsync(`kitty @ get-text ${match} --extent screen`)).stdout,
+  }, content, keystrokes);
 }
 
 // ── WezTerm injection via CLI (`wezterm cli`) ──────────────────────────────
@@ -18414,9 +18514,72 @@ async function injectViaWezTerm(
   if (paneId === null) {
     throw new Error(`WezTerm pane not found for TTY ${normalizedTty}`);
   }
+  await injectThroughPane({
+    name: `WezTerm for TTY ${normalizedTty}`,
+    sendText: async (text, beforeInput) => {
+      await beforeInput?.();
+      await weztermSendText(paneId, text, { bracketed });
+    },
+    sendKey: (key) => weztermSendKeys(paneId, WEZTERM_KEY_SEQUENCES[key] || key),
+    sendKeystrokes: (keys) => weztermSendKeys(paneId, keys),
+    readScreen: async () => (await execAsync(`wezterm cli get-text --pane-id ${paneId}`)).stdout,
+  }, content, keystrokes);
+}
 
+// ── herdr injection via its socket API ─────────────────────────────────────
+
+/** herdr's name for a poll step's key: lowercase, with Return spelled enter. */
+function herdrKey(key: string): string {
+  return key === "Return" ? "enter" : key.toLowerCase();
+}
+
+async function injectViaHerdr(
+  tty: string,
+  content: string,
+  keystrokes = false,
+  bracketed = true,
+): Promise<void> {
+  const normalizedTty = normalizeTty(tty);
+  const target = await findHerdrPaneForTty(normalizedTty);
+  if (!target) {
+    throw new Error(`herdr pane not found for TTY ${normalizedTty}`);
+  }
+  const call = (method: string, params: Record<string, unknown>) =>
+    herdrRequest<Record<string, any>>(target.socketPath, method, { pane_id: target.paneId, ...params });
+  await injectThroughPane({
+    name: `herdr pane ${target.paneId} for TTY ${normalizedTty}`,
+    // send_input pastes only when the pane's program turned bracketed paste
+    // on; send_text writes the bytes as typed, for a client that must not see
+    // a paste gesture.
+    sendText: async (text, beforeInput) => {
+      await beforeInput?.();
+      await call(bracketed ? "pane.send_input" : "pane.send_text", { text: prepareInjectedContent(text, { bracketed }) });
+    },
+    sendKey: (key) => call("pane.send_keys", { keys: [herdrKey(key)] }),
+    sendKeystrokes: (keys) => call("pane.send_text", { text: keys }),
+    readScreen: async () => (await call("pane.read", { source: "visible" })).read.text as string,
+  }, content, keystrokes);
+}
+
+// ── Injection through a terminal's pane API ────────────────────────────────
+// Kitty, WezTerm and herdr each expose a pane codecast can type into. Only the
+// transport differs: the keys around a poll and the paste-then-one-submit of a
+// message are the same for all of them.
+type PaneTransport = {
+  /** Which terminal and pane, for the log line. */
+  name: string;
+  /** Message text. Calls `beforeInput` right before writing, when given. */
+  sendText: (text: string, beforeInput?: () => Promise<void>) => Promise<unknown>;
+  /** One named key from a poll step: Escape, Enter, Up, a digit. */
+  sendKey: (key: string) => Promise<unknown>;
+  /** A payload that IS keys (the permission "\r" / "\x1b"), never bracketed. */
+  sendKeystrokes: (keys: string) => Promise<unknown>;
+  readScreen: () => Promise<string>;
+};
+
+async function injectThroughPane(t: PaneTransport, content: string, keystrokes: boolean): Promise<void> {
   if (keystrokes) {
-    await weztermSendKeys(paneId, content);
+    await t.sendKeystrokes(content);
     return;
   }
 
@@ -18426,44 +18589,39 @@ async function injectViaWezTerm(
     // pollDeclineText — doing it per-step spilled leftover option digits into the prompt.
     const declineText = pollDeclineText(poll);
     if (declineText !== null) {
-      await weztermSendKeys(paneId, "\x1b"); // Escape
+      await t.sendKey("Escape");
       await new Promise(r => setTimeout(r, 500));
       if (declineText) {
-        await weztermSendText(paneId, declineText, { bracketed });
+        await t.sendText(declineText);
         await new Promise(r => setTimeout(r, 150));
-        await weztermSendKeys(paneId, "\r"); // Enter
+        await t.sendKey("Enter");
       }
-      log(`Injected poll free-text answer (declined menu) via WezTerm for TTY ${normalizedTty}`);
+      log(`Injected poll free-text answer (declined menu) via ${t.name}`);
       return;
     }
     for (const step of pollMenuSteps(poll)) {
-      const seq = WEZTERM_KEY_SEQUENCES[step.key];
-      await weztermSendKeys(paneId, seq || step.key);
+      await t.sendKey(step.key);
       await new Promise(r => setTimeout(r, 500));
     }
     if (poll.text) {
       await new Promise(r => setTimeout(r, 300));
-      await weztermSendText(paneId, poll.text, { bracketed });
+      await t.sendText(poll.text);
       await new Promise(r => setTimeout(r, 150));
-      await weztermSendKeys(paneId, "\r");
+      await t.sendKey("Enter");
     }
-    log(`Injected poll response via WezTerm for TTY ${normalizedTty}`);
+    log(`Injected poll response via ${t.name}`);
     return;
   }
 
-  const beforeInput = inputGuard(async () =>
-    (await execAsync(`wezterm cli get-text --pane-id ${paneId}`)).stdout);
+  const beforeInput = inputGuard(t.readScreen);
   await pasteAndSubmitText({
-    paste: async () => {
-      await beforeInput?.();
-      await weztermSendText(paneId, content, { bracketed });
-    },
+    paste: () => t.sendText(content, beforeInput),
     submit: async () => {
       await beforeInput?.();
-      await weztermSendKeys(paneId, "\r");
+      await t.sendKey("Enter");
     },
   });
-  log(`Injected message via WezTerm for TTY ${normalizedTty}`);
+  log(`Injected message via ${t.name}`);
 }
 
 // ── Terminal injection router ──────────────────────────────────────────────
@@ -18475,7 +18633,7 @@ async function injectViaWezTerm(
 // text as a bracketed paste; unverified clients receive one flattened prompt. A
 // keystroke payload must never be bracketed, because wrapping a lone carriage
 // return would turn "approve" into a literal newline the TUI ignores.
-async function injectViaTerminal(
+export async function injectViaTerminal(
   tty: string,
   content: string,
   termProgram?: string,
@@ -18488,6 +18646,9 @@ async function injectViaTerminal(
   }
   if (termProgram === "WezTerm") {
     return injectViaWezTerm(tty, content, keystrokes, bracketed);
+  }
+  if (termProgram === "herdr") {
+    return injectViaHerdr(tty, content, keystrokes, bracketed);
   }
   if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
     throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
@@ -19127,6 +19288,7 @@ export function isSupersededAppServerSession(
   live: ReadonlyMap<string, string> = appServerConversations,
   persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
   cache: Record<string, string> | null | undefined = conversationCacheRef,
+  reverse?: Readonly<Record<string, string>>,
 ): boolean {
   if (!conversationId) return false;
   const threadId = live.get(conversationId) ?? persisted.get(conversationId)?.threadId;
@@ -19135,8 +19297,18 @@ export function isSupersededAppServerSession(
   // conversation cache still aliases the old thread. A different live binding
   // means this id is leftover — its output must not land on the new agent.
   if (!cache) return false;
-  const liveId = findCachedSessionIdForConversation(cache, conversationId);
+  const liveId = reverse ? reverse[conversationId] : findCachedSessionIdForConversation(cache, conversationId);
   return !!liveId && liveId !== sessionId;
+}
+
+export function currentHeartbeatSessions(
+  sessions: Iterable<string> = managedHeartbeatSessions,
+  cache: ConversationCache | null = conversationCacheRef,
+  live: ReadonlyMap<string, string> = appServerConversations,
+  persisted: ReadonlyMap<string, PersistedAppServerThreadRecord> = persistedAppServerThreads,
+): string[] {
+  const reverse = cache ? buildReverseConversationCache(cache) : {};
+  return [...sessions].filter(id => !isSupersededAppServerSession(id, cache?.[id], live, persisted, cache, reverse));
 }
 
 export function codexForkParentIdFromHead(headContent: string): string | undefined {
@@ -20265,7 +20437,7 @@ export async function runHeartbeatFlush(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
   retryHibernationStamps();
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = currentHeartbeatSessions();
   const now = Date.now();
 
   // Cadence sentinel: sends past 2x the interval mean something starved the
@@ -20305,7 +20477,7 @@ export async function runHeartbeatFlush(): Promise<void> {
 async function runHeartbeatMaintenance(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
-  const ids = [...managedHeartbeatSessions].filter(id => !isSupersededAppServerSession(id));
+  const ids = currentHeartbeatSessions();
   const tick = heartbeatMaintenanceCount++;
 
   // Self-heal pass (local): reconcile a status latched on a lost hook transition
@@ -22750,7 +22922,7 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
     const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
     return { state: alive ? "booting" : "gone", pane: "" };
   }
-  const { promptReadyPattern, paneReadiness } = AGENT_CLIENTS[entry.agentType];
+  const { promptReadyPattern, paneReadiness } = localAgentClient(entry.agentType);
   // The two terminal modes tmux renders as formats, read only when a client's
   // rule asks for one. They are facts the client told the terminal, which is why
   // they can say things a screen scrape cannot: grok is on the alternate screen
@@ -24100,8 +24272,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     resumeFatalReasons.set(sessionId, "invalid_session_id");
     return false;
   }
-  if (forkFromSessionId && (!AGENT_CLIENTS[agentType].forkCmd || !isValidResumeSessionId(agentType, forkFromSessionId))) {
-    log(`[SECURITY] Refusing native fork for ${agentType}: ${AGENT_CLIENTS[agentType].forkCmd ? `malformed parent id ${JSON.stringify(forkFromSessionId.slice(0, 80))}` : "no forkCmd"}`);
+  if (forkFromSessionId && (!localAgentClient(agentType).forkCmd || !isValidResumeSessionId(agentType, forkFromSessionId))) {
+    log(`[SECURITY] Refusing native fork for ${agentType}: ${localAgentClient(agentType).forkCmd ? `malformed parent id ${JSON.stringify(forkFromSessionId.slice(0, 80))}` : "no forkCmd"}`);
     return false;
   }
   const jsonlPath = isStoreOwnedResume ? "" : sessionFile!.path;
@@ -25557,7 +25729,7 @@ async function deliverMessageIntoSession(
         // slow input handler stalls the gate, not the submit. The 500ms just
         // lets the freshly painted frame stop redrawing, and a client with no
         // readiness entry of its own keeps exactly that.
-        const readiness = AGENT_CLIENTS[entry.agentType].paneReadiness;
+        const readiness = localAgentClient(entry.agentType).paneReadiness;
         await new Promise(resolve => setTimeout(resolve, readiness?.settleMs ?? 500));
         const startedTmuxTarget = entry.tmuxSession + ":0.0";
         // Mark "injected" best-effort (non-blocking) BEFORE the paste. The mark is fire-and-forget
@@ -28114,6 +28286,37 @@ function exitDoNotRestart(reason: string): never {
   process.exit(EXIT_DO_NOT_RESTART);
 }
 
+const HERD_TICK_MS = 3_000;
+let herdTickRunning = false;
+let herdTitles: HerdTitles | null = null;
+
+/** One mirror pass into the `cast herd` session. Costs one stat when no herd
+ *  is open, and one socket read plus one tmux list when one is. */
+async function tickHerd(titleCache: TitleCache): Promise<void> {
+  if (herdTickRunning) return;
+  const socketPath = herdrSocketPath(HERD_SESSION);
+  if (!(await fs.promises.access(socketPath).then(() => true, () => false))) return;
+  herdTickRunning = true;
+  try {
+    if (!(await herdViewerAlive(socketPath))) {
+      await syncHerdStatus(socketPath, []);
+      return;
+    }
+    const panes = await listCodecastPanesAsync();
+    herdTitles ??= serverTitles(readConfig());
+    await herdTitles.refresh(panes.flatMap((p) => p.sessionId ?? []));
+    const members = herdMembers(panes, {
+      status: currentAgentStatus,
+      title: (sessionId) => herdTitles?.get(sessionId) ?? titleCache[sessionId],
+    });
+    await syncHerdStatus(socketPath, members, (m) => log(`[HERD] ${m}`));
+  } catch {
+    // A socket file left by a stopped server: nothing to mirror into.
+  } finally {
+    herdTickRunning = false;
+  }
+}
+
 async function main(): Promise<void> {
   // Refuse before any state, lock, or exit-handler setup: on Windows the daemon
   // spawned a visible console window per background child (git, codex, cast) —
@@ -28462,6 +28665,15 @@ async function main(): Promise<void> {
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
+  // The local halves of codecast mods (mods/localRunner.ts): each in its own
+  // Worker, and only at a version a person approved on this machine.
+  void import("./mods/localRunner.js").then(({ startLocalMods }) => startLocalMods({
+    endpoint: () => {
+      const c = readConfig();
+      return c?.auth_token && c?.convex_url ? { siteUrl: c.convex_url.replace(".cloud", ".site"), apiToken: c.auth_token } : null;
+    },
+    log: (m) => log(m),
+  })).catch((err) => log(`[MODS] local runner did not start: ${err instanceof Error ? err.message : String(err)}`));
   // Agent logins (remote/agentAuth.ts) on the same cadence: a start backfill,
   // the 30-minute unconditional push, a per-host hash-gated fast tick, and a
   // watch on each source directory filtered to the exact filenames (the
@@ -28611,6 +28823,7 @@ async function main(): Promise<void> {
   const conversationCache = readConversationCache();
   conversationCacheRef = conversationCache;
   const titleCache = readTitleCache();
+  setInterval(() => { tickHerd(titleCache).catch(() => {}); }, HERD_TICK_MS);
   const pendingMessages: PendingMessages = {};
   const activeSessions = new Map<string, ActiveSession>();
 

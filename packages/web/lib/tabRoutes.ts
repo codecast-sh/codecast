@@ -3,6 +3,7 @@
 // src/routes.manifest.test.ts parses the sets below for parity with App.tsx.
 
 import { countLeaves, findLeaf, leavesOf, sanitizeLayout, setLeafPath } from "../store/stageSplit";
+import { tabSafePath } from "./tabSafePath";
 // The single-segment routes that live inside the shell, shared with the
 // desktop hand-off gate (which may import nothing, so the list lives there).
 import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
@@ -55,6 +56,8 @@ const NON_TAB_EXACT = new Set([
   // The share cursors glass: teammates' pointers over the sharer's screen.
   // Same rule again; the tab shell would rewrite the glass window's URL.
   "/share-cursors",
+  // The agent dock: the pill and its card on the screen's edge. Same rule.
+  "/agent-dock",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.
@@ -132,7 +135,7 @@ export function routerNavigate(
 
 export function shellTabPath(path: string | null | undefined): string {
   if (!path || typeof path !== "string") return DEFAULT_TAB_PATH;
-  return isNonTabRoute(path) ? DEFAULT_TAB_PATH : path;
+  return isNonTabRoute(path) ? DEFAULT_TAB_PATH : tabSafePath(path);
 }
 
 /** Heal a persisted tab list in place of trust: same array back when every
