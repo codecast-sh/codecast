@@ -197,7 +197,8 @@ async function verifyCompany() {
   propose();
   await mount();
   assert.ok(calls.includes("feed:proposal:op-54") && calls.includes("feed:proposal:op-55"), "one feeder for each open proposal");
-  assert.deepEqual(sections(), ["company", "goals", "projects", "people"]);
+  // Every loose project is placed by the proposal, so the section that lists loose ones is gone.
+  assert.deepEqual(sections(), ["company", "goals", "people"]);
   assert.equal(q("[data-company-proposals]")!.getAttribute("data-company-proposals"), "13");
   assert.deepEqual([...q("[data-company-proposals]")!.querySelectorAll("a")].map((a) => a.getAttribute("href")), ["/org?proposal=op-54", "/org?proposal=op-55"]);
   assert.equal(q("[data-company-tally]")!.textContent, "4 goals, 9 projects, 2 people, 2 roles", "nothing proposed is counted as held");
@@ -223,13 +224,13 @@ async function verifyCompany() {
   assert.equal(revenue.querySelector("[data-company-ghost-measure]")!.textContent, "Fees collected → The first dollar");
   assert.match(top[0].querySelector(":scope > [data-company-refs]")!.textContent!, /^Also carries 9 projects, listed under the goals nearest the work\.$/, "a purpose over every project counts them");
   assert.equal(under[0].querySelector("[data-company-project='pr-9']")!.getAttribute("data-company-project-ghost"), "proposed");
-  // A live goal keeps its heading and wears each change as a dashed line under it.
+  // A live goal keeps its heading and wears each change as a tinted line under it.
   const moved = q("[data-company-goal='in-2']")!;
   assert.equal(moved.getAttribute("data-company-depth"), "2");
   assert.equal(moved.getAttribute("data-company-goal-kind"), "live");
   const place = moved.querySelector(":scope > div > [data-company-change='union-network']") as HTMLElement;
   assert.equal(place.getAttribute("data-company-change-kind"), "initiative_shape");
-  assert.match(place.style.border, /dashed/);
+  assert.match(place.style.border, /^1px solid/);
   assert.equal(place.querySelector("[data-ghost-tag]")!.getAttribute("data-ghost-tag"), "moves here");
   assert.equal(place.querySelector("[data-company-change-under]")!.textContent, "under Broker high-value introductions that become real transactions");
   assert.deepEqual(qa("[data-company-goal='in-4'] > div > [data-company-change]").map((c) => c.getAttribute("data-company-change")), ["union-quality-shape", "union-quality-projects"]);

@@ -193,6 +193,23 @@ describe("UndoTimelineView", () => {
     assert.deepEqual(calls.at(-1), ["org"]);
   });
 
+  // A frame outside the dashboard (the simple lane) has no page for most
+  // objects and no org record: those rows show no link, and O and the org
+  // button do nothing rather than navigate into a frame the person is not in.
+  it("a frame with no place for an object or the org record leaves those rows inert", async () => {
+    await mount(<UndoTimelineView model={model} mode="interactive" {...handlers} canOpen={() => false} onOpenOrg={null} />);
+    assert.equal(all("[data-undo-open]").length, 0);
+    assert.equal(q('[data-undo-row="fx-org"] [data-undo-act="org"]'), null);
+    for (const id of ["fx-org", "fx-status", "fx-pin"]) {
+      await act(async () => (q(`[data-undo-row="${id}"]`) as any)?.click?.());
+    }
+    await press("ArrowDown");
+    await press("o");
+    await press("ArrowDown");
+    await press("o");
+    assert.deepEqual(calls.filter((c) => c[0] === "open" || c[0] === "org"), []);
+  });
+
   it("→ folds a group open, O opens the row's object, Esc closes", async () => {
     await mount(<UndoTimelineView model={model} mode="interactive" {...handlers} />);
     await press("ArrowUp");

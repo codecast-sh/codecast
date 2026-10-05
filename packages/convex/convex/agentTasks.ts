@@ -29,7 +29,7 @@ import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
-import { hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
+import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -64,13 +64,6 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
   }
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
-}
-
-// The agent_tasks.hosted_home stamp for a routine whose home is `homeId`:
-// true when the home is a hosted conversation, else absent.
-async function hostedHomeStamp(ctx: TaskCtx, homeId: Id<"conversations"> | string | null | undefined): Promise<true | undefined> {
-  const home = homeId ? await ctx.db.get(homeId as Id<"conversations">) : null;
-  return home && isHostedAgentType(home.agent_type) ? true : undefined;
 }
 
 // A recurring trigger keeps a cadence: slots one interval apart. run_at is when
@@ -2040,6 +2033,29 @@ export const backfillArmedTriggerKind = internalMutation({
       if (before && after && (before.armed_trigger_kind ?? "none") !== (after.armed_trigger_kind ?? "none")) stamped++;
     }
     return { homes: homes.size, stamped };
+  },
+});
+
+// Stamps hosted_home on routines armed before the stamp existed. With no cloud
+// wake host configured the dispatcher reads only stamped rows, so an unstamped
+// hosted routine would never fire there, and the plan limit counts stamps.
+// Pages the whole table and reschedules itself; idempotent, so re-running
+// writes nothing new.
+export const backfillHostedHome = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ scanned: number; stamped: number; done: boolean }> => {
+    const page = await ctx.db.query("agent_tasks").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    let stamped = 0;
+    for (const task of page.page) {
+      if (!task.originating_conversation_id) continue;
+      const stamp = await hostedHomeStamp(ctx, task.originating_conversation_id);
+      if (task.hosted_home === stamp) continue;
+      await ctx.db.patch(task._id, { hosted_home: stamp });
+      stamped++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.agentTasks.backfillHostedHome, { cursor: page.continueCursor });
+    if (stamped > 0) console.log("backfill_hosted_home", { scanned: page.page.length, stamped });
+    return { scanned: page.page.length, stamped, done: page.isDone };
   },
 });
 

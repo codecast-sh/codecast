@@ -387,10 +387,21 @@ export const CLIENT_SYNC_REGISTRY = {
     localFirst: true,
     workspaceScoped: true,
     sync: { altKey: "client_key" },
-    // The server's copy of the latest update: its clock and its id. A client
-    // cannot predict either, so a lock on them would never retire. `health`
-    // itself is predictable and stays protected.
-    unprotectedFields: ["health_at", "latest_update_id"],
+    // The server's copy of the latest update and its stamp: its clock and its
+    // id. A client cannot predict either, so a lock on them would never
+    // retire. `health` itself is predictable and stays protected.
+    // The intent record's four lists (I5) are edited one entry at a time, by
+    // key, by several writers: a role's session, an accepted proposal and a
+    // teammate all add to the list this device holds. A lock holds the whole
+    // list and retires only when the echo equals it, so one entry this
+    // device had not seen would hide every later push of that list for good.
+    // So the lists hold no lock: the entry paints from the shared reducer
+    // (the same one the server runs) and the server's list lands whole on
+    // the next push. A push computed before the write reverts the entry until
+    // the echo, moments later.
+    // The reported numbers (`scoreboard`, `score_history`) are the server's
+    // to write; the web only paints where a metric edit carries them.
+    unprotectedFields: ["health_at", "latest_update_id", "updated_at", "milestones", "questions", "decisions", "sources", "scoreboard", "score_history"],
     feeds: ["initiatives.webList"],
   },
   // One initiative's updates, newest first, fed for the initiative on screen.

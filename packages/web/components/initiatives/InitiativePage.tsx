@@ -15,7 +15,7 @@ import { useMemo, useState } from "react";
 import { ShareControl } from "../ShareControl";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CalendarDays, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ArrowLeft, Flag, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { INITIATIVE_STATUSES, INITIATIVE_STATUS_LABEL, metricReadings, metricTrends, milestoneCounts, nextMilestone, type InitiativeOwner, type InitiativeRow, type InitiativeStatus } from "@codecast/shared/contracts/initiative";
 import { InboxConversation } from "../../app/inbox/QueuePageClient";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -39,7 +39,7 @@ import { useSeat } from "../org/scope/useSeat";
 import { SeatLead } from "../org/scope/SeatLead";
 import { HEALTH_COLOR, INITIATIVE_ACCENT } from "../../lib/initiativeColors";
 import { HealthChip, MetricTile, NextMilestoneChip, OwnerChip, ProgressBar, StatusGlyph, TargetDate } from "./InitiativeAtoms";
-import { IntentHeader, IntentIdChip, IntentPickChip, useIntentTab } from "./IntentHeader";
+import { IntentHeader, IntentIdChip, IntentPickChip, IntentTargetChip, useIntentTab } from "./IntentHeader";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { isConvexId } from "../../lib/entityLinks";
@@ -259,17 +259,20 @@ function OwnerControl({ initiative }: { initiative: InitiativeRow }) {
   );
 }
 
-// One shared pair stores and reads a target day (shared/time), so the picker
-// and `cast initiative` name the same day in every timezone.
-const dateInputValue = (ts?: number) => targetDayOf(ts) ?? "";
-
+// One shared pair stores and reads a goal's target day (shared/time), so the
+// picker and `cast initiative` name the same day in every timezone.
 function TargetControl({ initiative, now }: { initiative: InitiativeRow; now: number }) {
-  const set = (value: string) => useInboxStore.getState().updateInitiative(initiative._id, { target_date: value ? targetDayStamp(value) : null });
+  const set = (target_date: number | null) => useInboxStore.getState().updateInitiative(initiative._id, { target_date });
   return (
-    <label className="relative inline-flex items-center gap-1.5 -mx-1 px-1 h-6 rounded-md cursor-pointer transition-colors hover:bg-sol-bg-highlight/70" data-initiative-pick="target">
-      <CalendarDays className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />
-      {initiative.target_date ? <TargetDate ts={initiative.target_date} now={now} done={ended(initiative.status)} /> : <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No target</span>}
-      <input type="date" value={dateInputValue(initiative.target_date)} onChange={(e) => set(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" aria-label="Target date" />
-    </label>
+    <IntentTargetChip
+      data-initiative-pick="target"
+      day={targetDayOf(initiative.target_date)}
+      label="Target date"
+      emptyLabel="No target"
+      onCommit={(day) => { const ts = targetDayStamp(day); if (ts !== null && ts !== initiative.target_date) set(ts); }}
+      onClear={() => set(null)}
+    >
+      {initiative.target_date ? <TargetDate ts={initiative.target_date} now={now} done={ended(initiative.status)} /> : null}
+    </IntentTargetChip>
   );
 }

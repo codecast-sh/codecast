@@ -2,31 +2,36 @@
 // reading a status or a health the way a person types one, the lines `ls` and
 // `show` print, and the one sentence that says what happened to the owner
 // role's scope. The intent record (I5) is here too: every line `show` prints
-// of it, and which entry a person means by a number or a few words. The
-// network calls and the exits live in index.ts.
+// of it, which entry a person means by a number or a few words, and the op
+// each record command sends. The network calls and the exits live in index.ts.
 
 import { targetDayOf, targetDayStamp } from "@codecast/shared/time";
 import {
   INITIATIVE_HEALTH_LABEL,
+  INITIATIVE_RECORD_LISTS,
+  INITIATIVE_RECORD_NOUN,
   INITIATIVE_STATUSES,
   INITIATIVE_STATUS_LABEL,
   INITIATIVE_UPDATE_HEALTHS,
+  applyRecordOp,
   initiativeStanding,
-  intentSourceKey,
   intentSourceLine,
   metricLine,
   metricReadings,
   metricTrends,
   milestoneCounts,
   nextMilestone,
+  normalizeInitiativeRef,
   orderedMilestones,
   parseIntentSource,
+  recordKeyOf,
   trendWords,
   type InitiativeDecision,
   type InitiativeHealth,
   type InitiativeMilestone,
   type InitiativeQuestion,
   type InitiativeRecordList,
+  type InitiativeRecordOp,
   type InitiativeStatus,
   type InitiativeUpdateHealth,
   type IntentSource,
@@ -72,9 +77,11 @@ export function healthText(c: Palette, health: InitiativeHealth, at?: number): s
   return `${healthColor(c, health)}${INITIATIVE_HEALTH_LABEL[health]}${c.reset}${when}`;
 }
 
+const standingColor = (c: Palette, standing: MetricStanding) => (standing === "met" ? c.green : standing === "behind" ? c.yellow : c.dim);
+
 /** A metric's standing against its target, as the one word the page uses. */
 export function metricStandingText(c: Palette, standing: MetricStanding): string {
-  return standing === "met" ? `${c.green}met${c.reset}` : standing === "behind" ? `${c.yellow}behind${c.reset}` : `${c.dim}unread${c.reset}`;
+  return `${standingColor(c, standing)}${standing === "unknown" ? "unread" : standing}${c.reset}`;
 }
 
 export function progressText(counts?: { total: number; done: number }): string {
@@ -124,62 +131,271 @@ export function scopeSentence(owner: string | undefined, scope: any, titleOf: (p
 
 // ── The intent record (I5) ───────────────────────────────────────────────────
 
+/** What a person typed, read: the value, or why it could not be read. */
+export type Read<T> = T | { error: string };
+export const unread = (x: unknown): x is { error: string } => !!x && typeof x === "object" && "error" in x;
+
+/** A calendar day (a target, a milestone's due day) as the stamp to store. */
+export function readDayArg(text: string, flag: string, clears = false): Read<number> {
+  return targetDayStamp(text) ?? { error: `Invalid ${flag} "${text}": use YYYY-MM-DD${clears ? ', or "none" to clear' : ""}` };
+}
+
+/**
+ * A moment as a person types one (when a source was said, a milestone
+ * reached, a value observed). A day is noon of that day here, so it reads as
+ * that day in every nearby timezone, and today before noon is now, never a
+ * moment still to come. A time (YYYY-MM-DDTHH:MM) is that time.
+ */
+export function readMomentArg(text: string, flag: string, now = Date.now()): Read<number> {
+  const t = text.trim();
+  if (targetDayStamp(t) !== null) {
+    const [y, m, d] = t.split("-").map(Number);
+    const noon = new Date(y, m - 1, d, 12).getTime();
+    return new Date(y, m - 1, d).getTime() <= now && now < noon ? now : noon;
+  }
+  const at = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(t) ? Date.parse(t.replace(" ", "T")) : NaN;
+  return Number.isFinite(at) && at > 0 ? at : { error: `Invalid ${flag} "${text}": use YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time` };
+}
+
 /** `Title=YYYY-MM-DD` read as a milestone. Null for no title or a day that is not one; any other "=" is part of the title. */
 export function parseMilestoneArg(text: string): { title: string; date?: number } | null {
   const dated = text.match(/^([\s\S]*)=\s*(\d{4}-\d{2}-\d{2})\s*$/);
+  // A tail that reads as a day and is not written as one (2026-11-1, 11/1/2026) is a mistyped day, never words of the title.
+  if (!dated && /=\s*\d{1,4}[-\/]\d{1,2}[-\/]\d{1,4}\s*$/.test(text)) return null;
   const title = (dated ? dated[1] : text).trim();
   if (!title) return null;
   if (!dated) return { title };
   const date = targetDayStamp(dated[2]);
   return date === null ? null : { title, date };
 }
+const MILESTONE_NEEDED = (text: string) => `Invalid milestone "${text}": use "Title" or "Title=YYYY-MM-DD"`;
+export const readMilestoneArg = (text: string): Read<{ title: string; date?: number }> => parseMilestoneArg(text) ?? { error: MILESTONE_NEEDED(text) };
 
-/** A source as a person types one, or null when it names no address and says no words. */
+/**
+ * A source as a person types one, as the record would store it, or null when
+ * it names no address and says no words (the reducer's own rule). Words typed
+ * beside --quote are kept with it: the parser alone would drop them.
+ */
 export function readSourceArg(text: string, extra: Pick<IntentSource, "by" | "at" | "quote"> = {}): IntentSource | null {
-  const source = parseIntentSource(text, extra);
-  return intentSourceKey(source).endsWith(":") ? null : source;
+  const said = [...new Set([parseIntentSource(text).quote, extra.quote?.trim()].filter(Boolean))].join(": ");
+  const read = applyRecordOp([], { list: "sources", action: "add", entry: parseIntentSource(text, { ...extra, quote: said }) }, { now: 0 });
+  return "error" in read ? null : read.entry;
 }
-
-export const RECORD_NOUN: Record<InitiativeRecordList, string> = { milestones: "milestone", questions: "question", decisions: "decision", sources: "source" };
+export const SOURCE_NEEDED = "A source needs an address (call:<id>#<line>, chat:<id>, doc:<id>, a session short id, ct-N, pl-N or a link) or the words said";
 
 export type RecordEntry = { n: number; key: string; words: string; entry: any };
 
 /**
  * One list of the record in reading order, each entry with the number `show`
  * prints beside it and the key a write names it by: milestones by day
- * (orderedMilestones), the rest as written. A source has no stored key; its
- * address is its key.
+ * (orderedMilestones), the rest as written. The key is the record's own
+ * (recordKeyOf): a source has no stored one, its address is its key.
  */
 export function recordEntries(row: any, list: InitiativeRecordList): RecordEntry[] {
   const entries: any[] = list === "milestones" ? orderedMilestones(row.milestones) : (row[list] ?? []);
   return entries.map((entry, i) => ({
     n: i + 1,
-    key: list === "sources" ? intentSourceKey(entry) : entry.key,
+    key: recordKeyOf(list, entry),
     words: list === "milestones" ? entry.title : list === "sources" ? [entry.ref, entry.quote].filter(Boolean).join(" ") : entry.text,
     entry,
   }));
 }
 
-/** Which entry a person means: its number in reading order, its key, or its words (all of them, or a part only one entry has). */
-export function pickRecordEntry(row: any, list: InitiativeRecordList, pick: string): RecordEntry | { error: string } {
-  const entries = recordEntries(row, list);
-  const noun = RECORD_NOUN[list];
+// The command that adds the first entry of each list, said when a goal has none.
+const RECORD_ADD: Record<InitiativeRecordList, (on: string) => string> = {
+  milestones: (on) => `cast initiative milestone ${on} "<title>" --date <YYYY-MM-DD>`,
+  questions: (on) => `cast initiative ask ${on} "<question>"`,
+  decisions: (on) => `cast initiative decide ${on} "<decision>"`,
+  sources: (on) => `cast initiative source ${on} <address or the words said>`,
+};
+
+export type PickOpts = {
+  /** The command to type next, with <n> where the entry's number goes. */
+  retry?: string;
+  /** The entries this command takes, what they are called, and what to say of one it does not take. */
+  only?: { noun: string; test: (e: RecordEntry) => boolean; refuse: (e: RecordEntry, on: string) => string };
+};
+
+/**
+ * Which entry a person means: its number in reading order, its key (a source's
+ * address in any form the parser reads), or its words (all of them, or a part
+ * only one entry has). A miss prints the entries and the command to type next.
+ */
+export function pickRecordEntry(row: any, list: InitiativeRecordList, pick: string, opts: PickOpts = {}): RecordEntry | { error: string } {
+  const all = recordEntries(row, list);
+  const noun = INITIATIVE_RECORD_NOUN[list];
   const on = row.short_id ?? "this goal";
   const t = pick.trim();
-  if (!entries.length) return { error: `${on} has no ${list} yet` };
-  if (/^\d+$/.test(t)) return entries[Number(t) - 1] ?? { error: `No ${noun} ${t} on ${on}: it has ${entries.length}` };
+  if (!all.length) return { error: `${on} has no ${list} yet. Add one: ${RECORD_ADD[list](row.short_id ?? "<in-N>")}` };
+  const takes = (e: RecordEntry) => !opts.only || opts.only.test(e);
+  const taken = (e: RecordEntry) => (takes(e) ? e : { error: opts.only!.refuse(e, on) });
+  const miss = (head: string, shown: RecordEntry[]) => ({
+    error: [head, ...shown.map((e) => `  ${e.n}. ${e.words}`), ...(opts.retry && shown.length ? [`Name one by its number: ${opts.retry}`] : [])].join("\n"),
+  });
+  // A number is the one `show` prints, so it counts every entry, also one this command does not take.
+  if (/^\d+$/.test(t)) return all[Number(t) - 1] ? taken(all[Number(t) - 1]) : miss(`No ${noun} ${t} on ${on}. It has ${all.length}:`, all);
   const low = t.toLowerCase();
-  const exact = entries.filter((e) => e.key === t || e.words.toLowerCase() === low);
-  const found = exact.length ? exact : entries.filter((e) => e.words.toLowerCase().includes(low));
+  const address = list === "sources" ? recordKeyOf(list, parseIntentSource(t)) : t;
+  const matches = (among: RecordEntry[]) => {
+    const exact = among.filter((e) => e.key === t || e.key === address || e.words.toLowerCase() === low);
+    return exact.length ? exact : among.filter((e) => e.words.toLowerCase().includes(low));
+  };
+  const open = all.filter(takes);
+  const found = matches(open);
   if (found.length === 1) return found[0];
-  if (!found.length) return { error: `No ${noun} on ${on} matches "${t}"` };
-  return { error: `"${t}" matches ${found.length} ${list} on ${on}; name one by its number: ${found.map((e) => `${e.n}. ${e.words}`).join(" | ")}` };
+  if (found.length > 1) return miss(`"${t}" matches ${found.length} ${list} on ${on}:`, found);
+  const other = matches(all.filter((e) => !takes(e)));
+  if (other.length === 1) return taken(other[0]);
+  return miss(`No ${opts.only?.noun ?? noun} on ${on} matches "${t}".${open.length ? " It has:" : ""}`, open);
 }
 
-/** One metric as `show` and `report` print it: now against its target, the standing and the date, then which way it is moving. */
+// ── The op each record command sends ─────────────────────────────────────────
+// Every command reads its arguments into one write here and index.ts sends it.
+// A cleared value ('none' on the command line) arrives as null.
+
+/** One write of the record: what it prints, the op it posts, and for an op on an entry that is there, how the person named it. */
+export type RecordWrite = { verb: string; op: InitiativeRecordOp; pick?: PickOpts & { text: string } };
+
+type Clearable = string | null | undefined;
+const given = (...values: unknown[]) => values.some((v) => v !== undefined);
+
+/** A source typed beside another entry (--source): read, or null for 'none'. */
+function readSaidSource(text: string | null): Read<IntentSource | null> {
+  return text === null ? null : readSourceArg(text) ?? { error: SOURCE_NEEDED };
+}
+
+/** `cast initiative milestone`: add one, reach one (--done, on the day --at names), change one (--edit) or take one off (--remove). */
+export function milestoneWrite(ref: string, title: string | undefined, o: { done?: string; edit?: string; remove?: string; date?: Clearable; source?: Clearable; at?: Clearable }, now = Date.now()): Read<RecordWrite> {
+  const on = normalizeInitiativeRef(ref);
+  const picks = [o.done, o.edit, o.remove].filter((x) => x !== undefined);
+  if (picks.length > 1 || (!picks.length && title === undefined)) return { error: "Give one of: a title to add, --done <n|title>, --edit <n|title> with what changes, or --remove <n|title>" };
+  const named = (text: string, flag: string) => ({ text, retry: `cast initiative milestone ${on} ${flag} <n>` });
+
+  if (o.remove !== undefined) {
+    if (given(title, o.date, o.source, o.at)) return { error: "--remove takes the milestone alone" };
+    return { verb: "Removed a milestone from", op: { list: "milestones", action: "remove" }, pick: named(o.remove, "--remove") };
+  }
+  if (o.done !== undefined) {
+    if (given(title, o.date, o.source)) return { error: "--done takes only --at, the day it was reached. A title, --date and --source belong to a new milestone or to --edit" };
+    if (o.at === null) return { error: `A reached milestone is reopened with: cast initiative milestone ${on} --edit <n> --at none` };
+    const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
+    if (unread(at)) return at;
+    return { verb: "Reached a milestone of", op: { list: "milestones", action: "close", ...(at === undefined ? {} : { at }) }, pick: named(o.done, "--done") };
+  }
+
+  const entry: Record<string, any> = {};
+  if (title !== undefined) {
+    const milestone = readMilestoneArg(title);
+    if (unread(milestone)) return milestone;
+    if (milestone.date !== undefined && o.date !== undefined) return { error: 'Give the day once: in the title as "Title=YYYY-MM-DD", or with --date' };
+    Object.assign(entry, milestone);
+  }
+  if (typeof o.date === "string") {
+    const date = readDayArg(o.date, "--date", o.edit !== undefined);
+    if (unread(date)) return date;
+    entry.date = date;
+  }
+  if (o.source != null) {
+    const source = readSaidSource(o.source);
+    if (unread(source)) return source;
+    entry.source = source;
+  }
+  if (o.edit === undefined) {
+    if (o.at !== undefined) return { error: "--at is the day a milestone was reached: give it with --done or --edit" };
+    return { verb: "Added a milestone to", op: { list: "milestones", action: "add", entry } };
+  }
+  if (o.date === null) entry.date = null;
+  if (o.source === null) entry.source = null;
+  if (o.at !== undefined) {
+    const at = o.at === null ? null : readMomentArg(o.at, "--at", now);
+    if (unread(at)) return at;
+    entry.done_at = at;
+  }
+  if (!Object.keys(entry).length) return { error: "Nothing to change: give a new title, --date, --source, or --at (the day it was reached; 'none' reopens it)" };
+  return { verb: "Changed a milestone of", op: { list: "milestones", action: "edit", entry }, pick: named(o.edit, "--edit") };
+}
+
+/** `cast initiative ask` and `decide`: put the words on the record, or change an entry that is there (--edit). */
+export function saidWrite(ref: string, list: "questions" | "decisions", words: string | undefined, o: { edit?: string; by?: Clearable; source?: Clearable }): Read<RecordWrite> {
+  const noun = INITIATIVE_RECORD_NOUN[list];
+  const command = list === "questions" ? "ask" : "decide";
+  const entry: Record<string, any> = {};
+  if (words !== undefined) entry.text = words;
+  if (o.by !== undefined) entry.by = o.by;
+  if (o.source !== undefined) {
+    const source = readSaidSource(o.source);
+    if (unread(source)) return source;
+    entry.source = source;
+  }
+  if (o.edit !== undefined) {
+    if (!Object.keys(entry).length) return { error: "Nothing to change: give the new words, --by or --source" };
+    return { verb: `Changed a ${noun} on`, op: { list, action: "edit", entry }, pick: { text: o.edit, retry: `cast initiative ${command} ${normalizeInitiativeRef(ref)} --edit <n> "<new words>"` } };
+  }
+  if (!words?.trim()) return { error: `Give the ${noun}, or --edit <n|words> to change one` };
+  // Only an edit clears: a new entry that names nobody is signed by whoever adds it.
+  for (const k of ["by", "source"]) if (entry[k] === null) delete entry[k];
+  return { verb: list === "questions" ? "Asked on" : "Recorded a decision on", op: { list, action: "add", entry } };
+}
+
+/** `cast initiative answer`: close an open question. One that is answered keeps its answer unless --replace. */
+export function answerWrite(ref: string, pick: string, answer: string, o: { replace?: boolean; at?: string } = {}, now = Date.now()): Read<RecordWrite> {
+  const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
+  if (unread(at)) return at;
+  const only: PickOpts["only"] = {
+    noun: "open question",
+    test: (e) => !e.entry.answer,
+    refuse: (e, on) => `Question ${e.n} on ${on} is already answered: "${e.entry.answer}". Pass --replace to put this answer in its place.`,
+  };
+  return {
+    verb: o.replace ? "Replaced the answer to a question on" : "Answered a question on",
+    op: { list: "questions", action: "close", answer, ...(at === undefined ? {} : { at }) },
+    pick: { text: pick, retry: `cast initiative answer ${normalizeInitiativeRef(ref)} <n> "<answer>"`, ...(o.replace ? {} : { only }) },
+  };
+}
+
+/** `cast initiative source`: where the goal was stated, who said it, and when as a moment. */
+export function sourceWrite(text: string, o: { quote?: string; by?: string; at?: string } = {}, now = Date.now()): Read<RecordWrite> {
+  const at = o.at === undefined ? undefined : readMomentArg(o.at, "--at", now);
+  if (unread(at)) return at;
+  const entry = readSourceArg(text, { quote: o.quote, by: o.by, at });
+  return entry ? { verb: "Added a source to", op: { list: "sources", action: "add", entry } } : { error: SOURCE_NEEDED };
+}
+
+/** `cast initiative record --list <list> --remove <n|key>`: take one entry of any list off. */
+export function removeWrite(ref: string, listText: string, pick: string): Read<RecordWrite> {
+  const list = INITIATIVE_RECORD_LISTS.find((l) => l === listText);
+  if (!list) return { error: `Invalid --list "${listText}": ${INITIATIVE_RECORD_LISTS.join(", ")}` };
+  return { verb: `Removed a ${INITIATIVE_RECORD_NOUN[list]} from`, op: { list, action: "remove" }, pick: { text: pick, retry: `cast initiative record ${normalizeInitiativeRef(ref)} --list ${list} --remove <n>` } };
+}
+
+/** The verb a write prints: its own, or that nothing moved (an add of what is already there, a close or an edit that says what stands). A server that does not say whether it moved prints the write's own. */
+export const recordVerb = (write: RecordWrite, result: any): string =>
+  result.moved !== false ? write.verb : write.op.action === "add" ? "Already on the record of" : "Nothing changed on";
+
+const SOURCE_SAID = { quote: "the words", by: "who said it", at: "when" } as const;
+
+/**
+ * What follows a source add that moved nothing: the address was already on
+ * the record, so the entry there stands. The quote, who and when typed now
+ * fill what it lacks, as one edit; what it already says is kept and named.
+ */
+export function sourceFillIn(write: RecordWrite, result: any): { write?: RecordWrite; kept: string[] } {
+  const { op } = write;
+  const stands: IntentSource | undefined = result.entry;
+  if (op.list !== "sources" || op.action !== "add" || result.moved !== false || !stands) return { kept: [] };
+  const typed = op.entry as IntentSource;
+  const fields = (Object.keys(SOURCE_SAID) as Array<keyof typeof SOURCE_SAID>).filter((k) => typed[k] !== undefined && typed[k] !== stands[k]);
+  const fill = Object.fromEntries(fields.filter((k) => stands[k] === undefined).map((k) => [k, typed[k]]));
+  return {
+    kept: fields.filter((k) => stands[k] !== undefined).map((k) => SOURCE_SAID[k]),
+    ...(Object.keys(fill).length ? { write: { verb: "Updated a source on", op: { list: "sources", action: "edit", key: recordKeyOf("sources", stands), entry: fill } } } : {}),
+  };
+}
+
+/** One metric as `show` and `report` print it: now against its target, the standing and the date in the standing's color, then which way it is moving. */
 export function metricRecordLine(c: Palette, m: MetricReading, trend?: MetricTrend, now = Date.now()): string {
   const moving = trend ? trendWords(trend) : "";
-  return `${metricStandingText(c, m.standing)} ${metricLine(m, now)}${moving ? ` ${c.dim}· ${moving}${c.reset}` : ""}`;
+  return `${standingColor(c, m.standing)}${metricLine(m, now)}${c.reset}${moving ? ` ${c.dim}· ${moving}${c.reset}` : ""}`;
 }
 
 // Who said it, when and where, as the dim tail of a question or a decision.
@@ -229,7 +445,7 @@ export function recordEntryLines(c: Palette, list: InitiativeRecordList, e: Reco
  */
 export function recordWriteLines(c: Palette, verb: string, result: any, list: InitiativeRecordList, now = Date.now()): string[] {
   const row = result.row ?? {};
-  const key = result.entry ? (list === "sources" ? intentSourceKey(result.entry) : result.entry.key) : undefined;
+  const key = result.entry ? recordKeyOf(list, result.entry) : undefined;
   const stands = recordEntries(row, list).find((e) => e.key === key);
   const next = list === "milestones" ? nextMilestoneLine(row) : null;
   return [
@@ -272,7 +488,7 @@ export function initiativeShowLines(c: Palette, row: any, opts: { now?: number; 
   const readings = metricReadings(row);
   if (readings.length) {
     const trends = metricTrends(row);
-    out.push(head("Metrics", "on track means against the target"));
+    out.push(head("Metrics", "each number against its target"));
     for (const m of readings) out.push(`  ${metricRecordLine(c, m, trends[m.key], now)} ${c.dim}· ${m.key}${m.source ? ` · ${m.source}` : ""}${c.reset}`);
     out.push(hint(`Report a value: cast initiative report ${row.short_id} ${readings[0].key}=<value> --source <link or short id>`));
   }

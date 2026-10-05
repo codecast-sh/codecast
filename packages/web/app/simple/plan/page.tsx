@@ -1,11 +1,11 @@
 // The plan: this month's usage as a meter, the plans side by side, and the
 // ways to get more. Every number comes from the wallet (useWallet) and the
 // PLANS catalog; nothing here holds a price of its own.
-import { Link, useSearchParams } from "react-router";
-import { Check, CircleAlert, CircleCheck, Info } from "lucide-react";
+import { Link } from "react-router";
+import { Check, CircleAlert, CircleCheck, Clock, Info } from "lucide-react";
 import { PLANS } from "@codecast/shared/contracts/assistant";
-import { LANE_COPY, TOPUP_AMOUNTS_USD, billingReturnNote, conversationPath, conversationTitle, dollars, meterLegend, planCard, planPoints, planPrice, topupLabel, usageHeadline, workedTimes } from "../../../components/simple/lane";
-import { useBilling } from "../../../components/simple/billing";
+import { LANE_COPY, TOPUP_AMOUNTS_USD, conversationPath, conversationTitle, dollars, meterLegend, planCard, planPoints, planPrice, topupLabel, usageHeadline, workedTimes } from "../../../components/simple/lane";
+import { useBilling, useBillingReturn } from "../../../components/simple/billing";
 import { supportMailto } from "../../../lib/siteLinks";
 import { planDay, usePlanFigures } from "../../../components/simple/usePlanFigures";
 
@@ -15,8 +15,8 @@ export default function SimplePlan() {
   const planFigures = usePlanFigures();
   const { wallet, known, figures, fill, full, names, resets, lines, history } = planFigures;
   const billing = useBilling();
-  const [params] = useSearchParams();
-  const returned = billingReturnNote(params.get("billing"));
+  const returned = useBillingReturn(wallet);
+  const ReturnIcon = returned?.tone === "done" ? CircleCheck : returned?.tone === "pending" ? Clock : Info;
 
   return (
     <main>
@@ -26,9 +26,9 @@ export default function SimplePlan() {
       </p>
 
       {returned ? (
-        <div className="sl-callout sl-rise" style={{ marginBottom: "0.9rem" }}>
-          <CircleCheck size={18} />
-          <span>{returned}</span>
+        <div className="sl-callout sl-rise" role="status" style={{ marginBottom: "0.9rem" }}>
+          <ReturnIcon size={18} />
+          <span>{returned.text}</span>
         </div>
       ) : null}
 

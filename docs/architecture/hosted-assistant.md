@@ -18,6 +18,19 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Mail and calendar go through Whisk
+
+Decided 2026-10-05. Codecast never holds Gmail or Calendar tokens. Whisk
+(`~/src/mail`, whisk.email) is the family's mail and calendar engine, and its
+Google verification (project `mailones`, `gmail.modify`, CASA assessment due
+Nov 29 2026) is the only one the product needs. A person connects mail from
+codecast through `whisk.email/connect`; Whisk mints a revocable app token,
+codecast stores it encrypted and calls the same Whisk functions the `whisk`
+CLI calls. Codecast keeps Google sign-in with basic scopes only. Whisk's
+design tokens live in `@platform/design`, and the simple lane is built on
+them so the lane and Whisk read as one product; Whisk remains a complete app
+on its own.
+
 ## Pieces and who owns which files
 
 Parallel implementers own disjoint files. Shared files (schema, registry,
@@ -97,9 +110,9 @@ How the engine (`assistant/turns.ts`, `assistant/history.ts`) does it:
 
 - **Lease** is `leaseTurn`, called by `wake` and at the end of every turn. It
   reserves the plan's `turn_ceiling_usd`, or whatever room is left above
-  `MIN_TURN_USD`. The run's ceiling keeps one web search's estimate of that
-  aside (`runCeiling`), because a tool's own spend is checked only before the
-  next model call. The lease also schedules `expire` for the deadline plus a
+  `MIN_TURN_USD`. The run's ceiling is the whole reservation: a paid tool
+  (search_web) reserves its own estimate through `ctx.remainingUsd` and
+  `ctx.charge` before it spends. The lease also schedules `expire` for the deadline plus a
   margin: a turn whose action died is ended there and charged the cost it
   recorded as it went (`record` keeps `cost_usd` current).
 - **Input.** `begin` writes queued pending rows into the transcript as the
@@ -220,13 +233,23 @@ On a deployment with no Google OAuth client (`googleConfigured()` is false)
 no Google tool is offered and the note says mail and calendar are not
 available there, rather than offering a connect flow that cannot work.
 
+- **Mail and calendar seam.** The mail tools (`mail.ts`) are written against
+  a `Mailbox` and the calendar tools (`calendar.ts`) against a `Calendar`:
+  the few thread and event verbs any engine offers. The tool definitions,
+  their wording, their risk and the gate rules live there and do not depend
+  on the engine. `gmail.ts` (`gmailMailbox`) and `googleCalendar.ts`
+  (`googleCalendar`) are today's implementations over Google tokens. Moving
+  to Whisk (above, ct-57102) adds a Whisk `Mailbox` and `Calendar` and swaps
+  them in `toolsFor`; nothing new should be built on the Google-token path.
 - **Gmail** (`gmail.ts`): what a connection allows is `googleCapabilities`,
   the same rule the Connections screen shows. `search_mail` and `read_thread`
   need any confirmed connection; `draft_reply`, `create_draft`, `archive` and
   `label` need gmail.modify; `send_mail` needs gmail.send (or modify). Drafts
   are risk `read`; send, archive and label are `write`. A reply answers the
   thread's last sent message, never a draft in it, and each recipient entry
-  must be exactly one address. `read_thread` marks a draft in a thread
+  must be exactly one address. A `send_mail` reply goes out under the
+  thread's own subject (mail engines file a reply into its thread only when
+  the subject matches), so a reworded subject is refused. `read_thread` marks a draft in a thread
   "Draft (not sent)", keeps the newest messages whole within
   `THREAD_MAX_CHARS` (under the fence's cap, which cuts a block's end),
   shortens older ones to sender, date and snippet, and leaves out the
@@ -237,7 +260,10 @@ available there, rather than offering a connect flow that cannot work.
   `create_event` derives the event id from the call id, so a create that lands
   twice is one event. All-day events cover their day in the calendar's own
   zone. `list_events` says when more events follow; `find_free_time` reads up
-  to four pages and stops its search where reading stopped.
+  to four pages and stops its search where reading stopped. In
+  `update_event` a new start alone moves the event and keeps its length, a
+  new end alone keeps its start, and an all-day event changes time only with
+  both edges given; edges keep the event's own time zone.
 - **Codecast** (`codecast.ts` over the internal functions in `workspace.ts`):
   `list_tasks`, `create_task`, `update_task`, `read_doc`, `write_doc` (create
   or append), `remember`, `recall`, `list_routines`, `cancel_routine` are
@@ -254,9 +280,12 @@ available there, rather than offering a connect flow that cannot work.
   `write_doc` an append to a doc shared by link, or the body doc of a plan
   shared by link (`replace_doc` asks, so it still works); `remember` a memory
   doc shared by link. Text read from mail or the web cannot leave through a
-  tool that never asks. `remember` also asks once the turn has called a mail,
-  calendar or web tool (`index.readOutsideContent`), so a fact steered by an
-  email or page never enters lasting memory unseen. Memory is one personal doc, "What I know about you",
+  tool that never asks. `remember` also asks whenever any row in front of the
+  model, earlier turns' history included, called a mail, calendar or web tool
+  (`index.readOutsideContent`), so a fact steered by an email or page never
+  enters lasting memory unseen. `write_doc` refuses to append to the memory
+  doc, which leaves `remember` and the approved `replace_doc` as the only ways
+  to change it. Memory is one personal doc, "What I know about you",
   found by its `source_file` among the person's own docs
   (`docs.ownDocsBySourceFile`); archiving it makes the assistant forget, and
   the next `remember` starts a fresh doc. Routines are triggers on this
@@ -321,12 +350,21 @@ These are starting values pending the founder's call; nothing else in the
 code hardcodes them.
 
 Billing (`convex/billing.ts`) maps each subscription as Stripe holds it now,
-read fresh for every event, so delivery order never moves a plan back. A plan
+read fresh for every event, so delivery order never moves a plan back. Two
+deliveries can read in one order and commit in the other, so each read is
+stamped when it returns (`wallets.subscription_read_at`): an older read of the
+same subscription is skipped, and a subscription the wallet holds as ended
+(`canceled`, `incomplete_expired`) never maps back to live. A plan
 change on a paid-up subscription counts for the rest of the period only
 (`proratedCap`, floored at zero, not at the usage, so going down and back up
 mints nothing); a new subscription buys its period whole. A renewal that is
 failing (`past_due`) keeps the plan's name but rolls into the free allowance
-until the payment lands. A second live subscription for the same person is
+until the payment lands. So does every period that ends after the last one
+Stripe confirmed paid (`wallets.paid_through`, set by `invoice.paid` and by a
+subscription paid in full): a period opens at its boundary before Stripe
+charges the renewal, and its paid allowance arrives with `invoice.paid`, so a
+renewal that is never paid, or whose events stop arriving, grants nothing. A
+plan granted by hand has no `paid_through` and keeps its allowance. A second live subscription for the same person is
 refunded, then canceled.
 
 Because the wallet grants a plan's allowance the moment a period opens and
@@ -397,7 +435,11 @@ How the web lane is wired (`packages/web/components/simple/`):
   `topup` can be bought) and calls `billing.startCheckout` with `{ plan }`
   or `{ topup_usd }`. It gets back a `BillingRedirect` (`{ ok: true, url,
   via }` or `{ ok: false, code, error }`) and opens `url`; Stripe returns
-  the person to `/simple/plan?billing=done|topup|canceled`.
+  the person to `/simple/plan?billing=done|topup|canceled` (`BILLING_RETURN`
+  in `@codecast/shared/contracts/assistant`, which the server's return URLs,
+  the lane's plan path and the return note all read). `useBillingReturn`
+  reads the parameter once, takes it off the URL, and says the payment is on
+  its way until the wallet shows it.
   `useBilling().manage()` opens the billing portal (`billing.openPortal`)
   through the same redirect; the plan screen shows "Manage billing" when
   billing is available and `WalletSummary.billing_account` is true. A

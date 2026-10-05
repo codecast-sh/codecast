@@ -21,7 +21,7 @@ import { messagesToRows, prepareContext, rowsToMessages, type MessageRow, type R
 import { affordableOutputTokens, billedUsage, messageCost, priceFor, projectInputCost } from "./meter";
 import { resolveModel } from "./models";
 import { streamModel } from "./stream";
-import { runTool, stoppedText, toAgentTool, type Tool, type ToolRisk } from "./tool";
+import { meteredContext, runTool, stoppedText, toAgentTool, type Tool, type ToolMeter, type ToolRisk } from "./tool";
 import { UNTRUSTED_GUIDANCE } from "./untrusted";
 
 /**
@@ -308,12 +308,19 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
   // at once, so the next model call's room sees it, and reported on the
   // call's result row.
   const charged = new Map<string, number>();
-  const charge = (usd: number, callId: string) => {
-    if (!Number.isFinite(usd) || usd <= 0) return;
-    spent += usd;
-    charged.set(callId, (charged.get(callId) ?? 0) + usd);
+  const meter: ToolMeter = {
+    charge: (usd, callId) => {
+      if (!Number.isFinite(usd)) return;
+      const had = charged.get(callId) ?? 0;
+      // A refund gives back at most what this call charged.
+      const delta = Math.max(usd, -had);
+      if (delta === 0) return;
+      spent += delta;
+      charged.set(callId, had + delta);
+    },
+    remainingUsd: () => Math.max(0, options.ceilingUsd - spent),
   };
-  const agentTools = tools.map((tool) => toAgentTool(tool, charge));
+  const agentTools = tools.map((tool) => toAgentTool(tool, meter));
   const gate = options.gate ?? gateByRisk;
   const price = priceFor(model.id, model);
   const maxTokens = options.maxTokens ?? Math.min(model.maxTokens || DEFAULT_MAX_TOKENS, DEFAULT_MAX_TOKENS);
@@ -393,7 +400,7 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
           const args = validateToolArguments(toAgentTool(tool), call);
           const blocked = await markStarted(requestFor(call));
           if (blocked !== undefined) throw new Error(blocked);
-          result = await runTool(tool, args, { callId: call.id, signal: controller.signal, charge: (usd) => charge(usd, call.id) });
+          result = await runTool(tool, args, meteredContext(call.id, controller.signal, meter));
         } catch (error) {
           result = { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }], details: undefined };
           isError = true;
@@ -460,9 +467,12 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
     // gate as the loop would: allowed calls run, refused ones are answered, and
     // the rest wait on the person, without a model call.
     // A plain loop, not findLastIndex: the package targets ES2021, the lib codecast's convex program loads it with.
+    // A content-less assistant message is a model call that failed before it
+    // wrote anything (see rowsToMessages); it said nothing, so it is looked past.
+    const spoke = (message: Message) => message.role === "assistant" && message.content.length > 0;
     let lastAssistant = messages.length - 1;
-    while (lastAssistant >= 0 && messages[lastAssistant].role !== "assistant") lastAssistant--;
-    const after = messages.slice(lastAssistant + 1);
+    while (lastAssistant >= 0 && !spoke(messages[lastAssistant])) lastAssistant--;
+    const after = messages.slice(lastAssistant + 1).filter((message) => message.role !== "assistant");
     // A `tool` row's text reads as a user message, but it is tool output, not the person.
     const fromPerson = (message: Message) => message.role === "user" && (message as RowMessage).rowOrigin?.role !== "tool";
     if (lastAssistant >= 0 && !after.some(fromPerson)) {
@@ -487,7 +497,10 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
     if (timedOut) return finish("time");
     if (pending.length > 0) return finish("approval");
 
-    const last = messages[messages.length - 1];
+    // The silent rows stay out of the loop too: pi-agent-core will not continue
+    // from an assistant message, and a failed call left the person unanswered.
+    const said = () => messages.filter((message) => message.role !== "assistant" || spoke(message));
+    const last = said().pop();
     if (!last) return finish("error", "There is no message to answer.");
     // A history ending on the model's own finished message has nothing to answer.
     if (last.role === "assistant") return finish("done");
@@ -607,7 +620,7 @@ export async function runAssistant(options: RunAssistantOptions): Promise<RunRes
     };
 
     await runAgentLoopContinue(
-      { systemPrompt: system, messages, tools: agentTools },
+      { systemPrompt: system, messages: said(), tools: agentTools },
       config,
       emit,
       controller.signal,

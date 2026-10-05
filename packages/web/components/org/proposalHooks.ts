@@ -2,15 +2,20 @@
 // against, and what a verdict saw. Read by ProposalCard and the entity card.
 import { useMemo } from "react";
 import { isOrgChangeDecidable, latestOrgRevisionAt, type OrgVerdictSeen } from "@codecast/shared/contracts/orgProposal";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, type PlanItem, type ProjectItem } from "../../store/inboxStore";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
+import { useInitiatives } from "../../hooks/useInitiatives";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
+import { findEntityInStore } from "../../lib/liveEntities";
 import { proposalWorkspace, sameWorkspace } from "./staffingModel";
+import { namedTaskRefs, type SubjectLive } from "./proposalSubjects";
 import type { OrgProposalChange, OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgTree } from "./orgTypes";
 
 const changesSig = (all: Record<string, OrgProposalChange>, proposalId: string): string => {
   let sig = "";
-  for (const c of Object.values(all)) if (c.proposal_id === proposalId) sig += `${c._id}:${c.status}:${c.revision?.at ?? 0}:${c.applied_note ?? ""}|`;
+  // The stamp of what an accept moved arrives with the applied row (S39), so it wakes the card too.
+  for (const c of Object.values(all)) if (c.proposal_id === proposalId) sig += `${c._id}:${c.status}:${c.revision?.at ?? 0}:${c.applied_note ?? ""}:${c.applied_at ?? 0}:${c.applied_diff?.length ?? ""}|`;
   return sig;
 };
 
@@ -40,3 +45,33 @@ export function proposalSeen(changes: readonly OrgProposalChange[]): OrgVerdictS
   return { revised_at: latestOrgRevisionAt(changes), seqs: changes.filter((c) => isOrgChangeDecidable(c.status)).map((c) => c.seq) };
 }
 
+// A card's before reads these fields and nothing else: a comment, a task
+// count or a heartbeat on a project repaints no card.
+const projectSig = (p: ProjectItem) => `${p.title}|${p.short_id ?? ""}|${p.status}|${p.priority ?? ""}|${p.goal ?? ""}|${p.owner_role_id ?? ""}|${(p.success_metrics ?? []).join("\u0001")}|${(p.non_goals ?? []).join("\u0001")}|${((p as { risks?: string[] }).risks ?? []).join("\u0001")}`;
+const planSig = (p: PlanItem) => `${p.title}|${p.short_id}|${p.status}|${(p as { project_id?: string }).project_id ?? ""}`;
+const NO_TASKS: SubjectLive["tasks"] = [];
+
+/**
+ * The live records a proposal's cards read a before from (S39): the one place
+ * they are gathered, for the conversation's card, the org page, the company
+ * document and the chart. All of it is the store, nothing is fetched; a cold
+ * store gives cards with no before, which is the honest fallback. Null for a
+ * proposal of another workspace, and until the tree lands: the collections
+ * below belong to the ACTIVE workspace, and a title match there would print
+ * another company's values as "before".
+ */
+export function useSubjectLive(proposal: Pick<OrgProposalListRow, "team_id" | "scope_user_id"> | undefined, changes: readonly OrgProposalChange[]): SubjectLive | null {
+  const tree = useProposalTree(proposal);
+  const goals = useInitiatives();
+  const projects = useWorkspaceCollection<ProjectItem>("projects", projectSig);
+  const plans = useWorkspaceCollection<PlanItem>("plans", planSig);
+  // Only the tasks the changes name, behind one signature of what a card shows of them: never the task collection.
+  const refs = useMemo(() => namedTaskRefs(changes), [changes]);
+  const taskSig = useInboxStore((s) => refs.map((ref) => { const t = findEntityInStore(s, "task", ref); return t ? `${ref}:${t._id ?? ""}:${t.status ?? ""}:${t.title ?? ""}` : ref; }).join("|"));
+  const tasks = useMemo(() => {
+    if (refs.length === 0) return NO_TASKS;
+    const state = useInboxStore.getState();
+    return refs.flatMap((ref) => { const t = findEntityInStore(state, "task", ref); return t?._id ? [{ _id: t._id, short_id: t.short_id ?? ref, title: t.title ?? ref, status: t.status ?? "" }] : []; });
+  }, [taskSig]); // eslint-disable-line react-hooks/exhaustive-deps
+  return useMemo(() => (tree ? { tree, goals, projects, plans, tasks } : null), [tree, goals, projects, plans, tasks]);
+}

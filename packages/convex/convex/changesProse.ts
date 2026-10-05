@@ -686,6 +686,40 @@ export type StoryRead = {
   prs: Array<{ number: number; title: string; body: string }>;
 };
 
+/**
+ * What one team day's stories were offered and what their articles placed:
+ * per story, the gated sessions by mode, the screenshots, instruction edits
+ * and embeds storyMedia would hand the prompt, and the images and embeds the
+ * written body holds. Read-only, for measuring the media path.
+ */
+export const mediaAudit = internalQuery({
+  args: { team_id: v.id("teams"), date: v.string() },
+  handler: async (ctx, args) => {
+    const stories: Doc<"change_stories">[] = await ctx.db
+      .query("change_stories")
+      .withIndex("by_team_date", (q) => q.eq("team_id", args.team_id).eq("date", args.date))
+      .take(80);
+    const out = [];
+    for (const story of stories) {
+      if (!story.on_default_branch) continue;
+      const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, { since: story.first_at - MEDIA_MARGIN_MS, until: story.last_at + MEDIA_MARGIN_MS });
+      const media = storyMedia(sessions);
+      const body = story.body ?? "";
+      out.push({
+        key: story.story_key,
+        headline: story.headline,
+        sessions: story.conversation_ids.length,
+        gated: sessions.map((x) => x.mode),
+        offered: { images: media.images.length, edits: media.edits.length, embeds: media.embeds.length },
+        contexts: media.images.map((i) => i.context),
+        embeds: media.embeds.map((e) => `${e.ref}: ${e.title}`),
+        placed: { images: (body.match(/!\[/g) ?? []).length, embeds: (body.match(/```cast-canvas|codecast\.sh\/a\//g) ?? []).length },
+      });
+    }
+    return out;
+  },
+});
+
 /** A pending story with the sessions that pass the gate now and its pull requests; null once it is no longer pending. */
 export const readStory = internalQuery({
   args: { story_id: v.id("change_stories") },

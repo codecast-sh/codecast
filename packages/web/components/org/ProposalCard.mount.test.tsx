@@ -1,10 +1,11 @@
-// Mounts the proposal card (docs/architecture/org-staffing.md S24) in jsdom
-// against stubbed store rows: a proposed proposal (a new role under the
-// founder and a move onto it, drawn as a small tree with faces, Accept, Skip
-// and Ask), an applied one (what happened, compactly), and a failed one
-// (Retry, the note). Accept and Skip reach the page's own store actions with
-// the seen stamp; Ask puts the proposal in the thread's composer.
-// Run: bun test --timeout 120000 components/org/ProposalCard.mount.test.tsx
+// Mounts the proposal card (docs/architecture/org-staffing.md S24, S39) in
+// jsdom against stubbed store rows: a proposed proposal (a new role under the
+// founder and a move onto it, drawn as two ledger entries with their own
+// Accept and Skip, and a closing row with Chart, Ask, Accept all and Skip
+// all), an applied one (what happened, in words), and a failed one (Retry,
+// the note). The verdicts reach the page's own store actions with the seen
+// stamp; Ask puts the proposal in the thread's composer.
+// Run: bun test --timeout 240000 components/org/ProposalCard.mount.test.tsx
 import { test, expect, afterAll, mock } from "bun:test";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
@@ -78,7 +79,8 @@ useInboxStore.setState({
     "c3-move": change("c3-move", "p3", 2, MOVE, "applied"),
     "c4-limit": change("c4-limit", "p4", 1, LIMIT, "proposed", { rationale: "Growth wakes 30 times a day." }),
     "c5-role": change("c5-role", "p5", 1, ROLE),
-    "c5-limit": change("c5-limit", "p5", 2, LIMIT, "proposed", { rationale: "Platform gets 800k tokens." }),
+    // The limit rides on the role this proposal creates.
+    "c5-limit": change("c5-limit", "p5", 2, { ...LIMIT, handle: "platform" }, "proposed", { rationale: "Platform gets 800k tokens." }),
   },
 } as any);
 
@@ -104,61 +106,80 @@ const q = (sel: string) => document.querySelector<HTMLElement>(sel)!;
 const qa = (sel: string) => Array.from(document.querySelectorAll<HTMLElement>(sel));
 const click = (el: HTMLElement) => React.act(() => el.dispatchEvent(new MouseEvent("click", { bubbles: true })));
 
-test("a proposed proposal draws its tree with faces and its three verdicts", () => {
+const sentences = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>("[data-subject-sentence]")).map((s) => s.textContent);
+const subjects = (c: HTMLElement) => Array.from(c.querySelectorAll<HTMLElement>("[data-subject]"));
+
+test("a proposed proposal draws one entry per subject, each with its verdict, and a closing row for all of it", () => {
   const root = mount(h(ReviewComposerContext.Provider, { value: composer }, card("op-1")));
   const c = q("[data-card='op-1']");
   expect(c.querySelector(".entity-card")).not.toBeNull();
   expect(c.textContent).toContain("Bring platform under one lead");
-  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 of 2 to decide");
+  // The meta line counts the cards a person sees.
+  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 to decide");
   expect(c.querySelector("[data-proposal-author='role']")!.textContent).toContain("Head of People");
+  // The letter's lead opens the card.
+  expect(c.querySelector("[data-proposal-letter]")!.textContent).toBe("Why bring platform under one lead.");
 
-  // The tree: the new role under the founder, then the move onto it, with
-  // where growth came from.
-  const rows = Array.from(c.querySelectorAll<HTMLElement>("[data-tree-row]"));
-  expect(rows.map((r) => r.getAttribute("data-tree-kind"))).toEqual(["role", "move"]);
-  const groups = Array.from(c.querySelectorAll<HTMLElement>("[data-tree-group]"));
-  expect(groups[0].querySelector("[data-tree-parent]")!.getAttribute("data-tree-parent")).toBe("fixture-user-me");
-  expect(groups[0].querySelector("[data-tree-parent] [data-face='person']")).not.toBeNull();
-  expect(rows[0].querySelector("[data-tree-node='role']")!.textContent).toContain("Head of Platform");
-  expect(rows[0].querySelector("[data-ghost-tag='new role']")).not.toBeNull();
-  // The move lands under the role this card creates: it hangs off that row, with no second parent line.
-  expect(groups[1].getAttribute("data-tree-under")).toBe("c1-role");
-  expect(groups[1].querySelector("[data-tree-parent]")).toBeNull();
-  expect(rows[1].querySelector("[data-tree-node='role']")!.textContent).toContain("Head of Growth");
-  expect(rows[1].querySelector("[data-ghost-tag='move']")).not.toBeNull();
-  expect(rows[1].querySelector("[data-tree-from]")!.textContent).toContain("was under");
-  expect(rows[1].querySelector("[data-tree-from]")!.textContent).toContain("Ashot Petrosian");
-  // Faces are the chart's own: a role avatar, a person avatar.
-  expect(c.querySelectorAll("[data-face='role']").length).toBeGreaterThanOrEqual(2);
+  // The ledger: the new role first, then the role moved under it, each a plain sentence.
+  expect(subjects(c).map((s) => [s.getAttribute("data-subject"), s.getAttribute("data-subject-status"), s.getAttribute("data-change-ids")])).toEqual([
+    ["role:platform", "proposed", "c1-role"],
+    ["role:growth", "proposed", "c1-move"],
+  ]);
+  expect(sentences(c)).toEqual(["Add the role Head of Platform, reporting to you.", "Have Head of Growth report to Head of Platform."]);
+  expect(Array.from(c.querySelectorAll("[data-subject-ordinal]")).map((n) => n.textContent)).toEqual(["1", "2"]);
+  // The move says where the role reported before, as a face and a name.
+  const reports = c.querySelector<HTMLElement>("[data-subject='role:growth'] [data-field='reports_to']")!;
+  expect(reports.getAttribute("data-field-before")).toBe("Ashot Petrosian");
+  expect(reports.getAttribute("data-field-after")).toBe("Head of Platform");
+  expect(reports.querySelector("[data-face='person']")).not.toBeNull();
+  expect(reports.querySelector("[data-face='role']")).not.toBeNull();
+  expect(c.querySelector("[data-subject='role:platform'] [data-subject-reasons]")!.textContent).toBe("Because c1-role.");
+  // The old tree and its dashed tags are gone.
+  expect(c.querySelector("[data-tree-row], [data-ghost-tag], [data-proposal-rationale]")).toBeNull();
 
-  // Accept: the page's acceptAll with the seen stamp (every waiting seq).
+  // One entry's Accept: one decide for its change, with the seen stamp.
+  click(c.querySelector("[data-subject='role:growth'] [data-subject-accept]")!);
+  expect(calls.splice(0)).toEqual([["decide", "c1-move", "accept", undefined, { revised_at: 0, seqs: [1, 2] }]]);
+  click(c.querySelector("[data-subject='role:platform'] [data-subject-skip]")!);
+  expect(calls.splice(0)).toEqual([["decide", "c1-role", "skip", undefined, { revised_at: 0, seqs: [1, 2] }]]);
+
+  // The closing row. Accept all: the page's acceptAll with the seen stamp (every waiting seq).
+  expect(c.querySelector("[data-accept]")!.textContent).toBe("Accept all 2");
+  expect(c.querySelector("[data-skip]")!.textContent).toBe("Skip all");
   click(c.querySelector("[data-accept]")!);
-  expect(calls.at(-1)).toEqual(["accept", "p1", { seen: { revised_at: 0, seqs: [1, 2] } }]);
-  // Skip: one decide per waiting change, the same stamp.
-  const before = calls.length;
+  expect(calls.splice(0)).toEqual([["accept", "p1", { seen: { revised_at: 0, seqs: [1, 2] } }]]);
+  // Skip all: one decide per waiting change, the same stamp.
   click(c.querySelector("[data-skip]")!);
-  expect(calls.slice(before)).toEqual([
+  expect(calls.splice(0)).toEqual([
     ["decide", "c1-role", "skip", undefined, { revised_at: 0, seqs: [1, 2] }],
     ["decide", "c1-move", "skip", undefined, { revised_at: 0, seqs: [1, 2] }],
   ]);
-  // Ask: the proposal goes into the thread's composer as the next message.
-  click(c.querySelector("[data-ask-about]")!);
+  // Chart and Ask are words at the left; Ask puts the proposal in the thread's composer as the next message.
+  expect(c.querySelector("[data-open-chart='op-1']")!.textContent).toBe("Chart");
+  click(c.querySelector("[data-ledger-close] [data-ask-about]")!);
   expect(populated).toEqual(['About op-1 ("Bring platform under one lead"):\n\n']);
   // A verdict click never toggles the card open.
   expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("false");
+
+  // Open, the card is the same ledger under the whole letter.
+  click(c.querySelector(".entity-card")!);
+  expect(c.querySelector(".entity-card")!.getAttribute("aria-expanded")).toBe("true");
+  const open = c.querySelector<HTMLElement>(".entity-card-expand")!;
+  expect(sentences(open)).toEqual(["Add the role Head of Platform, reporting to you.", "Have Head of Growth report to Head of Platform."]);
+  expect(open.querySelector("[data-accept]")!.textContent).toBe("Accept all 2");
   React.act(() => root.unmount());
 });
 
-test("an applied proposal says what happened and offers only Ask", () => {
+test("an applied proposal says what happened and offers only Chart and Ask", () => {
   const root = mount(card("op-2"));
   const c = q("[data-card='op-2']");
-  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 applied");
+  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 accepted");
   expect(c.querySelector("[data-accept]")).toBeNull();
   expect(c.querySelector("[data-skip]")).toBeNull();
-  expect(c.querySelector("[data-proposal-outcome]")!.textContent).toContain("2 applied");
-  expect(qa("[data-card='op-2'] [data-tree-row]").map((r) => r.getAttribute("data-tree-status"))).toEqual(["applied", "applied"]);
-  // The accepted move is drawn under the role it moved to, and the tag reads applied.
-  expect(c.querySelectorAll("[data-tree-status='applied']").length).toBeGreaterThanOrEqual(2);
+  expect(c.querySelector("[data-subject-accept]")).toBeNull();
+  expect(c.querySelector("[data-proposal-outcome]")!.textContent).toBe("2 accepted");
+  expect(subjects(c).map((s) => s.getAttribute("data-subject-status"))).toEqual(["applied", "applied"]);
+  expect(Array.from(c.querySelectorAll("[data-subject-state]")).map((s) => s.textContent)).toEqual(["Accepted", "Accepted"]);
   // Without a composer in reach, Ask is the link to the proposal on the org page.
   expect(c.querySelector("[data-ask-about]")!.getAttribute("href")).toBe("/org?proposal=op-2");
   React.act(() => root.unmount());
@@ -167,13 +188,20 @@ test("an applied proposal says what happened and offers only Ask", () => {
 test("a failed change keeps the card decidable: Retry, Skip and the note", () => {
   const root = mount(card("op-3"));
   const c = q("[data-card='op-3']");
-  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 failed");
+  // Nothing else waits, so the line is the outcome, with the failure named.
+  expect(c.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 accepted, 1 failed");
+  const failed = c.querySelector<HTMLElement>("[data-subject='role:platform']")!;
+  expect(failed.getAttribute("data-subject-status")).toBe("failed");
+  expect(failed.querySelector("[data-failed-note]")!.textContent).toBe("Failed: A role already answers to @platform");
+  expect(failed.querySelector("[data-subject-accept]")!.textContent).toBe("Retry");
+  expect(failed.querySelector("[data-subject-skip]")).not.toBeNull();
+  // The closing row offers the same on what still waits.
   expect(c.querySelector("[data-accept]")!.textContent).toContain("Retry");
   expect(c.querySelector("[data-skip]")).not.toBeNull();
-  expect(c.querySelector("[data-failed-note]")!.textContent).toContain("A role already answers to @platform");
-  expect(c.querySelector("[data-tree-row='c3-role'] [data-status='failed']")).not.toBeNull();
   click(c.querySelector("[data-accept]")!);
-  expect(calls.at(-1)).toEqual(["accept", "p3", { seen: { revised_at: 0, seqs: [1] } }]);
+  expect(calls.splice(0)).toEqual([["accept", "p3", { seen: { revised_at: 0, seqs: [1] } }]]);
+  click(failed.querySelector("[data-subject-accept]")!);
+  expect(calls.splice(0)).toEqual([["decide", "c3-role", "accept", undefined, { revised_at: 0, seqs: [1] }]]);
   React.act(() => root.unmount());
 });
 
@@ -181,20 +209,29 @@ test("a limit never reaches the person: no row beside drawn changes, plain words
   const root = mount(h("div", null, card("op-4"), card("op-5")));
   // Alone: one plain sentence naming the role, no unit, and the verdicts still apply.
   const alone = q("[data-card='op-4']");
-  expect(alone.querySelector("[data-proposal-tree]")).toBeNull();
-  expect(alone.querySelector("[data-proposal-quiet]")!.textContent).toContain("Head of Growth keeps a safety net on its daily work.");
+  expect(sentences(alone)).toEqual(["Head of Growth keeps a safety net on its daily work."]);
+  expect(alone.querySelector("[data-field]")).toBeNull();
   expect(alone.textContent).not.toMatch(/wakes|tokens|caps|limit/i);
-  expect(alone.querySelector("[data-accept]")).not.toBeNull();
-  // Beside a drawn change: nothing of it, no chip, no row, no words.
+  expect(alone.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 to decide");
+  // One card is the whole decision: its own Accept is the frame's filled button, and the closing row adds none.
+  expect(alone.querySelector<HTMLElement>("[data-subject-accept]")!.style.background).toBe("var(--sol-violet)");
+  expect(alone.querySelector("[data-accept]")).toBeNull();
+  click(alone.querySelector("[data-subject-accept]")!);
+  expect(calls.splice(0)).toEqual([["decide", "c4-limit", "accept", undefined, { revised_at: 0, seqs: [1] }]]);
+  // Beside a drawn change: nothing of it, no row, no words, and it is decided with the role it rides on.
   const beside = q("[data-card='op-5']");
-  expect(Array.from(beside.querySelectorAll("[data-tree-row]")).map((r) => r.getAttribute("data-tree-kind"))).toEqual(["role"]);
-  expect(beside.querySelector("[data-proposal-quiet]")).toBeNull();
+  expect(subjects(beside).map((s) => [s.getAttribute("data-subject"), s.getAttribute("data-change-ids")])).toEqual([["role:platform", "c5-role c5-limit"]]);
   expect(beside.textContent).not.toMatch(/wakes|tokens|caps|limit|safety net/i);
-  expect(beside.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("2 of 2 to decide");
+  expect(beside.querySelector("[data-proposal-meta]")!.getAttribute("data-proposal-meta")).toBe("1 to decide");
+  click(beside.querySelector("[data-subject-accept]")!);
+  expect(calls.splice(0)).toEqual([
+    ["decide", "c5-role", "accept", undefined, { revised_at: 0, seqs: [1, 2] }],
+    ["decide", "c5-limit", "accept", undefined, { revised_at: 0, seqs: [1, 2] }],
+  ]);
   // Expanded, the rationale of the quiet change stays out too.
   click(beside.querySelector(".entity-card")!);
   expect(beside.textContent).not.toMatch(/800k tokens/);
-  expect(beside.querySelectorAll("[data-proposal-rationale] [data-change-row]").length).toBe(1);
+  expect(beside.textContent).toContain("Because c5-role.");
   React.act(() => root.unmount());
 });
 

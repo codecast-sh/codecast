@@ -519,7 +519,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
 export function silentText(src: Pick<SenseSource, "newest" | "silent">, now: number): string {
   // Nothing in the window: silent at least that long, unless the finder may be newer than it.
   if (src.newest) return `silent ${ageShort(now - src.newest.created_at)}`;
-  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}` : "nothing filed yet";
+  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}+` : "nothing filed yet";
 }
 
 /** "3d", "5h", "12m": the largest unit, for a sentence. */

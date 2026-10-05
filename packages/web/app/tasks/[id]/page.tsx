@@ -27,6 +27,7 @@ import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
 import { useTaskIsBlocked } from "../../../hooks/useTaskDecisions";
 import { CollapsibleBody } from "../../../components/CollapsibleBody";
+import { TaskLineStory } from "../../../components/tasks/TaskLineStory";
 import { StationStrip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { DocEditor } from "../../../components/editor/DocEditor";
@@ -654,6 +655,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* The line (the-line.md L3): stations, the current one, its hold and its run */}
           <StationStrip task={data as any} />
+
+          {/* The cause's story (LM7, LE16): where it is, its goal, signals, card answer and runs */}
+          <TaskLineStory task={data as any} />
 
           {/* Secondary properties */}
           <div className="mb-6 rounded-lg border border-sol-border/15 overflow-hidden">

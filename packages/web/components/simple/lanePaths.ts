@@ -1,7 +1,8 @@
-// Where the simple lane lives, in a module that imports nothing, so a page
-// outside the app (the marketing site, signup) can link into the lane without
-// loading the store or the lane's model. lanePref.ts and lane.ts re-export
-// these names for everything inside the app.
+// Where the simple lane lives, in a module that imports only shared data, so
+// a page outside the app (the marketing site, signup) can link into the lane
+// without loading the store or the lane's model. lanePref.ts and lane.ts
+// re-export these names for everything inside the app.
+import { BILLING_RETURN } from "@codecast/shared/contracts/assistant";
 
 /** "simple" is the hosted assistant's lane; "full" or absent is the whole app. */
 export type Lane = "simple" | "full";
@@ -15,7 +16,9 @@ export const LANE_PATHS = {
   approvals: "/simple/approvals",
   routines: "/simple/routines",
   connections: "/simple/connections",
-  plan: "/simple/plan",
+  // Stripe returns people here (convex/billing.ts), so the server and the
+  // route read the one path.
+  plan: BILLING_RETURN.path,
   welcome: "/welcome",
 } as const;
 

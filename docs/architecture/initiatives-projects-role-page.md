@@ -325,7 +325,7 @@ the one synced collection:
 | `why` | written | Why it matters, in a paragraph. |
 | `done_when` | written | What done looks like: the sentence a person checks the result against. |
 | `milestones` | structured | An ordered list of `{ key, title, date?, done_at?, source? }`, at most 12. The next milestone is the first one not done, earliest date first. Reached ones stay, so the list is also the record of progress. |
-| `score_history` | structured | Per metric key, every reported value oldest first, `{ value, observed_at, source }`, the newest 52 kept. `scoreboard` (I4) stays the latest value and is a copy written by the one reporting writer, the way `health` is a copy of the latest update. |
+| `score_history` | structured | Per metric key, every reported value oldest first, `{ value, observed_at, source }`, the newest 52 kept. `scoreboard` (I4) stays the latest value and is a copy written by the one reporting writer, the way `health` is a copy of the latest update: the writer reads the latest of the history back, so a report backfilled for an earlier day never rewinds the current number. A renamed metric keeps its value and its history under the key its new name reads as. |
 | `questions` | written | Open questions: `{ key, text, at, by?, source?, answer?, answered_at? }`, at most 20. A question with an answer is closed and stays on the record. |
 | `decisions` | written | Decisions taken: `{ key, text, at, by?, source? }`, at most 40, newest last. |
 | `sources` | structured | Where the goal was stated: a list of sources, at most 20. |
@@ -345,10 +345,15 @@ is when. One parser reads a source the way people and the review write one
 (`parseIntentSource`: `call:<id>#<line>`, `chat:<id>`, `doc:<id>`,
 `jx7c6zk:142`, `ct-12`, a URL, and anything else as a `note` whose text is the
 quote), and one function says where it opens (`intentSourceHref`, web lib/intentSources, since routes are the web's). A
-milestone, a question and a decision each carry at most one source of the
-same shape. `by` on a question or a decision is who asked or decided, a name
-or an `@handle`, resolved to a face at render when it matches the roster; the
-server writes the caller's handle when none is given.
+source sent in its stored shape is held to the same address rules: a link is
+an http or https URL, a call line takes the shared form, a note has no
+address. A milestone, a question and a decision each carry at most one source
+of the same shape. `by` on a question or a decision is who asked or decided, a
+name or an `@handle`, resolved to a face at render when it matches the roster.
+When an add names nobody its maker signs it, by one rule on the server and the
+web (`initiativeSignature`): the role whose standing session made the call,
+else the person's `@handle` where the roster reads that handle back as them,
+else their name.
 
 **The trend.** `metricTrend(history, target)` reads a metric's history into
 `up`, `down`, `flat` or `unknown` and a short series for a sparkline, and
@@ -362,6 +367,23 @@ four lists are edited one entry at a time through `performRecordEntry`
 question) and remove, each naming the entry by key, so two people editing one
 goal never overwrite each other's list with a stale copy. `score_history` is
 written only by `performReportMetrics`, in the same patch as `scoreboard`.
+
+**One reducer.** The rules of an op live once, in `applyRecordOp`
+(shared/contracts/initiative), and the server and the web store both call it:
+the length of each written part, the key of a new entry (a slug of its words,
+numbered on a clash), the address rules of a source, and the times (a real
+moment, never 0 or NaN; a question and a decision always keep their date).
+An add whose key is already on the list with the same words is a retry and
+changes nothing; with other words it is a different entry whose key reads the
+same, and it is kept under a fresh key. A close said twice is one close: the
+first date stands unless the close names another. An add may name where it
+lands, which is how an undo of a remove puts an entry back where it sat. The
+reducer hands back the op with everything decided (the entry whole, its key,
+who and when), and the web sends that op, so the row stores the entry the
+page painted. On the web the four lists hold no pending lock
+(`unprotectedFields`): several writers add to one list, so the server's list
+always lands whole on the next push, and an entry painted a moment before a
+stale push shows again when its echo arrives.
 Editing `why`, `done_when`, a milestone, a question, a decision or a source
 is logged as the goal's shape (`initiative_shape`), so undo restores it.
 
@@ -385,9 +407,56 @@ and `sources`; `initiative_shape` gains the same four plus `questions` and
 change persists its evidence: every evidence line of the accepted change is
 read by `parseIntentSource` and added to the goal's `sources`, skipping ones
 already there, so a goal a review proposed can always say where the review
-read it. The S21 round trip covers the new fields.
+read it. A change that moved nothing (the owner it names already owns the
+goal, the projects are already carried, a goal of that title already exists)
+writes no sources either: the sources ride the change's own log row, and a
+row for a change that did not happen would misname what was done. The lists
+on a proposal are adds, applied through `performUpdateInitiative` as one
+patch and one log row per change; a proposed question or decision is signed
+by the person who accepted it. The S21 round trip covers the new fields.
 
-**Where it shows.** The goal page draws the record in the order of the test
-above. The list, the project page's goals strip, the chart's Goals lens and
-the document view draw the same atoms: the metric with its trend, the health
-chip, the owner face, the next milestone.
+**Where it shows.** One header (`components/initiatives/IntentHeader`) on
+the goal page and the project page: stripe, glyph or face, title, id, then
+one chip line (status, owner or lead, health, target, progress, the first
+metric, the next milestone). One set of atoms
+(`components/initiatives/InitiativeAtoms`) on every surface that names a
+goal, the chart's Goals lens included: `MetricTile` (now against the target,
+the trend arrow, a sparkline; sizes `tile`, `line`, `chip`),
+`NextMilestoneChip`, `HealthChip`, `OwnerChip`, `ProgressBar`, `SourceLink`,
+`UpdateLine`.
+
+The goal page has two tabs. **Goal** is the record in the order of the test
+above: what it is, why it matters, done when, measured by, milestones, open
+questions, decisions, sources, then the projects, the owner's updates and
+the goals under it. **Activity** (`?tab=activity`) is the scope feed
+(scopes-and-feed.md F2), the same engine and the same component a role's
+page uses, over the goal's projects and its sub goals' projects. The scope
+takes `initiative_ids`, admitted by the initiatives' own access rule, and
+the feed gains what only a goal has: its updates (kind `update`), its
+reached milestones, asked and answered questions and decisions (kind
+`goal`), and calls whose title or summary names the goal or that one of its
+sources cites (kind `call`). Calls are read newest first off the team's time
+index, a window at a time from where the last page stopped, so a call behind
+any number of newer ones is reached on a later page. A page keeps a few
+calls; when the scan stops with calls unread, every row older than where it
+stopped waits for the next page, whatever its kind, so the stream stays
+newest first across pages. A goal with no projects reads only its own
+sources: the ones that window a member's docs, pages, decisions and runs are
+skipped when the scope holds nothing they could match. The Goals and Calls
+chips are offered only on a feed whose scope names goals (`feedKindsFor`).
+No second feed engine exists.
+
+**The company as a document.** `/company` (`components/company`) reads the
+whole company top to bottom from the store alone: the name and purpose (why
+each top level goal matters), the goals with owner, health, number, next
+milestone and target, the goals under each, the projects each carries with
+lead, status, last change and counts, the projects nothing carries, then the
+roles and the people. The outline is `goalsPlan`, the chart's own reading,
+so the document and the chart place every goal the same way; `companyDoc`
+(`companyModel.ts`, pure) joins the rest. Open proposal changes draw in
+place with Accept and Skip: a proposed goal where it would sit, a change to
+a goal under it, role changes among the roles. A project an open proposal
+places is drawn under its goal and is not listed as carried by nothing. A
+project's lead is a role it names or whose scope lists it; a whole workspace
+role is nobody's lead. With no purpose written, a proposed top level goal's
+sentence stands as the purpose, marked proposed.

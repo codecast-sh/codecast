@@ -1,42 +1,46 @@
-/* The simple lane's own voice (plan pl-840). Everything is scoped under
-   [data-simple-lane] and built on the app's --sol-* tokens, so the theme
-   switch and both visual styles carry through. One warm grotesque at every
-   size, a teal that means "the assistant is on it", an apricot that means
-   "this needs you", and paper surfaces with soft depth. Phone width first. */
+/* The simple lane's look (plan pl-840). Everything is scoped under
+   [data-simple-lane] and drawn from the family tokens it shares with Whisk
+   (@platform/design, --pd-*), so the lane and the mail app read as one
+   product: warm paper, warm ink, Newsreader for reading and titles,
+   Instrument Sans for the interface, and one vermilion accent spent where
+   the person's attention or yes goes. The assistant at work moves in quiet
+   ink. Light and dark follow the app's theme. Phone width first. */
 
-/* The tokens. The lane's menu renders in a portal outside the lane's root,
-   so it carries them too. */
+/* The lane's names for the family tokens. The lane's menu renders in a
+   portal outside the lane's root, so it carries them too. */
 [data-simple-lane],
 .sl-menu {
-  --sl-paper: color-mix(in srgb, var(--sol-bg) 72%, var(--sol-card));
-  --sl-sheet: var(--sol-card);
-  --sl-sheet-2: color-mix(in srgb, var(--sol-card) 82%, var(--sol-bg));
-  --sl-ink: var(--sol-text);
-  --sl-ink-2: var(--sol-text-secondary);
-  --sl-soft: var(--sol-text-muted);
-  --sl-faint: color-mix(in srgb, var(--sol-text-dim) 85%, transparent);
-  --sl-line: color-mix(in srgb, var(--sol-border) 30%, transparent);
-  --sl-line-strong: color-mix(in srgb, var(--sol-border) 55%, transparent);
-  --sl-tide: var(--sol-cyan);
-  --sl-tide-ink: color-mix(in srgb, var(--sol-cyan) 78%, var(--sol-text));
-  --sl-tide-wash: color-mix(in srgb, var(--sol-cyan) 11%, transparent);
-  --sl-tide-wash-2: color-mix(in srgb, var(--sol-cyan) 20%, transparent);
-  /* A fill that carries text (primary buttons, send) and the ink on it: a
-     deeper teal with fixed light ink, about 5:1 in both themes, where the
-     plain tide under the card colour stays near 3:1. */
-  --sl-tide-solid: color-mix(in srgb, var(--sol-cyan) 64%, #002b36);
-  --sl-on-tide: #fdf6e3;
-  --sl-sun: var(--sol-orange);
-  --sl-sun-solid: color-mix(in srgb, var(--sol-orange) 85%, #002b36);
-  --sl-sun-wash: color-mix(in srgb, var(--sol-orange) 10%, transparent);
-  --sl-sun-line: color-mix(in srgb, var(--sol-orange) 38%, transparent);
-  --sl-moss: var(--sol-green);
-  --sl-rose: var(--sol-red);
-  --sl-shadow: 0 1px 0 color-mix(in srgb, var(--sol-border) 18%, transparent), 0 10px 30px -18px color-mix(in srgb, var(--sol-text) 32%, transparent);
-  --sl-shadow-lift: 0 1px 0 color-mix(in srgb, var(--sol-border) 22%, transparent), 0 18px 44px -20px color-mix(in srgb, var(--sol-text) 40%, transparent);
-  --sl-radius: 20px;
-  --sl-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
-  --sl-font: "Bricolage Grotesque", "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --sl-paper: var(--pd-bg);
+  --sl-sheet: var(--pd-bg-raised);
+  --sl-sheet-2: var(--pd-bg-sunken);
+  --sl-hover: var(--pd-bg-hover);
+  --sl-ink: var(--pd-ink);
+  --sl-ink-2: color-mix(in srgb, var(--pd-ink) 62%, var(--pd-ink-muted));
+  --sl-soft: var(--pd-ink-muted);
+  --sl-faint: var(--pd-ink-faint);
+  --sl-line: var(--pd-rule);
+  --sl-line-strong: var(--pd-rule-strong);
+  /* The assistant at work: dots, a running step, the meter. Quiet ink. */
+  --sl-tide: var(--pd-ink-muted);
+  --sl-tide-wash-2: color-mix(in srgb, var(--pd-ink) 8%, transparent);
+  /* The accent: a yes, a link, what is current, what needs the person. */
+  --sl-tide-ink: var(--pd-accent);
+  --sl-tide-wash: var(--pd-accent-soft);
+  --sl-tide-solid: var(--pd-accent);
+  --sl-on-tide: var(--pd-accent-ink);
+  --sl-sun: var(--pd-accent);
+  --sl-sun-solid: var(--pd-accent);
+  --sl-sun-wash: var(--pd-accent-soft);
+  --sl-sun-line: color-mix(in srgb, var(--pd-accent) 38%, transparent);
+  --sl-moss: var(--pd-ok);
+  --sl-rose: var(--pd-danger);
+  --sl-shadow: 0 1px 0 color-mix(in srgb, var(--pd-rule) 70%, transparent), 0 10px 28px -18px color-mix(in srgb, var(--pd-ink) 30%, transparent);
+  --sl-shadow-lift: var(--pd-shadow);
+  --sl-radius: calc(var(--pd-radius-lg) + 4px);
+  --sl-ease: var(--pd-t-ease);
+  --sl-font: var(--pd-font-ui);
+  --sl-read: var(--pd-font-read);
+  --sl-mono: var(--pd-font-mono);
 }
 
 [data-simple-lane] {
@@ -53,7 +57,7 @@
   text-rendering: optimizeLegibility;
 }
 
-/* Atmosphere: a tide pool of light in one corner, a warm blush in the other. */
+/* Atmosphere: lamplight on paper, a warm glow from above. */
 [data-simple-lane]::before {
   content: "";
   position: fixed;
@@ -61,9 +65,8 @@
   pointer-events: none;
   z-index: 0;
   background:
-    radial-gradient(60rem 36rem at -10% -12%, color-mix(in srgb, var(--sol-cyan) 13%, transparent), transparent 60%),
-    radial-gradient(48rem 32rem at 112% 108%, color-mix(in srgb, var(--sol-orange) 9%, transparent), transparent 62%),
-    radial-gradient(30rem 20rem at 85% -5%, color-mix(in srgb, var(--sol-yellow) 6%, transparent), transparent 70%);
+    radial-gradient(72rem 30rem at 50% -14%, color-mix(in srgb, var(--pd-accent) 7%, transparent), transparent 70%),
+    radial-gradient(40rem 26rem at 108% 112%, color-mix(in srgb, var(--pd-star) 5%, transparent), transparent 66%);
 }
 
 [data-simple-lane] *,
@@ -71,7 +74,7 @@
 [data-simple-lane] *::after { box-sizing: border-box; }
 
 [data-simple-lane] :focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--sl-tide) 70%, transparent);
+  outline: 2px solid var(--pd-accent);
   outline-offset: 2px;
   border-radius: 10px;
 }
@@ -122,9 +125,11 @@
   gap: 0.55rem;
   color: var(--sl-ink);
   text-decoration: none;
-  font-weight: 650;
-  font-size: 1.02rem;
-  letter-spacing: -0.015em;
+  font-family: var(--sl-read);
+  font-style: italic;
+  font-weight: 550;
+  font-size: 1.22rem;
+  letter-spacing: 0.005em;
 }
 
 .sl-brand-mark {
@@ -132,14 +137,16 @@
   width: 1.45rem;
   height: 1.45rem;
   border-radius: 999px;
-  background: conic-gradient(from 210deg, var(--sl-tide), color-mix(in srgb, var(--sl-tide) 40%, var(--sl-sun)), var(--sl-sun), var(--sl-tide));
+  width: 1.05rem;
+  height: 1.05rem;
+  background: var(--pd-accent);
   box-shadow: inset 0 0 0 3px var(--sl-paper);
 }
 
 .sl-brand-mark::after {
   content: "";
   position: absolute;
-  inset: 0.42rem;
+  inset: 0.3rem;
   border-radius: 999px;
   background: var(--sl-paper);
 }
@@ -168,7 +175,7 @@
   transition: color 160ms var(--sl-ease), background-color 160ms var(--sl-ease);
 }
 
-.sl-top-link:hover { color: var(--sl-ink); background: var(--sl-tide-wash); }
+.sl-top-link:hover { color: var(--sl-ink); background: var(--sl-hover); }
 .sl-top-link[aria-current="page"] { color: var(--sl-ink); background: var(--sl-sheet); box-shadow: var(--sl-shadow); }
 
 .sl-top-tools {
@@ -195,7 +202,7 @@
   transition: color 160ms var(--sl-ease), background-color 160ms var(--sl-ease), transform 160ms var(--sl-ease);
 }
 
-.sl-icon-btn:hover { color: var(--sl-ink); background: var(--sl-tide-wash); }
+.sl-icon-btn:hover { color: var(--sl-ink); background: var(--sl-hover); }
 .sl-icon-btn:active { transform: scale(0.94); }
 
 /* The lane's menu, on the app's Radix dropdown (keyboard, Escape, focus
@@ -224,7 +231,7 @@
   cursor: pointer;
 }
 
-[role="menuitem"].sl-menu-item[data-highlighted] { background: var(--sl-tide-wash); color: var(--sl-ink); }
+[role="menuitem"].sl-menu-item[data-highlighted] { background: var(--sl-hover); color: var(--sl-ink); }
 [role="menuitem"].sl-menu-item > svg { flex: none; width: 17px; height: 17px; align-self: flex-start; margin-top: 0.12rem; }
 .sl-menu-item small { display: block; color: var(--sl-soft); font-size: 0.8rem; }
 [role="separator"].sl-menu-sep { height: 1px; margin: 0.3rem 0.4rem; background: var(--sl-line); }
@@ -241,7 +248,7 @@
   width: min(26rem, calc(100% - 1.5rem));
   padding: 0.35rem;
   transform: translateX(-50%);
-  border-radius: 24px;
+  border-radius: 18px;
   background: color-mix(in srgb, var(--sl-sheet) 88%, transparent);
   border: 1px solid var(--sl-line);
   box-shadow: var(--sl-shadow-lift);
@@ -260,7 +267,7 @@
   align-items: center;
   gap: 0.15rem;
   padding: 0.45rem 0 0.4rem;
-  border-radius: 18px;
+  border-radius: 13px;
   color: var(--sl-faint);
   text-decoration: none;
   font-size: 0.68rem;
@@ -269,7 +276,7 @@
   transition: color 180ms var(--sl-ease), background-color 180ms var(--sl-ease);
 }
 
-.sl-tab[aria-current="page"] { color: var(--sl-ink); background: var(--sl-tide-wash); }
+.sl-tab[aria-current="page"] { color: var(--sl-ink); background: var(--sl-hover); }
 .sl-tab svg { transition: transform 220ms var(--sl-ease); }
 .sl-tab[aria-current="page"] svg { transform: translateY(-1px); color: var(--sl-tide-ink); }
 
@@ -297,11 +304,11 @@
 
 .sl-hello {
   margin: 1.75rem 0 0.35rem;
-  font-size: clamp(2rem, 7.5vw, 2.9rem);
-  font-weight: 640;
+  font-family: var(--sl-read);
+  font-size: clamp(2.25rem, 8.5vw, 3.3rem);
+  font-weight: 500;
   line-height: 1.04;
-  letter-spacing: -0.035em;
-  font-variation-settings: "opsz" 96;
+  letter-spacing: -0.012em;
 }
 
 .sl-lede {
@@ -313,11 +320,11 @@
 
 .sl-page-title {
   margin: 1.5rem 0 0.3rem;
-  font-size: clamp(1.7rem, 6vw, 2.2rem);
-  font-weight: 640;
+  font-family: var(--sl-read);
+  font-size: clamp(1.9rem, 6.5vw, 2.45rem);
+  font-weight: 550;
   line-height: 1.08;
-  letter-spacing: -0.03em;
-  font-variation-settings: "opsz" 72;
+  letter-spacing: -0.008em;
 }
 
 .sl-section {
@@ -336,7 +343,9 @@
 
 .sl-section-head .sl-count {
   color: var(--sl-faint);
-  font-weight: 500;
+  font-family: var(--sl-mono);
+  font-size: 0.78rem;
+  font-weight: 400;
   font-variant-numeric: tabular-nums;
 }
 
@@ -361,7 +370,7 @@
   align-items: flex-end;
   gap: 0.5rem;
   padding: 0.55rem 0.55rem 0.55rem 1.1rem;
-  border-radius: 26px;
+  border-radius: 18px;
   background: var(--sl-sheet);
   border: 1px solid var(--sl-line);
   box-shadow: var(--sl-shadow);
@@ -369,11 +378,11 @@
 }
 
 .sl-composer:focus-within {
-  border-color: color-mix(in srgb, var(--sl-tide) 45%, transparent);
+  border-color: var(--sl-line-strong);
   box-shadow: 0 0 0 5px var(--sl-tide-wash), var(--sl-shadow-lift);
 }
 
-.sl-composer.is-hero { padding: 0.75rem 0.65rem 0.65rem 1.25rem; border-radius: 28px; }
+.sl-composer.is-hero { padding: 0.75rem 0.65rem 0.65rem 1.25rem; border-radius: 20px; }
 
 .sl-composer textarea {
   flex: 1;
@@ -431,7 +440,7 @@
   transition: background-color 160ms var(--sl-ease), border-color 160ms var(--sl-ease), transform 160ms var(--sl-ease);
 }
 
-.sl-idea:hover { background: var(--sl-tide-wash); border-color: color-mix(in srgb, var(--sl-tide) 35%, transparent); }
+.sl-idea:hover { background: var(--sl-hover); border-color: var(--sl-line-strong); }
 .sl-idea:active { transform: scale(0.97); }
 
 /* ── Cards and rows ──────────────────────────────────────────────────── */
@@ -464,7 +473,7 @@
 }
 
 .sl-row + .sl-row { border-top: 1px solid var(--sl-line); }
-.sl-row:hover { background: color-mix(in srgb, var(--sl-tide) 5%, transparent); }
+.sl-row:hover { background: var(--sl-hover); }
 
 .sl-row-main { min-width: 0; flex: 1; }
 
@@ -532,7 +541,7 @@
   min-height: 2.6rem;
   padding: 0 1.1rem;
   border: 1px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--pd-radius-lg);
   background: transparent;
   color: var(--sl-ink);
   font: inherit;
@@ -547,9 +556,9 @@
 .sl-btn:active:not(:disabled) { transform: scale(0.97); }
 .sl-btn:disabled { opacity: 0.45; cursor: default; }
 .sl-btn.is-yes { background: var(--sl-tide-solid); color: var(--sl-on-tide); }
-.sl-btn.is-yes:hover:not(:disabled) { background: color-mix(in srgb, var(--sl-tide-solid) 86%, #002b36); }
+.sl-btn.is-yes:hover:not(:disabled) { background: color-mix(in srgb, var(--sl-tide-solid) 88%, var(--sl-ink)); }
 .sl-btn.is-plain { border-color: var(--sl-line-strong); background: var(--sl-sheet); }
-.sl-btn.is-plain:hover:not(:disabled) { border-color: color-mix(in srgb, var(--sl-tide) 45%, transparent); background: var(--sl-tide-wash); }
+.sl-btn.is-plain:hover:not(:disabled) { border-color: var(--sl-soft); background: var(--sl-hover); }
 .sl-btn.is-no { color: var(--sl-soft); }
 .sl-btn.is-no:hover:not(:disabled) { color: var(--sl-ink); background: color-mix(in srgb, var(--sl-ink) 6%, transparent); }
 .sl-btn.is-danger { color: var(--sl-rose); }
@@ -561,7 +570,7 @@
 .sl-approval {
   position: relative;
   overflow: hidden;
-  border-radius: 22px;
+  border-radius: var(--sl-radius);
   background: var(--sl-sheet);
   border: 1px solid var(--sl-sun-line);
   box-shadow: 0 0 0 4px var(--sl-sun-wash), var(--sl-shadow);
@@ -603,22 +612,24 @@
 
 .sl-approval-q {
   margin: 0.35rem 1.1rem 0.85rem;
-  font-size: 1.18rem;
-  font-weight: 620;
-  line-height: 1.28;
-  letter-spacing: -0.015em;
+  font-family: var(--sl-read);
+  font-size: 1.3rem;
+  font-weight: 550;
+  line-height: 1.25;
+  letter-spacing: -0.005em;
 }
 
 .sl-draft {
   position: relative;
   margin: 0 0.75rem;
   padding: 0.95rem 1rem;
-  border-radius: 14px;
+  border-radius: var(--pd-radius-lg);
   background: var(--sl-sheet-2);
   border: 1px solid var(--sl-line);
-  color: var(--sl-ink-2);
-  font-size: 0.95rem;
-  line-height: 1.58;
+  color: var(--sl-ink);
+  font-family: var(--sl-read);
+  font-size: 1.04rem;
+  line-height: 1.55;
 }
 
 /* A draft is the actual email or event, so its single line breaks (an
@@ -710,9 +721,10 @@
 
 .sl-convo-title {
   overflow: hidden;
-  font-size: 1rem;
-  font-weight: 620;
-  letter-spacing: -0.01em;
+  font-family: var(--sl-read);
+  font-size: 1.15rem;
+  font-weight: 550;
+  letter-spacing: 0;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -728,8 +740,9 @@
   align-self: flex-end;
   max-width: 85%;
   padding: 0.7rem 1rem;
-  border-radius: 20px 20px 6px 20px;
-  background: var(--sl-tide-wash-2);
+  border-radius: 16px 16px 4px 16px;
+  border: 1px solid var(--sl-line);
+  background: var(--sl-sheet);
   color: var(--sl-ink);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -748,8 +761,9 @@
 
 .sl-said {
   max-width: 40rem;
-  font-size: 1.04rem;
-  line-height: 1.62;
+  font-family: var(--sl-read);
+  font-size: 1.14rem;
+  line-height: 1.6;
   animation: sl-rise 360ms var(--sl-ease) both;
 }
 
@@ -800,7 +814,7 @@
   border: 1.5px solid var(--sl-line-strong);
 }
 
-.sl-step.is-done::before { background: var(--sl-tide); border-color: var(--sl-tide); }
+.sl-step.is-done::before { background: var(--sl-moss); border-color: var(--sl-moss); }
 .sl-step.is-failed { color: var(--sl-faint); }
 .sl-step.is-failed::before { border-color: var(--sl-rose); }
 .sl-step.is-running { color: var(--sl-ink-2); }
@@ -859,10 +873,11 @@
 }
 
 .sl-meter-head {
-  font-size: 1.25rem;
-  font-weight: 620;
+  font-family: var(--sl-read);
+  font-size: 1.4rem;
+  font-weight: 550;
   line-height: 1.25;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.005em;
 }
 
 .sl-meter-bar {
@@ -878,7 +893,7 @@
 .sl-meter-used {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, color-mix(in srgb, var(--sl-tide) 70%, var(--sl-moss)), var(--sl-tide));
+  background: linear-gradient(90deg, var(--sl-ink), color-mix(in srgb, var(--sl-ink) 72%, var(--sl-soft)));
   transform-origin: left;
   animation: sl-grow 900ms var(--sl-ease) both;
 }
@@ -919,9 +934,9 @@
   padding: 1.05rem 1.05rem 1rem;
 }
 
-.sl-plan.is-current { border-color: color-mix(in srgb, var(--sl-tide) 50%, transparent); box-shadow: 0 0 0 4px var(--sl-tide-wash), var(--sl-shadow); }
-.sl-plan-name { display: flex; align-items: center; gap: 0.5rem; font-weight: 640; font-size: 1.05rem; }
-.sl-plan-price { font-size: 1.45rem; font-weight: 650; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.sl-plan.is-current { border-color: var(--sl-sun-line); box-shadow: 0 0 0 4px var(--sl-tide-wash), var(--sl-shadow); }
+.sl-plan-name { display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 1.02rem; }
+.sl-plan-price { font-family: var(--sl-read); font-size: 1.65rem; font-weight: 500; letter-spacing: -0.01em; font-variant-numeric: lining-nums tabular-nums; }
 .sl-plan ul { margin: 0; padding: 0; list-style: none; color: var(--sl-soft); font-size: 0.88rem; }
 .sl-plan li { display: flex; gap: 0.45rem; padding: 0.15rem 0; }
 .sl-plan li svg { flex: none; margin-top: 0.2rem; color: var(--sl-tide-ink); }

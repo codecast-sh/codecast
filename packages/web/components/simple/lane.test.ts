@@ -295,6 +295,9 @@ describe("connections", () => {
     const { plainConnectError, missingAbilities } = await import("./lane");
     expect(plainConnectError("Google OAuth not configured (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET)")).toBe("Connecting Google isn't switched on here yet.");
     expect(plainConnectError("Couldn't reach Gmail")).toBe("Couldn't reach Gmail");
+    // Codes from Google's callback and the confirm step read through the connectors' one table.
+    expect(plainConnectError("access_denied")).toBe("You declined the authorization.");
+    expect(plainConnectError("wrong_account")).toContain("different account");
     expect(plainConnectError(null)).toBeNull();
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: true, calendar: true })).toBe(false);
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: false, calendar: true })).toBe(true);
@@ -305,11 +308,29 @@ describe("connections", () => {
 });
 
 describe("billing return", () => {
-  it("explains where Stripe sent the person back from", async () => {
+  it("explains where Stripe sent the person back from, and waits for the payment to land", async () => {
     const { billingReturnNote } = await import("./lane");
-    expect(billingReturnNote("done")).toBe("Your plan is updated. Thank you.");
-    expect(billingReturnNote("canceled")).toBe("Checkout was canceled, so nothing changed.");
-    expect(billingReturnNote(null)).toBeNull();
+    expect(billingReturnNote("done", true)).toEqual({ text: "Your plan is updated. Thank you.", tone: "done" });
+    expect(billingReturnNote("done", false)?.tone).toBe("pending");
+    expect(billingReturnNote("topup", false)?.text).toContain("as soon as Stripe confirms");
+    expect(billingReturnNote("canceled", true)).toEqual({ text: "Checkout was canceled, so nothing changed.", tone: "plain" });
+    expect(billingReturnNote(null, true)).toBeNull();
+  });
+
+  it("counts a plan settled once the subscription is live, and a top-up once its credit is on the account", async () => {
+    const { billingReturnSettled } = await import("./lane");
+    const now = 1_000_000_000;
+    const wallet = (subscription_status: string | null, account: { kind: "topup" | "grant"; at: number }[] = []) =>
+      ({ subscription_status, account: account.map((line) => ({ ...line, amount_usd: 6 })) });
+    expect(billingReturnSettled("done", null, now)).toBe(false);
+    expect(billingReturnSettled("done", wallet(null), now)).toBe(false);
+    expect(billingReturnSettled("done", wallet("incomplete"), now)).toBe(false);
+    expect(billingReturnSettled("done", wallet("active"), now)).toBe(true);
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "topup", at: now - 60 * 60_000 }]), now)).toBe(false);
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "grant", at: now }]), now)).toBe(false);
+    // The webhook may land a little before the person is back.
+    expect(billingReturnSettled("topup", wallet(null, [{ kind: "topup", at: now - 30_000 }]), now)).toBe(true);
+    expect(billingReturnSettled("canceled", null, now)).toBe(true);
   });
 });
 

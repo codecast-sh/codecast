@@ -38,9 +38,6 @@ const ops = internal.assistant.tools.workspace;
 const json = (value: unknown) => JSON.stringify(value, null, 1);
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((v) => Type.Literal(v)));
 
-/** The shortest a routine may repeat at: an hour. A plan may set a longer floor. */
-export const ROUTINE_MIN_HOURS = 1;
-
 export function codecastTools(deps: CodecastDeps): Tool[] {
   const user = { user_id: deps.userId };
   const here = { ...user, conversation_id: deps.conversationId };
@@ -179,7 +176,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
         instruction: Type.String({ description: "What to do each time, written as a request to yourself." }),
         title: Type.Optional(Type.String({ description: "A short name the person sees." })),
         first_run: Type.String({ description: "When it first runs, ISO 8601 with its UTC offset, like 2026-10-06T08:00:00-07:00." }),
-        repeat_every_hours: Type.Optional(Type.Number({ minimum: ROUTINE_MIN_HOURS, description: "Repeat this often; 24 is daily, 168 weekly. Leave out for once." })),
+        repeat_every_hours: Type.Optional(Type.Number({ exclusiveMinimum: 0, description: "Repeat this often; 24 is daily, 168 weekly. Leave out for once. At least 1; the person's plan may set a longer floor." })),
       }),
       risk: "write",
       run: async ({ instruction, title, first_run, repeat_every_hours }) => {
@@ -188,7 +185,7 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
           prompt: instruction,
           ...(title ? { title } : {}),
           run_at: instant(first_run, "first_run"),
-          ...(repeat_every_hours ? { interval_ms: Math.round(repeat_every_hours * 3_600_000) } : {}),
+          ...(repeat_every_hours !== undefined ? { interval_ms: Math.round(repeat_every_hours * 3_600_000) } : {}),
         });
         return { content: `Routine set: ${json(routine)}`, details: { routine_id: routine.id } };
       },

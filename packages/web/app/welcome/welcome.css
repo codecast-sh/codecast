@@ -362,7 +362,7 @@
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--sol-card) 55%, transparent) 50%, transparent 65%);
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--sl-sheet) 55%, transparent) 50%, transparent 65%);
   transform: translateX(-110%);
   animation: wl-sheen 1.3s var(--sl-ease) 700ms both;
 }

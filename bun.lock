@@ -20,7 +20,7 @@
     },
     "packages/cli": {
       "name": "@codecast/cli",
-      "version": "1.1.169",
+      "version": "1.1.170",
       "bin": {
         "codecast": "./dist/main.js",
         "cast": "./dist/main.js",
@@ -79,7 +79,7 @@
     },
     "packages/electron": {
       "name": "@codecast/electron",
-      "version": "1.1.124",
+      "version": "1.1.125",
       "dependencies": {
         "@platform/desktop": "file:../../platform/packages/desktop",
         "electron-updater": "^6.3.0",
@@ -217,6 +217,7 @@
         "@observablehq/plot": "^0.6.17",
         "@platform/analytics": "file:../../platform/packages/analytics",
         "@platform/auth": "file:../../platform/packages/auth",
+        "@platform/design": "file:../../platform/packages/design",
         "@platform/engine": "file:../../platform/packages/engine",
         "@platform/flags": "file:../../platform/packages/flags",
         "@platform/keys": "file:../../platform/packages/keys",
@@ -4427,6 +4428,8 @@
     "@codecast/web/@platform/analytics": ["@platform/analytics@file:platform/packages/analytics", { "devDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "happy-dom": "20.11.1", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "typescript": "^5.7.2", "web-vitals": "^5.1.0" }, "peerDependencies": { "@sentry/react": "^10.45.0", "@sentry/react-native": "^8.5.0", "posthog-js": "^1.363.3", "posthog-react-native": "^4.37.6", "web-vitals": "^5.1.0" }, "optionalPeers": ["@sentry/react", "@sentry/react-native", "posthog-js", "posthog-react-native", "web-vitals"] }],
 
     "@codecast/web/@platform/auth": ["@platform/auth@file:platform/packages/auth", { "devDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "@types/bun": "latest", "@types/node": "^22.0.0", "@types/react": "^19.0.0", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "19.1.0", "typescript": "^5.7.2" }, "peerDependencies": { "@auth/core": "^0.37.2", "@convex-dev/auth": "0.0.79", "convex": "^1.31.6", "jose": "5.10.0", "oslo": "^1.2.1", "react": "^19.0.0" }, "optionalPeers": ["@auth/core", "jose", "oslo", "react"] }],
+
+    "@codecast/web/@platform/design": ["@platform/design@file:platform/packages/design", { "devDependencies": { "@types/node": "^22.0.0", "typescript": "^5.7.2" } }],
 
     "@codecast/web/@platform/engine": ["@platform/engine@file:platform/packages/engine", { "dependencies": { "dexie": "^4.3.0", "mutative": "^1.3.0", "zustand": "^5.0.9" }, "devDependencies": { "@types/react": "^19.0.0", "typescript": "^5.7.2" }, "peerDependencies": { "react": "^19.0.0" } }],
 

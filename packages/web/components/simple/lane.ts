@@ -9,14 +9,15 @@
 // developer tool: no agent, session, model, token, repo or device.
 
 import { isHostedAgentType, parseDecisionAnswer } from "@codecast/shared/contracts";
-import { PLANS, TOPUP, topupCredit, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
+import { PLANS, TOPUP, topupCredit, type BillingReturnOutcome, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
 import { classifyUserMessage, isHiddenStubMessage, stripSystemTags } from "../conversation/classify";
 import { cadenceLabel } from "../org/staffingModel";
 import type { InboxSession, SessionDecisionItem } from "../../store/inboxStore";
 import { ARMED_STATUSES, isTriggerFailing, lastRunHeadline, type TaskRow } from "../triggerTasks";
 import type { GoogleCapabilities } from "@codecast/convex/convex/googleOAuth";
-import type { WalletAccountLine } from "@codecast/convex/convex/lib/wallet";
+import type { WalletAccountLine, WalletSummary } from "@codecast/convex/convex/lib/wallet";
 import { sessionLiveAt } from "../../lib/liveness";
+import { describeConnectorError } from "../../lib/connectorReturn";
 
 import { LANE_PATHS, conversationPath } from "./lanePaths";
 
@@ -645,12 +646,43 @@ export function accountLine(line: Pick<WalletAccountLine, "kind" | "amount_usd">
   }
 }
 
-/** What Stripe's return to the plan screen means (convex/billing.ts returnUrl). */
-export function billingReturnNote(param: string | null): string | null {
-  if (param === "done") return "Your plan is updated. Thank you.";
-  if (param === "topup") return "Your extra credit is on its way. It shows here in a moment.";
-  if (param === "canceled") return "Checkout was canceled, so nothing changed.";
-  return null;
+/** How long before the person came back a top-up credit may have landed and
+ *  still be theirs from this checkout: Stripe's webhook can beat the redirect. */
+const TOPUP_RETURN_SLACK_MS = 10 * 60_000;
+
+/** Whether what the person paid for on Stripe has reached the wallet. The
+ *  person comes back before Stripe's webhook lands, so a plan is settled once
+ *  the wallet holds a paid subscription, and a top-up once its credit is on
+ *  the account. A canceled checkout has nothing to wait for. */
+export function billingReturnSettled(
+  outcome: BillingReturnOutcome,
+  wallet: Pick<WalletSummary, "subscription_status" | "account"> | null,
+  returnedAt: number,
+): boolean {
+  if (outcome === "canceled") return true;
+  if (!wallet) return false;
+  if (outcome === "done") return wallet.subscription_status === "active" || wallet.subscription_status === "trialing";
+  return wallet.account.some((line) => line.kind === "topup" && line.at >= returnedAt - TOPUP_RETURN_SLACK_MS);
+}
+
+/** What the plan screen says after Stripe sends the person back
+ *  (BILLING_RETURN): thanks once the payment is on the wallet, a word that it
+ *  is coming until then, and a plain note for a canceled checkout. */
+export function billingReturnNote(outcome: BillingReturnOutcome | null, settled: boolean): { text: string; tone: "done" | "pending" | "plain" } | null {
+  switch (outcome) {
+    case "done":
+      return settled
+        ? { text: "Your plan is updated. Thank you.", tone: "done" }
+        : { text: "Thank you. Your new plan shows here as soon as Stripe confirms the payment.", tone: "pending" };
+    case "topup":
+      return settled
+        ? { text: "Your extra credit is here. Thank you.", tone: "done" }
+        : { text: "Thank you. Your extra credit shows here as soon as Stripe confirms the payment.", tone: "pending" };
+    case "canceled":
+      return { text: "Checkout was canceled, so nothing changed.", tone: "plain" };
+    default:
+      return null;
+  }
 }
 
 // ── Greeting ───────────────────────────────────────────────────────────────
@@ -698,12 +730,14 @@ export function firstAsks(can: GoogleAbilities | null | undefined): { lead: stri
 
 // ── Connections ────────────────────────────────────────────────────────────
 
-/** A connect or disconnect refusal in plain words. The server names env
- *  variables when Google is not set up, which means nothing to this reader. */
+/** A connect or disconnect refusal in plain words, through the connectors'
+ *  one reason table (shared/contracts/connectorReasons.ts). The lane adds only the
+ *  not-configured case: the server names env variables there, which the
+ *  settings page wants and this reader does not. */
 export function plainConnectError(message: string | null | undefined): string | null {
   if (!message) return null;
   if (/not configured|GOOGLE_OAUTH/i.test(message)) return "Connecting Google isn't switched on here yet.";
-  return message;
+  return describeConnectorError(message);
 }
 
 /** What the person's Google grant lets the assistant do (googleOAuth.listConnections `can`). */

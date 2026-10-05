@@ -23,7 +23,13 @@
 // Stripe does not deliver events in order. A subscription event, or a
 // checkout that made one, is treated as a prompt only: the webhook reads the
 // subscription as it stands now and maps that, so an older event arriving
-// late cannot move the plan back. A top-up lands once per payment
+// late cannot move the plan back. Two deliveries can still read in one order
+// and commit in the other, so each read is stamped with when it was taken
+// and the wallet keeps the newest stamp it applied (subscription_read_at):
+// an older read of the same subscription is skipped, and a subscription the
+// wallet already holds as ended never maps back to live. A paid plan's
+// allowance for a new period waits for Stripe to confirm that period paid
+// (lib/wallet allowancePlan, paid_through). A top-up lands once per payment
 // (wallet_ledger.external_id), a refund once per refunded total, and a period
 // the wallet already holds changes nothing.
 import { v } from "convex/values";
@@ -54,7 +60,7 @@ import {
   type StripeInvoice,
   type StripeSubscription,
 } from "@platform/billing";
-import { PLAN_IDS, planOf, TOPUP, topupCredit, type PlanId } from "@codecast/shared/contracts/assistant";
+import { BILLING_RETURN, PLAN_IDS, planOf, TOPUP, topupCredit, type BillingReturnOutcome, type PlanId } from "@codecast/shared/contracts/assistant";
 import { httpAction } from "./_generated/server";
 import type { ActionCtx, MutationCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -66,10 +72,6 @@ import { alignPeriod, credit, moveSubscription, refundTopup, setPlan, walletByCu
 
 /** Where Stripe posts events: `<convex site>/api/webhooks/stripe`. */
 export const STRIPE_WEBHOOK_PATH = "/api/webhooks/stripe";
-
-/** The web page checkout and the portal return to, with `?billing=` set to
- *  `done`, `topup` or `canceled` after a checkout. */
-export const BILLING_RETURN_PATH = "/simple/plan";
 
 /** The plans that cost money, each sold through the price in
  *  `STRIPE_PRICE_<PLAN>` (STRIPE_PRICE_PLUS, STRIPE_PRICE_PRO). The catalog
@@ -184,8 +186,8 @@ export const checkoutContext = internalQuery({
   },
 });
 
-function returnUrl(billing?: string): string {
-  return `${siteUrl()}${BILLING_RETURN_PATH}${billing ? `?billing=${billing}` : ""}`;
+function returnUrl(outcome?: BillingReturnOutcome): string {
+  return `${siteUrl()}${BILLING_RETURN.path}${outcome ? `?${BILLING_RETURN.param}=${outcome}` : ""}`;
 }
 
 /** The person's billing portal, after checking that its configuration bills
@@ -263,7 +265,11 @@ export const startCheckout = action({
           clientReferenceId: userId,
           metadata: { user_id: userId, kind: plan ? "plan" : "topup", ...(plan ? { plan } : {}) },
         },
-        plan ? { idempotencyKey: `checkout:${userId}:${plan}:${Math.floor(Date.now() / CHECKOUT_REUSE_MS)}` } : {},
+        // The key covers every parameter that can change within the minute:
+        // a customer recorded since the first click (a top-up's webhook) sends
+        // `customer` where that one sent `customer_email`, and Stripe refuses
+        // a reused key with different parameters.
+        plan ? { idempotencyKey: `checkout:${userId}:${plan}:${who.customer ?? "new"}:${Math.floor(Date.now() / CHECKOUT_REUSE_MS)}` } : {},
       );
       return { ok: true, url: session.url, via: "checkout" };
     } catch (error) {
@@ -326,13 +332,25 @@ function otherLiveSubscription(wallet: Doc<"wallets"> | null, subscriptionId: st
   return held && held !== subscriptionId && isLiveSubscription(wallet.subscription_status) ? held : null;
 }
 
-/** Maps a subscription as it stands now onto the wallet. `userId` is known
- *  when a checkout names the buyer before the wallet holds their customer.
+/** Statuses a subscription never leaves: Stripe starts a new one instead. */
+const ENDED_STATUSES: readonly string[] = ["canceled", "incomplete_expired"];
+
+/** How a subscription reached the mapping. `userId` is known when a checkout
+ *  names the buyer before the wallet holds their customer. `readAt` is when
+ *  the subscription was read from Stripe (absent for an event's own copy).
  *  `refunded` marks a subscription canceled because its payment was refunded
  *  or disputed (`endRefundedPlan`). */
-async function subscriptionChanged(ctx: MutationCtx, env: BillingEnv, subscription: StripeSubscription, userId?: Id<"users"> | null, refunded = false): Promise<BillingOutcome> {
+interface SubscriptionSource {
+  userId?: Id<"users"> | null;
+  readAt?: number;
+  refunded?: boolean;
+}
+
+/** Maps a subscription as it stands now onto the wallet. */
+async function subscriptionChanged(ctx: MutationCtx, env: BillingEnv, subscription: StripeSubscription, source: SubscriptionSource = {}): Promise<BillingOutcome> {
+  const { readAt, refunded = false } = source;
   const customer = stripeId(subscription.customer);
-  const owner = userId ?? (await userFor(ctx, customer, subscription.metadata?.user_id));
+  const owner = source.userId ?? (await userFor(ctx, customer, subscription.metadata?.user_id));
   if (!owner) return "ignored:no_user";
   const wallet = await walletRow(ctx, owner);
   const other = otherLiveSubscription(wallet, subscription.id);
@@ -343,6 +361,13 @@ async function subscriptionChanged(ctx: MutationCtx, env: BillingEnv, subscripti
   }
 
   const status = subscription.status;
+  const same = wallet?.stripe_subscription_id === subscription.id;
+  // A refunded mapping carries the subscription it just ended, which is the
+  // newest state there is, whichever read Stripe's own delete applied.
+  if (same && !refunded) {
+    if (ENDED_STATUSES.includes(wallet.subscription_status ?? "") && !ENDED_STATUSES.includes(status)) return "ignored:ended";
+    if (readAt !== undefined && wallet.subscription_read_at !== undefined && readAt < wallet.subscription_read_at) return "ignored:stale_read";
+  }
   let plan: PlanId;
   if (isLiveSubscription(status)) {
     const priced = planForPrice(env, subscriptionPriceId(subscription));
@@ -365,13 +390,19 @@ async function subscriptionChanged(ctx: MutationCtx, env: BillingEnv, subscripti
   // when Stripe's own delete for the cancel landed first and prorated it, so
   // it takes the plan's whole allowance through `setPlan`.
   const prorate = wallet?.stripe_subscription_id === subscription.id && isLiveSubscription(wallet.subscription_status) && wallet.subscription_status !== "past_due";
-  const facts = { stripe_customer_id: customer ?? undefined, stripe_subscription_id: subscription.id, subscription_status: status };
+  const facts = {
+    stripe_customer_id: customer ?? undefined,
+    stripe_subscription_id: subscription.id,
+    subscription_status: status,
+    subscription_read_at: readAt === undefined ? undefined : same ? Math.max(readAt, wallet.subscription_read_at ?? 0) : readAt,
+    billed: isLiveSubscription(status),
+  };
   if (refunded) await setPlan(ctx, owner, plan, facts);
   else await moveSubscription(ctx, owner, plan, facts, { prorate });
   return `plan:${plan}`;
 }
 
-async function checkoutCompleted(ctx: MutationCtx, env: BillingEnv, session: StripeCheckoutSession, subscription: StripeSubscription | null): Promise<BillingOutcome> {
+async function checkoutCompleted(ctx: MutationCtx, env: BillingEnv, session: StripeCheckoutSession, subscription: StripeSubscription | null, readAt?: number): Promise<BillingOutcome> {
   const customer = stripeId(session.customer);
   const userId = await userFor(ctx, null, session.client_reference_id ?? session.metadata?.user_id);
   if (!userId) return "ignored:no_user";
@@ -379,7 +410,7 @@ async function checkoutCompleted(ctx: MutationCtx, env: BillingEnv, session: Str
   if (session.mode === "subscription") {
     // The subscription's own state decides, read from Stripe by the webhook.
     if (!subscription) return "ignored:no_subscription";
-    return subscriptionChanged(ctx, env, subscription, userId);
+    return subscriptionChanged(ctx, env, subscription, { userId, readAt });
   }
 
   if (session.mode === "payment" && session.metadata?.kind === "topup") {
@@ -433,10 +464,19 @@ async function invoicePaid(ctx: MutationCtx, invoice: StripeInvoice): Promise<Bi
  *  event's `data.object` and `subscription_json` the subscription it concerns
  *  as Stripe holds it now, both as JSON: Stripe objects can carry keys a
  *  Convex value cannot, so they cross as strings. A subscription event maps
- *  `subscription_json` when it is given, its own copy otherwise. `refunded`
- *  ends that subscription's allowance whole rather than by time. */
+ *  `subscription_json` when it is given, its own copy otherwise. `read_at` is
+ *  when the subscription was read from Stripe (the event's object when no
+ *  `subscription_json` comes with it). `refunded` ends that subscription's
+ *  allowance whole rather than by time. */
 export const applyStripeEvent = internalMutation({
-  args: { id: v.string(), type: v.string(), object_json: v.string(), subscription_json: v.optional(v.string()), refunded: v.optional(v.boolean()) },
+  args: {
+    id: v.string(),
+    type: v.string(),
+    object_json: v.string(),
+    subscription_json: v.optional(v.string()),
+    read_at: v.optional(v.number()),
+    refunded: v.optional(v.boolean()),
+  },
   handler: async (ctx, args): Promise<BillingOutcome> => {
     const object = JSON.parse(args.object_json);
     const subscription: StripeSubscription | null = args.subscription_json ? JSON.parse(args.subscription_json) : null;
@@ -444,11 +484,11 @@ export const applyStripeEvent = internalMutation({
     switch (args.type) {
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded":
-        return checkoutCompleted(ctx, env, object as StripeCheckoutSession, subscription);
+        return checkoutCompleted(ctx, env, object as StripeCheckoutSession, subscription, args.read_at);
       case "customer.subscription.created":
       case "customer.subscription.updated":
       case "customer.subscription.deleted":
-        return subscriptionChanged(ctx, env, subscription ?? (object as StripeSubscription), null, args.refunded);
+        return subscriptionChanged(ctx, env, subscription ?? (object as StripeSubscription), { readAt: args.read_at, refunded: args.refunded });
       case "invoice.paid":
         return invoicePaid(ctx, object as StripeInvoice);
       case "charge.refunded":
@@ -549,7 +589,7 @@ async function endRefundedPlan(ctx: ActionCtx, stripe: StripeClient, event: Stri
     // It ran to the end of its last period: no allowance of it is left to take.
     return "ignored:already_ended";
   }
-  await ctx.runMutation(internal.billing.applyStripeEvent, { id: event.id, type: "customer.subscription.updated", object_json: JSON.stringify(ended), refunded: true });
+  await ctx.runMutation(internal.billing.applyStripeEvent, { id: event.id, type: "customer.subscription.updated", object_json: JSON.stringify(ended), read_at: Date.now(), refunded: true });
   console.error(`[billing] ${event.type} ${event.id}: invoice ${invoiceId} of ${subscriptionId} was ${disputed ? "disputed" : "refunded in full"}; ${ended === subscription ? "already canceled, allowance ended" : `canceled ${subscriptionId}`}`);
   return "plan_canceled";
 }
@@ -563,12 +603,16 @@ async function endRefundedPlan(ctx: ActionCtx, stripe: StripeClient, event: Stri
 async function applyEvent(ctx: ActionCtx, stripe: StripeClient, event: StripeEvent): Promise<BillingOutcome> {
   const subscriptionId = eventSubscriptionId(event);
   const subscription = subscriptionId ? await stripe.getSubscription(subscriptionId) : null;
+  // Taken as the read returns: a read that started earlier answered with
+  // Stripe's state no later than this one.
+  const readAt = subscription ? Date.now() : undefined;
   const apply = () =>
     ctx.runMutation(internal.billing.applyStripeEvent, {
       id: event.id,
       type: event.type,
       object_json: JSON.stringify(event.data.object),
       subscription_json: subscription ? JSON.stringify(subscription) : undefined,
+      read_at: readAt,
     });
   let outcome = await apply();
   if (outcome === "ignored:not_a_topup") return endRefundedPlan(ctx, stripe, event);
@@ -576,11 +620,13 @@ async function applyEvent(ctx: ActionCtx, stripe: StripeClient, event: StripeEve
 
   const keptId = outcome.slice("duplicate:".length);
   const kept = await stripe.getSubscription(keptId);
+  const keptReadAt = Date.now();
   if (!isLiveSubscription(kept.status)) {
     await ctx.runMutation(internal.billing.applyStripeEvent, {
       id: event.id,
       type: "customer.subscription.updated",
       object_json: JSON.stringify(kept),
+      read_at: keptReadAt,
     });
     outcome = await apply();
     if (!outcome.startsWith("duplicate:")) return outcome;

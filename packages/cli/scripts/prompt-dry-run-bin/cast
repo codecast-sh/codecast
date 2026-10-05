@@ -136,6 +136,8 @@ is_read() {
     # A decision stack's reads; create, add, remove, reorder, policy and delegate write.
     stack) case "${2:-}" in show|ls|list) return 0 ;; *) return 1 ;; esac ;;
     state) [ "${2:-}" = show ] ;;
+    # A project's expectations; propose, apply and drop write.
+    expectations) [ "${2:-}" = show ] ;;
     *) return 1 ;;
   esac
 }
@@ -148,7 +150,9 @@ frozen() {
 real_bin() {
   local here; here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   local dir
-  IFS=: read -ra dirs <<< "$PATH"
+  # Process substitution, not a here-string: a here-string needs a temp file,
+  # which the run's sandbox refuses.
+  IFS=: read -ra dirs < <(printf '%s\n' "$PATH")
   for dir in "${dirs[@]}"; do [ "$dir" = "$here" ] && continue; [ -x "$dir/cast" ] && { printf '%s' "$dir/cast"; return 0; }; done
   echo "dry run: no real cast on PATH for a read" >&2; exit 1
 }

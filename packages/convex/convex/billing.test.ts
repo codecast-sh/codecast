@@ -271,6 +271,19 @@ describe("startCheckout and openPortal", () => {
     expect(stripe.calls[1].headers["Idempotency-Key"]).toBe(stripe.calls[0].headers["Idempotency-Key"]);
   });
 
+  test("a customer recorded within the minute gets a fresh reuse key, since the request now names the customer", async () => {
+    const stripe = fakeStripe();
+    const { t, user, authed } = await setup();
+    await authed.action(api.billing.startCheckout, { plan: "plus" });
+    // A top-up's webhook lands in the same minute and records the customer.
+    await t.mutation(internal.wallet.setPlan, { user_id: user, plan: "free", stripe_customer_id: "cus_9" });
+    await authed.action(api.billing.startCheckout, { plan: "plus" });
+    const checkouts = stripe.calls.filter((call) => call.path === "checkout/sessions");
+    expect(checkouts.map((call) => call.form.customer)).toEqual([undefined, "cus_9"]);
+    expect(checkouts[0].headers["Idempotency-Key"]).toStartWith(`checkout:${user}:plus:new:`);
+    expect(checkouts[1].headers["Idempotency-Key"]).toStartWith(`checkout:${user}:plus:cus_9:`);
+  });
+
   test("a top-up is a one-off payment of that many dollars that reuses the customer on file", async () => {
     const stripe = fakeStripe();
     const { t, user, authed } = await setup();
@@ -535,6 +548,108 @@ describe("subscription events, mapped from Stripe's current state", () => {
     stripe.put(subscription(user, "incomplete_expired", "price_plus"));
     expect(await outcomeOf(deliver(t, "customer.subscription.updated", subscription(user, "incomplete_expired", "price_plus")))).toBe("plan:pro");
     expect(await wallet()).toMatchObject({ plan: "pro", period_cap_usd: granted.period_cap_usd, subscription_status: "incomplete_expired" });
+  });
+});
+
+describe("reads that commit out of order", () => {
+  /** Applies `sub` the way the webhook's action does, as read at `readAt`. */
+  const applyRead = (t: ReturnType<typeof convexTest>, sub: Sub, readAt: number) =>
+    t.mutation(internal.billing.applyStripeEvent, {
+      id: `evt_read_${readAt}`, type: "customer.subscription.updated",
+      object_json: JSON.stringify(sub), subscription_json: JSON.stringify(sub), read_at: readAt,
+    });
+
+  test("the webhook stamps each subscription it maps with when it read it", async () => {
+    const stripe = fakeStripe();
+    const { t, user, wallet } = await setup();
+    stripe.put(subscription(user, "active", "price_plus"));
+    const before = Date.now();
+    await deliver(t, "checkout.session.completed", checkoutSubscription(user));
+    expect((await wallet())!.subscription_read_at).toBeGreaterThanOrEqual(before);
+  });
+
+  test("an older snapshot committing after a newer one is skipped: incomplete or past_due cannot undo active", async () => {
+    const stripe = fakeStripe();
+    const { t, user, wallet } = await setup();
+    stripe.put(subscription(user, "active", "price_plus"));
+    await deliver(t, "checkout.session.completed", checkoutSubscription(user));
+    const stamp = (await wallet())!.subscription_read_at!;
+
+    expect(await applyRead(t, subscription(user, "incomplete", "price_plus"), stamp - 1000)).toBe("ignored:stale_read");
+    expect(await applyRead(t, subscription(user, "past_due", "price_plus"), stamp - 1)).toBe("ignored:stale_read");
+    expect(await wallet()).toMatchObject({ plan: "plus", subscription_status: "active", period_cap_usd: 12, subscription_read_at: stamp });
+
+    // A newer read still applies.
+    expect(await applyRead(t, subscription(user, "past_due", "price_plus"), stamp + 1000)).toBe("plan:plus");
+    expect(await wallet()).toMatchObject({ subscription_status: "past_due", period_cap_usd: 2, subscription_read_at: stamp + 1000 });
+  });
+
+  test("a subscription recorded as canceled never maps back to live, however its read is stamped", async () => {
+    const stripe = fakeStripe();
+    const { t, user, wallet } = await setup();
+    stripe.put(subscription(user, "active", "price_plus"));
+    await deliver(t, "checkout.session.completed", checkoutSubscription(user));
+    const activeRead = (await wallet())!.subscription_read_at!;
+    stripe.put(subscription(user, "canceled", "price_plus"));
+    await deliver(t, "customer.subscription.deleted", subscription(user, "canceled", "price_plus"));
+    expect(await wallet()).toMatchObject({ plan: "free", subscription_status: "canceled" });
+
+    expect(await applyRead(t, subscription(user, "active", "price_plus"), activeRead)).toBe("ignored:ended");
+    expect(await applyRead(t, subscription(user, "active", "price_pro"), Date.now() + 60_000)).toBe("ignored:ended");
+    expect(await wallet()).toMatchObject({ plan: "free", subscription_status: "canceled", period_cap_usd: 2 });
+  });
+});
+
+describe("a paid allowance waits for its period to be paid", () => {
+  /** Stripe's renewal invoice for `period`, in Stripe's seconds. */
+  const renewal = (period: { start: number; end: number }) => ({
+    id: `in_${period.start}`, object: "invoice", customer: "cus_1", billing_reason: "subscription_cycle", subscription: "sub_1",
+    lines: { data: [{ period: { start: Math.floor(period.start / 1000), end: Math.floor(period.end / 1000) } }] },
+  });
+
+  test("a subscribed wallet rolls into its next period on the free allowance, and the renewal's invoice.paid raises it", async () => {
+    const stripe = fakeStripe();
+    const { t, user, wallet } = await setup();
+    stripe.put(subscription(user, "active", "price_plus"));
+    await deliver(t, "checkout.session.completed", checkoutSubscription(user));
+    const first = (await wallet())!;
+    expect(first).toMatchObject({ plan: "plus", period_cap_usd: 12, paid_through: first.period_end });
+
+    // The boundary passes before Stripe has charged the renewal.
+    const later = first.period_end + 1000;
+    expect(rolledOver(first, later)!.period_cap_usd).toBe(2);
+    expect(await t.run((ctx) => walletSummary(ctx, user, later))).toMatchObject({ plan: "plus", cap_usd: 2 });
+    await t.run((ctx) => ensureWallet(ctx, user, later));
+    const unpaid = (await wallet())!;
+    expect(unpaid).toMatchObject({ plan: "plus", subscription_status: "active", period_cap_usd: 2, period_start: first.period_end });
+
+    // The renewal is paid: the period it opened gets the plan's whole allowance, once.
+    expect(await outcomeOf(deliver(t, "invoice.paid", renewal({ start: unpaid.period_start, end: unpaid.period_end })))).toBe("period");
+    const paid = (await wallet())!;
+    expect(paid.period_cap_usd).toBe(12);
+    expect(paid.paid_through).toBe(Math.floor(unpaid.period_end / 1000) * 1000);
+    expect(await outcomeOf(deliver(t, "invoice.paid", renewal({ start: unpaid.period_start, end: unpaid.period_end })))).toBe("ignored:period_unchanged");
+
+    // Events stop arriving (a lapsed card, a disabled endpoint): the period
+    // after that one grants the free allowance, every month.
+    expect(rolledOver(paid, paid.period_end + 1000)!.period_cap_usd).toBe(2);
+    expect(rolledOver(paid, addMonths(paid.period_end, 3) + 1000)!.period_cap_usd).toBe(2);
+  });
+
+  test("a plan granted by hand keeps its whole allowance at every rollover, and a cancel lifts the gate", async () => {
+    const stripe = fakeStripe();
+    const { t, user, wallet } = await setup();
+    await t.mutation(internal.wallet.setPlan, { user_id: user, plan: "pro" });
+    const granted = (await wallet())!;
+    expect(granted.paid_through).toBeUndefined();
+    expect(rolledOver(granted, granted.period_end + 1000)!.period_cap_usd).toBe(40);
+
+    stripe.put(subscription(user, "active", "price_plus"));
+    await deliver(t, "checkout.session.completed", checkoutSubscription(user));
+    expect((await wallet())!.paid_through).toBeDefined();
+    stripe.put(subscription(user, "canceled", "price_plus"));
+    await deliver(t, "customer.subscription.deleted", subscription(user, "canceled", "price_plus"));
+    expect((await wallet())!.paid_through).toBeUndefined();
   });
 });
 

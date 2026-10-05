@@ -15,7 +15,6 @@
 // (codecast.ts) and call these through ctx.runQuery / ctx.runMutation.
 import { v } from "convex/values";
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
-import { isHostedAgentType } from "@codecast/shared/contracts";
 import { isActiveTask, isOnHumanBoard, isTerminalTaskStatus, TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks";
 import { internalMutation, internalQuery } from "../../functions";
 import type { Doc, Id } from "../../_generated/dataModel";
@@ -24,6 +23,7 @@ import { resolveWorkspaceKey, workspaceKey } from "../../lib/access";
 import { createTaskAs, updateTaskAs } from "../../tasks";
 import { createDocAs, ownDocsBySourceFile, updateDocAs } from "../../docs";
 import { applyCancel, insertTask, logVerb } from "../../agentTasks";
+import { hostedHomeStamp, hostedOwnerRefusal } from "../routines";
 
 type Ctx = { db: any };
 
@@ -238,7 +238,12 @@ export const writeDoc = internalMutation({
     const doc = await personalDoc(ctx, args.user_id, args.id);
     if (!doc) throw new Error("No doc with that id in your own docs");
     // Appending runs without asking; replacing goes through the gate, where
-    // the person sees the new text before it lands.
+    // the person sees the new text before it lands. The memory doc takes new
+    // lines only through remember, whose gate asks once outside content is in
+    // front of the model, so an email or page cannot add to it here.
+    if (args.append && doc.source_file === memoryKey(args.user_id)) {
+      throw new Error(`Add to "${MEMORY_DOC_TITLE}" with remember, one fact at a time.`);
+    }
     const shown = args.append ? await publicCopy(ctx, "docs", doc) : null;
     if (shown) throw new Error(`Doc "${doc.title}" ${shown.reason}. Use replace_doc, which shows the person the new text first.`);
     const content = args.append ? `${(doc.content ?? "").trimEnd()}\n\n${args.content}` : args.content;
@@ -294,12 +299,13 @@ export const remember = internalMutation({
 
 // ── Routines: triggers bound to this conversation ───────────────────────────
 
+/** Refuses a routine anywhere but the person's own assistant conversation,
+ *  by routines.ts's one definition of a hosted home and of who may anchor a
+ *  routine on it. */
 async function hostedHome(ctx: Ctx, userId: Id<"users">, conversationId: Id<"conversations">) {
-  const home = await ctx.db.get(conversationId);
-  if (!home || String(home.user_id) !== String(userId) || !isHostedAgentType(home.agent_type)) {
+  if (!(await hostedHomeStamp(ctx, conversationId)) || (await hostedOwnerRefusal(ctx, userId, [conversationId]))) {
     throw new Error("Routines can only be set on your own assistant conversation");
   }
-  return home;
 }
 
 const routineView = (task: Doc<"agent_tasks">) => ({
@@ -331,7 +337,9 @@ export const scheduleRoutine = internalMutation({
       originating_conversation_id: String(args.conversation_id),
       created_by_conversation_id: String(args.conversation_id),
       agent_type: HOSTED_AGENT_TYPE,
-      schedule_type: args.interval_ms ? "recurring" : "once",
+      // Any interval at all makes it recurring, so one too short to keep (or
+      // rounded to 0) is refused by the plan rule rather than run once.
+      schedule_type: args.interval_ms !== undefined ? "recurring" : "once",
       run_at: args.run_at,
       interval_ms: args.interval_ms,
     });

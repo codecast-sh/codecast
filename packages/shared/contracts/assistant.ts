@@ -78,7 +78,13 @@ export interface PlanSpec {
 const HAIKU = "claude-haiku-4-5-20251001";
 const SONNET = "claude-sonnet-5-5";
 const OPUS = "claude-opus-5-5";
-const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** The shortest interval any routine repeats at, whatever the plan. Every
+ *  firing wakes a paid turn with nobody watching, so a plan's own floor can
+ *  raise this but nothing goes under it. */
+export const ROUTINE_MIN_INTERVAL_MS = HOUR_MS;
 
 /** Starting values pending the founder's call (spec "Plans"). Nothing else in
  *  the code may hardcode a price, an allowance or a limit. */
@@ -134,6 +140,22 @@ export function topupCredit(paidUsd: number): number {
   return Math.round(paidUsd * TOPUP.usage_usd_per_usd * 1e6) / 1e6;
 }
 
+/** Where Stripe sends a person back after checkout or the portal, and what
+ *  `?<param>=` says happened. The server builds the URLs (convex/billing.ts)
+ *  and the plan screen reads them (the web lane's plan path and its return
+ *  note), so both sides name the page and the outcomes from here. */
+export const BILLING_RETURN = {
+  path: "/simple/plan",
+  param: "billing",
+  outcomes: ["done", "topup", "canceled"],
+} as const;
+export type BillingReturnOutcome = (typeof BILLING_RETURN.outcomes)[number];
+
+/** The outcome a return URL's `?billing=` names, or null for anything else. */
+export function billingReturnOutcome(raw: string | null | undefined): BillingReturnOutcome | null {
+  return raw && (BILLING_RETURN.outcomes as readonly string[]).includes(raw) ? (raw as BillingReturnOutcome) : null;
+}
+
 /** The plan for a stored id; anything unknown or absent is the free plan. */
 export function planOf(id: string | null | undefined): PlanSpec {
   return id && (PLAN_IDS as readonly string[]).includes(id) ? PLANS[id as PlanId] : PLANS.free;
@@ -166,12 +188,15 @@ export function routineRefusal(plan: PlanSpec, routine: RoutineShape, armedOther
   if (routine.schedule_type === "event") {
     return HOSTED_ROUTINE_NO_EVENTS;
   }
-  const { max, min_interval_ms: floor } = plan.routines;
+  const { max, min_interval_ms: planFloor } = plan.routines;
   if (max !== null && armedOthers >= max) {
     return `The ${plan.label} plan runs up to ${max} routines at a time`;
   }
-  if (floor !== null && routine.schedule_type === "recurring" && (routine.interval_ms ?? 0) < floor) {
-    return `The ${plan.label} plan repeats a routine at most once every ${describeInterval(floor)}`;
+  const floor = Math.max(planFloor ?? 0, ROUTINE_MIN_INTERVAL_MS);
+  if (routine.schedule_type === "recurring" && !((routine.interval_ms ?? 0) >= floor)) {
+    return planFloor !== null && planFloor >= ROUTINE_MIN_INTERVAL_MS
+      ? `The ${plan.label} plan repeats a routine at most once every ${describeInterval(floor)}`
+      : `A routine repeats at most once every ${describeInterval(floor)}`;
   }
   return null;
 }

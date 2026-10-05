@@ -14,6 +14,9 @@
 // looks like, milestones, every reported number over time, open questions,
 // decisions taken, and the sources that say who stated the goal and where.
 
+import { matchHandle, memberHandle } from "../chat/handles";
+import { parseEntityUrl } from "../entities";
+
 export const INITIATIVE_STATUSES = ["proposed", "planned", "active", "completed", "cancelled"] as const;
 export type InitiativeStatus = (typeof INITIATIVE_STATUSES)[number];
 
@@ -85,7 +88,7 @@ export function metricNumber(text: string | null | undefined): number | null {
   return unit === "k" ? n * 1_000 : unit === "m" ? n * 1_000_000 : n;
 }
 /** The way a target is to be met: reach it (the default), or stay under it ("< 5%", "under 3", "at most 10"). */
-export const metricDirection = (target: string): "at_least" | "at_most" => /^\s*(<=?|under|below|at most|no more than|max(?:imum)?)\b/i.test(target) || /\bor (?:less|fewer|under)\b/i.test(target) ? "at_most" : "at_least";
+export const metricDirection = (target: string): "at_least" | "at_most" => /^\s*(?:<=?|(?:under|below|at most|no more than|max(?:imum)?)\b)/i.test(target) || /\bor (?:less|fewer|under)\b/i.test(target) ? "at_most" : "at_least";
 
 export type MetricStanding = "met" | "behind" | "unknown";
 export type MetricReading = InitiativeMetric & {
@@ -111,12 +114,20 @@ export function metricReading(metric: InitiativeMetric, score?: InitiativeScore 
 }
 export const metricReadings = (row: Pick<InitiativeRow, "metrics" | "scoreboard">): MetricReading[] => (row.metrics ?? []).map((m) => metricReading(m, row.scoreboard?.[m.key]));
 
+/** Whether a value reads "of" its target: a number to reach. A number to stay under ("under 20") and a target that is not a number are named as the target instead. */
+export const metricReaches = (target: string): boolean => metricDirection(target) === "at_least" && metricNumber(target) !== null;
+/** The value against its target, in the words every surface uses: "412 of 1,000", "34, target under 20", and "target 1,000" before a value is reported. */
+export function metricAgainst(r: Pick<MetricReading, "value" | "target">): string {
+  if (r.value === null) return `target ${r.target}`;
+  return metricReaches(r.target) ? `${r.value} of ${r.target}` : `${r.value}, target ${r.target}`;
+}
+
 /** "Weekly active teams: 412 of 1,000, behind (28 Sep)" or "Weekly active teams: not reported yet, target 1,000". */
 export function metricLine(r: MetricReading, now = Date.now()): string {
-  if (r.value === null) return `${r.name}: not reported yet, target ${r.target}`;
+  if (r.value === null) return `${r.name}: not reported yet, ${metricAgainst(r)}`;
   const when = r.observed_at ? ` (${dayWord(r.observed_at, now)})` : "";
   const word = r.standing === "met" ? "met" : r.standing === "behind" ? "behind" : "";
-  return `${r.name}: ${r.value} of ${r.target}${word ? `, ${word}` : ""}${when}`;
+  return `${r.name}: ${metricAgainst(r)}${word ? `, ${word}` : ""}${when}`;
 }
 function dayWord(at: number, now: number): string {
   const days = Math.floor((now - at) / 86_400_000);
@@ -157,11 +168,19 @@ const trimQuote = (text: string): string | undefined => {
   return t ? t.slice(0, QUOTE_MAX) : undefined;
 };
 
+const isWebAddress = (t: string): boolean => /^https?:\/\/\S+$/i.test(t);
+/** A codecast link or path read as the object it opens (a call, a doc, a session, a task, a plan), by the one url reader (shared/entities parseEntityUrl). */
+function readEntityAddress(href: string): Pick<IntentSource, "kind" | "ref"> | null {
+  const entity = parseEntityUrl(href);
+  return entity && /^(call|doc|session|task|plan)$/.test(entity.type) ? readSourceRef(`${entity.type}:${entity.id}`) : null;
+}
+
 /** One address read as a source kind and ref, or null when it is not an address. */
 function readSourceRef(token: string): Pick<IntentSource, "kind" | "ref"> | null {
   const t = token.trim().replace(/[.,;:]+$/, "");
   if (!t) return null;
-  if (/^https?:\/\/\S+$/i.test(t)) return { kind: "link", ref: t };
+  if (isWebAddress(t)) return readEntityAddress(t) ?? { kind: "link", ref: t };
+  if (t.startsWith("/")) return readEntityAddress(t);
   if (/^ct-\d+$/i.test(t)) return { kind: "task", ref: t.toLowerCase() };
   if (/^pl-\d+$/i.test(t)) return { kind: "plan", ref: t.toLowerCase() };
   const named = t.match(/^(call|chat|doc|session|task|plan):(\S+)$/i);
@@ -210,24 +229,24 @@ export function intentSourceLabel(s: IntentSource): string {
   }
 }
 
+/** A source's address as a person writes it, the form parseIntentSource reads back: "call:cl-42:14", "ct-12", a URL. Empty for a note, which has none. */
+export const intentSourceAddress = (s: IntentSource): string => s.kind === "note" ? "" : s.ref && s.kind !== "task" && s.kind !== "plan" && s.kind !== "link" ? `${s.kind}:${s.ref}` : (s.ref ?? "");
+
 /** "Ashot on a call, 30 Sep: our goal is $250 or less per introduction" for a terminal and a prompt. */
 export function intentSourceLine(s: IntentSource, now = Date.now()): string {
-  const where = s.kind === "note" ? "" : s.ref && s.kind !== "task" && s.kind !== "plan" && s.kind !== "link" ? `${s.kind}:${s.ref}` : (s.ref ?? "");
+  const where = intentSourceAddress(s);
   const head = [s.by, where, s.at ? dayWord(s.at, now) : ""].filter(Boolean).join(", ");
   return s.quote ? (head ? `${head}: "${s.quote}"` : `"${s.quote}"`) : head || "Note";
 }
 
-/** Add sources to a list, keeping the first of any two that are the same, capped at the list's limit. */
+/** Add sources to a list, keeping the first of any two that are the same, capped at the list's limit: each is one `add` of applyRecordOp. */
 export function mergeIntentSources(prior: readonly IntentSource[] | undefined, more: readonly IntentSource[]): IntentSource[] {
-  const out = [...(prior ?? [])];
-  const seen = new Set(out.map(intentSourceKey));
-  for (const s of more) {
-    const k = intentSourceKey(s);
-    if (seen.has(k) || k.endsWith(":")) continue;
-    seen.add(k);
-    out.push(s);
+  let out: IntentSource[] = [...(prior ?? [])];
+  for (const entry of more) {
+    const added = applyRecordOp(out, { list: "sources", action: "add", entry }, { now: 0 });
+    if (!("error" in added)) out = added.next;
   }
-  return out.slice(0, INITIATIVE_RECORD_MAX.sources);
+  return out;
 }
 
 /** A step on the way, with the day it is due and the moment it was reached. */
@@ -251,6 +270,253 @@ export function recordEntryKey(text: string, taken: readonly string[]): string {
   for (let n = 2; ; n++) if (!taken.includes(`${base}_${n}`)) return `${base}_${n}`;
 }
 
+// ── The record's one reducer (I5) ────────────────────────────────────────────
+// Every edit of the four lists is one op applied by applyRecordOp: the server
+// (`initiatives.record`, the create and update cores, an accepted proposal)
+// and the web store (the optimistic paint, the undo) call it and keep no copy,
+// so what a page paints is what the row stores.
+
+/** The word for one entry of each list. */
+export const INITIATIVE_RECORD_NOUN: Record<InitiativeRecordList, string> = { milestones: "milestone", questions: "question", decisions: "decision", sources: "source" };
+
+/** How long each written part of an entry may be; a quote's limit is QUOTE_MAX. */
+const ENTRY_MAX = { title: 200, text: 1000, by: 80, key: 64, ref: 500 } as const;
+
+/** One edit of one list of the record, as `initiatives.record` reads it. */
+export type InitiativeRecordOp = {
+  list: InitiativeRecordList;
+  action: "add" | "edit" | "close" | "remove";
+  /** Which entry: required for edit, close and remove. */
+  key?: string;
+  /** add and edit: the entry's fields, where null clears one on an edit. A source may be `{ text }` or the text alone, read by parseIntentSource. */
+  entry?: unknown;
+  /** close: when the milestone was reached or the question answered. */
+  at?: number;
+  /** close on a question. */
+  answer?: string;
+  /** add: where in the list the entry lands, the end when absent. An undo of a remove names where the entry sat. */
+  index?: number;
+};
+
+export type RecordOpResult = {
+  /** The list as it then stands. */
+  next: any[];
+  /** The entry the op touched; absent when a remove found nothing. */
+  entry?: any;
+  /** Whether the list changed: a retried add, a repeated close, a remove that finds nothing and an edit that says what is there move nothing. */
+  moved: boolean;
+  /** The op with everything decided (the entry whole, its key, who and when): applied to the same list anywhere, it writes the same entry. */
+  op: InitiativeRecordOp;
+};
+
+/** What names an entry in its list: its key, or a source's own address. */
+export const recordKeyOf = (list: InitiativeRecordList, entry: any): string => (list === "sources" ? intentSourceKey(entry) : String(entry?.key ?? ""));
+
+/** Whether an add leaves who asked or decided unsaid, so whoever makes it signs it: a new question or decision with no `by`. A `by` of null says nobody signs: an entry put back as it was. */
+export const recordOpNeedsSignature = (op: InitiativeRecordOp): boolean =>
+  op.action === "add" && (op.list === "questions" || op.list === "decisions") && !(isObject(op.entry) && (op.entry.by === null || (typeof op.entry.by === "string" && !!op.entry.by.trim())));
+
+type Signer = { _id: unknown; name?: string | null; github_username?: string | null; email?: string | null; is_bot?: boolean };
+/** Who signs a question or a decision that names nobody: the person's @handle where the roster reads that handle back as them, else their name, their GitHub name or their email. */
+export function initiativeSignature(me: Signer | null | undefined, roster: readonly Signer[]): string | undefined {
+  if (!me) return undefined;
+  const handle = memberHandle(me);
+  return handle && String(matchHandle(roster, handle)?._id ?? "") === String(me._id) ? `@${handle}` : me.name || me.github_username || me.email || undefined;
+}
+
+/** An entry as the row stores it: cleared fields gone and the rest sorted by name, a source inside it too, so two readings of one entry are the same JSON. */
+export function storedEntry<T extends Record<string, any>>(entry: T): T {
+  const out: Record<string, any> = {};
+  for (const k of Object.keys(entry).sort()) {
+    const value = entry[k];
+    if (value === null || value === undefined || value === "") continue;
+    out[k] = isObject(value) ? storedEntry(value) : value;
+  }
+  return out as T;
+}
+
+class RecordOpError extends Error {}
+function refuse(message: string): never {
+  throw new RecordOpError(message);
+}
+function isObject(x: unknown): x is Record<string, unknown> {
+  return !!x && typeof x === "object" && !Array.isArray(x);
+}
+const clip = (text: string, max: number): string => text.trim().slice(0, max);
+/** Two readings of one entry are the same when they store the same. */
+export const sameRecordEntry = (a: Record<string, any>, b: Record<string, any>): boolean => JSON.stringify(storedEntry(a)) === JSON.stringify(storedEntry(b));
+
+type ReadField = (x: unknown, name: string) => unknown;
+const words = (max: number): ReadField => (x, name) => (typeof x === "string" ? clip(x, max) || null : refuse(`${name} is text`));
+/** A moment on the record is a real one: a finite time after the epoch, since 0 and NaN read as "never". */
+const isMoment = (x: unknown): x is number => typeof x === "number" && Number.isFinite(x) && x > 0;
+const moment: ReadField = (x, name) => (isMoment(x) ? x : refuse(`${name} is a time in milliseconds`));
+
+/** A stored kind and ref read by the text parser's own address rules: a link is an http or https URL, a call line takes the shared form. Null when the ref is not an address of that kind. */
+function sourceAddress(kind: IntentSourceKind, ref: string): Pick<IntentSource, "kind" | "ref"> | null {
+  // A link stored as a link stays one, whatever its address reads as when typed.
+  if (kind === "link") return isWebAddress(ref) ? { kind, ref } : null;
+  const alone = readSourceRef(ref);
+  if (alone?.kind === kind) return alone;
+  const named = readSourceRef(`${kind}:${ref}`);
+  return named?.kind === kind ? named : null;
+}
+
+// `key` is allowed and unread: a client that names every entry by key may send a source's address with it.
+const SOURCE_FIELDS = ["kind", "ref", "quote", "by", "at", "text", "key"];
+/** A source as the row stores it, from the stored shape, from `{ text }` or from the text alone. */
+function readSource(raw: unknown): IntentSource {
+  const given = typeof raw === "string" ? { text: raw } : raw;
+  if (!isObject(given)) refuse("A source is an address, the words said, or both");
+  const stray = Object.keys(given).find((k) => !SOURCE_FIELDS.includes(k));
+  if (stray) refuse(`Not a field of a source: ${stray}`);
+  const text = (k: string, max: number) => (typeof given[k] === "string" && clip(given[k] as string, max)) || undefined;
+  const said = { quote: text("quote", QUOTE_MAX), by: text("by", ENTRY_MAX.by), at: isMoment(given.at) ? given.at : undefined };
+  let source: IntentSource;
+  if (typeof given.text === "string") source = parseIntentSource(given.text, said);
+  else {
+    const kind = given.kind as IntentSourceKind;
+    if (!INTENT_SOURCE_KINDS.includes(kind)) refuse(`A source is one of ${INTENT_SOURCE_KINDS.join(", ")}`);
+    const ref = kind === "note" ? undefined : text("ref", ENTRY_MAX.ref);
+    const address = ref ? sourceAddress(kind, ref) ?? refuse(kind === "link" ? "A link is an http or https address" : `Not the address of a ${kind}: ${ref}`) : { kind };
+    source = { ...address, ...said };
+  }
+  if (intentSourceKey(source).endsWith(":")) refuse("A source needs an address or the words said");
+  return storedEntry(source);
+}
+
+type KeyedRecordList = Exclude<InitiativeRecordList, "sources">;
+// What an entry of each keyed list may carry, and how each field is read.
+const ENTRY_FIELDS: Record<KeyedRecordList, Record<string, ReadField>> = {
+  milestones: { title: words(ENTRY_MAX.title), date: moment, done_at: moment, source: readSource },
+  questions: { text: words(ENTRY_MAX.text), at: moment, by: words(ENTRY_MAX.by), source: readSource, answer: words(ENTRY_MAX.text), answered_at: moment },
+  decisions: { text: words(ENTRY_MAX.text), at: moment, by: words(ENTRY_MAX.by), source: readSource },
+};
+
+/** The fields an entry names, each read by its rule; null stays null so an edit can clear with it. */
+function readEntry(list: KeyedRecordList, raw: unknown): Record<string, any> {
+  const noun = INITIATIVE_RECORD_NOUN[list];
+  if (!isObject(raw)) refuse(`Give the ${noun} as an entry`);
+  const out: Record<string, any> = {};
+  for (const [k, value] of Object.entries(raw)) {
+    if (k === "key" || value === undefined) continue;
+    const read = ENTRY_FIELDS[list][k];
+    if (!read) refuse(`Not a field of a ${noun}: ${k}`);
+    out[k] = value === null ? null : read(value, `A ${noun}'s ${k}`);
+  }
+  return out;
+}
+
+const entryWords = (entry: Record<string, any>): string => String(entry.title ?? entry.text ?? "");
+
+/** An entry as it is stored: its words present, a question and a decision always dated (clearing `at` keeps the date it had), and an answer always dated. */
+function settleEntry(list: KeyedRecordList, fields: Record<string, any>, was: Record<string, any> | undefined, now: number): Record<string, any> {
+  const e = storedEntry(fields);
+  if (!entryWords(e)) refuse(`A ${INITIATIVE_RECORD_NOUN[list]} needs ${list === "milestones" ? "a title" : "words"}`);
+  if (list !== "milestones") e.at ??= was?.at ?? now;
+  if (list === "questions") {
+    if (e.answer) e.answered_at ??= now;
+    else delete e.answered_at;
+  }
+  return storedEntry(e);
+}
+
+/**
+ * One op applied to one list. Pure: `now` and `by` (who signs an add that
+ * names nobody, see recordOpNeedsSignature) are the only things it does not
+ * read from the list and the op, and the op it hands back carries both, so
+ * the server applying that op stores the entry the client painted. An op
+ * that cannot be applied answers `{ error }` in words a person can act on;
+ * `goal` names the goal in them.
+ */
+export function applyRecordOp(prior: readonly any[] | undefined, op: InitiativeRecordOp, ctx: { now: number; by?: string; goal?: string }): RecordOpResult | { error: string } {
+  try {
+    return recordOp(prior ?? [], op, ctx);
+  } catch (e) {
+    if (e instanceof RecordOpError) return { error: e.message };
+    throw e;
+  }
+}
+
+function recordOp(prior: readonly any[], op: InitiativeRecordOp, ctx: { now: number; by?: string; goal?: string }): RecordOpResult {
+  const { list } = op;
+  const noun = INITIATIVE_RECORD_NOUN[list];
+  if (!noun) refuse(`A record list is one of ${INITIATIVE_RECORD_LISTS.join(", ")}`);
+  const keyOf = (e: any) => recordKeyOf(list, e);
+  const keys = prior.map(keyOf);
+  const unmoved = (entry: any, settled: InitiativeRecordOp): RecordOpResult => ({ next: prior as any[], entry, moved: false, op: settled });
+
+  if (op.action === "add") {
+    let entry: Record<string, any>;
+    if (list === "sources") entry = readSource(op.entry);
+    else {
+      const fields = readEntry(list, op.entry);
+      const given = isObject(op.entry) && typeof op.entry.key === "string" ? clip(op.entry.key, ENTRY_MAX.key) : "";
+      // Who asked or decided, and when: the caller and now, unless the entry says.
+      const signed = list === "milestones" ? {} : { at: fields.at ?? ctx.now, by: recordOpNeedsSignature(op) ? ctx.by : fields.by };
+      entry = settleEntry(list, { ...fields, ...signed, key: given || recordEntryKey(entryWords(fields), keys) }, undefined, ctx.now);
+      // A key already on the list with the same words is a retried add. With
+      // other words it is a different entry whose key reads the same (two
+      // texts with one slug, written before either had synced): it is kept
+      // under a fresh key, never dropped as a retry.
+      const clash = prior[keys.indexOf(entry.key)];
+      if (clash && entryWords(clash) !== entryWords(entry)) entry = { ...entry, key: recordEntryKey(entryWords(entry), keys) };
+    }
+    // A retried add, or a source already on the record: the entry there stands.
+    const there = keys.indexOf(keyOf(entry));
+    if (there >= 0) return unmoved(prior[there], { list, action: "add", entry: prior[there] });
+    if (prior.length >= INITIATIVE_RECORD_MAX[list]) refuse(`A goal holds at most ${INITIATIVE_RECORD_MAX[list]} ${list}`);
+    if (op.index !== undefined && !(Number.isInteger(op.index) && op.index >= 0)) refuse("An index is a whole number from 0");
+    const index = Math.min(op.index ?? prior.length, prior.length);
+    // The op says who signed even when nobody did, so the next reader of it does not sign in their place.
+    const whole = list === "questions" || list === "decisions" ? { ...entry, by: entry.by ?? null } : entry;
+    return { next: [...prior.slice(0, index), entry, ...prior.slice(index)], entry, moved: true, op: { list, action: "add", entry: whole, ...(op.index === undefined ? {} : { index }) } };
+  }
+
+  const key = typeof op.key === "string" ? op.key : "";
+  if (!key) refuse(`Name the ${noun} by its key`);
+  const at = keys.indexOf(key);
+  // A retried remove finds nothing and changes nothing.
+  if (op.action === "remove") {
+    const settled: InitiativeRecordOp = { list, action: "remove", key };
+    return at < 0 ? unmoved(undefined, settled) : { next: prior.filter((_, i) => i !== at), entry: prior[at], moved: true, op: settled };
+  }
+  if (at < 0) refuse(`No ${noun} ${key} on ${ctx.goal ?? "this goal"}`);
+  const was: Record<string, any> = prior[at];
+  let entry: Record<string, any>;
+  let settled: InitiativeRecordOp;
+  if (op.action === "close") {
+    // A close said twice is one close: the first date stands unless this one names another.
+    const when = op.at === undefined ? undefined : (moment(op.at, list === "milestones" ? "When a milestone was reached" : "When a question was answered") as number);
+    if (list === "milestones") {
+      const done_at = when ?? was.done_at ?? ctx.now;
+      entry = { ...was, done_at };
+      settled = { list, action: "close", key, at: done_at };
+    } else if (list === "questions") {
+      const answer = clip(typeof op.answer === "string" ? op.answer : "", ENTRY_MAX.text);
+      if (!answer) refuse("An answer needs words");
+      const answered_at = when ?? (was.answer === answer ? was.answered_at : undefined) ?? ctx.now;
+      entry = { ...was, answer, answered_at };
+      settled = { list, action: "close", key, at: answered_at, answer };
+    } else refuse(`A ${noun} is edited or removed; only a milestone is reached and a question answered`);
+  } else if (list === "sources") {
+    if (!isObject(op.entry)) refuse("Give the source as an entry");
+    // New text is read whole, keeping who said it and when unless the edit names them.
+    entry = readSource(typeof op.entry.text === "string" ? { by: was.by, at: was.at, ...op.entry } : { ...was, ...op.entry });
+    if (keyOf(entry) !== key && keys.includes(keyOf(entry))) refuse("That source is already on the record");
+    settled = { list, action: "edit", key, entry: { ...Object.fromEntries(Object.keys(was).filter((k) => !(k in entry)).map((k) => [k, null])), ...entry } };
+  } else {
+    const fields = readEntry(list, op.entry);
+    entry = settleEntry(list, { ...was, ...fields }, was, ctx.now);
+    // The two dates this reducer decides ride the op when they moved.
+    const decided = Object.fromEntries((["at", "answered_at"] as const).filter((k) => entry[k] !== was[k]).map((k) => [k, entry[k] ?? null]));
+    settled = { list, action: "edit", key, entry: { ...fields, ...decided } };
+  }
+  entry = storedEntry(entry);
+  if (sameRecordEntry(entry, was)) return unmoved(was, settled);
+  return { next: prior.map((e, i) => (i === at ? entry : e)), entry, moved: true, op: settled };
+}
+
 /** Milestones in reading order: dated ones by day, then undated ones as written. */
 export function orderedMilestones(milestones: readonly InitiativeMilestone[] | undefined): InitiativeMilestone[] {
   return (milestones ?? []).map((m, i) => ({ m, i })).sort((a, b) => (a.m.date ?? Infinity) - (b.m.date ?? Infinity) || a.i - b.i).map((x) => x.m);
@@ -265,6 +531,22 @@ export const openQuestions = (row: Pick<InitiativeRow, "questions">): Initiative
 export function appendScoreHistory(history: Record<string, InitiativeScore[]> | undefined, key: string, score: InitiativeScore): Record<string, InitiativeScore[]> {
   const series = [...(history?.[key] ?? []).filter((s) => s.observed_at !== score.observed_at), score].sort((a, b) => a.observed_at - b.observed_at);
   return { ...(history ?? {}), [key]: series.slice(-INITIATIVE_SCORE_HISTORY_MAX) };
+}
+
+/**
+ * What a metric edit does to the values reported under each key (`scoreboard`
+ * or `score_history`): a key that stays keeps its values and a key that goes
+ * takes them with it. A rename moves the key, since every caller derives it
+ * from the name: a new key standing where a key that goes stood is that
+ * metric renamed, and takes its values. Undefined when none are left.
+ */
+export function carryMetricScores<T>(was: readonly InitiativeMetric[] | undefined, now: readonly InitiativeMetric[] | undefined, byKey: Record<string, T> | undefined): Record<string, T> | undefined {
+  const before = was ?? [];
+  const after = now ?? [];
+  const has = (list: readonly InitiativeMetric[], key: string) => list.some((m) => m.key === key);
+  const renamed = new Map(after.flatMap((m, i) => (before[i] && !has(before, m.key) && !has(after, before[i].key) ? [[before[i].key, m.key] as const] : [])));
+  const out = Object.fromEntries(Object.entries(byKey ?? {}).map(([k, value]) => [renamed.get(k) ?? k, value] as const).filter(([k]) => has(after, k)));
+  return Object.keys(out).length ? out : undefined;
 }
 
 export type MetricTrend = {

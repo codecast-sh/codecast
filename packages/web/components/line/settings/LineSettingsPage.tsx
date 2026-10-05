@@ -7,7 +7,7 @@
 // the machine holding the checkout (useLineProfileEdits), which writes
 // `.codecast/line.toml` in place and republishes. The Stations section is
 // LineStations, built beside this page.
-import { useEffect, useMemo, useRef, type KeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, type KeyboardEvent, useState, type UIEvent } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
@@ -75,6 +75,19 @@ export function LineSettingsPage() {
     if (next) { e.preventDefault(); next.focus(); next.scrollIntoView({ block: "nearest" }); }
   };
 
+  // The rail marks the section being read: the last one whose top has passed
+  // a third of the way down the view. Scroll position only, so it holds in a
+  // background tab where observers stall.
+  const [inView, setInView] = useState<string>(NAV[0].id);
+  const onScroll = (e: UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    const line = el.getBoundingClientRect().top + el.clientHeight / 3;
+    const atEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 4;
+    let id = NAV[0].id;
+    for (const s of el.querySelectorAll<HTMLElement>("[data-lset-section]")) if (atEnd || s.getBoundingClientRect().top <= line) id = s.dataset.lsetSection!;
+    if (id !== inView) setInView(id);
+  };
+
   const commitField = (field: LineField) => (text: string) => {
     const r = editForField(field, text, lp);
     if ("error" in r) return r.error;
@@ -98,10 +111,10 @@ export function LineSettingsPage() {
       {!project || !lp ? (
         <Unset lineKey={line.key} titled={project?.title} hasLines={rollup.length > 0} />
       ) : (
-        <div ref={body} className="flex-1 min-h-0 overflow-y-auto" onKeyDown={onKeyDown}>
+        <div ref={body} className="flex-1 min-h-0 overflow-y-auto" onKeyDown={onKeyDown} onScroll={onScroll}>
           <div className="lset-body px-4 sm:px-6 pb-10">
             <nav className="lset-index" aria-label="Sections">
-              {NAV.map((n) => <a key={n.id} href={`#lset-${n.id}`} className="lset-index-link">{n.title}</a>)}
+              {NAV.map((n) => <a key={n.id} href={`#lset-${n.id}`} className="lset-index-link" aria-current={inView === n.id ? "location" : undefined}>{n.title}</a>)}
             </nav>
             <div className="lset-main">
               <Plate lp={lp} gate={gate} />

@@ -1,7 +1,8 @@
 "use client";
 import { useMemo } from "react";
 import Link from "next/link";
-import { ArrowUpRight, GitBranch } from "lucide-react";
+import { ArrowUpRight, Eye, GitBranch } from "lucide-react";
+import { shortDay } from "../../lib/line/runReport";
 import { classifySession, useTrackedStore, type TaskItem } from "../../store/inboxStore";
 import { useTeamTaskStatusList, statusVisual } from "../../lib/taskStatuses";
 import { useWorkflow, useWorkflowRun } from "../../hooks/useSyncWorkflows";
@@ -174,8 +175,12 @@ function rowsByTask(collection: Record<string, any>, keep: (row: any) => boolean
 const isOpenHold = (d: any) => d.status === "pending" && !!d.blocking;
 const anyRun = () => true;
 
-export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTask; className?: string }) {
+export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTask & { watch_until?: number | null }; className?: string }) {
   const statuses = useTeamTaskStatusList(task.team_id);
+  // The watch after a ship (LM3: done, "watching until <day>"), on a coarse
+  // clock so the chip leaves on the day the watch ends.
+  const now = useCoarseNow(15 * 60_000);
+  const watching = task.status === "done" && typeof task.watch_until === "number" && task.watch_until > now ? task.watch_until : null;
   const station = stationLabel(stationOf(task), statuses);
   const dep = useMemo(() => (st: any) => {
     const held = heldDecisionFor(task, rowsByTask(st.sessionDecisions, isOpenHold).get(task._id) ?? []);
@@ -187,6 +192,14 @@ export function TaskLineChip({ task, className = "" }: { task: TaskItem & LineTa
   }, [task._id, task.status, task.status_id, task.workflow_run_id, station]);
   const s = useTrackedStore([dep]);
   const [text, tone] = dep(s).split("|");
+  if (!text && watching) {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-[10px] shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line counts its signals again until this day, and reopens it if one comes back" data-task-line-chip="watch">
+        <Eye className="w-3 h-3" />
+        watching until {shortDay(watching)}
+      </span>
+    );
+  }
   if (!text) return null;
   const held = tone === "held";
   return (
