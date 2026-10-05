@@ -10,7 +10,10 @@ export interface ShortcutDef<A extends string = string> {
   key: string;
   action: A;
   when?: string;
-  mac?: string;
+  // The chord on mac when it differs from `key`. null = no binding on mac at
+  // all: a chord that means something else to the platform there (⌃Y is the
+  // system yank in every mac text field).
+  mac?: string | null;
   // true = fire even while an input is focused; 'whenEmpty' = fire in a focused
   // input only when it has no content (see inputGuardBypass); absent = never
   // fire while an input is focused.
@@ -187,9 +190,14 @@ export function createShortcutCatalog<A extends string>(
   opts?: { isMac?: boolean },
 ): ShortcutCatalog<A> {
   const isMac = opts?.isMac ?? detectMac();
+  // The one place a def's platform chord resolves; null = unbound here.
+  const comboFor = (def: ShortcutDef<A>): string | null =>
+    !isMac || def.mac === undefined ? def.key : def.mac;
+  const bound = shortcuts.filter(d => comboFor(d) !== null);
 
   function matchShortcut(e: KeyboardEvent, def: ShortcutDef<A>): boolean {
-    const combo = (isMac && def.mac) ? def.mac : def.key;
+    const combo = comboFor(def);
+    if (combo === null) return false;
     const parsed = parseKeyCombo(combo);
     const eventKey = normalizeEventKey(e);
 
@@ -213,19 +221,18 @@ export function createShortcutCatalog<A extends string>(
   }
 
   function getShortcutsForAction(action: A): ShortcutDef<A>[] {
-    return shortcuts.filter(s => s.action === action);
+    return bound.filter(s => s.action === action);
   }
 
   function getShortcutsByContext(when?: string): ShortcutDef<A>[] {
-    if (when === undefined) return shortcuts.filter(s => !s.when);
-    return shortcuts.filter(s => s.when === when);
+    if (when === undefined) return bound.filter(s => !s.when);
+    return bound.filter(s => s.when === when);
   }
 
   function conflicts(): ShortcutConflict<A>[] {
     const groups = new Map<string, ShortcutConflict<A>>();
-    for (const def of shortcuts) {
-      const combo = (isMac && def.mac) ? def.mac : def.key;
-      const p = parseKeyCombo(combo);
+    for (const def of bound) {
+      const p = parseKeyCombo(comboFor(def)!);
       const canonical = [
         p.ctrl && 'ctrl', p.meta && 'meta', p.alt && 'alt', p.shift && 'shift', p.key,
       ].filter(Boolean).join('+');
@@ -238,7 +245,8 @@ export function createShortcutCatalog<A extends string>(
   }
 
   function formatShortcutParts(def: ShortcutDef<A>): string[] {
-    const combo = (isMac && def.mac) ? def.mac : def.key;
+    const combo = comboFor(def);
+    if (combo === null) return [];
     return combo.split('+').map(p => formatPart(p, isMac));
   }
 
@@ -264,7 +272,7 @@ export function createShortcutCatalog<A extends string>(
   }
 
   return {
-    shortcuts,
+    shortcuts: bound,
     isMac,
     matchShortcut,
     getShortcutsForAction,
