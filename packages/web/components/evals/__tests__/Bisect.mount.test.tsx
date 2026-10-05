@@ -34,12 +34,14 @@ const { matchEvalsRoute } = await import("@codecast/shared/contracts/evalsApi");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { evalsFixtureWorld } = await import("../__fixtures__/world");
 const { attributionPairs, fixtureBisect } = await import("../__fixtures__/bisect");
-const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally } = await import("../bisectModel");
+const { rulerModel, orderCandidates, probesLeftFor, bisectSummaryWord, repTally, answerStepText } = await import("../bisectModel");
 const { AttributionView } = await import("../AttributionView");
-const { BisectView, isStalled } = await import("../BisectView");
+const { BisectView } = await import("../BisectView");
+const { isStalled } = await import("../bisectModel");
 const { BisectListView } = await import("../BisectListView");
-const { commitSessionId } = await import("../CommitPanel");
-const { BisectPlanPanel, canStart } = await import("../BisectPlanPanel");
+const { commitSessionId } = await import("../bisectModel");
+const { BisectPlanPanel } = await import("../BisectPlanPanel");
+const { canStart } = await import("../bisectModel");
 const { BisectNewPage } = await import("../pages/BisectNewPage");
 const { BisectPage } = await import("../pages/BisectPage");
 const { BisectListPage } = await import("../pages/BisectListPage");
@@ -55,8 +57,10 @@ const world = evalsFixtureWorld();
 const pairs = attributionPairs(world as never);
 const posts: Array<{ path: string; body: unknown }> = [];
 const gets: Array<{ path: string; query: Record<string, string> }> = [];
-/** Whether the world's running bisect holds the one-bisect lock; most tests start on a free machine. */
-let lockHeld = false;
+/** Whether the world's running bisect holds the one-bisect lock (or a named holder the list does not carry); most tests start on a free machine. */
+let lockHeld: boolean | string = false;
+/** A bisect id whose state is not written yet: GET /bisect/:id answers 404 `misses` times, then as the world's bisect `as`. */
+const notYet = new Map<string, { misses: number; as: string }>();
 
 beforeAll(() => {
   // One world for the test and the pages, so batch names agree.
@@ -67,9 +71,13 @@ beforeAll(() => {
       else gets.push({ path: req.path, query: req.query });
       const route = matchEvalsRoute(req.method, req.path);
       if (!route) return { status: 404, body: { error: "no route", reason: "not-found" } };
+      const pending = route.key === "GET /bisect/:id" ? notYet.get(route.params.id!) : undefined;
+      if (pending && pending.misses-- > 0) return { status: 404, body: { error: "no such bisect", reason: "not-found" } };
+      if (pending) return { status: 200, body: structuredClone(world.answer(route.key, { id: pending.as }, req.query)) };
       try {
         const body = structuredClone(world.answer(route.key, route.params, req.query, req.body));
         if (route.key === "GET /bisects" && !lockHeld) (body as BisectListResponse).running = null;
+        if (route.key === "GET /bisects" && typeof lockHeld === "string") (body as BisectListResponse).running = lockHeld;
         return { status: 200, body };
       } catch (e) {
         return { status: 404, body: { error: (e as Error).message, reason: "not-found" } };
@@ -179,8 +187,8 @@ describe("the free answer", () => {
       expect(lines[at][0]).toBe(kind);
       expect(lines.slice(0, at).every(([, s]) => s === "same")).toBe(true);
       expect(container.querySelector(`[data-evb-answer="${kind}"]`)).toBeTruthy();
-      // The rendered prompt change is always shown.
-      expect(container.querySelector("[data-evb-prompt-diffs]")).toBeTruthy();
+      // The rendered prompt change is always shown: per focus freeze, the flips or in score mode the largest drops.
+      expect(Number(container.querySelector("[data-evb-prompt-diffs]")?.getAttribute("data-evb-prompt-diffs"))).toBeGreaterThan(0);
       if (k === "unattributable") expect(container.querySelector('[data-evb-confidence="unattributable"]')).toBeTruthy();
       if (k === "narrowed") expect(container.querySelectorAll("[data-evb-candidate]").length).toBeGreaterThan(1);
       await unmount();
@@ -251,6 +259,37 @@ describe("the free answer", () => {
       lockHeld = false;
       useEvalsStore.setState({ resources: {} });
     }
+  });
+
+  it("names a lock holder the pages cannot open (a Multiplayer sim bisect) with its commands, never a dead link", async () => {
+    const p = pairs.narrowed!;
+    lockHeld = "sim-memberRemovedMidTurn-20261004-221500";
+    useEvalsStore.setState({ resources: {} });
+    try {
+      const { container, unmount } = await mount(<BisectNewPage view={{ view: "bisect-new", surface: p.surface, good: p.good, bad: p.bad, freeze: null }} />);
+      expect(await settle(container, (c) => !!c.querySelector('[data-evb-plan="priced"] [data-evb-blocked]'))).toBe(true);
+      const lock = container.querySelector("[data-evb-blocked]")!;
+      expect(lock.querySelector("a")).toBeNull();
+      expect(lock.textContent).toContain("./evals bisect stop sim-memberRemovedMidTurn-20261004-221500");
+      expect(container.querySelector<HTMLButtonElement>("[data-evb-start]")!.disabled).toBe(true);
+      await unmount();
+    } finally {
+      lockHeld = false;
+      useEvalsStore.setState({ resources: {} });
+    }
+  });
+
+  it("asks the records for the ends when only a surface is named", async () => {
+    const p = pairs.narrowed!;
+    gets.length = 0;
+    const { container, unmount } = await mount(<BisectNewPage view={{ view: "bisect-new", surface: p.surface, good: null, bad: null, freeze: null }} />);
+    expect(await settle(container, (c) => !!c.querySelector("[data-evb-checklist], [data-evb-answer]") || !!c.querySelector("[data-evb-needs-endpoints]"))).toBe(true);
+    expect(container.querySelector("[data-evb-needs-endpoints]")).toBeNull();
+    const asked = gets.find((g) => g.path === "/attribution")!;
+    expect(asked.query.surface).toBe(p.surface);
+    expect(asked.query.good).toBeUndefined();
+    expect(asked.query.bad).toBeUndefined();
+    await unmount();
   });
 
   it("lists a bisect already over the range, with its culprit, before anyone pays again", async () => {
@@ -429,12 +468,36 @@ describe("one bisect", () => {
     const { container, unmount } = await mount(<BisectView data={data} steps={data.steps} now={NOW} onStop={() => {}} stopping={false} />);
     expect(container.querySelector('[data-evb-result="range"] [data-evb-candidates]')).toBeTruthy();
     expect(container.querySelector(".evb-span")).toBeTruthy();
+    // The headline names why it is a range, counts candidates (the edits are not a commit), and a finished run offers no tmux to attach to.
+    expect(container.querySelector('[data-evb-result="range"] .evb-answer-say')!.textContent).toBe(answerStepText(data.steps));
+    expect(answerStepText(data.steps)).toContain("did not separate");
+    expect(container.querySelector('[data-evb-result="range"] .evb-answer-num')!.textContent).toMatch(/candidates?$/);
+    expect(container.textContent).not.toContain("tmux attach");
     // Each candidate opens its diff in place: a commit its CommitPanel, the uncommitted edits their patch.
     const row = container.querySelector<HTMLElement>('[data-evb-result="range"] [data-evb-candidate]')!;
     expect(row.getAttribute("aria-expanded")).toBe("false");
     await act(async () => row.click());
     expect(row.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector("[data-evb-commit], [data-evb-patch]")).toBeTruthy();
+    await unmount();
+  });
+
+  it("reads why a bisect ended from the runner's own last answer line", () => {
+    const step = (seq: number, kind: "narrow" | "answer", text: string) => ({ seq, at: "2026-10-04T00:00:00.000Z", kind, sha: null, text });
+    expect(answerStepText([step(1, "answer", "first"), step(2, "narrow", "x"), step(3, "answer", "range: 2 candidate(s) between good and class 3; the classes between them do not load")])).toContain("do not load");
+    expect(answerStepText([step(1, "narrow", "x")])).toBeNull();
+  });
+
+  it("keeps asking for a bisect started a moment ago until its state lands, rather than saying there is none", async () => {
+    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace("T", "-").slice(0, 15);
+    const id = `settle-${stamp}`;
+    notYet.set(id, { misses: 2, as: "b-settle-0927" });
+    const { container, unmount } = await mount(<BisectPage view={{ view: "bisect", id }} />);
+    expect(await settle(container, (c) => !!c.querySelector('[data-evals-loading="starting"]'))).toBe(true);
+    expect(container.textContent).not.toContain("No bisect with this id");
+    // Two 404s, then the state: the page polls through them on its own clock and draws the bisect.
+    expect(await settle(container, (c) => !!c.querySelector('[data-evb-result="culprit"]'), 30_000)).toBe(true);
+    expect(container.textContent).not.toContain("No bisect with this id");
     await unmount();
   });
 

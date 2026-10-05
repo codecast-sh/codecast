@@ -9,6 +9,7 @@ import { stripAnsi } from '@platform/cli-kit/render';
 
 import { acquireLock, releaseLock, type LockOptions } from '../../../cli/src/capabilities/lock';
 import { outcomeOf, prepareFreeze, repCount, replayModel, replayRep, treeFacts, type RepLedger } from '../adapters/replay';
+import { agentScratchGap } from '../adapters/dryRun';
 import { hasSnapshot, loadLabel, loadSnapshot } from '../adapters/resolver';
 import { surfaceRuns } from '../adapters/runs';
 import { loadSurface } from '../registry';
@@ -219,9 +220,17 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
   }
   const estimate = flags.dry ? 0 : usdOf(jobs);
   const parallel = flags.parallel ?? DEFAULT_PARALLEL;
-  // The time is what a real run would take, so a dry check sizes one for free.
-  const minutes = checkMinutes(jobs.map((j) => ({ meta: j.plan.meta, reps: 1, model: modelOf(j) })), state, parallel);
-  const took = minutes != null ? `about ${Math.ceil(minutes)} min at --parallel ${parallel}` : null;
+  // Each agent rep gets private scratch from the harness (ct-56832). Where it
+  // cannot, two agents in flight share /tmp and read each other's inputs, so
+  // agent reps run one at a time in a lane of their own beside the call reps.
+  const isAgent = (j: Job) => j.plan.meta.route === 'agent';
+  const scratchGap = parallel > 1 && jobs.filter(isAgent).length > 1 ? await agentScratchGap() : null;
+  const lanes = scratchGap ? [{ jobs: jobs.filter((j) => !isAgent(j)), slots: parallel }, { jobs: jobs.filter(isAgent), slots: 1 }] : [{ jobs, slots: parallel }];
+  if (scratchGap) console.log(fmt.muted(`agent reps run one at a time: their scratch is not private here (${scratchGap}); call reps keep --parallel ${parallel}`));
+  // The time is what a real run would take, so a dry check sizes one for free. Lanes run side by side: the slowest sets it.
+  const laneMinutes = lanes.map((l) => checkMinutes(l.jobs.map((j) => ({ meta: j.plan.meta, reps: 1, model: modelOf(j) })), state, l.slots));
+  const minutes = laneMinutes.includes(null) ? null : Math.max(...(laneMinutes as number[]));
+  const took = minutes != null ? `about ${Math.ceil(minutes)} min at --parallel ${parallel}${scratchGap ? ', agent reps one at a time' : ''}` : null;
   console.log(`${jobs.length} reps over ${plans.length} surface(s), estimated ${formatCost(estimate)}${flags.dry ? ` (dry: nothing is spent${took ? `; a real run takes ${took}` : ''})` : took ? ` and ${took}` : ''}`);
   if (minutes != null && flags.maxMinutes && minutes > flags.maxMinutes) console.log(fmt.warning(`the time estimate is over --max-minutes ${flags.maxMinutes}: expect a time stop; fewer --reps or more --parallel`));
   const facts = treeFacts(plans.map((p) => p.meta));
@@ -241,7 +250,10 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
   const opts = (plan: Plan, est = 0, peak = 0) => ({ reps: plan.reps, model: flags.model ?? null, dry: Boolean(flags.dry), notes: flags.notes ?? null, batch, cadence: flags.cadence ?? null, budgetUsd: stopAt, spent, estPerRep: est, peakPerRep: peak, deadline, stopFile: flags.stopFile ?? null, onLine: (l: string) => console.log(fmt.muted(l)) });
   // Jobs in surface order, so a stop leaves the later surfaces unreached rather than every surface half run.
   const prepared = new Map(await Promise.all(plans.flatMap((plan) => plan.freezes.map(async (f) => [f.id, await prepareFreeze(f, opts(plan), facts)] as const))));
-  const results = await mapLimit(jobs, parallel, (j) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan, perRepUsd(j.plan.meta, state, modelOf(j)), perRepPeakUsd(j.plan.meta, state, modelOf(j)))));
+  const runJob = (j: (typeof jobs)[number]) => replayRep(prepared.get(j.freeze.id)!, j.rep, repCount(j.plan.reps), opts(j.plan, perRepUsd(j.plan.meta, state, modelOf(j)), perRepPeakUsd(j.plan.meta, state, modelOf(j))));
+  const laneResults = await Promise.all(lanes.map((l) => mapLimit(l.jobs, l.slots, runJob)));
+  const resultOf = new Map(lanes.flatMap((l, i) => l.jobs.map((j, k) => [j, laneResults[i]![k]!] as const)));
+  const results = jobs.map((j) => resultOf.get(j)!);
   const budgetHit = Boolean(spent.stoppedBy);
   let failed = false;
   const reports: string[][] = [];
@@ -280,7 +292,9 @@ async function checkBatch(ids: string[], flags: CheckFlags, sources: EvalSources
     const dirty = facts.dirty.has(plan.meta.id);
     if (stateful) patchSurfaceState(plan.meta.id, (s) => ({
       ...s,
-      crash: crashes ? { hash, count: s.crash?.hash === hash ? s.crash.count + 1 : 1 } : undefined,
+      // A streak counts runs where no rep got through: the surface itself cannot run on these sources. Reps
+      // that ran beside a few crashed ones show the surface works and the crashes were the machine's.
+      crash: crashes && !outcome.runs.some((r) => r.status !== 'crash' && r.status !== 'unscored') ? { hash, count: s.crash?.hash === hash ? s.crash.count + 1 : 1 } : undefined,
       ...(flags.dry || crashes || cutShort || dirty ? {} : { lastRunHash: hash, lastRunAt: new Date().toISOString() }),
       ...(!flags.dry && real.length ? { perRep: { ...s.perRep, ...repCostsByModel(real, plan.meta.model) } } : {}),
     }));
