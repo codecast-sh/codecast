@@ -1,16 +1,28 @@
 import { labelsOf, noteOrgChange, partyRef, recordSubject, whereOfRecord, withOrgChange } from "./lib/orgChangeLog";
-import { movedFields } from "@codecast/shared/contracts/orgChange";
+import { canonical, movedFields } from "@codecast/shared/contracts/orgChange";
 import { v, type Validator } from "convex/values";
 import {
   INITIATIVE_METRICS_MAX,
+  INITIATIVE_RECORD_LISTS,
+  INITIATIVE_RECORD_MAX,
   INITIATIVE_STATUSES,
   INITIATIVE_UPDATE_HEALTHS,
+  INTENT_SOURCE_KINDS,
+  appendScoreHistory,
+  intentSourceKey,
   metricKeyOf,
+  metricTrends,
+  nextMilestone,
+  parseIntentSource,
+  recordEntryKey,
   type InitiativeMetric,
+  type InitiativeRecordList,
   type InitiativeStatus,
   type InitiativeUpdateHealth,
+  type IntentSource,
 } from "@codecast/shared/contracts/initiative";
 import { recordScores } from "@codecast/shared/contracts/orgTemplateState";
+import { memberHandle } from "@codecast/shared/chat";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
@@ -143,9 +155,9 @@ const clean = (text: string, max: number) => text.trim().slice(0, max);
 // One or two metrics, each a name and a target; the key is derived from the
 // name when the caller gave none, so a person types "Weekly active teams=1000"
 // and a role reports `weekly_active_teams=412`. A value already reported
-// under a key that survives the edit is kept; one under a key that goes is
-// dropped with it.
-function metricsPatch(raw: Array<{ key?: string; name: string; target: string }>, prior?: Record<string, any>): { metrics: InitiativeMetric[] | undefined; scoreboard: Record<string, any> | undefined } {
+// under a key that survives the edit is kept with its history; one under a
+// key that goes is dropped with it.
+function metricsPatch(raw: Array<{ key?: string; name: string; target: string }>, prior: { scoreboard?: Record<string, any>; score_history?: Record<string, any> } = {}): { metrics: InitiativeMetric[] | undefined; scoreboard: Record<string, any> | undefined; score_history: Record<string, any> | undefined } {
   const metrics: InitiativeMetric[] = [];
   for (const m of raw) {
     const name = clean(String(m.name ?? ""), 80);
@@ -157,8 +169,11 @@ function metricsPatch(raw: Array<{ key?: string; name: string; target: string }>
     metrics.push({ key, name, target });
   }
   if (metrics.length > INITIATIVE_METRICS_MAX) throw new Error(`An initiative carries at most ${INITIATIVE_METRICS_MAX} metrics`);
-  const kept = Object.fromEntries(Object.entries(prior ?? {}).filter(([k]) => metrics.some((m) => m.key === k)));
-  return { metrics: metrics.length ? metrics : undefined, scoreboard: Object.keys(kept).length ? kept : undefined };
+  const kept = (byKey?: Record<string, any>) => {
+    const out = Object.fromEntries(Object.entries(byKey ?? {}).filter(([k]) => metrics.some((m) => m.key === k)));
+    return Object.keys(out).length ? out : undefined;
+  };
+  return { metrics: metrics.length ? metrics : undefined, scoreboard: kept(prior.scoreboard), score_history: kept(prior.score_history) };
 }
 
 // An owner role has every project of its initiative in its scope (I1 "The
@@ -194,6 +209,13 @@ type Fields = {
   parent_initiative_id?: string | null;
   /** Replaces the list; an empty list clears it. */
   metrics?: Array<{ key?: string; name: string; target: string }>;
+  why?: string | null;
+  done_when?: string | null;
+  /** Entries to ADD to the record's lists, never a replacement: each is one `add` of recordOp. */
+  milestones?: unknown[];
+  questions?: unknown[];
+  decisions?: unknown[];
+  sources?: unknown[];
 };
 
 // The patch a create or an edit becomes, validated against the row's own
@@ -220,7 +242,15 @@ async function fieldsPatch(ctx: Ctx, userId: Id<"users">, row: any, fields: Fiel
   if (fields.parent_initiative_id !== undefined) {
     patch.parent_initiative_id = fields.parent_initiative_id ? await requireParent(ctx, userId, row, fields.parent_initiative_id) : undefined;
   }
-  if (fields.metrics !== undefined) Object.assign(patch, metricsPatch(fields.metrics, row.scoreboard));
+  if (fields.metrics !== undefined) Object.assign(patch, metricsPatch(fields.metrics, row));
+  if (fields.why !== undefined) patch.why = (fields.why && clean(fields.why, MAX_DESCRIPTION)) || undefined;
+  if (fields.done_when !== undefined) patch.done_when = (fields.done_when && clean(fields.done_when, MAX_DESCRIPTION)) || undefined;
+  for (const list of INITIATIVE_RECORD_LISTS) {
+    const prior: any[] = row[list] ?? [];
+    let next = prior;
+    for (const entry of fields[list] ?? []) next = (await recordOp(row, next, { list, action: "add", entry }, () => signature(ctx, userId, row))).next;
+    if (next !== prior) patch[list] = next;
+  }
   return patch;
 }
 
@@ -235,10 +265,152 @@ const fieldArgs = {
   labels: v.optional(v.array(v.string())),
   project_ids: v.optional(v.array(v.string())),
   parent_initiative_id: v.optional(v.union(v.string(), v.null())),
+  why: v.optional(v.union(v.string(), v.null())),
+  done_when: v.optional(v.union(v.string(), v.null())),
 };
 
+// ── The intent record (I5) ───────────────────────────────────────────────────
+// Four lists on the row, each edited one entry at a time and named by key, so
+// two people editing one goal never overwrite each other's list with a stale
+// copy of it. A milestone, a question and a decision carry a stored `key`; a
+// source has none, and is named by its address (intentSourceKey).
+
+const MAX_ENTRY_TEXT = 1000;
+const MAX_ENTRY_KEY = 64;
+const RECORD_NOUN: Record<InitiativeRecordList, string> = { milestones: "milestone", questions: "question", decisions: "decision", sources: "source" };
+
+export type RecordOp = {
+  list: InitiativeRecordList;
+  action: "add" | "edit" | "close" | "remove";
+  /** Which entry: required for edit, close and remove. */
+  key?: string;
+  /** The entry as the row stores it; a partial one on an edit, where null clears a field. A source may be `{ text }`, read by parseIntentSource. */
+  entry?: unknown;
+  /** close: when the milestone was reached or the question answered. */
+  at?: number;
+  /** close on a question. */
+  answer?: string;
+};
+
+const isObject = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x);
+const present = (e: Record<string, any>) => Object.fromEntries(Object.entries(e).filter(([, value]) => value !== null && value !== undefined));
+type ReadField = (x: unknown, name: string) => unknown;
+const words = (max: number): ReadField => (x, name) => {
+  if (typeof x !== "string") throw new Error(`${name} is text`);
+  return clean(x, max) || null;
+};
+const moment: ReadField = (x, name) => {
+  if (typeof x !== "number" || !Number.isFinite(x)) throw new Error(`${name} is a time in milliseconds`);
+  return x;
+};
+
+// `key` is allowed and unread: a client that names every entry by key may send a source's address with it.
+const SOURCE_FIELDS = ["kind", "ref", "quote", "by", "at", "text", "key"];
+/** A source as the row stores it, from the stored shape, from `{ text }` or from the text alone. */
+function readSource(raw: unknown): IntentSource {
+  const given = typeof raw === "string" ? { text: raw } : raw;
+  if (!isObject(given)) throw new Error("A source is an address, the words said, or both");
+  const stray = Object.keys(given).find((k) => !SOURCE_FIELDS.includes(k));
+  if (stray) throw new Error(`Not a field of a source: ${stray}`);
+  const text = (k: string, max: number) => (typeof given[k] === "string" && clean(given[k] as string, max)) || undefined;
+  const said = { quote: text("quote", 400), by: text("by", 80), at: typeof given.at === "number" && Number.isFinite(given.at) ? given.at : undefined };
+  let source: IntentSource;
+  if (typeof given.text === "string") source = parseIntentSource(given.text, said);
+  else {
+    if (!INTENT_SOURCE_KINDS.includes(given.kind as any)) throw new Error(`A source is one of ${INTENT_SOURCE_KINDS.join(", ")}`);
+    source = present({ kind: given.kind, ref: text("ref", 500), ...said }) as IntentSource;
+  }
+  if (intentSourceKey(source).endsWith(":")) throw new Error("A source needs an address or the words said");
+  return source;
+}
+
+// What an entry of each keyed list may carry, and how each field is read.
+const ENTRY_FIELDS: Record<Exclude<InitiativeRecordList, "sources">, Record<string, ReadField>> = {
+  milestones: { title: words(MAX_TITLE), date: moment, done_at: moment, source: readSource },
+  questions: { text: words(MAX_ENTRY_TEXT), at: moment, by: words(80), source: readSource, answer: words(MAX_ENTRY_TEXT), answered_at: moment },
+  decisions: { text: words(MAX_ENTRY_TEXT), at: moment, by: words(80), source: readSource },
+};
+
+/** The fields an entry names, each read by its rule; null stays null so an edit can clear with it. */
+function readEntry(list: Exclude<InitiativeRecordList, "sources">, raw: unknown): Record<string, any> {
+  const noun = RECORD_NOUN[list];
+  if (!isObject(raw)) throw new Error(`Give the ${noun} as an entry`);
+  const out: Record<string, any> = {};
+  for (const [k, value] of Object.entries(raw)) {
+    if (k === "key" || value === undefined) continue;
+    const read = ENTRY_FIELDS[list][k];
+    if (!read) throw new Error(`Not a field of a ${noun}: ${k}`);
+    out[k] = value === null ? null : read(value, `A ${noun}'s ${k}`);
+  }
+  return out;
+}
+
+/** An entry as it is stored: cleared fields gone, its words present, and an answer always dated. */
+function settled(list: Exclude<InitiativeRecordList, "sources">, entry: Record<string, any>, now: number): Record<string, any> {
+  const e = present(entry);
+  if (!(e.title ?? e.text)) throw new Error(`A ${RECORD_NOUN[list]} needs ${list === "milestones" ? "a title" : "words"}`);
+  if (list === "questions") {
+    if (e.answer) e.answered_at ??= now;
+    else delete e.answered_at;
+  }
+  return e;
+}
+
+/**
+ * One op applied to one list: the list as it then stands (the same array when
+ * nothing moved) and the entry it touched. Pure but for `by`, which is asked
+ * only when a new question or decision names nobody.
+ */
+async function recordOp(initiative: any, prior: any[], op: RecordOp, by: () => Promise<string | undefined>): Promise<{ next: any[]; entry?: any }> {
+  const { list } = op;
+  const noun = RECORD_NOUN[list];
+  const now = Date.now();
+  const keyOf = (e: any): string => (list === "sources" ? intentSourceKey(e) : e.key);
+  const indexOf = (key: string) => prior.findIndex((e) => keyOf(e) === key);
+
+  if (op.action === "add") {
+    let entry: any;
+    if (list === "sources") entry = readSource(op.entry);
+    else {
+      const fields = readEntry(list, op.entry);
+      const given = isObject(op.entry) && typeof op.entry.key === "string" ? clean(op.entry.key, MAX_ENTRY_KEY) : "";
+      // Who asked or decided, and when: the caller and now, unless the entry says.
+      const signed = list === "milestones" ? {} : { at: fields.at ?? now, by: fields.by ?? (await by()) };
+      entry = settled(list, { key: given || recordEntryKey(String(fields.title ?? fields.text ?? ""), prior.map(keyOf)), ...fields, ...signed }, now);
+    }
+    // A key already on the list is a retried add, or a source already on the
+    // record: the entry there stands.
+    const at = indexOf(keyOf(entry));
+    if (at >= 0) return { next: prior, entry: prior[at] };
+    if (prior.length >= INITIATIVE_RECORD_MAX[list]) throw new Error(`A goal holds at most ${INITIATIVE_RECORD_MAX[list]} ${list}`);
+    return { next: [...prior, entry], entry };
+  }
+
+  if (!op.key) throw new Error(`Name the ${noun} by its key`);
+  const at = indexOf(op.key);
+  // A retried remove finds nothing and changes nothing.
+  if (op.action === "remove") return at < 0 ? { next: prior } : { next: prior.filter((_, i) => i !== at), entry: prior[at] };
+  if (at < 0) throw new Error(`No ${noun} ${op.key} on ${initiative.short_id ?? "this goal"}`);
+  const was = prior[at];
+  let entry: any;
+  if (op.action === "close") {
+    if (list === "milestones") entry = { ...was, done_at: op.at ?? was.done_at ?? now };
+    else if (list === "questions") {
+      const answer = clean(op.answer ?? "", MAX_ENTRY_TEXT);
+      if (!answer) throw new Error("An answer needs words");
+      entry = { ...was, answer, answered_at: op.at ?? now };
+    } else throw new Error(`A ${noun} is edited or removed; only a milestone is reached and a question answered`);
+  } else if (list === "sources") {
+    if (!isObject(op.entry)) throw new Error("Give the source as an entry");
+    entry = readSource(present({ ...was, ...op.entry }));
+    if (keyOf(entry) !== op.key && indexOf(keyOf(entry)) >= 0) throw new Error("That source is already on the record");
+  } else entry = settled(list, { ...was, ...readEntry(list, op.entry) }, now);
+  if (canonical(entry) === canonical(was)) return { next: prior, entry: was };
+  return { next: prior.map((e, i) => (i === at ? entry : e)), entry };
+}
+
 // ── The cores ────────────────────────────────────────────────────────────────
-// Three writers, each the one path for its gesture: the mutations below, the
+// Four writers, each the one path for its gesture: the mutations below, the
 // CLI and the proposal apply path (orgInit applyInitiative and siblings,
 // initiatives-projects-role-page.md "I1, revised") all call these, so a goal
 // a person sets on the page and a goal a person accepts from a review are
@@ -249,6 +421,13 @@ const fieldArgs = {
 
 /** The ids the log labels for an initiative row: its owner and its projects. */
 const labelIds = (row: any, patch: Record<string, any> = {}) => [row?.owner?.role_id, row?.owner?.user_id, patch.owner?.role_id, patch.owner?.user_id, ...(row?.project_ids ?? []), ...(patch.project_ids ?? [])];
+
+/** A goal's shape as the log reads it: where it sits, how it is measured, and its intent record. */
+const SHAPE_FIELDS = ["parent_initiative_id", "metrics", "why", "done_when", ...INITIATIVE_RECORD_LISTS] as const;
+const shapeOf = (r: any) => ({
+  ...Object.fromEntries(SHAPE_FIELDS.map((k) => [k, r[k] ?? null])),
+  parent_initiative_id: r.parent_initiative_id ? String(r.parent_initiative_id) : null,
+});
 
 export type InitiativeWorkspace = { workspace: "personal" | "team"; team_id?: Id<"teams"> };
 
@@ -281,9 +460,10 @@ export async function performCreateInitiative(ctx: Ctx, userId: Id<"users">, whe
 /** Edit an initiative's fields. An owner change is logged with the owner
  *  before and after; the owner role's scope gain rides in the same row. A
  *  change of where the goal sits or how it is measured (its parent, its
- *  metrics) is logged as its shape, the row the proposal's `initiative_shape`
- *  change reads back; the row opens without a kind so the first fact names
- *  it (an edit that moves both reads as the owner change, carrying both). */
+ *  metrics) or of its intent record (why, done when, and the four lists) is
+ *  logged as its shape, the row the proposal's `initiative_shape` change
+ *  reads back; the row opens without a kind so the first fact names it (an
+ *  edit that moves both reads as the owner change, carrying both). */
 export async function performUpdateInitiative(ctx: Ctx, userId: Id<"users">, initiative: any, fields: Fields) {
   const patch = await fieldsPatch(ctx, userId, initiative, fields);
   const subject = recordSubject("initiative", initiative);
@@ -294,15 +474,34 @@ export async function performUpdateInitiative(ctx: Ctx, userId: Id<"users">, ini
       ...movedFields({ owner: partyRef(initiative.owner) ?? null }, { owner: partyRef(patch.owner) ?? null }),
       labels: await labelsOf(ctx, labelIds(initiative, patch)),
     });
-    if ("parent_initiative_id" in patch || "metrics" in patch) {
-      const shape = (r: any) => ({ parent_initiative_id: r.parent_initiative_id ? String(r.parent_initiative_id) : null, metrics: r.metrics ?? null });
-      await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
-        kind: "initiative_shape", subject,
-        ...movedFields(shape(initiative), shape({ ...initiative, ...patch })),
-        labels: await labelsOf(ctx, [initiative.parent_initiative_id, patch.parent_initiative_id]),
-      });
-    }
+    if (SHAPE_FIELDS.some((k) => k in patch)) await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
+      kind: "initiative_shape", subject,
+      ...movedFields(shapeOf(initiative), shapeOf({ ...initiative, ...patch })),
+      labels: await labelsOf(ctx, [initiative.parent_initiative_id, patch.parent_initiative_id]),
+    });
     return written(ctx, userId, initiative._id, "owner" in patch || "project_ids" in patch);
+  });
+}
+
+/**
+ * Edit one entry of the intent record (I5): add, edit, close (reach a
+ * milestone, answer a question) or remove, naming the entry by key. Who may
+ * is who may edit the goal. Logged as the goal's shape, the one list before
+ * and after, so undo restores it; an op that moved nothing writes nothing.
+ */
+export async function performRecordEntry(ctx: Ctx, userId: Id<"users">, initiative: any, op: RecordOp & { session_id?: string }) {
+  const prior: any[] = initiative[op.list] ?? [];
+  const { next, entry } = await recordOp(initiative, prior, op, () => signature(ctx, userId, initiative, op.session_id));
+  if (next === prior) return written(ctx, userId, initiative._id, false, { entry });
+  const subject = recordSubject("initiative", initiative);
+  const patch = { [op.list]: next.length ? next : undefined };
+  return withOrgChange(ctx, userId, { subject, door: "initiative" }, async () => {
+    await ctx.db.patch(initiative._id, { ...patch, updated_at: Date.now() });
+    await noteOrgChange(ctx, userId, whereOfRecord(initiative), {
+      kind: "initiative_shape", subject,
+      ...movedFields(shapeOf(initiative), shapeOf({ ...initiative, ...patch })),
+    });
+    return written(ctx, userId, initiative._id, false, { entry });
   });
 }
 
@@ -311,16 +510,24 @@ export async function performUpdateInitiative(ctx: Ctx, userId: Id<"users">, ini
  * scoreboard (`recordScores`, the one path): `key=value` pairs, one source a
  * person can open, an optional observation time. Who may report is who may
  * post an update: the owner, the owning role's standing session, or a
- * workspace admin. No log row: a number observed is not an org change.
+ * workspace admin. Each value written is also appended to the metric's
+ * history. No log row: a number observed is not an org change.
  */
 export async function performReportMetrics(ctx: Ctx, userId: Id<"users">, initiative: any, args: { entries: string[]; source?: string; observed_at?: number; session_id?: string }) {
-  const conversation = args.session_id ? await resolveSessionConversation(ctx, userId, args.session_id) : null;
-  const actor = await resolveActor(ctx, userId, conversation);
-  const role = actor.kind === "role" && actor.role && roleInBoundary(actor.role, initiative) ? actor.role : null;
+  const { role } = await signingRole(ctx, userId, initiative, args.session_id);
   await requireMayPostUpdate(ctx, userId, initiative, role);
   const state = { scoreboard: { ...(initiative.scoreboard ?? {}) } };
   const written = recordScores({ scoreboard: initiative.metrics ?? [] }, state, args.entries, { source: args.source, observedAt: args.observed_at, what: `${initiative.short_id}` });
-  await ctx.db.patch(initiative._id, { scoreboard: state.scoreboard, updated_at: Date.now() });
+  // The history grows in the same patch as the latest value (I5). A value
+  // reported before the history existed opens it, so the first report after
+  // already reads as a trend.
+  let score_history: Record<string, any> | undefined = initiative.score_history;
+  for (const [key, score] of Object.entries(written)) {
+    const before = initiative.scoreboard?.[key];
+    if (before && !score_history?.[key]?.length) score_history = appendScoreHistory(score_history, key, before);
+    score_history = appendScoreHistory(score_history, key, score);
+  }
+  await ctx.db.patch(initiative._id, { scoreboard: state.scoreboard, score_history, updated_at: Date.now() });
   return { id: initiative._id, short_id: initiative.short_id, written, row: await ctx.db.get(initiative._id) };
 }
 
@@ -351,6 +558,10 @@ export const create = mutation({
     client_key: v.optional(v.string()),
     title: v.string(),
     ...fieldArgs,
+    // A goal may be born with its first milestones and the sources that
+    // stated it: entries as `record` takes them, read by the same reader.
+    milestones: v.optional(v.array(v.any())),
+    sources: v.optional(v.array(v.any())),
   },
   handler: async (ctx, { api_token, workspace, team_id, client_key, ...fields }) => {
     const userId = await requireCaller(ctx, api_token);
@@ -406,12 +617,55 @@ export const setProjects = mutation({
   },
 });
 
+// The intent record's one door (I5): `cast initiative milestone|ask|answer|
+// decide|source` and the page's record sections all post an op here.
+export const record = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    id: v.string(),
+    // The calling session, so a role's standing session signs an entry as the role.
+    session_id: v.optional(v.string()),
+    list: v.union(...INITIATIVE_RECORD_LISTS.map((l) => v.literal(l))) as Validator<InitiativeRecordList>,
+    action: v.union(v.literal("add"), v.literal("edit"), v.literal("close"), v.literal("remove")),
+    key: v.optional(v.string()),
+    // Each list has its own entry shape and an edit names any part of it, so
+    // recordOp reads the entry and refuses a field the list does not carry.
+    entry: v.optional(v.any()),
+    at: v.optional(v.number()),
+    answer: v.optional(v.string()),
+  },
+  handler: async (ctx, { api_token, id, ...op }) => {
+    const userId = await requireCaller(ctx, api_token);
+    return performRecordEntry(ctx, userId, await requireInitiative(ctx, userId, id), op);
+  },
+});
+
 // A role's boundary is a team or one person (org_roles.team_id or
 // scope_user_id); an initiative's is its team or its creator.
 function roleInBoundary(role: any, initiative: any): boolean {
   return initiative.team_id
     ? String(role.team_id ?? "") === String(initiative.team_id)
     : !role.team_id && String(role.scope_user_id ?? "") === String(initiative.user_id);
+}
+
+/** The role a call is signed by: the calling session's standing role, and
+ *  only inside its own boundary. A standing session of a role from another
+ *  workspace signs as the person whose token made the call. */
+async function signingRole(ctx: Ctx, userId: Id<"users">, initiative: any, sessionId?: string): Promise<{ role: any | null; conversation: any | null }> {
+  const conversation = sessionId ? await resolveSessionConversation(ctx, userId, sessionId) : null;
+  const actor = await resolveActor(ctx, userId, conversation);
+  return { conversation, role: actor.kind === "role" && actor.role && roleInBoundary(actor.role, initiative) ? actor.role : null };
+}
+
+/** Who asked or decided when the entry names nobody: the signing role, else
+ *  the caller's @handle where the roster reads it back as them, else their name. */
+async function signature(ctx: Ctx, userId: Id<"users">, initiative: any, sessionId?: string): Promise<string | undefined> {
+  const { role } = await signingRole(ctx, userId, initiative, sessionId);
+  if (role) return `@${role.handle}`;
+  const caller = await ctx.db.get(userId);
+  const handle = caller && memberHandle(caller);
+  const roster = initiative.team_id ? await teamRoster(ctx as any, initiative.team_id) : caller ? [caller] : [];
+  return handle && String(matchHandle(roster, handle)?._id) === String(userId) ? `@${handle}` : ownerLabel(ctx, { kind: "user", user_id: userId });
 }
 
 // Health is what the owner said (I1): an update is posted by the owner, a
@@ -474,11 +728,7 @@ export const postUpdate = mutation({
       if (existing) return { id: existing._id, row: existing };
     }
 
-    const conversation = args.session_id ? await resolveSessionConversation(ctx, userId, args.session_id) : null;
-    const actor = await resolveActor(ctx, userId, conversation);
-    // A role signs only inside its own boundary: a standing session of a role
-    // from another workspace posts as the person whose token made the call.
-    const role = actor.kind === "role" && actor.role && roleInBoundary(actor.role, initiative) ? actor.role : null;
+    const { role, conversation } = await signingRole(ctx, userId, initiative, args.session_id);
     await requireMayPostUpdate(ctx, userId, initiative, role);
     const at = Date.now();
     const id = await ctx.db.insert("initiative_updates", {
@@ -621,6 +871,9 @@ export const get = query({
     const brief = (r: any) => ({ _id: r._id, short_id: r.short_id, title: r.title, status: r.status, health: r.health });
     return {
       ...(await forTerminal(ctx, userId, initiative)),
+      // Each metric's history read as a direction, and the first milestone not reached.
+      trends: metricTrends(initiative),
+      next_milestone: nextMilestone(initiative),
       parent: parent ? brief(parent) : undefined,
       sub_initiatives: children.map(brief),
       updates: await Promise.all(updates.map(async (u: any) => ({ ...u, by_label: await ownerLabel(ctx, u.by) }))),

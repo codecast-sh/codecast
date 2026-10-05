@@ -1,7 +1,11 @@
 // Initiatives on the web (docs/architecture/initiatives-projects-role-page.md
 // I1), mounted in jsdom against the typed fixture of the contract's rows.
 // Proves: the list groups by status with owner, health, target and progress
-// derived from the tasks, and nests a sub initiative; a page whose owner is a
+// derived from the tasks, the first number against its target and the next
+// milestone, and nests a sub initiative; the page's header wears the same
+// chips; the panel has two tabs, Goal (the record in the order of I5's test)
+// and Activity (the scope feed over the goal's projects and its sub goals',
+// selected by ?tab=activity); a page whose owner is a
 // role opens as that role's standing conversation with the initiative beside
 // it; a page whose owner is a person opens on the person's anchor, and one with
 // no conversation to open is the initiative alone; the projects are the scope
@@ -31,7 +35,7 @@ async function verifyInitiatives() {
   // ── the world the pages read ──
   const { ORG_FIXTURE } = await import("../org/orgFixture");
   const fx = await import("./initiativeFixture");
-  const env = { phone: false, wide: true, tree: ORG_FIXTURE as OrgTree, origin: null as null | { at: number; batch: string; proposal?: { short_id: string; title?: string }; undone: boolean } };
+  const env = { phone: false, wide: true, search: "", tree: ORG_FIXTURE as OrgTree, origin: null as null | { at: number; batch: string; proposal?: { short_id: string; title?: string }; undone: boolean } };
   const calls: string[] = [];
   const collections: Record<string, any[]> = {
     initiatives: fx.FIXTURE_INITIATIVES.map((r) => ({ ...r })),
@@ -39,6 +43,19 @@ async function verifyInitiatives() {
     projects: fx.FIXTURE_PROJECTS, plans: fx.FIXTURE_PLANS, tasks: fx.FIXTURE_TASKS,
   };
   const patch = (id: string, fields: Partial<InitiativeRow>) => { collections.initiatives = collections.initiatives.map((r) => (r._id === id ? { ...r, ...fields } : r)); };
+  // The first goal carries one number, reported twice (I4, I5), set here so
+  // the chips below read the same whatever the fixture's own record grows
+  // into. Its milestones are the fixture's, read through the contract.
+  const DAY = 86_400_000;
+  const { nextMilestone } = await import("@codecast/shared/contracts/initiative");
+  const nextUp = nextMilestone(fx.FIXTURE_INITIATIVES.find((r) => r._id === "init-org")!)!;
+  assert.ok(nextUp && !nextUp.done_at, "the fixture's first goal has a milestone still ahead");
+  const nextUpState = nextUp.date && nextUp.date < fx.FIXTURE_NOW ? "late" : "next";
+  patch("init-org", {
+    metrics: [{ key: "weekly_active_teams", name: "Weekly active teams", target: "1,000" }],
+    scoreboard: { weekly_active_teams: { value: "412", observed_at: fx.FIXTURE_NOW - 2 * DAY, source: "https://example.com/board" } },
+    score_history: { weekly_active_teams: [{ value: "380", observed_at: fx.FIXTURE_NOW - 9 * DAY, source: "https://example.com/board" }, { value: "412", observed_at: fx.FIXTURE_NOW - 2 * DAY, source: "https://example.com/board" }] },
+  });
   const state: any = {
     currentUser: { _id: "fixture-user-me", name: "Ashot" },
     get orgTree() { return env.tree; },
@@ -79,11 +96,14 @@ async function verifyInitiatives() {
   const realRoster = await import("../../hooks/useTeamRoster");
   mock.module("../../hooks/useTeamRoster", () => ({ ...realRoster, useTeamRosterIdentity: () => [{ _id: "fixture-user-me", name: "Ashot" }, { _id: "fixture-user-sam", name: "Sam" }] }));
   mock.module("../../hooks/useRoleScope", () => ({ useRoleScope: () => ({ model: null, role: null }), useScopeRows: () => ({ projects: collections.projects, plans: collections.plans, tasks: collections.tasks, roles: env.tree.roles }) }));
+  // The address bar: a replace moves the query the next render reads.
   mock.module("next/navigation", () => ({
-    useRouter: () => ({ replace: (u: string) => calls.push(`replace:${u}`), push: (u: string) => calls.push(`push:${u}`) }),
-    useSearchParams: () => new URLSearchParams(""),
+    useRouter: () => ({ replace: (u: string) => { calls.push(`replace:${u}`); env.search = u.split("?")[1] ?? ""; }, push: (u: string) => calls.push(`push:${u}`) }),
+    useSearchParams: () => new URLSearchParams(env.search),
     usePathname: () => "/initiatives",
   }));
+  // The feed is the scope page's own engine (its mount test proves it); here it says which scope it was asked for.
+  mock.module("../org/scope/ScopeFeed", () => ({ ScopeFeed: (props: any) => React.createElement("div", { "data-scope-feed": JSON.stringify(props.scope), "data-scope-feed-fill": props.fill ? "1" : "0" }, "feed") }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
   mock.module("../../app/inbox/QueuePageClient", () => ({
     InboxConversation: (props: any) => React.createElement("div", { "data-thread": props.sessionId, "data-thread-owner": props.seat?.seedOwnership ? "1" : "0", "data-thread-placeholder": props.seat?.layout?.composerPlaceholder ?? "", "data-thread-hide-diff": props.seat?.layout?.hideDiff ? "1" : "0", "data-thread-autofocus": props.autoFocusInput ? "1" : "0" }, props.seat?.layout?.leadNode, React.createElement("textarea", { "data-composer": true })),
@@ -138,6 +158,22 @@ async function verifyInitiatives() {
   assert.ok(q("[data-initiative-row='in-3'] [data-face='person:Ashot']"), "a person owner shows their face");
   assert.equal(q("[data-initiative-row='in-4'] [data-initiative-owner]")!.getAttribute("data-initiative-owner"), "none", "nobody drives it, said in words");
   assert.match(q("[data-initiative-row='in-4']")!.textContent!, /No owner/);
+  // The first number as a chip, with which way it moved, and the next milestone with its day.
+  const rowMetric = first.querySelector("[data-initiative-row-metric] [data-metric='weekly_active_teams']")!;
+  assert.equal(rowMetric.getAttribute("data-metric-size"), "chip");
+  assert.match(rowMetric.textContent!, /412\s*\/ 1,000/);
+  assert.equal(rowMetric.querySelector("[data-metric-standing]")!.getAttribute("data-metric-standing"), "behind");
+  assert.equal(rowMetric.querySelector("[data-metric-trend]")!.getAttribute("data-metric-trend"), "up");
+  assert.equal(rowMetric.querySelector("[data-metric-trend]")!.getAttribute("data-metric-toward"), "yes");
+  const rowMilestone = first.querySelector("[data-initiative-row-milestone] [data-initiative-milestone]")!;
+  assert.equal(rowMilestone.getAttribute("data-initiative-milestone"), nextUpState, "the first one not reached, red once its day has passed");
+  assert.ok(rowMilestone.textContent!.startsWith(nextUp.title), rowMilestone.textContent!);
+  // A goal with neither keeps its two cells, so the columns after them stay in line.
+  const bare = collections.initiatives.find((r) => !r.metrics?.length && !r.milestones?.length && !r.parent_initiative_id)!;
+  const bareExtra = q(`[data-initiative-row='${bare.short_id}'] .initiative-extra`)!;
+  assert.equal(bareExtra.getAttribute("data-empty"), "");
+  assert.equal(bareExtra.children.length, 2);
+  assert.equal(bareExtra.querySelector("[data-metric], [data-initiative-milestone]"), null);
 
   // On a cold cache the count is partial and says so, in the same component.
   state.syncMeta = {};
@@ -176,8 +212,26 @@ async function verifyInitiatives() {
   assert.ok(q("[data-initiative-pick='owner'] [data-face='role:growth']"));
   assert.match(q("header [data-initiative-health]")!.textContent!, /At risk.*Sep 16/);
   assert.equal(q("header [data-initiative-progress]")!.getAttribute("data-initiative-progress"), "3/6");
-  // The panel, in the contract's order.
-  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "projects", "updates", "sub"]);
+  // The same chips the list row wears: the number against its target, and the next milestone.
+  assert.ok(q("[data-intent-header]") === q("header"), "the header a project's page wears too");
+  assert.match(q("header [data-intent-chips] [data-metric='weekly_active_teams'][data-metric-size='chip']")!.textContent!, /412\s*\/ 1,000/);
+  assert.equal(q("header [data-intent-chips] [data-metric-trend]")!.getAttribute("data-metric-trend"), "up");
+  assert.ok(q(`header [data-intent-chips] [data-initiative-milestone='${nextUpState}']`)!.textContent!.startsWith(nextUp.title));
+  // The panel: two tabs in the scope panel's grammar, open on the goal.
+  assert.deepEqual(qa("[data-initiative-panel] [data-scope-tab]").map((t) => t.getAttribute("data-scope-tab")), ["goal", "activity"]);
+  assert.equal(q("[data-initiative-panel]")!.getAttribute("data-scope-tab-active"), "goal");
+  assert.equal(q("[data-scope-tab='goal']")!.getAttribute("aria-current"), "page");
+  assert.equal(q("[data-scope-feed]"), null);
+  // The goal, top to bottom in the order of I5's test: what it is for, the
+  // number, why, done when, milestones, what is undecided, what was decided,
+  // who said it; then what carries it, what the owner said, what is under it.
+  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "metrics", "why", "done_when", "milestones", "questions", "decisions", "sources", "projects", "updates", "sub"]);
+  assert.ok(q("[data-initiative-scroll] [data-initiative-record='in-1']"), "the record is the one component, mounted in the scroll");
+  // Measured by: the tile every surface draws, now against the target, with its source.
+  const tile = q("[data-initiative-metric='weekly_active_teams']")!;
+  assert.equal(tile.querySelector("[data-metric-size]")!.getAttribute("data-metric-size"), "tile");
+  assert.equal(tile.querySelector("[data-metric-now]")!.textContent, "412");
+  assert.equal(tile.querySelector("a[href='https://example.com/board']")!.textContent, "example.com");
   // Projects: the scope view's own card, in the owner's order, each with its lead.
   assert.deepEqual(qa("[data-initiative-project]").map((p) => p.getAttribute("data-initiative-project")), ["proj-org", "proj-inbox"]);
   const org = q("[data-initiative-project='proj-org']")!;
@@ -196,6 +250,29 @@ async function verifyInitiatives() {
   assert.deepEqual(qa("[data-initiative-update]").map((u) => u.getAttribute("data-initiative-update-health")), ["at_risk", "on_track"]);
   assert.ok(q("[data-initiative-update='upd-2'] [data-face='role:growth']"), "a role wrote it");
   assert.ok(q("[data-initiative-sub='in-2']"));
+
+  // ── Activity: the scope feed over the goal's projects and its sub goals', in the URL ──
+  const orgRow = collections.initiatives.find((r) => r._id === "init-org")!;
+  const under = collections.initiatives.filter((r) => r.parent_initiative_id === "init-org");
+  const expectedScope = {
+    scope: { project_ids: [...new Set([orgRow, ...under].flatMap((r) => r.project_ids))], plan_ids: [], initiative_ids: [orgRow, ...under].map((r) => r._id) },
+    team_id: "fixture-team",
+  };
+  assert.deepEqual(expectedScope.scope.project_ids, ["proj-org", "proj-inbox"], "each project once, the goal's own first");
+  await click(q("[data-scope-tab='activity']"));
+  assert.ok(calls.includes("replace:/initiatives/in-1?tab=activity"), calls.join("\n"));
+  await act(async () => root.render(page("in-1")));
+  assert.equal(q("[data-initiative-panel]")!.getAttribute("data-scope-tab-active"), "activity");
+  assert.equal(q("[data-scope-tab='activity']")!.getAttribute("aria-current"), "page");
+  assert.deepEqual(JSON.parse(q("[data-initiative-panel] [data-scope-feed]")!.getAttribute("data-scope-feed")!), expectedScope);
+  assert.equal(q("[data-scope-feed]")!.getAttribute("data-scope-feed-fill"), "1", "the feed owns its scroll");
+  assert.equal(qa("[data-initiative-section]").length, 0, "the record is one tab away");
+  assert.ok(q("header [data-initiative-health]"), "the header stays");
+  await click(q("[data-scope-tab='goal']"));
+  assert.equal(calls.at(-1), "replace:/initiatives/in-1", "the goal is the bare address");
+  await act(async () => root.render(page("in-1")));
+  assert.equal(q("[data-scope-feed]"), null);
+  assert.ok(q("[data-initiative-section='description']"));
 
   // The header's control puts the initiative away and brings it back.
   await click(q("[data-initiative-panel-toggle]"));
@@ -236,7 +313,13 @@ async function verifyInitiatives() {
   assert.equal(q("[data-thread]"), null);
   assert.ok(q("[data-initiative-alone] [data-initiative-panel]"));
   assert.equal(q("[data-initiative-panel-toggle]"), null);
+  assert.equal(q("[data-initiative-panel-close]"), null, "nothing to hand back to");
   assert.match(q("[data-initiative-section='projects']")!.textContent!, /No project carries this yet/);
+  // A link straight to its activity: a personal or a team goal with no project still asks for its own scope.
+  env.search = "tab=activity";
+  await mount(page("in-4"));
+  assert.deepEqual(JSON.parse(q("[data-initiative-alone] [data-scope-feed]")!.getAttribute("data-scope-feed")!), { scope: { project_ids: [], plan_ids: [], initiative_ids: ["init-orphan"] }, team_id: "fixture-team" });
+  env.search = "";
 
   // An id that names nothing here says so.
   await mount(page("in-999"));
@@ -254,9 +337,17 @@ async function verifyInitiatives() {
   assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "sheet");
   await click(q("[data-initiative-panel-close]"));
   assert.equal(q("[data-scope-aside]"), null, "handed back to the conversation");
+  // A link straight to a tab opens the sheet on it.
+  env.search = "tab=activity";
+  await mount(page("in-2"));
+  assert.equal(q("[data-scope-aside]")!.getAttribute("data-scope-aside"), "sheet");
+  assert.ok(q("[data-scope-aside] [data-scope-feed]"));
+  env.search = "";
   // The list on the phone stacks each row's facts under its title.
   await mount(React.createElement(InitiativesList));
   assert.ok(q("[data-initiative-row='in-1'] [data-initiative-progress]"));
+  assert.ok(q("[data-initiative-row='in-1'] [data-metric='weekly_active_teams']"), "the number wraps under the title with the rest");
+  assert.ok(q(`[data-initiative-row='in-1'] [data-initiative-milestone='${nextUpState}']`));
 
   // ── where a goal came from (I1, revised): the review's proposal, dated, one click away ──
   env.phone = false;
@@ -277,6 +368,6 @@ async function verifyInitiatives() {
   await act(async () => root.unmount());
 }
 
-test("initiatives mount: the list, a role's page, a person's page, an update posted, the phone", async () => {
+test("initiatives mount: the list, a role's page and its two tabs, a person's page, an update posted, the phone", async () => {
   await verifyInitiatives();
 }, 600_000);

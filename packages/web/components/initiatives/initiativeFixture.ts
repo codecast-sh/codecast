@@ -40,6 +40,29 @@ export const FIXTURE_INITIATIVES: InitiativeRow[] = [
     description: "Every area of the product has a lead that is an agent, and a person reads one page to know how it is going.\n\nScope: the org chart, roles, scopes and the head of people. Not in scope: billing for agent seats.",
     owner: { kind: "role", role_id: "fixture-role-growth" }, target_date: FIXTURE_NOW + 60 * DAY, priority: "p0",
     project_ids: ["proj-org", "proj-inbox"], health: "at_risk", health_at: FIXTURE_NOW - 2 * DAY, latest_update_id: "upd-2",
+    // The intent record (I5), each entry with its fields in the order the server hands them back.
+    why: "People spend their days routing work that an agent could route. When every area has a lead, a person reads **one page** to know how the company is going.",
+    done_when: "Every project has a lead that is an agent, and the weekly review is read, not written, by a person.",
+    milestones: [
+      { date: FIXTURE_NOW - 20 * DAY, done_at: FIXTURE_NOW - 21 * DAY, key: "org_chart_live", source: { kind: "plan", ref: "pl-600" }, title: "Org chart live" },
+      { date: FIXTURE_NOW - 9 * DAY, done_at: FIXTURE_NOW - 9 * DAY, key: "roles_own_tasks", title: "Roles own tasks" },
+      { date: FIXTURE_NOW + 20 * DAY, key: "every_area_has_a_lead", title: "Every area has a lead" },
+      { date: FIXTURE_NOW - 2 * DAY, key: "scope_view_ships", title: "Scope view ships" },
+      { key: "a_person_reads_one_page", title: "A person reads one page" },
+    ],
+    questions: [
+      { answer: "Not in this goal. Billing has its own.", answered_at: FIXTURE_NOW - 10 * DAY, at: FIXTURE_NOW - 12 * DAY, by: "Sam", key: "do_agent_seats_bill_separately", text: "Do agent seats bill separately?" },
+      { at: FIXTURE_NOW - 3 * DAY, by: "Ashot", key: "who_leads_the_inbox_project", text: "Who leads the inbox project?" },
+      { at: FIXTURE_NOW - DAY, by: "@growth", key: "does_the_review_run_weekly_or_daily", source: { kind: "session", ref: "jx7c6zk:142" }, text: "Does the review run weekly or daily?" },
+    ],
+    decisions: [
+      { at: FIXTURE_NOW - 25 * DAY, by: "@growth", key: "roles_are_colleagues", text: "Roles are colleagues: they own tasks the way people do." },
+      { at: FIXTURE_NOW - 14 * DAY, by: "Ashot", key: "the_head_of_people_is_the_root_seat", source: { kind: "call", ref: "cl-42:15" }, text: "The head of people is the root seat." },
+    ],
+    sources: [
+      { at: FIXTURE_NOW - 28 * DAY, by: "Ashot", kind: "call", quote: "Every area should have a lead that is an agent, and I read one page.", ref: "cl-42:15" },
+      { by: "Sam", kind: "note", quote: "Agents should run the routine work by the end of the year." },
+    ],
   }),
   row({
     _id: "init-org-sub", short_id: "in-2", title: "The role page is the session page", status: "active",

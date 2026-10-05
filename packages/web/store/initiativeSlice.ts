@@ -13,7 +13,9 @@
 import { action } from "./mutativeMiddleware";
 import { writeAsServerShape } from "./serverShape";
 import { pushRoleFieldsIntent, type OrgSliceData } from "./orgSlice";
+import { settleRecordOp, type InitiativeRecordOp } from "./initiativeRecord";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
+import { memberHandle } from "@codecast/shared/chat";
 import type { InitiativeMetric, InitiativeOwner, InitiativePriority, InitiativeRow, InitiativeStatus, InitiativeUpdateHealth, InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
 
 /** Null clears a field, as the mutation reads it. */
@@ -28,6 +30,9 @@ export type InitiativeFields = {
   parent_initiative_id?: string | null;
   /** Replaces the list; keys in the server's order (key, name, target) so the echo reconciles. */
   metrics?: InitiativeMetric[];
+  /** Why it matters, and what done looks like (I5). */
+  why?: string | null;
+  done_when?: string | null;
 };
 
 /** Writes are explicit: the caller names the workspace it is looking at. */
@@ -46,12 +51,22 @@ export type InitiativeSliceActions = {
   removeInitiativeProject: (id: string, projectId: string) => void;
   setInitiativeProjects: (id: string, projectIds: string[]) => void;
   postInitiativeUpdate: (id: string, update: { client_key: string; body: string; health: InitiativeUpdateHealth }) => void;
+  /** One entry of the intent record (I5): add, edit, close or remove, by key. */
+  recordInitiativeEntry: (id: string, op: InitiativeRecordOp) => void;
 };
 
 type InitiativeDraft = OrgSliceData & {
   initiatives: Record<string, InitiativeRow>;
   initiativeUpdates: Record<string, InitiativeUpdateRow>;
-  currentUser?: { _id: string } | null;
+  currentUser?: { _id: string; name?: string; github_username?: string; email?: string } | null;
+};
+
+/** Who a new question or decision is signed by: the viewer's @handle, or
+ *  their name when no handle reaches them. The server writes the same when an
+ *  entry names nobody. */
+const signatureOf = (me: InitiativeDraft["currentUser"]): string | undefined => {
+  const handle = me && memberHandle(me);
+  return handle ? `@${handle}` : me?.name || undefined;
 };
 
 /** Pending protection compares objects as JSON, so an owner is written with
@@ -154,6 +169,19 @@ export function createInitiativeSlice(): InitiativeSliceActions {
       // `health` only: when it was said and which update said it are the
       // server's to stamp, and the registry leaves them unprotected.
       row.health = update.health;
+    }),
+
+    // The list is replaced on the draft with the entry settled here (its key,
+    // who and when), and the op that carries that whole entry is returned: the
+    // side effect sends it in place of the caller's, so the server stores what
+    // the page already shows.
+    recordInitiativeEntry: action(function (this: InitiativeDraft, id: string, op: InitiativeRecordOp) {
+      const row = this.initiatives[id];
+      if (!row) return;
+      const settled = settleRecordOp(row[op.list] ?? [], op, { by: signatureOf(this.currentUser), now: Date.now() });
+      if (!settled) return;
+      writeAsServerShape(row, { [op.list]: settled.next });
+      return settled.op;
     }),
   };
 }
