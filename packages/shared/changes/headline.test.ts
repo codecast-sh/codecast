@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cleanSubject, clip, DEK_MAX, fitProse, HEADLINE_MAX, leadSentences, sliceDek, statsHeadline, storyDek, storyHeadline } from "./headline";
+import { cleanSubject, clip, clipToSentence, DEK_MAX, fitProse, HEADLINE_MAX, leadSentences, sliceDek, statsHeadline, storyDek, storyHeadline } from "./headline";
 
 describe("cleanSubject", () => {
   test("strips the conventional prefix and capitalizes", () => {
@@ -119,5 +119,20 @@ describe("leadSentences", () => {
 
   test("a version or a file name never ends a sentence", () => {
     expect(leadSentences("Shipped cli 1.1.163 and foo.ts today. Then more.", 6).lead).toBe("Shipped cli 1.1.163 and foo.ts today.");
+  });
+});
+
+describe("clipToSentence", () => {
+  test("a long body ends on its last whole sentence, line breaks kept", () => {
+    const body = "Notes are now separate.\nOnly staff see them. The cleanup keeps every moved sentence verbatim and";
+    expect(clipToSentence(body, 80)).toBe("Notes are now separate.\nOnly staff see them.");
+  });
+
+  test("a body that fits is returned whole", () => {
+    expect(clipToSentence("  Short body.  ", 80)).toBe("Short body.");
+  });
+
+  test("with no sentence end in reach it cuts at a word and marks the cut", () => {
+    expect(clipToSentence("one two three four five six seven eight", 20)).toBe("one two three four…");
   });
 });

@@ -562,6 +562,7 @@ async function deliverAnswer(ctx: Ctx, row: DecisionRow, verdict: Verdict, by: A
     content: formatDecisionAnswer({ id: String(row._id), question: row.question, answer: label }),
     client_id: `decision-answer:${row._id}`,
     human: by.kind === "user",
+    wake_cause: "approval",
   });
 }
 

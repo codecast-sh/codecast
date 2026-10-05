@@ -1,6 +1,17 @@
 // Shared pieces of undo labels. A label names the object the way the user
 // knows it, quoted and short enough to fit a toast and a timeline row.
+import { undoGroup, type UndoEntry } from "@platform/engine";
+
 const MAX_QUOTED = 40;
+
+/** Fold every undoable write `fn` makes into one undo. One write keeps its own
+ *  label; several take `summary`. */
+export function undoAsOne<T>(summary: string | ((entries: UndoEntry[]) => string), fn: () => T): T {
+  return undoGroup(
+    (entries: UndoEntry[]) => (entries.length === 1 ? entries[0]!.label : typeof summary === "function" ? summary(entries) : summary),
+    fn,
+  );
+}
 
 /** “title”, cut to 40 characters; the fallback when the object has no title. */
 export function quoted(text: string | null | undefined, fallback: string): string {

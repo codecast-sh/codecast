@@ -10,7 +10,9 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShortcutContext, type ShortcutAction } from "../../shortcuts";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { evalsHref } from "./evalsPaths";
-import { CopyCommand, EvalsLink, VerdictGlyph, plural, shortSha, whenLabel } from "./parts";
+import { CopyCommand, EvalsLink, StallChip, VerdictGlyph } from "./parts";
+import { isJobStalled } from "./bisectModel";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { DeliveryTimeline } from "./DeliveryTimeline";
 import { OrderStrip } from "./OrderStrip";
 import { parseOrder } from "../../store/__tests__/sim/replay";
@@ -18,9 +20,8 @@ import { splitOrderLine } from "../../store/__tests__/sim/shrink";
 import { SimLabels } from "../../store/__tests__/sim/labels";
 import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, traceLabels } from "./simLanes";
 import "./sim.css";
-
-/** "Play" steps the deliveries this far apart (section 6, motion). */
-export const PLAY_STEP_MS = 60;
+import { plural, shortSha, whenLabel } from "./format";
+import { PLAY_STEP_MS } from "./simModel";
 
 export type ShrinkState = { state: "idle" } | { state: "starting" } | { state: "running"; job: SimJob | null } | { state: "failed"; error: string };
 
@@ -314,17 +315,20 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
 function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal: boolean; shrinking: SimRunResponse["shrinking"]; shrink: ShrinkState; onShrink: () => void; recorded: number }) {
   const running = !!shrinking || shrink.state === "running" || shrink.state === "starting";
   const job = shrink.state === "running" ? shrink.job : null;
+  const now = useCoarseNow(30_000);
+  const stalled = !!job && isJobStalled(job, now);
   return (
     <div className="evs-sweep" style={{ borderTop: "1px solid var(--ev-rule)" }} data-evs-shrink={minimal ? "done" : running ? "running" : shrink.state}>
       {running ? (
         <span className="evs-job" role="status">
-          <Scissors className="w-3.5 h-3.5 ev-pulse" />
+          <Scissors className={`w-3.5 h-3.5 ${stalled ? "" : "ev-pulse"}`} />
           {shrinking
             ? `Shrinking, ${shrinking.phase === "prefix" ? "cutting the prefix" : "removing single deliveries"}: ${shrinking.attempts} attempts, shortest failing order ${shrinking.best} of ${shrinking.recorded}`
             : job
               ? job.progress.text || "Shrinking..."
               : "Starting the shrink..."}
           {job?.tmux && <code className="ev-mono">tmux {job.tmux}</code>}
+          {stalled && <StallChip since={job!.updatedAt} data-evs-stalled />}
         </span>
       ) : (
         <>

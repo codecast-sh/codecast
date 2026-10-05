@@ -16,6 +16,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import {
   callAnchorKey,
+  callPathRef,
   isRecRoomKey,
   sessionRoomConversationId,
   type CallAnchor,
@@ -81,6 +82,8 @@ export type RoomThreadRoute = { kind: string; target: string; mode: string; adde
 /** What the thread reads of transcripts.webGetCall. */
 export type RoomThreadCall = {
   _id: string;
+  /** cl-N: what the thread's copied links name the call by (callPathRef). */
+  short_id?: string | null;
   status: string;
   started_at: number;
   ended_at?: number | null;
@@ -291,6 +294,12 @@ export function RoomThread({
   const past = ended || !transcribing;
   // The explanation of what an agent does is said once per call, on the
   // first agent event of this call; the later ones just say who came.
+  // The recording runs this thread says were deleted: their start and stop
+  // lines read as gone.
+  const deletedRuns = useMemo(
+    () => new Set(chatRows.flatMap((r) => (r.event === "record_deleted" && r.event_run_id ? [r.event_run_id] : []))),
+    [chatRows],
+  );
   const explainEventId = past ? undefined : chatRows.find((r) => r.event === "agent_joined" && ofThisCall(r))?._id;
   // No room means the server has not let this client into the huddle yet
   // (or refused it), so nothing can be started; a refusal past that point
@@ -622,7 +631,7 @@ export function RoomThread({
             summary={call.summary}
             items={call.action_items ?? []}
             live={!ended}
-            callId={String(call._id)}
+            callId={callPathRef(call)}
             focus={focus && focus.kind !== "turns" ? focusKey : null}
           />
         ) : ended && !recording && passages.length > 0 ? (
@@ -734,11 +743,12 @@ export function RoomThread({
               turns={passages[0].turns}
               isSelected={selection?.isSelected}
               onTurnClick={selection?.onTurnClick}
+              onTurnHold={selection?.onTurnHold}
               compact
               activeIndex={activeIndex}
               activeSeq={selection?.activeSeq}
               filmed={selection?.filmed}
-              callId={call ? String(call._id) : undefined}
+              callId={call ? callPathRef(call) : undefined}
             />
           </div>
         ) : (
@@ -780,7 +790,7 @@ export function RoomThread({
                   dayOf={anchorAt}
                   onToggle={() => toggle(item)}
                   selection={selection}
-                  callId={call ? String(call._id) : undefined}
+                  callId={call ? callPathRef(call) : undefined}
                 />
               );
             } else if (item.kind === "event") {
@@ -795,6 +805,7 @@ export function RoomThread({
                   dayOf={anchorAt}
                   onOpen={openSession}
                   momentAt={selection?.momentAt}
+                  deletedRuns={deletedRuns}
                 />
               );
             } else {

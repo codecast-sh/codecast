@@ -52,7 +52,7 @@ export function stripInjectionNoise(text: string): string {
 }
 
 const WIRE_TAG_JUNK_PREFIX =
-  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|teammate-message|scheduled-task|session-escalation)[\s>])/;
+  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|task-comment|teammate-message|scheduled-task|session-escalation)[\s>])/;
 
 // A user-role row that carries tool results is the harness answering the agent's
 // tool calls, never something a person typed (typed input always lands as its own
@@ -186,6 +186,41 @@ export function parseProposalMessage(rawContent: string | null | undefined): { p
   // only on a reply a person sent from an ask's card.
   const ask = attr("ask");
   return { proposal: attr("proposal"), change: change ? Number(change) : null, ...(ask ? { ask: Number(ask) } : {}), from: attr("from").trim(), about, body };
+}
+
+// A person's comment on a task, delivered into the session that owns the
+// task while it is working (convex tasks.ts deliverCommentToOwner):
+// <task-comment task="ct-N" from="Name">. The body opens with the
+// "About ct-N ("title"):" header and closes with a reply note for the agent:
+// the person reads the task, not the session, so a reply belongs on the task.
+// The transcript shows the person's own words under a quote of the header,
+// the way a proposal message reads.
+export const TASK_COMMENT_TAG = "task-comment";
+
+export function formatTaskCommentMessage(o: { task: string; title: string; from: string; body: string }): string {
+  const q = (x: string) => x.replace(/"/g, "'");
+  const tail = `(This is a comment on ${o.task}, the task you own. Act on it; when a reply is wanted, answer on the task with \`cast task comment ${o.task} "..."\`, which is where ${q(o.from)} reads.)`;
+  return `<${TASK_COMMENT_TAG} task="${o.task}" from="${q(o.from)}">\nAbout ${o.task} ("${q(o.title)}"):\n\n${o.body}\n\n${tail}\n</${TASK_COMMENT_TAG}>`;
+}
+
+export function isTaskCommentMessage(rawContent: string | null | undefined): boolean {
+  if (!rawContent) return false;
+  return /^<task-comment\s/.test(stripInjectionNoise(rawContent));
+}
+
+export function parseTaskCommentMessage(rawContent: string | null | undefined): { task: string; from: string; about: string | null; body: string } | null {
+  if (!rawContent) return null;
+  const text = stripInjectionNoise(rawContent);
+  const m = text.match(/^<task-comment\s+([^>]*)>([\s\S]*?)(?:<\/task-comment>\s*$|$)/);
+  if (!m) return null;
+  const attr = (k: string) => { const a = m[1].match(new RegExp(`${k}="([^"]*)"`)); return a ? a[1] : ""; };
+  let body = m[2].trim();
+  // The trailing reply note is for the agent, not the reader.
+  body = body.replace(/\n*\(This is a comment on [\s\S]*\)\s*$/, "").trim();
+  let about: string | null = null;
+  const head = body.match(/^(About \S+ \("[^\n]*"\):)\s*\n+/);
+  if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
+  return { task: attr("task"), from: attr("from").trim(), about, body };
 }
 
 // The multi-agent harness wraps a message from another agent in

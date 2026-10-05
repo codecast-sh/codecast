@@ -15,7 +15,8 @@
 import { useContext } from "react";
 import { useConvex } from "convex/react";
 import { ContextMenu, useContextMenu } from "../ui/context-menu";
-import { browserPaneMenuItems } from "../../lib/browserPaneMenuItems";
+import { Copy } from "lucide-react";
+import { browserPaneMenuItems, copyAddress } from "../../lib/browserPaneMenuItems";
 import { prefetchBrowserFocusEndpoint } from "../../lib/browserFocus";
 import type { BrowserTabRef } from "../castCommand";
 import { BrowserSessionContext, BROWSER_ROW_PILL, useBrowserTabActions, type BrowserTabActionState } from "../../hooks/useBrowserTabActions";
@@ -119,6 +120,20 @@ export function BrowserTabPill({ tab }: { tab: BrowserTabRef }) {
         {state.kind === "idle" && OPEN_TAB_ICON}
         <BrowserTabActionLabel state={state} idle={<span>open tab</span>} />
       </a>
+      {tab.url && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            copyAddress(tab.url!);
+          }}
+          className="inline-flex items-center px-0.5 py-0.5 rounded-full text-sol-text-dim hover:text-sol-cyan transition-colors"
+          title={`Copy ${tab.url}`}
+          aria-label="Copy page address"
+        >
+          <Copy className="w-2.5 h-2.5" />
+        </button>
+      )}
       {/* The page, in YOUR browser, as a pane. Deliberately not the same thing
           as raising the agent's tab or watching it live: this is a second
           visit to the same address with your own session, which is what you

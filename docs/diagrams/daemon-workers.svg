@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 500" role="img" aria-labelledby="t d">
+  <title id="t">Daemon workers: children read, the main process decides</title>
+  <desc id="d">The daemon main process keeps the loopback server, Convex writes, delivery, sync positions, identity checks and the watchdog tick. Through workers/bridge.ts and host.ts it supervises three read-only children started as _worker probe, _worker scan and _worker ingest. It sends each a request over NDJSON on stdin and stdout and gets bounded result pages back. The children never write, deliver or kill. The hosts start only when config.daemon_workers is true and never on Windows; otherwise callers use their own asynchronous path.</desc>
+  <style>
+    .page { fill: #FBF5E2 }
+    .card { fill: #ffffff; stroke: #93a1a1; stroke-width: 1.25 }
+    .inset { fill: #eee8d5; stroke: none }
+    .zone { fill: none; stroke: #93a1a1; stroke-width: 1; stroke-dasharray: 3 4 }
+    .agent { fill: #ffffff; stroke: #6c71c4; stroke-width: 1.25 }
+    .core { fill: #ffffff; stroke: #2aa198; stroke-width: 1.75 }
+    text { font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace; fill: #002b36 }
+    .h { font-size: 15px; font-weight: 600 }
+    .l { font-size: 12px }
+    .n { font-size: 11px; fill: #586e75 }
+    .k { font-size: 10px; fill: #93a1a1; letter-spacing: .04em }
+    .data { stroke: #2aa198; stroke-width: 1.5; fill: none }
+    .cmd { stroke: #268bd2; stroke-width: 1.5; fill: none; stroke-dasharray: 5 4 }
+    .dataLbl { fill: #2aa198 }
+    .cmdLbl { fill: #268bd2 }
+    .ah-data { fill: #2aa198 }
+    .ah-cmd { fill: #268bd2 }
+    .person { fill: #cb4b16 }
+    @media (prefers-color-scheme: dark) {
+      .page { fill: #002b36 }
+      .card, .agent, .core { fill: #08404e }
+      .card { stroke: #586e75 }
+      .inset { fill: #073642 }
+      .zone { stroke: #586e75 }
+      text { fill: #fdf6e3 }
+      .n { fill: #93a1a1 }
+      .k { fill: #657b83 }
+      .dataLbl { fill: #2aa198 }
+      .cmdLbl { fill: #268bd2 }
+    }
+  </style>
+  <defs>
+    <marker id="aData" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-data" d="M0 0L10 5L0 10z"/></marker>
+    <marker id="aCmd" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-cmd" d="M0 0L10 5L0 10z"/></marker>
+  </defs>
+
+  <rect class="page" width="960" height="500" rx="12"/>
+  <text class="h" x="24" y="36">Daemon workers: children read, the main process decides</text>
+
+  <!-- Main process -->
+  <rect class="core" x="24" y="56" width="380" height="336" rx="10"/>
+  <text class="h" x="40" y="84">daemon main process</text>
+  <text class="n" x="40" y="104">owns every write and every decision</text>
+  <g class="l">
+    <text x="40" y="132">loopback server: hooks, terminals</text>
+    <text x="40" y="152">Convex subscriptions and writes</text>
+    <text x="40" y="172">delivery, sync positions, retries</text>
+    <text x="40" y="192">identity checks, kills, parking</text>
+    <text x="40" y="212">the watchdog tick</text>
+  </g>
+  <rect class="inset" x="40" y="228" width="348" height="148" rx="8"/>
+  <text class="l" x="56" y="252">workers/bridge.ts + host.ts</text>
+  <text class="n" x="56" y="272">one supervised child per kind</text>
+  <text class="n" x="56" y="290">4 active + 32 waiting requests</text>
+  <text class="n" x="56" y="308">deadline at most 60 s</text>
+  <text class="n" x="56" y="326">backoff 1 s, 5 s, 30 s after a crash</text>
+  <text class="n" x="56" y="344">3 crashes in 10 min disable the kind</text>
+  <text class="n" x="56" y="362">children never write, deliver or kill</text>
+
+  <!-- Children -->
+  <rect class="card" x="560" y="56" width="376" height="100" rx="8"/>
+  <text class="l" x="576" y="82">_worker probe</text>
+  <text class="n" x="576" y="104">read-only ps, tmux, lsappinfo,</text>
+  <text class="n" x="576" y="120">launchctl print and keychain reads</text>
+  <text class="n" x="576" y="136">argv validated per command</text>
+
+  <rect class="card" x="560" y="174" width="376" height="100" rx="8"/>
+  <text class="l" x="576" y="200">_worker scan</text>
+  <text class="n" x="576" y="222">paged filesystem walks: session index,</text>
+  <text class="n" x="576" y="238">watcher rescans, inventory, Cursor</text>
+  <text class="n" x="576" y="254">pages of 128 rows / 256 KiB</text>
+
+  <rect class="card" x="560" y="292" width="376" height="100" rx="8"/>
+  <text class="l" x="576" y="318">_worker ingest</text>
+  <text class="n" x="576" y="340">parses 9 transcript formats and</text>
+  <text class="n" x="576" y="356">prepares messages for sync</text>
+  <text class="n" x="576" y="372">pages of 128 tokens / 256 KiB</text>
+
+  <!-- request / result per child -->
+  <path class="cmd" d="M404 92 H556" marker-end="url(#aCmd)"/>
+  <path class="data" d="M560 120 H408" marker-end="url(#aData)"/>
+  <text class="l cmdLbl" x="420" y="84">request</text>
+  <text class="l dataLbl" x="420" y="138">result page</text>
+
+  <path class="cmd" d="M404 210 H556" marker-end="url(#aCmd)"/>
+  <path class="data" d="M560 238 H408" marker-end="url(#aData)"/>
+
+  <path class="cmd" d="M404 328 H556" marker-end="url(#aCmd)"/>
+  <path class="data" d="M560 356 H408" marker-end="url(#aData)"/>
+
+  <!-- Footer -->
+  <rect class="zone" x="24" y="412" width="912" height="64" rx="10"/>
+  <text class="n" x="40" y="438">on only when config.daemon_workers is true, never on win32; off or unavailable, callers use their own async path</text>
+  <text class="n" x="40" y="460">frames: NDJSON v1 on each child's stdin/stdout (workers/protocol.ts), 16 MiB max, checked against the pending request</text>
+</svg>

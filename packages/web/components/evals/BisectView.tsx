@@ -8,30 +8,16 @@
 import type { BisectResponse, BisectState, BisectStep } from "@codecast/shared/contracts/evalsApi";
 import { formatDuration } from "../../lib/conversationFormat";
 import { formatTimeAgo } from "../../lib/messageNavigator";
-import { EVALS_STALL_MS } from "../../lib/evals/hooks";
 import { AttributionAnswerCard, AttributionEvidence, CandidateList } from "./AttributionView";
 import { BisectRuler } from "./BisectRuler";
 import { CommitPanel } from "./CommitPanel";
-import { CopyCommand, EvalsLink, SeparationMark, VerdictGlyph, batchLabel, plural, shortSha, usd, type VerdictState } from "./parts";
-import { splitBatchNames } from "./format";
-import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled, rulerModel, tierWord, type RulerModel } from "./bisectModel";
+import { CopyCommand, EvalsLink, SeparationMark, VerdictGlyph } from "./parts";
+import { splitBatchNames, plural, shortSha, usd, batchLabel } from "./format";
+import { bisectStatusWord, endpointLabel, isBisectLive, answerStepText, rulerModel, tierWord, type RulerModel, bisectGlyph, bisectOutcomeOf, bisectSummaryWord, isStalled } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
 
-export function bisectGlyph(state: Pick<BisectState, "status" | "answer">): VerdictState {
-  if (isBisectLive(state.status)) return "unscored";
-  if (state.answer?.kind === "culprit") return "fail";
-  if (state.answer?.kind === "range") return "mixed";
-  if (state.status === "failed") return "crash";
-  return "dry";
-}
-
 const elapsed = (from: number, to: number) => formatDuration(from, to) || "under a minute";
-
-/** Stalled: the server says so, or a live bisect has written no step for five minutes. */
-export function isStalled(data: Pick<BisectResponse, "state" | "stalled">, now: number): boolean {
-  return isBisectStalled({ ...data.state, stalled: data.stalled }, now, EVALS_STALL_MS);
-}
 
 function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state: BisectState; model: RulerModel; logTail: string[]; stalled: boolean; now: number; onStop: () => void; stopping: boolean }) {
   const live = isBisectLive(state.status);
@@ -40,7 +26,7 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
   return (
     <aside className="ev-card evb-rail evb-area-rail" data-evb-rail>
       <h2>
-        <VerdictGlyph state={bisectGlyph(state)} size={11} />
+        <VerdictGlyph state={bisectGlyph(bisectOutcomeOf(state))} title={bisectSummaryWord(bisectOutcomeOf(state))} size={11} />
         {live ? "Running" : "Finished"}
       </h2>
       <div className="evb-spend">
@@ -72,7 +58,8 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
         <dt>Tier</dt>
         <dd>{tierWord(state.tier)}</dd>
       </dl>
-      {state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : live ? <span className="text-[11.5px] ev-quiet">Running detached; it writes log.txt in its bisect folder.</span> : null}
+      {/* The tmux session ends with the run, so the attach line is offered only while there is something to attach to. */}
+      {live && (state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : <span className="text-[11.5px] ev-quiet">Running detached; it writes log.txt in its bisect folder.</span>)}
       {live && (
         <button type="button" className="evb-btn evb-btn--stop self-start" onClick={onStop} disabled={stopping} data-evb-stop>
           {stopping ? "Stopping between reps..." : "Stop"}
@@ -81,8 +68,9 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
       {logTail.length > 0 && (
         <div className="flex flex-col gap-1.5">
           <span className="text-[11px] ev-quiet">Log tail</span>
+          {/* A column-reverse scroller opens at its end and stays there as lines land, so the newest line is the one in view. */}
           <pre className="evb-log" data-evb-log>
-            {logTail.join("\n")}
+            <span>{logTail.join("\n")}</span>
           </pre>
         </div>
       )}
@@ -91,7 +79,7 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
 }
 
 /** What the bisect answered. */
-export function BisectResult({ state, now }: { state: BisectState; now: number }) {
+export function BisectResult({ state, now, steps = [] }: { state: BisectState; now: number; steps?: readonly BisectStep[] }) {
   const ans = state.answer;
   if (!ans) {
     if (isBisectLive(state.status)) return null;
@@ -151,8 +139,9 @@ export function BisectResult({ state, now }: { state: BisectState; now: number }
     <section className="ev-card evb-result" data-evb-result={ans.kind}>
       <div className="evb-result-head">
         <VerdictGlyph state={ans.kind === "culprit" ? "fail" : "mixed"} size={16} />
-        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "commit")}</span>
-        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : "render alike or would not separate: the answer is this range."}</span>
+        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "candidate")}</span>
+        {/* A range's reason is the runner's own answer line, never rebuilt here. */}
+        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : (answerStepText(steps) ?? "")}</span>
       </div>
       <div className="flex items-center gap-3 flex-wrap text-[12px]">
         <span className="ev-quiet">Confirmation</span>
@@ -216,7 +205,7 @@ export function BisectView({ data, steps, now, onStop, stopping }: BisectViewPro
   return (
     <div className="evb-page" data-evb-bisect={state.id} data-evb-status={state.status}>
       <header className="evb-head">
-        <VerdictGlyph state={bisectGlyph(state)} size={14} />
+        <VerdictGlyph state={bisectGlyph(bisectOutcomeOf(state))} title={bisectSummaryWord(bisectOutcomeOf(state))} size={14} />
         <h1>Bisect {state.id}</h1>
         <EvalsLink className="ev-chip" href={evalsHref.surface(state.surface)}>
           {state.surface}
@@ -238,7 +227,7 @@ export function BisectView({ data, steps, now, onStop, stopping }: BisectViewPro
         </div>
         <Rail state={state} model={model} logTail={data.logTail} stalled={stalled} now={now} onStop={onStop} stopping={stopping} />
         <div className="evb-area-rest flex flex-col gap-4 min-w-0">
-          <BisectResult state={state} now={now} />
+          <BisectResult state={state} now={now} steps={steps} />
           <Steps steps={steps} surface={state.surface} />
         </div>
       </div>

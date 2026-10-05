@@ -6,15 +6,13 @@
 // re-syncs it), so each shows the server's answer and nothing is mirrored.
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useMutation } from "convex/react";
 import { toast } from "sonner";
 import { ArrowRightLeft, GitMerge, Scissors } from "lucide-react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../ui/dialog";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import type { OrgRole, OrgTree } from "../orgTypes";
+import { useInboxStore } from "../../../store/inboxStore";
 
-const api = _api as any;
 
 const serverWords = (e: any, fallback: string) => String(e?.message ?? "").replace(/^\[Request ID: [^\]]+\] Server Error\s*/i, "").split("\n")[0] || fallback;
 
@@ -31,7 +29,7 @@ export function mergeStepWords(m: MergeAllowanceRow | null | undefined): string 
 /** The line's merge step (L12): one switch; turning it on without a merge
  *  grant asks for the daily limit, which writes the grant in the same act. */
 export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEdit: boolean; merge: MergeAllowanceRow | null | undefined }) {
-  const setLineMerge = useMutation(api.orgLineMerge.setLineMerge);
+  const setLineMerge = useInboxStore((s) => s.setOrgLineMerge);
   const [asking, setAsking] = useState(false);
   const [perDay, setPerDay] = useState("3");
   const [busy, setBusy] = useState(false);
@@ -39,7 +37,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
   const flip = async (next: boolean, per_day?: number) => {
     setBusy(true);
     try {
-      await setLineMerge({ role_id: role._id, on: next, ...(per_day !== undefined ? { per_day } : {}) });
+      await setLineMerge(role._id, next, per_day);
       toast.success(next ? `${role.name}'s line merges on its own now` : `${role.name}'s line leaves merges to a person`);
       setAsking(false);
     } catch (e: any) {
@@ -110,7 +108,7 @@ const dayWords = (at: number) => new Date(at).toLocaleDateString(undefined, { mo
 export function HandingOverSection({ tree, role, canEdit }: { tree: OrgTree; role: OrgRole; canEdit: boolean }) {
   const hand = role.handing_over;
   const now = useCoarseNow(60_000);
-  const settle = useMutation(api.orgHandoff.settle);
+  const settle = useInboxStore((s) => s.settleOrgHandoff);
   const [busy, setBusy] = useState(false);
   if (!hand) return null;
   const hoursLeft = Math.max(0, Math.round((hand.deadline - now) / 3_600_000));
@@ -118,7 +116,7 @@ export function HandingOverSection({ tree, role, canEdit }: { tree: OrgTree; rol
   const act = async (how: "run" | "close") => {
     setBusy(true);
     try {
-      await settle({ role_id: role._id, how });
+      await settle(role._id, how);
       toast.success(how === "run" ? "The handoff trigger runs now" : hand.retire ? `The handoff closed; ${role.name} retires` : "The handoff closed");
     } catch (e: any) { toast.error(serverWords(e, "Could not settle the handoff")); }
     finally { setBusy(false); }
@@ -189,7 +187,7 @@ export function splitReadiness(areas: Array<{ key: string }>, side: Record<strin
 
 /** Split into two leads (S34): one dialog, two columns, every area placed. */
 export function SplitRoleDialog({ tree, role, open, onOpenChange }: { tree: OrgTree; role: OrgRole; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const split = useMutation(api.orgSplit.split);
+  const split = useInboxStore((s) => s.splitOrgRole);
   const areas = useMemo(() => [
     ...(role.scope_names?.projects ?? []).map((p) => ({ key: `project:${p.id}`, ref: `project:${p.id}`, title: p.title })),
     ...(role.scope_names?.plans ?? []).map((p) => ({ key: `plan:${p.id}`, ref: `plan:${p.id}`, title: p.title })),

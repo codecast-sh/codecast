@@ -8,24 +8,18 @@
 import { useMemo, useRef, useState } from "react";
 import { GitCommitHorizontal } from "lucide-react";
 import type { CommitRef, CommitResponse, PatchResponse } from "@codecast/shared/contracts/evalsApi";
-import { SESSION_TRAILER_KEY, extractSessionTrailer, splitSessionTrailer } from "@codecast/shared/blame";
+import { splitSessionTrailer } from "@codecast/shared/blame";
 import { parseUnifiedDiffSections } from "../../lib/unifiedDiffParser";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { DiffView } from "../DiffView";
 import { EntityIdPill } from "../EntityIdPill";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { useEvalsResource } from "../../lib/evals/hooks";
-import { shortSha } from "./parts";
 import "./bisect.css";
-
-/**
- * The session a commit's Codecast-Session trailer names, read the way blame
- * reads it: the value is the session link as written (`git log` hands it over
- * raw), and anything but a full conversation id names nothing.
- */
-export function commitSessionId(commit: Pick<CommitRef, "session">): string | null {
-  return commit.session ? extractSessionTrailer(`${SESSION_TRAILER_KEY}: ${commit.session}`) : null;
-}
+import { offBranchWords, shortSha } from "./format";
+import { commitSessionId } from "./bisectModel";
+import { evalsHref } from "./evalsPaths";
+import { EvalsLink } from "./parts";
 
 /** The session pill and the off-branch twin: what every commit line in these pages carries. */
 export function CommitMarks({ commit }: { commit: CommitRef }) {
@@ -34,8 +28,8 @@ export function CommitMarks({ commit }: { commit: CommitRef }) {
     <>
       {session && <EntityIdPill type="session" id={session} compact />}
       {!commit.onMain && (
-        <span className="ev-chip ev-chip--offbranch" title="On no branch; its main-line twin carries the same patch">
-          off-branch{commit.mainSha && commit.mainSha !== commit.sha ? `, main ${shortSha(commit.mainSha)}` : ", no main twin"}
+        <span className="ev-chip ev-chip--offbranch" title={offBranchWords(commit).title} data-ev-offbranch={commit.mainSha && commit.mainSha !== commit.sha ? "twin" : "none"}>
+          {offBranchWords(commit).label}
         </span>
       )}
     </>
@@ -73,11 +67,25 @@ export function CommitPanelView({ data, loading = false, error = null, whole, on
         </div>
         <div className="evb-commit-subject">{c.subject}</div>
         {body && <div className="evb-note whitespace-pre-wrap">{body}</div>}
+        {!c.onMain && !(c.mainSha && c.mainSha !== c.sha) && (
+          <div className="evb-note" data-evb-no-twin>
+            {offBranchWords(c).title}
+            {c.near && (
+              <>
+                {" "}
+                <EvalsLink className="evb-link" href={evalsHref.commit(c.near)}>
+                  Open {shortSha(c.near)}
+                </EvalsLink>
+              </>
+            )}
+          </div>
+        )}
       </header>
       <div className="evb-commit-bar">
         <span className="text-[11.5px] ev-quiet">
           {data.files.length} {data.files.length === 1 ? "file" : "files"}
           {data.whole ? " in the whole commit" : " in the surface's declared sources"}
+          {data.truncated ? ", the text cut at 2 MiB" : ""}
         </span>
         <SegmentedToggle value={whole ? "whole" : "declared"} onChange={(k) => onWhole(k === "whole")} items={SCOPES} />
       </div>

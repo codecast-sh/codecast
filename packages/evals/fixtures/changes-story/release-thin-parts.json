@@ -1,0 +1,149 @@
+{
+ "asOf": "2026-01-14T18:00:00.000Z",
+ "notes": "synthetic: a release with two parts the inputs describe and two they only name; the article must not remark on what the inputs leave out",
+ "snapshot": {
+  "story": {
+   "area": "web",
+   "branch": "main",
+   "commit_shas": [
+    "e1f60718293a4b5c6d7e8f90123456789012345",
+    "e2f60718293a4b5c6d7e8f90123456789012345",
+    "e3f60718293a4b5c6d7e8f90123456789012345",
+    "e4f60718293a4b5c6d7e8f90123456789012345"
+   ],
+   "area_counts": {
+    "web": 2,
+    "backend": 1,
+    "cli": 1
+   },
+   "risks": [],
+   "conversation_ids": [
+    "k27d4e5f6g7h8j9k0m1n2p3"
+   ],
+   "kind": "feature",
+   "importance": 4
+  },
+  "commits": [
+   {
+    "sha": "e1f60718293a4b5c6d7e8f90123456789012345",
+    "subject": "feat(booking): patients can move an appointment themselves",
+    "body": "A patient can now move their own appointment to any open slot within 14 days from the confirmation email, instead of phoning the front desk. The old slot is released at once so another patient can take it.",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768389000000,
+    "branch": "main",
+    "conversation_id": "k27d4e5f6g7h8j9k0m1n2p3",
+    "insertions": 420,
+    "deletions": 84,
+    "areas": {
+     "web": {
+      "touches": 1,
+      "insertions": 420,
+      "deletions": 84
+     }
+    },
+    "top_paths": [
+     "packages/web/booking/reschedule.tsx"
+    ]
+   },
+   {
+    "sha": "e2f60718293a4b5c6d7e8f90123456789012345",
+    "subject": "fix(reminders): one reminder per appointment after a move",
+    "body": "Moving an appointment used to leave the first reminder scheduled, so patients got two reminders with different times. A move now cancels the old reminder.",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768389600000,
+    "branch": "main",
+    "conversation_id": "k27d4e5f6g7h8j9k0m1n2p3",
+    "insertions": 120,
+    "deletions": 24,
+    "areas": {
+     "backend": {
+      "touches": 1,
+      "insertions": 120,
+      "deletions": 24
+     }
+    },
+    "top_paths": [
+     "packages/backend/reminders/schedule.ts"
+    ]
+   },
+   {
+    "sha": "e3f60718293a4b5c6d7e8f90123456789012345",
+    "subject": "chore(web): new table shell",
+    "body": "",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768390200000,
+    "branch": "main",
+    "conversation_id": "k27d4e5f6g7h8j9k0m1n2p3",
+    "insertions": 300,
+    "deletions": 60,
+    "areas": {
+     "web": {
+      "touches": 1,
+      "insertions": 300,
+      "deletions": 60
+     }
+    },
+    "top_paths": [
+     "packages/web/components/TableShell.tsx"
+    ]
+   },
+   {
+    "sha": "e4f60718293a4b5c6d7e8f90123456789012345",
+    "subject": "feat(cli): clinic export command",
+    "body": "",
+    "author_name": "Dana Whitfield",
+    "author_email": "dana@example.com",
+    "timestamp": 1768390800000,
+    "branch": "main",
+    "conversation_id": "k27d4e5f6g7h8j9k0m1n2p3",
+    "insertions": 180,
+    "deletions": 36,
+    "areas": {
+     "cli": {
+      "touches": 1,
+      "insertions": 180,
+      "deletions": 36
+     }
+    },
+    "top_paths": [
+     "packages/cli/commands/export.ts"
+    ]
+   }
+  ],
+  "sessions": [
+   {
+    "conversation_id": "k27d4e5f6g7h8j9k0m1n2p3",
+    "mode": "full",
+    "outcome_type": "shipped",
+    "headline": "Self-service rescheduling ships with the reminder fix",
+    "summary": "Patients can move their own appointments from the confirmation email; a move cancels the old reminder. Also landed a table shell and an export command.",
+    "turns": [
+     {
+      "ask": "let patients reschedule without calling",
+      "did": [
+       "added reschedule from the confirmation email",
+       "release the old slot at once"
+      ]
+     },
+     {
+      "ask": "people get two reminders after moving",
+      "did": [
+       "a move cancels the old reminder"
+      ]
+     }
+    ]
+   }
+  ],
+  "prs": [],
+  "people": [
+   "Dana Whitfield",
+   "Kofi Mensah"
+  ]
+ },
+ "label": {
+  "why": "commit"
+ }
+}

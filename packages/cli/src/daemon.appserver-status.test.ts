@@ -1,5 +1,27 @@
 import { describe, expect, test } from "bun:test";
-import { isSupersededAppServerSession, mapCodexAppServerThreadStatusToAgentStatus } from "./daemon.js";
+import { currentHeartbeatSessions, isSupersededAppServerSession, mapCodexAppServerThreadStatusToAgentStatus } from "./daemon.js";
+
+test("fleet heartbeat scans the historical cache once and observes remaps on the next pass", () => {
+  const rows = Object.fromEntries(Array.from({ length: 10_000 }, (_, i) => [`session-${i}`, `conv-${i}`]));
+  let scans = 0;
+  const cache = new Proxy(rows, { ownKeys(target) { scans++; return Reflect.ownKeys(target); } });
+  const sessions = Array.from({ length: 300 }, (_, i) => `session-${i}`);
+  const live = new Map([["conv-1", "live-thread"]]);
+  const persisted = new Map([["conv-2", { threadId: "persisted-thread", updatedAt: 1 }]]);
+  rows["live-thread"] = "conv-1";
+  rows["persisted-thread"] = "conv-2";
+  sessions.push("live-thread", "persisted-thread");
+  expect(currentHeartbeatSessions(sessions, cache, live, persisted)).toEqual(
+    sessions.filter(id => id !== "session-1" && id !== "session-2"),
+  );
+  expect(scans).toBe(1);
+  rows["replacement"] = "conv-3";
+  sessions.push("replacement");
+  expect(currentHeartbeatSessions(sessions, cache, live, persisted)).toEqual(
+    sessions.filter(id => !["session-1", "session-2", "session-3"].includes(id)),
+  );
+  expect(scans).toBe(2);
+});
 
 describe("app-server status ownership after switching agents", () => {
   const conv = "conversation";

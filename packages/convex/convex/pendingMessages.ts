@@ -6,6 +6,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
+import type { WakeCause } from "@codecast/shared/contracts/assistant";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
@@ -13,7 +14,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
 import { resolveOwnerDeviceView } from "./devices";
 import {
   messagesCommandCoverageTarget,
@@ -197,6 +198,10 @@ export function canDaemonSeePendingMessage(
   // destination does not own it yet. Nobody delivers; the message waits as
   // pending and rides the resume on the destination once the fence clears.
   if ((conversation as any).migration) return false;
+  // A hosted conversation (agent_type "codecast") is run by this backend's
+  // turn engine, which consumes its pending rows itself (assistant/entry.ts).
+  // No daemon delivers into it, resumes it or launches it.
+  if (isHostedAgentType((conversation as any).agent_type)) return false;
   // Delivery is the TARGET owner's job, not the sender's — a teammate's message is delivered by
   // the owner's daemon. (For a self-send these are the same user.)
   if (pendingMessageOwnerId(message, conversation) !== userId.toString()) return false;
@@ -322,7 +327,9 @@ export async function updatePendingMessageStatusForDaemon(
 // session sends (sendSessionMessage) funnel through here so the wake-up rules
 // stay in one place.
 export async function enqueuePendingMessage(
-  ctx: { db: any },
+  // `scheduler` is required for a hosted conversation, whose turn engine is
+  // woken from here; tests driving a daemon conversation may pass `{ db }`.
+  ctx: { db: any; scheduler?: { runAfter: (delayMs: number, fn: any, args: any) => Promise<unknown> } },
   conversation: any,
   fromUserId: Id<"users">,
   fields: {
@@ -357,6 +364,10 @@ export async function enqueuePendingMessage(
     // caused, such as a role's own escalation divider, so the role is not
     // woken to read what it just wrote.
     hold?: boolean;
+    // Why a hosted conversation wakes for this row, when the caller knows
+    // better than the origin says (an answered approval). Ignored for every
+    // other conversation.
+    wake_cause?: WakeCause;
   }
 ): Promise<Id<"pending_messages">> {
   if (fields.client_id) {
@@ -433,6 +444,17 @@ export async function enqueuePendingMessage(
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
   if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
+
+  // A hosted conversation has no daemon to poll for this row: wake its turn
+  // engine, which consumes the pending rows itself. A turn already running
+  // picks the row up before it stops (assistant/entry.ts wake).
+  if (isHostedAgentType(conversation.agent_type)) {
+    if (!ctx.scheduler) throw new Error("enqueuePendingMessage: a hosted conversation needs a scheduler to wake");
+    await ctx.scheduler.runAfter(0, internal.assistant.entry.wake, {
+      conversation_id: conversation._id,
+      cause: fields.wake_cause ?? (fields.origin === "scheduler" ? "routine" : "message"),
+    });
+  }
 
   // Wake-up rules. A human send resurfaces the session everywhere: dismissed,
   // stashed, and killed flags all clear ("I messaged it, show it to me").

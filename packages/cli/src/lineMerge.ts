@@ -21,7 +21,7 @@ export type MergeCheck = {
   on: boolean;
   used: number;
   limit: number | null;
-  role: { handle: string; short_id: string; name: string };
+  role: { handle: string; short_id: string; name: string } | null; // null: a person answered Ship on a run no role started
   task: { short_id: string; title: string; pr_url: string | null } | null;
 };
 

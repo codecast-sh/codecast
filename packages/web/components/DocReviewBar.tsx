@@ -8,8 +8,6 @@
 // uses — then clears the batch and leaves review mode.
 
 import { useState, useCallback } from "react";
-import { useMutation } from "convex/react";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { nanoid } from "nanoid";
 import { useInboxStore } from "../store/inboxStore";
@@ -17,7 +15,6 @@ import { cleanTitle } from "../lib/conversationProcessor";
 import { formatPendingComments, sortPendingComments, formatDocFeedback } from "../lib/quoteFormat";
 import { Send } from "lucide-react";
 
-const api = _api as any;
 
 export function DocReviewBar({
   reviewKey,
@@ -35,7 +32,7 @@ export function DocReviewBar({
   const comments = useInboxStore((s) => s.reviewComments[reviewKey]);
   const count = comments?.length ?? 0;
   const [note, setNote] = useState("");
-  const sendMessage = useMutation(api.pendingMessages.sendMessageToSession);
+  const sendMessage = useInboxStore((s) => s.sendMessage);
   const openCompose = useInboxStore((s) => s.openCompose);
 
   // Compile the live annotation batch into the same feedback message both the
@@ -59,13 +56,11 @@ export function DocReviewBar({
   const send = useCallback(
     async (conversationId: string, sessionTitle: string) => {
       const content = compileContent();
-      try {
-        await sendMessage({ conversation_id: conversationId as any, content, client_id: nanoid(10), human: true });
-        finishReview();
-        toast.success(`Sent to ${cleanTitle(sessionTitle || "session")}`);
-      } catch (e: any) {
-        toast.error(e?.message?.includes("Unauthorized") ? "You can only send to your own sessions" : "Failed to send feedback");
-      }
+      // The store's send paints the message at once and owns its delivery
+      // (and a refusal's notice), like every other composer.
+      sendMessage(conversationId, content, undefined, nanoid(10));
+      finishReview();
+      toast.success(`Sent to ${cleanTitle(sessionTitle || "session")}`);
     },
     [compileContent, finishReview, sendMessage],
   );

@@ -39,6 +39,7 @@ import {
   isSeat,
   liveMembers,
   readRoomState,
+  stampRoomWordsPublic,
 } from "./callRooms";
 import { isTeamMember } from "./privacy";
 import { teamHasFeature } from "./teamFeatures";
@@ -58,14 +59,17 @@ import {
   asrTranscriptionSession,
   callParticipantKind,
   callSpeakerName,
+  coveredSpans,
   formatHuddleDigest,
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   guestIdFromIdentity,
   isRecRoomKey,
   isRecordingActive,
+  lineSaidAt,
   liveFeedChunkHeader,
   needsFullBrief,
+  videoStretches,
   ownRoomChunkHeader,
   parseRoomKey,
   sessionRoomConversationId,
@@ -354,6 +358,9 @@ export const start = mutation({
       .collect();
     const live = existing.find((t) => t.status === "live");
     if (live) {
+      // A record Record began while transcription was off, adopted now that
+      // it is on (the auto start returned above while it was off).
+      await ensureOwnRoute(ctx, live, userId);
       const elapsed_ms = Math.max(0, Date.now() - live.started_at);
       if (String(live.started_by) === String(userId)) {
         return { transcript_id: live._id, existing: true, role: "scribe", elapsed_ms };
@@ -394,9 +401,20 @@ export const start = mutation({
  *  transcription back on hands it to whoever pressed (setRoomTranscribeOff). */
 export async function beginCallRecord(
   ctx: any,
-  args: { roomKey: string; teamId: Id<"teams">; userId: Id<"users">; routes: Route[]; announce: boolean },
+  args: {
+    roomKey: string;
+    teamId: Id<"teams">;
+    userId: Id<"users">;
+    routes: Route[];
+    announce: boolean;
+    // false: hold the room's own session route back (own_route_owed) until
+    // transcription comes on. Record does this in a room that switched
+    // transcription off, so filming a huddle never summons its agent.
+    ownRoute?: boolean;
+  },
 ): Promise<Id<"transcripts">> {
   const startedAt = Date.now();
+  const ownRoute = args.ownRoute !== false;
   const id = await ctx.db.insert("transcripts", {
     room_key: args.roomKey,
     team_id: args.teamId,
@@ -404,12 +422,15 @@ export async function beginCallRecord(
     status: "live",
     started_at: startedAt,
     short_id: await nextShortId(ctx.db, "cl"),
-    routes: withDefaultRoutes(args.roomKey, args.routes).map((r) => ({
+    routes: (ownRoute ? withDefaultRoutes(args.roomKey, args.routes) : args.routes).map((r) => ({
       ...r,
       added_by: args.userId,
     })),
     last_seq: 0,
+    ...(!ownRoute && ownRoomTarget(args.roomKey) ? { own_route_owed: true } : {}),
   });
+  // A new record has no public link, whatever the room's last one had.
+  await stampRoomWordsPublic(ctx, (await ctx.db.get(id))!);
   if (args.announce) {
     await postEvent(ctx, { room_key: args.roomKey, team_id: args.teamId, user_id: args.userId, event: "transcribe_on" });
   }
@@ -427,6 +448,19 @@ export async function beginCallRecord(
   }
   await syncAgentFeeds(ctx, (await ctx.db.get(id))!);
   return id;
+}
+
+/** Pay a live record's owed own route (beginCallRecord's `ownRoute: false`):
+ *  transcription is on in this huddle now, so the session it belongs to hears
+ *  it the way every transcribed session huddle does. The one place a record
+ *  that lacked the route gains it. A record that owes nothing is left alone,
+ *  so a route somebody removed stays removed. The route is added by whoever
+ *  turned transcription on, the person it now speaks for. */
+export async function ensureOwnRoute(ctx: any, t: Doc<"transcripts">, userId: Id<"users">): Promise<void> {
+  if (!t.own_route_owed || t.status !== "live") return;
+  const routes = withDefaultRoutes(t.room_key, t.routes).map((r) => ({ ...r, added_by: r.added_by ?? userId }));
+  await ctx.db.patch(t._id, { routes, own_route_owed: undefined });
+  await syncAgentFeeds(ctx, (await ctx.db.get(t._id))!);
 }
 
 export const setRoutes = mutation({
@@ -561,7 +595,7 @@ export const appendSegments = mutation({
  * of them; filling it with a placeholder would put a fake person on the call
  * object that the list, the summary and the detail view all read.
  */
-async function writeSegments(
+export async function writeSegments(
   ctx: any,
   t: Doc<"transcripts">,
   segments: {
@@ -917,6 +951,9 @@ export async function endTranscript(
     summary_status: "pending",
     idle_since: undefined,
   });
+  // Its link may stay on, but the room is no longer being written into it.
+  // Only a record with a link ever set the room's stamp.
+  if (t.share_token) await stampRoomWordsPublic(ctx, t, { ending: true });
   // The fed sessions leave the room with the words: an ended huddle has no
   // chat to mirror a reply into.
   await syncAgentFeeds(ctx, { ...t, status: "ended" });
@@ -1269,7 +1306,10 @@ export function huddleDigestTarget(
 /** The row a finished huddle leaves where it was held. Every huddle with any
  *  words gets one — a summary when there was enough said to write one, the
  *  words themselves when there was not (a "skipped" summary is under forty
- *  words, and those words ARE the summary). A chat room gets a message the
+ *  words, and those words ARE the summary). So does every huddle Record
+ *  filmed, words or none: a teammate looking for "the recording from that
+ *  huddle" looks where it was held, and its digest names the filmed
+ *  stretches (and tells an agent it can snap a frame). A chat room gets a message the
  *  reader can unfold into the transcript (chat.postCallDigest); a session room
  *  gets its agent woken with the summary and the command that reads the whole
  *  transcript, never the transcript itself. Delivery acts as the scribe. */
@@ -1279,7 +1319,9 @@ async function scheduleHuddleDigest(
   verdict: { summary_status: "done" | "failed" | "skipped"; title?: string; summary?: string; action_items?: string[] },
 ): Promise<void> {
   const target = huddleDigestTarget(t.room_key);
-  if (!target || t.last_seq <= 0) return;
+  const filmed = callFilmed(t);
+  if (!target || (t.last_seq <= 0 && !filmed)) return;
+  const video = filmed ? await huddleVideoStretches(ctx, t) : null;
   let summary = verdict.summary ?? t.summary ?? null;
   if (!summary && verdict.summary_status === "skipped") {
     const segs = await ctx.db
@@ -1296,6 +1338,7 @@ async function scheduleHuddleDigest(
     summary,
     actionItems: verdict.action_items ?? t.action_items ?? [],
     summaryStatus: verdict.summary_status,
+    video,
   };
   if (target.kind === "chat") {
     await ctx.scheduler.runAfter(0, internal.chat.postCallDigest, {
@@ -1311,11 +1354,29 @@ async function scheduleHuddleDigest(
     as_user: t.started_by,
     to: target.conversationId,
     body: formatHuddleSummaryTag(String(t._id), digest, {
+      callRef: t.short_id ?? null,
       heardLive: t.routes.some(
         (r) => r.kind === "session" && r.target === target.conversationId && r.mode === "live",
       ),
     }),
   });
+}
+
+/** The stretches of a call its recordings filmed, as the call page's header
+ *  names them (coveredSpans, then videoStretches): failed files left out, a
+ *  file still saving counted to its stop. */
+async function huddleVideoStretches(ctx: any, t: Doc<"transcripts">) {
+  const rows: Doc<"call_recordings">[] = await ctx.db
+    .query("call_recordings")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
+    .collect();
+  const spans = coveredSpans(
+    rows.map((r) => ({ ...r, id: String(r._id) })),
+    t.started_at,
+    Date.now(),
+  );
+  const out = videoStretches(spans);
+  return out.length ? out : null;
 }
 
 export const generateSummary = internalAction({
@@ -1713,8 +1774,14 @@ function shapeCallRow(t: Doc<"transcripts">) {
     // that cannot play it yet (the phone) says where it plays rather than
     // offering only the words. Off the row, so neither the list nor the
     // detail re-runs for the recording reconciler's writes.
-    filmed: (t.recorded_people?.length ?? 0) > 0,
+    filmed: callFilmed(t),
   };
+}
+
+/** Was Record ever pressed on this call? A run seats the people it shows
+ *  (recorded_people), so the row itself answers without reading a run. */
+export function callFilmed(t: Pick<Doc<"transcripts">, "recorded_people">): boolean {
+  return (t.recorded_people?.length ?? 0) > 0;
 }
 
 async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
@@ -1866,10 +1933,54 @@ export async function resolveCallRef(
  *  head and says how many more the call page holds. */
 export const CALL_EXCERPT_MAX_TURNS = 40;
 
+/** How many lines before the last one begun by a moment are read to find
+ *  the line being said then: a line still being said that began earlier
+ *  than the lines after it (two people talking over each other). */
+const MOMENT_LINE_LOOKBACK = 8;
+
+/**
+ * The line a moment of a call is captioned with (the shared lineSaidAt, the
+ * rule `cast call snap` names a frame's line by), found without reading the
+ * whole transcript: seq order is time order (every surface reads it so), so
+ * a binary search over seq finds the last line begun by the moment in a
+ * dozen point reads, and the few lines before it settle which one was being
+ * said. A long call's card then re-runs on a handful of rows, not thousands.
+ */
+export async function lineAtMoment(ctx: any, t: Doc<"transcripts">, atMs: number) {
+  const at = (seq: number) =>
+    ctx.db
+      .query("transcript_segments")
+      .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id).gte("seq", seq))
+      .first() as Promise<Doc<"transcript_segments"> | null>;
+  let lo = 1;
+  let hi = t.last_seq;
+  let found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const s = await at(mid);
+    if (!s || s.seq > hi || s.t0 > atMs) hi = mid - 1;
+    else {
+      found = s.seq;
+      lo = s.seq + 1;
+    }
+  }
+  if (!found) return null;
+  const near: Doc<"transcript_segments">[] = await ctx.db
+    .query("transcript_segments")
+    .withIndex("by_transcript_seq", (q: any) =>
+      q.eq("transcript_id", t._id).gte("seq", found - MOMENT_LINE_LOOKBACK).lte("seq", found),
+    )
+    .collect();
+  const hit = lineSaidAt(near, atMs);
+  if (!hit) return null;
+  const s = near[hit.index];
+  return { seq: s.seq, speaker_id: s.speaker_id, speaker_name: s.speaker_name, text: s.text, t0: s.t0, t1: s.t1, during: hit.during };
+}
+
 async function callRefCore(
   ctx: any,
   userId: Id<"users">,
-  args: { ref: string; from_seq?: number; to_seq?: number },
+  args: { ref: string; from_seq?: number; to_seq?: number; at_ms?: number },
 ) {
   const t = await resolveCallRef(ctx, userId, args.ref);
   if (!t) return null;
@@ -1884,8 +1995,9 @@ async function callRefCore(
     title: row.title,
     participants: row.participants,
     summary: row.summary,
-    last_seq: row.last_seq,
   };
+  // A moment (`cl-42@12:34`) carries the line said then, its card's caption.
+  if (args.at_ms !== undefined) return { ...lean, turns: null, line: await lineAtMoment(ctx, t, args.at_ms) };
   if (args.from_seq === undefined) return { ...lean, turns: null };
   const from = Math.min(args.from_seq, args.to_seq ?? args.from_seq);
   const to = Math.max(args.from_seq, args.to_seq ?? args.from_seq);
@@ -1915,9 +2027,10 @@ async function callRefCore(
 }
 
 // A call mentioned in prose: `cl-42` is the pill, `cl-42:15-25` the excerpt
-// card with those turns. One query for both, so they cannot disagree.
+// card with those turns, `cl-42@12:34` the frame captioned with the line said
+// then. One query for all, so they cannot disagree.
 export const webGetCallRef = query({
-  args: { ref: v.string(), from_seq: v.optional(v.number()), to_seq: v.optional(v.number()) },
+  args: { ref: v.string(), from_seq: v.optional(v.number()), to_seq: v.optional(v.number()), at_ms: v.optional(v.number()) },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
@@ -1984,6 +2097,10 @@ export const webCallsForConversation = query({
         room_key: t.room_key,
         status: t.status,
         started_at: t.started_at,
+        // What the header pill names an untitled call by (callTitle: the
+        // people, a guest) and whether it marks it as filmed.
+        participants: t.participants ?? [],
+        filmed: callFilmed(t),
         live: !!l.live,
         excerpts: l.excerpts ?? [],
       });
@@ -2061,7 +2178,7 @@ export const cliListCalls = query({
     // it for each write the recording reconciler makes.
     // The place too, so an untitled call reads "Huddle in <session>" rather
     // than its room key. Same reason it is here: the web list names rooms
-    // from its own store and never pays for these reads.
+    // from its own store and asks webCallPlaces only for the rooms it cannot.
     return Promise.all(
       rows.map(async (r) => ({
         ...r,
@@ -2069,6 +2186,30 @@ export const cliListCalls = query({
         place: await callPlaceNames(ctx, auth.userId, r.room_key),
       })),
     );
+  },
+});
+
+/** The place names of the calls the web could not name from its own store
+ *  (roomLabels.callTitle asks only for those: an older session that was
+ *  never loaded, a channel this client never synced). Its own query and not a
+ *  field on webListCalls or webGetCall, because a session's row is written on
+ *  every message: carried on the list, each message in a session that once
+ *  hosted a huddle would re-run the whole page of calls, and on the detail it
+ *  would re-send every segment. Here a write re-runs a handful of reads.
+ *  Each call is checked with canReadCall first, so a key cannot be used to
+ *  learn a channel's name the viewer has no call in. */
+export const webCallPlaces = query({
+  args: { transcript_ids: v.array(v.id("transcripts")) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const out: Record<string, Awaited<ReturnType<typeof callPlaceNames>>> = {};
+    if (!userId) return out;
+    for (const id of args.transcript_ids.slice(0, 100)) {
+      const t = await ctx.db.get(id);
+      if (!t || !(await canReadCall(ctx, userId, t))) continue;
+      out[String(id)] = await callPlaceNames(ctx, userId, t.room_key);
+    }
+    return out;
   },
 });
 

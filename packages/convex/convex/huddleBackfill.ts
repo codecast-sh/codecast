@@ -56,8 +56,17 @@ export const run = internalMutation({
     const offAt = lines.filter((l) => l.event === "transcribe_off").map((l) => l._creationTime);
 
     const groups: Group[] = [];
+    const skipped: { id: string; started_at: number; reason: string }[] = [];
     for (const t of records) {
       const last = groups[groups.length - 1];
+      // A record that something else points at by its id stays a record of
+      // its own: it starts a group rather than folding into one.
+      const pinned = last ? await foldBlocker(ctx, t) : null;
+      if (pinned) {
+        skipped.push({ id: String(t._id), started_at: t.started_at, reason: pinned });
+        groups.push({ keep: t, fold: [] });
+        continue;
+      }
       const prev = last ? [last.keep, ...last.fold].reduce((a, b) => ((a.ended_at ?? 0) >= (b.ended_at ?? 0) ? a : b)) : null;
       const prevEnd = prev?.ended_at;
       if (prev && prev.status === "ended" && t.status === "ended" && prevEnd !== undefined) {
@@ -103,9 +112,28 @@ export const run = internalMutation({
       stamped++;
       if (!dryRun) await ctx.db.patch(l._id, { transcript_id: owner.id });
     }
-    return { dryRun, records: records.length, groups: report, stamped };
+    return { dryRun, records: records.length, groups: report, skipped, stamped };
   },
 });
+
+/** Why a fragment cannot be folded, or null when it can. The fold moves
+ *  words, routes and session links and then deletes the fragment; these
+ *  belong to the record by id and the fold does not carry them, so a
+ *  fragment holding any of them is left whole rather than half moved. A
+ *  recording left on a deleted call could be neither watched nor deleted,
+ *  and its video would stay in the bucket for good. */
+async function foldBlocker(ctx: any, t: Doc<"transcripts">): Promise<string | null> {
+  const byTranscript = (table: string) =>
+    ctx.db
+      .query(table)
+      .withIndex("by_transcript", (q: any) => q.eq("transcript_id", t._id))
+      .first();
+  if (await byTranscript("call_recordings")) return "it has recordings";
+  if (t.share_token) return "it is shared by a public link";
+  if (t.recorded_people?.length) return "people were seated while it recorded";
+  if (await byTranscript("call_guest_attendance")) return "guests attended it";
+  return null;
+}
 
 /** Fold a run of fragments into its first record: words on its clock and
  *  numbering, the sessions they reached, who spoke, and one summary. */

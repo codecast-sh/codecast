@@ -8,6 +8,7 @@ import { useRouteMeta } from "../pageMeta";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { SOL, Terminal, Cmd } from "../blog/blogChrome";
 import { SUITE } from "../suite";
+import { FEATURE_DEEP_DIVES, featureHref } from "./catalog";
 
 /** The commands an agent (or a person) runs on each surface of the suite, keyed by its name in SUITE. */
 const SURFACE_COMMANDS: Record<string, string[]> = {
@@ -142,6 +143,28 @@ export default function FeaturesPage() {
           <span style={{ color: SOL.yellow }}>Queued for @ashot</span>
           <span style={{ color: SOL.base01 }}> · 3 agents keep working while you decide</span>
         </Terminal>
+      </section>
+
+      {/* Deep dives */}
+      <section className="max-w-6xl mx-auto px-6 pb-16 sm:pb-20">
+        <h2 className="text-2xl sm:text-3xl font-bold mb-2 font-mono" style={{ color: SOL.base03 }}>Deep dives</h2>
+        <p className="text-base mb-8" style={{ color: SOL.base00 }}>One page per capability: what it does, how it works, and the commands behind it.</p>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+          {FEATURE_DEEP_DIVES.map((f) => (
+            <Link
+              key={f.slug}
+              href={featureHref(f.slug)}
+              className="group flex flex-col rounded-xl p-4 transition-all hover:-translate-y-0.5"
+              style={{ backgroundColor: `color-mix(in srgb, ${f.color} 7%, ${SOL.base3})`, border: `1px solid color-mix(in srgb, ${f.color} 22%, transparent)` }}
+            >
+              <span className="font-mono font-semibold text-sm mb-1.5" style={{ color: f.color }}>{f.name}</span>
+              <span className="text-xs leading-relaxed mb-3 line-clamp-3" style={{ color: SOL.base00 }}>{f.dek}</span>
+              <code className="mt-auto font-mono text-[11px] truncate" style={{ color: SOL.base01 }} title={f.command}>
+                <span style={{ color: f.color }} aria-hidden>$ </span>{f.command}
+              </code>
+            </Link>
+          ))}
+        </div>
       </section>
 
       {/* Quick start */}

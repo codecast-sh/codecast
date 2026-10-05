@@ -23,7 +23,9 @@ import { positiveNumber } from './verdict';
 // `./evals grade <surface> <dir>`: grade an output dir that already exists
 // (an old org round) with the surface's own grader, without replaying.
 // `./evals rescore`: grade a replay rep's route gates again from the files its
-// harness runs wrote, so a gate fixed after a run reaches the stored score,
+// harness runs wrote, and a surface's own gates and checks again where it can
+// grade a finished dir (org-review, against today's labels), so a gate or a
+// label fixed after a run reaches the stored score,
 // and a rep found to have run outside its world becomes a crash. With
 // --rejudge it also asks today's judge again, so a run set judged before a
 // judge change can be weighed on the same ruler as one judged after.
@@ -66,9 +68,10 @@ export function harnessRunsOf(runDir: string, model: string): { calls: CallResul
 const ROUTE_GATES = new Set(['model-as-pinned', 'ok', 'prod-budget', 'frozen-reads', 'no-unexpected-writes']);
 
 /**
- * Grade one rep's route gates again and rewrite its score.json. The
- * surface's own gates, its checks and the judge's verdict are kept as they
- * were scored; only what routeGates reads from the harness files is redone.
+ * Grade one rep's route gates again and rewrite its score.json. A surface
+ * with a grader for a finished dir (impl.grade) has its own gates and checks
+ * graded again too, against today's labels; any other surface's, and the
+ * judge's verdict, are kept as they were scored.
  * A rep whose harness runs now read as a harness failure (dryRun.ts: the
  * model never answered, or the agent's cast reached the real CLI) becomes
  * the crash a fresh run would have recorded: no score.json, its result ended
@@ -104,12 +107,16 @@ export async function rescoreRun(runDir: string, opts: { rejudge?: boolean } = {
     rmSync(join(runDir, 'score.json'));
     return { before: stored, after: null, crash };
   }
-  const freeze = impl.allowedRefusals ? await codecastFreezeStore().get(run.freezeId) : null;
+  const freeze = impl.allowedRefusals || impl.grade ? await codecastFreezeStore().get(run.freezeId) : null;
   const allowedHere = freeze && impl.allowedRefusals ? impl.allowedRefusals(loadSnapshot(freeze).snap) : [];
   const fresh = routeGates(meta, harnessRuns, allowedHere);
-  const gates = [...fresh, ...stored.gates.filter((g) => !ROUTE_GATES.has(g.id))];
+  // A surface that grades a finished dir (org-review) grades it again against today's labels, so a label fixed after the run reaches the score.
+  const regraded = freeze && impl.grade ? impl.grade(runDir, undefined, freeze) : null;
+  const own = regraded ?? stored;
+  const gates = [...fresh, ...own.gates.filter((g) => !ROUTE_GATES.has(g.id))];
   const judged = opts.rejudge ? await rejudgeRun(runDir, impl, run.freezeId, stored) : null;
-  const checks = judged ? stored.checks.map((c) => (c.id === 'criteria' ? judged.check : c)) : stored.checks;
+  const ownChecks = regraded ? [...regraded.checks, ...stored.checks.filter((c) => c.id === 'criteria')] : stored.checks;
+  const checks = judged ? ownChecks.map((c) => (c.id === 'criteria' ? judged.check : c)) : ownChecks;
   const judge = judged ?? (stored.judgeModel ? { costUsd: stored.judgeCostUsd ?? 0, model: stored.judgeModel } : null);
   const after = scoreOf(gates, checks, judge);
   const text = JSON.stringify({ ...after, scenario: stored.scenario, title: stored.title, seed: stored.seed }, null, 2);
@@ -143,7 +150,7 @@ async function rejudgeRun(runDir: string, impl: SurfaceImpl, freezeId: string | 
 export function registerRescore(program: Command): void {
   program
     .command('rescore [runs...]')
-    .description("grade replay reps' route gates again from their harness files and rewrite score.json (a gate fixed after the run)")
+    .description("grade replay reps' route gates (and org-review's own gates against today's labels) again and rewrite score.json (a gate or label fixed after the run)")
     .option('--batch <id>', "every rep of this check's run set")
     .option('--surface <id>', 'with --batch: only this surface')
     .option('--rejudge', "also grade the judged check again with today's judge and moment, on the reply each rep's judge saw (spends a judge call per rep)")

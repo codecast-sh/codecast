@@ -14,6 +14,7 @@
     "@codecast/shared": "workspace:*",
     "@convex-dev/auth": "0.0.79",
     "@convex-dev/prosemirror-sync": "^0.2.3",
+    "@platform/agent": "file:../../platform/packages/agent",
     "@platform/analytics": "file:../../platform/packages/analytics",
     "@platform/auth": "file:../../platform/packages/auth",
     "@platform/email": "file:../../platform/packages/email",

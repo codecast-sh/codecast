@@ -26,6 +26,7 @@ import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import "./changeCard.css";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The change card (docs/architecture/the-line-end-to-end.md LE10, LE11) drawn
 // natively, one component for every surface that shows a decision about a
@@ -148,7 +149,11 @@ function ChangeCardCause({ card, brief = false, facts = [] }: { card: ChangeCard
 }
 
 /** The asker's own question beside a card, or null when it only repeats the change. */
-export const cardAskedQuestion = (card: ChangeCard, question: string | undefined) => (question && question.trim() !== card.change.trim() ? question : null);
+export const cardAskedQuestion = (card: ChangeCard, question: string | undefined) => {
+  const q = question?.trim();
+  if (!q || q === card.change.trim() || (card.headline && q.includes(card.headline.trim()))) return null;
+  return q;
+};
 
 /**
  * A change card's head, one component and one order on every surface: the
@@ -161,13 +166,17 @@ export const cardAskedQuestion = (card: ChangeCard, question: string | undefined
  */
 export function ChangeCardHeadline({ card, question, size = "title", facts, href, folded = false, className = "" }: { card: ChangeCard; question?: string; size?: "title" | "card" | "row"; facts?: SepItem[]; href?: string; folded?: boolean; className?: string }) {
   const asked = cardAskedQuestion(card, question);
-  const change = size === "title" ? <h1 className="cc-change cc-change-title">{card.change}</h1>
-    : size === "card" ? <p className="cc-change">{card.change}</p>
-    : href ? <Link href={href} className="cc-line-change" title={card.change}>{card.change}</Link>
-    : <span className="cc-line-change">{card.change}</span>;
+  // A card written for a cold reader leads with its plain headline and the one
+  // sentence saying what the affected part is; older cards lead with the change.
+  const title = card.headline || card.change;
+  const change = size === "title" ? <h1 className="cc-change cc-change-title">{title}</h1>
+    : size === "card" ? <p className="cc-change">{title}</p>
+    : href ? <Link href={href} className="cc-line-change" title={title}>{title}</Link>
+    : <span className="cc-line-change">{title}</span>;
   return (
     <div className={`cc-head cc-head-${size} ${folded ? "is-folded" : ""} ${className}`}>
       {change}
+      {card.context && size !== "row" && !folded && <p className="cc-context" data-card-context>{card.context}</p>}
       {asked && !folded && <p className="cc-asked" data-card-question title={asked}>{asked}</p>}
       {!folded && <ChangeCardCause card={card} brief={size === "row"} facts={facts} />}
     </div>
@@ -448,6 +457,10 @@ function ChangeCardFull({ card, inline, head, recommend, outcome, animate, summa
       <div className="cc-sentences">
         <h3 className="cc-label cc-wrong-label">What is wrong</h3>
         <p className="cc-wrong">{card.wrong}</p>
+        {card.headline && <>
+          <h3 className="cc-label cc-change-label">What this changes</h3>
+          <p className="cc-wrong" data-card-change>{card.change}</p>
+        </>}
       </div>
 
       {/* Proof, then examples, stacked on every card at every width, so the
@@ -652,7 +665,8 @@ export function cardAnswerIndexes(decision: Pick<SessionDecisionItem, "card" | "
 }
 
 /**
- * Whether a window key may reach answer controls: no modifier, no modal, and,
+ * Whether a window key may reach answer controls: no modifier, no modal, no
+ * focus in another region that owns its keys, and,
  * when the surface scoped its keys, focus inside that surface. A card that
  * shares a window with a transcript answers only while it is the thing in
  * focus, so a digit typed anywhere else never answers it.
@@ -662,8 +676,12 @@ export function answerKeyAllowed(e: KeyboardEvent, scope?: RefObject<HTMLElement
   // Shift and a digit belongs to the page (the line jumps stations with it),
   // even on a layout where that chord still reports a bare digit.
   if (e.shiftKey && /^(Digit|Numpad)\d$/.test(e.code)) return false;
+  // A focused region that owns its keys (the branch map, an active review)
+  // keeps them, scoped surface or not: its Enter, digits and x are never an
+  // answer.
+  const root = scope?.current ?? null;
+  if (keysOwnedElsewhere(e.target, root)) return false;
   if (!scope) return true;
-  const root = scope.current;
   return !!root && root.contains(document.activeElement);
 }
 

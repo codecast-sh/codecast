@@ -1,6 +1,6 @@
 # Session characters
 
-Every session in codecast wears a character: one of the 24 painted animal
+A session in codecast can wear a character: one of the 24 painted animal
 faces from the role avatar set (org-staffing.md S13) and a short name. A list
 of sessions then reads like a room of people rather than a column of titles,
 and a face the eye has learned once finds the same thread again in the inbox,
@@ -18,11 +18,18 @@ conversations.character_name?: string     // a person's name for the session
 
 Either may be set alone. Whatever is not set falls to the default.
 
+**Personifying is opt in.** A session nobody gave a character resolves to
+`plain` and renders the way it always has (title and agent icon). Setting
+either field personifies that session; the profile preference "Personify every
+session" (`clientState.ui.personify_sessions`, read through
+`hooks/usePersonifyAll.ts`) personifies every session with its default. Roles
+always wear their face.
+
 **The default is stable and costs nothing.** A hash of the conversation id
 picks the face, and a second slice of the same hash picks the name from a
 bank of six names per face (`shared/contracts/sessionCharacter.ts`,
-`CHARACTER_NAMES`), so a new session is one of 144 characters the moment it
-exists, identical on every device and surface, without anyone choosing. The
+`CHARACTER_NAMES`), so a session is one of 144 characters, identical on every
+device and surface, without anyone choosing. The
 bank is curated: short, whimsical, never a name that reads as a teammate's,
 and no name shared between two faces, so a name alone identifies the face.
 
@@ -35,9 +42,11 @@ filed under a role (`org_role_id`) keeps its own character and says who it
 reports to in its hover card.
 
 `sessionIdentity(row)` (web `lib/sessionIdentity.ts`) is the one resolver
-every surface calls: it returns `{ kind: "role" | "character", avatar, name,
-handle?, roleShortId? }`. No surface reads `character_*` or the role fields
-directly.
+every surface calls: `sessionIdentity(row, personifyAll)` returns
+`{ kind: "plain" }`, `{ kind: "character", avatar, name, chosen }` or
+`{ kind: "role", avatar, name, handle, role }` (the first two also carry
+`reportsTo`). `faceIdentity(row)` is the face a row would wear regardless of
+opt in, which the picker and hover cards preview.
 
 ## S2. Choosing
 
@@ -47,12 +56,13 @@ grid of the 24 faces, the name field prefilled, and a shuffle button that
 proposes another name from the bank for the selected face. A click on a face
 applies at once, optimistically, through the store's `setSessionCharacter`
 action on the generic conversation patch rail (`conversationFields.ts` marks
-both fields `send`, `dispatch`, `patch`); there is no save button. "Use the
-default" clears both fields.
+both fields `send`, `dispatch`, `patch`); there is no save button. "Remove"
+clears both fields, which opts the session back out.
 
-The picker is also reachable from the session context menu ("Character…"),
-the command palette ("Change character"), and the keyboard shortcut
-`session.character`. Typing a name and pressing Enter keeps the face.
+The picker is also reachable from the session context menu and the command
+palette's session actions ("Give it a character…" on a plain session, "Change
+character…" otherwise; `y` in the palette). Typing a name and pressing Enter
+keeps the face.
 
 The list owns ONE picker for every card, the way it owns one right-click menu:
 a popover per row would mount one per card. Both gestures resolve their targets
@@ -75,9 +85,9 @@ and a role seat rename (S16) never touches it either.
 
 One component family under `components/identity/`:
 
-- `SessionFace({ row, size })` draws the face. A role's face carries a thin
-  violet ring, the org page's role colour, so a role reads as a role at every
-  size from 14 px; a character has no ring.
+- `SessionFace({ row, size, badge })` always draws a face (`faceIdentity`),
+  so previews work for plain rows; `IdentityFace` decides whether a card shows
+  one at all. Role and character faces are drawn the same, with no ring.
 - `SessionIdentityLine({ row })` is the card line: the face, the name in
   medium weight, then the title in the secondary text colour, separated by a
   colon. `Ember: Fixing the auth race`. The name never truncates; the title
@@ -124,8 +134,8 @@ The agent brand does not get a glyph of its own on the card any more: it rides
 the face as a small corner badge, so one mark answers "who" and "which agent"
 without two glyphs competing in the title row. The badge follows the existing
 `show_agent_icon` preference and is dropped under 16 px, where it would only be
-a smudge. The generic anchor glyph is gone: a role's ringed face says which
-role, which is strictly more than "this is a standing agent".
+a smudge. A role's face says which role, which is strictly more than "this is a
+standing agent".
 
 ## S4. Hover cards: who they are and what they do
 
@@ -138,8 +148,8 @@ with the name and, dimmed, the title; the agent and model; the owner and
 machine; the pinned state line or the last activity. A hand under a role adds
 "reports to @handle" with the role's small face.
 
-**A role's card** answers who they are and what they do. The face at 36 px
-with the violet ring, the display name, `@handle` and a chip for status and
+**A role's card** answers who they are and what they do. The face at 36 px,
+the display name, `@handle` and a chip for status and
 tenure (standing, or program with what ends it). Then the charter in one or
 two sentences (the charter doc's first paragraph, else the inline charter).
 Then the scope as chips: projects and plans, or "whole workspace". Then
@@ -157,20 +167,20 @@ the proposal author pill, the org chart node, the ownership menu.
 A role's standing session sits in the inbox for a reason: it needs input, it
 finished a wake, it is dormant until its next one. The card keeps that reason
 where it is today (the state chip and the pinned line) and changes only who
-it says is speaking: the role's face with its ring, the role's name, its
-handle. What the role does is one hover away, never on the card. That is the
+it says is speaking: the role's face, the role's name, its handle. What the role does is one hover away, never on the card. That is the
 balance: the inbox stays a list of things that need a person, and identity is
 recognised rather than read.
 
 ## S6. Guard rails
 
-- `sessionIdentity` is the only reader of `character_*`, `standing_role_id`
-  and the row's `role` snapshot; a source level test fails any other reader
-  under `components/` or `app/`.
+- `sessionIdentity` is meant to be the only interpreter of `character_*`,
+  `standing_role_id` and the row's `role` snapshot. No test enforces it: call
+  surfaces copy the fields into an identity row (`components/calls/`), and
+  wake signatures read them raw (`AnchorPanel`, `askingSessionDeps`).
 - The inbox row carries `character_avatar`, `character_name`,
   `standing_role_id`, `org_role_id` and, for a role's rows only, a `role`
-  snapshot `{ short_id, name, handle, avatar, status }`; the projection guard
-  test lists them.
+  snapshot `{ _id, short_id, name, handle, avatar, status, tenure_kind }`; the projection guard
+  (`convex/inboxCompat.test.ts`) lists them.
 - The name bank test: six names per face, all distinct, capitalised words.
 
 ## S7. On the phone
@@ -183,8 +193,7 @@ so there is one copy of the art and one resolver for both clients.
 
 `packages/mobile/components/identity/` holds the React Native drawing:
 
-- `MobileSessionFace` always draws a face, with the role ring and the agent
-  badge. It is an `Image`; it does not draw through `react-native-svg`.
+- `MobileSessionFace` always draws a face, with the agent badge. It is an `Image`; it does not draw through `react-native-svg`.
 - `MobileIdentityFace` is the phone's `SessionGlyph`: the face when the row is
   personified, else the mark the surface drew before.
 - `MobileSessionIdentityLine` leads with the name and dims the title.

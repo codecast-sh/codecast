@@ -1,7 +1,5 @@
 import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
@@ -85,8 +83,8 @@ export default function CreateTeamPage() {
     setMaxVisited((m) => Math.max(m, step));
   }, [step]);
 
-  const renameTeam = useMutation(api.teams.renameTeam);
-  const updateTeamIcon = useMutation(api.teams.updateTeamIcon);
+  const renameTeam = useInboxStore((s) => s.renameTeam);
+  const updateTeamIcon = useInboxStore((s) => s.updateTeamIcon);
 
   const data = useTeamWorkspaceSuggestions(teamId);
   const { selectedPaths, toggle, selectedCount, selectedList, since, setSince } = useWorkspaceSelection(data, teamId);
@@ -119,11 +117,9 @@ export default function CreateTeamPage() {
     if (!prev || (prev.name === next.name && prev.icon === next.icon && prev.color === next.color)) return;
     teamIdPromise.current
       ?.then(async (id) => {
-        const team_id = id as Id<"teams">;
-        if (prev.name !== next.name) await renameTeam({ team_id, name: next.name });
+        if (prev.name !== next.name) await renameTeam(id, next.name);
         if (prev.icon !== next.icon || prev.color !== next.color) {
-          await updateTeamIcon({
-            team_id,
+          await updateTeamIcon(id, {
             icon: prev.icon !== next.icon ? next.icon : undefined,
             icon_color: prev.color !== next.color ? next.color : undefined,
           });

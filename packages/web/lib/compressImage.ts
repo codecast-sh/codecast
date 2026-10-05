@@ -36,7 +36,7 @@ function shouldAttempt(file: File): boolean {
   return true;
 }
 
-async function decode(file: File): Promise<ImageBitmap | HTMLImageElement> {
+async function decode(file: Blob): Promise<ImageBitmap | HTMLImageElement> {
   // createImageBitmap is fast and honors EXIF orientation (phone photos);
   // fall back to an <img> for browsers/types it rejects.
   if (typeof createImageBitmap === "function") {
@@ -80,47 +80,45 @@ async function encode(canvas: HTMLCanvasElement | OffscreenCanvas, type: string,
   );
 }
 
+// Decode an image and draw it onto a canvas no larger than MAX_EDGE on its
+// longest side. Null when the bytes have no size or no 2D context exists.
+export async function drawFitted(blob: Blob): Promise<{ canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D; w: number; h: number } | null> {
+  const source = await decode(blob);
+  const { w: srcW, h: srcH } = dims(source);
+  if (!srcW || !srcH) return null;
+  const scale = Math.min(1, MAX_EDGE / Math.max(srcW, srcH));
+  const w = Math.max(1, Math.round(srcW * scale));
+  const h = Math.max(1, Math.round(srcH * scale));
+  const canvas: HTMLCanvasElement | OffscreenCanvas = typeof OffscreenCanvas === "function"
+    ? new OffscreenCanvas(w, h)
+    : Object.assign(document.createElement("canvas"), { width: w, height: h });
+  const ctx = (canvas as HTMLCanvasElement).getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(source as CanvasImageSource, 0, 0, w, h);
+  if ("close" in source && typeof source.close === "function") source.close();
+  return { canvas, ctx, w, h };
+}
+
+// The canvas as WebP, or JPEG where the platform won't produce WebP.
+export async function encodeCompact(canvas: HTMLCanvasElement | OffscreenCanvas): Promise<Blob | null> {
+  const webp = await encode(canvas, "image/webp", WEBP_QUALITY);
+  if (webp && webp.type === "image/webp") return webp;
+  return (await encode(canvas, "image/jpeg", JPEG_QUALITY)) ?? webp;
+}
+
 export async function compressImage(file: File): Promise<File> {
   if (!shouldAttempt(file)) return file;
 
   try {
-    const source = await decode(file);
-    const { w, h } = dims(source);
-    if (!w || !h) return file;
-
-    const scale = Math.min(1, MAX_EDGE / Math.max(w, h));
-    const targetW = Math.max(1, Math.round(w * scale));
-    const targetH = Math.max(1, Math.round(h * scale));
-
-    const canvas: HTMLCanvasElement | OffscreenCanvas =
-      typeof OffscreenCanvas === "function"
-        ? new OffscreenCanvas(targetW, targetH)
-        : Object.assign(document.createElement("canvas"), { width: targetW, height: targetH });
-    if (canvas instanceof HTMLCanvasElement) {
-      canvas.width = targetW;
-      canvas.height = targetH;
-    }
-
-    const ctx = (canvas as HTMLCanvasElement).getContext("2d");
-    if (!ctx) return file;
-    ctx.drawImage(source as CanvasImageSource, 0, 0, targetW, targetH);
-    if ("close" in source && typeof source.close === "function") source.close();
-
-    // Prefer WebP; fall back to JPEG if the platform won't produce WebP.
-    let blob = await encode(canvas, "image/webp", WEBP_QUALITY);
-    let outType = "image/webp";
-    if (!blob || blob.type !== "image/webp") {
-      const jpeg = await encode(canvas, "image/jpeg", JPEG_QUALITY);
-      if (jpeg) {
-        blob = jpeg;
-        outType = "image/jpeg";
-      }
-    }
+    const drawn = await drawFitted(file);
+    if (!drawn) return file;
+    const blob = await encodeCompact(drawn.canvas);
 
     // Only adopt the result if it's genuinely smaller. Already-optimized inputs
     // (a tight JPEG, a small PNG) can re-encode larger — keep the original then.
     if (!blob || blob.size >= file.size) return file;
 
+    const outType = blob.type;
     const ext = outType === "image/webp" ? "webp" : "jpg";
     const baseName = file.name?.replace(/\.[^./\\]+$/, "") || "image";
     return new File([blob], `${baseName}.${ext}`, { type: outType, lastModified: file.lastModified });

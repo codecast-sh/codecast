@@ -8,7 +8,8 @@ import { BISECT_CADENCE } from '../commands/check';
 import { scoreOrZero } from '../commands/verdict';
 import { separate } from '../stats';
 import { argsOf, CONFIRM_REPS, legacyMap, NO_LEGACY, planFrom, planSearchable, renderPlan, type LegacyMap, type PlanArgs, type PlanWorld } from './plan';
-import { candidateKey, crashedFocus, missingReps, probeSet, readProbe, treeLabel, treeOf, unsureSide, type ProbeEnv, type Tree } from './probe';
+import { candidateKey, missingReps, probeSet, treeLabel, treeOf, type ProbeEnv, type Tree } from './probe';
+import { crashedFocus, failedControls, readProbe, unsureSide } from './reading';
 import { acquireRunLock, Journal, readBisectState } from './state';
 
 // The paid part of a bisect, after the free answers (section 5 of
@@ -145,6 +146,8 @@ async function search(j: Journal, plan: BisectPlan, env: ProbeEnv): Promise<void
   const s = j.state;
   const set = plan.freezes.map((f) => f.id);
   const focus = plan.freezes.filter((f) => f.role === 'flipped').map((f) => f.id);
+  const controls = plan.freezes.filter((f) => f.role === 'control').map((f) => f.id);
+  const ids = (fs: string[]) => fs.map((f) => f.slice(0, 8)).join(', ');
   const mode = plan.attribution.mode;
   const classes = searchClasses(plan);
   s.tier = plan.classes ? 1 : 0;
@@ -245,10 +248,12 @@ async function search(j: Journal, plan: BisectPlan, env: ProbeEnv): Promise<void
     let r = await ensure(kind, t, n, plan.reps);
     if (r.halt || r.skip) return { side: null, verdict: r.skip ? 'skip' : 'pending', ...r };
     const dead = crashedFocus(r.set, focus);
-    if (dead.length) {
+    // A stable control failing at a probe says this tree does not run the surface as the ends do, so its flipped freezes say nothing about the source.
+    const broken = kind === 'probe' ? failedControls(r.set, controls) : [];
+    if (dead.length || broken.length) {
       const p = entry(kind, t, n);
       p.verdict = 'skip';
-      p.skipReason = `every rep crashed on ${dead.map((f) => f.slice(0, 8)).join(', ')}`;
+      p.skipReason = dead.length ? `every rep crashed on ${ids(dead)}` : `the control freeze${broken.length > 1 ? 's' : ''} ${ids(broken)} failed here`;
       j.step(kind.startsWith('control') ? 'control' : 'probe', t.sha, `skip: ${p.skipReason}`);
       return { side: null, verdict: 'skip', set: r.set, skip: p.skipReason, halt: null };
     }
@@ -285,10 +290,15 @@ async function search(j: Journal, plan: BisectPlan, env: ProbeEnv): Promise<void
   if (cb.halt) return halted(cb.halt);
   if (crashedControl('bad', badTree, legacy.bad, cb.set)) return;
   if (cg.skip || cb.skip) return finish('done', { kind: 'drift', detail: `an endpoint does not load under today's tool: ${cg.skip ?? cb.skip}` }, 'the controls could not run');
-  if (cgRead !== 'good' || cb.verdict !== 'bad') {
+  // The stable controls passed on both ends in the records: failing at either end now is the tool or the judge moving, not the source.
+  const drifted = (['good', 'bad'] as const).flatMap((side) => {
+    const failed = failedControls(side === 'good' ? cg.set : cb.set, controls);
+    return failed.length ? [`the control freeze${failed.length > 1 ? 's' : ''} ${ids(failed)} failed at the ${side} end`] : [];
+  });
+  if (cgRead !== 'good' || cb.verdict !== 'bad' || drifted.length) {
     const words = (v: string) => (v === 'unsure' || v === 'split' ? 'split' : v);
-    const detail = `the good control read ${words(cgRead)} and the bad control read ${words(cb.verdict)} on today's tool and judge`;
-    const unreplayable = plan.bad.dirty && !plan.bad.treePatch && legacy.bad === null && cb.verdict === 'good';
+    const detail = [`the good control read ${words(cgRead)} and the bad control read ${words(cb.verdict)}`, ...drifted].join('; ') + " on today's tool and judge";
+    const unreplayable = !drifted.length && plan.bad.dirty && !plan.bad.treePatch && legacy.bad === null && cb.verdict === 'good';
     return finish(
       'done',
       unreplayable ? { kind: 'unreplayable', detail: `the bad batch ran on uncommitted edits to ${plan.bad.sha.slice(0, 9)} that nothing recorded can replay, and that commit alone reads good` } : { kind: 'drift', detail: `${detail[0]!.toUpperCase()}${detail.slice(1)}.` },

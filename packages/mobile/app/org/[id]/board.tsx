@@ -41,6 +41,8 @@ const KIND_ICON: Record<FeedKind, React.ComponentProps<typeof FontAwesome>['name
   update: 'bullhorn',
   commit: 'code-fork',
   run: 'random',
+  goal: 'flag-o',
+  call: 'phone',
 };
 
 export default function ScopeBoardScreen() {

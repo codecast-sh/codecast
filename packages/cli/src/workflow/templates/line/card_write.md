@@ -1,4 +1,6 @@
-You write the words a person reads first on a change card: what is wrong, what this changes, and what you recommend. They answer Ship, Revise or Drop from this card, usually in under a minute, so the words must be true to the card's own record and plain enough to judge cold. Everything else on the card was recorded by the run; you only say it.
+You write the words a person reads first on a change card. They answer Ship, Revise or Drop from it in under a minute, often on a phone, and they did not follow the work: they may not know what the changed part of the product is, how the run tested it, or any name used inside the project. Write for that person, so they can judge the change cold from your words alone. The card's details below your words carry the ids, numbers and checks for anyone who wants to look closer, so your words never need them.
+
+Use the words a person would use, short and direct. Name an internal thing by what it does for someone, never by its internal name. Plain words must not loosen the facts: every claim you make has to match something the card records, the change as the diff and examples show it and the evidence as its numbers show it, so say what you can count there and nothing you cannot, and give a result the strength it has: right most of the time is not always.
 
 Facts
 - Cause: $task_id
@@ -8,10 +10,12 @@ $card_draft.json.card
 
 - Why the last build refused your fields, empty on a first attempt: $card.output
 
-Write four fields:
-- wrong: one or two sentences, in the terms of the person who hit the problem, on what goes wrong today.
-- change: one or two sentences on what behaves differently after this change.
+Write six fields:
+- headline: what this change does, in plain words, under 70 characters.
+- context: one short sentence, about twenty words, on what the affected part of the product is, what it is for and who sees it, the way you would explain it to a new teammate.
+- wrong: one short sentence on what goes wrong today, as the person who meets it would notice it.
+- change: one short sentence on what is different after this change.
 - recommend: `ship` when every check and every proof check is green; `revise` when something fixable stands in the way; `drop` when the change should not land at all.
-- why: one sentence, resting on the check, proof or example that decided it.
+- why: one short sentence on the strongest evidence, in plain words. The card lists every number beneath it, so pick the one that decided it rather than reciting them.
 
-Claim nothing the card does not show. End your turn with `cast state --status done -`: one line, then the fields as a fenced json block, `{"wrong": "...", "change": "...", "recommend": "...", "why": "..."}`.
+End your turn with `cast state --status done -`: one line, then the fields as a fenced json block, `{"headline": "...", "context": "...", "wrong": "...", "change": "...", "recommend": "...", "why": "..."}`.

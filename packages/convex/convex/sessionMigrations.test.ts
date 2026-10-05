@@ -9,7 +9,9 @@ import {
   performEnqueueQuiesce,
   performFailSession,
   performFinishSession,
+  performCheckoutHolder,
   performReapStale,
+  performRunHere,
   performRetryFailed,
   planMigration,
   STALE_MIGRATION_MS,
@@ -91,10 +93,17 @@ describe("planMigration", () => {
     expect(offline.skipped[0].reason).toContain("offline");
   });
 
+  test("an ended session never goes out to a host, but one that ended on a host can come home", () => {
+    const out = planMigration({ conversations: [{ ...base, _id: "ended", owner_device_id: LAPTOP, status: "completed" }], devices, targetDeviceId: BOX, now: NOW });
+    expect(out.skipped[0]?.reason).toContain("ended");
+    const devicesOnline = devices.map((d: any) => ({ ...d, last_seen: ONLINE }));
+    const home = planMigration({ conversations: [{ ...base, _id: "ended", owner_device_id: BOX, status: "completed" }], devices: devicesOnline, targetDeviceId: LAPTOP, now: NOW });
+    expect(home.rows.map((r) => r.direction)).toEqual(["to_local"]);
+  });
+
   test("every refusal names its reason", () => {
     const { rows, skipped } = planMigration({
       conversations: [
-        { ...base, _id: "ended", owner_device_id: LAPTOP, status: "completed" },
         { ...base, _id: "killed", owner_device_id: LAPTOP, inbox_killed_at: 1 },
         { ...base, _id: "sub", owner_device_id: LAPTOP, is_subagent: true },
         { ...base, _id: "busy", owner_device_id: LAPTOP, migration: { batch_id: "mg-old" } },
@@ -107,7 +116,6 @@ describe("planMigration", () => {
     });
     expect(rows).toEqual([]);
     const reasons = Object.fromEntries(skipped.map((s) => [s.conversation_id, s.reason]));
-    expect(reasons.ended).toContain("ended");
     expect(reasons.killed).toContain("killed");
     expect(reasons.sub).toContain("subagent");
     expect(reasons.busy).toContain("mg-old");
@@ -370,6 +378,42 @@ describe("finishSession — the flip", () => {
     expect(canDaemonSeePendingMessage(msg as any, c, ME as any, LAPTOP)).toBe(false);
   });
 
+  test("siblings from one laptop folder share the host checkout; anyone else holding it refuses the handoff without throwing", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1", "c2"]);
+    const root = "/home/ubuntu/work/repo";
+    const source = "/Users/me/src/repo/.codecast/worktrees/a";
+    for (const r of rows) {
+      await performBeginSession({ db }, ME as any, { migration_id: r.migration_id as any, device_id: LAPTOP }, NOW);
+      const fin = await performFinishSession({ db }, ME as any, { migration_id: r.migration_id as any, project_path: root, source_path: source }, NOW + 5);
+      expect(fin.ok).toBe(true);
+    }
+    expect([conv(db, "c1").owner_device_id, conv(db, "c2").owner_device_id]).toEqual([BOX, BOX]);
+
+    const other = fixtures();
+    conv(other, "c3").project_path = root;
+    const { rows: one } = await startedBatch(other, ["c1"]);
+    await performBeginSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, device_id: LAPTOP }, NOW);
+    const refused = await performFinishSession({ db: other }, ME as any, { migration_id: one[0].migration_id as any, project_path: root, source_path: source }, NOW + 5);
+    expect(refused.ok).toBe(false);
+    expect(!refused.ok && refused.reason).toContain("is in use by session c3short");
+    expect(conv(other, "c1").owner_device_id).toBe(LAPTOP);
+  });
+
+  test("before the push: a session outside the batch holding the host checkout is named; batch siblings never are", async () => {
+    const root = "/home/ubuntu/work/repo";
+    const db = fixtures();
+    conv(db, "c3").project_path = root;
+    const { rows } = await startedBatch(db, ["c1", "c2"]);
+    const holder = await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: root });
+    expect(holder).toMatchObject({ conversation_id: "c3", short_id: "c3short" });
+    expect(await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: `${root}-mv-abc` })).toBeNull();
+    conv(db, "c2").owner_device_id = BOX;
+    conv(db, "c2").project_path = root;
+    conv(db, "c3").project_path = "/elsewhere";
+    expect(await performCheckoutHolder({ db }, ME as any, { migration_id: rows[0].migration_id as any, project_path: root })).toBeNull();
+  });
+
   test("refuses a row that is not in flight", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db, ["c1"]);
@@ -380,6 +424,18 @@ describe("finishSession — the flip", () => {
 });
 
 describe("failSession / cancel / retry", () => {
+  test("restore: a session stopped for a move that failed is resumed on its own machine", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1"]);
+    const id = rows[0].migration_id as any;
+    await performBeginSession({ db }, ME as any, { migration_id: id, device_id: LAPTOP }, NOW);
+    const before = commands(db).length;
+    await performFailSession({ db }, ME as any, { migration_id: id, error: "push refused", restore: true }, NOW);
+    const added = commands(db).slice(before);
+    expect(added.map((c) => [c.command, c.target_device_id])).toEqual([["resume_session", LAPTOP]]);
+    expect(JSON.parse(added[0].args)).toMatchObject({ session_id: "s1", conversation_id: "c1" });
+  });
+
   test("a failure lifts only its own fence and leaves the session where it was", async () => {
     const db = fixtures();
     const { rows } = await startedBatch(db);
@@ -423,6 +479,23 @@ describe("failSession / cancel / retry", () => {
     expect(rowsOf(db)[0].error).toBeUndefined();
     expect(commands(db).slice(before).map((x) => [x.command, x.target_device_id])).toEqual([["migrate_sessions", LAPTOP]]);
     expect(db._tables.migration_batches[0].cancelled_at).toBeUndefined();
+  });
+});
+
+describe("runHere", () => {
+  test("a row still waiting to be placed on the host comes home by re-homing: the park clears and it resumes here", async () => {
+    const db = fixtures({ conversations: [
+      { _id: "c5", short_id: "c5short", user_id: ME, owner_device_id: BOX, agent_type: "claude_code", status: "active", project_path: "/Users/me/src/notes", title: "Never placed",
+        cloud_placement: "pending", cloud_placement_token: "tok", cloud_placement_failed_at: NOW - 1000, session_error: "cloud host preparation failed (exit 1): not a git repository" },
+    ] });
+    const res = await performRunHere({ db }, ME as any, { conversation_id: "c5", device_id: LAPTOP, request_id: "req-1" });
+    expect((res as any).batch_id).toBeUndefined();
+    expect(rowsOf(db)).toHaveLength(0);
+    const row = conv(db, "c5");
+    expect(row.owner_device_id).toBe(LAPTOP);
+    expect(row.cloud_placement).toBeUndefined();
+    expect(row.session_error).toBeUndefined();
+    expect(commands(db).some((c) => c.command === "resume_session" && c.target_device_id === LAPTOP)).toBe(true);
   });
 });
 

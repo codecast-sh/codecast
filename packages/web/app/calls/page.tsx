@@ -24,19 +24,20 @@ import { GuestInvite } from "../../components/calls/GuestDoor";
 import { GuestTag, ParticipantTag } from "../../components/calls/GuestTag";
 import { isGuestParticipant } from "../../lib/calls/roomGuests";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useCallDetail, useCallList } from "../../hooks/useSyncCalls";
+import { useCallDetail, useCallList, useCallPlaces } from "../../hooks/useSyncCalls";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { humanizeConvexError, isRecRoomKey, parseCallAnchor, parseCallMomentParam, parseCallViewParam } from "@codecast/shared/contracts";
+import { callAnchorHref, callPathRef, callViewParam, humanizeConvexError, isRecRoomKey, lineFrameMs, parseCallAnchor, parseCallMomentParam, parseCallViewParam, type CallView } from "@codecast/shared/contracts";
 import { callRefId } from "@codecast/shared/entities";
 import { joinCall } from "../../lib/calls/callManager";
-import { callTitle } from "../../lib/calls/roomLabels";
+import { callTitle, type CallPlace } from "../../lib/calls/roomLabels";
 import { isConvexId, useInboxStore } from "../../store/inboxStore";
 import { Facepile } from "../../components/calls/OccupancyChip";
 import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
 import { useLiveRooms } from "../../hooks/useLiveRooms";
 import { RoomThread } from "../../components/calls/RoomThread";
+import type { CallMoment } from "../../components/calls/RoomThreadRows";
 import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
 import { turnsAnchor } from "../../components/calls/transcriptTurnModel";
 import { copyCallFrameLink, copyCallLink } from "../../lib/calls/callLinks";
@@ -44,7 +45,6 @@ import { copyText } from "../../lib/copyText";
 import {
   callVideoNotice,
   callVideoRuns,
-  describeStretches,
   filmedSpans,
   lineSeqAt,
   playableFiles,
@@ -53,7 +53,8 @@ import {
   videoStretches,
   type CallVideoRun,
 } from "../../lib/calls/callVideo";
-import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn } from "../../hooks/useRoomRecording";
+import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn, useSeatedRoomKey } from "../../hooks/useRoomRecording";
+import { RecordButton } from "../../components/calls/RoomRecording";
 import {
   CallVideoNoticeLine,
   CallVideoPlaceholder,
@@ -62,13 +63,16 @@ import {
   type CallVideoHandle,
 } from "../../components/calls/CallVideoPlayer";
 import { ShareVideoSwitch } from "../../components/calls/ShareVideoSwitch";
+import { CallVideoStretchChip } from "../../components/calls/CallVideoStretchChip";
+import { SharedFrames } from "../../components/calls/SharedFrames";
 import {
   openFeedTargetPicker,
   useSendExcerpt,
   type FeedTarget,
   type TranscriptExcerpt,
 } from "../../components/calls/useCallFeed";
-import { firstName, fmtCallLength, fmtClock, speakerColor } from "../../components/calls/speakers";
+import { firstName, fmtCallLength, speakerColor } from "../../components/calls/speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import { CallSessionChips } from "../../components/calls/CallSessionChips";
 import { useMutation } from "convex/react";
 import {
@@ -103,10 +107,14 @@ import "../../components/calls/callMedia.css";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useMediaMoment } from "../../hooks/useMediaMoment";
-import { seekCallMedia, showCallLine, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
+import { useCoarsePointer } from "../../hooks/useIsPhone";
+import { callLineEl, seekCallMedia, showCallLine, useCallMomentLanding, type CallMediaTarget } from "../../hooks/useCallMomentLanding";
 import { RecordingMark } from "../../components/calls/RecordingMark";
 import { RecorderMic } from "../../components/calls/RecorderMic";
 import { fmtClock as fmtWhen } from "../../components/triggerCadence";
+
+// A stable empty list, so a call page still loading asks no place query.
+const NO_CALLS: any[] = [];
 
 /** Where a recording of mine stands in triage, at a glance: private (the
  *  birth state) or the team its creator shared it into. Read-only here — the
@@ -130,7 +138,7 @@ function RecordingScopeChip({ call }: { call: any }) {
   );
 }
 
-function CallListRow({ call, selected }: { call: any; selected: boolean }) {
+function CallListRow({ call, selected, place }: { call: any; selected: boolean; place?: CallPlace | null }) {
   const live = isCallLive(call);
   // A recording sits in the same list under the same idiom — it is a call
   // object like any other — and the glyph is the whole difference: a
@@ -148,11 +156,11 @@ function CallListRow({ call, selected }: { call: any; selected: boolean }) {
   // A string out of the selector, so the row re-renders only when the name
   // itself changes, not on every write to the collections it reads.
   const title = useInboxStore((s) =>
-    callTitle(call, s as any, { untitled: silent ? "Typed huddle, nothing said" : undefined }),
+    callTitle({ ...call, place }, s as any, { untitled: silent ? "Typed huddle, nothing said" : undefined }),
   );
   return (
     <Link
-      href={`/calls/${call._id}`}
+      href={callAnchorHref(callPathRef(call))}
       className={`block border-b border-sol-border/15 px-4 py-3 transition-colors hover:bg-sol-bg-alt/40 ${
         selected ? "border-l-2 border-l-sol-cyan bg-sol-bg-alt/60" : "border-l-2 border-l-transparent"
       }`}
@@ -434,6 +442,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   // A link into the call (callAnchorHref): turns open selected, the recap's
   // summary or an action item opens the recap. The thread scrolls to it.
   const searchParams = useSearchParams();
+  const router = useRouter();
   const focus = useMemo(() => parseCallAnchor(searchParams), [searchParams]);
   const landed = useRef<string | null>(null);
   useWatchEffect(() => {
@@ -457,6 +466,22 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   // screen, not on the room the player otherwise starts from.
   const momentView = useMemo(() => parseCallViewParam(searchParams), [searchParams]);
   const mediaTarget: CallMediaTarget = { hasVideo, player: playerRef, audio: audioRef, media, setMissed };
+  // A view picked in the player goes into the address in place (no history
+  // entry), beside whatever `t` it already holds, so a reload or a copied
+  // address opens on the picture that was up. `t` is left alone: rewriting
+  // it as the video plays would churn the address every second, and the
+  // landing is keyed on it, so a changed view alone never seeks again.
+  const writeView = (view: CallView | null) => {
+    const params = new URLSearchParams(window.location.search);
+    const was = parseCallViewParam(params);
+    if (!!was === !!view && (was?.identity ?? null) === (view?.identity ?? null)) return;
+    params.delete("view");
+    // Appended as callViewParam spells it, the way a built link carries it,
+    // rather than re-encoded by URLSearchParams.
+    const spelled = callViewParam(view);
+    const qs = [params.toString(), spelled ? `view=${spelled}` : ""].filter(Boolean).join("&");
+    router.replace(`${window.location.pathname}${qs ? `?${qs}` : ""}`, { scroll: false });
+  };
   useCallMomentLanding({
     scope: id,
     momentMs,
@@ -475,10 +500,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   // back taken, follows again.
   // The i-th turn's element, or the line `seq` inside it: the line being
   // said is what follows the picture, since one turn can run for minutes.
-  const lineEl = (i: number, seq: number | null = null) => {
-    const turn = detailRef.current?.querySelector<HTMLElement>(`[data-turn="${i}"]`) ?? null;
-    return (seq !== null ? turn?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? turn;
-  };
+  const lineEl = (i: number, seq: number | null = null) => callLineEl(detailRef.current, i, seq);
   const [following, setFollowing] = useState(true);
   const playingIndex = seekable && mediaAt?.playing ? turnIndexAt(turns, mediaAt.ms) : null;
   const playingSeq = playingIndex === null ? null : lineSeqAt(turns[playingIndex], mediaAt!.ms);
@@ -518,7 +540,10 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
 
   // Named by the one rule the history list uses, so a row and the page it
   // opens never call the same call two things.
-  const title = useInboxStore((s) => (call ? callTitle(call, s as any) : ""));
+  const places = useCallPlaces(call ? [call] : NO_CALLS);
+  const title = useInboxStore((s) => (call ? callTitle({ ...call, place: places[String(call._id)] }, s as any) : ""));
+  // Touch screens select lines by press and hold (onTurnHold below).
+  const coarse = useCoarsePointer();
   if (call === undefined) return <CallDetailSkeleton preview={preview} />;
   if (call === null) {
     return <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>;
@@ -564,13 +589,15 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
   const seekTo = (ms: number) => seekCallMedia(mediaTarget, ms);
 
   // A recording's start or stop in the thread jumps to the picture it is
-  // about (shownMomentNear snaps a press to the file's first frame).
-  const momentAt = (at: number) => {
-    if (!callRecs) return null;
-    const ms = shownMomentNear(videoFiles, callRecs.call_started_at, at - callRecs.call_started_at);
-    if (ms === null) return null;
+  // about (shownMomentNear snaps a press to the file's first frame). Where no
+  // video shows it (the run was deleted, or never filmed), the line still
+  // says when it was on the call's clock, without the jump.
+  const momentAt = (at: number): CallMoment => {
+    const startedAt = callRecs?.call_started_at ?? call.started_at;
+    const ms = hasVideo && callRecs ? shownMomentNear(videoFiles, startedAt, at - startedAt) : null;
+    if (ms === null) return { label: formatCallTime(Math.max(0, at - startedAt)), onSeek: null };
     return {
-      label: fmtClock(ms),
+      label: formatCallTime(ms),
       onSeek: () => {
         setFollowing(true);
         seekTo(ms);
@@ -578,8 +605,15 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
     };
   };
 
+  // A finger has no Shift key: on a touch screen a press and hold on a line
+  // starts a selection, and while one is open a tap extends it instead of
+  // seeking (a tap with nothing selected still shows that moment).
+  const onTurnHold = (i: number) => {
+    setAnchor(i);
+    setEnd(null);
+  };
   const onTurnClick = (i: number, e: React.MouseEvent, atMs: number) => {
-    if (seekable && !e.shiftKey) {
+    if (seekable && !e.shiftKey && !(coarse && anchor !== null)) {
       setFollowing(true);
       seekTo(atMs);
       return;
@@ -634,15 +668,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
           {/* Which part of the call has video, in the call's own clock: the
               player sits under the whole call, and only these stretches of
               it play. */}
-          {stretches.length > 0 && (
-            <span
-              className="flex shrink-0 items-center gap-1 rounded-md bg-sol-red/[0.07] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-sol-text-muted"
-              title="The parts of the call that were filmed. The lines said in them carry a red rail"
-            >
-              <Video className="h-3 w-3 text-sol-red/70" aria-hidden="true" />
-              video {describeStretches(stretches)}
-            </span>
-          )}
+          <CallVideoStretchChip stretches={stretches} />
           <RecordingScopePicker call={call} />
           {recording && live && <RecorderMic transcriptId={String(call._id)} />}
           {(call.participants || []).length > 0 && (
@@ -683,18 +709,25 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
           <span className="flex-1" />
           <ShareControl
             label={recording ? "recording" : "call"}
-            path={`/calls/${call._id}`}
+            path={callAnchorHref(callPathRef(call))}
             publicShare={{ kind: "call", id: String(call._id), token: call.share_token }}
             linkExtra={
-              callRecs && videoRuns.some((r) => r.composite?.status === "ready") ? (
-                <ShareVideoSwitch
-                  call={String(call._id)}
-                  shared={callRecs.video_shared}
-                  linkOn={!!call.share_token}
-                  canShare={callRecs.can_share_video ?? true}
-                  later={callRecs.video_later ?? 0}
-                  guests={(call.guests ?? []).map((g: { name: string }) => g.name)}
-                />
+              callRecs ? (
+                <>
+                  {videoRuns.some((r) => r.composite?.status === "ready") && (
+                    <ShareVideoSwitch
+                      call={String(call._id)}
+                      shared={callRecs.video_shared}
+                      linkOn={!!call.share_token}
+                      canShare={callRecs.can_share_video ?? true}
+                      later={callRecs.video_later ?? 0}
+                      guests={(call.guests ?? []).map((g: { name: string }) => g.name)}
+                    />
+                  )}
+                  {/* Pictures of the call anyone can open by their own
+                      links (cast call snap --share), each to take down. */}
+                  <SharedFrames call={String(call._id)} />
+                </>
               ) : undefined
             }
           />
@@ -766,6 +799,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
                 seekTo(ms);
               }}
               refreshing={!!callRecs.refreshing}
+              onViewPick={writeView}
               actions={({ callMs, file, now }) => {
                 const run = videoRuns.find((r) => r.id === (file.run_id ?? file.id));
                 const moment = callRefId(callRef, null, callMs);
@@ -787,7 +821,7 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
                     </button>
                     <button
                       type="button"
-                      onClick={() => copyCallFrameLink(String(call._id), now(), file)}
+                      onClick={() => copyCallFrameLink(callPathRef(call), now(), file)}
                       className={copy}
                       title={file.kind === "screen" ? "Copy a link that opens the call at this moment, on this screen" : "Copy a link that opens the call at this moment"}
                     >
@@ -848,19 +882,25 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
         selection={{
           isSelected,
           onTurnClick,
+          onTurnHold,
           activeIndex,
           // The rails are for a call whose words follow media.
           ...(seekable ? { activeSeq, filmed: stretches } : {}),
-          momentAt: hasVideo && callRecs ? momentAt : undefined,
+          // A rec: voice note has no recording events to place.
+          momentAt: recording ? undefined : momentAt,
           hint:
             selectedCount === 0
-              ? recording
-                ? call.recording_url
-                  ? "Click a line to jump there in the audio. Hold Shift and click to select lines to send."
-                  : "Hold Shift and click to select lines to send."
-                : hasVideo
-                  ? "Click a line to see that moment in the video. Hold Shift and click to select lines to send."
-                  : "Click a turn to start a selection, click another to extend, then send the excerpt to an agent."
+              ? coarse
+                ? hasVideo || (recording && call.recording_url)
+                  ? `Tap a line to ${hasVideo ? "see that moment" : "jump there in the audio"}. Press and hold to select lines to send.`
+                  : "Press and hold a line to select lines to send."
+                : recording
+                  ? call.recording_url
+                    ? "Click a line to jump there in the audio. Hold Shift and click to select lines to send."
+                    : "Hold Shift and click to select lines to send."
+                  : hasVideo
+                    ? "Click a line to see that moment in the video. Hold Shift and click to select lines to send."
+                    : "Click a turn to start a selection, click another to extend, then send the excerpt to an agent."
               : null,
         }}
       />
@@ -906,10 +946,11 @@ function CallDetail({ id, preview }: { id: string; preview?: any }) {
             <button
               onClick={() =>
                 copyCallLink(
-                  String(call._id),
+                  callPathRef(call),
                   turnsAnchor(turns.slice(selLo!, (selHi as number) + 1)),
-                  // With video the link also waits at the first line's moment.
-                  hasVideo ? turns[selLo!]?.t0 : undefined,
+                  // With video the link also waits at the first line's moment,
+                  // the second `cast call snap` frames for that line.
+                  hasVideo && turns[selLo!]?.segments[0] ? lineFrameMs(turns[selLo!].segments[0]) : undefined,
                 )
               }
               className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium text-sol-text-muted transition-colors hover:bg-sol-bg/60 hover:text-sol-text"
@@ -988,7 +1029,7 @@ function RecordMeetingButton() {
         className="mt-2.5 flex w-full items-center justify-center gap-2 rounded-md border border-sol-red/50 bg-sol-red/12 px-3 py-2 text-xs font-medium text-sol-red transition-colors hover:bg-sol-red/20"
       >
         <span className="rec-pill-dot" aria-hidden="true" />
-        Recording. Open the transcript
+        Recording a voice note. Open it
       </button>
     );
   }
@@ -1011,26 +1052,42 @@ function RecordMeetingButton() {
       {/* The wait here is a person deciding, not a machine working: Chrome is
           asking them for the microphone and nothing moves until they answer.
           Saying "Starting…" made an unanswered prompt look like a hang. */}
-      {starting ? "Waiting for the microphone" : "Record audio"}
+      {starting ? "Waiting for the microphone" : "Record a voice note"}
     </button>
+  );
+}
+
+/**
+ * The huddle the viewer is seated in, filmed from here: the stage's own
+ * Record (the same press, first-time question and Stop), above the voice
+ * note so the two are never taken for each other. A voice note records this
+ * computer's microphone, privately; this records the room, and the room is
+ * told. With no huddle to film, a line says where Record lives.
+ */
+function SeatedHuddleRecord() {
+  const seated = useSeatedRoomKey();
+  if (seated && !isRecRoomKey(seated)) {
+    return (
+      <div className="mt-2.5">
+        <RecordButton roomKey={seated} variant="wide" />
+      </div>
+    );
+  }
+  return (
+    <p className="mt-1 text-[10.5px] leading-snug text-sol-text-dim/80">
+      To film a huddle, press Record in the huddle's controls.
+    </p>
   );
 }
 
 export default function CallsPage() {
   const params = useParams() as { id?: string };
   const selectedId = params?.id ?? null;
-  // A link built from a call's short id (`/calls/cl-42?turns=15-25`) lands
-  // on the call's page under its full id, the anchor kept.
-  const shortRef = selectedId && /^cl-\d+$/i.test(selectedId) ? selectedId : null;
-  const byShort = useQueryNoThrow(api.transcripts.webGetCallRef, shortRef ? { ref: shortRef } : "skip").data as
-    | { _id: string }
-    | null
-    | undefined;
-  const router = useRouter();
-  const search = useSearchParams();
-  useWatchEffect(() => {
-    if (byShort?._id) router.replace(`/calls/${byShort._id}${search?.toString() ? `?${search}` : ""}`);
-  }, [byShort?._id]);
+  // A call's address is its short id (`/calls/cl-42?t=150`, callPathRef),
+  // the name the header, the toolbar and every citation give it. The page
+  // reads it as it is and never rewrites the bar: the cached list answers it
+  // on the first frame, the server for a call older than the cached page.
+  const shortRef = selectedId && /^cl-\d+$/i.test(selectedId) ? selectedId.toLowerCase() : null;
   const callsOn = useTeamFeature("calls");
   // Always asked, whatever the ACTIVE team's calls feature says: recordings
   // are personal — they land here from every team and from none — and the
@@ -1042,6 +1099,23 @@ export default function CallsPage() {
   // and the live answer only keeps it current. A skeleton is honest only
   // while nothing is cached and nothing has answered.
   const { calls, ready: callsReady, error: callsError, retry: retryCalls } = useCallList(100);
+  const places = useCallPlaces(calls);
+  const cachedShort = shortRef ? calls.find((r) => r.short_id === shortRef)?._id : undefined;
+  const byShort = useQueryNoThrow(
+    api.transcripts.webGetCallRef,
+    shortRef && !cachedShort ? { ref: shortRef } : "skip",
+  ).data as { _id: string } | null | undefined;
+  // The call's full id, what its data is keyed by. Undefined while a short
+  // id is being looked up, null when no call of the viewer's answers to it.
+  const callId: string | null | undefined = !shortRef
+    ? selectedId
+    : cachedShort
+      ? String(cachedShort)
+      : byShort === undefined
+        ? undefined
+        : byShort
+          ? String(byShort._id)
+          : null;
   const { liveCalls, pastCalls, transcribedRoomKeys } = useMemo(() => {
     const rows = calls;
     const live = rows.filter(isCallLive);
@@ -1065,21 +1139,19 @@ export default function CallsPage() {
               <h2 className="text-sm font-medium text-sol-text">Calls</h2>
               <p className="mt-0.5 text-[11px] text-sol-text-dim">
                 Huddles with their transcripts and video, and voice
-                recordings, also via <code className="text-sol-cyan">cast calls</code>
+                notes, also via <code className="text-sol-cyan">cast calls</code>
               </p>
-              <p className="mt-1 text-[10.5px] leading-snug text-sol-text-dim/80">
-                To film a huddle, press Record in the huddle's controls.
-              </p>
+              <SeatedHuddleRecord />
               <RecordMeetingButton />
               <p className="mt-1.5 text-[10.5px] leading-snug text-sol-text-dim/80">
-                Records audio from your microphone. A voice recording starts
-                private to you, whatever team is active. Share it into a team
-                from its page when it belongs there.
+                A voice note records your microphone, not the huddle, and
+                starts private to you, whatever team is active. Share it into
+                a team from its page when it belongs there.
               </p>
               {!callsOn && (
                 <p className="mt-1.5 text-[10.5px] leading-snug text-sol-yellow/80">
                   Huddles are off for this team (a team admin can turn them on
-                  under Settings → Team). Your recordings stay here either way.
+                  under Settings → Team). Your voice notes stay here either way.
                 </p>
               )}
             </div>
@@ -1109,7 +1181,7 @@ export default function CallsPage() {
                     </div>
                   )}
                   {liveCalls.map((r) => (
-                    <CallListRow key={r._id} call={r} selected={r._id === selectedId} />
+                    <CallListRow key={r._id} call={r} selected={String(r._id) === callId} place={places[String(r._id)]} />
                   ))}
                   {pastCalls.length > 0 && (
                     <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">
@@ -1117,7 +1189,7 @@ export default function CallsPage() {
                     </div>
                   )}
                   {pastCalls.map((r) => (
-                    <CallListRow key={r._id} call={r} selected={r._id === selectedId} />
+                    <CallListRow key={r._id} call={r} selected={String(r._id) === callId} place={places[String(r._id)]} />
                   ))}
                 </>
               )}
@@ -1135,8 +1207,12 @@ export default function CallsPage() {
               </Link>
             )}
             <div className="relative min-h-0 flex-1">
-              {selectedId && !shortRef ? (
-                <CallDetail id={selectedId} preview={calls.find((r) => String(r._id) === selectedId)} />
+              {callId ? (
+                <CallDetail id={callId} preview={calls.find((r) => String(r._id) === callId)} />
+              ) : callId === undefined ? (
+                <CallDetailSkeleton />
+              ) : selectedId ? (
+                <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>
               ) : (
                 <div className="flex h-full items-center justify-center">
                   <div className="text-center text-sol-text-dim">

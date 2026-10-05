@@ -8,7 +8,7 @@ import { classifyWorkStates } from "./conversations";
 import { isOrphanOrSubagent, type WorkState } from "./inboxFilters";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { derivePresenceState } from "./presenceState";
-import { WORKING_SET_RECENCY_MS, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
+import { WORKING_SET_RECENCY_MS, addressesAgent, extractRepoFromRemoteUrl, parseThreadStateStatus, threadStateHeadline, type ThreadStateStatus } from "@codecast/shared/contracts";
 import { accessJudgeFor, canAccessDoc, workspaceKey } from "./lib/access";
 import { userCanAccessRole } from "./lib/orgAccess";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
@@ -18,10 +18,14 @@ import { pendingOnLadder } from "./sessionDecisions";
 import { isScopeless, type Scope } from "./lib/orgScope";
 import { capsFor, countersFor } from "./lib/orgCaps";
 import { findRoleRoutine } from "./lib/orgRoutine";
+import { roleWakeOf } from "@codecast/shared/contracts/rolePlaybook";
 import { extractPlanTitleForWeb } from "./docs";
 import { computeReportingPeople, type BriefPerson } from "./orgGoals";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
-import { metricLine } from "@codecast/shared/contracts/initiative";
+import { metricLine, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { parseCallRef } from "@codecast/shared/entities";
+import { findInitiative } from "./lib/initiativeRef";
+import { canReadCall } from "./transcripts";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -525,8 +529,11 @@ export const handsStartedBy = query({
 // task or plan it is bound to, by project path, or by the role pointer.
 
 // "run" (the-line.md L10): a task's or plan's passage along the line.
-export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run";
-export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run"];
+// "goal" and "call" (initiatives-projects-role-page.md I5): a moment on a
+// goal's record (a milestone reached, a question asked or answered, a
+// decision taken), and a call that names a goal in scope.
+export type FeedKind = "session" | "task" | "plan" | "doc" | "artifact" | "decision" | "update" | "commit" | "run" | "goal" | "call";
+export const FEED_KINDS: FeedKind[] = ["session", "task", "plan", "doc", "artifact", "decision", "update", "commit", "run", "goal", "call"];
 export type FeedActor = { name: string; image?: string; is_bot?: boolean };
 export type FeedRow = {
   kind: FeedKind;
@@ -552,6 +559,10 @@ const COMMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const ARTIFACTS_PER_MEMBER = 100;
 /** Runs the feed reads from the workspace's newest (by_workspace_updated). */
 const RUNS_PER_WORKSPACE = 200;
+/** Calls the feed reads from a team's newest (by_team_started), and how many
+ *  of them a page keeps: each kept call costs its own access check. */
+const CALLS_PER_TEAM = 60;
+const CALL_ROWS_PER_PAGE = 8;
 /** The decision statuses the feed shows: an ask that waits, and one answered. */
 const DECISION_STATUSES = ["pending", "answered"] as const;
 const PREVIEW_CHARS = 200;
@@ -578,12 +589,15 @@ export function decodeFeedCursor(s: string | undefined): FeedCursor {
 const scopeArgs = {
   api_token: v.optional(v.string()),
   role_id: v.optional(v.string()),
-  scope: v.optional(v.object({ project_ids: v.array(v.id("projects")), plan_ids: v.array(v.id("plans")) })),
+  // `initiative_ids`: goals by id or `in-N`. A role's stored scope names none.
+  scope: v.optional(v.object({ project_ids: v.array(v.id("projects")), plan_ids: v.array(v.id("plans")), initiative_ids: v.optional(v.array(v.string())) })),
   team_id: v.optional(v.id("teams")),
 };
 
 // The scope resolved to rows: the role (when named), its workspace, and every
-// project, plan and task inside it, access checked per row.
+// project, plan and task inside it, access checked per row. The goals a
+// scope names ride beside them: the rows, and their ids for a caller that
+// only filters.
 export type ResolvedScope = {
   userId: Id<"users">;
   role: any | null;
@@ -592,12 +606,14 @@ export type ResolvedScope = {
   projects: any[];
   plans: any[];
   tasks: any[];
+  initiatives?: any[];
+  initiative_ids?: Id<"initiatives">[];
 };
 
 export async function resolveScope(
   ctx: Ctx,
   userId: Id<"users">,
-  args: { role_id?: string; scope?: Scope; team_id?: Id<"teams"> },
+  args: { role_id?: string; scope?: Scope & { initiative_ids?: string[] }; team_id?: Id<"teams"> },
 ): Promise<ResolvedScope | null> {
   let role: any = null;
   let scope: Scope;
@@ -645,7 +661,15 @@ export async function resolveScope(
   for (const plan of planById.values()) {
     await admit(await ctx.db.query("tasks").withIndex("by_plan_id", (q: any) => q.eq("plan_id", plan._id)).collect());
   }
-  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()) };
+  // Goals: each admitted by the initiative's own access rule (its workspace
+  // key), so one the caller cannot read is dropped like an unreadable project.
+  const goalById = new Map<string, any>();
+  for (const ref of args.role_id ? [] : args.scope?.initiative_ids ?? []) {
+    const goal = await findInitiative(ctx, userId, ref);
+    if (goal) goalById.set(goal._id.toString(), goal);
+  }
+  const initiatives = Array.from(goalById.values());
+  return { userId, role, teamId, scope, projects, plans: Array.from(planById.values()), tasks: Array.from(taskById.values()), initiatives, initiative_ids: initiatives.map((g) => g._id) };
 }
 
 // F1's session rule over the org scan (org-staffing.md S35): bound to a task
@@ -737,6 +761,10 @@ export async function computeScopeFeed(
   const projectIds = new Set(resolved.projects.map((p) => p._id.toString()));
   /** The window's range on a time keyed index: everything before the cursor. */
   const before = (q: any, field: string, kind: FeedKind) => (cursor[kind] ? q.lt(field, cursor[kind]!.ts) : q);
+  const goals = resolved.initiatives ?? [];
+  const goalHref = (goal: any) => `/initiatives/${goal.short_id ?? goal._id}`;
+  /** A source whose window was cut at a row cap: more of it waits past the page. */
+  const cut = new Set<FeedKind>();
 
   if (want("session")) {
     sources.set("session", await Promise.all(sessions.map(async ({ session, raw }) => ({
@@ -896,7 +924,99 @@ export async function computeScopeFeed(
         });
       }
     }
+    // What a goal's owner said (I1): the first line is the row, the health
+    // its state, the rest the preview.
+    for (const goal of goals) {
+      const updates: any[] = await ctx.db.query("initiative_updates")
+        .withIndex("by_initiative_at", (q: any) => before(q.eq("initiative_id", goal._id), "at", "update"))
+        .order("desc")
+        .take(take);
+      for (const u of updates) {
+        const [first, ...rest] = String(u.body ?? "").trim().split("\n");
+        rows.push({
+          kind: "update",
+          id: u._id.toString(),
+          short_id: goal.short_id,
+          title: first.replace(/^#+\s*/, "").trim() || `Update on ${goal.title}`,
+          state: u.health,
+          actor: await actor(u.by?.kind === "role" ? u.by.role_id : u.by?.user_id ?? u.user_id),
+          updated_at: u.at,
+          href: goalHref(goal),
+          preview: preview(rest.join(" ")),
+        });
+      }
+    }
     sources.set("update", rows);
+  }
+  if (want("goal")) {
+    // The moments on a goal's record (I5), read off the goal rows the scope
+    // already holds, so the source reads nothing: a milestone the day it was
+    // reached, a question when it was asked (and, once answered, when that
+    // was), a decision when it was taken. One row per entry, keyed by its
+    // list and key.
+    const rows: FeedRow[] = [];
+    const said = (source?: IntentSource) => preview(source?.quote);
+    const by = (name?: string): FeedActor | undefined => (name ? { name } : undefined);
+    for (const goal of goals) {
+      const moment = (list: string, key: string, row: Pick<FeedRow, "title" | "state" | "updated_at" | "actor" | "preview">) =>
+        rows.push({ kind: "goal", id: `${goal._id}:${list}:${key}`, short_id: goal.short_id, href: goalHref(goal), ...row });
+      for (const m of goal.milestones ?? []) {
+        if (m.done_at) moment("milestones", m.key, { title: m.title, state: "reached", updated_at: m.done_at, preview: said(m.source) });
+      }
+      for (const q of goal.questions ?? []) {
+        if (q.answer) moment("questions", q.key, { title: q.text, state: "answered", updated_at: q.answered_at ?? q.at, preview: preview(q.answer) });
+        else moment("questions", q.key, { title: q.text, state: "asked", updated_at: q.at, actor: by(q.by), preview: said(q.source) });
+      }
+      for (const d of goal.decisions ?? []) {
+        moment("decisions", d.key, { title: d.text, state: "decided", updated_at: d.at, actor: by(d.by), preview: said(d.source) });
+      }
+    }
+    sources.set("goal", rows);
+  }
+  if (want("call") && goals.length) {
+    // Calls that name a goal in scope: its short id or title in the call's
+    // title or summary, or a source on the goal's record that cites the call.
+    // One window of each team's newest calls; the words themselves (the
+    // segments) are never read, and only a call that matches is access
+    // checked, a few a page.
+    const cited = new Set<string>();
+    const names: string[] = [];
+    for (const goal of goals) {
+      if (goal.short_id) names.push(goal.short_id);
+      if ((goal.title ?? "").trim().length >= 3) names.push(goal.title);
+      const sourced: Array<IntentSource | undefined> = [...(goal.sources ?? []), ...[goal.milestones, goal.questions, goal.decisions].flatMap((list: any[] | undefined) => (list ?? []).map((e) => e.source))];
+      for (const s of sourced) if (s?.kind === "call" && s.ref) cited.add(parseCallRef(s.ref)?.call ?? s.ref.toLowerCase());
+    }
+    // `team_id` here is routing (whose calls to window); canReadCall decides.
+    const teams = new Set<string>(resolved.teamId ? [String(resolved.teamId)] : goals.map((g) => g.team_id).filter(Boolean).map(String));
+    const candidates: any[] = [];
+    for (const teamId of teams) {
+      candidates.push(...await ctx.db.query("transcripts")
+        .withIndex("by_team_started", (q: any) => before(q.eq("team_id", teamId), "started_at", "call"))
+        .order("desc")
+        .take(CALLS_PER_TEAM));
+    }
+    const rows: FeedRow[] = [];
+    for (const t of candidates.sort((a, b) => b.started_at - a.started_at)) {
+      // addressesAgent is the whole word, case folded name match: "in-3" is
+      // not named by "in-30".
+      const named = cited.has(String(t._id)) || (!!t.short_id && cited.has(t.short_id)) || addressesAgent(`${t.title ?? ""}\n${t.summary ?? ""}`, names);
+      if (!named) continue;
+      if (rows.length >= CALL_ROWS_PER_PAGE) { cut.add("call"); break; }
+      if (!(await canReadCall(ctx as any, resolved.userId, t))) continue;
+      rows.push({
+        kind: "call",
+        id: t._id.toString(),
+        short_id: t.short_id ?? undefined,
+        title: t.title || "Call",
+        state: t.status,
+        actor: await actor(t.started_by),
+        updated_at: t.started_at,
+        href: `/calls/${t.short_id ?? t._id}`,
+        preview: preview(t.summary),
+      });
+    }
+    sources.set("call", rows);
   }
   if (want("run")) {
     // Runs (the-line.md L10): every workflow run bound to a task or plan in
@@ -992,7 +1112,8 @@ export async function computeScopeFeed(
   const page = merged.slice(0, limit);
   const next: FeedCursor = { ...cursor };
   for (const row of page) next[row.kind] = { ts: row.updated_at, id: row.id };
-  const hasMore = merged.length > page.length;
+  // A cut source's rows all shipped: its next window starts past them.
+  const hasMore = merged.length > page.length || cut.size > 0;
 
   // Thumbnails only for the rows that ship: an image artifact or a page
   // thumbnail, and the newest image a session showed.
@@ -1370,7 +1491,8 @@ export const brief = query({
         authority: role.authority ?? [],
         standing_short_id: standing?.short_id ?? null, standing_conversation_id: standing?._id ?? null,
         checked_at: role.checked_at ?? null,
-        routine: routine ? { _id: routine._id, short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, interval_ms: routine.interval_ms ?? null } : null,
+        // `wake` is how the check runs as the role may tune it (S38): cadence, gate, focus, and why it last changed.
+        routine: routine ? { _id: routine._id, short_id: routine.short_id ?? null, title: routine.title, status: routine.status, run_at: routine.run_at ?? null, last_run_at: routine.last_run_at ?? null, interval_ms: routine.interval_ms ?? null, wake: roleWakeOf(routine) } : null,
       },
       facts,
       narrative: briefDoc?.content ?? "",

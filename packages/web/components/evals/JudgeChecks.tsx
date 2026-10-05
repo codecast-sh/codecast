@@ -3,16 +3,13 @@
 // score version the folder keeps, and, before a rep is scored, the rubric it
 // will be held to.
 
-import type { CheckResultJson, RunResponse, ScoreJson, ScoreVersion } from "@codecast/shared/contracts/evalsApi";
+import type { RunResponse, ScoreJson, ScoreVersion } from "@codecast/shared/contracts/evalsApi";
 import { PASS_MARK } from "./charts/scale";
 import { AnchorLink } from "./GateList";
 import { Caret } from "./CallPane";
-import { ScoreBar, VerdictGlyph, score2, usd, whenLabel } from "./parts";
-
-export const checkAnchor = (id: string) => `check-${id}`;
-
-/** A check's own state, read the way ScoreBar draws it: at the pass mark and over its `must` floor. */
-export const checkPasses = (c: Pick<CheckResultJson, "score" | "must">, passMark = PASS_MARK) => c.score >= passMark && (c.must === null || c.must === undefined || c.score >= c.must);
+import { ScoreBar, VerdictGlyph } from "./parts";
+import { score2, usd, whenLabel } from "./format";
+import { checkAnchor, checkPasses } from "./runModel";
 
 export function JudgeChecks({ score, target, anchorHref, onAnchor }: { score: ScoreJson; target: string | null; anchorHref: (anchor: string) => string; onAnchor: (anchor: string) => void }) {
   if (!score.checks.length) return <div className="ev-rows"><div className="ev-empty-note">No judged checks: this rep's score is its gates alone.</div></div>;

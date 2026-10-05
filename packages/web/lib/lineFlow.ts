@@ -18,11 +18,13 @@
 // rows to one project before buildLineFlow, and lineRollup counts every
 // project's line for the "all projects" view. A project's declared finders
 // (LP3, published onto the project row) join Sense, so a silent one shows.
+import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
+import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
 
 export const HOUR = 60 * 60 * 1000;
 export const DAY = 24 * HOUR;
@@ -92,12 +94,12 @@ export type LineDecision = {
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
 /** A finder a project's line profile declares (LP3). */
-export type LineFinderDecl = { id: string; source: string; kind: "any" | string[]; runs?: string };
+export type { LineFinderDecl };
 /** A project row as the line reads it: its goal fields and its published profile. */
 export type LineProject = GoalRow & {
   _id: string;
   project_path?: string;
-  line_profile?: { finders: LineFinderDecl[]; root?: string; default?: boolean; changed_at: number } | null;
+  line_profile?: PublishedLineProfile | null;
 };
 
 /** idle: nothing has reached the station yet, or nothing waits for it, which
@@ -142,6 +144,8 @@ export type BuildRow = {
   step: string | null;
   /** Where a line run sits in LINE_STEPS (0 to 4), null for any other workflow. */
   stepIndex: number | null;
+  /** The shipped line, a project's customized copy, or null for another workflow. */
+  line: LineRunKind | null;
 };
 export type WatchRow = { task: LineCauseTask; until: number; daysLeft: number };
 export type ClosedOutcome = "shipped" | "dissolved" | "resolved";
@@ -220,8 +224,8 @@ const LINE_STEP_OF: Record<string, number> = {
   verify: 3, green: 3, eval: 3, review: 3,
   card_draft: 4, card_write: 4, card: 4, decide: 4,
 };
-export function lineStepIndex(run: Pick<LineFlowRun, "workflow_name">, node: Pick<LiveNode, "id"> | null): number | null {
-  if (run.workflow_name !== "line" || !node) return null;
+export function lineStepIndex(line: LineRunKind | null, node: Pick<LiveNode, "id"> | null): number | null {
+  if (!line || !node) return null;
   return LINE_STEP_OF[node.id] ?? null;
 }
 
@@ -303,7 +307,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
   runs: LineFlowRun[];
   decisions: D[];
   initiatives: GoalRow[];
-  projects: GoalRow[];
+  /** Goal chips read these; a row with an id also names its customized line. */
+  projects: Array<GoalRow & { _id?: string }>;
   now: number;
   cardsCap?: number;
   /** The selected project's declared finders: each is a Sense row, silent or not. */
@@ -369,6 +374,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const buildItems: BuildRow[] = [];
   const buildTasks = new Set<string>();
   let otherRuns = 0;
+  const forks = lineForkIndex(input.projects.filter((p): p is GoalRow & { _id: string } => !!p._id));
   const lineRuns = input.runs.filter((r) => !!r.task_id && causeById.has(r.task_id));
   for (const run of input.runs) {
     if (!isLiveRun(run) && run.status !== "pending") continue;
@@ -379,7 +385,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
     if (atGate) continue;
     const node = runLiveNode(run);
     const step = runStep(run, node);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(run, node), ...runName(run, task, step) });
+    const line = lineRunKind(run, forks);
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(line, node), line, ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
@@ -488,6 +495,13 @@ export function buildLineFlow<D extends LineDecision>(input: {
       closed: closedItems.length,
     },
   };
+}
+
+/** A silent finder's silence in words, the same on the Line page and in line
+ *  settings: how long since its last signal, or the whole window the line
+ *  reads when it has filed nothing in it. */
+export function silentText(src: Pick<SenseSource, "newest">, now: number): string {
+  return `silent ${src.newest ? ageShort(now - src.newest.created_at) : ageShort(LINE_SIGNAL_WINDOW_MS)}`;
 }
 
 /** "3d", "5h", "12m": the largest unit, for a sentence. */

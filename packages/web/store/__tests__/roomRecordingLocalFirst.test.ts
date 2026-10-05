@@ -13,15 +13,17 @@ describe("room recording local-first", () => {
   const owner = {};
   let calls: Array<{ action: string; args: any[] }>;
   let refuse: string | null;
+  let answer: unknown;
 
   beforeEach(() => {
     calls = [];
     refuse = null;
+    answer = null;
     useInboxStore.setState({ callRooms: {}, pending: {} } as any);
     useInboxStore.getState()._setDispatch(async (action: string, args: any[]) => {
       calls.push({ action, args });
       if (refuse) throw new Error(refuse);
-      return null;
+      return answer;
     }, { owner });
     useInboxStore.getState().syncTable("callRooms", [flags(false)]);
   });
@@ -58,6 +60,23 @@ describe("room recording local-first", () => {
     expect(mark()).toBe(false);
   });
 
+  // The web and the phone press through one function (lib/calls/
+  // recordingPress); only how a refusal is said is theirs.
+  it("the shared press says a refusal in the caller's own way, and notes the run a press made", async () => {
+    const { pressRoomRecording, pressedRunOf } = await import("../../lib/calls/recordingPress");
+    refuse = "[CONVEX M(callRecordings:startRecording)] Uncaught Error: Recording is not set up on this server";
+    const said: string[] = [];
+    await pressRoomRecording(ROOM, true, (message) => said.push(message));
+    expect(mark()).toBe(false);
+    expect(said).toHaveLength(1);
+    expect(said[0]).toContain("Recording is not set up on this server");
+    refuse = null;
+    answer = { recording_id: "run9", existing: false };
+    await pressRoomRecording(ROOM, true, (message) => said.push(message));
+    expect(said).toHaveLength(1);
+    expect(pressedRunOf(ROOM)).toBe("run9");
+  });
+
   // A press is a moment (shared recordingPressStale): the dispatch binding
   // refuses one that is no longer, on every send, so a press that could not
   // be delivered when it was made never films the room later.
@@ -73,8 +92,52 @@ describe("room recording local-first", () => {
       const sent = calls[calls.length - 1];
       expect(sent.action).toBe("setRoomRecording");
       expect(deadRecordingPress(sent.action, sent.args, sent.args[2] + 1_000)).not.toBeNull();
-      // The send is tried four times over seven seconds before it gives up.
+      // The send is tried four times over seven seconds before it gives up,
+      // then the row is given PRESS_SETTLE_MS to show the press landed.
+    }, 30_000);
+
+    // Under load a mutation can run on the server while its answer is lost
+    // (a dropped socket, a late receipt). The presser must not then be told
+    // the room is not being filmed: the room's row says what happened.
+    it("a send that failed but whose run the row shows is a press that worked", async () => {
+      const { pressRoomRecording, pressedRunOf } = await import("../../lib/calls/recordingPress");
+      useInboxStore.setState({ currentUser: { _id: "me1" } } as any);
+      const said: string[] = [];
+      const at = Date.now();
+      useInboxStore.getState()._setDispatch(async (action: string, args: any[]) => {
+        calls.push({ action, args });
+        // The server ran it, and its push lands before the answer is lost.
+        useInboxStore.getState().syncTable("callRooms", [
+          {
+            ...flags(true),
+            recording_status: "starting",
+            recording_run_id: "runLost",
+            recording_by_id: "me1",
+            recording_by_name: "Me",
+            recording_requested_at: at,
+          },
+        ]);
+        throw new Error("Connection lost while action was in flight");
+      }, { owner });
+      await pressRoomRecording(ROOM, true, (message) => said.push(message));
+      expect(said).toEqual([]);
+      expect(mark()).toBe(true);
+      expect(pressedRunOf(ROOM)).toBe("runLost");
     }, 20_000);
+
+    it("the row decides a failed send: someone else's run or an old one does not confirm a Record", async () => {
+      const { pressConfirmedBy } = await import("../../lib/calls/recordingPress");
+      const row = { recording: true, recording_status: "recording" as const, recording_run_id: "r1", recording_by_id: "u2", recording_requested_at: 1_000 };
+      expect(pressConfirmedBy(row, true, 1_000, "me1")).toBe(false);
+      expect(pressConfirmedBy({ ...row, recording_by_id: "me1" }, true, 1_000, "me1")).toBe("r1");
+      expect(pressConfirmedBy({ ...row, recording_by_id: "me1" }, true, 60_000, "me1")).toBe(false);
+      // Stop: the run gone or saving confirms; one still filming does not.
+      expect(pressConfirmedBy(row, false, 1_000, "me1")).toBe(false);
+      expect(pressConfirmedBy({ ...row, recording_status: "stopping" }, false, 1_000, "me1")).toBe(true);
+      expect(pressConfirmedBy({ recording: false, recording_status: null }, false, 1_000, "me1")).toBe(true);
+      // A row from a server too old to name the run confirms nothing.
+      expect(pressConfirmedBy({ recording: true }, true, 1_000, "me1")).toBe(false);
+    });
 
     it("a replay after a reload is refused as stale, and a fresh press is not", async () => {
       const { deadRecordingPress } = await import("../../lib/calls/recordingPress");

@@ -9,6 +9,10 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { decisionHref } from "../../lib/decisionLinks";
 import { ORG_STATE_META } from "../org/orgMeta";
 import { useTaskHold } from "../../hooks/useTaskDecisions";
+import { useLineForks } from "../../hooks/useLineForks";
+import { lineRunKind } from "../../lib/line/lineStations";
+import { lineSettingsHref } from "../../lib/lineSettings";
+import { CustomizedLineChip } from "../line/CustomizedLineChip";
 import {
   currentStationIndex,
   formatElapsed,
@@ -83,6 +87,11 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
   const workflow = useWorkflow(run?.workflow_id);
   const node = runLiveNode(run, workflow?.nodes);
   const live = isLiveRun(run);
+  // A line run's node is a station of the line graph: it links to that
+  // station in line settings, where its prompt is read and edited.
+  const forks = useLineForks();
+  const line = run ? lineRunKind({ workflow_slug: workflow?.slug, workflow_name: run.workflow_name }, forks) : null;
+  const lineProject = line?.kind === "customized" ? line.project : (task as { project_id?: string | null }).project_id ?? null;
   const now = useCoarseNow(30_000);
   const elapsed = live ? formatElapsed(node?.started_at, now) : null;
   const verdict = task.review_verdict ?? null;
@@ -123,7 +132,10 @@ export function StationStrip({ task }: { task: TaskItem & LineTask }) {
           {live && node && (
             <span className="inline-flex items-center gap-1.5 min-w-0" title={run?.workflow_name ? `Run of ${run.workflow_name}` : "Run"} data-live-node={node.id}>
               <GitBranch className="w-3 h-3 text-sol-violet shrink-0" />
-              <span className="text-sol-violet truncate">{node.label}</span>
+              {line
+                ? <Link href={lineSettingsHref({ project: lineProject, station: node.id })} className="text-sol-violet truncate hover:underline" title={`${node.label}: read this station's prompt in line settings`} data-station-settings={node.id}>{node.label}</Link>
+                : <span className="text-sol-violet truncate">{node.label}</span>}
+              {line?.kind === "customized" && <CustomizedLineChip project={line.project.title} />}
               {run?.status === "paused" && <span className="text-sol-orange">at a gate</span>}
             </span>
           )}

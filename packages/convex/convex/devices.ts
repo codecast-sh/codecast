@@ -28,7 +28,7 @@ import { fromConvexAgentType, findModelOption, deviceDisplayName, formatMachineS
 import { isTeamMachineFor, listTeamMachines, resolveSessionLaunchDevice } from "./sessionLaunch";
 import { notifySessionExecutionTaken } from "./sessionAssignmentNotifications";
 import { releasePreviousOwner } from "./sessionRelease";
-import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost } from "./cloudPlacement";
+import { cloudPlacementNeeded, findSharedCheckoutOccupant, parkOnCloudHost, unparkForMove } from "./cloudPlacement";
 import { getSystemConfig } from "./systemConfig";
 import { isBelowMinimum } from "@platform/flags";
 
@@ -509,7 +509,7 @@ async function insertMachineSwitchDivider(
 export async function performMoveSessionToDevice(
   ctx: { db: any },
   userId: Id<"users">,
-  args: { conversation_id: Id<"conversations">; owner_device_id: string; project_path: string; resume?: boolean },
+  args: { conversation_id: Id<"conversations">; owner_device_id: string; project_path: string; resume?: boolean; shared_with?: string[] },
 ): Promise<{ ok: true; command_id: string | undefined; owner_device_id: string }> {
   const conv = await ctx.db.get(args.conversation_id);
   if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
@@ -524,7 +524,7 @@ export async function performMoveSessionToDevice(
     .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.owner_device_id))
     .first();
   if (dest?.is_remote) {
-    const occupant = await findSharedCheckoutOccupant(ctx, userId, args.owner_device_id, { projectPath: args.project_path, excludeId: args.conversation_id.toString() });
+    const occupant = await findSharedCheckoutOccupant(ctx, userId, args.owner_device_id, { projectPath: args.project_path, excludeId: args.conversation_id.toString(), sharedWith: args.shared_with });
     if (occupant) throw new Error(checkoutInUseMessage(args.project_path, occupant));
   }
 
@@ -533,6 +533,7 @@ export async function performMoveSessionToDevice(
     project_path: args.project_path,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, dest)),
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -552,24 +553,7 @@ export async function performMoveSessionToDevice(
   }
 
   let commandId: string | undefined;
-  if (args.resume !== false) {
-    const agentType = fromConvexAgentType(conv.agent_type);
-    const id = await ctx.db.insert("daemon_commands", {
-      user_id: userId,
-      command: "resume_session" as const,
-      args: JSON.stringify({
-        session_id: conv.session_id,
-        agent_type: agentType,
-        conversation_id: args.conversation_id,
-        project_path: args.project_path,
-      }),
-      created_at: Date.now(),
-      // Targeted, so only the destination acts: untargeted, every daemon of
-      // the user's fetched it and had to decline via the owner guard.
-      target_device_id: args.owner_device_id,
-    });
-    commandId = id;
-  }
+  if (args.resume !== false) commandId = await enqueueTargetedResume(ctx, userId, conv, args.owner_device_id, args.project_path);
   await releasePreviousOwner(ctx, {
     queueUserId: userId,
     conversationId: args.conversation_id,
@@ -578,6 +562,26 @@ export async function performMoveSessionToDevice(
     newDeviceId: args.owner_device_id,
   });
   return { ok: true, command_id: commandId, owner_device_id: args.owner_device_id };
+}
+
+/**
+ * Resume a session on one device. Targeted, so only that daemon acts:
+ * untargeted, every daemon of the user's fetched it and had to decline via
+ * the owner guard.
+ */
+export async function enqueueTargetedResume(ctx: { db: any }, userId: Id<"users">, conv: any, deviceId: string, projectPath: string | undefined): Promise<string> {
+  return await ctx.db.insert("daemon_commands", {
+    user_id: userId,
+    command: "resume_session" as const,
+    args: JSON.stringify({
+      session_id: conv.session_id,
+      agent_type: fromConvexAgentType(conv.agent_type),
+      conversation_id: conv._id,
+      project_path: projectPath,
+    }),
+    created_at: Date.now(),
+    target_device_id: deviceId,
+  });
 }
 
 export const moveSessionToDevice = mutation({
@@ -775,6 +779,7 @@ export async function performReassignToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -824,7 +829,7 @@ export async function performReassignToDevice(
 // puller, who consents by pulling onto their own machine. Bot accounts can
 // never claim ownership, so they don't get the team path either; a bare share
 // link never grants a pull.
-async function findPullableConversation(
+export async function findPullableConversation(
   ctx: { db: any },
   userId: Id<"users">,
   ref: string,
@@ -961,6 +966,7 @@ export async function performReparentSessionToDevice(
     session_error: undefined,
     status: "active" as const,
     updated_at: Date.now(),
+    ...(await unparkForMove(ctx, conv, device)),
   };
   if (crossUser) {
     // Account follows device: the caller now runs + bills it. Pin the author
@@ -1649,13 +1655,18 @@ export async function performSetDeviceShares(
 
 /** The caller's own device row, or a thrown error: every device-targeted
  *  command below is for a machine the caller owns. */
-async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId: string) {
-  const userId = await getAuthenticatedUserId(ctx, apiToken);
-  if (!userId) throw new Error("Authentication required");
-  const device = await ctx.db
+/** The user's own device row by device id, or null: the one ownership test every device-targeted write uses. */
+export async function ownDevice(ctx: { db: any }, userId: Id<"users">, deviceId: string) {
+  return await ctx.db
     .query("devices")
     .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", deviceId))
     .first();
+}
+
+async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId: string) {
+  const userId = await getAuthenticatedUserId(ctx, apiToken);
+  if (!userId) throw new Error("Authentication required");
+  const device = await ownDevice(ctx, userId, deviceId);
   if (!device) throw new Error("Unknown device");
   return { userId, device };
 }
@@ -1793,13 +1804,16 @@ export const enqueueCloudAgentLoginCommand = mutation({
     device_id: v.string(),
     provider: v.string(),
     op: v.union(v.literal("check"), v.literal("start")),
+    // Start a sign-in that finishes on another device: the daemon answers the
+    // page (url) and one-time code (detail) instead of opening its browser.
+    device_code: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { userId } = await requireOwnDevice(ctx, args.api_token, args.device_id);
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command: "cloud_agent_login" as const,
-      args: JSON.stringify({ provider: args.provider, op: args.op }),
+      args: JSON.stringify({ provider: args.provider, op: args.op, ...(args.device_code ? { device_code: true } : {}) }),
       created_at: Date.now(),
       target_device_id: args.device_id,
     });
@@ -1890,9 +1904,14 @@ export const claimConversation = mutation({
     if (!convId) return;
     const conv = await ctx.db.get(convId);
     if (!conv || conv.user_id.toString() !== userId.toString()) return;
+    const device = await ctx.db
+      .query("devices")
+      .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
     await ctx.db.patch(convId, {
       owner_device_id: args.device_id,
       session_error: undefined,
+      ...(await unparkForMove(ctx, conv, device)),
     });
     return { ok: true };
   },
@@ -1972,7 +1991,16 @@ export const setConversationOwner = mutation({
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) throw new Error("conversation not found");
     if (conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
-    await ctx.db.patch(args.conversation_id, { owner_device_id: args.owner_device_id });
+    const device = args.owner_device_id
+      ? await ctx.db
+          .query("devices")
+          .withIndex("by_user_device", (q: any) => q.eq("user_id", userId).eq("device_id", args.owner_device_id))
+          .first()
+      : null;
+    await ctx.db.patch(args.conversation_id, {
+      owner_device_id: args.owner_device_id,
+      ...(await unparkForMove(ctx, conv, device)),
+    });
     return { ok: true, owner_device_id: args.owner_device_id ?? null };
   },
 });

@@ -353,18 +353,28 @@ export async function probeBrowserTab(query: string, deps: Pick<FocusDeps, "engi
 }
 
 /**
- * The focus route's request: `tab` names the tab a row printed. A row whose
- * output lost that footer (piped through grep or tail) names the session
- * instead, and the tab is the one the session drives now.
+ * The focus route's request: `tab` names the tab a row printed, and the
+ * session it ran in rides along. The session's current tab (the one "watch
+ * live" shows) stands in when the row named none (its output went through
+ * grep or tail) and when the row's tab is gone: agents switch, share and
+ * close each other's tabs, so an older row's tab often is.
  */
 export async function focusRequestedTab(
   params: URLSearchParams,
   deps: FocusDeps,
   act: (tab: string, deps: FocusDeps) => Promise<FocusResult> = focusBrowserTab,
 ): Promise<{ tab: string; result: FocusResult }> {
-  const tab =
-    params.get("tab") ||
-    (deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "");
+  const rowTab = params.get("tab") ?? "";
+  const sessionTab = async () =>
+    deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "";
+  if (rowTab) {
+    const result = await act(rowTab, deps);
+    if (result.ok || result.reason !== "tab-not-found") return { tab: rowTab, result };
+    const current = await sessionTab();
+    if (!current || matchTab([{ id: current }], rowTab)) return { tab: rowTab, result };
+    return { tab: current, result: await act(current, deps) };
+  }
+  const tab = await sessionTab();
   if (!tab) return { tab, result: { ok: false, reason: "tab-not-found" } };
   return { tab, result: await act(tab, deps) };
 }

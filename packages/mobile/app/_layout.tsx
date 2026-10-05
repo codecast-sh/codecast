@@ -15,7 +15,7 @@ import { ConvexAuthProvider } from '@convex-dev/auth/react';
 
 import { Palettes, setActiveScheme, useActiveScheme, type ColorScheme } from '@/constants/Theme';
 import { useColorScheme } from '@/components/useColorScheme';
-import { Mono } from '@/constants/fonts';
+import { Mono, markLateFacesLoaded, useLateFacesLoaded } from '@/constants/fonts';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -127,7 +127,7 @@ function RootLayout() {
       'JetBrainsMono-Medium': require('../assets/fonts/JetBrainsMono-Medium.ttf'),
       'JetBrainsMono-Bold': require('../assets/fonts/JetBrainsMono-Bold.ttf'),
       'JetBrainsMono-Italic': require('../assets/fonts/JetBrainsMono-Italic.ttf'),
-    }).catch(() => {});
+    }).then(markLateFacesLoaded, () => {});
   }, [loaded]);
 
   // CallKit + PushKit bridge — mounts once, before any call surface. Safe on
@@ -205,7 +205,7 @@ export default wrapRoot(RootLayout);
 // our StyleSheets, so parity with web has to come through the nav theme:
 // Solarized surfaces + JetBrains Mono faces. fontWeight stays 'normal' in
 // every entry — the face carries the weight (see constants/fonts.ts).
-function solarizedNavTheme(scheme: ColorScheme) {
+function solarizedNavTheme(scheme: ColorScheme, late: boolean) {
   const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
   const palette = Palettes[scheme];
   return {
@@ -221,16 +221,17 @@ function solarizedNavTheme(scheme: ColorScheme) {
     },
     fonts: {
       regular: { fontFamily: Mono.regular, fontWeight: 'normal' },
-      medium: { fontFamily: Mono.medium, fontWeight: 'normal' },
+      medium: { fontFamily: late ? Mono.medium : Mono.regular, fontWeight: 'normal' },
       bold: { fontFamily: Mono.semiBold, fontWeight: 'normal' },
-      heavy: { fontFamily: Mono.bold, fontWeight: 'normal' },
+      heavy: { fontFamily: late ? Mono.bold : Mono.semiBold, fontWeight: 'normal' },
     },
   } as const;
 }
 
 function RootLayoutNav() {
   const scheme = useActiveScheme();
-  const navTheme = useMemo(() => solarizedNavTheme(scheme), [scheme]);
+  const lateFaces = useLateFacesLoaded();
+  const navTheme = useMemo(() => solarizedNavTheme(scheme, lateFaces), [scheme, lateFaces]);
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (
@@ -242,7 +243,9 @@ function RootLayoutNav() {
               <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
               <AnalyticsIdentify />
               <AuthGate>
-                <Stack>
+                {/* Back is a bare chevron: the tab group has no title, so a labeled
+                    back button read "(tabs)" on every pushed screen. */}
+                <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
                   <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                   <Stack.Screen name="auth/login" options={{ title: 'Login', headerShown: false }} />
                   <Stack.Screen name="auth/signup" options={{ title: 'Sign Up', headerShown: false }} />

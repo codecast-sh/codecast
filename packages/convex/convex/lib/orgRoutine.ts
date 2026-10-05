@@ -23,11 +23,21 @@ export const COMPANY_REVIEW_PROMPT = "Company review. Run `cast org review` and 
 // a line about it (red list #20, ct-55713).
 
 export const ROLE_CHECK_EVERY_MS = 24 * 60 * 60 * 1000;
+
+// The playbook and the wake (org-staffing.md S38), at principle level: the
+// shapes of the playbook's entries and the command that tunes the check are
+// printed by `cast brief`, so the prompt says only what the role is for here.
+export const ROLE_PLAYBOOK_LINES = [
+  `Your brief is what your next run starts from. End the run by revising it: the number your area is read by as it stands now and what this run taught you go into your playbook, what is no longer true comes out, and it stays short enough to be worth reading every time.`,
+  `A check costs a whole run, so yours should come as often as your area moves. When checks keep finding nothing, or find work that waited for one, change how yours runs and say why. Otherwise leave it as it is.`,
+];
+
 export const ROLE_CHECK_PROMPT = [
   `Check your area. Run \`cast brief\`: it points to what moved since you last looked, which of your sessions wait on a person, and how the people who report to you are doing against their goals.`,
   `The brief names what moved, not where it stands: your own lines and a session's pinned state were written before the move. Read each session that moved (\`cast read <id>\`) and write your lines from what it says now.`,
   `The brief lists the initiatives you own with their health as last said, and when. When what you read differs from that health, or it is older than a week, post the read (\`cast initiative update <in-N> --health on_track|at_risk|off_track "<what changed>"\`), so nobody plans against a stale word.`,
-  `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation; the rest belongs in your brief. When nothing needs doing, say so in one line and end the turn.`,
+  `Act on what is yours to act on. Put in front of the person what needs them, with your recommendation; the rest belongs in your brief. When nothing needs doing, say so in one line.`,
+  ...ROLE_PLAYBOOK_LINES,
 ].join("\n");
 
 export function roleRoutineFor(role: { handle: string; name: string }): { title: string; prompt: string; every_ms: number } {

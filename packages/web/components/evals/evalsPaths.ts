@@ -195,12 +195,17 @@ export function evalsTabLabel(path: string): string {
 
 // ── The search box ──────────────────────────────────────────────────────────
 
-/** What the search box knows already: the wall's surfaces and their batches, and any freeze ids a page loaded. */
+/**
+ * What the search box knows: the wall's surfaces and their batches, the
+ * freezes a page loaded, and what `GET /search` found in the index for the
+ * text typed (freezes and runs by id prefix).
+ */
 export interface EvalsSearchKnown {
   surfaces: string[];
   /** Batch name to the surfaces that ran it. */
   batches: Record<string, string[]>;
   freezes: Array<{ id: string; name: string }>;
+  runs?: Array<{ id: string; surface: string; freezeName: string | null }>;
 }
 
 export interface EvalsSearchTarget {
@@ -213,10 +218,9 @@ const RUN_ID_RE = /^([a-z][a-z0-9-]*?)-([0-9a-f]{8})-seed(\d+)-\d{4}-\d{2}-\d{2}
 const BATCH_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 
 /**
- * Where a search can go, best first. It accepts a surface id, a run id (or a
- * prefix the page knows), a batch name, a freeze id prefix and a sha. A hex
- * string that names no known freeze reads as a commit, which opens the
- * attribution launcher with it as the bad end.
+ * Where a search can go, best first. It accepts a surface id, a run id or its
+ * prefix, a batch name, a freeze id prefix and a sha. A hex string that names
+ * no known freeze reads as a commit, which opens its commit page.
  */
 export function evalsSearchTargets(input: string, known: EvalsSearchKnown): EvalsSearchTarget[] {
   const q = input.trim();
@@ -228,13 +232,14 @@ export function evalsSearchTargets(input: string, known: EvalsSearchKnown): Eval
     else if (s.startsWith(lower) || s.includes(lower)) out.push({ kind: "surface", label: s, href: evalsHref.surface(s) });
   }
   if (RUN_ID_RE.test(q)) out.push({ kind: "run", label: q, href: evalsHref.run(q) });
+  for (const r of known.runs ?? []) if (r.id !== q && r.id.toLowerCase().startsWith(lower)) out.push({ kind: "run", label: r.id, href: evalsHref.run(r.id) });
   if (BATCH_RE.test(q)) {
     const surfaces = known.batches[q] ?? [];
     for (const s of surfaces) out.push({ kind: "batch", label: `${s} at batch ${q}`, href: evalsHref.surface(s, { batch: q }) });
   }
-  if (lower.length >= 4 && /^[0-9a-f-]+$/.test(lower)) {
-    for (const f of known.freezes) if (f.id.startsWith(lower)) out.push({ kind: "freeze", label: `${f.name} (${f.id.slice(0, 8)})`, href: evalsHref.freeze(f.id) });
+  if (lower.length >= 3) {
+    for (const f of known.freezes) if (f.id.toLowerCase().startsWith(lower)) out.push({ kind: "freeze", label: `${f.name} (${f.id.slice(0, 8)})`, href: evalsHref.freeze(f.id) });
   }
-  if (EVALS_SHA_RE.test(lower) && !out.some((t) => t.kind === "freeze")) out.push({ kind: "commit", label: `commit ${lower.slice(0, 12)} as the bad end`, href: evalsHref.bisectNew({ bad: lower }) });
+  if (EVALS_SHA_RE.test(lower) && !out.some((t) => t.kind === "freeze")) out.push({ kind: "commit", label: `commit ${lower.slice(0, 12)}`, href: evalsHref.commit(lower) });
   return out.slice(0, 8);
 }

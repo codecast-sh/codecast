@@ -1,53 +1,47 @@
 "use client";
 // The line page (docs/architecture/the-line-end-to-end.md LE13): the whole
 // factory as one horizontal flow, from what the world reported to what
-// closed this week. Paints from the store: signals (useSyncSignals), tasks
-// with a `cause`, runs (useSyncRuns) and the decision queue. lib/lineFlow
+// closed this week. Paints from the store (useLineFloor): signals, tasks
+// with a `cause`, runs and the decision queue. lib/lineFlow
 // derives every column, stage state and the throughput strip. One project's
 // line at a time (line-profile.md LP1): LineProjects holds the switcher and
 // the "all projects" roll-up, and scopeLine narrows the rows.
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronDown, ChevronRight, Copy } from "lucide-react";
+import { ChevronDown, ChevronRight, Copy, SlidersHorizontal } from "lucide-react";
 import { formatTokens } from "@codecast/shared/render/changeCardHtml";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
-import type { SessionDecisionItem, TaskItem } from "../../store/inboxStore";
-import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
-import { useCollectionRows } from "../../hooks/useCollectionRows";
+import type { SessionDecisionItem } from "../../store/inboxStore";
 import { useInitiatives } from "../../hooks/useInitiatives";
-import { useSyncRuns, useWorkspaceRuns } from "../../hooks/useSyncRuns";
-import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
-import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { hasOpenModal } from "../../shortcuts";
+import { hasOpenModal, useShortcutAction, useShortcutContext } from "../../shortcuts";
+import { KeyHint } from "../changes/useChangesKeys";
+import { LINE_STATION_SETTINGS, lineSettingsHref } from "../../lib/lineSettings";
 import { formatElapsed } from "../../lib/taskLine";
 import { runHref, decisionHref } from "../../lib/decisionLinks";
 import { cn } from "../../lib/utils";
 import { copyText } from "../../lib/copyText";
 import {
-  ageShort, buildLineFlow, groupBuild, isLineCard, lineHeadline, lineRollup, scopeLine, ALL_PROJECTS, DAY, LINE_STEPS,
-  type LineProject, type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type LineCauseTask, type LineFlowRun, type SenseSource, type StageState, type WatchRow,
+  ageShort, buildLineFlow, silentText, groupBuild, lineHeadline, scopeLine, ALL_PROJECTS, NO_PROJECT, DAY, LINE_STEPS,
+  type BuildBlock, type HeadlinePart, type CauseRow, type ClosedRow, type Column, type GoalRow, type SenseSource, type StageState, type WatchRow,
 } from "../../lib/lineFlow";
+import { LINE_SIGNAL_WINDOW_MS } from "@codecast/shared/contracts/lineProfile";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { Spark } from "../Spark";
-import { LineProjectSwitcher, LineRollup, lineKeys, useLineProject } from "./LineProjects";
+import { LineProjectSwitcher, LineRollup, lineKeys } from "./LineProjects";
+import { useLineFloor } from "./useLineFloor";
+import { CustomizedLineChip } from "./CustomizedLineChip";
 import { DecisionCompactCard } from "../decisions/DecisionCompactCard";
 import { edgeAttrs, useScrollEdges } from "./useScrollEdges";
 import { cardAnswerIndexes, GoalChip } from "../decisions/ChangeCardView";
 import { evalsSenseHref } from "../evals/evalsPaths";
 import "./line.css";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 
 /** formatElapsed without its zero units: "2d", "2d 5h", "40m", never "2d 0h". */
 const ago = (from: number | null | undefined, now: number) => (from == null ? null : (formatElapsed(from, now) ?? "").replace(/ 0[hm]$/, ""));
 const compactElapsed = (ms: number) => ago(0, ms) ?? "";
-
-const RUNS_FEED = { limit: 200 };
-
-const causeSig = (t: TaskItem & LineCauseTask) =>
-  t.cause ? `${t.status}|${t.updated_at ?? 0}|${t.watch_until ?? 0}|${t.goal_ref ?? ""}|${t.cause.signal_count}|${t.priority ?? ""}|${t.closed_at ?? 0}|${t.resolved_at ?? 0}|${t.project_id ?? ""}` : `|${t.project_id ?? ""}`;
-const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}`;
-const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${d.task_id ?? ""}|${d.workflow_run_id ?? ""}`;
 
 type StationKey = "sense" | "causes" | "build" | "awaiting" | "watching" | "closed";
 /** what and cmd teach an empty station: what feeds it, and the command. */
@@ -73,9 +67,10 @@ const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id
 // feeds it), so the eye goes to the stations holding work. Sense is a list of
 // one line sources, so it takes a fixed width that fits a source name and its
 // count and no more (a station is a size container, so its content cannot
-// size its track). Causes and
-// Awaiting you hold the work the founder reads, so they take the most of what
-// is left; In build and the "After ship" track (Watching over Closed, stacked
+// size its track). Awaiting you
+// holds the work the founder reads, so it takes the most of what is left;
+// Causes and In build share the rest near evenly (Causes a little more for
+// its goal chips), so a title wraps the same in both; the "After ship" track (Watching over Closed, stacked
 // at 1600px and under by line.css .line-after) take less. The tight set takes
 // over under 1360px and its minimums fit a 1000px flow, so every station
 // shows whole on a laptop or a split screen; the compact one under 1000px
@@ -83,9 +78,9 @@ const taskHref = (t: { short_id?: string; _id: string }) => `/tasks/${t.short_id
 // station folds to a 40px labelled slot. Below sm the stations snap one per
 // screen and scroll sideways.
 type TrackSet = { rail: string; empty: string; wide: string; slim: string; tail: string; live: string; causes: string; after: string };
-const ROOMY: TrackSet = { rail: "24px", empty: "minmax(132px, 0.42fr)", wide: "minmax(340px, 2.2fr)", slim: "168px", tail: "minmax(160px, 0.8fr)", live: "minmax(200px, 1fr)", causes: "minmax(220px, 1.7fr)", after: "minmax(180px, 0.85fr)" };
-const TIGHT: TrackSet = { rail: "8px", empty: "minmax(110px, 0.4fr)", wide: "minmax(290px, 2.2fr)", slim: "150px", tail: "minmax(135px, 0.8fr)", live: "minmax(165px, 1fr)", causes: "minmax(185px, 1.7fr)", after: "minmax(135px, 0.85fr)" };
-const COMPACT: TrackSet = { rail: "8px", empty: "minmax(108px, 0.4fr)", wide: "minmax(290px, 2fr)", slim: "150px", tail: "minmax(150px, 0.8fr)", live: "minmax(180px, 1fr)", causes: "minmax(200px, 1.4fr)", after: "minmax(150px, 0.8fr)" };
+const ROOMY: TrackSet = { rail: "24px", empty: "minmax(132px, 0.42fr)", wide: "minmax(340px, 2.2fr)", slim: "168px", tail: "minmax(160px, 0.8fr)", live: "minmax(200px, 1.2fr)", causes: "minmax(220px, 1.4fr)", after: "minmax(180px, 0.85fr)" };
+const TIGHT: TrackSet = { rail: "8px", empty: "minmax(110px, 0.4fr)", wide: "minmax(290px, 2.2fr)", slim: "150px", tail: "minmax(135px, 0.8fr)", live: "minmax(165px, 1.2fr)", causes: "minmax(185px, 1.4fr)", after: "minmax(135px, 0.85fr)" };
+const COMPACT: TrackSet = { rail: "8px", empty: "minmax(108px, 0.4fr)", wide: "minmax(290px, 2fr)", slim: "150px", tail: "minmax(150px, 0.8fr)", live: "minmax(180px, 1.15fr)", causes: "minmax(200px, 1.3fr)", after: "minmax(150px, 0.8fr)" };
 const SLIM: TrackSet = { ...COMPACT, rail: "10px", empty: "40px" };
 // Each station fills the flow less its padding, and the rail is wider than
 // that padding, so a neighbour never peeks in as a stray border.
@@ -102,23 +97,16 @@ const template = (set: TrackSet, emptyOf: (s: Station) => boolean, stacked = fal
   }).join(" ");
 
 export function LinePage() {
-  useSyncSignals();
-  useSyncRuns(RUNS_FEED);
   const router = useRouter();
-  const now = useCoarseNow(30_000);
-
-  const signals = useWorkspaceSignals();
-  const tasks = useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig);
-  const runs = useWorkspaceRuns() as LineFlowRun[];
-  const cards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: isLineCard as (d: SessionDecisionItem) => boolean, sig: cardSig });
   const initiatives = useInitiatives();
-  const projects = useWorkspaceCollection<LineProject>("projects", projectSig);
-
-  // One project's line (LP1): the roll-up counts every line, the switcher
-  // picks one, and the flow below is built from that project's rows only.
-  const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
-  const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
-  const line = useLineProject(rollup, projects);
+  const { now, tasks, projects, lineRows, rollup, line } = useLineFloor();
+  // Settings belong to one project's line. From the roll-up (or "no project")
+  // the link names none, and the settings page opens on its own default: the
+  // project of the repo the viewer is in, else the busiest line.
+  const settingsProject = line.key === ALL_PROJECTS || line.key === NO_PROJECT ? null : line.param;
+  const settingsOf = (station?: StationKey) => lineSettingsHref({ project: settingsProject, section: station ? LINE_STATION_SETTINGS[station]?.section : null });
+  useShortcutContext("line");
+  useShortcutAction("line.settings", () => { router.push(settingsOf()); return true; });
   // With no line anywhere the roll-up has nothing to count: the page teaches instead.
   const rollupView = line.key === ALL_PROJECTS && rollup.length > 0;
   const finders = useMemo(() => projects.find((p) => p._id === line.key)?.line_profile?.finders, [projects, line.key]);
@@ -184,8 +172,7 @@ export function LinePage() {
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey || hasOpenModal()) return;
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      if (keyBelongsElsewhere(e.target)) return;
       // Sideways skips stations with nothing in them, unless every station
       // is empty; a number jumps to any.
       const side = (dc: number) => {
@@ -319,11 +306,9 @@ export function LinePage() {
       onFocus={() => setFocus({ col: i, row: 0 })}
       note={s.key === "causes" && ungrounded
         ? <>None of these serve a goal yet. <code className="text-sol-text-muted">cast task update ct-N --goal-ref in-N:key</code></>
-        : s.key === "sense" && sense.silent.length > 0
-          ? <button type="button" onClick={(e) => { e.stopPropagation(); setFocus({ col: i, row: Math.max(0, senseRows.findIndex((x) => x.source === sense.silent[0].source)) }); }} className="line-chip-warn line-chip-wrap hover:brightness-125" title={`Declared finders that filed nothing in 24 hours: ${sense.silent.map((x) => x.source).join(", ")}. Shows the finder and how it runs.`} data-line-silent-note>{silentWords(sense.silent, now)}</button>
-          : undefined}
+        : undefined}
     >
-      {empty(s.key) && <Empty station={s} focused={col === i} what={s.key === "closed" && flow.throughput.shippedInWatch > 0 ? closedInWatch(flow.throughput.shippedInWatch) : undefined} after={s.key === "build" ? <OtherRuns n={flow.build.otherRuns} /> : s.key === "closed" && flow.watching.count > 0 && flow.throughput.shippedInWatch > 0 ? <button type="button" onClick={(e) => { e.stopPropagation(); showStation(STATIONS.findIndex((x) => x.key === "watching")); }} className="self-start text-[11px] text-sol-text-muted underline underline-offset-2 decoration-sol-border hover:text-sol-text" data-line-see-watching>see Watching</button> : undefined} />}
+      {empty(s.key) && <Empty station={s} focused={col === i} settings={settingsOf(s.key)} what={s.key === "closed" && flow.throughput.shippedInWatch > 0 ? closedInWatch(flow.throughput.shippedInWatch) : undefined} after={s.key === "build" ? <OtherRuns n={flow.build.otherRuns} /> : s.key === "closed" && flow.watching.count > 0 && flow.throughput.shippedInWatch > 0 ? <button type="button" onClick={(e) => { e.stopPropagation(); showStation(STATIONS.findIndex((x) => x.key === "watching")); }} className="self-start text-[11px] text-sol-text-muted underline underline-offset-2 decoration-sol-border hover:text-sol-text" data-line-see-watching>see Watching</button> : undefined} />}
 
       {s.key === "sense" && !empty("sense") && (<>
         {sense.live.map((src, r) => <SenseRow key={src.source} src={src} now={now} focused={at("sense", r)} index={r} href={hrefs.sense[r]} />)}
@@ -392,12 +377,17 @@ export function LinePage() {
         <div className="flex items-baseline gap-3 min-w-0">
           <h1 className="text-[13px] font-semibold text-sol-text leading-none">The line</h1>
           <span className="line-subtitle text-[11px] text-sol-text-dim leading-none truncate">a signal in the world to a shipped, watched change</span>
+          <Link href={settingsOf()} className="ml-auto self-center shrink-0 inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text" title="What this line listens to, checks, limits and runs" data-line-settings-link>
+            <SlidersHorizontal className="w-3 h-3" />
+            <span>settings</span>
+            <KeyHint action="line.settings" />
+          </Link>
         </div>
         <LineProjectSwitcher rollup={rollup} selected={line.key} onSelect={(k) => { setFocus(null); line.select(k); }} />
         {!allEmpty && !rollupView && <Throughput t={flow.throughput} lead={<Headline parts={headlineLead(lineHeadline(flow, now))} onStation={(key) => showStation(STATIONS.findIndex((x) => x.key === key))} />} />}
       </header>
 
-      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => { setFocus(null); line.select(k); }} /> : allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} /> : (<>
+      {rollupView ? <LineRollup rollup={rollup} onSelect={(k) => { setFocus(null); line.select(k); }} /> : allEmpty ? <Onboarding focusedCol={col} onFocus={(i) => setFocus({ col: i, row: 0 })} settingsOf={settingsOf} /> : (<>
       <nav ref={tabsRow} className="line-tabs line-edge-fade line-scroll-quiet sm:hidden shrink-0 flex gap-1 overflow-x-auto px-4 pb-2" aria-label="Stations" {...edgeAttrs(tabEdges)}>
         {STATIONS.map((s, i) => (
           <button key={s.key} onClick={() => showStation(i)} data-active={shown === i ? "true" : undefined} data-ask={s.key === "awaiting" && columns[s.key].count > 0 ? "true" : undefined} className="line-tab shrink-0 rounded-full px-2.5 py-1 text-[11px] whitespace-nowrap">
@@ -769,22 +759,27 @@ function Rail({ live }: { live: boolean }) {
  *  where they are, so the strip's shipped count never reads as a bug. */
 const closedInWatch = (n: number) => `${n === 1 ? "This week's ship is" : `This week's ${n} ships are`} in Watching. ${n === 1 ? "It lands" : "They land"} here when the watch ends quiet.`;
 
-/** A silent finder said in words on the chip itself, since a tooltip never
- *  shows on touch: "union.guard: no signals 2d". */
-const silentWords = (silent: SenseSource[], now: number) => {
-  if (silent.length > 1) return `${silent.length} finders: no signals 24h`;
-  const s = silent[0];
-  return `${s.source}: no signals ${s.newest ? ageShort(now - s.newest.created_at) : "in 14d"}`;
-};
-
 /** An empty station: what feeds it and the command that does. */
-function Empty({ station, focused, what, after }: { station: Station; focused: boolean; what?: string; after?: ReactNode }) {
+function Empty({ station, focused, what, after, settings }: { station: Station; focused: boolean; what?: string; after?: ReactNode; settings?: string }) {
   return (
     <div className="line-empty rounded-lg flex flex-col gap-2.5 p-2.5" data-line-empty title={`${what ?? station.what} ${station.cmd}`}>
       <p className="text-[11px] text-sol-text-muted leading-relaxed">{what ?? station.what}</p>
       <Cmd cmd={station.cmd} shown={focused} />
+      {settings && <SettingsLink href={settings} station={station.key} />}
       {after}
     </div>
+  );
+}
+
+/** The setting that would fill an empty station, as a quiet link into line settings. */
+function SettingsLink({ href, station }: { href: string; station: StationKey }) {
+  const say = LINE_STATION_SETTINGS[station]?.say;
+  if (!say) return null;
+  return (
+    <Link href={href} onClick={(e) => e.stopPropagation()} className="line-settings-link self-start inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text" data-line-station-settings={station}>
+      <SlidersHorizontal className="w-3 h-3 shrink-0" />
+      {say}
+    </Link>
   );
 }
 
@@ -837,7 +832,7 @@ function Cmd({ cmd, shown, primary }: { cmd: string; shown?: boolean; primary?: 
 /** The line before anything has reached it: the first command, then the six
  *  stations in one row, each saying what will feed it and, on hover or under
  *  the cursor, the command that does. */
-function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: number) => void }) {
+function Onboarding({ focusedCol, onFocus, settingsOf }: { focusedCol: number; onFocus: (i: number) => void; settingsOf: (station: StationKey) => string }) {
   return (
     <div className="line-onboard flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 pb-5 flex flex-col" data-line-onboarding>
       {/* The start card, then the stations, top aligned at the header's
@@ -868,7 +863,7 @@ function Onboarding({ focusedCol, onFocus }: { focusedCol: number; onFocus: (i: 
               <span className="text-[13px] font-medium text-sol-text whitespace-nowrap">{s.name}</span>
             </div>
             <p className="line-ghost-what mt-2 text-[11px] leading-relaxed text-sol-text-muted" title={s.what}>{s.what}</p>
-            <div className="line-ghost-cmd mt-auto pt-3"><Cmd cmd={s.cmd} shown={focusedCol === i} /></div>
+            <div className="line-ghost-cmd mt-auto pt-3 flex flex-col gap-2"><Cmd cmd={s.cmd} shown={focusedCol === i} /><SettingsLink href={settingsOf(s.key)} station={s.key} /></div>
           </li>
         ))}
       </ol>
@@ -914,11 +909,12 @@ function RowLink({ href, focused, index, children, className }: { href: string; 
  *  latest signal, the kinds it files and how it runs sit in the tooltip, so
  *  the station stays narrow and gives its width to the titles beside it. A
  *  quiet source (nothing in 24 hours) says its week instead of a zero, and a
- *  declared finder's silence says how long, in the warning ink. */
+ *  declared finder's silence says how long (silentText) in the warning
+ *  ink. That row is the one place a silent finder is said. */
 function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: number; focused: boolean; index: number; href: string }) {
   const f = src.finder;
   const kinds = src.kinds.length ? src.kinds.join(", ") : f?.kind === "any" ? "any kind" : null;
-  const latest = src.newest ? `latest: ${src.newest.title}, ${ago(src.newest.created_at, now)} ago` : "no signal in 14 days";
+  const latest = src.newest ? `latest: ${src.newest.title}, ${ago(src.newest.created_at, now)} ago` : `no signal in ${ageShort(LINE_SIGNAL_WINDOW_MS)}`;
   const tip = [src.source, src.silent ? "silent: a declared finder with no signal in 24 hours" : null, src.undeclared ? "files here, not declared in the line profile" : f ? `finder ${f.id}` : null, kinds, f?.runs ? `runs ${f.runs}` : null, latest, `${src.day} in the last 24 hours, ${src.week} this week`].filter(Boolean).join("\n");
   const quiet = src.day === 0;
   return (
@@ -927,8 +923,9 @@ function SenseRow({ src, now, focused, index, href }: { src: SenseSource; now: n
         <span className={cn("text-[13px] truncate min-w-0", src.undeclared ? "text-sol-text-muted italic" : "text-sol-text")}>{src.source}</span>
         {!src.silent && sparkable(src.spark) && <Spark values={src.spark} bar={2} height={12} className="line-sense-spark ml-auto" label="signals per day, last 7 days" />}
         <span className={cn("line-sense-count shrink-0 text-[11px] tabular-nums whitespace-nowrap", (src.silent || !sparkable(src.spark)) && "ml-auto", "text-sol-text-dim")}>
+          {/* Silence is said in words on its own row, which a touch screen reads too. */}
           {src.silent
-            ? <span className="line-silent-dot inline-block" role="img" aria-label={src.newest ? `silent ${ago(src.newest.created_at, now)}` : "silent, no signal in 14 days"} />
+            ? <span className="line-silent-age" data-line-silent>{silentText(src, now)}</span>
             : quiet
               ? (src.week > 0 ? `${src.week} wk` : null)
               : <span className="text-[13px] font-semibold text-sol-text">{src.day}</span>}
@@ -993,7 +990,7 @@ function BuildRowView({ row, now, focused, index }: { row: BuildBlock["rows"][nu
   const old = now - row.since > DAY;
   // The title is what a founder scans; the ids and the workflow sit in its
   // tooltip, and what the step is doing shows on the row under the cursor.
-  const tip = [row.name, ref, row.workflow ? `workflow ${row.workflow}` : null, row.node?.activity].filter(Boolean).join(" · ");
+  const tip = [row.name, ref, row.workflow ? `workflow ${row.workflow}` : null, row.line?.kind === "customized" ? "runs this project's customized line" : null, row.node?.activity].filter(Boolean).join(" · ");
   return (
     <RowLink href={runHref(r._id)} focused={focused} index={index} className={row.stalled ? "opacity-60" : undefined}>
       <div className="flex items-start gap-2" title={tip}>
@@ -1004,6 +1001,7 @@ function BuildRowView({ row, now, focused, index }: { row: BuildBlock["rows"][nu
         {row.stepIndex !== null
           ? <Stepper at={row.stepIndex} label={row.chip} tone={row.stalled ? "stalled" : r.status === "paused" ? "paused" : "live"} />
           : row.chip && <span className="min-w-0 truncate px-1.5 rounded border border-sol-border/60 text-sol-text-muted">{row.chip}</span>}
+        {row.line?.kind === "customized" && <CustomizedLineChip />}
         {/* Over a day at one step says so in words, on the row itself. */}
         <span className={cn("ml-auto tabular-nums shrink-0", old ? "text-sol-orange" : "text-sol-text-dim")} title={old ? "at this step over a day" : "at this step"}>{old ? `stuck ${ago(row.since, now)}` : ago(row.since, now)}</span>
       </div>

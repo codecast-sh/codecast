@@ -9,19 +9,22 @@
 
 import { useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useContainerWidth } from "../ActivityHeatmap";
-import { feedTone, type Lane, type Mark, type Timeline } from "./simLanes";
+import { feedTone, stepLabels, truncate, type Lane, type Mark, type Timeline } from "./simLanes";
 import { traceMatches, type SimLabels } from "../../store/__tests__/sim/labels";
 import "./sim.css";
 
 const GUTTER = 168;
 const PAD = 10;
-const TOP = 34;
+// Room above the lanes for two rows of step labels, then the playhead knob.
+const TOP = 44;
 const AXIS = 26;
 const H_DEVICE = 20;
 const H_LANE = 26;
 const GROUP_GAP = 8;
 const MIN_COL = 9;
 const CHAR_W = 6.1;
+/** Baselines of the two step label rows above the lanes. */
+const LABEL_Y = [15, 27] as const;
 
 export interface DeliveryTimelineProps {
   timeline: Timeline;
@@ -100,6 +103,8 @@ export function DeliveryTimeline({ timeline, failAt, failLabel, playhead, onPlay
   const flagText = `fails: ${failLabel}`;
   const flag = failAt === null ? null : flagBox(x(failAt), flagText, svgW);
 
+  const bandLabels = useMemo(() => stepLabels(timeline.steps, (i) => PAD + colW * i, svgW - PAD, CHAR_W), [timeline.steps, colW, svgW]);
+
   const step = axisStep(colW);
   const ticks: number[] = [];
   for (let i = step - 1; i < timeline.count; i += step) ticks.push(i);
@@ -151,16 +156,16 @@ export function DeliveryTimeline({ timeline, failAt, failLabel, playhead, onPlay
           {timeline.steps.map((s, k) => {
             const x0 = PAD + colW * s.at;
             const w = colW * (s.end - s.at);
-            const room = Math.max(w, colW) - 8;
+            const place = bandLabels[k];
             const text = `${s.verb} ${s.actor === "world" ? "" : `${s.actor}: `}${s.label}`;
             return (
               <g key={`${k}:${s.at}`} data-evs-step={s.verb}>
                 {k % 2 === 0 && w > 0 && <rect x={x0} y={TOP - 4} width={w} height={bottom - TOP + 4} className="evs-band" />}
                 <line x1={x0} x2={x0} y1={6} y2={bottom} className="evs-band-edge" />
-                {room > 30 && (
-                  <text x={x0 + 4} y={16} className="evs-band-label">
+                {place && (
+                  <text x={place.x} y={LABEL_Y[place.row]} className="evs-band-label" data-evs-label-row={place.row}>
                     <tspan className="evs-band-verb">{s.verb}</tspan>
-                    <tspan dx={5}>{truncate(s.actor === "world" ? s.label : `${s.actor}: ${s.label}`, Math.floor((room - s.verb.length * CHAR_W - 5) / CHAR_W))}</tspan>
+                    {place.detail && <tspan dx={5}>{place.detail}</tspan>}
                   </text>
                 )}
                 <title>{text}</title>
@@ -295,5 +300,3 @@ function laneTitle(lane: Lane): string {
   if (lane.kind === "device") return `device ${lane.label}: its bridge deliveries`;
   return lane.label;
 }
-
-const truncate = (s: string, max: number) => (max <= 1 ? "" : s.length > max ? `${s.slice(0, Math.max(1, max - 1))}…` : s);

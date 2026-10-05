@@ -12,7 +12,6 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
-  ActionSheetIOS,
   ActivityIndicator,
 } from 'react-native';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -33,6 +32,7 @@ import { sameAssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { TaskItemRow, STATUS_CONFIG, PRIORITY_CONFIG, PRIORITY_ORDER, showTaskActions } from "@/components/TaskItem";
 import { PlanItemRow, PLAN_STATUS_CONFIG, PLAN_STATUS_ORDER } from "@/components/PlanItem";
 import { DocItemRow, DOC_TYPE_CONFIG, DOC_TYPES } from "@/components/DocItem";
+import { showActionSheet } from "@/lib/actionSheet";
 
 const ICON_EMOJI: Record<string, string> = {
   rocket: "🚀", flame: "🔥", zap: "⚡", star: "⭐", diamond: "💎", crown: "👑",
@@ -55,6 +55,15 @@ const GROUP_BY_OPTIONS: { key: GroupBy; label: string; icon: React.ComponentProp
   { key: "priority", label: "Priority", icon: "arrow-up" },
   { key: "plan", label: "Plan", icon: "map-o" },
 ];
+
+const SOURCE_OPTIONS: { key: SourceFilter; label: string }[] = [
+  { key: "", label: "Everything" },
+  { key: "human", label: "Human" },
+  { key: "bot", label: "Bot" },
+];
+
+const FILTER_STATUSES: TaskStatus[] = ["open", "in_progress", "in_review", "backlog", "done", "dropped"];
+const FILTER_PRIORITIES = ["urgent", "high", "medium", "low"] as const;
 
 const SORT_OPTIONS: { key: SortBy; label: string }[] = [
   { key: "priority", label: "Priority" },
@@ -183,25 +192,23 @@ export default function TasksScreen() {
   const [statusFilter, setStatusFilter] = useState<TaskStatus | "">("");
   const [priorityFilter, setPriorityFilter] = useState<string>("");
   const [assigneeFilter, setAssigneeFilter] = useState<string>("");
+  // Search folds behind its header icon; it stays open while it holds text.
+  const [searchOpen, setSearchOpen] = useState(false);
   const router = useRouter();
 
   const { teamId, activeTeam, validTeams } = useActiveTeam();
   const switchTeam = useSwitchActiveTeam();
 
   const showWorkspacePicker = useCallback(() => {
-    const options = [
-      "Personal",
-      ...validTeams.map((t) => `${ICON_EMOJI[t.icon || ""] || ""} ${t.name}`.trim()),
-      "Cancel",
-    ];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Switch Workspace" },
-      (idx) => {
-        if (idx === 0) switchTeam(null);
-        else if (idx > 0 && idx <= validTeams.length) switchTeam(validTeams[idx - 1]._id);
-      },
-    );
-  }, [validTeams, switchTeam]);
+    showActionSheet("Switch Workspace", [
+      { label: "Personal", selected: !teamId, onPress: () => switchTeam(null) },
+      ...validTeams.map((t) => ({
+        label: `${ICON_EMOJI[t.icon || ""] || ""} ${t.name}`.trim(),
+        selected: String(t._id) === String(teamId),
+        onPress: () => switchTeam(t._id),
+      })),
+    ]);
+  }, [validTeams, switchTeam, teamId]);
 
   // Fed app-wide (useSyncWorkspaceData); this tab only reads the store.
   const tasksReady = !useFeedLoading("tasks");
@@ -328,51 +335,63 @@ export default function TasksScreen() {
     return Array.from(names).sort();
   }, [tasksList]);
 
-  const showGroupByPicker = useCallback(() => {
-    const options = [...GROUP_BY_OPTIONS.map((o) => o.label), "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Group By" },
-      (idx) => { if (idx < GROUP_BY_OPTIONS.length) setGroupBy(GROUP_BY_OPTIONS[idx].key); },
-    );
-  }, []);
+  // Every filter and view option sits behind the one Filter button: a sheet
+  // naming each setting with its current value, each opening its own picker.
+  const pickGroupBy = useCallback(() => showActionSheet("Group By", GROUP_BY_OPTIONS.map((o) => ({
+    label: o.label, selected: o.key === groupBy, onPress: () => setGroupBy(o.key),
+  }))), [groupBy]);
 
-  const showSortPicker = useCallback(() => {
-    const options = [...SORT_OPTIONS.map((o) => o.label), "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Sort By" },
-      (idx) => { if (idx < SORT_OPTIONS.length) setSortBy(SORT_OPTIONS[idx].key); },
-    );
-  }, []);
+  const pickSort = useCallback(() => showActionSheet("Sort By", SORT_OPTIONS.map((o) => ({
+    label: o.label, selected: o.key === sortBy, onPress: () => setSortBy(o.key),
+  }))), [sortBy]);
 
-  const showStatusFilterPicker = useCallback(() => {
-    const statuses: TaskStatus[] = ["open", "in_progress", "in_review", "backlog", "done", "dropped"];
-    const options = ["All Statuses", ...statuses.map((s) => STATUS_CONFIG[s].label), "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Filter by Status" },
-      (idx) => { setStatusFilter(idx === 0 ? "" : idx <= statuses.length ? statuses[idx - 1] : statusFilter); },
-    );
-  }, [statusFilter]);
+  const pickSource = useCallback(() => showActionSheet("Show", SOURCE_OPTIONS.map((o) => ({
+    label: o.label, selected: o.key === sourceFilter, onPress: () => setSourceFilter(o.key),
+  }))), [sourceFilter]);
 
-  const showPriorityFilterPicker = useCallback(() => {
-    const priorities = ["urgent", "high", "medium", "low"];
-    const options = ["All Priorities", ...priorities.map((p) => PRIORITY_CONFIG[p as keyof typeof PRIORITY_CONFIG].label), "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Filter by Priority" },
-      (idx) => { setPriorityFilter(idx === 0 ? "" : idx <= priorities.length ? priorities[idx - 1] : priorityFilter); },
-    );
-  }, [priorityFilter]);
+  const pickStatus = useCallback(() => showActionSheet("Filter by Status", [
+    { label: "All Statuses", selected: !statusFilter, onPress: () => setStatusFilter("") },
+    ...FILTER_STATUSES.map((st) => ({ label: STATUS_CONFIG[st].label, selected: st === statusFilter, onPress: () => setStatusFilter(st) })),
+  ]), [statusFilter]);
 
-  const showAssigneeFilterPicker = useCallback(() => {
-    const options = ["All Assignees", "Unassigned", ...uniqueAssignees, "Cancel"];
-    ActionSheetIOS.showActionSheetWithOptions(
-      { options, cancelButtonIndex: options.length - 1, title: "Filter by Assignee" },
-      (idx) => {
-        if (idx === 0) setAssigneeFilter("");
-        else if (idx === 1) setAssigneeFilter("_unassigned");
-        else if (idx > 1 && idx <= uniqueAssignees.length + 1) setAssigneeFilter(uniqueAssignees[idx - 2]);
-      },
-    );
-  }, [uniqueAssignees]);
+  const pickPriority = useCallback(() => showActionSheet("Filter by Priority", [
+    { label: "All Priorities", selected: !priorityFilter, onPress: () => setPriorityFilter("") },
+    ...FILTER_PRIORITIES.map((pr) => ({ label: PRIORITY_CONFIG[pr].label, selected: pr === priorityFilter, onPress: () => setPriorityFilter(pr) })),
+  ]), [priorityFilter]);
+
+  const pickAssignee = useCallback(() => showActionSheet("Filter by Assignee", [
+    { label: "All Assignees", selected: !assigneeFilter, onPress: () => setAssigneeFilter("") },
+    { label: "Unassigned", selected: assigneeFilter === "_unassigned", onPress: () => setAssigneeFilter("_unassigned") },
+    ...uniqueAssignees.map((name) => ({ label: name, selected: name === assigneeFilter, onPress: () => setAssigneeFilter(name) })),
+  ]), [assigneeFilter, uniqueAssignees]);
+
+  // The active filters, one entry each: the chips under the header and the
+  // count on the Filter button both read this list. Status, priority and
+  // assignee only narrow the task list.
+  const activeFilters = useMemo(() => {
+    const list: { key: string; label: string; clear: () => void }[] = [];
+    if (sourceFilter) list.push({ key: "source", label: sourceFilter === "human" ? "Human" : "Bot", clear: () => setSourceFilter("") });
+    if (segment !== "tasks") return list;
+    if (statusFilter) list.push({ key: "status", label: STATUS_CONFIG[statusFilter]?.label, clear: () => setStatusFilter("") });
+    if (priorityFilter) list.push({ key: "priority", label: PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG]?.label, clear: () => setPriorityFilter("") });
+    if (assigneeFilter) list.push({ key: "assignee", label: assigneeFilter === "_unassigned" ? "Unassigned" : assigneeFilter, clear: () => setAssigneeFilter("") });
+    return list;
+  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter]);
+
+  const openFilterMenu = useCallback(() => {
+    const valueOf = <T,>(opts: { key: T; label: string }[], key: T) => opts.find((o) => o.key === key)?.label ?? "";
+    showActionSheet(segment === "tasks" ? "Filter & Sort" : "Filter", [
+      { label: `Show: ${valueOf(SOURCE_OPTIONS, sourceFilter)}`, onPress: pickSource },
+      ...(segment === "tasks" ? [
+        { label: `Status: ${statusFilter ? STATUS_CONFIG[statusFilter].label : "All"}`, onPress: pickStatus },
+        { label: `Priority: ${priorityFilter ? PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG].label : "All"}`, onPress: pickPriority },
+        { label: `Assignee: ${assigneeFilter ? (assigneeFilter === "_unassigned" ? "Unassigned" : assigneeFilter) : "All"}`, onPress: pickAssignee },
+        { label: `Group by: ${valueOf(GROUP_BY_OPTIONS, groupBy)}`, onPress: pickGroupBy },
+        { label: `Sort by: ${valueOf(SORT_OPTIONS, sortBy)}`, onPress: pickSort },
+      ] : []),
+      ...(activeFilters.length > 0 ? [{ label: "Clear filters", destructive: true, onPress: () => activeFilters.forEach((f) => f.clear()) }] : []),
+    ]);
+  }, [segment, sourceFilter, statusFilter, priorityFilter, assigneeFilter, groupBy, sortBy, activeFilters, pickSource, pickStatus, pickPriority, pickAssignee, pickGroupBy, pickSort]);
 
   const filteredPlans = useMemo(() => applySourceFilter(plansList), [plansList, applySourceFilter]);
 
@@ -590,22 +609,46 @@ export default function TasksScreen() {
             ) : null;
           })()}
         </RNView>
-        <TouchableOpacity style={styles.workspaceBtn} onPress={showWorkspacePicker} activeOpacity={0.7}>
-          {teamId && activeTeam ? (
-            <>
-              <RNText style={styles.workspaceIcon}>
-                {ICON_EMOJI[activeTeam.icon || ""] || ""}
-              </RNText>
-              <RNText style={styles.workspaceName} numberOfLines={1}>{activeTeam.name}</RNText>
-            </>
-          ) : (
-            <>
-              <FontAwesome name="user" size={11} color={Theme.textMuted} />
-              <RNText style={styles.workspaceName}>Personal</RNText>
-            </>
+        <RNView style={styles.headerRight}>
+          {(segment === "tasks" || segment === "docs") && !searchOpen && !searchInput && (
+            <TouchableOpacity
+              style={styles.headerIconBtn}
+              onPress={() => setSearchOpen(true)}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 6, right: 6 }}
+              accessibilityLabel={segment === "tasks" ? "Search tasks" : "Search docs"}
+            >
+              <FontAwesome name="search" size={15} color={Theme.textMuted} />
+            </TouchableOpacity>
           )}
-          <FontAwesome name="chevron-down" size={8} color={Theme.textMuted0} />
-        </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterBtn, activeFilters.length > 0 && styles.filterBtnActive]}
+            onPress={openFilterMenu}
+            activeOpacity={0.7}
+            accessibilityLabel={activeFilters.length > 0 ? `Filters, ${activeFilters.length} active` : "Filters"}
+          >
+            <FontAwesome name="sliders" size={13} color={activeFilters.length > 0 ? Theme.accent : Theme.textMuted} />
+            {activeFilters.length > 0 && (
+              <RNText style={styles.filterBtnCount}>{activeFilters.length}</RNText>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.workspaceBtn} onPress={showWorkspacePicker} activeOpacity={0.7}>
+            {teamId && activeTeam ? (
+              <>
+                <RNText style={styles.workspaceIcon}>
+                  {ICON_EMOJI[activeTeam.icon || ""] || ""}
+                </RNText>
+                <RNText style={styles.workspaceName} numberOfLines={1}>{activeTeam.name}</RNText>
+              </>
+            ) : (
+              <>
+                <FontAwesome name="user" size={11} color={Theme.textMuted} />
+                <RNText style={styles.workspaceName}>Personal</RNText>
+              </>
+            )}
+            <FontAwesome name="chevron-down" size={8} color={Theme.textMuted0} />
+          </TouchableOpacity>
+        </RNView>
       </RNView>
 
       <RNView style={styles.segmentBar}>
@@ -614,7 +657,7 @@ export default function TasksScreen() {
             <TouchableOpacity
               key={s}
               style={[styles.segmentBtn, segment === s && styles.segmentBtnActive]}
-              onPress={() => { setSegment(s); setSearchInput(""); setSearchQuery(""); }}
+              onPress={() => { setSegment(s); setSearchInput(""); setSearchQuery(""); setSearchOpen(false); }}
               activeOpacity={0.7}
             >
               <RNText style={[styles.segmentText, segment === s && styles.segmentTextActive]}>
@@ -625,85 +668,44 @@ export default function TasksScreen() {
         </RNView>
       </RNView>
 
-      <RNView style={styles.filterBar}>
-        <RNView style={styles.sourceFilterRow}>
-          {([["", "All"], ["human", "Human"], ["bot", "Bot"]] as const).map(([key, label]) => (
-            <TouchableOpacity
-              key={key}
-              style={[styles.sourceBtn, sourceFilter === key && styles.sourceBtnActive]}
-              onPress={() => setSourceFilter(key as SourceFilter)}
-              activeOpacity={0.7}
-            >
-              {key === "human" ? (
-                <FontAwesome name="user" size={11} color={sourceFilter === key ? Theme.text : Theme.textMuted0} />
-              ) : key === "bot" ? (
-                <FontAwesome name="bolt" size={11} color={sourceFilter === key ? Theme.cyan : Theme.textMuted0} />
-              ) : (
-                <RNText style={[styles.sourceText, sourceFilter === key && styles.sourceTextActive]}>
-                  {label}
-                </RNText>
-              )}
-            </TouchableOpacity>
-          ))}
-          {segment === "tasks" && (
-            <RNView style={styles.filterActions}>
-              <TouchableOpacity style={styles.filterActionBtn} onPress={showGroupByPicker} activeOpacity={0.7}>
-                <FontAwesome name="th-list" size={12} color={groupBy !== "status" ? Theme.accent : Theme.textMuted0} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.filterActionBtn} onPress={showSortPicker} activeOpacity={0.7}>
-                <FontAwesome name="sort-amount-desc" size={12} color={sortBy !== "priority" ? Theme.accent : Theme.textMuted0} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.filterActionBtn} onPress={showStatusFilterPicker} activeOpacity={0.7}>
-                <FontAwesome name="circle-o" size={12} color={statusFilter ? Theme.accent : Theme.textMuted0} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.filterActionBtn} onPress={showPriorityFilterPicker} activeOpacity={0.7}>
-                <FontAwesome name="arrow-up" size={12} color={priorityFilter ? Theme.accent : Theme.textMuted0} />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.filterActionBtn} onPress={showAssigneeFilterPicker} activeOpacity={0.7}>
-                <FontAwesome name="user-o" size={12} color={assigneeFilter ? Theme.accent : Theme.textMuted0} />
+      {(activeFilters.length > 0 || ((segment === "tasks" || segment === "docs") && (searchOpen || searchInput))) && (
+        <RNView style={styles.filterBar}>
+          {activeFilters.length > 0 && (
+            <RNView style={styles.activeFiltersRow}>
+              {activeFilters.map((f) => (
+                <TouchableOpacity key={f.key} style={styles.activeFilterChip} onPress={f.clear} activeOpacity={0.7}>
+                  <RNText style={styles.activeFilterText}>{f.label}</RNText>
+                  <FontAwesome name="times" size={9} color={Theme.textMuted} />
+                </TouchableOpacity>
+              ))}
+            </RNView>
+          )}
+
+          {(segment === "tasks" || segment === "docs") && (searchOpen || searchInput) && (
+            <RNView style={styles.searchBarRow}>
+              <RNView style={styles.searchInputRow}>
+                <FontAwesome name="search" size={13} color={Theme.textMuted0} style={{ marginRight: 8 }} />
+                <TextInput
+                  style={styles.searchInput}
+                  value={searchInput}
+                  onChangeText={handleSearchChange}
+                  placeholder={segment === "tasks" ? "Filter tasks..." : "Filter docs..."}
+                  placeholderTextColor={Theme.textMuted0}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  autoFocus={!searchInput}
+                />
+              </RNView>
+              <TouchableOpacity
+                onPress={() => { handleSearchChange(""); setSearchOpen(false); }}
+                hitSlop={{ top: 10, bottom: 10, left: 6, right: 10 }}
+              >
+                <RNText style={styles.searchCancel}>Cancel</RNText>
               </TouchableOpacity>
             </RNView>
           )}
         </RNView>
-
-        {segment === "tasks" && (statusFilter || priorityFilter || assigneeFilter) && (
-          <RNView style={styles.activeFiltersRow}>
-            {statusFilter ? (
-              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setStatusFilter("")} activeOpacity={0.7}>
-                <RNText style={styles.activeFilterText}>{STATUS_CONFIG[statusFilter]?.label}</RNText>
-                <FontAwesome name="times" size={9} color={Theme.textMuted} />
-              </TouchableOpacity>
-            ) : null}
-            {priorityFilter ? (
-              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setPriorityFilter("")} activeOpacity={0.7}>
-                <RNText style={styles.activeFilterText}>{PRIORITY_CONFIG[priorityFilter as keyof typeof PRIORITY_CONFIG]?.label}</RNText>
-                <FontAwesome name="times" size={9} color={Theme.textMuted} />
-              </TouchableOpacity>
-            ) : null}
-            {assigneeFilter ? (
-              <TouchableOpacity style={styles.activeFilterChip} onPress={() => setAssigneeFilter("")} activeOpacity={0.7}>
-                <RNText style={styles.activeFilterText}>{assigneeFilter === "_unassigned" ? "Unassigned" : assigneeFilter}</RNText>
-                <FontAwesome name="times" size={9} color={Theme.textMuted} />
-              </TouchableOpacity>
-            ) : null}
-          </RNView>
-        )}
-
-        {(segment === "tasks" || segment === "docs") && (
-          <RNView style={styles.searchInputRow}>
-            <FontAwesome name="search" size={13} color={Theme.textMuted0} style={{ marginRight: 8 }} />
-            <TextInput
-              style={styles.searchInput}
-              value={searchInput}
-              onChangeText={handleSearchChange}
-              placeholder={segment === "tasks" ? "Filter tasks..." : "Filter docs..."}
-              placeholderTextColor={Theme.textMuted0}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-          </RNView>
-        )}
-      </RNView>
+      )}
 
       <ScrollView
         refreshControl={
@@ -849,6 +851,47 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: "700",
     color: Theme.bg,
   },
+  headerRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  headerIconBtn: {
+    width: 32,
+    height: 30,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  filterBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    height: 30,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    backgroundColor: Theme.bg,
+  },
+  filterBtnActive: {
+    borderColor: Theme.accent + "80",
+    backgroundColor: Theme.accent + "14",
+  },
+  filterBtnCount: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: Theme.accent,
+    fontVariant: ["tabular-nums"],
+  },
+  searchBarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  searchCancel: {
+    fontSize: 14,
+    color: Theme.blue,
+  },
   workspaceBtn: {
     flexDirection: "row",
     alignItems: "center",
@@ -906,43 +949,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.borderLight,
     gap: 6,
   },
-  sourceFilterRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 0,
-    borderRadius: 6,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    overflow: "hidden",
-    alignSelf: "flex-start",
-  },
-  sourceBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRightWidth: StyleSheet.hairlineWidth,
-    borderRightColor: Theme.borderLight,
-  },
-  sourceBtnActive: {
-    backgroundColor: Theme.bgHighlight,
-  },
-  sourceText: {
-    fontSize: 12,
-    fontWeight: "500",
-    color: Theme.textMuted0,
-  },
-  sourceTextActive: {
-    color: Theme.text,
-  },
-  filterActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginLeft: "auto",
-    gap: 2,
-  },
-  filterActionBtn: {
-    padding: 6,
-    borderRadius: 6,
-  },
   activeFiltersRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -966,6 +972,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.accent,
   },
   searchInputRow: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: Theme.bg,
