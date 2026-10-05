@@ -7,6 +7,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useSearchParams, useRouter } from "next/navigation";
 import { AppLoader } from "../../../components/AppLoader";
 import { buildDesktopDeepLink } from "../../../lib/desktop";
+import { oauthProviderButton } from "@platform/auth/web";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -33,7 +34,7 @@ function CliAuthContent() {
   // Which provider button was clicked in the desktop app. When this browser
   // has no session yet, we jump straight into that provider's OAuth instead
   // of parking the user on the login page.
-  const provider = searchParams.get("provider");
+  const provider = oauthProviderButton(searchParams.get("provider"));
   const device = searchParams.get("device") || (isDesktopMode ? "Codecast Desktop" : "CLI Device");
   const deviceName = decodeURIComponent(device);
   // The CLI's device id, when it sent one: the token minted below binds to it
@@ -136,9 +137,9 @@ function CliAuthContent() {
       // Desktop provider hint: run that provider's OAuth right here and come
       // back to this page authed — the user already said which account kind
       // they want, so the login page would be a pointless stop.
-      if ((provider === "apple" || provider === "github") && !oauthStarted.current) {
+      if (provider && !oauthStarted.current) {
         oauthStarted.current = true;
-        signIn(provider, { redirectTo: returnPath }).catch(() => {
+        signIn(provider.id, { redirectTo: returnPath }).catch(() => {
           router.push(`/login?return_to=${encodeURIComponent(returnPath)}`);
         });
         return;
@@ -176,8 +177,8 @@ function CliAuthContent() {
             className="min-h-0 bg-transparent"
             size={32}
             label={
-              provider === "apple" || provider === "github"
-                ? `Continuing to ${provider === "apple" ? "Apple" : "GitHub"} sign-in...`
+              provider
+                ? `Continuing to ${provider.label} sign-in...`
                 : "Redirecting to login..."
             }
           />

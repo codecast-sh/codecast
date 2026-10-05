@@ -234,12 +234,14 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
   const repoObjectArgs = isRepoObject && queryArgs && (queryArgs.id || queryArgs.repository) ? queryArgs : null;
   const repoObject = useRepoObject(live && isRepoObject ? type : null, rawId, repoObjectArgs);
-  // A call (`cl-42`) or a stretch of it (`cl-42:15-25`): one query answers
-  // both, the turns riding along only when the reference names some.
+  // A call (`cl-42`), a stretch of it (`cl-42:15-25`) or a moment of it
+  // (`cl-42@12:34`): one query answers all three, the turns riding along only
+  // when the reference names some, and the line said then when it names a
+  // moment (the frame card's caption).
   const callRef = type === "call" ? parseCallRef(rawId) : null;
   const { data: call } = useQueryNoThrow(
     api.transcripts.webGetCallRef,
-    live && callRef ? { ref: callRef.call, ...(callRef.turns ?? {}) } : "skip",
+    live && callRef ? { ref: callRef.call, ...(callRef.turns ?? {}), ...(callRef.at_ms != null ? { at_ms: callRef.at_ms } : {}) } : "skip",
   );
   const served = fixtures ? fixture?.entity ?? null : isTask ? task : isPlan ? plan : isSession ? session : isTrigger ? trigger : type === "doc" ? doc : type === "project" ? project : type === "initiative" ? initiative : type === "proposal" ? proposal : type === "decision" ? decision : type === "call" ? call : undefined;
 

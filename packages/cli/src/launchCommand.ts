@@ -17,7 +17,7 @@ import {
   PI_EFFORT_LEVELS,
   cloudAgentModel,
   findModelOption,
-  type AgentClientId,
+  type AgentClientId, localAgentClient
 } from "@codecast/shared/contracts";
 import { getAgentArgs, type Config } from "./config/types.js";
 import { stableClaudeBinary } from "./stableClaudeBinary.js";
@@ -370,7 +370,7 @@ export function launchBinary(agentType: AgentClientId, deps: LaunchBinaryDeps = 
     const stable = (deps.stable ?? stableClaudeBinary)({ warn: deps.warn });
     if (stable) return stable;
   }
-  return AGENT_CLIENTS[agentType].binary;
+  return localAgentClient(agentType).binary;
 }
 
 export type PrintOutputFormat = "text" | "json" | "stream-json";
@@ -420,7 +420,7 @@ export interface PrintArgsResult {
  */
 export function buildPrintArgs(input: PrintArgsInput): PrintArgsResult {
   const { agentType, prompt } = input;
-  const print = AGENT_CLIENTS[agentType].printMode;
+  const print = localAgentClient(agentType).printMode;
   const ignored: string[] = [];
   const args: string[] = [];
   const codexPromptArgs: string[] = [];

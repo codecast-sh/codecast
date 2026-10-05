@@ -8,7 +8,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Phone } from "lucide-react";
+import { Phone, Video } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { callExcerptHref, callLinkHow, callLinkHref } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -16,6 +16,9 @@ import { isConvexId } from "../../lib/entityLinks";
 import { excerptLabel } from "../../lib/calls/excerptLabel";
 import { fmtClock } from "../triggerCadence";
 import { isCallLive } from "../../lib/calls/callStatus";
+import { callTitle } from "../../lib/calls/roomLabels";
+import { useCallPlaces } from "../../hooks/useSyncCalls";
+import { useInboxStore } from "../../store/inboxStore";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -28,7 +31,15 @@ import {
 const PILL =
   "inline-flex min-w-0 max-w-[180px] flex-shrink items-center gap-1 rounded-full bg-sol-bg-highlight px-2 py-0.5 text-[10.5px] leading-4 text-sol-text-muted hover:text-sol-text";
 
-const callName = (c: any) => c.title || "Untitled huddle";
+const NO_CALLS: any[] = [];
+
+/** A call's glyph: the camera for one Record filmed (the history's mark, so
+ *  "the recording from this session's huddle" stands out), else the phone;
+ *  green while the call is live. */
+function CallGlyph({ call, live, className }: { call: any; live: boolean; className: string }) {
+  const Icon = call.filmed ? Video : Phone;
+  return <Icon className={`${className} shrink-0 ${live ? "text-sol-green" : ""}`} aria-label={call.filmed ? "Has video" : undefined} />;
+}
 
 export function SessionCallPill({ conversationId }: { conversationId: string }) {
   const router = useRouter();
@@ -36,11 +47,18 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
     api.transcripts.webCallsForConversation,
     isConvexId(conversationId) ? { conversation_id: conversationId as any } : "skip",
   ).data;
+  // Every call named by the rule the Calls list and `cast calls` use, read
+  // as one string so the pill re-renders only when a name changes.
+  const places = useCallPlaces(calls ?? NO_CALLS);
+  const names = useInboxStore((s) =>
+    (calls ?? NO_CALLS).map((c: any) => callTitle({ ...c, place: places[String(c._id)] }, s as any)).join("\n"),
+  ).split("\n");
   if (!calls || calls.length === 0) return null;
   const [latest] = calls;
+  const callName = (c: any) => names[calls.indexOf(c)] ?? "Huddle";
   const face = (
     <>
-      <Phone className={`h-2.5 w-2.5 shrink-0 ${calls.some(isCallLive) ? "text-sol-green" : ""}`} />
+      <CallGlyph call={latest} live={calls.some(isCallLive)} className="h-2.5 w-2.5" />
       <span className="truncate">{callName(latest)}</span>
       {calls.length > 1 && <span className="shrink-0 text-sol-text-dim">+{calls.length - 1}</span>}
     </>
@@ -70,7 +88,7 @@ export function SessionCallPill({ conversationId }: { conversationId: string }) 
             {i > 0 && <DropdownMenuSeparator />}
             <DropdownMenuItem onSelect={() => router.push(callExcerptHref(String(c._id)))} className="flex-col items-start gap-0">
               <span className="flex w-full items-center gap-1.5 text-[12.5px] text-sol-text">
-                <Phone className={`h-3 w-3 shrink-0 ${isCallLive(c) ? "text-sol-green" : "text-sol-text-dim"}`} />
+                <CallGlyph call={c} live={isCallLive(c)} className={`h-3 w-3 ${isCallLive(c) ? "" : "text-sol-text-dim"}`} />
                 <span className="truncate">{callName(c)}</span>
               </span>
               <span className="pl-[18px] text-[11px] text-sol-text-dim">

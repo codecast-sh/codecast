@@ -16,6 +16,8 @@ import { killConversation } from "./conversations";
 // object, and an anchor is a role seat (seated sessions refuse deletion).
 const PURGE_TABLES: ReadonlyArray<readonly [string, string]> = [
   ["messages", "by_conversation_id"],
+  ["message_thinking", "by_conversation_message"],
+  ["message_tool_inputs", "by_conversation_message"],
   ["conversation_images", "by_conversation_id"],
   ["conversation_summaries", "by_conversation_id"],
   ["session_insights", "by_conversation_id"],

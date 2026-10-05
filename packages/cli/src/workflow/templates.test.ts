@@ -187,12 +187,12 @@ describe("line.cast template", () => {
   test("the decision stack groups one line's gates by day (LE11)", () => {
     const payload = gatePayload(graph.nodes.get("decide")!, graph, {
       assignee: "Infra lead", run_date: "2026-10-02", task_title: "Titles copy the opener",
-      "card_write.json": JSON.stringify({ wrong: "W.", change: "C.", recommend: "ship", why: "Y." }),
+      "card_write.json": JSON.stringify({ headline: "Titles copy the opener", context: "X.", wrong: "W.", change: "C.", recommend: "ship", why: "Y." }),
       run_dir: "/nonexistent/cast-line",
     });
     expect(payload.stack).toBe("Line · Infra lead · 2026-10-02");
     expect(payload.prompt).toBe("Ship this change? Titles copy the opener");
-    expect(payload.doc_md).toBe("What is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
+    expect(payload.doc_md).toBe("X.\n\nWhat is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
     expect(payload.category).toBe("review");
     expect("card" in payload).toBe(false);
   });
@@ -484,7 +484,7 @@ describe("line.cast station scripts", () => {
     run("watch", {});
     const dir = "/run/cast-line";
     expect(run("card_draft", { run_dir: dir }).code).toBe(0);
-    run("card", { run_dir: dir, "card_write.json": JSON.stringify({ wrong: "Titles copy the greeting.", change: "Titles name the work.", recommend: "ship", why: "All checks are green." }) });
+    run("card", { run_dir: dir, "card_write.json": JSON.stringify({ headline: "Titles name the work", context: "A title names each session.", wrong: "Titles copy the greeting.", change: "Titles name the work.", recommend: "ship", why: "All checks are green." }) });
     expect(calls()).toEqual([
       ["task", "comment", "ct-1", "Parked at ground: readiness needs_context, goal in-3:activation. which account?", "-t", "blocker"],
       ["task", "comment", "ct-1", "Parked at ground: readiness ready, goal none. ", "-t", "progress"],
@@ -495,7 +495,7 @@ describe("line.cast station scripts", () => {
       ["task", "update", "ct-1", "--watch-days", "7"],
       ["card", "build", "--task", "ct-1", "--dir", dir, "--base", "main", "--json"],
       ["card", "build", "--task", "ct-1", "--dir", dir, "--base", "main", "--publish",
-        "--wrong", "Titles copy the greeting.", "--change", "Titles name the work.", "--recommend", "ship", "--why", "All checks are green."],
+        "--headline", "Titles name the work", "--context", "A title names each session.", "--wrong", "Titles copy the greeting.", "--change", "Titles name the work.", "--recommend", "ship", "--why", "All checks are green."],
     ]);
   });
 });
@@ -557,7 +557,7 @@ describe("line.cast offline run through the session path", () => {
     task = { short_id: "ct-7", title: "Add the thing", status: "open", steps: [], assignee: "infra-lead" };
     pinned = {
       prove: 'Showed it failing.\n```json\n{"reproduced": true}\n```',
-      card_write: 'Card words.\n```json\n{"wrong": "W.", "change": "C.", "recommend": "ship", "why": "Y."}\n```',
+      card_write: 'Card words.\n```json\n{"headline": "Add the thing", "context": "X.", "wrong": "W.", "change": "C.", "recommend": "ship", "why": "Y."}\n```',
     };
     effects = {
       ground: () => { task = { ...task, ...grounded }; },
@@ -626,7 +626,7 @@ describe("line.cast offline run through the session path", () => {
     const gate = calls.find((c) => c.route === "/cli/workflow-runs/gate")!.body;
     expect(gate).toMatchObject({ node_id: "decide", prompt: "Ship this change? Add the thing", category: "review" });
     expect(gate.stack).toMatch(/^Line · infra-lead · \d{4}-\d{2}-\d{2}$/);
-    expect(gate.doc_md).toBe("What is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
+    expect(gate.doc_md).toBe("X.\n\nWhat is wrong: W.\n\nWhat this changes: C.\n\nRecommends ship: Y.");
     expect(gate.choices.map((c: any) => [c.key, c.target])).toEqual([["S", "ship"], ["R", "reopen"], ["D", "drop"]]);
     const ran = calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "completed").map((c) => c.body.node_id);
     expect(ran.slice(-4)).toEqual(["ship", "merge", "watch", "exit"]);

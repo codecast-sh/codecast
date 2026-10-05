@@ -35,8 +35,10 @@ const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider, useShortcuts } = await import("../../../shortcuts/ShortcutProvider");
 const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
-const { SimCatalogView, cellFailure, gridRows, markersFor } = await import("../SimCatalogView");
-const { SimRunView, PLAY_STEP_MS } = await import("../SimRunView");
+const { SimCatalogView } = await import("../SimCatalogView");
+const { cellFailure, gridRows, markersFor } = await import("../simModel");
+const { SimRunView } = await import("../SimRunView");
+const { PLAY_STEP_MS } = await import("../simModel");
 const { SimRunPage } = await import("../pages/SimRunPage");
 const { SimCatalogPage } = await import("../pages/SimCatalogPage");
 
@@ -298,5 +300,23 @@ describe("the pages over the fixture transport", () => {
     while (!missing.container.textContent?.includes("No such") && Date.now() < end) await act(async () => wait(25));
     expect(missing.container.textContent).toContain("No such Multiplayer sim run");
     await missing.unmount();
+  }, 120_000);
+
+  it("after a reload, shows how the newest sweep ended and the lines it printed", async () => {
+    const inner = await fixtureTransport("on", { latencyMs: 0 });
+    const lastSweep = { id: "sweep-1", kind: "sweep", status: "failed", session: null, run: null, tmux: null, startedAt: "2026-10-03T11:00:00.000Z", updatedAt: "2026-10-03T11:02:00.000Z", progress: { done: 0, total: null, text: "the sweep ended before its session closed" }, logTail: ["sweeping everything", "error: bun exited 1"] };
+    const transport = {
+      kind: "fixture" as const,
+      async send(req: Parameters<typeof inner.send>[0]) {
+        const res = await inner.send(req);
+        return req.path === "/sim/sessions" ? { ...res, body: { ...(res.body as object), lastSweep } } : res;
+      },
+    };
+    useEvalsStore.setState({ connection: "connected", transport, resources: {} });
+    const cat = await mount(<SimCatalogPage view={{ view: "sim" }} />);
+    const log = await waitFor(cat.container, "[data-evs-sweep-log]");
+    expect(cat.container.textContent).toContain("The sweep failed: the sweep ended before its session closed");
+    expect(log?.textContent).toContain("error: bun exited 1");
+    await cat.unmount();
   }, 120_000);
 });

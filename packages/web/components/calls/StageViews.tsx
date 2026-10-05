@@ -352,12 +352,15 @@ export function StageVideo({
   // A big share tile can be read at the share's own size or fullscreen
   // (hooks/useShareZoom). The video sits in a frame inside a scroller: fitted,
   // the frame is the tile; at 1:1 it is the share's size and the scroller
-  // pans it. Cursors draw over the frame, so they map in both.
+  // pans it (a finger pans it natively, and may pinch past 1:1, which on a
+  // phone's dense screen is still small). Cursors draw over the frame, so
+  // they map in both. On a touch screen the zoom pill shows at rest: there
+  // is no hover to reveal it.
   const zoomable = cursorsOn && !small;
   const scrollRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const natural = useNaturalSize(ref, tile.track);
-  const zoom = useShareZoom(boxRef, scrollRef, natural, zoomable);
+  const zoom = useShareZoom(boxRef, scrollRef, natural, zoomable, ref);
   return (
     <div
       ref={boxRef}
@@ -372,7 +375,7 @@ export function StageVideo({
       <div
         ref={scrollRef}
         {...zoom.panHandlers}
-        className={`absolute inset-0 flex ${zoom.actual ? "cursor-grab overflow-auto active:cursor-grabbing" : "overflow-hidden"}`}
+        className={`absolute inset-0 flex ${zoom.actual ? "cursor-grab touch-pan-x touch-pan-y touch-pinch-zoom overflow-auto active:cursor-grabbing" : "overflow-hidden"}`}
       >
         <div
           ref={frameRef}
@@ -412,7 +415,7 @@ export function StageVideo({
       {zoomable && (
         <span
           onDoubleClick={(e) => e.stopPropagation()}
-          className={`absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/45 p-0.5 font-mono text-[11.5px] text-white/85 backdrop-blur transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 ${
+          className={`absolute bottom-2 right-2 flex items-center gap-0.5 rounded-full bg-black/45 p-0.5 font-mono text-[11.5px] text-white/85 backdrop-blur transition-opacity duration-150 focus-within:opacity-100 group-hover:opacity-100 [@media(pointer:coarse)]:opacity-100 ${
             zoom.actual || zoom.fullscreen ? "opacity-100" : "opacity-0"
           }`}
         >

@@ -340,6 +340,7 @@ export function resumePinFor(
     pending_api_error_kind?: string | null;
     cc_account?: string | null;
     cc_account_auto?: boolean | null;
+    model?: string | null;
   },
   device: ContinueDevice | undefined,
   now: number,
@@ -353,7 +354,11 @@ export function resumePinFor(
     (conv.pending_api_error_kind === "limit" || conv.pending_api_error_kind === "auth");
   const pinnedSpent =
     !!conv.cc_account &&
-    isUsageExhausted(device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account)?.usage, now);
+    isUsageExhausted(
+      device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account)?.usage,
+      now,
+      conv.model ? [conv.model] : undefined,
+    );
   if ((parked || pinnedSpent) && continueNeedsRestart(conv, device, now)) return continueTargetPin(device, now);
   if (!conv.cc_account && device?.is_remote !== true) return continueTargetPin(device, now);
   return conv.cc_account ?? undefined;
@@ -765,8 +770,11 @@ export function decideAutoSwitch(input: {
   // the Claude one; the Codex pass passes its own so the two providers' free
   // continues are independent (see AUTO_SWITCH_CODEX_CONTINUE_KEY).
   continueKey?: string;
+  // The models the parked sessions run. An account's model-scoped week
+  // ("Fable") is spent only for sessions on that model (limitWindows).
+  models?: readonly string[];
 }): AutoSwitchDecision {
-  const { now, parkedAt, activeEmail, activeSince, profiles, attempts } = input;
+  const { now, parkedAt, activeEmail, activeSince, profiles, attempts, models } = input;
   const allowSwitch = input.allowSwitch !== false;
   const lastAttemptAt = (profile: string): number | null =>
     attempts.reduce<number | null>(
@@ -810,7 +818,7 @@ export function decideAutoSwitch(input: {
   if (
     !input.activeDead &&
     (noParkOnActive || windowRolledSincePark || settledProbeShowsHeadroom) &&
-    !isUsageExhausted(active?.usage, now) &&
+    !isUsageExhausted(active?.usage, now, models) &&
     continueHasNewEvidence
   ) {
     return { action: "continue" };
@@ -820,7 +828,7 @@ export function decideAutoSwitch(input: {
     !input.activeDead &&
     lastContinue &&
     (noParkOnActive || activeParkedAt <= lastContinue) &&
-    !isUsageExhausted(active?.usage, now)
+    !isUsageExhausted(active?.usage, now, models)
   ) {
     return { action: "wait", retry_at: now + AUTO_SWITCH_PROBE_RETRY_MS };
   }
@@ -843,7 +851,7 @@ export function decideAutoSwitch(input: {
   }
 
   if (allowSwitch) {
-    const candidates = fallbackProfiles(profiles, activeEmail, now).filter((p) => {
+    const candidates = fallbackProfiles(profiles, activeEmail, now, models).filter((p) => {
       const att = lastAttemptAt(p.name);
       if (att && att >= parkedAt) return false; // switch in flight — wait
       if (att && now - att < AUTO_SWITCH_SESSION_WINDOW_MS) {

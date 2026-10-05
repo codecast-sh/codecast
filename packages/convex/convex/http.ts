@@ -10,8 +10,8 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
-import { SHARED_CALL_VIDEO_PATHS, signForCli } from "./callRecordings";
-import { callRecordingsBucketFromEnv, PRIVATE_OBJECT_GET_PARAMS, r2FreshGetUrl } from "./lib/r2";
+import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
+import { callRecordingGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { CLI_ERROR_STATUS } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
@@ -19,8 +19,9 @@ import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
 import { REPLAY_CHUNK_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./replays";
-import { timingSafeEqualHex } from "./lib/hmac";
+import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
+import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -226,18 +227,7 @@ http.route({
       });
     }
 
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(webhookSecret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"]
-    );
-    const signatureBuffer = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-    const hashArray = Array.from(new Uint8Array(signatureBuffer));
-    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-    const expectedSignature = "sha256=" + hashHex;
+    const expectedSignature = "sha256=" + (await hmacSha256Hex(webhookSecret, body));
 
     if (!timingSafeEqualHex(signature, expectedSignature)) {
       return new Response(JSON.stringify({ error: "Invalid signature" }), {
@@ -338,6 +328,8 @@ http.route({
 // Request-ID and scheduled in sources/sentry.ts, so a test drives the real
 // handler.
 http.route({ path: "/api/webhooks/sentry", method: "POST", handler: sentryWebhook });
+// Stripe: plans, top-ups and renewals onto the wallet (billing.ts).
+http.route({ path: STRIPE_WEBHOOK_PATH, method: "POST", handler: stripeWebhook });
 
 // Linear webhooks (issue sync, docs/architecture/issue-sync.md S6). Same shape
 // as the GitHub App route above: verify the raw body, refuse anything we cannot
@@ -430,22 +422,7 @@ http.route({
         });
       }
 
-      const encoder = new TextEncoder();
-      const keyData = encoder.encode(webhookSecret);
-      const messageData = encoder.encode(body);
-
-      const key = await crypto.subtle.importKey(
-        "raw",
-        keyData,
-        { name: "HMAC", hash: "SHA-256" },
-        false,
-        ["sign"]
-      );
-
-      const signatureBuffer = await crypto.subtle.sign("HMAC", key, messageData);
-      const hashArray = Array.from(new Uint8Array(signatureBuffer));
-      const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-      const expectedSignature = "sha256=" + hashHex;
+      const expectedSignature = "sha256=" + (await hmacSha256Hex(webhookSecret, body));
 
       if (!signature || !timingSafeEqualHex(signature, expectedSignature)) {
         return new Response(JSON.stringify({ error: "Invalid signature" }), {
@@ -3770,17 +3747,7 @@ http.route({
     if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 300) {
       return new Response(JSON.stringify({ error: "Stale timestamp" }), { status: 401 });
     }
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(secret),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
-    const sigBuf = await crypto.subtle.sign("HMAC", key, encoder.encode(`v0:${timestamp}:${body}`));
-    const hex = Array.from(new Uint8Array(sigBuf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-    if (!timingSafeEqualHex(signature, "v0=" + hex)) {
+    if (!timingSafeEqualHex(signature, "v0=" + (await hmacSha256Hex(secret, `v0:${timestamp}:${body}`)))) {
       return new Response(JSON.stringify({ error: "Invalid signature" }), { status: 401 });
     }
 
@@ -4048,6 +4015,7 @@ for (const [verb, fn] of [
   ["remove-project", "removeProject"],
   ["post", "postUpdate"],
   ["report", "report"],
+  ["record", "record"],
 ] as const) {
   cliRoute(`/cli/initiatives/${verb}`, async (ctx, body) => ctx.runMutation(api.initiatives[fn], body));
 }
@@ -4142,6 +4110,8 @@ cliRoute("/cli/role/create", async (ctx, body) => ctx.runMutation(api.orgRoles.c
 cliRoute("/cli/role/update", async (ctx, body) => ctx.runMutation(api.orgRoles.update, body));
 cliRoute("/cli/role/provision", async (ctx, body) => ctx.runMutation(api.orgRoles.provision, body));
 cliRoute("/cli/role/wake", async (ctx, body) => ctx.runMutation(api.orgRoles.wake, body));
+// A role tunes its own check (org-staffing.md S38): no trigger id, the role names the routine.
+cliRoute("/cli/role/tune", async (ctx, body) => ctx.runMutation((api as any).orgRoles.tuneRoutine, body));
 cliRoute("/cli/role/pause", async (ctx, body) => ctx.runMutation(api.orgRoles.pause, body));
 cliRoute("/cli/role/resume", async (ctx, body) => ctx.runMutation(api.orgRoles.resume, body));
 cliRoute("/cli/role/retire", async (ctx, body) => ctx.runMutation(api.orgRoles.retire, body));
@@ -4358,10 +4328,11 @@ cliRoute("/cli/signal/ls", async (ctx, body) => {
 cliRoute("/cli/signal/show", async (ctx, body) => {
   return await ctx.runQuery(api.signals.showForCli, body);
 });
-// A repo's declared finders onto its projects (line-profile.md LP3).
+// A repo's resolved line profile onto its projects (line-profile.md LP3).
+// device_id is the publisher's machine, where an edit of the file is routed.
 cliRoute("/cli/line/profile/publish", async (ctx, body) => {
   return await ctx.runMutation(api.signals.publishProfile, body);
-});
+}, { forwardDeviceId: true });
 // The goals brief the ground node reads (the-line-end-to-end.md LE5).
 cliRoute("/cli/goals/brief", async (ctx, body) => {
   return await ctx.runQuery(api.goals.brief, body);
@@ -4382,14 +4353,18 @@ cliRoute("/cli/calls/recordings", async (ctx, body) => {
   const res = await ctx.runQuery(internal.callRecordings.cliCallRecordings, { api_token: body.api_token, call: body.call });
   return res ? await signForCli(res) : null;
 });
-// `cast call snap --share`: tie a frame just uploaded as a public image to
-// the recording file it came from, so deleting the recording deletes it.
-// body: { recording_id, storage_id }.
+// `cast call snap --share`: store a frame as a public image tied to the
+// recording file it came from, so deleting the recording deletes it.
+// body: { recording_id, image_base64, at_ms? }. The picture travels in the
+// request and the server stores it itself: a storage id is never taken from
+// the client (callRecordings.cliShareFrame says why). `at_ms` is the moment
+// it shows, on the call's clock, for the room's thread line.
 cliRoute("/cli/calls/frame-share", async (ctx, body) => {
-  return await ctx.runMutation(internal.callRecordings.cliNoteFrameShare, {
+  return await ctx.runAction(internal.callRecordings.cliShareFrame, {
     api_token: body.api_token,
     recording_id: String(body.recording_id ?? ""),
-    storage_id: String(body.storage_id ?? ""),
+    image_base64: String(body.image_base64 ?? ""),
+    ...(typeof body.at_ms === "number" && Number.isFinite(body.at_ms) ? { at_ms: body.at_ms } : {}),
   });
 });
 // `cast call hold <duration>|off`: a fed agent asks its huddle for time.
@@ -4656,6 +4631,33 @@ cliRoute("/cli/workflows/upsert", async (ctx, body) => {
 cliRoute("/cli/workflows/list", async (ctx, body) => {
   return await ctx.runMutation(api.workflows.list, body);
 });
+
+// Mods (shared/contracts/mods.ts): cast mod dev|publish|ls|logs|versions|pull|rollback|enable|disable|rm
+cliRoute("/cli/mods/push", async (ctx, body) => ctx.runMutation((api as any).mods.cliPush, body));
+cliRoute("/cli/mods/list", async (ctx, body) => ctx.runQuery((api as any).mods.cliList, body));
+cliRoute("/cli/mods/logs", async (ctx, body) => ctx.runQuery((api as any).mods.cliLogs, body));
+cliRoute("/cli/mods/versions", async (ctx, body) => ctx.runQuery((api as any).mods.cliVersions, body));
+cliRoute("/cli/mods/get-version", async (ctx, body) => ctx.runQuery((api as any).mods.cliGetVersion, body));
+cliRoute("/cli/mods/rollback", async (ctx, body) => ctx.runMutation((api as any).mods.cliRollback, body));
+cliRoute("/cli/mods/set-enabled", async (ctx, body) => ctx.runMutation((api as any).mods.cliSetEnabled, body));
+cliRoute("/cli/mods/remove", async (ctx, body) => ctx.runMutation((api as any).mods.cliRemove, body));
+cliRoute("/cli/mods/guide", async (ctx, body) => ctx.runQuery((api as any).mods.cliGuide, body));
+
+// Mod objects (shared/contracts/mods.ts objects): cast obj <prefix> create|ls|show|set|done
+cliRoute("/cli/objects/create", async (ctx, body) => ctx.runMutation((api as any).modObjects.cliCreate, body));
+cliRoute("/cli/objects/update", async (ctx, body) => ctx.runMutation((api as any).modObjects.cliUpdate, body));
+cliRoute("/cli/objects/get", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliGet, body));
+cliRoute("/cli/objects/list", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliList, body));
+cliRoute("/cli/objects/kinds", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliKinds, body));
+
+// Mods' local halves (convex/modLocal.ts): the daemon's side of the bridge
+cliRoute("/cli/mods/local", async (ctx, body) => ctx.runQuery((api as any).modLocal.cliLocalMods, body));
+cliRoute("/cli/mods/publish-state", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliPublish, body));
+cliRoute("/cli/mods/claim-calls", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliClaimCalls, body));
+cliRoute("/cli/mods/finish-call", async (ctx, body) => ctx.runMutation((api as any).modLocal.cliFinishCall, body));
+cliRoute("/cli/mods/log", async (ctx, body) => ctx.runMutation((api as any).modLogs.cliLog, body));
+cliRoute("/cli/mods/call", async (ctx, body) => ctx.runMutation((api as any).modCalls.cliCall, body));
+cliRoute("/cli/mods/get-call", async (ctx, body) => ctx.runQuery((api as any).modCalls.cliGetCall, body));
 
 // Workflow Runs
 cliRoute("/cli/workflow-runs/create", async (ctx, body) => ctx.runMutation(api.workflow_runs.createFromCli, body));
@@ -5013,15 +5015,20 @@ http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 // A publicly shared call's video (callRecordings.sharedCallVideos): the share
 // page's <video> points here, and every request (each range a player asks
 // for) re-checks the link and the choice to include video, then redirects to
-// a URL into the private bucket signed now for ten minutes. Turning the link
-// off stops the video at the next request; no URL into the bucket is ever
-// written into the page.
+// a URL into the private bucket. Turning the link off stops the video at the
+// next request; no URL into the bucket is ever written into the page.
 //
-// Registered under the prefixes the Caddy proxy in front of this deployment
-// forwards to HTTP actions (infra/convex-proxy/Caddyfile), the way the public
-// repo routes below are: any other path lands on the backend and 404s. The
-// page is handed the /cli/ address (SHARED_CALL_VIDEO_PATHS[0]), the one prod
-// carries today.
+// The URL is signed stable within SHARED_VIDEO_REDIRECT_WINDOW_MS (lib/r2
+// stableSigningWindow), so every redirect in a window carries the same
+// Location: a player that asks again while scrubbing lands on the object URL
+// it already holds, and its ranges come from R2 rather than through here.
+// It lives at most two windows, the ten minutes a fresh one had.
+//
+// Registered only under /cli/, the prefix the Caddy proxy in front of prod
+// forwards to HTTP actions today (infra/convex-proxy/Caddyfile): any other
+// path lands on the backend and 404s, so a second address here would be a
+// route that never answers.
+const SHARED_VIDEO_REDIRECT_WINDOW_MS = 5 * 60_000;
 const sharedCallVideo = httpAction(async (ctx, request) => {
   const u = new URL(request.url);
   const token = u.searchParams.get("token") ?? "";
@@ -5029,12 +5036,11 @@ const sharedCallVideo = httpAction(async (ctx, request) => {
   const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
   if (!token || !Number.isFinite(at)) return notFound();
   const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
-  const bucket = callRecordingsBucketFromEnv();
-  if (!key || !bucket) return notFound();
-  const { url } = await r2FreshGetUrl(bucket, key, Date.now(), PRIVATE_OBJECT_GET_PARAMS);
-  return new Response(null, { status: 302, headers: { Location: url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
+  const signed = key ? await callRecordingGetUrl(key, { stable: { at: Date.now(), windowMs: SHARED_VIDEO_REDIRECT_WINDOW_MS } }) : null;
+  if (!signed) return notFound();
+  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
-for (const path of SHARED_CALL_VIDEO_PATHS) http.route({ path, method: "GET", handler: sharedCallVideo });
+http.route({ path: SHARED_CALL_VIDEO_PATH, method: "GET", handler: sharedCallVideo });
 
 // Reading a public repository with no account at all — the standalone /r/ shell
 // runs on this. The handler is repoPublicHttp.ts; see the file header for why a

@@ -41,7 +41,7 @@ import {
   snippetContentHash,
   stampSectionBody,
   stripSnippetStamp,
-  AGENT_CLIENTS,
+  LOCAL_AGENT_CLIENTS,
   SNIPPET_CATALOG,
 } from "@codecast/shared/contracts";
 import {
@@ -98,7 +98,7 @@ export function getSnippetTargets(): SnippetTarget[] {
   const home = process.env.HOME || os.homedir();
   const candidates: TargetCandidate[] = [];
 
-  for (const descriptor of Object.values(AGENT_CLIENTS)) {
+  for (const descriptor of Object.values(LOCAL_AGENT_CLIENTS)) {
     // DECLARED is the gate, not "a dot directory exists": gemini and pi have
     // dot directories on plenty of machines and no verified instruction file,
     // and a directory-driven loop would start writing ~/.gemini files nothing

@@ -723,6 +723,11 @@ export async function retireTeam(
   // A recording running in one of its rooms stops now: LiveKit would film on
   // until the room empties, and the purge below skips a call still recording.
   await stopTeamRecordings(ctx, team._id);
+  // Pictures shared from its calls are public storage URLs nothing can gate,
+  // so they go now, a page of calls at a time, rather than serving through
+  // the restore window (the calls' public links already stop at the
+  // tombstone, lib/callRecordingRuns.callTeamRetired).
+  await ctx.scheduler.runAfter(0, internal.callRecordings.purgeTeamRecordings, { team_id: team._id, frames: true });
   // The team's call recordings (video of its meetings, guests included) leave
   // the private bucket once the restore window has passed. The sweep checks
   // the tombstone again when it runs, so a restored team keeps them.

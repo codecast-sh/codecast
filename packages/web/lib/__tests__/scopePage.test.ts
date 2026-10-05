@@ -45,6 +45,17 @@ describe("scope page rules", () => {
     expect(feedStateTone("task", "done")).toBe("var(--sol-cyan)");
   });
 
+  test("a goal's open question waits on somebody; its finished moments, its updates and its calls read by their own state", () => {
+    expect(feedStateTone("goal", "asked")).toBe("var(--sol-yellow)");
+    for (const done of ["reached", "answered", "decided"]) expect(feedStateTone("goal", done)).toBe("var(--sol-cyan)");
+    expect(feedStateTone("update", "on_track")).toBe("var(--sol-green)");
+    expect(feedStateTone("update", "off_track")).toBe("var(--sol-red)");
+    // A project's update names its kind, which earns no colour.
+    expect(feedStateTone("update", "digest")).toBe(feedStateTone("task", "open"));
+    expect(feedStateTone("call", "live")).toBe("var(--sol-green)");
+    expect(feedStateTone("call", "ended")).toBe(feedStateTone("task", "open"));
+  });
+
   test("published pages leave the SPA; app routes stay in it", () => {
     expect(feedLinkIsServerOwned("/a/some-slug")).toBe(true);
     expect(feedLinkIsServerOwned("/tasks/ct-12")).toBe(false);

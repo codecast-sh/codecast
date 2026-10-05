@@ -188,11 +188,13 @@ export function insightRequest(context: InsightRequestContext, source: string): 
 
   const prompt = `You are writing a session narrative for a developer activity feed.
 
+A teammate reads it to learn where the work stands and what to do next, so it is a record of what the excerpt shows happened, and the excerpt's last message is the session's present. A step is done only when the excerpt shows its result, and only done steps go in did. A notice that a command completed shows that it ended, not what it found: a check passed only when the excerpt shows its output saying so. A step the agent is doing or waiting on when the excerpt ends (a click it is making now, a test, typecheck or deploy still running, a check whose result has not appeared) has not finished, and a step it says it will do next has not started: neither is done, passed or verified, so the summary names each as underway or next, and did leaves it out.
+
 Return ONLY valid JSON with this exact shape:
 {
-  "headline": "string (one sentence, max 80 chars, what was accomplished)",
+  "headline": "string (one sentence, max 80 chars, what the excerpt shows done or where the work stands)",
   "turns": [
-    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what was done in response (2-4 bullet points, specific)"] }
+    { "ask": "what the user asked/directed (their actual words, paraphrased concisely)", "did": ["what the excerpt shows finished in response (2-4 bullet points, specific, each one result the excerpt shows)"] }
   ],
   "summary": "string (2-3 sentences, narrative context)",
   "outcome_type": "shipped|progress|blocked|unknown",
@@ -201,13 +203,13 @@ Return ONLY valid JSON with this exact shape:
 }
 
 Rules:
-- turns: THE MOST IMPORTANT FIELD. This captures the back-and-forth of the session. Each turn is one user request and what the agent did about it. The "ask" field should quote or closely paraphrase what the user actually said -- their intent, their words. The "did" array lists specific concrete things that were done in response (files changed, bugs found, features built). 3-8 turns per session.
-  Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Deployed fix, confirmed memory stable"] }
+- turns: THE MOST IMPORTANT FIELD. This captures the back-and-forth of the session. Each turn is one user request and what the agent did about it. The "ask" field should quote or closely paraphrase what the user actually said -- their intent, their words. The "did" array lists specific concrete things the excerpt shows finished in response (files changed, bugs found, features built). Each bullet claims one result: when a step's first part shows a result and the rest is still running or only announced (the button renders, the click on it is being made now), the bullet claims the first part alone. 3-8 turns per session.
+  Good: { "ask": "Fix the OOM crash in renderMedia", "did": ["Found root cause: renderMedia() spawning unlimited Chromium processes", "Capped concurrency to os.cpus().length * 0.5 in index.ts", "Ran the render benchmark: peak memory fell from 9 GB to 2 GB"] }
   Good: { "ask": "Map the React Native architecture across the monorepo", "did": ["Documented Router file-base routing in app/, layout.tsx", "Identified Tamagui config and component library structure", "Wrote comprehensive report covering all three backend layers"] }
   Bad: { "ask": "Worked on stuff", "did": ["Made changes"] }
-- headline: Lead with the verb. Max 80 characters.
-- summary: Brief narrative context, 2-3 sentences.
-- outcome_type: shipped = deployed/merged/complete. progress = still working. blocked = stuck.
+- headline: Lead with the verb, and claim only what the excerpt shows finished. Max 80 characters.
+- summary: Brief narrative context, 2-3 sentences, ending on what is in progress or next.
+- outcome_type: shipped = the excerpt shows the work deployed, merged or complete. progress = still working, including when its last step has not been shown finishing. blocked = stuck.
 - themes: 2-4 short tags, lowercase.
 - No markdown, no commentary, just JSON.
 

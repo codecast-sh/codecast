@@ -5,6 +5,7 @@ import { v } from "convex/values";
 import {
   CALL_GUEST_LEFT_REASONS,
   CALL_GUEST_STATUSES,
+  CALL_RECORDING_ERROR_KINDS,
   CALL_RECORDING_KINDS,
   CALL_RECORDING_STATUSES,
   CALL_RECORDING_STOP_REASONS,
@@ -13,5 +14,15 @@ import {
 export const callRecordingKindValidator = v.union(...CALL_RECORDING_KINDS.map((k) => v.literal(k)));
 export const callRecordingStatusValidator = v.union(...CALL_RECORDING_STATUSES.map((s) => v.literal(s)));
 export const callRecordingStopReasonValidator = v.union(...CALL_RECORDING_STOP_REASONS.map((r) => v.literal(r)));
+export const callRecordingErrorKindValidator = v.union(...CALL_RECORDING_ERROR_KINDS.map((k) => v.literal(k)));
 export const callGuestStatusValidator = v.union(...CALL_GUEST_STATUSES.map((s) => v.literal(s)));
 export const callGuestLeftReasonValidator = v.union(...CALL_GUEST_LEFT_REASONS.map((r) => v.literal(r)));
+// A guest's notice (GuestNotice in shared/contracts/callGuests.ts): what the
+// page showed when they agreed, stored on their row and checked against the
+// room's at every media token.
+export const guestNoticeValidator = v.object({
+  recording: v.boolean(),
+  transcribed: v.boolean(),
+  video_public: v.optional(v.boolean()),
+  words_public: v.optional(v.boolean()),
+});

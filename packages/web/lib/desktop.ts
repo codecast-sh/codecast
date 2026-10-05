@@ -193,6 +193,8 @@ declare global {
       // (route /call-ring). `callRingAnswer` hands the room to the CALL window
       // — the media plane is per-renderer, so a ring card must never join.
       isCallRingWindow?: boolean;
+      // A see-through window: loading paints nothing in it.
+      isTransparentWindow?: boolean;
       openCallRingWindow?: () => Promise<boolean>;
       callRingSize?: (size: { width: number; height: number }) => void;
       callRingHide?: () => void;
@@ -294,6 +296,11 @@ export async function openCallRingWindow(): Promise<boolean> {
   const open = bridge("openCallRingWindow");
   if (!open) return false;
   return (await open()) === true;
+}
+
+/** This renderer is a see-through shell window (palette, rings, dock). */
+export function isTransparentWindow(): boolean {
+  return typeof window !== "undefined" && window.__CODECAST_ELECTRON__?.isTransparentWindow === true;
 }
 
 /** This renderer IS the ring window. */
@@ -1043,6 +1050,7 @@ export const DESKTOP_SHORTCUTS: { key: string; label: string; description: strin
   { key: "toggleWindow", label: "Toggle Main Window", description: "Show or hide the main Codecast window" },
   { key: "togglePalette", label: "Quick Command Palette", description: "Open the floating command palette from anywhere" },
   { key: "toggleEnv", label: "Switch Local / Prod", description: "Switch between local dev and production" },
+  { key: "toggleAgentDock", label: "Agent Dock", description: "Open the agent dock's card from any app (only while the dock is on)" },
 ];
 
 export type DesktopShortcutConfig = {

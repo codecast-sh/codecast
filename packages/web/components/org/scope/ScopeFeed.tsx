@@ -5,7 +5,7 @@
 // lives in useScopeFeedStream, which the phone's feed shares.
 import { useRef } from "react";
 import Link from "next/link";
-import { CheckSquare, FileText, GitCommitHorizontal, Image as ImageGlyph, Layers, Megaphone, MessageCircleQuestionMark, Terminal, Workflow } from "lucide-react";
+import { CheckSquare, FileText, Flag, GitCommitHorizontal, Image as ImageGlyph, Layers, Megaphone, MessageCircleQuestionMark, Phone, Terminal, Workflow } from "lucide-react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
@@ -27,6 +27,8 @@ const KIND_ICON: Record<FeedKind, any> = {
   update: Megaphone,
   commit: GitCommitHorizontal,
   run: Workflow,
+  goal: Flag,
+  call: Phone,
 };
 
 export type ScopeFeedProps = {

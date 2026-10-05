@@ -14,7 +14,7 @@ import {
   Settings, Keyboard, Compass, SlidersHorizontal, CircleUser, History, Rss, ListChecks,
   FileText, FolderGit2, CalendarClock, ArrowLeftRight, ScrollText, Globe, LogOut, Waypoints,
   BookOpen, ExternalLink, Radio, Newspaper, Home, MonitorSmartphone,
-  Blocks, Sun, Moon,
+  Blocks, Sun, Moon, SquareTerminal,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
@@ -249,6 +249,7 @@ export function UserMenu() {
             <MenuItem icon={ListChecks} label="Tasks" onClick={() => go("/tasks")} />
             <MenuItem icon={FileText} label="Documents" onClick={() => go("/docs")} />
             <MenuItem icon={FolderGit2} label="Projects" onClick={() => go("/projects")} />
+            <MenuItem icon={SquareTerminal} label="Sessions" onClick={() => go("/sessions")} />
             <MenuItem icon={CalendarClock} label="Workflows" onClick={() => go("/routines")} />
             <MenuItem icon={Waypoints} label="Line" onClick={() => go("/line")} />
           </div>

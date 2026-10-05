@@ -8,32 +8,23 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, Lock, Globe } from "lucide-react";
-import type { BatchStats, BatchVerdict, BatchesResponse, EpochResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
+import { flipCounts, type BatchStats, type BatchVerdict, type BatchesResponse, type EpochResponse, type SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useContainerWidth } from "../ActivityHeatmap";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
-import { Seismograph, surfaceColumns, type SurfaceAxis, type SurfaceColumn } from "./Seismograph";
+import { Seismograph } from "./Seismograph";
 import { CostTrack } from "./CostTrack";
 import { FreezeLedger } from "./FreezeLedger";
 import { ComparePanel } from "./ComparePanel";
 import { EpochDiffSheet } from "./EpochDiffSheet";
-import { EvalsLink, SeparationMark, VerdictGlyph, baselineWords, batchLabel, newestBaseline, score2, separationTitle, shortModel, usd, verdictOfSet } from "./parts";
+import { EvalsLink, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
 import "./surface.css";
-
-export type SurfaceCadence = "all" | "nightly" | "named";
-
-/** What the page asks the api for (cadence, model, dry, bisect) and what it hides itself (dirty). */
-export interface SurfaceFilters {
-  cadence: SurfaceCadence;
-  model: string | null;
-  dry: boolean;
-  bisect: boolean;
-  dirty: boolean;
-}
-
-export const DEFAULT_SURFACE_FILTERS: SurfaceFilters = { cadence: "all", model: null, dry: false, bisect: false, dirty: true };
+import { score2, shortModel, usd, batchLabel } from "./format";
+import { baselineWords, newestBaseline, noiseFlipWords, noiseFlipsShort, separationTitle, verdictOfSet } from "./verdictModel";
+import { surfaceColumns, type SurfaceAxis } from "./seismographModel";
+import { type SurfaceCadence, type SurfaceFilters, orderedPair, nextPins } from "./surfaceModel";
 
 export interface Loaded<T> {
   res: T | null;
@@ -63,20 +54,6 @@ export interface SurfaceViewProps {
   refreshing?: boolean;
 }
 
-/** The order of two pinned batches: the earlier is the baseline. */
-export function orderedPair(cols: Map<string, SurfaceColumn>, x: string, y: string): [string, string] {
-  const ax = cols.get(x)?.at ?? 0;
-  const ay = cols.get(y)?.at ?? 0;
-  return ax <= ay ? [x, y] : [y, x];
-}
-
-/** Clicking pins one batch; shift-clicking pins a second. Clicking the only pin again unpins it. */
-export function nextPins(pinned: string | null, compare: string | null, batch: string, second: boolean): [string | null, string | null] {
-  if (!second || !pinned) return pinned === batch && !compare ? [null, null] : [batch, null];
-  if (batch === pinned) return [pinned, null];
-  return [pinned, batch];
-}
-
 /**
  * What the wall said about this surface, said again where its link lands:
  * the latest batch's verdict, what it was weighed against, and one click to
@@ -85,8 +62,7 @@ export function nextPins(pinned: string | null, compare: string | null, batch: s
 function LatestVerdict({ v, stats, pinned, compare, onPins }: { v: BatchVerdict; stats: readonly BatchStats[]; pinned: string | null; compare: string | null; onPins: (pinned: string | null, compare: string | null) => void }) {
   const words = baselineWords(v.baseline);
   const base = newestBaseline(v, stats);
-  const broke = v.flips.filter((f) => f.direction === "broke").length;
-  const fixed = v.flips.length - broke;
+  const { broke, fixed, noise } = flipCounts(v.flips);
   const shown = (pinned === v.batch && compare === base) || (pinned === base && compare === v.batch);
   return (
     <div className="ev-sf-verdictline" data-ev-latest-verdict={v.separation.kind}>
@@ -102,8 +78,13 @@ function LatestVerdict({ v, stats, pinned, compare, onPins }: { v: BatchVerdict;
             {fixed > 0 && <span className="ev-pass">{fixed} fixed</span>}
           </span>
         )}
+        {noise.length > 0 && (
+          <span className="ev-sf-nowrap ev-quiet" title={noise.map(noiseFlipWords).join("\n")} data-ev-noise-flips={noise.length}>
+            {noiseFlipsShort(noise)}
+          </span>
+        )}
         {base && !shown && (
-          <button type="button" className="ev-sf-btn" onClick={() => onPins(v.batch, base)} data-ev-compare-baseline title="Pin the latest batch and the newest batch of its baseline">
+          <button type="button" className="ev-btn" onClick={() => onPins(v.batch, base)} data-ev-compare-baseline title="Pin the latest batch and the newest batch of its baseline">
             Compare with its baseline
           </button>
         )}
@@ -226,7 +207,7 @@ export function SurfaceView(props: SurfaceViewProps) {
             <ChevronRight className="w-3 h-3" />
             <span className="ev-mono">{surface.id}</span>
           </nav>
-          <h1 className="ev-sf-title">
+          <h1 className="ev-page-title">
             <VerdictGlyph state={latest ? verdictOfSet(latest.passed, latest.reps) : "unscored"} size={14} />
             {surface.title}
           </h1>
@@ -341,7 +322,7 @@ export function SurfaceView(props: SurfaceViewProps) {
                   <span className="ev-sf-legend-median" /> median
                 </span>
                 {zoom ? (
-                  <button type="button" className="ev-sf-btn" onClick={() => setZoom(null)} data-ev-unzoom>
+                  <button type="button" className="ev-btn" onClick={() => setZoom(null)} data-ev-unzoom>
                     {zoomLabel}, show all
                   </button>
                 ) : (

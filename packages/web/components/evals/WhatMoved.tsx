@@ -5,40 +5,10 @@
 
 import type { MovedEvent } from "@codecast/shared/contracts/evalsApi";
 import { formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
-import { evalsHref } from "./evalsPaths";
-import { EvalsLink, plural, shortModel, shortRuler } from "./parts";
+import { EvalsLink } from "./parts";
+import { movedLine } from "./wallModel";
 
 const MAX_EVENTS = 12;
-
-
-const OUTCOME_WORDS: Record<string, string> = {
-  culprit: "named a culprit commit",
-  range: "narrowed to a range",
-  drift: "found drift, not source",
-  attribution: "answered from the records",
-  unreplayable: "found uncommitted edits it cannot replay",
-};
-
-/** Where an event's line goes, and what it says. */
-export function movedLine(e: MovedEvent): { href: string; text: string } {
-  const s = e.surface ?? "";
-  switch (e.kind) {
-    case "epoch":
-      return { href: evalsHref.surface(s, { batch: e.batch }), text: `${s} began prompt epoch e${e.epoch}, ${plural(e.changedFreezes, "freeze")} rendered anew` };
-    case "footing":
-      return e.change === "model"
-        ? { href: evalsHref.surface(s, { batch: e.batch }), text: `${s} moved model, ${shortModel(e.from)} to ${shortModel(e.to)}` }
-        : { href: evalsHref.surface(s, { batch: e.batch }), text: `${s} judge ruler moved, ${shortRuler(e.from)} to ${shortRuler(e.to)}` };
-    case "flips": {
-      const parts = [e.broke ? `${plural(e.broke, "freeze")} broke` : null, e.fixed ? `${e.fixed} fixed` : null].filter(Boolean);
-      return { href: evalsHref.surface(s, { batch: e.batch }), text: `${s}: ${parts.join(", ") || "freezes flipped"}` };
-    }
-    case "bisect":
-      return { href: evalsHref.bisect(e.id), text: `Bisect on ${s} ${e.outcome ? OUTCOME_WORDS[e.outcome] ?? "finished" : "stopped without an answer"}` };
-    case "sim-failure":
-      return { href: e.run ? evalsHref.simRun(e.session, e.run) : evalsHref.sim(), text: `Multiplayer sim: ${e.scenario} broke ${e.invariant || "an invariant"}` };
-  }
-}
 
 /** The event's mark, drawn in the fixed colour meanings: magenta broke, cyan fixed, violet the judge. */
 function MovedMark({ e }: { e: MovedEvent }) {

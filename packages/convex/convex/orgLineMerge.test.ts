@@ -107,10 +107,23 @@ describe("recordMergeCore", () => {
     expect(mergeAllowance(role(), NOW + 2)).toMatchObject({ allowed: false, used: 2 });
   });
 
-  test("a run no role started has no authority to merge under", async () => {
+  test("a run no role started has no authority to merge under until a person answers Ship", async () => {
     const { ctx, tables } = world();
     tables.workflow_runs[0].spawner_conversation_id = undefined;
     tables.conversations[1].org_role_id = undefined;
-    await expect(recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "a", branch: "b", into: "main" })).rejects.toThrow("not started by a role's line");
+    await expect(recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "a", branch: "b", into: "main" })).rejects.toThrow("nothing authorizes the merge");
+
+    // A role answering Ship is not a person's authorization.
+    tables.session_decisions = [{ _id: "sd_1", status: "answered", answer_index: 0, options: [{ label: "Ship" }, { label: "Revise" }, { label: "Drop" }], answered_by: { kind: "role", id: ROLE } }];
+    tables.workflow_runs[0].gate_decision_id = "sd_1";
+    await expect(recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "a", branch: "b", into: "main" })).rejects.toThrow("nothing authorizes the merge");
+
+    // A person's Ship authorizes it, records it on the run and the task, and counts against no role.
+    tables.session_decisions[0].answered_by = { kind: "user", id: HOST };
+    const out = await recordMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", sha: "abc123def456", branch: "codecast/line-ct-7", into: "main" });
+    expect(out).toMatchObject({ used: 0, limit: null, over: false });
+    expect(tables.workflow_runs[0].merge).toMatchObject({ sha: "abc123def456", into: "main" });
+    expect(tables.task_comments.at(-1).text).toBe("merged codecast/line-ct-7 into main at abc123def4, shipped at the card");
+    expect(tables.org_roles[0].counters?.merges ?? 0).toBe(0);
   });
 });

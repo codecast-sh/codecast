@@ -12,6 +12,7 @@ import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
 import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./sessionCommands";
 import { deadRecordingPress } from "./calls/recordingPress";
+import { storableActionArgs } from "./tabSafePath";
 
 /** The args of one `dispatch:dispatch` mutation call. */
 export type DispatchCallArgs = {
@@ -41,7 +42,9 @@ export function makeDispatchBinding(
   call: (args: DispatchCallArgs) => Promise<any>,
   state: DispatchAckState = newDispatchAckState(),
 ): DispatchFn {
-  return (action, args, patches, result) => {
+  return (action, raw, patches, result) => {
+    // A tab address leaves the browser in its storable form, as the outbox row keeps it (lib/tabSafePath).
+    const args = storableActionArgs(action, raw);
     // A Record or Stop press that is no longer a moment never leaves the
     // browser: refused here as final, so the outbox drops it instead of
     // delivering it into a room nobody is still asking to film.

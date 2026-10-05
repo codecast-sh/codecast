@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import type { Epoch, FootingMarker, PromptFilePair, RunRow } from '@codecast/shared/contracts/evalsApi';
 
-import { batchSet, batchStarts, BISECT_CADENCE, defaultRuler, footingOf, type RulerOf, type VerdictRun } from '../commands/verdict';
+import { askedSet, batchStarts, BISECT_CADENCE, defaultRuler, footingOf, type RulerOf, type VerdictRun } from '../commands/verdict';
 import { homePaths } from '../paths';
 
 // Prompt epochs: the stretches of a surface's history over which every
@@ -232,7 +232,7 @@ export function footingMarkers<R extends VerdictRun & EpochRow>(rows: R[], ruler
   const out: FootingMarker[] = [];
   let prev: { model: string | null; ruler: string | null } | null = null;
   for (const { batch, at } of timeline(rows)) {
-    const graded = batchSet(rows, batch).filter((r) => r.status !== 'crash' && r.status !== 'dry');
+    const graded = askedSet(rows, batch);
     if (!graded.length) continue;
     const f = footingOf(graded[0]!, ruler);
     if (prev && prev.model !== f.model) out.push({ batch, batchAt: at, kind: 'model', from: prev.model, to: f.model });

@@ -24,7 +24,7 @@ import type { TouchLedger } from "./ledger.js";
 
 import {
   AGENT_CONTEXT_ROOTS, CONTEXT_SIZE_CAP, INSTRUCTION_FILE_RE, LOCAL_BIN_ROOT, LOCAL_BIN_SCRIPT_CAP, SHELL_ENV_FILES, SKILL_STATE_FILES, commandCompatibilityWarnings, configPatterns,
-  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern, portableHooks,
+  activeContextReferences, isPortableScript, contextReferences, isAccessError, isAccountDataPath, isContextEntry, isActiveConfig, isDefaultExcluded, isDeniedPath, isNativeBinary, isReferencedDirectory, matchesContextPattern, portableHooks,
 } from "./discovery.js";
 
 export { CONTEXT_DENYLIST as MIRROR_DENYLIST, DEFAULT_EXCLUDES, globToRegExp, isDeniedPath, isDefaultExcluded } from "./discovery.js";
@@ -149,6 +149,8 @@ export async function collectMirrorSources(opts: Omit<CollectOptions, "hostHome"
     if (isDefaultExcluded(rel) || excluded(rel, true)) { skip(rel, "excluded"); return null; }
     const abs = path.join(home, rel);
     ledger?.note(abs);
+    const entry = await fs.promises.lstat(abs).catch((e: NodeJS.ErrnoException) => { if (e.code !== "ENOENT") throw e; return null; });
+    if (entry && !isContextEntry(entry)) { skip(rel, "not a file, directory or link"); return null; }
     let real: string;
     try { real = await fs.promises.realpath(abs); } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;

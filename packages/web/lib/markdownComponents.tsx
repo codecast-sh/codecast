@@ -1,40 +1,15 @@
 import type { Components } from "react-markdown";
-import { CodeBlock } from "../components/CodeBlock";
-import { MermaidDiagram } from "../components/MermaidDiagram";
-import { tryRenderCanvas } from "../components/HtmlSnippet";
-import { tryRenderCastDiff } from "../components/InlineDiff";
+import { renderPre } from "./fenceRenderers";
 import { EntityAwareCode, EntityAwareLink } from "../components/EntityIdPill";
 import { MarkdownImg, ImageRowParagraph } from "../components/tools/MarkdownImages";
 
-function extractTextFromHast(node: any): string {
-  if (!node) return '';
-  if (node.type === 'text') return node.value || '';
-  if (node.children) return node.children.map(extractTextFromHast).join('');
-  return '';
-}
 
 // Exported for surfaces that reuse this component set with a few overrides
 // (the vault reading view swaps `a`/`img` for wiki-link-aware variants).
 export const MD_COMPONENTS: Components = {
           code: EntityAwareCode,
           a: EntityAwareLink,
-          pre: ({ node, children, ...props }) => {
-            const codeElement = node?.children?.[0];
-            if (codeElement && codeElement.type === 'element' && codeElement.tagName === 'code') {
-              const className = codeElement.properties?.className as string[] | undefined;
-              const language = className?.find((cls) => cls.startsWith('language-'))?.replace('language-', '');
-              const code = extractTextFromHast(codeElement);
-              if (code) {
-                if (language === 'mermaid') return <MermaidDiagram code={code} />;
-                const canvas = tryRenderCanvas(language, code);
-                if (canvas) return canvas;
-                const castDiff = tryRenderCastDiff(language, code);
-                if (castDiff) return castDiff;
-                return <CodeBlock code={code} language={language} />;
-              }
-            }
-            return <pre {...props}>{children}</pre>;
-          },
+          pre: ({ node, children, ...props }) => renderPre(node, children, props, { mermaid: true }),
           h1: ({ children }) => (
             <h1 className="text-lg font-bold mt-0 mb-3 text-sol-text">
               {children}

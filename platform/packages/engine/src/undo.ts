@@ -28,6 +28,7 @@ import {
   newUndoEntryId,
   objectsOf,
   onUndoRekey,
+  onUndoReset,
   undoneAfter,
   recordUndoEntry,
   rekeyCells,
@@ -273,9 +274,10 @@ export function captureCells(
   prev: Record<string, any>,
   next: Record<string, any>,
   shape: CaptureShape,
-  spec?: Pick<UndoSpec, "ignoreFields">,
+  spec?: Pick<UndoSpec, "ignoreFields" | "captureKeys">,
 ): CellChange[] {
   const ignoreFields = new Set(spec?.ignoreFields ?? []);
+  const captureKeys = new Set(spec?.captureKeys ?? []);
   const kindOf = (key: string): CellShapeKind => {
     const declared = shape.declaredKind(key);
     if (declared) return declared;
@@ -296,7 +298,7 @@ export function captureCells(
     {
       kindOf,
       rowKeyOf: shape.rowKeyOf,
-      include: (key) => !shape.ignoreKeys?.has(key),
+      include: (key) => captureKeys.has(key) || !shape.ignoreKeys?.has(key),
     },
     prev,
     next,
@@ -509,6 +511,12 @@ export function guardUndo(
     const verdict = verdictForUndo(cell, state, opts);
     if (verdict === "apply") apply.push(cell);
     else if (verdict === "conflict" && cell.kind === "mirror") mirrorConflicts.push(cell);
+  }
+  // A restored mirror row is restamped too, as a protected row is: a stamp
+  // that orders writes (last writer wins) must call the restore the newest.
+  const mirrorRows = new Set(apply.filter((c) => c.kind !== "protected").map(rowKeyOfCell));
+  for (const cell of changes) {
+    if (cell.kind !== "protected" && isStamp(cell) && !skippedIds.has(cell.id) && mirrorRows.has(rowKeyOfCell(cell))) apply.push(cell);
   }
   return { apply, skippedRows, held, mirrorConflicts };
 }
@@ -751,6 +759,7 @@ export type UndoControllerDeps = {
     opts?: {
       onCommitted?: (commit: { outboxId: string }) => void;
       after?: readonly string[];
+      reverses?: readonly string[];
       vet?: (commit: { state: any; nextState: any; patches: Patch[] }) => boolean;
     },
   ) => any;
@@ -770,13 +779,43 @@ type Internal = {
    */
   left: CellChange[];
   frame: Pick<UndoCtx, "before" | "after" | "result">;
+  /**
+   * Stub rekeys the frame has not followed yet. Its states are whole store
+   * snapshots, so they are rewritten only when a spec is asked again.
+   */
+  frameRekeys?: ReadonlyArray<readonly [string, string]>;
 };
+
+// The capture's frame with every stub rekey since applied, the way the
+// entry's cells and args already follow them.
+const frameOf = (internal: Internal): Internal["frame"] => {
+  let frame = internal.frame;
+  for (const [oldId, newId] of internal.frameRekeys ?? []) {
+    frame = {
+      before: rekeyIds(frame.before, oldId, newId),
+      after: rekeyIds(frame.after, oldId, newId),
+      result: rekeyIds(frame.result, oldId, newId),
+    };
+  }
+  if (internal.frameRekeys?.length) {
+    internal.frame = frame;
+    internal.frameRekeys = undefined;
+  }
+  return frame;
+};
+
+/**
+ * Outbox ids a send must follow, and the subset it wholly writes back. It may
+ * overtake one of `reverses` still on its first attempt (that send is then
+ * not retried); every other id in `after` it waits for.
+ */
+export type SendOrder = { after: readonly string[]; reverses: readonly string[] };
 
 export type UndoController = {
   /** Whether a call of `key` should be captured right now. */
   wants: (key: string, flags: Flags) => boolean;
-  /** Outbox ids a call made right now must not overtake: a redo's re-invoke follows its undo's sends. */
-  orderAfter: () => readonly string[] | undefined;
+  /** The sends a call made right now must not overtake: a redo's re-invoke follows its undo's sends. */
+  orderAfter: () => SendOrder | undefined;
   /** The judge of a call of `key` made right now: a redo's re-invoke, once. */
   vetFor: (key: string) => ((commit: { state: any; nextState: any; patches: Patch[] }) => boolean) | undefined;
   capture: (
@@ -810,14 +849,33 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       lastSend.delete(`#${oldId}`);
       lastSend.set(`#${newId}`, new Map([...sends, ...(lastSend.get(`#${newId}`) ?? [])]));
     }
+    // The cells a send wrote, named under the id it was sent with.
+    const stub = `\u0000${oldId}\u0000`;
+    for (const [id, wrote] of sentCells) {
+      if (![...wrote].some((k) => k.includes(stub))) continue;
+      sentCells.set(id, new Set([...wrote].map((k) => k.split(stub).join(`\u0000${newId}\u0000`))));
+    }
     const internal = internals.get(entry);
     if (!internal) return false;
     const inverse = internal.inverse?.map((inv) => ({ ...inv, args: rekeyIds(inv.args, oldId, newId) })) ?? null;
     const applied = rekeyCells(internal.applied, oldId, newId);
     const left = rekeyCells(internal.left, oldId, newId);
     const touched = applied !== internal.applied || left !== internal.left || inverse?.some((inv, i) => inv.args !== internal.inverse![i]!.args) === true;
-    if (touched) internals.set(entry, { ...internal, inverse, applied, left });
+    // A spec reads its frame by the ids its cells and args name, so the frame
+    // follows only a rekey of one of those (the stack has moved them already).
+    const names = (v: unknown) => rekeyIds(v, newId, `${newId}\u0000`) !== v;
+    const frameRekeys =
+      touched || names(entry.changes) || names(entry.args)
+        ? [...(internal.frameRekeys ?? []), [oldId, newId] as const]
+        : internal.frameRekeys;
+    if (touched || frameRekeys !== internal.frameRekeys) internals.set(entry, { ...internal, inverse, applied, left, frameRekeys });
     return touched;
+  });
+
+  // A reset history (an account boundary) takes its send order with it.
+  onUndoReset(() => {
+    lastSend.clear();
+    sentCells.clear();
   });
 
   const isStamp = (c: CellChange) => c.field !== undefined && !!config.stampFields?.has(c.field);
@@ -843,7 +901,21 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   const SEND_ROWS_LIMIT = 1000;
   const scopeOf = (c: { store: string; id: string }) => (c.id !== "" ? `#${c.id}` : `@${c.store}`);
   const WHOLE = "\u0001";
-  const noteSends = (cells: readonly CellChange[], outboxIds: readonly string[]) => {
+  // The cells each send wrote (the whole step's, for a pass): a later step
+  // may overtake a send only when it writes every one of them back. A send
+  // that also carried something its cells leave out (a field the spec's
+  // ignoreFields keeps out of capture) holds UNCOVERED, which no step writes
+  // back, so every later step waits for it.
+  const sentCells = new Map<string, ReadonlySet<string>>();
+  const UNCOVERED = "\u0002";
+  const noteSends = (cells: readonly CellChange[], outboxIds: readonly string[], carriedMore = false) => {
+    const wrote = new Set(cells.filter((c) => !isStamp(c)).map(cellKey));
+    if (carriedMore) wrote.add(UNCOVERED);
+    for (const id of outboxIds) {
+      sentCells.delete(id);
+      sentCells.set(id, wrote);
+    }
+    while (sentCells.size > SEND_ROWS_LIMIT * 4) sentCells.delete(sentCells.keys().next().value!);
     for (const c of cells) {
       if (isStamp(c)) continue;
       const scope = scopeOf(c);
@@ -854,7 +926,11 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     }
     while (lastSend.size > SEND_ROWS_LIMIT) lastSend.delete(lastSend.keys().next().value!);
   };
-  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): string[] => {
+  // What a step writing `cells` must follow (`after`), and the subset it
+  // wholly writes back (`reverses`): only those may it overtake, since a
+  // dropped failure of one leaves nothing on the server the step does not
+  // overwrite. The rest it waits for.
+  const sendsBefore = (cells: readonly CellChange[], own: readonly string[]): SendOrder => {
     const out = new Set(own);
     for (const c of cells) {
       if (isStamp(c)) continue;
@@ -863,7 +939,16 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       const named = c.field === undefined ? [...fields.values()] : [fields.get(c.field), fields.get(WHOLE)];
       for (const ids of named) for (const id of ids ?? []) out.add(id);
     }
-    return [...out];
+    const writes = new Set(cells.filter((c) => !isStamp(c)).map(cellKey));
+    const wholeRows = new Set(cells.filter((c) => !isStamp(c) && c.field === undefined).map(rowKeyOfCell));
+    const covers = (key: string) =>
+      key !== UNCOVERED && (writes.has(key) || wholeRows.has(key.slice(0, key.lastIndexOf("\u0000"))));
+    const after = [...out];
+    const reverses = after.filter((id) => {
+      const wrote = sentCells.get(id);
+      return !!wrote && [...wrote].every(covers);
+    });
+    return { after, reverses };
   };
 
   // A redo re-invokes its action, which may write a value the first run did
@@ -905,7 +990,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   });
 
   // The sends a redo's re-invoke follows, while it runs.
-  let redoAfter: readonly string[] | undefined;
+  let redoAfter: SendOrder | undefined;
   // The judge of the redo's re-invoke, taken by its one call.
   let redoVet: { action: string; judge: (commit: { state: any; nextState: any; patches: Patch[] }) => boolean } | undefined;
 
@@ -914,7 +999,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     pass: ReplayPass,
     first: boolean,
     skippedRows: Array<{ store: string; id: string }>,
-    after: readonly string[],
+    order: SendOrder,
     writes: readonly CellChange[],
   ) => {
     const target = deps.rawCreator(pass.inv.action);
@@ -933,8 +1018,9 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
           // The step's sends so far: the last pass notes all of them.
           noteSends(writes, entry.replayOutboxIds);
         },
-        // A reversal never overtakes a write it reverses.
-        after,
+        // A reversal never overtakes a write it does not wholly reverse.
+        after: order.after,
+        reverses: order.reverses,
       }),
     );
     swallow(result);
@@ -948,7 +1034,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     const cleared = spellClears(guarded.apply, config.writers);
     const internal = internals.get(entry);
     const recorded = (): UndoCtx | undefined =>
-      internal && { ...internal.frame, action: entry.action!, args: entry.args ?? [], changes: entry.changes ?? [] };
+      internal && { ...frameOf(internal), action: entry.action!, args: entry.args ?? [], changes: entry.changes ?? [] };
     const apply = spec?.spell ? spec.spell(cleared, recorded()) : cleared;
     entry.skipped = skippedRows;
     // No row applies when every protected row conflicted, even if a mirror
@@ -992,7 +1078,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       const kept = new Set(apply.map(cellKey));
       internal.left = cleared.filter((c) => !isStamp(c) && !kept.has(cellKey(c)));
     }
-    config.afterReplay?.(entry, "undo", apply);
+    config.afterReplay?.(entry, "undo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: skippedRows.length };
   };
 
@@ -1012,7 +1098,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     entry.replayOutboxIds = [];
     entry.replayDir = "redo";
     passes.forEach((pass) => runPass(entry, pass, false, [], after, apply));
-    config.afterReplay?.(entry, "redo", apply);
+    config.afterReplay?.(entry, "redo", apply, "replay");
     return { ok: true, applied: apply.filter((c) => !isStamp(c)).length, skipped: entry.skipped?.length ?? 0 };
   };
 
@@ -1091,7 +1177,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
       entry.replayDir = replayDir;
       return redoPartial(entry, get(), applied);
     }
-    config.afterReplay?.(entry, "redo", entry.changes ?? []);
+    config.afterReplay?.(entry, "redo", entry.changes ?? [], "reinvoke");
     return { ok: true, applied: (entry.changes ?? []).filter((c) => !isStamp(c)).length, skipped: 0 };
   };
 
@@ -1111,7 +1197,12 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
     capture(key, args, commit) {
       const spec = config.specs[key];
       if (!spec) return;
-      const changes = captureCells(commit.patches, commit.state, commit.finalState, shape, spec);
+      // What the send carries, then what the entry keeps: the spec's ignored
+      // fields go out with the send but are never undone.
+      const sent = captureCells(commit.patches, commit.state, commit.finalState, shape, { captureKeys: spec.captureKeys });
+      const ignored = new Set(spec.ignoreFields ?? []);
+      const changes = ignored.size ? sent.filter((c) => c.field === undefined || !ignored.has(c.field)) : sent;
+      const carriedMore = changes.length !== sent.length;
       const meaningful = changes.some((c) => !isStamp(c));
       const ctx: UndoCtx = {
         action: key,
@@ -1133,7 +1224,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         refresh.changes = changes;
         refresh.planted = planted;
         refresh.outboxIds = [commit.outboxId];
-        noteSends(changes, [commit.outboxId]);
+        noteSends(changes, [commit.outboxId], carriedMore);
         refresh.objects = objectsOf(changes);
         internals.set(refresh, internal);
         return;
@@ -1175,7 +1266,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         redo: () => redoGeneric(entry),
       };
       internals.set(entry, internalOf(spec, ctx));
-      noteSends(changes, [commit.outboxId]);
+      noteSends(changes, [commit.outboxId], carriedMore);
       recordUndoEntry(entry, { toast: spec.toast, coalesce: spec.coalesce });
     },
   };

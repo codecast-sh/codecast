@@ -12,6 +12,7 @@ import {
   humanizeConvexError,
   type CallGuestView,
   type GuestLinkRefusal,
+  noticeWidened,
   type GuestNotice,
 } from "@codecast/shared/contracts";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
@@ -29,6 +30,7 @@ import { GuestInCall } from "./GuestInCall";
 import { GuestOutcome, linkAsOf, type Outcome } from "./GuestOutcome";
 import { MeetShell } from "./MeetChrome";
 import { meetingTitle } from "../../../lib/calls/roomGuests";
+import { firstName } from "../../../components/calls/speakers";
 import {
   clearCreds,
   readCreds,
@@ -105,8 +107,17 @@ type Describe =
       recording: boolean;
       /** The recording's video will be on the call's public link. */
       video_public?: boolean;
+      /** The transcript is on the call's public link as it is written. */
+      words_public?: boolean;
     }
-  | { ok: false; reason: GuestLinkRefusal };
+  | {
+      ok: false;
+      reason: GuestLinkRefusal;
+      /** A link that closed (expired, turned off, its sender gone) still
+       *  names the meeting and who sent it, so the refusal says whom to ask. */
+      title?: string | null;
+      inviter?: { name: string | null; image?: string | null };
+    };
 
 type GuestState = {
   view: CallGuestView;
@@ -125,6 +136,7 @@ type GuestState = {
     transcribed: boolean;
     recording: boolean;
     video_public?: boolean;
+    words_public?: boolean;
   };
 };
 
@@ -197,6 +209,7 @@ export default function GuestMeetPage() {
   const heartbeat = useMutation(api.callGuests.guestHeartbeat);
   const leaveCall = useMutation(api.callGuests.leaveCall);
   const stopRecording = useMutation(api.callRecordings.guestStopRecording);
+  const acceptNotice = useMutation(api.callGuests.acceptGuestNotice);
   const mintToken = useAction(api.callGuests.mintGuestToken);
 
   const [name, setName] = useState(readName);
@@ -300,11 +313,11 @@ export default function GuestMeetPage() {
   const transcribed = !!info?.transcribed;
   const recording = !!info?.recording;
   const videoPublic = recording && !!info?.video_public;
-  const notice: GuestNotice = { recording, transcribed, video_public: videoPublic };
+  const wordsPublic = transcribed && !!info?.words_public;
+  const notice: GuestNotice = { recording, transcribed, video_public: videoPublic, words_public: wordsPublic };
   // The room keeps more than the guest agreed to when they asked: a
-  // recording, a transcript, or a recording whose video goes to a public link.
-  const widened =
-    !!accepted && ((recording && !accepted.recording) || (transcribed && !accepted.transcribed) || (videoPublic && !accepted.video_public));
+  // recording, a transcript, or either of them going to a public link.
+  const widened = noticeWidened(accepted, notice);
 
   // The lease. See the header: worker-timed, at once when the tab comes back
   // to the front, and for an admitted guest out of the media only while
@@ -455,7 +468,9 @@ export default function GuestMeetPage() {
       // since this one loaded, and one person is one row at the door.
       const known = readCreds(token) ?? creds;
       if (known && known.guest_id !== creds?.guest_id) setCreds(known);
-      const res = await requestJoin({ token, name, accept_notice: true, ...(known ?? {}) });
+      // The notice on the screen is what the server keeps as their consent,
+      // and it refuses one that says less than the room keeps by now.
+      const res = await requestJoin({ token, name, accept_notice: notice, ...(known ?? {}) });
       writeName(name);
       setAccepted(notice);
       setKnockedView(res.status);
@@ -483,7 +498,10 @@ export default function GuestMeetPage() {
     setBusy(true);
     setError(null);
     try {
-      await requestJoin({ token, name: state.name, accept_notice: true, ...creds });
+      // Walking back into a place still held keeps the consent the row has.
+      // Should the place have gone meanwhile this is a knock, made under the
+      // notice agreed to this visit (or the one the waiting lobby shows next).
+      await requestJoin({ token, name: state.name, accept_notice: accepted ?? notice, ...creds });
     } catch (err) {
       setError(humanizeConvexError(err, "Could not rejoin the call"));
       // A try that failed (the network was not back yet) is not the one
@@ -560,7 +578,10 @@ export default function GuestMeetPage() {
     const next = new GuestCall(choice, { mic: !!tracks.audio, camera: !!tracks.video }, tracks);
     setCall(next);
     try {
-      const minted = await mintToken(creds);
+      // A press carries the notice it was made under, which the server keeps
+      // as their consent; the page walking them in carries none and is held
+      // to what they agreed to (a room that keeps more is refused).
+      const minted = await mintToken({ ...creds, ...(pressed ? { accept_notice: notice } : {}) });
       await next.connect(minted);
     } catch (err) {
       await next.leave();
@@ -637,12 +658,22 @@ export default function GuestMeetPage() {
       setCall(next);
       await next.reconnectWith(minted);
       setReopenTries(0);
-    } catch {
+    } catch (err) {
       await next.leave();
+      // The room keeps more now than they agreed to (a recording started, a
+      // public link turned on while they were inside): a new connection is
+      // theirs to choose, so the page goes back to the lobby, which shows the
+      // wider notice and its Join.
+      if (guestJoinRefusalOf(err) === "notice_changed" && !moved()) {
+        await old.leave();
+        setCall((cur) => (cur === old || cur === next ? null : cur));
+        return;
+      }
       setCall((cur) => (cur === next ? old : cur));
       setReopenTries((n) => n + 1);
-      // Whatever the server refused (removed, ended, no longer admitted), its
-      // view moves the page to that ending, which says it better than a line.
+      // Whatever else the server refused (removed, ended, no longer
+      // admitted), its view moves the page to that ending, which says it
+      // better than a line.
     } finally {
       setReopening(false);
     }
@@ -712,6 +743,7 @@ export default function GuestMeetPage() {
         transcribed={transcribed}
         recording={recording}
         videoPublic={videoPublic}
+        wordsPublic={wordsPublic}
         accepted={accepted}
         reconnecting={reopening}
         ended={ended}
@@ -721,6 +753,16 @@ export default function GuestMeetPage() {
         onLeave={() => void leave()}
         onReconnect={() => void reconnect()}
         onStopRecording={() => (creds ? stopRecording({ guest_id: creds.guest_id, secret: creds.secret }) : Promise.reject(new Error("You are not in the call")))}
+        // What the server kept becomes this visit's consent too, so a page
+        // that lapsed and is let back in walks in again on its own. A refusal
+        // (the room kept more by the time it landed) leaves the old notice,
+        // and the new line is already on the screen to be read.
+        onAgree={(seen) => {
+          if (!creds) return;
+          void acceptNotice({ ...creds, notice: seen })
+            .then((agreed) => agreed && setAccepted(agreed))
+            .catch(() => {});
+        }}
       />
     );
   }
@@ -733,7 +775,7 @@ export default function GuestMeetPage() {
     );
   }
   if (link === undefined || (creds && state === undefined && !knockedView)) {
-    return <AppLoader className="h-dvh min-h-0 bg-[#002b36]" />;
+    return <AppLoader className="h-dvh min-h-0 bg-sol-base03" />;
   }
 
   // Where the guest stands, when it is anywhere but the lobby. Asking again
@@ -745,10 +787,19 @@ export default function GuestMeetPage() {
   };
   // A place the server let go without anybody deciding it walks back in.
   const onOutcome = state?.resumable ? () => void resume() : askAgain;
+  // Who a closed link is named by in its refusal: the sender's first name
+  // ("Ask Ashot for a new one") and the meeting, when the server said them.
+  const linkSender = !link.ok && link.inviter?.name ? firstName(link.inviter.name) : null;
+  const linkMeeting = !link.ok && (link.title || link.inviter?.name) ? meetingTitle(link.title ?? null, link.inviter ?? null) : null;
   let outcome: Outcome | null = null;
   if (leftByMe && view === "admitted") {
     outcome = { kind: "view", view: "left", leftReason: "self", retryAt: null, canAskAgain: link.ok, pending: leaving };
-  } else if (!link.ok && !atDoorOrIn) outcome = { kind: "refused", reason: link.reason };
+  } else if (!link.ok && !atDoorOrIn && !state?.resumable && view !== "closed") {
+    // A place still held is the room's, not the link's: a guest let in on a
+    // link that has since closed still walks back in (requestJoin). A guest
+    // who was at the door when it closed is told that, below ("closed").
+    outcome = { kind: "refused", reason: link.reason, inviter: linkSender };
+  }
   else if (state && view && !atDoorOrIn && !toLobby) {
     outcome = {
       kind: "view",
@@ -758,6 +809,8 @@ export default function GuestMeetPage() {
       canAskAgain: state.link_open && link.ok,
       resumable: state.resumable,
       reason: !link.ok ? link.reason : undefined,
+      meeting: linkMeeting,
+      inviter: linkSender,
     };
   }
   // Nothing else to say, and the lobby is what would show: a browser that
@@ -771,7 +824,7 @@ export default function GuestMeetPage() {
     );
   }
 
-  if (!preview) return <AppLoader className="h-dvh min-h-0 bg-[#002b36]" />;
+  if (!preview) return <AppLoader className="h-dvh min-h-0 bg-sol-base03" />;
   const mode: LobbyMode = view === "waiting" ? "waiting" : view === "admitted" ? "rejoin" : "ask";
   return (
     <MeetShell>
@@ -783,6 +836,8 @@ export default function GuestMeetPage() {
         live={!!info?.live}
         transcribed={transcribed}
         recording={recording}
+        videoPublic={videoPublic}
+        wordsPublic={wordsPublic}
         accepted={accepted}
         creatorTold={!!state?.creator_told}
         doorFull={doorFull}

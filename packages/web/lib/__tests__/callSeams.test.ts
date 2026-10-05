@@ -393,7 +393,9 @@ describe("hanging up frees the seat before the scribe's teardown", () => {
     // keeps our face for as long as our pipes take to close.
     expect(scribeStops).toBe(1);
     expect(named("leaveRoom")).toHaveLength(1);
-    expect(named("leaveRoom")[0].args).toEqual({ room_key: ROOM });
+    // End is a hang-up: the server stops a recording at once when the last
+    // teammate hangs up, rather than holding it for a reload.
+    expect(named("leaveRoom")[0].args).toEqual({ room_key: ROOM, hangup: true });
     // The call is over for the person while the flush still runs: the row
     // lets go on End, not seconds later when the pipes have closed.
     // MUTATION CHECK: move setCall({ phase: "idle" }) back below stopScribe
@@ -404,6 +406,16 @@ describe("hanging up frees the seat before the scribe's teardown", () => {
     scribeStopping.resolve();
     await leaving;
     expect(S().call.phase).toBe("idle");
+  });
+
+  test("the media server dropping the call frees the seat without a hang-up", async () => {
+    await callManager.joinCall(ROOM, { intent: "deliberate" });
+    mutations = [];
+    // Nobody pressed End: the server gives a recording the time a reload
+    // takes to come back, rather than stopping it as a hang-up would.
+    room().emit(RoomEvent.Disconnected);
+    await settle();
+    expect(named("leaveRoom").map((c) => c.args)).toEqual([{ room_key: ROOM }]);
   });
 });
 

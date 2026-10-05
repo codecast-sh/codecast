@@ -7,16 +7,17 @@
 // A card in the toast corner, never modal: ⌘Z keeps stepping while it is
 // open, and the "now" rule slides with the head. Rows hang from the same rail
 // as the org record (components/history/HistoryRail).
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Command } from "cmdk";
 import { Ban, CornerDownLeft, History, Network, Redo2, Undo2 } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { visitTimeAgo, type ResolvedVisit } from "../../lib/recentVisits";
 import { undoActLabel, undoLabelNamesTitle, undoSetAsideLine, undoWindowWords, type UndoTimelineModel, type UndoTimelineRow } from "../../lib/undoHistory";
-import type { UndoTimelineFlash, UndoTimelineMode } from "../../lib/undoTimelineOpen";
+import { pressLeavesCard, type UndoTimelineFlash, type UndoTimelineMode } from "../../lib/undoTimelineOpen";
 import { HISTORY_STRUCK, HistoryFold, HistoryRailDot, HistoryRailLine } from "../history/HistoryRail";
 import { RecentVisitGlyph } from "../RecentVisitRow";
 import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { claimKeys } from "../../shortcuts/keyOwnership";
 
 /** How many rows a peek shows around the head. */
 const PEEK_ABOVE = 3;
@@ -32,7 +33,7 @@ export type UndoTimelineViewProps = {
   onClose: () => void;
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
-  onKey?: (e: ReactKeyboardEvent) => boolean;
+  onKey?: (e: KeyboardEvent) => boolean;
   /** A ⌘Z stopped at this row (its undo widens access): select and mark it. */
   flash?: UndoTimelineFlash | null;
 };
@@ -42,6 +43,11 @@ const CHORD = "inline-flex items-center gap-[2px] align-middle";
 
 /** How long a flashed row stays marked. */
 const FLASH_MS = 1400;
+
+/** A control a press or a script could focus inside the card. */
+function heldControl(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest("button, a[href]");
+}
 
 export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
   const peek = mode === "peek";
@@ -99,19 +105,37 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
   }, [peek]);
 
   // Its keys (Esc included) live on the card, so an interactive card stays
-  // open only while it holds focus: a press or a focus anywhere else closes
-  // it, and the click lands where it was aimed.
+  // open only while it holds focus: a press anywhere else closes it, and the
+  // click lands where it was aimed. Focus that leaves is judged by whose input
+  // came last. After the card's own key or press, a step it took may move the
+  // page (an undo that brings an earlier session back, whose composer focuses
+  // itself on mount): that focus is the page's, not the person's, so it comes
+  // back to the card. After a key the card passed on (Tab, a chord it does not
+  // take), focus going elsewhere is the person leaving, and the card closes.
+  const lastInput = useRef<"card" | "elsewhere">("card");
   useEffect(() => {
     if (peek) return;
-    const outside = (e: Event) => {
-      const card = cardRef.current;
-      if (card && e.target && !card.contains(e.target as Node)) onClose();
+    const inside = (e: Event) => !!cardRef.current && !!e.target && cardRef.current.contains(e.target as Node);
+    const onPointer = (e: Event) => {
+      if (inside(e)) lastInput.current = "card";
+      else if (pressLeavesCard(e.target, cardRef.current)) onClose();
     };
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("focusin", outside, true);
+    const onFocus = (e: Event) => {
+      // A control inside the card that took focus (a script, or a browser
+      // that focuses on click) hands it back: the card's keys act on its
+      // selection, and a control that unmounts would drop focus to the body.
+      if (inside(e)) {
+        if (e.target !== rootRef.current && heldControl(e.target)) rootRef.current?.focus({ preventScroll: true });
+        return;
+      }
+      if (lastInput.current === "card") rootRef.current?.focus({ preventScroll: true });
+      else onClose();
+    };
+    document.addEventListener("pointerdown", onPointer, true);
+    document.addEventListener("focusin", onFocus, true);
     return () => {
-      document.removeEventListener("pointerdown", outside, true);
-      document.removeEventListener("focusin", outside, true);
+      document.removeEventListener("pointerdown", onPointer, true);
+      document.removeEventListener("focusin", onFocus, true);
     };
   }, [peek, onClose]);
 
@@ -141,39 +165,50 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
     return next;
   });
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (onKey?.(e)) return;
-    if (e.metaKey || e.ctrlKey || e.altKey) return;
-    const row = rows.find((r) => r.id === selected);
-    switch (e.key) {
-      case "Escape":
-        e.preventDefault();
-        onClose();
-        return;
-      case "Enter":
-        e.preventDefault();
-        act(row);
-        return;
-      case "ArrowRight":
-      case " ":
-        e.preventDefault();
-        if (row?.fold) toggleFold(row.id);
-        return;
-      case "o":
-      case "O":
-        e.preventDefault();
-        open(row);
-        return;
-      case "Home":
-        e.preventDefault();
-        if (rows[0]) setSelected(rows[0].id);
-        return;
-      case "End":
-        e.preventDefault();
-        if (rows.length) setSelected(rows[rows.length - 1]!.id);
-        return;
-    }
+  const move = (by: number) => {
+    const at = rows.findIndex((r) => r.id === selected);
+    const next = rows[Math.min(rows.length - 1, Math.max(0, at === -1 ? 0 : at + by))];
+    if (next) setSelected(next.id);
   };
+
+  // Every key the card handles, and every other plain key, is the card's
+  // alone while it holds focus: it claims them in the app's first key
+  // listener (claimKeys), so no shortcut, no page listener in any phase and
+  // no React handler behind the card ever sees one. Tab still moves focus
+  // (which closes the card: the row's own buttons are out of the tab order);
+  // chords the card does not take pass on. Focus stays on the card itself
+  // (its controls never keep it), so Enter and Space act on the selection.
+  const onKeyRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
+  const ownKey = (e: KeyboardEvent): boolean => {
+    if (onKey?.(e)) return true;
+    if (e.metaKey || e.ctrlKey || e.altKey) return false;
+    if (e.key === "Tab" || e.key === "Shift") return false;
+    const row = rows.find((r) => r.id === selected);
+    const handled = (fn: () => void) => { e.preventDefault(); fn(); return true; };
+    switch (e.key) {
+      case "Escape": return handled(onClose);
+      case "Enter": return handled(() => act(row));
+      case "ArrowDown": return handled(() => move(1));
+      case "ArrowUp": return handled(() => move(-1));
+      case "ArrowRight":
+      case " ": return handled(() => { if (row?.fold) toggleFold(row.id); });
+      case "o":
+      case "O": return handled(() => open(row));
+      case "Home": return handled(() => { if (rows[0]) setSelected(rows[0].id); });
+      case "End": return handled(() => { if (rows.length) setSelected(rows[rows.length - 1]!.id); });
+    }
+    return true;
+  };
+  onKeyRef.current = (e) => {
+    const mine = ownKey(e);
+    // A lone modifier says nothing about where the person is going.
+    if (!["Shift", "Meta", "Control", "Alt"].includes(e.key)) lastInput.current = mine ? "card" : "elsewhere";
+    return mine;
+  };
+  useEffect(() => {
+    if (peek) return;
+    return claimKeys((e) => !!cardRef.current?.contains(e.target as Node | null) && onKeyRef.current(e));
+  }, [peek]);
 
   return (
     <div
@@ -181,6 +216,9 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
       role="dialog"
       aria-label="Undo history"
       data-undo-timeline={mode}
+      // A press on a row's control acts through its click and leaves focus
+      // where it was: on the card, or (in a peek) on the page's own field.
+      onMouseDown={(e) => { if (heldControl(e.target)) e.preventDefault(); }}
       className={cn(
         "fixed z-[9990] right-4 bottom-4 w-[min(380px,calc(100vw-24px))] flex flex-col overflow-hidden",
         "rounded-xl border border-sol-border/60 bg-sol-bg/95 backdrop-blur-xl shadow-2xl shadow-black/40",
@@ -197,7 +235,6 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
         shouldFilter={false}
         label="Undo history"
         tabIndex={-1}
-        onKeyDown={onKeyDown}
         data-owns-keys=""
         className="flex flex-col min-h-0 outline-none"
       >
@@ -371,7 +408,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
           <span className="ml-auto flex-shrink-0 text-[10.5px] text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
         </div>
         <div className="flex items-center gap-2 min-h-[18px]">
-          {foldInline && <HistoryFold open={foldOpen} onClick={onFold} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
+          {foldInline && <HistoryFold open={foldOpen} onClick={onFold} tabIndex={-1} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
           {showTitle && (
             // Line 2 is where it happened, and the object is the first word of
             // that: its live title, a quiet link. The button truncates itself
@@ -379,6 +416,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onOpen(); }}
+              tabIndex={-1}
               className="min-w-[6ch] truncate text-left text-[11px] text-sol-text-muted hover:text-sol-cyan hover:underline underline-offset-2"
               data-undo-open
             >
@@ -398,6 +436,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onAct(); }}
+              tabIndex={-1}
               className={cn(
                 // Out of flow until hover or selection, so the detail gets the full line.
                 "ml-auto flex-shrink-0 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
@@ -414,7 +453,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
         </div>
         {row.fold && (
           <div className={foldInline ? undefined : "mt-0.5"}>
-            {!foldInline && <HistoryFold open={foldOpen} onClick={onFold} data-undo-fold>{row.fold.label}</HistoryFold>}
+            {!foldInline && <HistoryFold open={foldOpen} onClick={onFold} tabIndex={-1} data-undo-fold>{row.fold.label}</HistoryFold>}
             {foldOpen && (
               <ul className="mt-1 mb-0.5 space-y-0.5 pl-1" data-undo-fold-rows>
                 {row.fold.children.map((c) => {

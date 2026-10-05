@@ -35,6 +35,22 @@ export interface SurfaceMeta {
   servedAliases?: Array<{ serve: string[]; from: string[] }>;
   /** Agent route: REFUSED lines matching one of these are allowed by the surface's harness note. */
   allowedRefusals?: string[];
+  /**
+   * Agent route: a snapshot is the world as it stood at its capture. Its
+   * served dir freezes every read, so one the capture did not hold is refused
+   * rather than read from today's workspace, and git history is cut at the
+   * capture (served.ts Cut). Only an uncaptured frozenVerbs read fails
+   * frozen-reads; any other refused read reached past the record.
+   */
+  cut?: SnapshotCut;
+}
+
+/** What a capture adds to make its snapshot the world at that moment (SurfaceMeta.cut). */
+export interface SnapshotCut {
+  /** The single-record reads to capture from what frozenReads returned; `prefix` also answers a longer argv that starts with it. */
+  follow(captured: Array<{ argv: string[]; out: string }>): Array<{ argv: string[]; prefix?: boolean }>;
+  /** The repository roots whose default branch the capture pins. */
+  gitRoots(captured: Array<{ argv: string[]; out: string }>): string[];
 }
 
 /**

@@ -24,7 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Command } from "commander";
 import {
-  AGENT_CLIENTS,
+  AGENT_CLIENTS, LOCAL_AGENT_CLIENTS,
   AGENT_MODEL_CONFIG,
   parseExecutionAgentClientId,
   renderChainStepPrompt,
@@ -65,7 +65,7 @@ import {
 } from "./workflow/chainWorkflow.js";
 
 const CONFIG_DIR = defaultConfigDir();
-const AGENT_NAMES = Object.keys(AGENT_CLIENTS).join(", ");
+const AGENT_NAMES = Object.keys(LOCAL_AGENT_CLIENTS).join(", ");
 
 export interface ResolveExecPromptDeps {
   stdinIsTTY: boolean;
