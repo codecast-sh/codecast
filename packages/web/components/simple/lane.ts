@@ -9,18 +9,19 @@
 // developer tool: no agent, session, model, token, repo or device.
 
 import { isHostedAgentType, parseDecisionAnswer } from "@codecast/shared/contracts";
-import { PLANS, TOPUP, topupCredit, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
+import { PLANS, TOPUP, routineFloor, topupCredit, type BillingReturnOutcome, type PlanId, type PlanSpec } from "@codecast/shared/contracts/assistant";
 import { classifyUserMessage, isHiddenStubMessage, stripSystemTags } from "../conversation/classify";
 import { cadenceLabel } from "../org/staffingModel";
 import type { InboxSession, SessionDecisionItem } from "../../store/inboxStore";
 import { ARMED_STATUSES, isTriggerFailing, lastRunHeadline, type TaskRow } from "../triggerTasks";
 import type { GoogleCapabilities } from "@codecast/convex/convex/googleOAuth";
-import type { WalletAccountLine } from "@codecast/convex/convex/lib/wallet";
+import type { WalletAccountLine, WalletSummary } from "@codecast/convex/convex/lib/wallet";
 import { sessionLiveAt } from "../../lib/liveness";
+import { describeConnectorError } from "../../lib/connectorReturn";
 
-import { LANE_PATHS, conversationPath } from "./lanePaths";
+import { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath } from "./lanePaths";
 
-export { LANE_PATHS, conversationPath };
+export { LANE_CONVERSATION_ROUTE, LANE_PATHS, conversationPath };
 
 /** The lane's sections in tab order, named the same on the web and the
  *  phone; each platform adds only its icons. */
@@ -33,6 +34,15 @@ export const LANE_SECTIONS = [
 ] as const;
 
 export type LaneSectionKey = (typeof LANE_SECTIONS)[number]["key"];
+
+/** What a lane page is called in the window's title: its section's label, or
+ *  "Welcome" on /welcome. A conversation sits under Home, the section it is
+ *  opened from. */
+export function laneSurfaceLabel(pathname: string): string {
+  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  if (path === LANE_PATHS.welcome) return "Welcome";
+  return LANE_SECTIONS.find((s) => s.path === path)?.label ?? LANE_SECTIONS[0].label;
+}
 
 export { laneOf, type Lane } from "./lanePref";
 
@@ -577,10 +587,8 @@ export function meterLegend(w: MeterFigures, resets: string | null): Array<{ key
 
 /** What each plan gives, in plain words. Every number comes from PLANS. */
 export function planPoints(plan: PlanSpec): string[] {
-  const { max, min_interval_ms } = plan.routines;
-  const routines = max === null
-    ? "Unlimited routines"
-    : `${plural(max, "routine")}${min_interval_ms ? `, ${cadenceLabel(min_interval_ms).replace(/^every /, "at most every ")}` : ""}`;
+  const { max } = plan.routines;
+  const routines = `${max === null ? "Unlimited routines" : plural(max, "routine")}, ${cadenceLabel(routineFloor(plan)).replace(/^every /, "at most every ")}`;
   const together = plan.concurrent_turns === 1 ? "One thing at a time" : `${plan.concurrent_turns} things at once`;
   const thinking = plan.strong_model !== plan.default_model ? "Deeper thinking for hard problems" : null;
   return [`${dollars(plan.included_usd)} of work included each month`, routines, together, ...(thinking ? [thinking] : [])];
@@ -645,12 +653,55 @@ export function accountLine(line: Pick<WalletAccountLine, "kind" | "amount_usd">
   }
 }
 
-/** What Stripe's return to the plan screen means (convex/billing.ts returnUrl). */
-export function billingReturnNote(param: string | null): string | null {
-  if (param === "done") return "Your plan is updated. Thank you.";
-  if (param === "topup") return "Your extra credit is on its way. It shows here in a moment.";
-  if (param === "canceled") return "Checkout was canceled, so nothing changed.";
-  return null;
+/** How long before the person came back a top-up credit may have landed and
+ *  still be theirs from this checkout: Stripe's webhook can beat the redirect. */
+const TOPUP_RETURN_SLACK_MS = 10 * 60_000;
+
+/** Whether what the person paid for on Stripe has reached the wallet. The
+ *  person comes back before Stripe's webhook lands, so a plan is settled once
+ *  the wallet holds a paid subscription, and a top-up once its credit is on
+ *  the account. A canceled checkout has nothing to wait for. */
+export function billingReturnSettled(
+  outcome: BillingReturnOutcome,
+  wallet: Pick<WalletSummary, "subscription_status" | "account"> | null,
+  returnedAt: number,
+): boolean {
+  if (outcome === "canceled") return true;
+  if (!wallet) return false;
+  if (outcome === "done") return wallet.subscription_status === "active" || wallet.subscription_status === "trialing";
+  return wallet.account.some((line) => line.kind === "topup" && line.at >= returnedAt - TOPUP_RETURN_SLACK_MS);
+}
+
+/** How long the plan screen waits for Stripe's webhook before it says the
+ *  payment has not reached the account. The webhook usually lands within
+ *  seconds; past this something is wrong (Stripe down, the webhook refused). */
+export const BILLING_RETURN_PATIENCE_MS = 5 * 60_000;
+
+export type BillingReturnNote = {
+  text: string;
+  tone: "done" | "pending" | "late" | "plain";
+  /** A mail to support, offered when the payment is late: `text`, then
+   *  `link` as a mailto with `subject`, then `after`. */
+  support?: { subject: string; link: string; after: string };
+};
+
+/** What the plan screen says after Stripe sends the person back
+ *  (BILLING_RETURN): thanks once the payment is on the wallet, a word that it
+ *  is coming until then, a way to reach support once it has taken longer
+ *  than BILLING_RETURN_PATIENCE_MS, and a plain note for a canceled checkout. */
+export function billingReturnNote(outcome: BillingReturnOutcome | null, settled: boolean, late = false): BillingReturnNote | null {
+  if (outcome === "canceled") return { text: "Checkout was canceled, so nothing changed.", tone: "plain" };
+  if (outcome !== "done" && outcome !== "topup") return null;
+  const what = outcome === "done" ? "new plan" : "extra credit";
+  if (settled) return { text: outcome === "done" ? "Your plan is updated. Thank you." : "Your extra credit is here. Thank you.", tone: "done" };
+  if (late) {
+    return {
+      text: `Your ${what} hasn't reached your account yet. If Stripe charged you, `,
+      tone: "late",
+      support: { subject: `My ${what} hasn't shown up`, link: "write to us", after: " and we'll sort it out." },
+    };
+  }
+  return { text: `Thank you. Your ${what} shows here as soon as Stripe confirms the payment.`, tone: "pending" };
 }
 
 // ── Greeting ───────────────────────────────────────────────────────────────
@@ -698,12 +749,14 @@ export function firstAsks(can: GoogleAbilities | null | undefined): { lead: stri
 
 // ── Connections ────────────────────────────────────────────────────────────
 
-/** A connect or disconnect refusal in plain words. The server names env
- *  variables when Google is not set up, which means nothing to this reader. */
+/** A connect or disconnect refusal in plain words, through the connectors'
+ *  one reason table (shared/contracts/connectorReasons.ts). The lane adds only the
+ *  not-configured case: the server names env variables there, which the
+ *  settings page wants and this reader does not. */
 export function plainConnectError(message: string | null | undefined): string | null {
   if (!message) return null;
   if (/not configured|GOOGLE_OAUTH/i.test(message)) return "Connecting Google isn't switched on here yet.";
-  return message;
+  return describeConnectorError(message);
 }
 
 /** What the person's Google grant lets the assistant do (googleOAuth.listConnections `can`). */
@@ -734,6 +787,10 @@ export function connectionControls(
 
 // ── Words ──────────────────────────────────────────────────────────────────
 
+/** The assistant's one promise about acting for the person, said the same way
+ *  on Home, Connections and onboarding's connect screen. */
+export const ASK_FIRST = "I always ask before I send an email or change your calendar.";
+
 /** Every fixed line the lane's pages say, once for the web and the phone.
  *  The rules above say what changes with the data; these are the rest. */
 export const LANE_COPY = {
@@ -751,7 +808,7 @@ export const LANE_COPY = {
     label: (label: string, waiting: number) => (waiting > 0 ? `${label}, ${waiting} waiting` : label),
   },
   home: {
-    lede: "Hand me anything on your list. I'll check with you before I send an email or change your calendar.",
+    lede: `Hand me anything on your list. ${ASK_FIRST}`,
     placeholder: "What can I take off your plate?",
     loading: "Getting your conversations",
     waiting: "Waiting on you",
@@ -803,7 +860,7 @@ export const LANE_COPY = {
   },
   connections: {
     title: "Connections",
-    lede: "What I can see and do for you. I always ask before sending an email or changing your calendar.",
+    lede: `What I can see and do for you. ${ASK_FIRST}`,
     connected: "Connected",
     notConnected: "Not connected",
     google: "Google",

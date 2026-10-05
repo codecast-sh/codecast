@@ -1024,15 +1024,23 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   // A step of `entry` starts: its replay (or, with no `sent`, a redo's
   // re-invoke, which the history follows by its forward dispatch) supersedes
   // the replay before it. That one stays findable until this step settles
-  // (supersededReplay), and rebases deferred under it lapse.
+  // (supersededReplay); rebases deferred under it are kept by its ids
+  // (lapsedDeferred).
+  const LAPSED_DEFERRED_LIMIT = 16;
   const beginStep = (entry: UndoEntry, dir: "undo" | "redo", sent: readonly CellChange[] | undefined) => {
     entry.supersededReplay = entry.replayOutboxIds?.length && entry.replayDir
       ? { ids: entry.replayOutboxIds, dir: entry.replayDir }
       : undefined;
+    // Rebases deferred under the replay (a refused forward below it) outlive
+    // it: they apply if it is refused, whatever steps came since.
+    if (entry.replayOutboxIds?.length && entry.replayDeferred?.length) {
+      entry.lapsedDeferred = [...(entry.lapsedDeferred ?? []), { ids: entry.replayOutboxIds, moves: entry.replayDeferred }].slice(-LAPSED_DEFERRED_LIMIT);
+    }
     entry.replayOutboxIds = sent ? [] : undefined;
     entry.replayDir = sent ? dir : undefined;
     entry.replaySent = sent?.filter((c) => !isStamp(c));
     entry.replayDeferred = undefined;
+    entry.forwardRefused = undefined;
   };
 
   const undoGeneric = (entry: UndoEntry): UndoOutcome => {
@@ -1234,6 +1242,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         rebaseUndoneAfter(refresh, refresh.changes ?? [], changes);
         refresh.changes = changes;
         refresh.planted = planted;
+        refresh.priorOutboxIds = refresh.outboxIds;
         refresh.outboxIds = [commit.outboxId];
         noteSends(changes, [commit.outboxId], carriedMore);
         refresh.objects = objectsOf(changes);

@@ -8,7 +8,8 @@ import type { InitiativeHealth } from "@codecast/shared/contracts/initiative";
 import { isNonTabRoute } from "./tabRoutes";
 import { HEALTH_COLOR } from "./initiativeColors";
 import { ORG_STATE_META } from "../components/org/orgMeta";
-import type { FeedKind } from "../components/org/scope/scopeTypes";
+import { FEED_KINDS, type FeedKind } from "../components/org/scope/scopeTypes";
+import type { ScopeRef } from "../hooks/useScopeQueries";
 import type { OrgAnchor, OrgRole, OrgTree } from "../components/org/orgTypes";
 import { isHeadOfPeopleRole } from "../components/org/orgStaffingTypes";
 
@@ -102,6 +103,14 @@ export function feedStateTone(kind: FeedKind, state?: string): string {
   if (s === "in_progress" || s === "active" || s === "working") return "var(--sol-green)";
   if (s === "dropped" || s === "dismissed" || s === "withdrawn") return "var(--sol-red)";
   return FEED_NEUTRAL_TONE;
+}
+
+/** The kinds a scope's feed offers as chips. A goal's own rows (the moments
+ *  on its record, the calls that name it) come back only where the scope
+ *  names goals, so no other feed offers a chip for them. */
+export function feedKindsFor(scope: ScopeRef): FeedKind[] {
+  const namesGoals = "scope" in scope && (scope.scope.initiative_ids?.length ?? 0) > 0;
+  return namesGoals ? FEED_KINDS : FEED_KINDS.filter((k) => k !== "goal" && k !== "call");
 }
 
 /** A published page (/a/<slug>) is served by the server, not the SPA: the

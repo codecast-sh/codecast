@@ -15,15 +15,14 @@ import { agentName, rootAgentOf, type AnchorRow } from "../hooks/useSyncAnchors"
 
 export type HeaderPin = { kind: "role" | "session"; id: string };
 
-const NO_PINS: HeaderPin[] = [];
-
 export function readHeaderPins(state: any): HeaderPin[] | null {
   const raw = state.clientState?.ui?.header_pins;
   return Array.isArray(raw) ? (raw as HeaderPin[]) : null;
 }
 
+/** True when the header shows it, the default face included. */
 export function isHeaderPinned(state: any, kind: HeaderPin["kind"], id: string): boolean {
-  return (readHeaderPins(state) ?? NO_PINS).some((p) => p.kind === kind && p.id === id);
+  return (readHeaderPins(state) ?? defaultPinsOf(state)).some((p) => p.kind === kind && p.id === id);
 }
 
 /** A resolved pin: what the header draws and what a click opens. */

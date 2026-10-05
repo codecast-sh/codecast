@@ -1,0 +1,26 @@
+{
+  "name": "expectations callers-quiet",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:callers-quiet"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "expectations:callers-quiet",
+    "title": "expectations callers-quiet"
+  },
+  "asOf": "2026-10-05T18:20:00.000Z",
+  "trigger": {
+    "type": "expectations"
+  },
+  "meta": {
+    "surface": "expectations",
+    "visibility": "public",
+    "snapshot": "fixtures/expectations/callers-quiet.json"
+  },
+  "judge": "the proposal records the window from the cursor with no changes; the reposted summary of an earlier call and the talk about the fleet bill become no line",
+  "notes": null,
+  "tags": [],
+  "id": "c9d79c67-5d26-4a6c-bfe9-8bb3b6287121",
+  "createdAt": "2026-10-05T19:29:29.265Z"
+}

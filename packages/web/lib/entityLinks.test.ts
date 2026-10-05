@@ -27,6 +27,9 @@ import {
   parseClaudeArtifactUrl,
   parseCallRef,
   callRefId,
+  parseProposalChangeRef,
+  proposalChangeRefId,
+  proposalChangeLabelSuffix,
 } from "./entityLinks";
 
 const MSG_CONVEX_ID = "kx82qtvpbmmrmwcjqmhzawejsx8bq9gm";
@@ -622,6 +625,51 @@ describe("proposals (op-N)", () => {
     expect(parseEntityUrl("/org")).toBeNull();
     expect(parseEntityUrl("https://codecast.sh/org/or-7")).toBeNull();
     expect(normalizeEntityType("org")).toBe("proposal");
+  });
+
+  // One change of a proposal is written `op-55#3`: still a proposal
+  // reference, with the change's number riding along.
+  test("op-N#seq is a proposal reference that names one change", () => {
+    expect(entityTypeFromId("op-55#3")).toBe("proposal");
+    expect(entityTypeFromId("OP-55#3")).toBe("proposal");
+    expect(isEntityId("op-55#3")).toBe(true);
+    expect(parseProposalChangeRef("OP-55#3")).toEqual({ proposal: "op-55", seq: 3 });
+    expect(proposalChangeRefId("op-55", 3)).toBe("op-55#3");
+    expect(parseProposalChangeRef(proposalChangeRefId("op-55", 3))).toEqual({ proposal: "op-55", seq: 3 });
+    for (const not of ["op-55", "op-55#", "op-55#x", "op-55#3x", "ct-55#3", "op-ed#3", "", null, undefined]) {
+      expect(parseProposalChangeRef(not)).toBeNull();
+    }
+    expect(proposalChangeLabelSuffix(parseProposalChangeRef("op-55#3"))).toBe(" #3");
+    expect(proposalChangeLabelSuffix(parseProposalChangeRef("op-55"))).toBe("");
+  });
+
+  test("prose scans the change reference whole, and only a real one", () => {
+    expect("see op-55#3 next".match(bareEntityIdRegex())).toEqual(["op-55#3"]);
+    expect("Start with op-55#1, then op-54#10.".match(bareEntityIdRegex())).toEqual(["op-55#1", "op-54#10"]);
+    // A dangling or worded tail is the whole proposal followed by text.
+    expect("op-55# and op-55#x".match(bareEntityIdRegex())).toEqual(["op-55", "op-55"]);
+    for (const word of ["op-55#", "op-55#x"]) expect(isEntityId(word)).toBe(false);
+    // A mention carries the same form.
+    const m = entityMentionRegex({ requireId: true }).exec("@[Make Infrastructure the top priority op-55#3]");
+    expect(m?.[2]).toBe("op-55#3");
+  });
+
+  test("a change routes to the org page with it in focus and its url parses back", () => {
+    expect(entityRoute("proposal", "op-55#3")).toBe("/org?proposal=op-55&focus=3");
+    expect(buildEntityUrl("proposal", "op-55#3")).toBe("https://codecast.sh/org?proposal=op-55&focus=3");
+    expect(parseEntityUrl("https://codecast.sh/org?proposal=op-55&focus=3")).toEqual({ type: "proposal", id: "op-55#3" });
+    expect(parseEntityUrl("/org?proposal=op-55&focus=3")).toEqual({ type: "proposal", id: "op-55#3" });
+    // A focus on a goal or a role is the whole proposal, as is none at all.
+    expect(parseEntityUrl("/org?proposal=op-55&focus=in-4")).toEqual({ type: "proposal", id: "op-55" });
+    expect(parseEntityUrl("/org?proposal=op-55&focus=@head-of-growth")).toEqual({ type: "proposal", id: "op-55" });
+    expect(parseEntityUrl("/org?proposal=op-55&focus=")).toEqual({ type: "proposal", id: "op-55" });
+  });
+
+  test("a pull request still owns owner/repo#N", () => {
+    expect(entityTypeFromId("owner/repo#482")).toBe("pr");
+    expect(parseProposalChangeRef("owner/repo#482")).toBeNull();
+    expect("merged op-team/op-55#3 today".match(bareEntityIdRegex())).toEqual(["op-team/op-55#3"]);
+    expect(entityTypeFromId("op-team/op-55#3")).toBe("pr");
   });
 });
 

@@ -6,6 +6,9 @@ import { useState, useCallback, useMemo, type MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore, ProjectItem } from "../../store/inboxStore";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
+import { useSyncTasks } from "../../hooks/useSyncTasks";
+import { useBoardTasks, useTasksBackfilled } from "../../hooks/useInitiatives";
+import { projectTaskCounts, type ProjectProgress } from "@codecast/shared/tasks";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useWorkspaceArgs, workspaceStamp } from "../../hooks/useWorkspaceArgs";
 import { AuthGuard } from "../../components/AuthGuard";
@@ -30,7 +33,6 @@ import {
   ExternalLink,
   FileText,
   Link as LinkIcon,
-  ListChecks,
   Target,
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -43,26 +45,25 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { ProgressBar, TargetDate } from "../../components/initiatives/InitiativeAtoms";
 import { ProjectInitiatives } from "../../components/initiatives/ProjectInitiatives";
 
-// A project the store holds before the server has counted it (an optimistic
-// create, a row from a feed that carries no counts) has no task_counts yet.
-const NO_TASK_COUNTS: ProjectItem["task_counts"] = { total: 0, done: 0, in_progress: 0 };
-const taskCountsOf = (project: ProjectItem) => project.task_counts ?? NO_TASK_COUNTS;
-
 function ProjectCard({
   project,
+  progress,
+  partial,
   now,
   onClick,
   onContextMenu,
 }: {
   project: ProjectItem;
+  /** Its tasks by the board's rule (shared/tasks projectTaskCounts), the count its page header shows. */
+  progress: ProjectProgress;
+  /** The task store is still filling (useTasksBackfilled). */
+  partial: boolean;
   now: number;
   onClick: () => void;
   onContextMenu: (e: MouseEvent) => void;
 }) {
   const status = projectStatusOf(project.status);
   const StatusIcon = status.icon;
-  const counts = taskCountsOf(project);
-  const totalItems = taskCountsOf(project).total + (project.plan_count ?? 0) + (project.doc_count ?? 0);
 
   return (
     // A div with the button role, not a <button>: the lead chip inside it
@@ -86,8 +87,8 @@ function ProjectCard({
             <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
             <h3 className="text-sm font-medium text-sol-text truncate">{project.title}</h3>
           </div>
-          {/* The day a goal's row shows the same way: red once it has passed with the project not done. */}
-          <TargetDate ts={project.target_date} now={now} done={project.status === "done"} />
+          {/* The deadline, red once it has passed with the project not done. It is the end of the viewer's own day (the project page writes it so), hence `local`. */}
+          <TargetDate ts={project.target_date} now={now} done={project.status === "done"} local />
         </div>
 
         {/* The charter's pill (org-staffing.md S7) and who leads the project
@@ -105,19 +106,13 @@ function ProjectCard({
           <p className="text-xs text-sol-text-muted line-clamp-2 leading-relaxed">{project.description}</p>
         )}
 
-        {/* Stats row */}
-        {totalItems > 0 && (
+        {/* What else is filed here: plans and docs. The bar below says the tasks. */}
+        {(project.plan_count ?? 0) + (project.doc_count ?? 0) > 0 && (
           <div className="flex items-center gap-3 text-[11px] text-sol-text-dim">
             {project.plan_count > 0 && (
               <span className="flex items-center gap-1">
                 <Target className="w-3 h-3" />
                 {project.plan_count} {project.plan_count === 1 ? "plan" : "plans"}
-              </span>
-            )}
-            {taskCountsOf(project).total > 0 && (
-              <span className="flex items-center gap-1">
-                <ListChecks className="w-3 h-3" />
-                {taskCountsOf(project).total} {taskCountsOf(project).total === 1 ? "task" : "tasks"}
               </span>
             )}
             {project.doc_count > 0 && (
@@ -129,8 +124,8 @@ function ProjectCard({
           </div>
         )}
 
-        {/* Tasks done over tasks, as the bar a goal draws. */}
-        {counts.total > 0 && <ProgressBar progress={{ ...counts, open: counts.total - counts.done - counts.in_progress }} className="w-full" />}
+        {/* Tasks done over tasks, as the bar its page header and a goal draw, counted from the store's tasks. */}
+        {progress.total > 0 && <ProgressBar progress={progress} partial={partial} className="w-full" />}
 
         {/* The goals it carries, each with its first number (initiatives-projects-role-page.md I5). */}
         <ProjectInitiatives projectId={project._id} size="xs" label="Part of" metrics="line" now={now} />
@@ -245,6 +240,11 @@ function ProjectListContent() {
   const [showDone, setShowDone] = useState(false);
   const ctxMenu = useContextMenu<ProjectItem>();
   const now = useCoarseNow(60_000);
+  // Every card's bar derives from the task store at render, so a task done on
+  // the board moves it in the same tick.
+  useSyncTasks();
+  const tasks = useBoardTasks();
+  const counted = useTasksBackfilled();
 
   // Strict workspace boundary at read time: `store.projects` caches rows from
   // every workspace (the sync overlay never prunes on team switch, IDB persists
@@ -269,6 +269,7 @@ function ProjectListContent() {
   }, [allProjects, showDone]);
 
   const doneCount = allProjects.filter((p) => p.status === "done").length;
+  const progressOf = useMemo(() => new Map(allProjects.map((p) => [p._id, projectTaskCounts(tasks, [p._id])])), [allProjects, tasks]);
 
   return (
     <div className="h-full flex flex-col">
@@ -330,6 +331,8 @@ function ProjectListContent() {
                     <ProjectCard
                       key={project._id}
                       project={project}
+                      progress={progressOf.get(project._id)!}
+                      partial={!counted}
                       now={now}
                       onClick={() => router.push(`/projects/${project._id}`)}
                       onContextMenu={(e) => ctxMenu.open(e, project)}

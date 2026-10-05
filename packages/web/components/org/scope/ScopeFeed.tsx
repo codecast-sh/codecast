@@ -14,8 +14,8 @@ import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { compactAge } from "../../../lib/threadState";
 import { cn } from "../../../lib/utils";
 import { Avatar } from "../../tasks/TaskCommentStream";
-import { FEED_KINDS, FEED_KIND_META, type FeedKind, type FeedRow } from "./scopeTypes";
-import { FEED_NEUTRAL_TONE, feedLinkIsServerOwned, feedStateTone } from "../../../lib/scopePage";
+import { FEED_KIND_META, type FeedKind, type FeedRow } from "./scopeTypes";
+import { FEED_NEUTRAL_TONE, feedKindsFor, feedLinkIsServerOwned, feedStateTone } from "../../../lib/scopePage";
 
 const KIND_ICON: Record<FeedKind, any> = {
   session: Terminal,
@@ -71,7 +71,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFee
         >
           Everything
         </button>
-        {FEED_KINDS.map((k) => {
+        {feedKindsFor(scope).map((k) => {
           const on = kinds.includes(k);
           const m = FEED_KIND_META[k];
           const KindIcon = KIND_ICON[k];

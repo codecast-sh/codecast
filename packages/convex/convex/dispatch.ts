@@ -831,6 +831,20 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   decideOrgProposalAsk: async (ctx, _userId, [proposalId, ask, verdict, seen, opts]: [string, number, "accept" | "skip", { revised_at: number; seqs?: number[] } | undefined, { leave_sessions?: boolean } | undefined]) => {
     return await ctx.runMutation!((api as any).orgProposals.decideAsk, { proposal: proposalId, ask, verdict, ...(seen ? { seen } : {}), ...(opts?.leave_sessions && verdict === "accept" ? { leave_sessions: true } : {}) });
   },
+  // A person's answers to a proposal, sent together (org-staffing.md S39):
+  // approve, reject or a note per card, applied and kept by the mutation. The
+  // store's items carry change ids for its own rows; the mutation reads seqs.
+  // `say` is for a surface with no composer: the mutation writes the answers
+  // into the proposal's thread as one message under the given client id.
+  replyOnOrgProposal: async (ctx, _userId, [proposalId, items, seen, opts]: [string, Array<{ verdict: "approve" | "reject" | "note"; seqs: number[]; text?: string; change_ids?: string[] }>, { revised_at: number; seqs?: number[] } | undefined, { leave_sessions?: boolean; say?: { thread?: string; body?: string; client_id?: string } } | undefined]) => {
+    return await ctx.runMutation!((api as any).orgProposals.reply, {
+      proposal: proposalId,
+      items: items.map((i) => ({ verdict: i.verdict, seqs: i.seqs, ...(i.change_ids?.length ? { change_ids: i.change_ids } : {}), ...(i.text ? { text: i.text } : {}) })),
+      ...(seen ? { seen } : {}),
+      ...(opts?.leave_sessions ? { leave_sessions: true } : {}),
+      ...(opts?.say ? { say: { ...(opts.say.body ? { body: opts.say.body } : {}), ...(opts.say.client_id ? { client_id: opts.say.client_id } : {}) } } : {}),
+    });
+  },
   // Take an entry of the org record back, or apply it again (org-staffing.md
   // S21). `with` names the later entries the preview said go with it: the
   // mutation undoes them together or refuses the gesture. Human only; the
@@ -1612,9 +1626,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await (ctx as any).runMutation(api.initiatives.postUpdate, { id, ...update });
   },
   // One entry of the intent record (I5). The store settles the entry it
-  // paints (its key, who and when) and hands that op back as the action's
-  // result, so the row stores the same entry and the echo equals the draft.
-  // A call with no result painted nothing; the caller's op goes as given.
+  // paints with the reducer the mutation runs (applyRecordOp) and hands that
+  // op back as the action's result, its key, who and when decided, so the row
+  // stores the entry the page shows. A call with no result painted nothing:
+  // the caller's op goes as given, and the mutation finds it moves nothing or
+  // refuses it in words.
   recordInitiativeEntry: async (ctx, userId, [id, op]: [string, Record<string, any>], result) => {
     return await (ctx as any).runMutation(api.initiatives.record, { id, ...((result as Record<string, any> | null | undefined) ?? op) });
   },

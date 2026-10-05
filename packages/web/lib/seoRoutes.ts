@@ -102,7 +102,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
   {
     path: "/terms",
     title: "Terms of Service — Codecast",
-    description: "The Codecast terms of service.",
+    description: "The Codecast terms of service: accounts, acceptable use, your content and its ownership, subscriptions and payments, service availability, and liability.",
   },
 ];
 

@@ -31,7 +31,7 @@ import { OrgChartChip } from "./org/orgChartLink";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
-import { agentSupportsFork, agentForksFromAnyMessage, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId } from "@codecast/shared/contracts";
+import { agentSupportsFork, agentForksFromAnyMessage, isHostedAgentType, isModelSwitchStdout, isForkSeedClientId, isRecoveryContinueClientId } from "@codecast/shared/contracts";
 import { GROUP_WINDOW_MS } from "@codecast/shared/chat";
 import { useNowWhen } from "../hooks/useCoarseNow";
 import { isAskTool } from "@codecast/shared/render";
@@ -118,6 +118,7 @@ import { AskSessionPanel } from "./conversation/AskSessionPanel";
 import { useAskSession } from "../hooks/useAskSession";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
 import type { MentionItem } from "./editor/MentionList";
+import { HeaderPinMenuItem } from "./anchor/AnchorPanel";
 import { Maximize2, CornerDownRight, Split, Workflow, Loader2, Bot, Forward, ArrowRightLeft, Cpu, FolderTree } from "lucide-react";
 import { filesHref } from "../lib/vault/vaultHref";
 import { openFiles } from "../lib/filesPane";
@@ -2314,12 +2315,18 @@ const ConversationViewInner = (
 
   const onReviewNavigate = useCallback(() => setUserScrolled(true), []);
   const reviewNavigation = useReviewNavigation(containerRef, virtualizer, scrollToMessageById, onReviewNavigate, stickyElRef);
+  // The composer's send, attached by MessageInput while it is mounted, so a
+  // proposal ledger in the thread can press it (S39).
+  const composerSendRef = useRef<(() => void) | null>(null);
   const reviewComposer = useMemo(() => {
     const populate = (t: string, o?: { append?: boolean }) => populateInputRef.current?.(t, o);
     return {
       quote: (text: string) => quoteToComposer(text, populate),
       populate,
       submit: () => submitReview(conversation?._id ?? "", populate),
+      conversationId: conversation?._id,
+      send: () => composerSendRef.current?.(),
+      attachSend: (send: (() => void) | null) => { composerSendRef.current = send; },
       ...reviewNavigation,
     };
   }, [conversation?._id, reviewNavigation]);
@@ -3685,7 +3692,7 @@ const ConversationViewInner = (
     <ImageGalleryProvider conversationId={conversation?._id} onJumpToMessage={scrollToMessageById} quotable={showMessageInput && effectiveIsOwner}>
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
-      {isDragging && (
+      {isDragging && !isHostedAgentType(conversation?.agent_type) && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
             <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
@@ -4175,6 +4182,7 @@ const ConversationViewInner = (
                         {conversation.profile_pinned_at ? "Unpin from public profile" : "Pin to public profile"}
                       </DropdownMenuItem>
                     )}
+                    {!guest && conversation?._id && <HeaderPinMenuItem sessionId={conversation._id} />}
                     {effectiveIsOwner && hasLocalAgent && (
                       <DropdownMenuItem disabled={isHeaderRestarting} onSelect={() => { setTimeout(() => handleRestartSession()); }}>
                         <svg className={`w-3 h-3 mr-1.5 text-orange-400 ${isHeaderRestarting ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">

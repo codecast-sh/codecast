@@ -286,6 +286,7 @@ import {
   typedNewlineKey,
   pasteAndSubmitText,
   prepareInjectedContent,
+  stripComposerChrome,
 } from "./tmuxPaste.js";
 import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
 import { formatFeedResults } from "./formatter.js";
@@ -6349,7 +6350,7 @@ async function executeRemoteCommand(
         if (agentType === "codex" && activeCodexAppServer) {
           try {
             const sandbox = codexPermissions.sandbox;
-            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
+            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs, conversationId || undefined);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
                 cwd,
@@ -8471,6 +8472,7 @@ export async function buildCodexStableContext(
   config: Config | null,
   cwd?: string,
   prefs?: StableLaunchPrefs,
+  session?: string,
 ): Promise<BuiltStableContext | undefined> {
   let mode: "team" | "solo" | null;
   if (prefs?.stable_mode === "off") mode = null;
@@ -8482,6 +8484,7 @@ export async function buildCodexStableContext(
     global: !!config?.stable_global,
     exclude: prefs?.stable_exclude ?? [],
     cwd,
+    session,
   });
 }
 
@@ -8502,7 +8505,7 @@ export async function writeGrokStableRulesFile(
   key: string,
   conversationId?: string,
 ): Promise<string | undefined> {
-  const built = await buildCodexStableContext(config, cwd, prefs);
+  const built = await buildCodexStableContext(config, cwd, prefs, conversationId);
   if (!built) return undefined;
   const dir = path.join(CONFIG_DIR, "stable-rules");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -14706,12 +14709,13 @@ function tmuxComposerRegion(pane: string): string | null {
   return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
 }
 
+// Both checks read the whole capture: the caller sizes it to the payload. A
+// fixed window shorter than a long draft lost the prompt line above it, read
+// the unsent message as gone, and acked it as delivered (jx76c85, 2026-10-05).
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
-  const lines = paneContent.split("\n");
-  const recent = lines.slice(-80).join("\n");
-  const fromPrompt = tmuxComposerRegion(recent);
+  const fromPrompt = tmuxComposerRegion(paneContent);
   if (fromPrompt === null) return false;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
@@ -14724,8 +14728,7 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
 export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
-  const recent = paneContent.split("\n").slice(-80).join("\n");
-  const composer = tmuxComposerRegion(recent);
+  const composer = tmuxComposerRegion(paneContent);
   if (composer === null) return false;
   const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
   return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
@@ -14843,7 +14846,26 @@ export function extractTmuxLiveRegion(paneContent: string): string {
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
   }
-  if (sepIdx.length >= 2) {
+  // A composer box taller than the tail leaves only its bottom rule in it: a
+  // long typed draft renders in full, where a paste collapses to one chip line.
+  // The pane then read "unknown" with no ❯ in view, and every later message
+  // held until a person pressed Enter (jx76rqh, 2026-10-05). When nothing under
+  // that lone rule is a dialog and the nearest rule above it opens onto the
+  // composer caret, the box runs from there.
+  let rows = tail;
+  let boxTop = sepIdx.length >= 2 ? sepIdx[sepIdx.length - 2] : -1;
+  if (sepIdx.length === 1) {
+    const below = tail.slice(sepIdx[0] + 1);
+    if (!below.some((line) => /[❯›]/.test(line) || isMenuFooterRow(line))) {
+      const bottom = lines.length - tail.length + sepIdx[0];
+      for (let i = bottom - 1; i >= 0; i--) {
+        if (!isSep(lines[i])) continue;
+        if (COMPOSER_CARET_ROW.test(lines[i + 1] ?? "")) { rows = lines; boxTop = i; }
+        break;
+      }
+    }
+  }
+  if (boxTop >= 0) {
     // Input box: take the box body AND everything below the box (the footer).
     // The footer is where Claude Code renders "esc to interrupt" while it is
     // generating — and the input box (❯) stays visible the whole time for
@@ -14852,7 +14874,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // it; the queued text never submitted, never acked, and retried forever.
     // Nothing but the live footer renders below the box, so this can't pull in
     // scrollback (the reason the region is narrowed in the first place).
-    const top = sepIdx[sepIdx.length - 2];
+    const top = boxTop;
     // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
     // The running turn's only marker is now its own status line, rendered
     // above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry that line
@@ -14863,10 +14885,10 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // (2026-09-29, jx74ek4). It cannot be scrollback: the finished form reads
     // differently, and everything above the newest ⏺ is left out.
     let status: string[] = [];
-    for (let i = top - 1; i >= 0 && !/^⏺/.test(tail[i]); i--) {
-      if (CLAUDE_TURN_STATUS_LINE.test(tail[i])) { status = [tail[i]]; break; }
+    for (let i = top - 1; i >= 0 && !/^⏺/.test(rows[i]); i--) {
+      if (CLAUDE_TURN_STATUS_LINE.test(rows[i])) { status = [rows[i]]; break; }
     }
-    return [...status, ...tail.slice(top + 1)].join("\n");
+    return [...status, ...rows.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -17544,8 +17566,6 @@ export async function tmuxComposerDraft(
 // composer holds as real text only matches once the frame is out of the way
 // (ct-49607). Both sides go through this, so a payload containing box glyphs
 // still compares against itself.
-const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
-
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {
@@ -25092,7 +25112,7 @@ async function recoverBlankCodexForDelivery(
   if (unavailable()) return false;
   const params = blankCodexRecoveryParams(data, projectPath, resolveCodexPermissionDefaults(config));
   if (!params) return false;
-  const builtContext = await buildCodexStableContext(config, projectPath!, {});
+  const builtContext = await buildCodexStableContext(config, projectPath!, {}, conversationId);
   if (unavailable()) return false;
   const response = await startCodexThreadThenRecordStableContext(
     () => server!.threadStart({ ...params, ...(builtContext ? { developerInstructions: builtContext.text } : {}) }),

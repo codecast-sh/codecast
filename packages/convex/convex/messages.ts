@@ -1846,6 +1846,44 @@ export function getAddMessagesAgentStatusProjection(
   };
 }
 
+/**
+ * One pending agent-status check per conversation. Every message batch used to
+ * schedule its own check, which made it the scheduler's most frequent job
+ * (a third of all runs) while nearly every one found the status already
+ * "working". A batch now opens a probe on the conversation row (patched by
+ * every batch anyway) and schedules one check for when the window closes;
+ * batches inside the window only fold their evidence into the open probe, and
+ * the check reads the folded flags. A probe whose check never ran expires with
+ * its window, so the next batch opens a new one.
+ */
+export const AGENT_STATUS_PROBE_WINDOW_MS = 3_000;
+
+export type AgentStatusProbe = AddMessagesAgentStatusProjection & {
+  /** When the scheduled check runs; a batch after it opens a new probe. */
+  due_at: number;
+  /** The newest batch folded in: the daemon's own status write after it wins. */
+  at: number;
+};
+
+export function nextAgentStatusProbe(
+  current: AgentStatusProbe | undefined,
+  projection: AddMessagesAgentStatusProjection,
+  now: number,
+): { probe: AgentStatusProbe; schedule: boolean } {
+  if (current && current.due_at > now) {
+    return {
+      schedule: false,
+      probe: {
+        due_at: current.due_at,
+        at: now,
+        has_assistant_message: current.has_assistant_message || projection.has_assistant_message,
+        has_tool_result_reply: current.has_tool_result_reply || projection.has_tool_result_reply,
+      },
+    };
+  }
+  return { schedule: true, probe: { ...projection, due_at: now + AGENT_STATUS_PROBE_WINDOW_MS, at: now } };
+}
+
 export function shouldApplyAddMessagesAgentStatusProjection(
   agentStatusUpdatedAt: number | undefined,
   scheduledAt: number,
@@ -2304,14 +2342,16 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     // inbox activity line; see schema.activity).
     const nextActivity = deriveActivity(args.messages, conversation.activity, Date.now());
     if (nextActivity) convPatch.activity = nextActivity;
+    const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
+    const agentStatusProbe = agentStatusProjection
+      ? nextAgentStatusProbe(conversation.agent_status_probe, agentStatusProjection, Date.now())
+      : null;
+    if (agentStatusProbe) convPatch.agent_status_probe = agentStatusProbe.probe;
     await ctx.db.patch(args.conversation_id, convPatch);
 
-    const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
-    if (agentStatusProjection) {
-      await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
+    if (agentStatusProbe?.schedule) {
+      await ctx.scheduler.runAfter(AGENT_STATUS_PROBE_WINDOW_MS, internal.messages.projectAgentStatusOnAddMessages, {
         conversation_id: args.conversation_id,
-        scheduled_at: Date.now(),
-        ...agentStatusProjection,
       });
     }
 
@@ -2386,11 +2426,16 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
 export const projectAgentStatusOnAddMessages = internalMutation({
   args: {
     conversation_id: v.id("conversations"),
-    scheduled_at: v.number(),
-    has_assistant_message: v.boolean(),
-    has_tool_result_reply: v.boolean(),
+    // Jobs scheduled before the probe carried their evidence in their args.
+    scheduled_at: v.optional(v.number()),
+    has_assistant_message: v.optional(v.boolean()),
+    has_tool_result_reply: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    const evidence = args.scheduled_at !== undefined
+      ? { at: args.scheduled_at, has_assistant_message: !!args.has_assistant_message, has_tool_result_reply: !!args.has_tool_result_reply }
+      : (await ctx.db.get(args.conversation_id))?.agent_status_probe;
+    if (!evidence) return;
     const session = await ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
@@ -2398,14 +2443,14 @@ export const projectAgentStatusOnAddMessages = internalMutation({
     // A hosted conversation's turn engine sets its work state itself, in the
     // mutation that ends each turn; a guess from its rows would undo that.
     if (!session || session.hosted) return;
-    if (!shouldApplyAddMessagesAgentStatusProjection(session.agent_status_updated_at, args.scheduled_at)) {
+    if (!shouldApplyAddMessagesAgentStatusProjection(session.agent_status_updated_at, evidence.at)) {
       return;
     }
 
     const nextStatus = nextAgentStatusOnAddMessages(
       session.agent_status,
-      args.has_assistant_message,
-      args.has_tool_result_reply,
+      evidence.has_assistant_message,
+      evidence.has_tool_result_reply,
     );
     if (!nextStatus) return;
 
