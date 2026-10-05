@@ -10,7 +10,7 @@
 //
 // Two kinds of overlay, because they deserve different answers:
 //
-//   modal    a dialog, the palette, the drag veil, the pick layer. It takes
+//   modal    a dialog (unless it says aria-modal="false"), the palette, the drag veil, the pick layer. It takes
 //            the whole app: its backdrop covers every pane and its keyboard
 //            focus must not land in a page. Any pane hides while one is up,
 //            whether or not the rects meet.
@@ -32,7 +32,9 @@ export type OverlayHit = { kind: "modal" | "floating"; selector: string; rect: R
 /** Overlays that own the whole app while they are up. */
 export const MODAL_SELECTORS = [
   // Radix dialogs and the command palette (its root carries role="dialog").
-  '[role="dialog"]',
+  // A dialog that declares aria-modal="false" leaves the app usable and is
+  // floating instead (below).
+  '[role="dialog"]:not([aria-modal="false"])',
   '[role="alertdialog"]',
   // The stage's own layers: the veil under a drag to split, and the layer
   // that asks which pane to place something in.
@@ -52,6 +54,9 @@ export const FLOATING_SELECTORS = [
   '[role="listbox"]',
   // Sonner: the individual toast, not its always-present region.
   "[data-sonner-toast]",
+  // A dialog in role that owns nothing beyond its own rect: the undo card in
+  // the corner, a drill-in over one board, an anchored confirm.
+  '[role="dialog"][aria-modal="false"]',
 ];
 
 function isVisible(el: Element): boolean {

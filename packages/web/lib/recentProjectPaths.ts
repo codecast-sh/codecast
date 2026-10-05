@@ -1,3 +1,5 @@
+import { worktreeOfPath } from "@codecast/shared/contracts";
+
 export type RecentProjectPath = {
   path: string;
   count: number;
@@ -43,11 +45,14 @@ export function recentProjectPathsFromSessionKeys(
   }), currentUserId);
 }
 
+/** The checkout a path belongs to: a managed worktree folds to its repository root. */
+export function projectRootOf(raw: string): string {
+  const path = raw.replace(/\/+$/, "");
+  return worktreeOfPath(path)?.root || path;
+}
+
 function usableRecentPath(raw: string): string | null {
-  const path = raw
-    .replace(/\/+$/, "")
-    .replace(/\/\.conductor\/[^/]+$/, "")
-    .replace(/\/\.codecast\/worktrees\/[^/]+$/, "");
+  const path = projectRootOf(raw);
   if (!path || /^\/(tmp|var|private\/tmp|private\/var)(\/|$)/.test(path)) return null;
   const parts = path.split("/").filter(Boolean);
   if (parts.length === 0 || (parts[0] === "root" && parts.length === 1)) return null;

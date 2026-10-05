@@ -9,7 +9,7 @@ import { useInboxStore, type AccountSwitchArgs } from "../store/inboxStore";
 import { isParkedDispatchError, isRefusedDispatchError } from "../store/mutativeMiddleware";
 import { MACHINE_SWITCH_TIMEOUT_MS } from "./machineAccountSwitch";
 
-export type SessionCommandKind = "restart" | "repair" | "move" | "switch";
+export type SessionCommandKind = "restart" | "repair" | "move" | "switch" | "line_edit";
 
 export type SessionCommandRow = {
   _id: string;
@@ -30,10 +30,14 @@ export type SessionCommandRow = {
   to_label?: string;
   profile?: string;
   email?: string;
+  // A line edit (store/lineSlice.ts): the project, the edits and the keys they touch.
+  project_id?: string;
+  edits?: unknown[];
+  keys?: string[];
 };
 
 // The store actions whose first argument is a sessionCommands request id.
-export const SESSION_COMMAND_ACTIONS = new Set(["hibernateSession", "restartSession", "moveSessionToDevice", "requestAccountSwitch"]);
+export const SESSION_COMMAND_ACTIONS = new Set(["hibernateSession", "restartSession", "moveSessionToDevice", "requestAccountSwitch", "editLineProfile"]);
 
 // Marks a row the server refused outright (no daemon will ever answer it).
 export const DISPATCH_REFUSED = "dispatch_refused";

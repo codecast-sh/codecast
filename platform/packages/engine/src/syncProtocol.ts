@@ -302,6 +302,9 @@ export function applySyncTable<T extends { _id: string }>(
         : applyFieldOverrides(record);
       if (next !== previous) writable()[id] = next;
     }
+    for (const id of includeIds) {
+      if (incomingIds.has(id)) delete mutPending()[prefix + id];
+    }
     return { table: deltaTable, pending: newPending };
   }
 
@@ -341,10 +344,10 @@ export function applySyncTable<T extends { _id: string }>(
   }
 
   // Include entries — locally-added records the server hasn't acknowledged.
-  // Same delta caveat: don't clear an include just because this partial
-  // batch didn't carry the record.
+  // A batch that carries the record acknowledges it, delta or not; a delta
+  // batch that omits it says nothing, so the include stays.
   for (const id of includeIds) {
-    if (!isDelta && incomingIds.has(id)) {
+    if (incomingIds.has(id)) {
       delete mutPending()[prefix + id];
     } else if (prev?.[id] && !table[id]) {
       table[id] = prev[id];

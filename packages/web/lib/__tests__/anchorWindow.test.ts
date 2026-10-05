@@ -15,11 +15,18 @@ describe("the seat's provisioning prompt folds away (F4.1)", () => {
     expect(isBootstrapMessage(undefined)).toBe(false);
   });
 
-  test("the cut is the first message after the last prompt in the window", () => {
+  test("the cut is the first message after the first prompt, once the window reaches the start", () => {
     expect(bootstrapCut({ messages: [boot, reply, later] })).toBe(200);
     // Seated on an existing agent: the prompt sits mid-history and the thread as this role starts there.
     const before = { timestamp: 50, role: "assistant", content: "the old anchor's words" };
-    expect(bootstrapCut({ messages: [before, boot, reply], loaded_start_index: 40 })).toBe(200);
+    expect(bootstrapCut({ messages: [before, boot, reply], loaded_start_index: 0 })).toBe(200);
+    // A re-brief later in the role's own thread never cuts it (jx7d538 carried
+    // three, and cutting at the last hid 395 messages of the role's own work).
+    const rebrief = { timestamp: 400, role: "user", content: "You are the **Calling lead** (@calling) in Union." };
+    const work = { timestamp: 300, role: "assistant", content: "the role's own work" };
+    expect(bootstrapCut({ messages: [boot, reply, work, rebrief, { timestamp: 500, role: "assistant", content: "after" }] })).toBe(200);
+    // Older pages unloaded: the first prompt in the window may be a re-brief, so nothing is cut yet.
+    expect(bootstrapCut({ messages: [work, rebrief, reply], loaded_start_index: 395 })).toBeUndefined();
     // The prompt alone cuts itself, so the page opens on the lead.
     expect(bootstrapCut({ messages: [before, boot] })).toBe(101);
     expect(bootstrapCut({ messages: [reply, later] })).toBeUndefined();

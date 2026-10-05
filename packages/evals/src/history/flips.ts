@@ -2,7 +2,7 @@ import type { EvalFlip, Footing, FlipsResult } from '@codecast/shared/contracts/
 
 import { codecastFreezeStore } from '../adapters/freezes';
 import { repsSurface } from '../commands/line';
-import { batchSet, defaultRuler, footingChange, footingOf, verdictFlips, type RulerOf, type VerdictRun } from '../commands/verdict';
+import { defaultRuler, gradedSet, footingChange, footingOf, verdictFlips, type RulerOf, type VerdictRun } from '../commands/verdict';
 import { flipOf } from '../evalResult';
 import { surfaceMeta } from '../registry';
 
@@ -12,8 +12,7 @@ import { surfaceMeta } from '../registry';
 // would read the model or the ruler as a prompt change, so the comparison
 // refuses then and says which moved.
 
-/** The graded reps of a batch: one per seed, crashes and dry reps left out (they graded nothing). */
-export const gradedSet = <R extends VerdictRun>(rows: R[], batch: string): R[] => batchSet(rows, batch).filter((r) => r.status !== 'crash' && r.status !== 'dry');
+export { gradedSet };
 
 /**
  * The flips from batch `a` to batch `b` among `rows` (one surface's reps).

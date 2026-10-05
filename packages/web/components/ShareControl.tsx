@@ -13,6 +13,9 @@ export interface PublicShare {
   id: string;
   /** Its current share token; absent while nobody can open it without access. */
   token: string | null | undefined;
+  /** Why this viewer may close the link but not open it (SharePopover
+   *  openRefusal); absent when they may do both. */
+  openRefusal?: string | null;
 }
 
 export function ShareControl({
@@ -21,6 +24,7 @@ export function ShareControl({
   publicShare,
   className,
   linkExtra,
+  defaultOpen,
 }: {
   /** What the object is, for the popover title and the chat picker ("task"). */
   label: string;
@@ -33,6 +37,8 @@ export function ShareControl({
   className?: string;
   /** What else the public link carries (SharePopover linkExtra). */
   linkExtra?: React.ReactNode;
+  /** Open the popover on mount (SharePopover defaultOpen). */
+  defaultOpen?: boolean;
 }) {
   const setObjectShareLink = useInboxStore((s) => s.setObjectShareLink);
   const token = publicShare?.token ?? null;
@@ -52,6 +58,8 @@ export function ShareControl({
       }}
       onRevokeShareLink={async () => setObjectShareLink(publicShare!.kind, publicShare!.id, null)}
       linkExtra={linkExtra}
+      openRefusal={publicShare?.openRefusal}
+      defaultOpen={defaultOpen}
     />
   );
   return className ? <span className={`inline-flex ${className}`}>{control}</span> : control;

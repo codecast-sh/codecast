@@ -41,7 +41,7 @@ function world(opts: {
   rows?: RunnerRow[];
   begin?: Record<string, BeginResult>;
   statuses?: string[];
-  quiesceResults?: Array<{ quiesced: boolean; reason?: string } | { error: string }>;
+  quiesceResults?: Array<{ quiesced: boolean; reason?: string; had_pane?: boolean } | { error: string }>;
   resumeError?: string | null;
   resumeNeverExecutes?: boolean;
   transferError?: string;
@@ -85,14 +85,14 @@ function world(opts: {
       return { ok: true, resume_command_id: cmdId };
     },
     confirm: async (id, ok, detail) => { calls.push(["confirm", id, ok, detail?.error ?? detail?.stage]); },
-    fail: async (id, error, cancelled) => { calls.push(["fail", id, error, !!cancelled]); },
+    fail: async (id, error, cancelled, restore) => { calls.push(["fail", id, error, !!cancelled]); if (restore) calls.push(["restore", id]); },
     sendNotice: async (convId, text) => { calls.push(["notice", convId, text]); },
     deviceOnline: async (d) => { calls.push(["deviceOnline", d]); return opts.deviceOnline ?? true; },
     prepareHost: async (d) => { calls.push(["prepareHost", d]); },
     transferToCloud: async (f, o) => {
-      calls.push(["transferToCloud", f.session_id, o.skipTree]);
+      calls.push(["transferToCloud", f.session_id, o.skipTree, o.pushedHead]);
       if (opts.transferError) throw new Error(opts.transferError);
-      return { destinationPath: `/home/ubuntu/work/${f.worktree_name}`, gitRoot: `/home/ubuntu/work/${f.worktree_name}`, sourcePath: f.project_path!, verification: "heads match", localCwd: f.project_path! };
+      return { destinationPath: `/home/ubuntu/work/${f.worktree_name}`, gitRoot: `/home/ubuntu/work/${f.worktree_name}`, sourcePath: f.project_path!, verification: "heads match", localCwd: f.project_path!, ...(o.skipTree ? {} : { pushedHead: `snap-${f.session_id}` }) };
     },
     transferToLocal: async (f) => {
       calls.push(["transferToLocal", f.session_id]);
@@ -114,12 +114,40 @@ describe("migrateRow — a session to the cloud", () => {
       "begin", "quiesce", "report", "prepareHost", "deviceOnline", "report", "transferToCloud", "report", "finish", "notice", "confirm",
     ]);
     expect(w.calls.find((c) => c[0] === "quiesce")).toEqual(["quiesce", "m1", "idle"]);
-    expect(w.calls.find((c) => c[0] === "transferToCloud")).toEqual(["transferToCloud", "s1", false]);
+    expect(w.calls.find((c) => c[0] === "transferToCloud")).toEqual(["transferToCloud", "s1", false, undefined]);
     expect(w.calls.find((c) => c[0] === "finish")).toEqual(["finish", "m1", {
       project_path: "/home/ubuntu/work/a", git_root: "/home/ubuntu/work/a", verification: "heads match", source_path: "/Users/me/src/repo/.codecast/worktrees/a",
     }]);
     expect(w.calls.find((c) => c[0] === "confirm")).toEqual(["confirm", "m1", true, "running on Linux box"]);
     expect(w.calls.some((c) => c[0] === "fail")).toBe(false);
+  });
+
+  test("siblings from one folder: the first pushes, the second skips the tree and verifies against the first one's snapshot", async () => {
+    const w = world({ begin: { m1: facts(), m2: facts({ session_id: "s2", conversation_id: "c2" }) } });
+    const ledger = new SharedTreeLedger();
+    const [a, b] = await Promise.all([migrateRow(w.io, w.batch, row(), ledger), migrateRow(w.io, w.batch, row({ migration_id: "m2", conversation_id: "c2", session_id: "s2" }), ledger)]);
+    expect([a.outcome, b.outcome]).toEqual(["done", "done"]);
+    expect(w.calls.filter((c) => c[0] === "transferToCloud")).toEqual([["transferToCloud", "s1", false, undefined], ["transferToCloud", "s2", true, "snap-s1"]]);
+  });
+
+  test("a sibling whose push failed hands the push to the next one instead of letting it skip the tree", async () => {
+    const ledger = new SharedTreeLedger();
+    expect(ledger.claim("k")).toBe(true);
+    const waiting = ledger.awaitPushed("k");
+    ledger.release("k");
+    expect(await waiting).toEqual({ pushed: false });
+    expect(ledger.claim("k")).toBe(true);
+    ledger.settle("k", "snap");
+    expect(await ledger.awaitPushed("k")).toEqual({ pushed: true, head: "snap" });
+  });
+
+  test("a running session stopped for a move that then fails is restarted where it is; one that was not running is left alone", async () => {
+    const stopped = world({ quiesceResults: [{ quiesced: true, had_pane: true }], transferError: "push refused" });
+    expect((await migrateRow(stopped.io, stopped.batch, row(), new SharedTreeLedger())).outcome).toBe("failed");
+    expect(stopped.calls.filter((c) => c[0] === "restore")).toEqual([["restore", "m1"]]);
+    const parked = world({ quiesceResults: [{ quiesced: true, had_pane: false }], transferError: "push refused" });
+    await migrateRow(parked.io, parked.batch, row(), new SharedTreeLedger());
+    expect(parked.calls.some((c) => c[0] === "restore")).toBe(false);
   });
 
   test("mid-turn session: waits, polling, until the turn ends — then stops it gently", async () => {

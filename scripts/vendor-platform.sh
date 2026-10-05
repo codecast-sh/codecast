@@ -207,13 +207,21 @@ write_manifest
 
 # bun materializes file: deps as COPIES under node_modules/.bun, and keeps
 # serving the copy after the mirror changes; vite then pre-bundles the old copy
-# into its optimizer cache and serves that. Purge the copies and reinstall,
-# then purge every web optimizer cache: .vite (the dev server) and .vite-smoke
-# (the smoke suite's second dev server, scripts/rig/vite.smoke.config.mjs). The
-# caches go last: a running dev server (plugins/depsCacheGuard.ts) restarts
-# itself when its cache disappears, and it must rebuild against a finished
-# node_modules, not one bun is still writing.
-rm -rf "$ROOT"/node_modules/.bun/@platform+*
+# into its optimizer cache and serves that. Refresh each existing copy in place
+# from the mirror (rsync swaps file by file, so a module is never missing while
+# cast, the daemon and eval runs keep importing it), then install so a package
+# the mirror gained gets its copy. Deleting the copies first left a window of
+# minutes under load in which every `cast` command and eval rep failed with
+# "Cannot find module '@platform/...'". Then purge every web optimizer cache:
+# .vite (the dev server) and .vite-smoke (the smoke suite's second dev server,
+# scripts/rig/vite.smoke.config.mjs). The caches go last: a running dev server
+# (plugins/depsCacheGuard.ts) restarts itself when its cache disappears, and it
+# must rebuild against a finished node_modules, not one bun is still writing.
+for copy in "$ROOT"/node_modules/.bun/@platform+*/node_modules/@platform/*; do
+  [ -d "$copy" ] || continue
+  name=$(basename "$copy")
+  [ -d "$ROOT/platform/packages/$name" ] && "${RSYNC[@]}" "$ROOT/platform/packages/$name/" "$copy/"
+done
 (cd "$ROOT" && bun install --silent)
 rm -rf "$ROOT"/packages/web/node_modules/.vite "$ROOT"/packages/web/node_modules/.vite-smoke
-echo "re-materialized the @platform copies and cleared the vite caches"
+echo "refreshed the @platform copies in place and cleared the vite caches"

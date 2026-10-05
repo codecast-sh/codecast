@@ -70,6 +70,8 @@
 .cc-head { display: flex; flex-direction: column; gap: 0.4rem; min-width: 0; }
 .cc-head-title { gap: 0.5rem; }
 .cc-head-title > .cc-cause { margin-top: 0.25rem; }
+.cc-context { margin: 2px 0 6px; font-size: 14px; line-height: 1.5; color: var(--sol-text-muted); max-width: 62ch; }
+.cc-head-title .cc-context { font-size: 15px; }
 .cc-asked { margin: 0; font-size: 13px; line-height: 1.4; color: var(--sol-text-dim); }
 .cc-head-row { gap: 0.25rem; }
 .cc-head-row .cc-asked { font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -108,7 +110,7 @@
 
 /* the decision: what changes leads, what was wrong supports it */
 .cc-sentences { display: flex; flex-direction: column; gap: 0.6rem; }
-.cc-sentences > .cc-wrong-label { margin-bottom: -0.35rem; }
+.cc-sentences > .cc-wrong-label, .cc-sentences > .cc-change-label { margin-bottom: -0.35rem; }
 /* The change sentence is one style everywhere it reads (the page's title,
    the card's head, the transcript, the queue's row): mono, one weight, one
    tracking. Only its size follows the density. */

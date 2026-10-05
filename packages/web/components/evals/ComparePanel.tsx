@@ -9,8 +9,10 @@ import { X } from "lucide-react";
 import type { BatchStats, BatchesResponse, EvalRoute } from "@codecast/shared/contracts/evalsApi";
 import { ExamplePair } from "../decisions/ChangeCardView";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph, batchLabel, flipFreezeHref, plural, score2, shortModel, usd, verdictOfSet } from "./parts";
+import { ChangedPrompts, EvalsLink, FlipRunLinks, LockBadge, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { evalsHref } from "./evalsPaths";
+import { plural, score2, shortModel, usd, batchLabel } from "./format";
+import { flipFreezeHref, verdictOfSet } from "./verdictModel";
 
 export interface ComparePanelProps {
   surface: string;
@@ -60,6 +62,8 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
   const files = res?.promptDiffs.length ? [...new Set(res.promptDiffs.map((p) => p.file))] : promptFiles(route);
   const newlyFailing = (res?.gateDeltas ?? []).filter((g) => g.b > g.a);
   const v = res?.verdict ?? null;
+  // A pair that did not separate on its own may still be one night of a pooled regression: attribution stays one click away, labelled as such.
+  const unseparated = v !== null && (v.separation.kind === "not-separated" || v.separation.kind === "too-few");
   return (
     <aside className="ev-sf-compare ev-card" aria-label="Compare two batches" data-ev-compare>
       <header className="ev-sf-compare-head">
@@ -69,8 +73,13 @@ export function ComparePanel({ surface, route, a, b, res, loading, error, onClos
         </span>
         {/* In the header, so the hop to attribution is in view whenever the drawer is, however long its flips run. */}
         <span className="ev-sf-compare-actions">
-          <EvalsLink href={evalsHref.bisectNew({ surface, good: a.batch, bad: b.batch })} className="ev-sf-btn ev-sf-btn--primary" data-ev-attribute>
-            Attribute this
+          <EvalsLink
+            href={evalsHref.bisectNew({ surface, good: a.batch, bad: b.batch })}
+            className={unseparated ? "ev-btn ev-btn--lg" : "ev-btn ev-btn--lg ev-btn--go sol-btn-solid"}
+            data-ev-attribute={unseparated ? "anyway" : "separated"}
+            title={unseparated ? "Batch 2 against batch 1 alone did not separate; attribution weighs this pair anyway" : undefined}
+          >
+            {unseparated ? "Attribute anyway: this pair did not separate" : "Attribute this"}
             <KeyCap size="xs">b</KeyCap>
           </EvalsLink>
           <button type="button" className="ev-sf-iconbtn" onClick={onClose} aria-label="Close the comparison">

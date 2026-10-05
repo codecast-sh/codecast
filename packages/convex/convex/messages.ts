@@ -1,4 +1,4 @@
-import { stripPastedContent } from "@codecast/shared/contracts";
+import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { countersFor } from "./lib/orgCaps";
 import { calibrationSlot } from "./usageCalibration";
@@ -21,6 +21,7 @@ import { maybeScheduleTitleGeneration, firstPromptOf, FIRST_PROMPT_STAMP_WINDOW 
 import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
+import { storeHostedReplay } from "./hostedReplay";
 import { canSendProductMessage, markPendingDelivered } from "./pendingMessages";
 import { queuedBy, scheduleUserSend } from "./lib/userSend";
 import { validateCommandId } from "./localFirstCommands";
@@ -1439,6 +1440,7 @@ export const addMessage = mutation({
       );
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
+    refuseHostedTranscriptWrite(conversation);
 
     const msgTimestamp = args.timestamp || Date.now();
 
@@ -1767,7 +1769,7 @@ export async function supersedeApiErrorBanners(
   return deleted;
 }
 
-const messageValidator = v.object({
+export const messageValidator = v.object({
   message_uuid: v.optional(v.string()),
   // Accepted for wire compatibility with daemons that still stamp source
   // ordering; the handler does not use them.
@@ -1781,6 +1783,9 @@ const messageValidator = v.object({
   ),
   content: v.optional(v.string()),
   thinking: v.optional(v.string()),
+  // Kept for hosted writes only, in message_thinking rather than on the row.
+  thinking_signature: v.optional(v.string()),
+  thinking_redacted: v.optional(v.boolean()),
   tool_calls: v.optional(v.array(v.object({
     id: v.string(),
     name: v.string(),
@@ -1818,6 +1823,9 @@ const messageValidator = v.object({
   })),
   api_message_id: v.optional(v.string()),
 });
+
+/** The fields one batch message may carry (the hosted harness's MessageRow is checked against it). */
+export const MESSAGE_BATCH_FIELDS = Object.keys(messageValidator.fields);
 
 export type AddMessagesAgentStatusProjection = {
   has_assistant_message: boolean;
@@ -1882,6 +1890,29 @@ export function findDuplicateUserRow<T extends UserDedupeRow>(
   );
 }
 
+// An empty batch is a no-op (false); an oversized one is refused before any
+// read. Shared by every writer of a message batch.
+function batchHasWork(messages: readonly unknown[]): boolean {
+  if (messages.length === 0) return false;
+  if (messages.length > MAX_BATCH_SIZE) {
+    throw new Error(`Batch size ${messages.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
+  }
+  return true;
+}
+
+// A hosted conversation's transcript is written by its turn engine alone
+// (writeHostedMessages). Every client writer refuses it, the owner's own token
+// included: a local agent holding that token could otherwise plant assistant
+// turns or tool results the model replays as its own, settle the owner's
+// queued input through the echo match, or report usage.
+function refuseHostedTranscriptWrite(conversation: Doc<"conversations">) {
+  if (isHostedAgentType(conversation.agent_type)) {
+    throw new Error("A hosted conversation's transcript is written by its turn engine");
+  }
+}
+
+export type MessageBatch = { conversation_id: Id<"conversations">; messages: Array<typeof messageValidator.type> };
+
 export const addMessages = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1889,11 +1920,8 @@ export const addMessages = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    if (args.messages.length === 0) {
+    if (!batchHasWork(args.messages)) {
       return { inserted: 0, ids: [] };
-    }
-    if (args.messages.length > MAX_BATCH_SIZE) {
-      throw new Error(`Batch size ${args.messages.length} exceeds maximum of ${MAX_BATCH_SIZE}`);
     }
 
     const conversation = await ctx.db.get(args.conversation_id);
@@ -1911,398 +1939,449 @@ export const addMessages = mutation({
       );
       throw new Error("Unauthorized: can only add messages to your own conversations");
     }
+    refuseHostedTranscriptWrite(conversation);
 
-    const messages = args.messages.filter((msg) =>
-      !(
-        conversation.owner_device_id &&
-        typeof msg.source_device_id === "string" &&
-        typeof msg.source_revision === "number" &&
-        msg.source_device_id !== conversation.owner_device_id
-      )
-    );
-    if (messages.length === 0) {
-      // The session moved to another device. Acknowledge the old daemon's
-      // durable retry without letting any transcript-derived side effects
-      // (status, loop state, title/doc extraction) leak through.
-      return {
-        inserted: 0,
-        ids: [],
-        transcript_revision: conversation.transcript_revision ?? 0,
-      };
+    return await writeMessageBatch(ctx, conversation, args);
+  },
+});
+
+// The hosted assistant's transcript writer (plan pl-840): the same batch
+// write as addMessages, with every side effect, for a conversation whose turns
+// run in this backend and so hold no api token. Streaming rewrites one row by
+// message_uuid; `usage` rides only the final write of a message, under a
+// unique api_message_id, so rollUpUsage counts each model call once.
+export const writeHostedMessages = internalMutation({
+  args: {
+    conversation_id: v.id("conversations"),
+    messages: v.array(messageValidator),
+  },
+  handler: async (ctx, args) => {
+    if (!batchHasWork(args.messages)) {
+      return { inserted: 0, ids: [] };
+    }
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    return await writeMessageBatch(ctx, conversation, args);
+  },
+});
+
+// Everything addMessages does once the writer is known to own the
+// conversation: the device fence, inserts and uuid rewrites, the pending echo
+// settle, the conversation patch (counts, previews, usage rollup, banners),
+// and the scheduled projections (agent status, title, docs, needs input).
+export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"conversations">, args: MessageBatch) {
+  // Only a hosted conversation's turn engine writes here with thinking
+  // signatures and approvable tool calls (client writers refuse hosted rows).
+  const hosted = isHostedAgentType(conversation.agent_type);
+  const messages = args.messages.filter((msg) =>
+    !(
+      conversation.owner_device_id &&
+      typeof msg.source_device_id === "string" &&
+      typeof msg.source_revision === "number" &&
+      msg.source_device_id !== conversation.owner_device_id
+    )
+  );
+  if (messages.length === 0) {
+    // The session moved to another device. Acknowledge the old daemon's
+    // durable retry without letting any transcript-derived side effects
+    // (status, loop state, title/doc extraction) leak through.
+    return {
+      inserted: 0,
+      ids: [],
+      transcript_revision: conversation.transcript_revision ?? 0,
+    };
+  }
+
+  const ids: Id<"messages">[] = [];
+  let insertedCount = 0;
+  // Batch positions this call inserted (vs patched an existing uuid), for
+  // the usage rollup: a resync must never count a turn twice.
+  const insertedIndexes = new Set<number>();
+  let oldRowEdits = 0;
+  let lastUserContentStored: string | undefined;
+
+  // Collect pending_messages ONCE per batch instead of once per user message.
+  // This was the dominant per-message read amplifier on the write hot-path —
+  // a 25-message batch with several user turns re-scanned the whole pending set
+  // each time. Most batches have no pending rows, so we skip the read entirely
+  // unless the batch actually carries a user message. consumedPendingIds keeps a
+  // pending row from matching two different user messages in the same batch.
+  const batchHasUserMsg = args.messages.some((m) => m.role === "user");
+  const pendingMsgs = batchHasUserMsg ? await pendingRowsForEcho(ctx, args.conversation_id) : [];
+  const consumedPendingIds = new Set<Id<"pending_messages">>();
+
+  for (const [batchIndex, msg] of args.messages.entries()) {
+    const msgTimestamp = msg.timestamp || Date.now();
+
+    const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
+    const safeThinking = msg.thinking ? redactSecrets(msg.thinking) : msg.thinking;
+    // A hosted conversation's raw tool call arguments, which an approved call
+    // runs with, are kept server side by storeHostedReplay; the row keeps the
+    // redacted form like every other transcript.
+    const safeToolCalls = msg.tool_calls?.map(tc => ({
+      ...tc,
+      input: redactSecrets(tc.input),
+    }));
+    const safeToolResults = msg.tool_results?.map(tr => ({
+      ...tr,
+      content: redactSecrets(tr.content),
+    }));
+    // Resolve the exact pending intent before duplicate suppression. Two
+    // identical user sends with different client ids are distinct durable
+    // commands and need distinct transcript relations for v2 coverage.
+    const matchingPending = msg.role === "user" && pendingMsgs.length > 0
+      ? findEchoedPendingMessage(
+          pendingMsgs,
+          safeContent,
+          msgTimestamp,
+          consumedPendingIds,
+        )
+      : undefined;
+
+    if (msg.message_uuid) {
+      const existing = await ctx.db
+        .query("messages")
+        .withIndex("by_conversation_uuid", (q) =>
+          q.eq("conversation_id", args.conversation_id).eq("message_uuid", msg.message_uuid)
+        )
+        .first();
+
+      if (existing) {
+        const patch = buildExistingMessagePatch(existing, {
+          role: msg.role,
+          content: safeContent,
+          thinking: safeThinking,
+          tool_calls: safeToolCalls,
+          tool_results: safeToolResults,
+          images: msg.images,
+          files: msg.files,
+          subtype: msg.subtype,
+          model: msg.model,
+        });
+        // A hosted turn streams a model message into one row and sends its
+        // usage only on the final write, which lands here as a rewrite: the
+        // first usage a row receives is stored and counted once, like an
+        // insert (rollUpUsage, keyed by the message's api_message_id).
+        const finalUsage = hosted && msg.usage && !existing.usage ? msg.usage : undefined;
+        if (finalUsage) insertedIndexes.add(batchIndex);
+        const written = finalUsage ? { ...(patch ?? {}), usage: finalUsage } : patch;
+        if (written) {
+          await ctx.db.patch(existing._id, written);
+          // An edit far behind the conversation head is a backfill (resync
+          // after resume/fork), invisible to the client's live tail
+          // subscription — count it so the watermark bumps below. The margin
+          // keeps ordinary streaming patches (which target the newest row)
+          // from bumping the conversation doc on every flush.
+          if (existing.timestamp < conversation.updated_at - OLD_ROW_EDIT_MARGIN_MS) {
+            oldRowEdits++;
+          }
+        }
+        const current = { ...existing, ...written };
+        await materializeConversationImages(ctx, args.conversation_id, existing._id, existing.timestamp,
+          current.content, current.images);
+        if (safeToolCalls !== undefined || safeToolResults !== undefined) {
+          await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
+            current.tool_calls, current.tool_results, extractFileChanges([existing]));
+        }
+        if (hosted) await storeHostedReplay(ctx, args.conversation_id, existing._id, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
+        ids.push(existing._id);
+        continue;
+      }
     }
 
-    const ids: Id<"messages">[] = [];
-    let insertedCount = 0;
-    // Batch positions this call inserted (vs patched an existing uuid), for
-    // the usage rollup: a resync must never count a turn twice.
-    const insertedIndexes = new Set<number>();
-    let oldRowEdits = 0;
-    let lastUserContentStored: string | undefined;
-
-    // Collect pending_messages ONCE per batch instead of once per user message.
-    // This was the dominant per-message read amplifier on the write hot-path —
-    // a 25-message batch with several user turns re-scanned the whole pending set
-    // each time. Most batches have no pending rows, so we skip the read entirely
-    // unless the batch actually carries a user message. consumedPendingIds keeps a
-    // pending row from matching two different user messages in the same batch.
-    const batchHasUserMsg = args.messages.some((m) => m.role === "user");
-    const pendingMsgs = batchHasUserMsg ? await pendingRowsForEcho(ctx, args.conversation_id) : [];
-    const consumedPendingIds = new Set<Id<"pending_messages">>();
-
-    for (const [batchIndex, msg] of args.messages.entries()) {
-      const msgTimestamp = msg.timestamp || Date.now();
-
-      const safeContent = msg.content ? redactSecrets(msg.content) : msg.content;
-      const safeThinking = msg.thinking ? redactSecrets(msg.thinking) : msg.thinking;
-      const safeToolCalls = msg.tool_calls?.map(tc => ({
-        ...tc,
-        input: redactSecrets(tc.input),
-      }));
-      const safeToolResults = msg.tool_results?.map(tr => ({
-        ...tr,
-        content: redactSecrets(tr.content),
-      }));
-      // Resolve the exact pending intent before duplicate suppression. Two
-      // identical user sends with different client ids are distinct durable
-      // commands and need distinct transcript relations for v2 coverage.
-      const matchingPending = msg.role === "user" && pendingMsgs.length > 0
-        ? findEchoedPendingMessage(
-            pendingMsgs,
-            safeContent,
-            msgTimestamp,
-            consumedPendingIds,
-          )
-        : undefined;
-
-      if (msg.message_uuid) {
-        const existing = await ctx.db
+    if (msg.role === "user") {
+      const hasContent = !!safeContent?.trim();
+      const hasImages = msg.images && msg.images.length > 0;
+      const hasToolResults = !!msg.tool_results && msg.tool_results.length > 0;
+      if ((hasContent || hasImages) && !hasToolResults) {
+        const recentMessages = await ctx.db
           .query("messages")
-          .withIndex("by_conversation_uuid", (q) =>
-            q.eq("conversation_id", args.conversation_id).eq("message_uuid", msg.message_uuid)
+          .withIndex("by_conversation_timestamp", (q) =>
+            q.eq("conversation_id", args.conversation_id)
           )
-          .first();
-
-        if (existing) {
-          const patch = buildExistingMessagePatch(existing, {
-            role: msg.role,
-            content: safeContent,
-            thinking: safeThinking,
-            tool_calls: safeToolCalls,
-            tool_results: safeToolResults,
-            images: msg.images,
-            files: msg.files,
-            subtype: msg.subtype,
-            model: msg.model,
-          });
-          if (patch) {
-            await ctx.db.patch(existing._id, patch);
-            // An edit far behind the conversation head is a backfill (resync
-            // after resume/fork), invisible to the client's live tail
-            // subscription — count it so the watermark bumps below. The margin
-            // keeps ordinary streaming patches (which target the newest row)
-            // from bumping the conversation doc on every flush.
-            if (existing.timestamp < conversation.updated_at - OLD_ROW_EDIT_MARGIN_MS) {
-              oldRowEdits++;
+          .order("desc")
+          .take(5);
+        const dup = findDuplicateUserRow(
+          recentMessages,
+          { content: safeContent, timestamp: msgTimestamp, tool_results: msg.tool_results, images: msg.images },
+          redactSecrets,
+        );
+        if (dup && (!matchingPending?.client_id ||
+          dup.client_id === matchingPending.client_id)) {
+          // If incoming message has images/tool_results that the existing doesn't, patch them in.
+          // This handles the race where a fast sync path stores the message without images,
+          // and the image-aware sync arrives later matching by content dedup.
+          const patch: Record<string, unknown> = {};
+          if (msg.images && msg.images.length > 0 && (!dup.images || dup.images.length === 0)) {
+            patch.images = msg.images;
+          }
+          if (msg.tool_results && msg.tool_results.length > 0 && (!dup.tool_results || dup.tool_results.length === 0)) {
+            patch.tool_results = safeToolResults;
+          }
+          if (Object.keys(patch).length > 0) {
+            await ctx.db.patch(dup._id, patch);
+          }
+          if (matchingPending) {
+            consumedPendingIds.add(matchingPending._id);
+            const dupPatch: Record<string, unknown> = {};
+            if (!dup.client_id && matchingPending.client_id) {
+              dupPatch.client_id = matchingPending.client_id;
             }
+            if (!dup.from_user_id && matchingPending.from_user_id) {
+              dupPatch.from_user_id = matchingPending.from_user_id;
+            }
+            if (Object.keys(dupPatch).length > 0) {
+              await ctx.db.patch(dup._id, dupPatch);
+            }
+            await settleEchoedPending(ctx, matchingPending, dup._id);
           }
-          const current = { ...existing, ...patch };
-          await materializeConversationImages(ctx, args.conversation_id, existing._id, existing.timestamp,
-            current.content, current.images);
-          if (safeToolCalls !== undefined || safeToolResults !== undefined) {
-            await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
-              current.tool_calls, current.tool_results, extractFileChanges([existing]));
-          }
-          ids.push(existing._id);
+          ids.push(dup._id);
           continue;
         }
       }
-
-      if (msg.role === "user") {
-        const hasContent = !!safeContent?.trim();
-        const hasImages = msg.images && msg.images.length > 0;
-        const hasToolResults = !!msg.tool_results && msg.tool_results.length > 0;
-        if ((hasContent || hasImages) && !hasToolResults) {
-          const recentMessages = await ctx.db
-            .query("messages")
-            .withIndex("by_conversation_timestamp", (q) =>
-              q.eq("conversation_id", args.conversation_id)
-            )
-            .order("desc")
-            .take(5);
-          const dup = findDuplicateUserRow(
-            recentMessages,
-            { content: safeContent, timestamp: msgTimestamp, tool_results: msg.tool_results, images: msg.images },
-            redactSecrets,
-          );
-          if (dup && (!matchingPending?.client_id ||
-            dup.client_id === matchingPending.client_id)) {
-            // If incoming message has images/tool_results that the existing doesn't, patch them in.
-            // This handles the race where a fast sync path stores the message without images,
-            // and the image-aware sync arrives later matching by content dedup.
-            const patch: Record<string, unknown> = {};
-            if (msg.images && msg.images.length > 0 && (!dup.images || dup.images.length === 0)) {
-              patch.images = msg.images;
-            }
-            if (msg.tool_results && msg.tool_results.length > 0 && (!dup.tool_results || dup.tool_results.length === 0)) {
-              patch.tool_results = safeToolResults;
-            }
-            if (Object.keys(patch).length > 0) {
-              await ctx.db.patch(dup._id, patch);
-            }
-            if (matchingPending) {
-              consumedPendingIds.add(matchingPending._id);
-              const dupPatch: Record<string, unknown> = {};
-              if (!dup.client_id && matchingPending.client_id) {
-                dupPatch.client_id = matchingPending.client_id;
-              }
-              if (!dup.from_user_id && matchingPending.from_user_id) {
-                dupPatch.from_user_id = matchingPending.from_user_id;
-              }
-              if (Object.keys(dupPatch).length > 0) {
-                await ctx.db.patch(dup._id, dupPatch);
-              }
-              await settleEchoedPending(ctx, matchingPending, dup._id);
-            }
-            ids.push(dup._id);
-            continue;
-          }
-        }
-      }
-
-      let images = msg.images;
-      let contentToStore = safeContent;
-      let clientIdToStore: string | undefined;
-      if (matchingPending) {
-          consumedPendingIds.add(matchingPending._id);
-          contentToStore = redactSecrets(matchingPending.content);
-          clientIdToStore = matchingPending.client_id;
-      }
-      if (msg.role === "user") {
-        const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
-        images = (resolved === null
-          ? await verifiedEchoImages(ctx, safeContent || "")
-          : resolved) as typeof images;
-        if (images && images.length === 0) images = undefined;
-      }
-
-      const messageId = await ctx.db.insert("messages", {
-        conversation_id: args.conversation_id,
-        // Sender identity comes from the echoed pending row (team sends, cast
-        // send); owner-typed terminal messages have no pending row and stay
-        // unattributed, which the UI reads as "the owner".
-        from_user_id: matchingPending?.from_user_id,
-        message_uuid: msg.message_uuid,
-        role: msg.role,
-        content: contentToStore,
-        thinking: safeThinking,
-        tool_calls: safeToolCalls,
-        tool_results: safeToolResults,
-        images,
-        files: msg.files,
-        subtype: msg.subtype,
-        model: msg.model,
-        usage: msg.usage,
-        client_id: clientIdToStore,
-        timestamp: msgTimestamp,
-      });
-      if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
-      ids.push(messageId);
-      insertedCount++;
-      insertedIndexes.add(batchIndex);
-      await scheduleUserSend(ctx, conversation, { _id: messageId, role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id, queued: queuedBy(matchingPending) }, msgTimestamp);
-      await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
-      await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
-      if (msg.role === "user") lastUserContentStored = contentToStore;
     }
 
-    if (insertedCount > 0) {
-      const newMessageCount = conversation.message_count + insertedCount;
-      const lastMsg = args.messages[args.messages.length - 1];
-      // Use the actual max message timestamp instead of Date.now(): for live
-      // sync these match, but for historical backfill (sync_mode=all dredging
-      // up months-old JSONLs) Date.now() would falsely mark every old session
-      // as just-active and pollute the inbox's "needs input" / "working"
-      // buckets. Math.max guards against clock skew or out-of-order batches.
-      const maxMsgTs = args.messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
-
-      // --- Supersede transient Claude Code API/auth-error banners ---
-      // The CLI rewinds these out of its transcript on a successful retry, but
-      // the daemon's append-only sync has already persisted the banner. Once a
-      // genuine turn lands, delete the stale banner(s) that precede it; a
-      // banner-only batch just flips the gate flag so a later turn can clear it.
-      // The deletion scan only runs on the rare recovery batch — ordinary
-      // traffic skips it entirely.
-      const batchHasBanner = args.messages.some(isBannerTurn);
-      const batchHasRealTurn = args.messages.some(isRealTurn);
-      const maxRealTurnTs = args.messages.reduce(
-        (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
-        0,
-      );
-      const newestSignificant = newestSignificantMessage(args.messages);
-      const wasPendingApiError = conversation.pending_api_error === true;
-
-      let supersededBanners = 0;
-      if (
-        apiErrorBatchAction({
-          batchHasRealTurn,
-          batchHasBanner,
-          conversationPending: wasPendingApiError,
-        }) === "supersede"
-      ) {
-        supersededBanners = await supersedeApiErrorBanners(ctx, args.conversation_id, maxRealTurnTs);
-      }
-
-      const convPatch: Record<string, unknown> = {
-        message_count: newMessageCount - supersededBanners,
-        updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
-        last_message_role: lastMsg.role,
-      };
-      stampFirstPrompt(conversation, args.messages, convPatch);
-      await rollUpUsage(ctx, conversation, args.messages.map((m: any, i: number) => ({ usage: m.usage, api_message_id: m.api_message_id, inserted: insertedIndexes.has(i) })), convPatch, Date.now());
-      if (oldRowEdits > 0) {
-        convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
-      }
-      const batchModel = lastKnownModelFromBatch(args.messages);
-      if (batchModel && batchModel !== conversation.model) {
-        convPatch.model = batchModel;
-      }
-      const batchEffort = lastKnownEffortFromBatch(args.messages);
-      if (batchEffort && batchEffort !== conversation.effort) {
-        convPatch.effort = batchEffort;
-      }
-      // Keep the gate flag in lockstep with "newest banner-or-turn is a banner".
-      const newestIsBanner = newestSignificant != null && isBannerTurn(newestSignificant);
-      const safetyPatch = safetyBlockPatch(conversation, args.messages, Date.now());
-      const nextPending = safetyPatch ? true : nextPendingApiError({
-        newestIsBanner,
-        batchHasRealTurn,
-        conversationPending: wasPendingApiError,
-      });
-      if (nextPending !== wasPendingApiError) {
-        convPatch.pending_api_error = nextPending;
-      }
-      // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
-      const nextBannerKind = safetyPatch?.pending_api_error_kind ?? (newestIsBanner
-        ? classifyApiErrorBanner(newestSignificant!.content) ?? undefined
-        : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined);
-      if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
-        convPatch.pending_api_error_kind = nextBannerKind;
-      }
-      const nextBannerAt = safetyPatch?.pending_api_error_at ?? (newestIsBanner
-        ? newestSignificant!.timestamp || Date.now()
-        : nextPending ? conversation.pending_api_error_at ?? undefined : undefined);
-      if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
-        convPatch.pending_api_error_at = nextBannerAt;
-      }
-      // A fresh blocked-kind park triggers the debounced reactions (see
-      // addMessage): auto-switch check + aggregated incident notification.
-      if (
-        (newestIsBanner || safetyPatch) &&
-        nextBannerKind &&
-        nextBannerKind !== "error" &&
-        (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
-      ) {
-        await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
-      }
-      if (safetyPatch) Object.assign(convPatch, safetyPatch);
-      const userMsgs = args.messages.filter((m) => m.role === "user");
-      if (userMsgs.length > 0) {
-        const lastUserMsg = userMsgs[userMsgs.length - 1];
-        const lastUserTs = userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
-        if (lastUserTs > 0) {
-          convPatch.last_user_message_at = lastUserTs;
-        }
-        const previewSrc = lastUserContentStored || lastUserMsg.content;
-        const preview = redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
-        if (preview) {
-          convPatch.last_message_preview = preview;
-        }
-      }
-      const imagePreview = await latestImagePreviewUrl(ctx, args.messages);
-      if (imagePreview && imagePreview !== conversation.image_preview_url) {
-        convPatch.image_preview_url = imagePreview;
-      }
-      // What the agent is doing now, off the batch's newest tool call (the
-      // inbox activity line; see schema.activity).
-      const nextActivity = deriveActivity(args.messages, conversation.activity, Date.now());
-      if (nextActivity) convPatch.activity = nextActivity;
-      await ctx.db.patch(args.conversation_id, convPatch);
-
-      const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
-      if (agentStatusProjection) {
-        await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
-          conversation_id: args.conversation_id,
-          scheduled_at: Date.now(),
-          ...agentStatusProjection,
-        });
-      }
-
-      // Comment-thread agent reply: when this conversation is the hidden fork
-      // spawned to answer in a teammate comment thread, mirror its fresh reply
-      // back into the placeholder comment. Single cheap field check skips this for
-      // all ordinary traffic; the mirror runs off this transaction.
-      if (
-        (conversation as { comment_fork_comment_id?: unknown }).comment_fork_comment_id &&
-        args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())
-      ) {
-        await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
-          fork_conversation_id: args.conversation_id,
-        });
-      }
-
-      await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
-
-    } else if (oldRowEdits > 0) {
-      // Backfill-only batch (no inserts): still bump the watermark so tail
-      // subscribers learn that rows behind their anchor changed.
-      await ctx.db.patch(args.conversation_id, {
-        transcript_revision: (conversation.transcript_revision ?? 0) + 1,
-      });
+    let images = msg.images;
+    let contentToStore = safeContent;
+    let clientIdToStore: string | undefined;
+    if (matchingPending) {
+        consumedPendingIds.add(matchingPending._id);
+        contentToStore = redactSecrets(matchingPending.content);
+        clientIdToStore = matchingPending.client_id;
+    }
+    if (msg.role === "user") {
+      const resolved = resolveEchoImages(images, matchingPending, safeContent || "");
+      images = (resolved === null
+        ? await verifiedEchoImages(ctx, safeContent || "")
+        : resolved) as typeof images;
+      if (images && images.length === 0) images = undefined;
     }
 
-    // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into
-    // conversation.loop_state. Like the AskUserQuestion check below, this must
-    // run even when insertedCount is 0: tool_calls usually land as a PATCH to
-    // the already-synced streaming message. The batchHasLoopEvent gate keeps
-    // ordinary traffic free of the derivation.
-    if (batchHasLoopEvent(args.messages)) {
-      const nextLoop = deriveLoopState(conversation.loop_state, args.messages, Date.now());
-      if (nextLoop) await ctx.db.patch(args.conversation_id, { loop_state: nextLoop });
-    }
+    const messageId = await ctx.db.insert("messages", {
+      conversation_id: args.conversation_id,
+      // Sender identity comes from the echoed pending row (team sends, cast
+      // send); owner-typed terminal messages have no pending row and stay
+      // unattributed, which the UI reads as "the owner".
+      from_user_id: matchingPending?.from_user_id,
+      message_uuid: msg.message_uuid,
+      role: msg.role,
+      content: contentToStore,
+      thinking: safeThinking,
+      tool_calls: safeToolCalls,
+      tool_results: safeToolResults,
+      images,
+      files: msg.files,
+      subtype: msg.subtype,
+      model: msg.model,
+      usage: msg.usage,
+      client_id: clientIdToStore,
+      timestamp: msgTimestamp,
+    });
+    if (matchingPending) await settleEchoedPending(ctx, matchingPending, messageId);
+    if (hosted) await storeHostedReplay(ctx, args.conversation_id, messageId, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
+    ids.push(messageId);
+    insertedCount++;
+    insertedIndexes.add(batchIndex);
+    await scheduleUserSend(ctx, conversation, { _id: messageId, role: msg.role, content: contentToStore, tool_results: safeToolResults, from_user_id: matchingPending?.from_user_id, queued: queuedBy(matchingPending) }, msgTimestamp);
+    await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
+    if (msg.role === "user") lastUserContentStored = contentToStore;
+  }
 
-    // An AskUserQuestion tool_use arriving as the batch's newest message means
-    // the agent just blocked on the user — the needs-input verdict flips NOW,
-    // on this message write, not on any status write (the daemon races back to
-    // "working" while the poll is open, and buffered polls send no status at
-    // all). Deliberately OUTSIDE the insertedCount block: the poll's tool_calls
-    // usually land as a PATCH to the already-synced streaming message
-    // (insertedCount 0), which is exactly the batch that must schedule the
-    // check. The check re-reads the messages table at fire time, so a poll
-    // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
-    const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+  // Each row's usage, and whether this batch is its first write (inserted, or
+  // a hosted streamed row's final write): the one input both rollups below read.
+  const usageRows = args.messages.map((m: any, i: number) => ({ usage: m.usage, api_message_id: m.api_message_id, inserted: insertedIndexes.has(i) }));
+  if (insertedCount > 0) {
+    const newMessageCount = conversation.message_count + insertedCount;
+    const lastMsg = args.messages[args.messages.length - 1];
+    // Use the actual max message timestamp instead of Date.now(): for live
+    // sync these match, but for historical backfill (sync_mode=all dredging
+    // up months-old JSONLs) Date.now() would falsely mark every old session
+    // as just-active and pollute the inbox's "needs input" / "working"
+    // buckets. Math.max guards against clock skew or out-of-order batches.
+    const maxMsgTs = args.messages.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+
+    // --- Supersede transient Claude Code API/auth-error banners ---
+    // The CLI rewinds these out of its transcript on a successful retry, but
+    // the daemon's append-only sync has already persisted the banner. Once a
+    // genuine turn lands, delete the stale banner(s) that precede it; a
+    // banner-only batch just flips the gate flag so a later turn can clear it.
+    // The deletion scan only runs on the rare recovery batch — ordinary
+    // traffic skips it entirely.
+    const batchHasBanner = args.messages.some(isBannerTurn);
+    const batchHasRealTurn = args.messages.some(isRealTurn);
+    const maxRealTurnTs = args.messages.reduce(
+      (max, m) => (isRealTurn(m) ? Math.max(max, m.timestamp || 0) : max),
+      0,
+    );
+    const newestSignificant = newestSignificantMessage(args.messages);
+    const wasPendingApiError = conversation.pending_api_error === true;
+
+    let supersededBanners = 0;
     if (
-      newestBatchMsg.role === "assistant" &&
-      newestBatchMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
+      apiErrorBatchAction({
+        batchHasRealTurn,
+        batchHasBanner,
+        conversationPending: wasPendingApiError,
+      }) === "supersede"
     ) {
-      await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+      supersededBanners = await supersedeApiErrorBanners(ctx, args.conversation_id, maxRealTurnTs);
+    }
+
+    const convPatch: Record<string, unknown> = {
+      message_count: newMessageCount - supersededBanners,
+      updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
+      last_message_role: lastMsg.role,
+    };
+    stampFirstPrompt(conversation, args.messages, convPatch);
+    await rollUpUsage(ctx, conversation, usageRows, convPatch, Date.now());
+    if (oldRowEdits > 0) {
+      convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
+    }
+    const batchModel = lastKnownModelFromBatch(args.messages);
+    if (batchModel && batchModel !== conversation.model) {
+      convPatch.model = batchModel;
+    }
+    const batchEffort = lastKnownEffortFromBatch(args.messages);
+    if (batchEffort && batchEffort !== conversation.effort) {
+      convPatch.effort = batchEffort;
+    }
+    // Keep the gate flag in lockstep with "newest banner-or-turn is a banner".
+    const newestIsBanner = newestSignificant != null && isBannerTurn(newestSignificant);
+    const safetyPatch = safetyBlockPatch(conversation, args.messages, Date.now());
+    const nextPending = safetyPatch ? true : nextPendingApiError({
+      newestIsBanner,
+      batchHasRealTurn,
+      conversationPending: wasPendingApiError,
+    });
+    if (nextPending !== wasPendingApiError) {
+      convPatch.pending_api_error = nextPending;
+    }
+    // A kept flag keeps its kind and stamp; only a fresh banner rewrites them.
+    const nextBannerKind = safetyPatch?.pending_api_error_kind ?? (newestIsBanner
+      ? classifyApiErrorBanner(newestSignificant!.content) ?? undefined
+      : nextPending ? conversation.pending_api_error_kind ?? undefined : undefined);
+    if ((conversation.pending_api_error_kind ?? undefined) !== nextBannerKind) {
+      convPatch.pending_api_error_kind = nextBannerKind;
+    }
+    const nextBannerAt = safetyPatch?.pending_api_error_at ?? (newestIsBanner
+      ? newestSignificant!.timestamp || Date.now()
+      : nextPending ? conversation.pending_api_error_at ?? undefined : undefined);
+    if ((conversation.pending_api_error_at ?? undefined) !== nextBannerAt) {
+      convPatch.pending_api_error_at = nextBannerAt;
+    }
+    // A fresh blocked-kind park triggers the debounced reactions (see
+    // addMessage): auto-switch check + aggregated incident notification.
+    if (
+      (newestIsBanner || safetyPatch) &&
+      nextBannerKind &&
+      nextBannerKind !== "error" &&
+      (!wasPendingApiError || conversation.pending_api_error_kind !== nextBannerKind)
+    ) {
+      await onFreshApiErrorPark(ctx, conversation.user_id, nextBannerKind);
+    }
+    if (safetyPatch) Object.assign(convPatch, safetyPatch);
+    const userMsgs = args.messages.filter((m) => m.role === "user");
+    if (userMsgs.length > 0) {
+      const lastUserMsg = userMsgs[userMsgs.length - 1];
+      const lastUserTs = userMsgs.reduce((max, m) => Math.max(max, m.timestamp || 0), 0);
+      if (lastUserTs > 0) {
+        convPatch.last_user_message_at = lastUserTs;
+      }
+      const previewSrc = lastUserContentStored || lastUserMsg.content;
+      const preview = redactSecrets(previewSrc || "").replace(/\u001b\[\d+m/g, "").replace(/\[Image[:\s][^\]]*\]/gi, "").trim().slice(0, 200);
+      if (preview) {
+        convPatch.last_message_preview = preview;
+      }
+    }
+    const imagePreview = await latestImagePreviewUrl(ctx, args.messages);
+    if (imagePreview && imagePreview !== conversation.image_preview_url) {
+      convPatch.image_preview_url = imagePreview;
+    }
+    // What the agent is doing now, off the batch's newest tool call (the
+    // inbox activity line; see schema.activity).
+    const nextActivity = deriveActivity(args.messages, conversation.activity, Date.now());
+    if (nextActivity) convPatch.activity = nextActivity;
+    await ctx.db.patch(args.conversation_id, convPatch);
+
+    const agentStatusProjection = getAddMessagesAgentStatusProjection(args.messages);
+    if (agentStatusProjection) {
+      await ctx.scheduler.runAfter(0, internal.messages.projectAgentStatusOnAddMessages, {
         conversation_id: args.conversation_id,
+        scheduled_at: Date.now(),
+        ...agentStatusProjection,
       });
     }
 
-    // Doc extraction touches the docs table (index reads + inserts/patches) and is
-    // not latency-critical, so keep it off the addMessages transaction. Schedule it
-    // only when a batch plausibly contains a doc — re-passing args.messages is size-safe
-    // since that exact payload already fit this mutation's arg limit.
-    if (hasDocExtractionCandidate(args.messages)) {
-      await ctx.scheduler.runAfter(0, internal.messages.extractDocs, {
-        conversation_id: args.conversation_id,
-        messages: args.messages,
+    // Comment-thread agent reply: when this conversation is the hidden fork
+    // spawned to answer in a teammate comment thread, mirror its fresh reply
+    // back into the placeholder comment. Single cheap field check skips this for
+    // all ordinary traffic; the mirror runs off this transaction.
+    if (
+      (conversation as { comment_fork_comment_id?: unknown }).comment_fork_comment_id &&
+      args.messages.some((m) => m.role === "assistant" && !!m.content?.trim())
+    ) {
+      await ctx.scheduler.runAfter(0, internal.comments.mirrorAgentReply, {
+        fork_conversation_id: args.conversation_id,
       });
     }
 
-    return { inserted: insertedCount, ids };
-  },
-});
+    await maybeScheduleTitleGeneration(ctx, conversation, conversation.message_count, newMessageCount);
+
+  } else if (oldRowEdits > 0 || insertedIndexes.size > 0) {
+    // Backfill-only batch (no inserts): still bump the watermark so tail
+    // subscribers learn that rows behind their anchor changed. A hosted
+    // message's final write (usage on a streamed row) is counted here.
+    const convPatch: Record<string, unknown> = {};
+    if (oldRowEdits > 0) convPatch.transcript_revision = (conversation.transcript_revision ?? 0) + 1;
+    await rollUpUsage(ctx, conversation, usageRows, convPatch, Date.now());
+    if (Object.keys(convPatch).length > 0) await ctx.db.patch(args.conversation_id, convPatch);
+  }
+
+  // Fold harness-loop events (ScheduleWakeup / scheduled_task_fire) into
+  // conversation.loop_state. Like the AskUserQuestion check below, this must
+  // run even when insertedCount is 0: tool_calls usually land as a PATCH to
+  // the already-synced streaming message. The batchHasLoopEvent gate keeps
+  // ordinary traffic free of the derivation.
+  if (batchHasLoopEvent(args.messages)) {
+    const nextLoop = deriveLoopState(conversation.loop_state, args.messages, Date.now());
+    if (nextLoop) await ctx.db.patch(args.conversation_id, { loop_state: nextLoop });
+  }
+
+  // An AskUserQuestion tool_use arriving as the batch's newest message means
+  // the agent just blocked on the user — the needs-input verdict flips NOW,
+  // on this message write, not on any status write (the daemon races back to
+  // "working" while the poll is open, and buffered polls send no status at
+  // all). Deliberately OUTSIDE the insertedCount block: the poll's tool_calls
+  // usually land as a PATCH to the already-synced streaming message
+  // (insertedCount 0), which is exactly the batch that must schedule the
+  // check. The check re-reads the messages table at fire time, so a poll
+  // answered in the meantime is a no-op. (see notifications.checkNeedsInput)
+  const newestBatchMsg = args.messages.reduce((a, b) => ((b.timestamp || 0) >= (a.timestamp || 0) ? b : a));
+  if (
+    newestBatchMsg.role === "assistant" &&
+    newestBatchMsg.tool_calls?.some((tc) => tc.name === "AskUserQuestion")
+  ) {
+    await ctx.scheduler.runAfter(NEEDS_INPUT_AUQ_CHECK_DELAY_MS, internal.notifications.checkNeedsInput, {
+      conversation_id: args.conversation_id,
+    });
+  }
+
+  // Doc extraction touches the docs table (index reads + inserts/patches) and is
+  // not latency-critical, so keep it off the addMessages transaction. Schedule it
+  // only when a batch plausibly contains a doc — re-passing args.messages is size-safe
+  // since that exact payload already fit this mutation's arg limit.
+  if (hasDocExtractionCandidate(args.messages)) {
+    await ctx.scheduler.runAfter(0, internal.messages.extractDocs, {
+      conversation_id: args.conversation_id,
+      messages: args.messages,
+    });
+  }
+
+  return { inserted: insertedCount, ids };
+}
 
 export const projectAgentStatusOnAddMessages = internalMutation({
   args: {
@@ -2316,7 +2395,9 @@ export const projectAgentStatusOnAddMessages = internalMutation({
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))
       .first();
-    if (!session) return;
+    // A hosted conversation's turn engine sets its work state itself, in the
+    // mutation that ends each turn; a guess from its rows would undo that.
+    if (!session || session.hosted) return;
     if (!shouldApplyAddMessagesAgentStatusProjection(session.agent_status_updated_at, args.scheduled_at)) {
       return;
     }
@@ -2421,6 +2502,7 @@ export const deleteMessagesByUuid = mutation({
     if (conversation.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized: can only delete messages from your own conversations");
     }
+    refuseHostedTranscriptWrite(conversation);
 
     let deleted = 0;
     for (const uuid of new Set(args.message_uuids)) {

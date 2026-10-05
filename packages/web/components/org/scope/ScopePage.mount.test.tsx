@@ -51,10 +51,13 @@ function world() {
       // The page reads whether the diff is open (it closes the board for it).
       clientState: { ui: {}, layouts: {} },
       updateOrgRole: (id: string, fields: any) => calls.push(`update:${id}:${JSON.stringify(fields)}`),
+      // Starting a role is a store action; it records as the mutation it dispatches.
+      provisionOrgRole: async (id: string) => { calls.push(`mutation:${JSON.stringify({ role_id: id })}`); },
       reparentOrgRole: () => {}, retireOrgRole: (id: string, choice?: string) => calls.push(`retire:${id}:${choice ?? ""}`),
     };
     const collections: Record<string, any[]> = { projects: [], plans: [], tasks: [], docs: [] };
-    const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
+    // `subscribe` too: a hook that reads the store through useSyncExternalStore (usePersonifyAll) takes it off this object.
+    const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {}, subscribe: () => () => {} });
 
     mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
     // Spread the real module: a substitution is process-global, so a stub that
@@ -320,7 +323,7 @@ async function verifyScopePage() {
   await mount("or-1");
   const openMenu = () => act(async () => { q("[data-scope-actions]")!.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
   await openMenu();
-  assert.deepEqual(qa("[data-scope-action]").map((el) => el.textContent), ["Pause role", "Retire role…"], "the same words wherever a role is paused or retired");
+  assert.deepEqual(qa("[data-scope-action]").map((el) => el.textContent), ["Pin to header", "Pause role", "Retire role…"], "the same words wherever a role is paused or retired");
   await click(q('[data-scope-action="pause"]'));
   assert.equal(calls.pop(), `update:${growth._id}:{"status":"paused"}`);
   await openMenu();
@@ -452,6 +455,22 @@ async function verifyFirstScreen() {
   // Nothing to say is said by saying nothing: no empty sections, no placeholder lines.
   assert.equal(q('[data-scope-section="stands"]'), null);
   assert.equal(qa("[data-scope-briefing] [data-scope-stands-line]").length, 0);
+
+  // The playbook and the wake (org-staffing.md S38) sit under the briefing,
+  // never in it: the briefing keeps its two sentences and one activity line.
+  const { RolePlaybookSections } = await import("./ScopePanel");
+  const playbook = `Calling: steady\n\n## North metric\nIntroductions a day.\n- ${old}: 4.4/day (milestone: first week above 4)\n- ${today}: 3.7/day\n\n## Rules learned\n- Read the threads before the counters. Learned from: a diagnosis made from totals was wrong. (${old})\n\n## Standing decisions\n- Never deploy past a red gate. (Ashot, ${old})`;
+  const routine = { interval_ms: 12 * 3_600_000, wake: { every_ms: 12 * 3_600_000, precheck: null, focus: "the launch queue", why: "results land twice a day", tuned_at: T0 - DAY } };
+  await act(async () => root.render(React.createElement("div", null, React.createElement(Screen, { brief: playbook }), React.createElement(RolePlaybookSections, { narrative: playbook, routine, now: T0 }))));
+  assert.equal(q("[data-scope-briefing] [data-role-playbook]"), null, "the playbook is not part of the briefing");
+  assert.deepEqual(qa("[data-role-playbook] [data-playbook]").map((el) => el.getAttribute("data-playbook")), ["metric", "rules", "decisions"], "the sections the role wrote, in order");
+  assert.match(q('[data-playbook="rules"]')!.textContent!, /Learned from: a diagnosis made from totals was wrong/);
+  assert.match(q("[data-role-wake]")!.textContent!, /every 12 hours · focus: the launch queue/);
+  assert.match(q("[data-role-wake-why]")!.textContent!, /It set this itself on .*: results land twice a day/);
+  // A brief with no playbook and a role with no check draw neither block.
+  await act(async () => root.render(React.createElement(RolePlaybookSections, { narrative: "Calling: steady", routine: null, now: T0 })));
+  assert.equal(q('[data-scope-section="playbook"]'), null);
+  assert.equal(q('[data-scope-section="wake"]'), null);
 
   await act(async () => root.unmount());
   console.log("first screen: ok");

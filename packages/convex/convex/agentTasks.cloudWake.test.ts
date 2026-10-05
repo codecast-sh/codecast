@@ -322,16 +322,18 @@ describe("dispatchCloudTriggers", () => {
 });
 
 describe("cloud trigger authorization and daemon exclusion", () => {
-  test.each([undefined, "", "[]", "malformed-json"])("missing, empty or invalid server configuration (%s) skips all DB work and keeps legacy scheduling", async (config) => {
+  // Without a host the dispatcher reads only hosted routines (hosted_home):
+  // hosted conversations (agent_type "codecast") take their routines from the
+  // server on every deployment. A daemon conversation's routine is not even
+  // read, and keeps legacy scheduling.
+  test.each([undefined, "", "[]", "malformed-json"])("missing, empty or invalid server configuration (%s) dispatches nothing to a daemon conversation and keeps legacy scheduling", async (config) => {
     if (config === undefined) delete process.env.CAST_CLOUD_WAKE_HOSTS;
     else process.env.CAST_CLOUD_WAKE_HOSTS = config;
-    const { ctx } = await world();
-    const query = spyOn(ctx.db, "query");
+    const { ctx, tables } = await world();
     expect(await dispatch(ctx)).toEqual({ scanned: 0, dispatched: 0, done: true });
-    expect(query).not.toHaveBeenCalled();
+    expect(tables.pending_messages).toHaveLength(0);
     expect(await due(ctx)).toHaveLength(1);
     expect((await claim(ctx)).status).toBe("running");
-    query.mockRestore();
   });
 
   test.each([

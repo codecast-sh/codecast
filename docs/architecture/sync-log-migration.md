@@ -1,6 +1,6 @@
 # Sync log migration
 
-Status: in progress (pl-399). This note pins the decisions the local-first restart brief
+Status: shipped (pl-399 done, 11/11 tasks; the log's cargo extension is `sync-log-cargo.md`, pl-498). This note pins the decisions the local-first restart brief
 required before any client work, revised after a three lens adversarial design review
 (ordering/convergence, rollout/operations, guardrails). It is deliberately small: the design
 is an append only log next to the existing machinery, not a second domain model.
@@ -37,7 +37,8 @@ Two new tables (see schema.ts):
 ```
 sync_heads:   { scope_key, position, floor, updated_at }         index by_scope
 sync_actions: { scope_key, position, entity_type, entity_id,
-                op, ts }                                          index by_scope_position
+                op, ts, + cargo and access stamp fields (cargo E1/E4) }
+                                                                  index by_scope_position
                                                                   index by_scope_entity
                                                                   index by_ts
 ```
@@ -298,8 +299,9 @@ exceeds 32 days — the implemented alarm for a stalled cron (review C18).
 ### D12 — Deletion ledger
 
 Deleted now (new client): the change feed overlap/cursor heuristics (internals of
-`useSyncChangeFeed`), `since` mode as correctness, `CHANGE_FEED_META_KEY` as a live cursor
-(it is read once by the D7 bridge, then dropped).
+`useSyncChangeFeed`), `since` mode as correctness, the `changefeed:v1` meta key as a live
+cursor (`LEGACY_META_KEY` in `hooks/useSyncChangeFeed.ts`, read once by the D7 bridge, then
+dropped).
 
 Kept, with removal conditions:
 

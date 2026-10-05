@@ -51,7 +51,7 @@ describe("stale undo guard on the task writer", () => {
     expect(getUndoHistory().items[0]!.status).toBe("conflict");
   });
 
-  it("a bulk move with one row changed since undoes the others and says one was left", () => {
+  it("a bulk move with one row changed since undoes the others and says one was left", async () => {
     useInboxStore.setState({
       tasks: { [A]: task(A, "ct-1"), [B]: task(B, "ct-2"), [C]: task(C, "ct-3") },
       pending: {},
@@ -67,6 +67,9 @@ describe("stale undo guard on the task writer", () => {
     calls = [];
     performUndo();
     expect([A, B, C].map((id) => s().tasks[id].status)).toEqual(["todo", "in_review", "todo"]);
+    // The moves' sends carried the server stamps the capture leaves out, so
+    // the undo's writes follow them.
+    for (let i = 0; i < 100 && calls.length < 2; i++) await Bun.sleep(2);
     expect(calls.map(([, args]) => (args as any[])[0]).sort()).toEqual(["ct-1", "ct-3"]);
     expect(notices).toEqual(["Undid: Moved 3 tasks to Done (1 changed since, left as they are)"]);
   });

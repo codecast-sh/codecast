@@ -79,6 +79,9 @@ let refreshTarget: UndoEntry | null = null;
 let groupDepth = 0;
 let groupChildren: UndoEntry[] | null = null;
 let groupToast = false;
+// External entries recorded inside the open group: one gesture over several
+// rows the record owns becomes one history row, named by the group's label.
+let groupExternals: UndoEntry[] | null = null;
 let idCounter = 0;
 
 /** Tune the limits; the middleware calls it with PlatformConfig.undo. */
@@ -209,8 +212,28 @@ export function withoutUndo<T>(fn: () => T): T {
   }
 }
 
+// Holds on recording for the whole window (suspendUndoRecording).
+let recordingHolds = 0;
+
+/**
+ * Stop recording in this window until the returned release runs. For a
+ * window with no way to undo (no undo key, no toast it can click, no
+ * timeline): an entry recorded there would strand in its in-memory history,
+ * and the gesture would look undoable when nothing can reach it. Counted, and
+ * each release counts once.
+ */
+export function suspendUndoRecording(): () => void {
+  recordingHolds += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    recordingHolds = Math.max(0, recordingHolds - 1);
+  };
+}
+
 export function isUndoSuppressed(): boolean {
-  return suppressDepth > 0;
+  return suppressDepth > 0 || recordingHolds > 0;
 }
 
 /** The entry a redo is refreshing, so its capture rewrites that entry instead of pushing. */
@@ -232,6 +255,60 @@ export function undoneAfter(entry: UndoEntry): UndoEntry[] {
     out.push(...(later.children ?? [later]));
   }
   return out;
+}
+
+/** The entries recorded after `entry`, oldest first: its later siblings in
+ *  its group, then every entry the history holds above its owner. */
+function recordedAfter(entry: UndoEntry): UndoEntry[] {
+  const order = history.some((e) => e === entry || e.children?.includes(entry)) ? history : undoStack;
+  const owner = order.find((e) => e === entry || e.children?.includes(entry));
+  if (!owner) return [];
+  const out = owner === entry ? [] : owner.children!.slice(owner.children!.indexOf(entry) + 1);
+  for (const later of order.slice(order.indexOf(owner) + 1)) out.push(...(later.children ?? [later]));
+  return out;
+}
+
+/** A cell whose value under the later entries changed: the value they saw (`from`) and the one that stands (`to`). */
+export type UndoCellMove = { from: { after: unknown; hadAfter: boolean }; to: { after: unknown; hadAfter: boolean } };
+
+// Cells kept beside an entry outside the stack (a controller's applied cells),
+// rebased with the entry's own.
+const rebaseHooks = new Set<(entry: UndoEntry, rebase: (cells: CellChange[]) => CellChange[]) => void>();
+
+/** Called when an entry's cells are rebased, with the same rebase for any cells kept beside it. Returns the unsubscribe. */
+export function onUndoRebase(hook: (entry: UndoEntry, rebase: (cells: CellChange[]) => CellChange[]) => void): () => void {
+  rebaseHooks.add(hook);
+  return () => {
+    rebaseHooks.delete(hook);
+  };
+}
+
+/**
+ * A value under `later` moved: each cell in `moved` (by cell key) now stands at
+ * its `to` value where the later entries recorded `from`. The nearest later
+ * entry that touches the cell takes `to` as its before, if its before was
+ * `from`; the cell is then settled for every entry above it, which recorded
+ * that entry's after instead.
+ */
+export function rebaseUndoCells(later: Iterable<UndoEntry>, moved: Map<string, UndoCellMove>): boolean {
+  let touched = false;
+  for (const entry of later) {
+    if (moved.size === 0) break;
+    const reached = new Set<string>();
+    const rebase = (cells: CellChange[]) =>
+      cells.map((c) => {
+        const m = moved.get(cellKey(c));
+        if (!m) return c;
+        reached.add(cellKey(c));
+        if (c.hadBefore !== m.from.hadAfter || !sameShape(c.before, m.from.after)) return c;
+        touched = true;
+        return { ...c, before: m.to.after, hadBefore: m.to.hadAfter };
+      });
+    if (entry.changes) entry.changes = rebase(entry.changes);
+    for (const hook of rebaseHooks) hook(entry, rebase);
+    for (const k of reached) moved.delete(k);
+  }
+  return touched;
 }
 
 export function withUndoRefresh<T>(entry: UndoEntry, fn: () => T): T {
@@ -261,19 +338,29 @@ export function undoGroup<T>(label: string | ((entries: UndoEntry[]) => string),
   }
   groupDepth = 1;
   groupChildren = [];
+  groupExternals = [];
   groupToast = false;
   try {
     return fn();
   } finally {
     const children = groupChildren;
+    const externals = groupExternals;
     const toast = groupToast;
     groupDepth = 0;
     groupChildren = null;
+    groupExternals = null;
     groupToast = false;
     if (children.length > 0) {
       const group = makeGroupEntry(typeof label === "function" ? label(children) : label, children);
       pushEntry(group);
       if (toast) announceRecorded(group);
+    }
+    if (externals.length === 1) {
+      addToHistory(externals[0]!);
+      changed();
+    } else if (externals.length > 1) {
+      addToHistory({ ...externals[0]!, id: newUndoEntryId(), label: typeof label === "function" ? label(externals) : label });
+      changed();
     }
   }
 }
@@ -476,7 +563,12 @@ function announceRecorded(entry: UndoEntry): void {
  * (coalesce), or onto the stack. External entries are history only.
  */
 export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coalesce?: boolean }): void {
+  if (recordingHolds > 0) return;
   if (entry.status === "external") {
+    if (groupExternals) {
+      groupExternals.push(entry);
+      return;
+    }
     addToHistory(entry);
     changed();
     return;
@@ -494,6 +586,7 @@ export function recordUndoEntry(entry: UndoEntry, opts?: { toast?: boolean; coal
 /** A hand-written entry (mode "manual"). Returns its id. */
 export function pushUndo(entry: Omit<UndoEntry, "id" | "ts" | "status" | "mode">): string {
   const full: UndoEntry = { ...entry, id: newUndoEntryId(), ts: Date.now(), status: "done", mode: "manual" };
+  if (recordingHolds > 0) return full.id;
   if (groupChildren) {
     groupChildren.push(full);
     return full.id;
@@ -758,6 +851,22 @@ function* allEntries(): Generator<{ entry: UndoEntry; parent: UndoEntry | null }
   }
 }
 
+// A refused write never landed: each cell `was` wrote now stands where `now`
+// leaves it (a split run's last standing call), or back at its before when
+// `now` no longer writes it. The entries recorded after `entry` recorded the
+// refused after as their before, and are rebased onto what stands.
+function rebaseRefused(entry: UndoEntry, was: readonly CellChange[], now: readonly CellChange[]): void {
+  const nowByKey = new Map(now.map((c) => [cellKey(c), c] as const));
+  const moved = new Map<string, UndoCellMove>();
+  for (const c of was) {
+    const stands = nowByKey.get(cellKey(c));
+    const to = stands ? { after: stands.after, hadAfter: stands.hadAfter } : { after: c.before, hadAfter: c.hadBefore };
+    if (to.hadAfter === c.hadAfter && sameShape(to.after, c.after)) continue;
+    moved.set(cellKey(c), { from: { after: c.after, hadAfter: c.hadAfter }, to });
+  }
+  if (moved.size > 0) rebaseUndoCells(recordedAfter(entry), moved);
+}
+
 /**
  * The server refused the dispatch with this outbox id for good. A forward
  * capture (or a redo) that named it is marked refused and leaves both stacks.
@@ -769,8 +878,15 @@ export function markUndoOutboxRefused(outboxId: string): void {
   for (const { entry, parent } of allEntries()) {
     if (entry.outboxIds?.includes(outboxId)) {
       touched = true;
+      // The entries recorded after this one saw its after values as their
+      // befores; what stands now is what the server held (rebaseRefused).
+      const was = entry.changes ?? [];
       // A coalesced run stays undoable down to the calls that landed.
-      if (splitRefusedCall(entry, outboxId)) continue;
+      if (splitRefusedCall(entry, outboxId)) {
+        rebaseRefused(entry, was, entry.changes ?? []);
+        continue;
+      }
+      rebaseRefused(entry, was, []);
       entry.status = "refused";
       if (parent) {
         parent.children = parent.children!.filter((c) => c !== entry);
@@ -829,7 +945,14 @@ const rekeyPendingKey = (key: string, oldId: string, newId: string): string => {
   return parts.map((p) => (p === oldId ? newId : p)).join(":");
 };
 
-/** `value` with every string equal to `oldId` replaced, at any depth; the same reference when none is. */
+/**
+ * `value` with every mention of `oldId` moved to `newId`, at any depth: a
+ * string equal to it, and an object key equal to it (a table keyed by row id,
+ * a map from row id to a sort key). A row whose own `_id` is the stub moves
+ * the way syncEngine moves it: its `_id` follows, and any other top-level
+ * field that holds the stub (its alt key, `client_id`) stays. The same
+ * reference comes back when nothing names the id.
+ */
 export function rekeyIds<T>(value: T, oldId: string, newId: string): T {
   if (value === oldId) return newId as T;
   if (Array.isArray(value)) {
@@ -837,34 +960,28 @@ export function rekeyIds<T>(value: T, oldId: string, newId: string): T {
     return (next.some((v, i) => v !== value[i]) ? next : value) as T;
   }
   if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
-    let out: Record<string, unknown> | null = null;
-    for (const [k, v] of Object.entries(value)) {
-      const next = rekeyIds(v, oldId, newId);
-      if (next !== v) (out ??= { ...(value as Record<string, unknown>) })[k] = next;
-    }
-    return (out ?? value) as T;
+    const own = (value as { _id?: unknown })._id === oldId;
+    let moved = false;
+    const entries = Object.entries(value).map(([k, v]): [string, unknown] => {
+      const key = k === oldId ? newId : k;
+      const next = own && k !== "_id" && v === oldId ? v : rekeyIds(v, oldId, newId);
+      if (key !== k || next !== v) moved = true;
+      return [key, next];
+    });
+    return (moved ? Object.fromEntries(entries) : value) as T;
   }
   return value;
 }
 
-// A whole row moves to its server id the way syncEngine moves it: only its
-// `_id` changes, the rest (its client_id among them) stays.
-const rekeyRow = (row: unknown, oldId: string, newId: string): unknown =>
-  row && typeof row === "object" && (row as { _id?: unknown })._id === oldId ? { ...row, _id: newId } : row;
-
 /**
- * Cells naming `oldId`, moved to `newId`; the same array when none does. A
- * field cell's values follow too (a parent pointer or a bucket id the app's
- * rekeyExtra rewrites), so the guard compares them with the rewritten row.
+ * Cells naming `oldId`, moved to `newId`; the same array when none does. The
+ * values follow too, a whole row's as well as a field's (a parent pointer or a
+ * bucket id the app's rekeyExtra rewrites), so the guard compares them with
+ * the rewritten row and a restored row comes back pointing at the server id.
  */
 export function rekeyCells(cells: CellChange[], oldId: string, newId: string): CellChange[] {
   let moved = false;
   const out = cells.map((c) => {
-    if (c.field === undefined) {
-      if (c.id !== oldId) return c;
-      moved = true;
-      return { ...c, id: newId, before: rekeyRow(c.before, oldId, newId), after: rekeyRow(c.after, oldId, newId) };
-    }
     const id = c.id === oldId ? newId : c.id;
     const before = rekeyIds(c.before, oldId, newId);
     const after = rekeyIds(c.after, oldId, newId);
@@ -934,15 +1051,113 @@ export function rekeyUndoIds(oldId: string, newId: string): void {
   if (touched) changed();
 }
 
+const resetListeners = new Set<() => void>();
+
+/**
+ * Called when the history is reset: anything outside the stacks that holds a
+ * reset history's state (a controller's send order, a toast, an open card)
+ * drops it here. Returns the unsubscribe.
+ */
+export function onUndoReset(fn: () => void): () => void {
+  resetListeners.add(fn);
+  return () => {
+    resetListeners.delete(fn);
+  };
+}
+
+/**
+ * Forget every entry, as at an account boundary: the history belongs to the
+ * principal that made it, and replaying it under another would write the old
+ * account's rows into the new one's store and send them as the new one. A
+ * group or suppression already running keeps its own bookkeeping; only what
+ * it recorded so far goes.
+ */
+export function resetUndoHistory(): void {
+  undoStack = [];
+  redoStack = [];
+  history = [];
+  if (groupChildren) groupChildren = [];
+  if (groupExternals) groupExternals = [];
+  for (const fn of [...resetListeners]) {
+    try {
+      fn();
+    } catch (error) {
+      console.error("[undo] reset listener failed", error);
+    }
+  }
+  changed();
+}
+
+/** One window's undo state: everything a browser window keeps of its own. */
+type UndoWindowSlots = {
+  undoStack: UndoEntry[];
+  redoStack: UndoEntry[];
+  history: UndoEntry[];
+  version: number;
+  snapshot: UndoHistorySnapshot | null;
+  suppressDepth: number;
+  refreshTarget: UndoEntry | null;
+  groupDepth: number;
+  groupChildren: UndoEntry[] | null;
+  groupToast: boolean;
+  groupExternals: UndoEntry[] | null;
+  recordingHolds: number;
+};
+
+/**
+ * Test seam for a harness that runs several windows in one process (the
+ * codecast multiplayer sim): each browser window keeps its own history, so the
+ * harness saves this state after a window's turn and loads it before the
+ * next. Arrays are copied, so a saved slot never aliases the live stacks.
+ * Configuration, the notifier, listeners and the id counter stay one per
+ * process (set once at load; ids only need to be unique).
+ */
+export function __undoStackWindowSlots(): { get(): object; set(s: object): void; fresh(): object } {
+  // Lists are copied; anything else a harness hands in passes as it is.
+  const list = <T>(x: T): T => (Array.isArray(x) ? ([...x] as T) : x);
+  const copy = (s: UndoWindowSlots): UndoWindowSlots => ({
+    ...s,
+    undoStack: list(s.undoStack),
+    redoStack: list(s.redoStack),
+    history: list(s.history),
+    groupChildren: list(s.groupChildren),
+    groupExternals: list(s.groupExternals),
+  });
+  return {
+    fresh: (): UndoWindowSlots => ({
+      undoStack: [],
+      redoStack: [],
+      history: [],
+      version: 0,
+      snapshot: null,
+      suppressDepth: 0,
+      refreshTarget: null,
+      groupDepth: 0,
+      groupChildren: null,
+      groupToast: false,
+      groupExternals: null,
+      recordingHolds: 0,
+    }),
+    get: (): UndoWindowSlots =>
+      copy({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds }),
+    set: (raw: object) => {
+      const s = copy(raw as UndoWindowSlots);
+      ({ undoStack, redoStack, history, version, snapshot, suppressDepth, refreshTarget, groupDepth, groupChildren, groupToast, groupExternals, recordingHolds } = s);
+    },
+  };
+}
+
 /** Test hook: the stacks live at module scope and would leak across tests. */
 export function _resetUndoStacks(): void {
   undoStack = [];
   redoStack = [];
   history = [];
   suppressDepth = 0;
+  recordingHolds = 0;
   refreshTarget = null;
   groupDepth = 0;
   groupChildren = null;
+  groupExternals = null;
   groupToast = false;
   changed();
 }

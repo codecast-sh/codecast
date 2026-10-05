@@ -1,6 +1,8 @@
 // How the Evals pages write a time and a batch, in one place, so one batch
 // reads the same on every page. Pure: the bisect model and the views share it.
 
+import { formatUsd } from "@codecast/shared/render/changeCardHtml";
+
 const WHEN: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
 /** One clock for every page: a time in the viewer's local zone, "Oct 2, 07:23 PM". */
 export const whenLabel = (at: string | number) => new Date(at).toLocaleString(undefined, WHEN);
@@ -31,4 +33,30 @@ export function splitBatchNames(text: string): Array<string | { batch: string }>
   }
   if (at < text.length) out.push(text.slice(at));
   return out;
+}
+
+export const shortSha = (sha: string | null | undefined, n = 8) => (sha ? sha.slice(0, n) : "none");
+/** Dollars as the change cards write them, with the sub-dime precision a single rep needs. */
+export const usd = (v: number) => (v >= 0.1 ? formatUsd(v) : v > 0 ? `$${v.toFixed(3)}` : "$0");
+
+/** A count with its noun: "1 class", "3 classes". */
+export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+export const score2 = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : v.toFixed(2));
+/** A model as a person names it: no vendor prefix, no date stamp. */
+export const shortModel = (m: string | null | undefined) => (m ? m.replace(/^claude-/, "").replace(/-\d{8}$/, "") : "none");
+/** A judge ruler (`<model>#<rubric>`) as its rubric, else the short model. */
+export const shortRuler = (r: string | null | undefined) => (r ? (r.includes("#") ? r.slice(r.indexOf("#") + 1) : shortModel(r)) : "none");
+
+/** A p value as every page prints it: two significant figures, and anything under 0.001 as "<0.001". */
+export const pLabel = (p: number) => (p < 0.001 ? "<0.001" : String(Number(p.toPrecision(2))));
+
+/**
+ * An off-branch head as every chip names it: its main-line twin, or that it
+ * has none and, when the commit page read heads.json, why (and the near commit).
+ */
+export function offBranchWords(t: { sha?: string; mainSha: string | null; twinReason?: string; near?: string }): { label: string; title: string } {
+  const twin = t.mainSha && t.mainSha !== t.sha ? t.mainSha : null;
+  if (twin) return { label: `off-branch, main ${shortSha(twin)}`, title: `On no branch; main-line commit ${shortSha(twin)} carries the same patch` };
+  const near = t.near && !t.twinReason?.includes(t.near.slice(0, 9)) ? ` Nearest on main: ${shortSha(t.near)}.` : "";
+  return { label: "off-branch, no main twin", title: `On no branch, and no main-line commit carries its patch${t.twinReason ? `: ${t.twinReason}` : ""}.${near}` };
 }

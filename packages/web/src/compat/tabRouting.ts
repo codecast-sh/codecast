@@ -3,6 +3,7 @@ import { inboxTabSessionId, pathLabel } from "../../lib/pathLabel";
 import { borrowsTabShell } from "../../lib/desktop";
 import { settingsSectionForPath } from "../../lib/settingsSections";
 import { isNonTabRoute, routerNavigate } from "../../lib/tabRoutes";
+import { tabSafePath } from "../../lib/tabSafePath";
 
 // Re-exported so callers of the routing layer keep one import; the rule itself
 // lives in lib/tabRoutes (pure, no store import) so the store can apply it too.
@@ -62,7 +63,9 @@ export function shouldUseTabRouting(
  * entries. The history `state` is tagged so the global popstate handler can tell a
  * tab navigation apart from an inbox session selection (`{ inboxId }`).
  */
-export function tabNavigate(path: string, mode: "push" | "replace" = "push", fromTabId?: string) {
+export function tabNavigate(to: string, mode: "push" | "replace" = "push", fromTabId?: string) {
+  // The tab, its title, the recents rail and the history entry all take the storable spelling (lib/tabSafePath).
+  const path = tabSafePath(to);
   // No tab here is this document's to move (borrowsTabShell). Callers that
   // reach this directly — a pane gesture whose stage could not take the page —
   // still mean "go there", so it goes there for real.

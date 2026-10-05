@@ -22,6 +22,11 @@ export const TASK_STATUS_CATEGORIES = [
 
 export type TaskStatusCategory = (typeof TASK_STATUS_CATEGORIES)[number];
 
+/** Every value tasks.priority may hold, most pressing first. */
+export const TASK_PRIORITIES = ["urgent", "high", "medium", "low", "none"] as const;
+
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+
 /** Categories that close a task (stamp closed_at, leave progress denominators). */
 export const TERMINAL_TASK_CATEGORIES: readonly TaskStatusCategory[] = ["done", "dropped"];
 

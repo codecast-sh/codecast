@@ -25,10 +25,7 @@ import { toast } from "sonner";
 import {
   Plus,
   FolderKanban,
-  Circle,
   CircleDot,
-  PauseCircle,
-  CheckCircle2,
   Check,
   ExternalLink,
   FileText,
@@ -40,72 +37,31 @@ import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { PriorityPill } from "../../components/charter/CharterChips";
 import { ProjectLeadChip } from "../../components/charter/ProjectLeadChip";
-
-type ProjectStatus = "active" | "planning" | "paused" | "done";
-
-const STATUS_CONFIG: Record<ProjectStatus, { icon: typeof Circle; label: string; color: string; accent: string }> = {
-  active: { icon: CircleDot, label: "Active", color: "text-sol-cyan", accent: "border-sol-cyan" },
-  planning: { icon: Circle, label: "Planning", color: "text-sol-violet", accent: "border-sol-violet" },
-  paused: { icon: PauseCircle, label: "Paused", color: "text-sol-yellow", accent: "border-sol-yellow" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green", accent: "border-sol-green" },
-};
-
-const STATUS_ORDER: ProjectStatus[] = ["active", "planning", "paused", "done"];
-
-const PROJECT_COLORS = [
-  { value: "cyan", label: "Cyan", tw: "bg-sol-cyan" },
-  { value: "blue", label: "Blue", tw: "bg-sol-blue" },
-  { value: "violet", label: "Violet", tw: "bg-sol-violet" },
-  { value: "green", label: "Green", tw: "bg-sol-green" },
-  { value: "yellow", label: "Yellow", tw: "bg-sol-yellow" },
-  { value: "orange", label: "Orange", tw: "bg-sol-orange" },
-  { value: "red", label: "Red", tw: "bg-sol-red" },
-  { value: "magenta", label: "Magenta", tw: "bg-sol-magenta" },
-];
-
-function getColorClass(color?: string): string {
-  const found = PROJECT_COLORS.find((c) => c.value === color);
-  return found ? found.tw : "bg-sol-cyan";
-}
+import { PROJECT_COLORS, projectColorClass } from "../../lib/projectColors";
+import { PROJECT_STATUS as STATUS_CONFIG, PROJECT_STATUS_ORDER as STATUS_ORDER, projectStatusOf } from "../../lib/projectStatus";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { ProgressBar, TargetDate } from "../../components/initiatives/InitiativeAtoms";
+import { ProjectInitiatives } from "../../components/initiatives/ProjectInitiatives";
 
 // A project the store holds before the server has counted it (an optimistic
 // create, a row from a feed that carries no counts) has no task_counts yet.
 const NO_TASK_COUNTS: ProjectItem["task_counts"] = { total: 0, done: 0, in_progress: 0 };
 const taskCountsOf = (project: ProjectItem) => project.task_counts ?? NO_TASK_COUNTS;
 
-function ProjectProgress({ project }: { project: ProjectItem }) {
-  const task_counts = taskCountsOf(project);
-  if (task_counts.total === 0) return null;
-
-  const donePct = (task_counts.done / task_counts.total) * 100;
-  const ipPct = (task_counts.in_progress / task_counts.total) * 100;
-
-  return (
-    <div className="flex items-center gap-2">
-      <div className="flex-1 h-1 bg-sol-border/20 rounded-full overflow-hidden">
-        <div className="h-full flex">
-          <div className="bg-sol-green/80 transition-all duration-500" style={{ width: `${donePct}%` }} />
-          <div className="bg-sol-yellow/60 transition-all duration-500" style={{ width: `${ipPct}%` }} />
-        </div>
-      </div>
-      <span className="text-[10px] text-sol-text-dim tabular-nums whitespace-nowrap">
-        {task_counts.done}/{task_counts.total}
-      </span>
-    </div>
-  );
-}
-
 function ProjectCard({
   project,
+  now,
   onClick,
   onContextMenu,
 }: {
   project: ProjectItem;
+  now: number;
   onClick: () => void;
   onContextMenu: (e: MouseEvent) => void;
 }) {
-  const status = STATUS_CONFIG[project.status as ProjectStatus] || STATUS_CONFIG.active;
+  const status = projectStatusOf(project.status);
   const StatusIcon = status.icon;
+  const counts = taskCountsOf(project);
   const totalItems = taskCountsOf(project).total + (project.plan_count ?? 0) + (project.doc_count ?? 0);
 
   return (
@@ -121,7 +77,7 @@ function ProjectCard({
       className="group w-full text-left bg-sol-bg rounded-lg border border-sol-border/30 hover:border-sol-border/60 transition-all duration-200 overflow-hidden cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan"
     >
       {/* Color accent bar */}
-      <div className={`h-0.5 ${getColorClass(project.color)} opacity-60 group-hover:opacity-100 transition-opacity`} />
+      <div className={`h-0.5 ${projectColorClass(project.color)} opacity-60 group-hover:opacity-100 transition-opacity`} />
 
       <div className="p-4 space-y-3">
         {/* Header */}
@@ -130,11 +86,8 @@ function ProjectCard({
             <StatusIcon className={`w-4 h-4 flex-shrink-0 ${status.color}`} />
             <h3 className="text-sm font-medium text-sol-text truncate">{project.title}</h3>
           </div>
-          {project.target_date && (
-            <span className="text-[10px] text-sol-text-dim tabular-nums whitespace-nowrap">
-              {new Date(project.target_date).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-            </span>
-          )}
+          {/* The day a goal's row shows the same way: red once it has passed with the project not done. */}
+          <TargetDate ts={project.target_date} now={now} done={project.status === "done"} />
         </div>
 
         {/* The charter's pill (org-staffing.md S7) and who leads the project
@@ -176,8 +129,11 @@ function ProjectCard({
           </div>
         )}
 
-        {/* Progress bar */}
-        <ProjectProgress project={project} />
+        {/* Tasks done over tasks, as the bar a goal draws. */}
+        {counts.total > 0 && <ProgressBar progress={{ ...counts, open: counts.total - counts.done - counts.in_progress }} className="w-full" />}
+
+        {/* The goals it carries, each with its first number (initiatives-projects-role-page.md I5). */}
+        <ProjectInitiatives projectId={project._id} size="xs" label="Part of" metrics="line" now={now} />
 
         {/* Labels */}
         {project.labels && project.labels.length > 0 && (
@@ -288,6 +244,7 @@ function ProjectListContent() {
   const [showCreate, setShowCreate] = useState(false);
   const [showDone, setShowDone] = useState(false);
   const ctxMenu = useContextMenu<ProjectItem>();
+  const now = useCoarseNow(60_000);
 
   // Strict workspace boundary at read time: `store.projects` caches rows from
   // every workspace (the sync overlay never prunes on team switch, IDB persists
@@ -319,7 +276,7 @@ function ProjectListContent() {
       <div ref={titlebarRef} className="flex items-center justify-between px-6 py-4 border-b border-sol-border/20">
         <div className="flex items-center gap-2.5">
           <FolderKanban className="w-5 h-5 text-sol-text-muted" />
-          <h1 className="text-base font-medium text-sol-text">Projects</h1>
+          <h1 className="text-[20px] font-semibold tracking-tight leading-none text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>Projects</h1>
           <span className="text-xs text-sol-text-dim tabular-nums">{allProjects.length}</span>
         </div>
         <button
@@ -373,6 +330,7 @@ function ProjectListContent() {
                     <ProjectCard
                       key={project._id}
                       project={project}
+                      now={now}
                       onClick={() => router.push(`/projects/${project._id}`)}
                       onContextMenu={(e) => ctxMenu.open(e, project)}
                     />

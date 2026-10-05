@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { keysOwnedElsewhere, routeQueueKey } from "../decisionQueue";
+import { routeQueueKey } from "../decisionQueue";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 // The decision card's key listener runs on window in CAPTURE phase, so every
 // key in the app passes through it first. These tests pin the stand-down

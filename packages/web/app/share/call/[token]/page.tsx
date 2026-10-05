@@ -13,7 +13,7 @@ import { Mic } from "lucide-react";
 // app store, and this page boots without it (standaloneBootGraph guard).
 import { useSearchParams } from "react-router";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { callAnchorKey, parseCallAnchor, parseCallMomentParam, type CallAnchor } from "@codecast/shared/contracts";
+import { callAnchorKey, lineSeekMs, parseCallAnchor, parseCallMomentParam, type CallAnchor } from "@codecast/shared/contracts";
 import { TranscriptTurnList } from "../../../../components/calls/TranscriptTurns";
 import { groupTurns, oneSegmentTurns } from "../../../../components/calls/transcriptTurnModel";
 import { fmtCallLength } from "../../../../components/calls/speakers";
@@ -22,7 +22,7 @@ import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { CallVideoPlayer, type CallVideoHandle } from "../../../../components/calls/CallVideoPlayer";
 import { filmedSpans, lineSeqAt, turnIndexAt, videoStretches, type CallVideoFile } from "../../../../lib/calls/callVideo";
 import { useMediaMoment } from "../../../../hooks/useMediaMoment";
-import { seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../../../hooks/useCallMomentLanding";
+import { callLineEl, seekCallMedia, useCallMomentLanding, type CallMediaTarget } from "../../../../hooks/useCallMomentLanding";
 import { scrollIntoContainer } from "../../../../lib/scrollWithin";
 
 type SharedCall = NonNullable<FunctionReturnType<typeof api.publicShare.getSharedCall>>;
@@ -115,10 +115,7 @@ function SharedCallBody({
     turns,
     ready: true,
     target,
-    lineEl: (i, seq) => {
-      const turn = threadRef.current?.querySelector<HTMLElement>(`[data-turn="${turns[i]?.index}"]`) ?? null;
-      return (seq !== null ? turn?.querySelector<HTMLElement>(`[data-seq="${seq}"]`) : null) ?? turn;
-    },
+    lineEl: (i, seq) => callLineEl(threadRef.current, turns[i]?.index, seq),
   });
 
   return (
@@ -133,7 +130,7 @@ function SharedCallBody({
             <Pill quiet>{fmtCallLength(call.started_at, call.ended_at)}</Pill>
           </>
         }
-        title={call.title || (call.recording ? "Untitled recording" : "Untitled huddle")}
+        title={call.title || (call.recording ? "Untitled voice note" : "Untitled huddle")}
         at={call.started_at}
         meta={
           // The voices on the record, a guest among them already marked
@@ -198,7 +195,7 @@ function SharedCallBody({
               isSelected={inAnchor}
               activeIndex={activeIndex}
               {...(hasMedia ? { activeSeq, filmed: files.length > 0 ? stretches : undefined } : {})}
-              onTurnClick={hasMedia ? (_i, _e, atMs) => seekTo(atMs) : undefined}
+              onTurnClick={hasMedia ? (_i, _e, line) => seekTo(lineSeekMs(stretches, line)) : undefined}
             />
           </div>
         </Section>

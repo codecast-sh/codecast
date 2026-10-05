@@ -4,7 +4,7 @@
 // against the shared registry plus the small daemon-exported dispatch helpers, so
 // they pin the byte-identical mandate without needing a live daemon.
 import { test, expect, describe, spyOn } from "bun:test";
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { LOCAL_AGENT_CLIENTS, type AgentClientId, type LocalAgentClientId } from "@codecast/shared/contracts";
 import {
   parseTranscriptFor,
   parseSessionFile,
@@ -34,9 +34,9 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
   const oldTernary = (agentType: AgentClientId): RegExp =>
     agentType === "gemini" ? />\s*$|gemini/i : /❯|⏵/;
 
-  for (const id of ["claude", "gemini"] as AgentClientId[]) {
+  for (const id of ["claude", "gemini"] as LocalAgentClientId[]) {
     test(`${id}: registry pattern === old ternary source+flags`, () => {
-      const reg = AGENT_CLIENTS[id].promptReadyPattern;
+      const reg = LOCAL_AGENT_CLIENTS[id].promptReadyPattern;
       const old = oldTernary(id);
       expect(reg.source).toBe(old.source);
       expect(reg.flags).toBe(old.flags);
@@ -45,32 +45,32 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
 
   // A few concrete pane samples to lock behavior, not just literals.
   test("codex matches the chevron it renders, and no longer a trailing '>'", () => {
-    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("›")).toBe(true);
-    expect(AGENT_CLIENTS.codex.promptReadyPattern.test("some output\n> ")).toBe(false);
+    expect(LOCAL_AGENT_CLIENTS.codex.promptReadyPattern.test("›")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.codex.promptReadyPattern.test("some output\n> ")).toBe(false);
   });
   test("gemini matches a trailing '>' or the word gemini", () => {
-    expect(AGENT_CLIENTS.gemini.promptReadyPattern.test("ready\n> ")).toBe(true);
-    expect(AGENT_CLIENTS.gemini.promptReadyPattern.test("Gemini CLI")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.gemini.promptReadyPattern.test("ready\n> ")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.gemini.promptReadyPattern.test("Gemini CLI")).toBe(true);
   });
   test("claude matches the ❯/⏵ glyphs", () => {
-    expect(AGENT_CLIENTS.claude.promptReadyPattern.test("❯ ")).toBe(true);
-    expect(AGENT_CLIENTS.claude.promptReadyPattern.test("⏵ ")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.claude.promptReadyPattern.test("❯ ")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.claude.promptReadyPattern.test("⏵ ")).toBe(true);
   });
 
   // cursor-agent left the ternary: it never rendered ❯/⏵, so a fresh cursor
   // pane read as booting for the whole discovery budget. Its composer is an
   // arrow over a placeholder (v2026.09.28 panes).
   test("cursor matches its empty composer, before and after the first turn", () => {
-    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Plan, search, build anything")).toBe(true);
-    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Add a follow-up")).toBe(true);
-    expect(AGENT_CLIENTS.cursor.promptReadyPattern.test("  → write a poem")).toBe(false);
+    expect(LOCAL_AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Plan, search, build anything")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.cursor.promptReadyPattern.test("  → Add a follow-up")).toBe(true);
+    expect(LOCAL_AGENT_CLIENTS.cursor.promptReadyPattern.test("  → write a poem")).toBe(false);
   });
 
   // grok renders a real ❯ composer, but the glyph stays visible for the WHOLE
   // turn (live pane capture, v1.0.5) — so grok classifies through the busy-first
   // whole-pane path, never the glyph whitelist. These samples pin that order.
   test("grok: busy chrome wins over the always-visible ❯ composer", () => {
-    const p = AGENT_CLIENTS.grok.promptReadyPattern;
+    const p = LOCAL_AGENT_CLIENTS.grok.promptReadyPattern;
     // Settled composer (real capture shape): ready.
     const settled = "│ ❯ \nShift+Tab:mode  │  Ctrl+x:shortcuts";
     expect(p.test(settled)).toBe(true);
@@ -89,7 +89,7 @@ describe("promptReadyPattern reproduces the fresh-launch ternary", () => {
   // opencode is a NEW client (no old-ternary equivalent): its TUI shows no ❯/›, so
   // readiness keys off the settled-pane footer/placeholder captured from a real run.
   test("opencode matches the settled TUI footer/placeholder, not a loading pane", () => {
-    const p = AGENT_CLIENTS.opencode.promptReadyPattern;
+    const p = LOCAL_AGENT_CLIENTS.opencode.promptReadyPattern;
     expect(p.test("┃  Ask anything...\ntab agents  ctrl+p commands")).toBe(true);
     expect(p.test("Ask anything... \"Fix a TODO\"")).toBe(true);
     // A booting pane (bottom status bar only) must NOT read as ready.
@@ -246,8 +246,8 @@ describe("sessionProcessGrepToken reproduces both per-client grep ternaries", ()
     });
   }
   test("codex, gemini and grok tokens are sourced from the registry binary", () => {
-    expect(sessionProcessGrepToken("codex", "claude")).toBe(AGENT_CLIENTS.codex.binary);
-    expect(sessionProcessGrepToken("gemini", "claude")).toBe(AGENT_CLIENTS.gemini.binary);
+    expect(sessionProcessGrepToken("codex", "claude")).toBe(LOCAL_AGENT_CLIENTS.codex.binary);
+    expect(sessionProcessGrepToken("gemini", "claude")).toBe(LOCAL_AGENT_CLIENTS.gemini.binary);
     // grok is a compiled Rust binary (ps comm "grok") — it must never fall
     // through to the claude pattern.
     expect(sessionProcessGrepToken("grok", "/claude\\b|claude-code")).toBe("grok");

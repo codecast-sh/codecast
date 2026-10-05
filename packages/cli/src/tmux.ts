@@ -95,16 +95,25 @@ export async function tmuxRunAsync(args: string[], opts?: { timeout?: number; en
 // the header tmux pill, the read-only split, and message injection all address
 // it. So the stamp is how anything else finds "the pane for this session".
 //
-// Stamp + creation time + name in ONE tmux call: identifying a pane costs one
-// exec, not one show-options per pane.
+// Every stamp, both times and the name in ONE tmux call: identifying a pane
+// costs one exec, not one show-options per pane.
 //
 // The separator must be PRINTABLE. tmux sanitizes control characters in all
-// format output — a tab comes back as `_`, which silently welds the three
+// format output — a tab comes back as `_`, which silently welds the
 // fields into one unparseable string (and then nothing ever matches). The name
 // goes LAST because it is the only field a human names, so anything unexpected
 // in it can be re-joined instead of shifting the fields.
 const PANE_FIELD_SEP = "|";
-const PANE_LIST_FORMAT = `#{@codecast_session_id}${PANE_FIELD_SEP}#{session_created}${PANE_FIELD_SEP}#{session_name}`;
+const PANE_LIST_FIELDS = [
+  "#{@codecast_session_id}",
+  "#{session_created}",
+  "#{session_activity}",
+  "#{@codecast_conversation_id}",
+  "#{@codecast_agent_type}",
+  "#{@codecast_project_path}",
+  "#{session_name}",
+];
+const PANE_LIST_FORMAT = PANE_LIST_FIELDS.join(PANE_FIELD_SEP);
 
 export type CodecastPane = {
   tmux: string;
@@ -112,28 +121,43 @@ export type CodecastPane = {
   sessionId: string | null;
   /** tmux #{session_created}, unix seconds. 0 when tmux didn't report one. */
   createdSec: number;
+  /** tmux #{session_activity}: the last output or input, unix seconds. 0 when unknown. */
+  activitySec: number;
+  conversationId: string | null;
+  agentType: string | null;
+  projectPath: string | null;
 };
+
+/** A user option's value, or null when it is unset. A tmux too old to expand
+ *  `#{@opt}` hands the placeholder back verbatim, which is "unset" too: read as
+ *  a value, a pane could be mistaken for another session's. */
+function optionValue(raw: string | undefined): string | null {
+  const v = (raw ?? "").trim();
+  return v && !v.includes("#{") ? v : null;
+}
 
 /** Parse `tmux list-sessions -F PANE_LIST_FORMAT` output. Unset user options
  *  expand to the empty string, and an ancient tmux that doesn't expand `#{@opt}`
  *  at all just yields no stamp — so a pane goes unmatched rather than
  *  misidentified. */
 export function parseCodecastPaneRows(stdout: string): CodecastPane[] {
+  const fixed = PANE_LIST_FIELDS.length - 1;
   const panes: CodecastPane[] = [];
   for (const row of stdout.split("\n")) {
     if (!row.trim()) continue;
-    const [sessionId, created, ...rest] = row.split(PANE_FIELD_SEP);
+    const fields = row.split(PANE_FIELD_SEP);
     // Re-join: a separator inside the name is the name's, not a new field.
-    const tmux = rest.join(PANE_FIELD_SEP).trim();
+    const tmux = fields.slice(fixed).join(PANE_FIELD_SEP).trim();
     if (!tmux) continue;
-    // A tmux too old to expand `#{@opt}` hands the placeholder back verbatim.
-    // That is "no stamp", not a session id — read it as one, and a pane could be
-    // mistaken for another session's.
-    const stamp = (sessionId ?? "").trim();
+    const [sessionId, created, activity, conversationId, agentType, projectPath] = fields;
     panes.push({
       tmux,
-      sessionId: stamp && !stamp.includes("#{") ? stamp : null,
+      sessionId: optionValue(sessionId),
       createdSec: Number.parseInt((created ?? "").trim(), 10) || 0,
+      activitySec: Number.parseInt((activity ?? "").trim(), 10) || 0,
+      conversationId: optionValue(conversationId),
+      agentType: optionValue(agentType),
+      projectPath: optionValue(projectPath),
     });
   }
   return panes;
@@ -169,6 +193,13 @@ export function pickPaneForSession(
 export function listCodecastPanes(): CodecastPane[] {
   const r = tmuxRun(["list-sessions", "-F", PANE_LIST_FORMAT]);
   // status !== 0 covers "no server running", which is simply no panes.
+  if (r.status !== 0) return [];
+  return parseCodecastPaneRows(r.stdout);
+}
+
+/** listCodecastPanes for callers on the daemon's event loop. */
+export async function listCodecastPanesAsync(): Promise<CodecastPane[]> {
+  const r = await tmuxRunAsync(["list-sessions", "-F", PANE_LIST_FORMAT]);
   if (r.status !== 0) return [];
   return parseCodecastPaneRows(r.stdout);
 }

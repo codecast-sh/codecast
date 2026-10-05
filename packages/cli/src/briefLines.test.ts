@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { briefCharterLines, briefHandLine, briefInitiativeLines, standingSessionLine } from "./briefLines";
+import { briefCharterLines, briefHandLine, briefInitiativeLines, standingSessionLine, wakeLine } from "./briefLines";
 import { stripAnsi } from "@platform/cli-kit/render";
 
 // The brief's hand line reads the server's BriefHand shape: `state`, not
@@ -52,5 +52,20 @@ describe("standingSessionLine", () => {
     expect(stripAnsi(standingSessionLine(role, { state: "dormant", state_status: "blocked", state_line: "Waiting on the pricing decision" }, 0))).toBe("  standing session: jx7b88a · blocked · Waiting on the pricing decision");
     expect(stripAnsi(standingSessionLine(role, { state: "working", state_status: null, state_line: null }, 0))).toBe("  standing session: jx7b88a · working");
     expect(stripAnsi(standingSessionLine({ standing_short_id: null, routine: null }, null, 0))).toBe("  standing session: none · no trigger yet");
+  });
+});
+
+// How the role's check runs (org-staffing.md S38): read off the trigger, with
+// the one command that changes it and no trigger id in it.
+describe("wakeLine", () => {
+  test("prints the cadence, the gate, the focus and the reason, then the role's own command", () => {
+    const [line] = wakeLine({ interval_ms: 86_400_000, wake: { every_ms: 12 * 3_600_000, precheck: "git diff --quiet", focus: "the launch queue", why: "launch week", tuned_at: Date.parse("2026-10-01T09:00:00Z") } }).map(stripAnsi);
+    expect(line).toContain("its check runs every 12 hours · only when `git diff --quiet` passes · focus: the launch queue · changed 2026-10-01: launch week");
+    expect(line).toContain("cast role tune --every <1h to 7d>");
+    expect(line).not.toMatch(/tr-\d|cast trigger/);
+  });
+  test("a routine read from an older server still prints its cadence; a role with no trigger prints nothing", () => {
+    expect(stripAnsi(wakeLine({ interval_ms: 86_400_000 })[0])).toContain("its check runs every day");
+    expect(wakeLine(null)).toEqual([]);
   });
 });

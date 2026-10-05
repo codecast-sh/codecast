@@ -24,7 +24,9 @@
 
 const APP_EDIT_COMMAND = "app-edit-command";
 
-// Runs in the page: is focus somewhere that owns its own undo?
+// Runs in the page: is focus somewhere that owns its own undo? The same rule
+// as the web's isTextEditingControl (packages/web/lib/undoWalk.ts); the web's
+// undoWalk.test runs this probe against that predicate, so they cannot drift.
 const EDITABLE_PROBE = `(() => {
   let el = document.activeElement;
   while (el && el.shadowRoot && el.shadowRoot.activeElement) el = el.shadowRoot.activeElement;
@@ -33,7 +35,7 @@ const EDITABLE_PROBE = `(() => {
   if (el.tagName === "TEXTAREA") return !el.readOnly && !el.disabled;
   if (el.tagName === "INPUT") {
     return !el.readOnly && !el.disabled &&
-      !/^(button|checkbox|radio|submit|reset|range|color|file|image|hidden)$/i.test(el.type);
+      !/^(button|checkbox|radio|submit|reset|range|color|file|image|hidden|date|time|datetime-local|month|week)$/i.test(el.type || "");
   }
   return false;
 })()`;

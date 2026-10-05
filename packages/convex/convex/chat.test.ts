@@ -3447,6 +3447,21 @@ describe("agent channels: roles and sessions in chat", () => {
     expect(pending(ctx).length).toBe(2);
   });
 
+  test("a teammate session's reply to a hosted assistant's mention is skipped, and the post stands", async () => {
+    const base = seed();
+    base.conversations = base.conversations.map((c: any) => c._id === "conv-alice" ? { ...c, agent_type: "codecast" } : c);
+    const ctx = context(ALICE, base);
+    const root = await askBob(ctx);
+    expect(pending(ctx).length).toBe(1);
+    const answer = await call(sendMessage, as(ctx, BOB), {
+      channel_id: CHANNEL, thread_root_id: root, content: "yes, all green",
+      origin: "agent", origin_session_id: "sess-bob",
+    });
+    expect(answer.session_relay).toMatchObject({ delivered: false, skipped: "no_access" });
+    expect(row(ctx, answer.message_id)?.content).toBe("yes, all green");
+    expect(pending(ctx).length).toBe(1);
+  });
+
   // Alice's session asks Bob's in a thread; returns the thread root.
   async function askBob(ctx: any) {
     const root = await call(sendMessage, ctx, {

@@ -998,32 +998,22 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--force", "Restart even when that would end the sessions in the daemon's own tmux server")
     .action(async (id: string | undefined, o: { restart: boolean; force?: boolean }) => {
       const h = pick(id, "no linux host registered");
-      const { installLinuxCast, restartHostDaemon, hostIdleWatchdogCurrent } = await import("../browser/provisionLinux.js");
+      const { hostIdleWatchdogCurrent } = await import("../browser/provisionLinux.js");
+      const { hostCastPlatform, updateHostCast } = await import("./updateHost.js");
       console.log(`updating ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const remote = toRemoteHost(up);
-      if (up.platform === "darwin" || up.provider === "scaleway-mac") {
-        const { installMacCast } = await import("./updateMac.js");
-        const version = installMacCast(remote, (message) => console.log(fmt.muted(`  ${message}`)));
-        console.log(`${OK} ${version} is installed on ${up.id}`);
-        if (o.restart) {
-          const { macServiceLabel } = await import("./provisionMac.js");
-          remoteExec(remote, `sudo -n launchctl kickstart -k system/${macServiceLabel(remote.user)}`, 60_000);
-          console.log(`${OK} Mac service restarted`);
-        }
-        return;
-      }
+      const platform = hostCastPlatform(up);
       try {
-        const { version } = installLinuxCast(remote, (m) => console.log(fmt.muted(`  ${m}`)));
-        console.log(`${OK} cast ${version} is installed on ${h.id} and runs there`);
-        if (!o.restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
-        else {
-          const { pid } = restartHostDaemon(remote, { force: o.force });
-          console.log(`${OK} daemon restarted onto ${version} (pid ${pid})`);
-        }
+        const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force }, (m) => console.log(fmt.muted(`  ${m}`)));
+        console.log(`${OK} cast ${version} is installed on ${up.id}${platform === "linux" ? " and runs there" : ""}`);
+        if (!restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
+        else if ("refused" in restart) die(restart.refused);
+        else console.log(`${OK} ${platform === "darwin" ? "Mac service restarted" : `daemon restarted onto ${version} (pid ${restart.pid})`}`);
       } catch (err) {
         die((err as Error).message);
       }
+      if (platform === "darwin") return;
       // The bundle is not the whole host: provisioning writes the idle watchdog
       // and its probe, so an update leaves them at whatever version the host was
       // last provisioned with. Compare the script itself rather than a recorded

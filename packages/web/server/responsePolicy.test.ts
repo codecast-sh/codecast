@@ -84,9 +84,13 @@ test("the draft policy names every source the app loads from", () => {
   expect(DOCUMENT_POLICY).not.toContain("'unsafe-eval'");
 });
 
-test("a guest meeting link tells search engines not to list it; other pages are untouched", async () => {
+test("a guest meeting link and a call's public page tell search engines not to list them; other pages are untouched", async () => {
   const app = new Hono().use("*", responsePolicy).get("*", c => c.html("<p>page</p>"));
   expect((await app.request("/meet/abcDEF123456")).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
+  expect((await app.request("/share/call/3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c")).headers.get("X-Robots-Tag")).toBe("noindex, nofollow");
   expect((await app.request("/meetings")).headers.get("X-Robots-Tag")).toBeNull();
+  // Other kinds of shared page are their team's own writing, and stay listable.
+  expect((await app.request("/share/doc/3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c")).headers.get("X-Robots-Tag")).toBeNull();
+  expect((await app.request("/share/calls")).headers.get("X-Robots-Tag")).toBeNull();
   expect((await app.request("/")).headers.get("X-Robots-Tag")).toBeNull();
 });

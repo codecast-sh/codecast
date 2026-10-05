@@ -72,7 +72,7 @@ export type OrgScopePanelProps = {
   /** Changes still to decide on the open proposal, shown on the tab. */
   staffingCount?: number;
   /** The open proposal's changes: a project charter or a filing renders as a
-   *  dashed chip on the scope row it names (org-staffing.md S5). */
+   *  chip on the scope row it names (org-staffing.md S5). */
   changes?: OrgProposalChange[];
   focusChangeId?: string | null;
   onSelectChange?: (changeId: string) => void;

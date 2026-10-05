@@ -17,7 +17,7 @@
 // split a lead is the Head of People's reading.
 
 import { projectLeadOf, type LeadRole } from "@codecast/shared/contracts/orgLead";
-import { initiativeChain, initiativeStanding, metricReadings, type InitiativeLink, type InitiativeRow, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
+import { initiativeChain, initiativeStanding, metricReadings, metricTrends, nextMilestone, openQuestions, trendWords, type InitiativeLink, type InitiativeRow, type MetricReading, type MetricStanding } from "@codecast/shared/contracts/initiative";
 import { isOnProjectBoard } from "@codecast/shared/tasks";
 import { isClosedPlan, type ActivityArea } from "./orgActivity";
 
@@ -26,7 +26,7 @@ export type CoverageProject = { _id: unknown; short_id?: string | null; title: s
 export type CoveragePlan = { _id: unknown; short_id: string; title: string; status: string; project_id?: unknown };
 /** The fields the board rule reads, beside the two links; a raw task row satisfies it. */
 export type CoverageTask = Parameters<typeof isOnProjectBoard>[0] & { status?: string | null; project_id?: unknown; plan_id?: unknown };
-export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard" | "description">;
+export type CoverageInitiative = Pick<InitiativeRow, "_id" | "short_id" | "title" | "status" | "owner" | "health" | "health_at" | "target_date" | "project_ids" | "parent_initiative_id" | "metrics" | "scoreboard" | "description" | "score_history" | "why" | "done_when" | "milestones" | "questions" | "sources">;
 
 export type CoverageInputs = {
   projects: CoverageProject[];
@@ -65,6 +65,19 @@ export type InitiativeCoverage = {
   metrics: MetricReading[];
   /** Against the numbers: behind if any metric is, met if every reported one is, else unknown. The owner's `health` is their word; this is the target's. */
   standing: MetricStanding;
+  /** Which way each metric is moving, by metric key, in words ("up from 380, toward the target"); a metric with fewer than two reports has no entry. */
+  trends: Record<string, string>;
+  // The intent record (I5), as much of it as a review reads to say what the goal still lacks.
+  /** Why it matters, in its author's words. */
+  why?: string;
+  /** What done looks like: the sentence a result is checked against. */
+  done_when?: string;
+  /** The first milestone not reached, earliest day first; absent when every one is reached or none is set. */
+  next_milestone?: { title: string; date?: number };
+  /** What is still undecided, as asked. */
+  open_questions: string[];
+  /** How many sources say where the goal was stated; none means nobody can check who said it. */
+  sources: number;
   projects: Array<LeadFacts & { id: string; short_id?: string; title: string; has_work: boolean }>;
   /** Of its projects with work, how many have no lead. */
   projects_without_lead: number;
@@ -148,10 +161,12 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
   const initiatives: InitiativeCoverage[] = [...open].sort((a, b) => rank(a.status) - rank(b.status)).map((i) => {
     const rows = i.project_ids.map((id) => projectById.get(String(id))).filter((p): p is CoverageProject => !!p)
       .map((p) => ({ id: String(p._id), short_id: p.short_id ?? undefined, title: p.title, has_work: hasWork(p), ...leadFacts(p) }));
+    const words = (text: string | undefined) => (text?.trim() ? text.trim().slice(0, INITIATIVE_DESCRIPTION_CHARS) : undefined);
+    const next = nextMilestone(i);
     return {
       short_id: i.short_id,
       title: i.title,
-      description: i.description?.trim() ? i.description.trim().slice(0, INITIATIVE_DESCRIPTION_CHARS) : undefined,
+      description: words(i.description),
       status: i.status,
       health: i.health,
       health_at: i.health_at,
@@ -161,6 +176,12 @@ export function computeCoverage(input: CoverageInputs): OrgCoverage {
       chain: initiativeChain(i, (id) => byId.get(id)),
       metrics: metricReadings(i),
       standing: initiativeStanding(metricReadings(i)),
+      trends: Object.fromEntries(Object.entries(metricTrends(i)).map(([key, t]) => [key, trendWords(t)]).filter(([, said]) => said)),
+      why: words(i.why),
+      done_when: words(i.done_when),
+      next_milestone: next ? { title: next.title, ...(next.date ? { date: next.date } : {}) } : undefined,
+      open_questions: openQuestions(i).map((q) => q.text),
+      sources: i.sources?.length ?? 0,
       projects: rows,
       projects_without_lead: rows.filter((p) => p.has_work && !p.lead).length,
     };

@@ -11,6 +11,7 @@ import { gate, type AgentResult } from '../../surface';
 import { meta } from './meta';
 import { assembleProposals, proposalFiles, type AssembledProposal } from './assemble';
 import { checkProposal } from './checkProposal';
+import { foreignRecords, recordOwners } from './contamination';
 
 // The mechanical half of the org rubric for one sample (the port of
 // ~/.cache/org-eval/bin/grade.py): the same sets, bands and pools, against the
@@ -249,6 +250,18 @@ export function handlePool(ws: string): Set<string> {
   return pool;
 }
 
+/** Which workspace holds each record id: every local snapshot and every workspace's labels, each read as its workspace's. */
+export function workspaceRecordOwners(): ReturnType<typeof recordOwners> {
+  const dirs = (root: string): string[] => (existsSync(root) ? readdirSync(root).map((n) => join(root, n)).filter((d) => statSync(d).isDirectory()) : []);
+  return recordOwners([
+    ...dirs(snapshotsRoot()).flatMap((dir) => {
+      const workspace = snapshotWorkspace(dir);
+      return workspace ? [{ workspace, dir }] : [];
+    }),
+    ...dirs(join(homePaths().labels, SURFACE)).map((dir) => ({ workspace: basename(dir), dir })),
+  ]);
+}
+
 // ── From a run dir to a Score ────────────────────────────────────────────────
 
 export interface OrgGradeContext {
@@ -257,6 +270,8 @@ export interface OrgGradeContext {
   servedDir: string;
   sets: GradeSets;
   pool: Set<string>;
+  /** Which workspace holds each record id (workspaceRecordOwners() when absent). */
+  owners?: ReturnType<typeof recordOwners>;
   /** Grade the frozen reads from the dir's calls.log; a replay leaves this to the route gate. */
   frozenReads?: boolean;
 }
@@ -297,11 +312,14 @@ export function gradeDir(dir: string, ctx: OrgGradeContext): OrgGrade {
   const parsed = files.map((f) => ({ file: basename(f), errors: checkProposal(readJson(f)).errors }));
   const broken = parsed.filter((p) => p.errors.length);
   const r = auto.records;
+  const foreign = foreignRecords(spec.changes, ctx.workspace, ctx.owners ?? workspaceRecordOwners());
   const gates: GateResult[] = [
     gate('spec-parses', files.length > 0 && !broken.length, !files.length ? 'no proposals/op-*.json was written' : broken.length ? broken.map((b) => `${b.file}: ${JSON.stringify(b.errors).slice(0, 300)}`).join('; ') : `${files.length} proposal file(s) parse`),
     gate('no-wrong-close', !r.wrong_close.length, r.wrong_close.length ? `closes ${r.wrong_close.join(', ')}${WRONG_CLOSE_TAIL}` : `closes ${r.closed_total}, none the labels say must stay open`),
     gate('no-never-name', !auto.sessions.named_bad.length, auto.sessions.named_bad.length ? `names ${auto.sessions.named_bad.join(', ')}, which the labels say is a finished job` : 'names no session the labels rule out'),
     gate('no-phantom-handle', !auto.roles_named.phantom.length, auto.roles_named.phantom.length ? `the letter names ${auto.roles_named.phantom.map((h) => `@${h}`).join(', ')}, a role neither the inputs nor this proposal has` : 'every role the letter names exists'),
+    // ct-56832: a rep that read another rep's scratch proposes that workspace's records.
+    gate('own-workspace', !foreign.length, foreign.length ? `touches ${foreign.length} record(s) another workspace holds, not ${ctx.workspace}: ${foreign.map((f) => `${f.id} (${f.owners.join(', ')})`).join(', ')}` : `touches no record another workspace holds`),
   ];
   // A dir graded with no replay gets the route's frozen-reads gate over the calls.log it kept.
   if (ctx.frozenReads) gates.push(...routeGates(meta, { calls: [], agents: [{ calls: callsLog(dir), model: meta.model, modelUsage: {}, isError: false, exitCode: 0 } as unknown as AgentResult] }).filter((g) => g.id === 'frozen-reads'));

@@ -44,3 +44,15 @@ export function oauthApprovalCode(value: string): string {
   }
   return code;
 }
+
+/**
+ * A device-code sign-in's prompt (`codex login --device-auth`): the page to
+ * open on any device and the one-time code to enter there, read off the CLI's
+ * printout. Null until both have appeared.
+ */
+export function deviceCodePrompt(pane: string): { url: string; code: string } | null {
+  const text = pane.replace(/\x1b\[[0-9;]*m/g, "");
+  const url = text.match(/https:\/\/\S+/)?.[0];
+  const code = text.match(/\b[A-Z0-9]{4,}-[A-Z0-9]{4,}\b/)?.[0];
+  return url && code ? { url, code } : null;
+}

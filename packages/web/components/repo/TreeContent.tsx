@@ -29,6 +29,7 @@ import {
   type RepoRouteFamily,
 } from "../../lib/repoView";
 import { serverErrorText } from "../../lib/errorCause";
+import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 
 /** The breadcrumb, which is also how you climb back out. */
 export function Breadcrumb({
@@ -112,6 +113,7 @@ export function TreeContent({
     if (!repoShortcutAllowed(rootRef.current, e) && e.target !== filterRef.current) return;
     if (!rootRef.current?.getClientRects().length) return;
     const el = e.target as HTMLElement | null;
+    if (keysOwnedElsewhere(el)) return;
     const typing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
     if (e.metaKey || e.ctrlKey || e.altKey) return;
 

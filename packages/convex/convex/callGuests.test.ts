@@ -1,5 +1,6 @@
-import { describe, expect, test } from "bun:test";
-import { makeFakeDb } from "./testDb";
+import { describe, expect, spyOn, test } from "bun:test";
+import schema from "./schema";
+import { makeFakeDb, schemaIndexes } from "./testDb";
 import {
   CALL_MEMBER_STALE_MS,
   GUEST_CREATOR_NOTICE_ANY_LINK_MS,
@@ -13,9 +14,11 @@ import {
   MAX_WAITING_PER_LINK,
   GUEST_RESUME_MS,
   GUEST_JOIN_REFUSAL_TEXT,
+  GUEST_LINK_REFUSAL_TEXT,
   guestIdentity,
 } from "@codecast/shared/contracts";
 import {
+  acceptGuestNotice,
   admitGuest,
   authForGuestToken,
   clampLinkTtl,
@@ -32,19 +35,20 @@ import {
   listGuestsWaiting,
   noteGuestsWaitingShown,
   leaveCall,
-  linkRefusal,
   listGuestLinks,
   mintGuestToken,
   guestPushName,
   removeGuest,
   requestJoin,
   revokeGuestLink,
+  revokeRoomGuestLinks,
   settleQuietGuests,
   sweepGuestRooms,
 } from "./callGuests";
 import { authForToken, getLiveRooms, getRoomKnocks, joinRoom, leaveRoom } from "./calls";
-import { appendSegments } from "./transcripts";
-import { expireRoomGrants } from "./callRooms";
+import { appendSegments, endIdleTranscript, HUDDLE_GRACE_MS, sweepOrphanedLive } from "./transcripts";
+import { expireRoomGrants, stampRoomWordsPublic } from "./callRooms";
+import { claimShareToken } from "./publicShare";
 import { GUEST_ROSTER_TAIL_MS, callGuestsOnRecord } from "./lib/callGuestAdmission";
 
 const ROOM = "dm:u1:u2";
@@ -52,7 +56,7 @@ const run = (fn: any) => fn._handler ?? fn.handler;
 
 // A team with calls on, two teammates in a people room, u1 seated in it, and
 // an outsider (u9) on no team. Everything a guest touches is in these tables.
-function world(extra: Record<string, any[]> = {}) {
+function world(extra: Record<string, any[]> = {}, opts: { indexes?: boolean } = {}) {
   const now = Date.now();
   const db = makeFakeDb({
     teams: [{ _id: "t1", name: "T", features: { calls: true } }],
@@ -80,7 +84,7 @@ function world(extra: Record<string, any[]> = {}) {
     conversations: [],
     chat_channels: [],
     ...extra,
-  }, { strictPatch: true });
+  }, { strictPatch: true, ...(opts.indexes ? { indexes: schemaIndexes(schema as any) } : {}) });
   const scheduled: any[] = [];
   const as = (userId: string | null) => ({
     db,
@@ -97,14 +101,6 @@ async function linkAndKnock(w: ReturnType<typeof world>, name = "Ada") {
 }
 
 describe("pure rules", () => {
-  test("link refusal names why", () => {
-    const now = 1_000;
-    expect(linkRefusal(null, now)).toBe("not_found");
-    expect(linkRefusal({ expires_at: 2_000, revoked_at: 500 } as any, now)).toBe("revoked");
-    expect(linkRefusal({ expires_at: 1_000 } as any, now)).toBe("expired");
-    expect(linkRefusal({ expires_at: 1_001 } as any, now)).toBeNull();
-  });
-
   test("a link's lifetime is held inside the allowed range", () => {
     expect(clampLinkTtl(undefined)).toBe(GUEST_LINK_TTL_MS);
     expect(clampLinkTtl(1)).toBe(GUEST_LINK_MIN_TTL_MS);
@@ -145,6 +141,44 @@ describe("links", () => {
     expect(listed.map((l: any) => l.token)).toEqual([c.token]);
   });
 
+  test("a room's past links are not read: only the ones still open by the clock", async () => {
+    // Read through the schema's real indexes, so a range the index cannot
+    // serve throws here as it would in convex, and the expired rows never
+    // reach the filter at all.
+    const t = Date.now();
+    const past = Array.from({ length: 30 }, (_, i) => ({
+      _id: `old${i}`, room_key: ROOM, team_id: "t1", token: `old-token-${i}`, created_by: "u1", created_at: t - 40 * 86_400_000, expires_at: t - 86_400_000 * (i + 1),
+    }));
+    const w = world({ call_guest_links: past }, { indexes: true });
+    // Every link row a collect() hands back, by index.
+    const linkRows: Record<string, number> = {};
+    const query = w.db.query.bind(w.db);
+    (w.db as any).query = (table: string) => {
+      const q = query(table);
+      if (table !== "call_guest_links") return q;
+      const withIndex = q.withIndex.bind(q);
+      q.withIndex = (name: string, range: any) => {
+        const r = withIndex(name, range);
+        const collect = r.collect.bind(r);
+        r.collect = async () => {
+          const rows = await collect();
+          linkRows[name] = (linkRows[name] ?? 0) + rows.length;
+          return rows;
+        };
+        return r;
+      };
+      return q;
+    };
+    // An expired link of their own is never handed out again.
+    const made = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    expect(made.reused).toBe(false);
+    const listed = await run(listGuestLinks)(w.as("u1"), { room_key: ROOM });
+    expect(listed.map((l: any) => l.token)).toEqual([made.token]);
+    // createGuestLink read none of the 30 past links, listGuestLinks only the new one.
+    expect(linkRows.by_room ?? 0).toBe(0);
+    expect(linkRows.by_room_expires).toBe(1);
+  });
+
   test("nobody outside the room can make or list one", async () => {
     const w = world();
     await expect(run(createGuestLink)(w.as("u9"), { room_key: ROOM })).rejects.toThrow(/Cannot invite guests/);
@@ -169,6 +203,7 @@ describe("links", () => {
       transcribed: true,
       recording: false,
       video_public: false,
+      words_public: false,
     });
     expect(await run(describeGuestLink)(w.as(null), { token: "nope-not-a-token" })).toEqual({ ok: false, reason: "not_found" });
   });
@@ -351,7 +386,7 @@ describe("a guest secret opens one row and nothing else", () => {
     // Its own row reads, and what it reads is about this meeting only.
     const mine = await state(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
     expect(Object.keys(mine).sort()).toEqual(["creator_told", "knocked_at", "left_reason", "link_open", "name", "resumable", "retry_at", "room", "view"]);
-    expect(Object.keys(mine.room).sort()).toEqual(["inviter", "live", "recording", "title", "transcribed", "video_public"]);
+    expect(Object.keys(mine.room).sort()).toEqual(["inviter", "live", "recording", "title", "transcribed", "video_public", "words_public"]);
     expect(mine.view).toBe("waiting");
   });
 
@@ -426,7 +461,8 @@ describe("revoking a link", () => {
     const waiting = await run(requestJoin)(w.as(null), { token: inside.link.token, name: "Bob", accept_notice: true });
     await run(revokeGuestLink)(w.as("u1"), { link_id: inside.link.link_id });
 
-    expect(await run(describeGuestLink)(w.as(null), { token: inside.link.token })).toEqual({ ok: false, reason: "revoked" });
+    // Still named, so the page can say whom to ask for a new one.
+    expect(await run(describeGuestLink)(w.as(null), { token: inside.link.token })).toEqual({ ok: false, reason: "revoked", title: null, inviter: { name: "Sam Rivera", image: "https://img/sam.png" } });
     await expect(run(requestJoin)(w.as(null), { token: inside.link.token, name: "Eve", accept_notice: true })).rejects.toThrow(/turned off/);
     expect((await run(getGuestState)(w.as(null), { guest_id: waiting.guest_id, secret: waiting.secret })).view).toBe("closed");
     expect(await run(getRoomKnocks)(w.as("u1"), { room_key: ROOM, guests: true })).toEqual([]);
@@ -528,6 +564,14 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     await expect(run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id })).rejects.toThrow(/link expired/);
     const st = await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
     expect(st).toMatchObject({ view: "closed", link_open: false, room: null });
+    // The link's own page still names the meeting and its sender, so the
+    // guest is told whom to ask; a token that opens nothing names nobody.
+    expect(await run(describeGuestLink)(w.as(null), { token: ada.link.token })).toEqual({
+      ok: false,
+      reason: "expired",
+      title: null,
+      inviter: { name: "Sam Rivera", image: "https://img/sam.png" },
+    });
     // Their beat no longer keeps a place at a door that is shut.
     const before = w.db._tables.call_guests[0].last_seen;
     expect(await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({ view: "closed" });
@@ -538,7 +582,7 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     const w = world();
     const ada = await linkAndKnock(w);
     w.db._tables.team_memberships.splice(0, 1); // u1 leaves the team
-    expect(await run(describeGuestLink)(w.as(null), { token: ada.link.token })).toEqual({ ok: false, reason: "inviter_gone" });
+    expect(await run(describeGuestLink)(w.as(null), { token: ada.link.token })).toEqual({ ok: false, reason: "inviter_gone", title: null, inviter: { name: "Sam Rivera", image: "https://img/sam.png" } });
     await expect(run(requestJoin)(w.as(null), { token: ada.link.token, name: "Bob", accept_notice: true })).rejects.toThrow(/can no longer invite/);
     expect((await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).view).toBe("closed");
   });
@@ -559,7 +603,7 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     expect((await run(describeGuestLink)(w.as(null), { token: link.token })).ok).toBe(true);
     // The huddle is over: the private session's room keeps no door for strangers.
     w.db._tables.call_members.length = 0;
-    expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toEqual({ ok: false, reason: "inviter_gone" });
+    expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toMatchObject({ ok: false, reason: "inviter_gone", title: null });
     await expect(run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true })).rejects.toThrow(/can no longer invite/);
     // And the room's next huddle starts without it for good.
     await expireRoomGrants(w.as("u2"), room);
@@ -574,7 +618,7 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     });
     const link = await run(createGuestLink)(w.as("u1"), { room_key: room });
     w.db._tables.team_memberships.splice(0, 1);
-    expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toEqual({ ok: false, reason: "inviter_gone" });
+    expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toMatchObject({ ok: false, reason: "inviter_gone" });
   });
 
   test("calls switched off for the team reads as a meeting not taking guests, in words for a stranger", async () => {
@@ -583,6 +627,131 @@ describe("a link closes on everybody waiting at it, however it closes", () => {
     w.db._tables.teams[0].features = { calls: false };
     expect(await run(describeGuestLink)(w.as(null), { token: link.token })).toEqual({ ok: false, reason: "unavailable" });
     await expect(run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true })).rejects.toThrow(/isn't taking guests/);
+  });
+});
+
+describe("a call's words on its public link", () => {
+  const TOKEN = "3f2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c";
+  const liveCall = (w: ReturnType<typeof world>, over: Record<string, unknown> = {}) => {
+    const row = { _id: "tr1", room_key: ROOM, team_id: "t1", started_by: "u1", status: "live", started_at: Date.now() - 60_000, short_id: "cl-1", routes: [], last_seq: 0, ...over };
+    w.db._tables.transcripts.push(row);
+    return row;
+  };
+
+  test("a link turned on mid-call widens the notice for guests and for the room, and off narrows it", async () => {
+    const w = world();
+    const call = liveCall(w);
+    const ada = await linkAndKnock(w);
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const state = async () => (await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).room;
+    expect((await state()).words_public).toBe(false);
+
+    await claimShareToken(w.as("u1") as any, "transcripts", call as any, TOKEN);
+    expect((await state()).words_public).toBe(true);
+    expect((await run(describeGuestLink)(w.as(null), { token: ada.link.token })).words_public).toBe(true);
+    const room = (await run(getLiveRooms)(w.as("u1"), {})).find((r: any) => r.room_key === ROOM);
+    expect(room.words_public).toBe(true);
+
+    // Told under the transcript alone, the guest is held at the door of the
+    // media until they agree to the wider notice.
+    expect(await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toEqual({ ok: false, reason: "notice_changed" });
+
+    await claimShareToken(w.as("u1") as any, "transcripts", w.db._tables.transcripts[0], null);
+    expect((await state()).words_public).toBe(false);
+    expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
+  });
+
+  test("only the record the room is keeping now speaks for it", async () => {
+    const w = world();
+    const earlier = { _id: "tr0", room_key: ROOM, team_id: "t1", started_by: "u1", status: "ended", started_at: 0, short_id: "cl-0", routes: [], last_seq: 0 };
+    w.db._tables.transcripts.push(earlier);
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    // Sharing last week's call says nothing about this one.
+    await claimShareToken(w.as("u1") as any, "transcripts", earlier as any, TOKEN);
+    expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(false);
+
+    // A record that ends takes its stamp with it; a new one starts unshared.
+    const call = liveCall(w);
+    await claimShareToken(w.as("u1") as any, "transcripts", call as any, "4a2b8c1e-9a4d-4e7b-8c2a-1d5e6f7a8b9c");
+    expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(true);
+    await stampRoomWordsPublic(w.as("u1"), { ...w.db._tables.transcripts[1] }, { ending: true });
+    expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(false);
+
+    // Transcription off: nothing is being written onto the link.
+    await stampRoomWordsPublic(w.as("u1"), w.db._tables.transcripts[1]);
+    w.db._tables.call_room_state[0].transcribe_off = true;
+    expect((await run(describeGuestLink)(w.as(null), { token: link.token })).words_public).toBe(false);
+  });
+});
+
+describe("what a guest agreed to is kept, and held to", () => {
+  const recordingStarts = (w: ReturnType<typeof world>) =>
+    w.db._tables.call_recordings.push({ _id: "rec1", room_key: ROOM, kind: "composite", status: "recording" });
+
+  test("the knock keeps the notice the page showed, and refuses one that says less than the room keeps", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const shown = { recording: false, transcribed: true };
+    const ada = await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: shown });
+    expect(w.db._tables.call_guests[0].notice_accepted).toEqual({ ...shown, video_public: false, words_public: false });
+
+    recordingStarts(w);
+    await expect(run(requestJoin)(w.as(null), { token: link.token, name: "Bo", accept_notice: shown })).rejects.toThrow(/keeps more than the notice you saw/);
+    // A page from before pages said which agreed to the room as it is.
+    await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret });
+    expect(w.db._tables.call_guests[0].notice_accepted).toMatchObject({ recording: true, transcribed: true });
+  });
+
+  test("a recording started after the knock holds the media until a Join under the wider notice", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const ada = await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: { recording: false, transcribed: true } });
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const creds = { guest_id: ada.guest_id, secret: ada.secret };
+    expect((await run(authForGuestToken)(w.as(null), creds)).ok).toBe(true);
+
+    recordingStarts(w);
+    // A page that walks in by itself, or reconnects, is refused.
+    expect(await run(authForGuestToken)(w.as(null), creds)).toEqual({ ok: false, reason: "notice_changed" });
+    // A press under a notice that still says less is refused too.
+    expect(await run(authForGuestToken)(w.as(null), { ...creds, accept_notice: { recording: false, transcribed: true } })).toEqual({ ok: false, reason: "notice_changed" });
+    // The press under the notice as it is: let through, and kept.
+    expect((await run(authForGuestToken)(w.as(null), { ...creds, accept_notice: { recording: true, transcribed: true } })).ok).toBe(true);
+    expect(w.db._tables.call_guests[0].notice_accepted).toEqual({ recording: true, transcribed: true, video_public: false, words_public: false });
+    expect((await run(authForGuestToken)(w.as(null), creds)).ok).toBe(true);
+    expect(GUEST_JOIN_REFUSAL_TEXT.notice_changed).toContain("Read the notice again");
+  });
+
+  test("putting away the line about a recording that started inside is agreeing to it: the next reconnect goes through", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const ada = await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: { recording: false, transcribed: true } });
+    const creds = { guest_id: ada.guest_id, secret: ada.secret };
+    // Not inside yet: a guest at the door agrees by pressing Join, not here.
+    expect(await run(acceptGuestNotice)(w.as(null), { ...creds, notice: { recording: false, transcribed: true } })).toBeNull();
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+
+    recordingStarts(w);
+    expect(await run(authForGuestToken)(w.as(null), creds)).toEqual({ ok: false, reason: "notice_changed" });
+    // A page still showing less than the room keeps is refused, and the row
+    // keeps what it had.
+    await expect(run(acceptGuestNotice)(w.as(null), { ...creds, notice: { recording: false, transcribed: true } })).rejects.toThrow(/keeps more than the notice you saw/);
+    expect(w.db._tables.call_guests[0].notice_accepted).toMatchObject({ recording: false });
+    // A wrong secret reads as nobody.
+    expect(await run(acceptGuestNotice)(w.as(null), { ...creds, secret: "nope", notice: { recording: true, transcribed: true } })).toBeNull();
+
+    await run(acceptGuestNotice)(w.as(null), { ...creds, notice: { recording: true, transcribed: true } });
+    expect(w.db._tables.call_guests[0].notice_accepted).toEqual({ recording: true, transcribed: true, video_public: false, words_public: false });
+    expect((await run(authForGuestToken)(w.as(null), creds)).ok).toBe(true);
+  });
+
+  test("a row from before notices were kept is not held to one", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w);
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    delete w.db._tables.call_guests[0].notice_accepted;
+    recordingStarts(w);
+    expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
   });
 });
 
@@ -1120,7 +1289,7 @@ describe("a guest put out stays out, past every tail", () => {
     process.env.LIVEKIT_API_KEY = "k";
     process.env.LIVEKIT_API_SECRET = "s".repeat(32);
     try {
-      const actx = { runQuery: (_fn: any, args: any) => run(authForGuestToken)(w.as(null), args) };
+      const actx = { runMutation: (_fn: any, args: any) => run(authForGuestToken)(w.as(null), args) };
       const minted = await run(mintGuestToken)(actx, { guest_id: ada.guest_id, secret: ada.secret });
       expect(minted.name).toBe("Sam Rivera");
       const claims = JSON.parse(Buffer.from(minted.token.split(".")[1], "base64url").toString());
@@ -1310,6 +1479,50 @@ describe("a quiet page is asked about before it is let go", () => {
     expect((await run(authForGuestToken)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).ok).toBe(true);
   });
 
+  test("an admission outlives its link: a guest let go after a short link expired walks back in", async () => {
+    const w = world();
+    const link = await run(createGuestLink)(w.as("u1"), { room_key: ROOM, ttl_ms: GUEST_LINK_MIN_TTL_MS });
+    const ada = await run(requestJoin)(w.as(null), { token: link.token, name: "Ada", accept_notice: true });
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    const linkRow = w.db._tables.call_guest_links.find((l: any) => l.token === link.token);
+    linkRow.expires_at = Date.now() - 1;
+    const creds = { token: link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret };
+    // Still inside: told so, past the closed link.
+    expect((await run(requestJoin)(w.as(null), creds)).status).toBe("admitted");
+    quiet(w, ada.guest_id, { media: true });
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] });
+    expect(await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret })).toMatchObject({
+      view: "left",
+      link_open: false,
+      resumable: true,
+    });
+    expect(await run(requestJoin)(w.as(null), creds)).toMatchObject({ status: "admitted", secret: null });
+    expect(await run(getRoomKnocks)(w.as("u1"), { room_key: ROOM, guests: true })).toEqual([]);
+  });
+
+  test("a turned-off link still lets a let-go guest back in, and nobody new knock on it", async () => {
+    const w = world();
+    const ada = await linkAndKnock(w, "Ada");
+    await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(revokeGuestLink)(w.as("u1"), { link_id: ada.link.link_id });
+    quiet(w, ada.guest_id, { media: true });
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] });
+    const back = await run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret });
+    expect(back.status).toBe("admitted");
+    await expect(run(requestJoin)(w.as(null), { token: ada.link.token, name: "Bob", accept_notice: true })).rejects.toThrow(
+      GUEST_LINK_REFUSAL_TEXT.revoked,
+    );
+    // Once the place is gone for good (past the window), Ada knocks like
+    // anyone, and the closed link turns her away too.
+    const row = w.db._tables.call_guests.find((g: any) => g._id === ada.guest_id);
+    quiet(w, ada.guest_id, { media: true });
+    await run(settleQuietGuests)(w.as(null), { room_key: ROOM, guest_ids: [ada.guest_id], in_media: [] });
+    row.settled_at = Date.now() - GUEST_RESUME_MS - 1;
+    await expect(
+      run(requestJoin)(w.as(null), { token: ada.link.token, name: "Ada", accept_notice: true, guest_id: ada.guest_id, secret: ada.secret }),
+    ).rejects.toThrow(GUEST_LINK_REFUSAL_TEXT.revoked);
+  });
+
   test("past the window, or once the huddle ends, a let-go guest knocks like anyone", async () => {
     const w = world();
     const ada = await linkAndKnock(w, "Ada");
@@ -1369,11 +1582,89 @@ describe("a join the server refuses says why in words the page can act on", () =
     process.env.LIVEKIT_API_KEY = "k";
     process.env.LIVEKIT_API_SECRET = "s".repeat(32);
     try {
-      const ctx = { runQuery: async () => ({ ok: false, reason: "removed" }) };
+      const ctx = { runMutation: async () => ({ ok: false, reason: "removed" }) };
       const err: any = await run(mintGuestToken)(ctx, { guest_id: "x", secret: "y" }).catch((e: any) => e);
       expect(err.data).toEqual({ code: "removed", message: GUEST_JOIN_REFUSAL_TEXT.removed });
     } finally {
       process.env = env;
     }
+  });
+});
+
+// A guest's page beats for as long as it stays open, and whoever made the
+// link is told about a knock until it is answered. Neither is a teammate in
+// the room, so neither may hold a huddle's record open: a record that ran for
+// hours with one line in it would also keep a recording billing by the minute.
+describe("a guest at the door never keeps an empty huddle's record going", () => {
+  async function emptiedWithAGuestWaiting(admitted: boolean) {
+    const w = world({
+      transcripts: [{ _id: "tr1", room_key: ROOM, team_id: "t1", started_by: "u1", status: "live", started_at: Date.now() - 60_000, routes: [], last_seq: 1 }],
+    });
+    const ada = await linkAndKnock(w);
+    if (admitted) await run(admitGuest)(w.as("u1"), { guest_id: ada.guest_id });
+    await run(leaveRoom)(w.as("u1"), { room_key: ROOM });
+    const leftAt = w.db._tables.transcripts[0].idle_since;
+    expect(leftAt).toBeNumber();
+    return { w, ada, leftAt };
+  }
+
+  // Every way the guest's side touches the room, a few times over, the way
+  // an open page and a creator's notification would across the grace.
+  async function guestActivity(w: ReturnType<typeof world>, ada: { guest_id: string; secret: string }) {
+    for (let i = 0; i < 3; i++) {
+      await run(guestHeartbeat)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+      await run(getGuestState)(w.as(null), { guest_id: ada.guest_id, secret: ada.secret });
+      await run(noteGuestsWaitingShown)(w.as("u1"), { guest_ids: [ada.guest_id] });
+    }
+  }
+
+  for (const admitted of [false, true]) {
+    const who = admitted ? "an admitted guest alone" : "a guest knocking";
+    test(`${who}: the grace check ends the record where the room emptied`, async () => {
+      const { w, ada, leftAt } = await emptiedWithAGuestWaiting(admitted);
+      await guestActivity(w, ada);
+      const now = spyOn(Date, "now").mockReturnValue(leftAt + HUDDLE_GRACE_MS);
+      try {
+        await guestActivity(w, ada);
+        expect(w.db._tables.transcripts[0].idle_since).toBe(leftAt);
+        expect(await run(endIdleTranscript)(w.as(null), { transcript_id: "tr1" })).toEqual({ ended: true });
+      } finally {
+        now.mockRestore();
+      }
+      expect(w.db._tables.transcripts[0]).toMatchObject({ status: "ended", ended_at: leftAt });
+    });
+
+    test(`${who}: the orphan sweep ends it too, dated from the last seat`, async () => {
+      const { w, ada, leftAt } = await emptiedWithAGuestWaiting(admitted);
+      const now = spyOn(Date, "now").mockReturnValue(leftAt + HUDDLE_GRACE_MS + 1_000);
+      try {
+        await guestActivity(w, ada);
+        expect(await run(sweepOrphanedLive)(w.as(null), {})).toMatchObject({ ended: 1 });
+      } finally {
+        now.mockRestore();
+      }
+      expect(w.db._tables.transcripts[0]).toMatchObject({ status: "ended", ended_at: leftAt });
+    });
+  }
+});
+
+describe("the e2e harness's cleanup", () => {
+  test("turns off every open link into the room made since the run began, and nothing older", async () => {
+    const w = world();
+    const links = () => w.db._tables.call_guest_links;
+    const older = await run(createGuestLink)(w.as("u2"), { room_key: ROOM });
+    links()[0].created_at = Date.now() - 60_000;
+    const since = Date.now() - 1_000;
+    const mine = await run(createGuestLink)(w.as("u1"), { room_key: ROOM });
+    const bob = await run(requestJoin)(w.as(null), { token: mine.token, name: "Bob", accept_notice: true });
+    const res = await run(revokeRoomGuestLinks)(w.as(null), { room_key: ROOM, since });
+    expect(res.revoked).toEqual([String(mine.link_id)]);
+    expect(links().find((l: any) => l.token === mine.token)).toMatchObject({ revoked_by: "u1" });
+    expect(links().find((l: any) => l.token === older.token).revoked_at).toBeUndefined();
+    // Revoked the way the panel does: the guest waiting on it is told so.
+    expect((await run(getGuestState)(w.as(null), { guest_id: bob.guest_id, secret: bob.secret })).view).toBe("closed");
+    // With no start given it takes the rest, and a second run finds nothing.
+    expect((await run(revokeRoomGuestLinks)(w.as(null), { room_key: ROOM })).revoked).toEqual([String(older.link_id)]);
+    expect((await run(revokeRoomGuestLinks)(w.as(null), { room_key: ROOM })).revoked).toEqual([]);
   });
 });
