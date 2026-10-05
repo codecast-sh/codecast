@@ -1,7 +1,6 @@
 // How the Evals pages write a time and a batch, in one place, so one batch
-// reads the same on every page. Pure: the bisect model and the views share it.
-
-import { formatUsd } from "@codecast/shared/render/changeCardHtml";
+// reads the same on every page. Pure and free of imports: the models and the
+// views share it, in whichever app they render.
 
 const WHEN: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" };
 /** One clock for every page: a time in the viewer's local zone, "Oct 2, 07:23 PM". */
@@ -36,8 +35,13 @@ export function splitBatchNames(text: string): Array<string | { batch: string }>
 }
 
 export const shortSha = (sha: string | null | undefined, n = 8) => (sha ? sha.slice(0, n) : "none");
-/** Dollars as the change cards write them, with the sub-dime precision a single rep needs. */
-export const usd = (v: number) => (v >= 0.1 ? formatUsd(v) : v > 0 ? `$${v.toFixed(3)}` : "$0");
+/**
+ * Dollars as codecast's change cards write them (formatUsd in
+ * shared/render/changeCardHtml: cents under $10, whole dollars above), with
+ * the sub-dime precision a single rep needs. The foundation test holds the
+ * two rules together.
+ */
+export const usd = (v: number) => (v >= 10 ? `$${Math.round(v).toLocaleString("en-US")}` : v >= 0.1 ? `$${v.toFixed(2)}` : v > 0 ? `$${v.toFixed(3)}` : "$0");
 
 /** A count with its noun: "1 class", "3 classes". */
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;

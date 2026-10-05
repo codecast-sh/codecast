@@ -5,27 +5,24 @@
 // told by shape (filled against hollow), never by colour alone.
 
 import { forwardRef, type AnchorHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { Check, Copy, GitBranch, Globe, Lock } from "lucide-react";
 import type { PromptFilePair, RunRow, SeparationResult, EvalVisibility } from "@codecast/shared/contracts/evalsApi";
-import { DiffView } from "../DiffView";
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { PASS_MARK } from "./charts/scale";
 import { evalsHref } from "./evalsPaths";
-import { batchLabel, whenLabel, shortSha, score2, pLabel, offBranchWords } from "./format";
-import "./evals.css";
+import { batchLabel, shortSha, score2, pLabel, offBranchWords } from "./format";
+import { useCopy, useEvalsHost } from "./host";
 import { type VerdictState, verdictOfRow, type FlipRuns } from "./verdictModel";
-import { useCopy } from "./useCopy";
 
 // ── EvalsLink ───────────────────────────────────────────────────────────────
 
 /**
- * A link inside the area. A plain click goes through the router, which moves
- * the pane the page sits in (a split sibling stays put); a modified click is
- * the browser's, so Cmd-click still opens a tab.
+ * A link inside the area. A plain click goes through the host's router, which
+ * moves the pane the page sits in (a split sibling stays put); a modified
+ * click is the browser's, so Cmd-click still opens a tab.
  */
 export const EvalsLink = forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }>(function EvalsLink({ href, onClick, ...rest }, ref) {
-  const router = useRouter();
+  const navigate = useEvalsHost().useNavigate();
   return (
     <a
       ref={ref}
@@ -34,7 +31,7 @@ export const EvalsLink = forwardRef<HTMLAnchorElement, AnchorHTMLAttributes<HTML
         onClick?.(e);
         if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
         e.preventDefault();
-        router.push(href);
+        navigate(href);
       }}
       {...rest}
     />
@@ -49,7 +46,7 @@ const VERDICT_WORDS: Record<VerdictState, string> = { pass: "passed", fail: "fai
 export function VerdictGlyph({ state, size = 12, title }: { state: VerdictState; size?: number; title?: string }) {
   const tone = state === "pass" ? "ev-pass" : state === "fail" ? "ev-fail" : state === "mixed" ? "ev-fail" : "ev-quiet";
   return (
-    <svg className={`${tone} shrink-0`} width={size} height={size} viewBox="-7 -7 14 14" role="img" aria-label={title ?? VERDICT_WORDS[state]} data-ev-verdict={state}>
+    <svg className={`ev-glyph ${tone}`} width={size} height={size} viewBox="-7 -7 14 14" role="img" aria-label={title ?? VERDICT_WORDS[state]} data-ev-verdict={state}>
       <title>{title ?? VERDICT_WORDS[state]}</title>
       {state === "pass" && <circle r={5.5} fill="currentColor" />}
       {state === "fail" && <circle r={4.9} fill="none" stroke="currentColor" strokeWidth={1.6} />}
@@ -76,7 +73,7 @@ export function SeparationMark({ result, showWord = false, size = 12 }: { result
   const word = `${SEPARATION_WORDS[kind]}${result && "p" in result ? `, p ${pLabel(result.p)}` : ""}`;
   const tone = kind === "better" ? "ev-pass" : kind === "worse" ? "ev-fail" : "ev-quiet";
   return (
-    <span className={`inline-flex items-center gap-1.5 ${tone}`} data-ev-separation={kind}>
+    <span className={`ev-sep ${tone}`} data-ev-separation={kind}>
       <svg width={size} height={size} viewBox="-7 -7 14 14" role="img" aria-label={word}>
         <title>{word}</title>
         {kind === "better" && <path d="M0,-5.5 L5.5,4 L-5.5,4 Z" fill="currentColor" />}
@@ -84,7 +81,7 @@ export function SeparationMark({ result, showWord = false, size = 12 }: { result
         {kind === "not-separated" && <path d="M-5,-2 H5 M-5,2 H5" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" />}
         {kind === "too-few" && <circle r={4.6} fill="none" stroke="currentColor" strokeWidth={1.2} strokeDasharray="1.4 1.6" />}
       </svg>
-      {showWord && <span className="text-[11.5px] ev-tabular">{word}</span>}
+      {showWord && <span className="ev-sep-word">{word}</span>}
     </span>
   );
 }
@@ -204,7 +201,7 @@ export function FlipRunLinks({ flip, className = "" }: { flip: FlipRuns; classNa
 /** The flag every live job wears after five quiet minutes (section 3.6): a bisect, a shrink or a sweep. */
 export function StallChip({ since, ...rest }: { since: string } & HTMLAttributes<HTMLSpanElement>) {
   return (
-    <span className="evb-stall-chip" title={`No new step since ${new Date(since).toLocaleTimeString()}: check its tmux session or log`} {...rest}>
+    <span className="ev-stall-chip" title={`No new step since ${new Date(since).toLocaleTimeString()}: check its tmux session or log`} {...rest}>
       stalled?
     </span>
   );
@@ -220,8 +217,8 @@ export function StallChip({ since, ...rest }: { since: string } & HTMLAttributes
 export function LogTail({ lines, label = "Log tail", ...rest }: { lines: readonly string[]; label?: string } & HTMLAttributes<HTMLPreElement>) {
   if (!lines.length) return null;
   return (
-    <div className="ev-logtail flex flex-col gap-1.5">
-      <span className="text-[11px] ev-quiet">{label}</span>
+    <div className="ev-logtail">
+      <span className="ev-logtail-label">{label}</span>
       {/* A column-reverse scroller opens at its end and stays there as lines land, so the newest line is the one in view. */}
       <pre className="ev-log" {...rest}>
         <span>{lines.join("\n")}</span>
@@ -238,7 +235,7 @@ export function CopyCommand({ command, label = "Copy" }: { command: string; labe
     <span className="ev-copy" data-ev-copy>
       <code>{command}</code>
       <button type="button" onClick={() => void copy()} aria-label={`${label}: ${command}`}>
-        {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+        {copied ? <Check /> : <Copy />}
         {label}
       </button>
     </span>
@@ -255,9 +252,9 @@ export function ReplyCard({ row, reply, reasoning = null, heading = null, href =
         <VerdictGlyph state={verdictOfRow(row)} size={14} />
         {heading && <span className="ev-title">{heading}</span>}
         <ScoreBar score={row.score} passMark={row.passMark ?? PASS_MARK} width={90} />
-        <span className="flex-1" />
+        <span className="ev-grow" />
         {href && (
-          <EvalsLink href={href} className="text-[11.5px] text-sol-text-dim hover:text-sol-text underline-offset-2 hover:underline">
+          <EvalsLink href={href} className="ev-reply-open">
             open run
           </EvalsLink>
         )}
@@ -269,7 +266,7 @@ export function ReplyCard({ row, reply, reasoning = null, heading = null, href =
       {row.gatesFailed.length > 0 && (
         <div className="ev-reply-gates">
           {row.gatesFailed.map((g) => (
-            <span key={g} className="ev-chip ev-gate" style={{ borderColor: "color-mix(in srgb, var(--sol-red) 45%, transparent)" }}>
+            <span key={g} className="ev-chip ev-gate">
               gate {g} failed
             </span>
           ))}
@@ -296,16 +293,17 @@ export function PromptDiff(props: { pair: PromptFilePair } | { a: string; b: str
   const before = "pair" in props ? props.pair.a.text : a.data?.text ?? null;
   const after = "pair" in props ? props.pair.b.text : b.data?.text ?? null;
   const loading = !("pair" in props) && (a.loading || b.loading);
+  const { DiffView } = useEvalsHost().ui;
   return (
-    <section className="ev-card overflow-hidden" data-ev-prompt-diff={file}>
-      <header className="ev-title px-3 py-2 border-b" style={{ borderColor: "var(--ev-rule)" }}>
-        <span className="ev-mono text-[12px] font-normal">{file}</span>
-        {before === after && before !== null && <span className="text-[11.5px] font-normal ev-quiet">unchanged</span>}
+    <section className="ev-card ev-pdiff" data-ev-prompt-diff={file}>
+      <header className="ev-title ev-pdiff-head">
+        <span className="ev-mono ev-pdiff-file">{file}</span>
+        {before === after && before !== null && <span className="ev-pdiff-same">unchanged</span>}
       </header>
       {loading ? (
-        <div className="px-3 py-4 text-[12px] ev-quiet">Reading both prompts...</div>
+        <div className="ev-pdiff-note">Reading both prompts...</div>
       ) : before === null && after === null ? (
-        <div className="px-3 py-4 text-[12px] ev-quiet">Neither rep wrote this file.</div>
+        <div className="ev-pdiff-note">Neither rep wrote this file.</div>
       ) : (
         <DiffView oldStr={before ?? ""} newStr={after ?? ""} showLineNumbers contextLines={3} />
       )}

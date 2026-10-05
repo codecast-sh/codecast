@@ -56,3 +56,18 @@ export function memberHandle(member: {
   if (member.is_bot) return botHandle(member.name ?? undefined);
   return member.github_username?.toLowerCase() || emailLocalHandle(member.email ?? undefined);
 }
+
+/** One handle read against one roster, to at most one member: a GitHub login
+ *  first, then an email local part, then a bot's name, and only when exactly
+ *  one member matches at that level. An ambiguous handle resolves to nobody
+ *  rather than to a guess. */
+export function matchHandle<T extends { github_username?: string | null; email?: string | null; name?: string | null; is_bot?: boolean }>(roster: readonly T[], rawHandle: string): T | null {
+  const handle = rawHandle.replace(/^@/, "").toLowerCase();
+  const byGithub = roster.filter((u) => !u.is_bot && u.github_username?.toLowerCase() === handle);
+  const byEmail = roster.filter((u) => !u.is_bot && emailLocalHandle(u.email ?? undefined) === handle);
+  const byBot = roster.filter((u) => u.is_bot && botHandle(u.name ?? undefined) === handle);
+  return byGithub.length === 1 ? byGithub[0]
+    : byGithub.length === 0 && byEmail.length === 1 ? byEmail[0]
+    : byGithub.length === 0 && byEmail.length === 0 && byBot.length === 1 ? byBot[0]
+    : null;
+}

@@ -16,7 +16,11 @@
 //                   huddleVoiceAskHeader.
 //
 //   join   LiveKit dispatches the worker into the room, told which session
-//          it speaks for, as which face and voice, and in which mode.
+//          it speaks for, as which face and voice, and in which mode. Two
+//          callers race to it on purpose: a client in the call asks at once
+//          (ensureFaces), because the scheduler can run minutes behind, and
+//          the feed's own scheduled join is the fallback. A dispatch already
+//          on its way for the session wins.
 //   tell   Each reply the room's chat shows reaches the worker on the room's
 //          data channel.
 //   leave  The face is removed from the room and the worker leaves with it.
@@ -30,7 +34,8 @@
 // beside the LIVEKIT_* the room needs; otherwise agents in a call stay chat
 // only.
 import { v } from "convex/values";
-import { internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { agentFaceIdentity, agentSpokenNames, huddleVoiceAskHeader, huddleVoiceInstructions } from "@codecast/shared/contracts";
@@ -42,6 +47,7 @@ import { timingSafeEqualHex } from "./lib/hmac";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
 import { agentLineText, liveTranscriptFor } from "./callChat";
 import { writeSegments } from "./transcripts";
+import { authorizeRoom } from "./callRooms";
 
 // The name the worker registers under, and the data topic it listens on.
 export const FACE_HOST_AGENT = "codecast-face";
@@ -246,6 +252,37 @@ async function livekit(cfg: FaceConfig, room: string, method: string, body: unkn
   return res.ok && text ? JSON.parse(text) : null;
 }
 
+type FaceFeed = { room_key: string; conversation_id: string; name: string; avatar: string };
+
+/** A dispatch that has not finished: none of its jobs ended yet. */
+function dispatchAlive(d: { state?: { jobs?: { state?: { status?: string } }[] } }): boolean {
+  const jobs = d.state?.jobs ?? [];
+  return jobs.length === 0 || jobs.some((j) => !j.state?.status || j.state.status === "JS_PENDING" || j.state.status === "JS_RUNNING");
+}
+
+/** Send the worker in for this session's face, unless a dispatch for it is
+ *  already on its way or running. A finished one (the face left, or never
+ *  came) is cleared so a new one can go. True when it dispatched. */
+export async function dispatchFace(cfg: FaceConfig, feed: FaceFeed, realtime: boolean): Promise<boolean> {
+  const listed = await livekit(cfg, feed.room_key, "AgentDispatchService/ListDispatch", { room: feed.room_key }, [404]);
+  for (const d of listed?.agentDispatches ?? []) {
+    if (d.agentName !== FACE_HOST_AGENT) continue;
+    let meta: { conversation_id?: string } = {};
+    try {
+      meta = JSON.parse(d.metadata || "{}");
+    } catch {}
+    if (meta.conversation_id !== feed.conversation_id) continue;
+    if (dispatchAlive(d)) return false;
+    await livekit(cfg, feed.room_key, "AgentDispatchService/DeleteDispatch", { dispatchId: d.id, room: feed.room_key }, [404]);
+  }
+  await livekit(cfg, feed.room_key, "AgentDispatchService/CreateDispatch", {
+    room: feed.room_key,
+    agentName: FACE_HOST_AGENT,
+    metadata: JSON.stringify({ conversation_id: feed.conversation_id, name: feed.name, ...faceForAvatar(feed.avatar), realtime }),
+  });
+  return true;
+}
+
 export const join = internalAction({
   args: { feed_id: v.id("call_agent_feeds"), realtime: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<void> => {
@@ -253,11 +290,45 @@ export const join = internalAction({
     if (!cfg) return;
     const feed = await ctx.runQuery(internal.callFace.feedForFace, { feed_id: args.feed_id });
     if (!feed) return;
-    await livekit(cfg, feed.room_key, "AgentDispatchService/CreateDispatch", {
-      room: feed.room_key,
-      agentName: FACE_HOST_AGENT,
-      metadata: JSON.stringify({ conversation_id: feed.conversation_id, name: feed.name, ...faceForAvatar(feed.avatar), realtime: args.realtime === true }),
-    });
+    await dispatchFace(cfg, feed, args.realtime === true);
+  },
+});
+
+/** The faces this caller's call should have: every live feed of the room
+ *  they may be in, when their team has faces on. */
+export const facesForRoom = internalQuery({
+  args: { room_key: v.string() },
+  handler: async (ctx, args): Promise<(FaceFeed & { realtime: boolean })[]> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    if (!(await authorizeRoom(ctx, userId, args.room_key)).ok) return [];
+    const t = await liveTranscriptFor(ctx, args.room_key);
+    const mode = t ? await faceMode(ctx, t.team_id) : "off";
+    if (!t || mode === "off") return [];
+    const feeds: Doc<"call_agent_feeds">[] = await ctx.db
+      .query("call_agent_feeds")
+      .withIndex("by_transcript", (q) => q.eq("transcript_id", t._id))
+      .collect();
+    const out: (FaceFeed & { realtime: boolean })[] = [];
+    for (const feed of feeds) {
+      const who = await characterFor(ctx, feed.conversation_id);
+      if (who) out.push({ room_key: feed.room_key, conversation_id: String(feed.conversation_id), name: who.character.name, avatar: who.character.avatar, realtime: mode === "realtime" });
+    }
+    return out;
+  },
+});
+
+/** From a client in the call, whenever the agents in the room change: seat
+ *  each one's face now rather than when the scheduler gets to it. */
+export const ensureFaces = action({
+  args: { room_key: v.string() },
+  handler: async (ctx, args): Promise<number> => {
+    const cfg = faceConfig();
+    if (!cfg) return 0;
+    const feeds = await ctx.runQuery(internal.callFace.facesForRoom, { room_key: args.room_key });
+    let sent = 0;
+    for (const feed of feeds) if (await dispatchFace(cfg, feed, feed.realtime)) sent++;
+    return sent;
   },
 });
 

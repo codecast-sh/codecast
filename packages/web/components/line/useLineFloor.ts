@@ -10,6 +10,7 @@ import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncRuns, useWorkspaceRuns } from "../../hooks/useSyncRuns";
 import { useSyncSignals, useWorkspaceSignals } from "../../hooks/useSyncSignals";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useSyncProjectTasks } from "../../hooks/useSyncTasks";
 import { isLineCard, lineRollup, type LineCauseTask, type LineFlowRun, type LineProject } from "../../lib/lineFlow";
 import { useLineProject } from "./LineProjects";
 
@@ -22,21 +23,28 @@ const causeSig = (t: TaskItem & LineCauseTask) =>
 const projectSig = (p: LineProject) => `${p.short_id ?? ""}|${p.title ?? ""}|${p.priority ?? ""}|${p.project_path ?? ""}|${p.line_profile?.changed_at ?? 0}|${p.line_profile?.published_at ?? 0}`;
 const cardSig = (d: SessionDecisionItem) => `${d.status}|${d.updated_at ?? 0}|${d.task_id ?? ""}|${d.workflow_run_id ?? ""}`;
 
-export function useLineFloor() {
-  useSyncSignals();
-  useSyncRuns(RUNS_FEED);
+/** `project` pins the floor to one project's line (the project's Line tab).
+ *  `workspace` reads the floor where the project lives (its stored access
+ *  key) when that is not the active workspace, so a project opened from
+ *  another team shows its line without moving the viewer's active team. */
+export function useLineFloor(project?: string | null, workspace?: string | null) {
+  useSyncSignals(workspace);
+  useSyncRuns(RUNS_FEED, true, workspace);
+  // The active workspace's tasks ride the workspace feeder; another
+  // workspace's causes come by project.
+  useSyncProjectTasks(project, workspace, !!workspace);
   const now = useCoarseNow(30_000);
 
-  const signals = useWorkspaceSignals();
-  const tasks = useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig);
-  const runs = useWorkspaceRuns() as LineFlowRun[];
+  const signals = useWorkspaceSignals(workspace);
+  const tasks = useWorkspaceCollection<TaskItem & LineCauseTask>("tasks", causeSig, workspace);
+  const runs = useWorkspaceRuns(workspace) as LineFlowRun[];
   const cards = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: isLineCard as (d: SessionDecisionItem) => boolean, sig: cardSig });
-  const projects = useWorkspaceCollection<LineProject>("projects", projectSig);
+  const projects = useWorkspaceCollection<LineProject>("projects", projectSig, workspace);
 
   // One project's line (LP1): the roll-up counts every line, the switcher
   // picks one.
   const lineRows = useMemo(() => ({ signals, tasks, runs, decisions: cards as Array<SessionDecisionItem & { created_at?: number }> }), [signals, tasks, runs, cards]);
   const rollup = useMemo(() => lineRollup(lineRows, projects, now), [lineRows, projects, now]);
-  const line = useLineProject(rollup, projects);
+  const line = useLineProject(rollup, projects, project);
   return { now, tasks, projects, lineRows, rollup, line };
 }

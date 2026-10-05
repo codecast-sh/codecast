@@ -54,7 +54,8 @@ mock.module("../../hooks/useQueryNoThrow", () => ({
 
 const { useInboxStore } = await import("../../store/inboxStore");
 const { settingsDataKey } = await import("../../lib/settingsData");
-const { ASKS } = await import("../../components/simple/lane");
+const { ASKS, ASK_FIRST } = await import("../../components/simple/lane");
+const { disconnectNote } = await import("../../components/simple/connectionWords");
 const { MAIL_COMING, assistantPromise } = await import("../../components/simple/assistantPromise");
 const { default: Welcome } = await import("./page");
 
@@ -158,7 +159,8 @@ describe("/welcome", () => {
     setGoogle(false);
     await open();
     await settle(() => text().includes("Bring in your mail and calendar"));
-    expect(text()).toContain("I ask before I send an email or change your calendar.");
+    expect(text()).toContain(ASK_FIRST);
+    expect(text()).toContain(disconnectNote(false, undefined, []));
     await act(async () => { button("Not now")!.click(); });
     await settle(() => text().includes("What can I take off your plate?"));
     expect(text()).toContain(ASKS.planWeek);

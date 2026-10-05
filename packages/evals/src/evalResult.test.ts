@@ -32,6 +32,14 @@ describe('buildEvalResult', () => {
     expect(r.costUsd).toBe(0.5);
   });
 
+  test('a long judge note keeps its whole sentences, never stopping mid-thought', () => {
+    const note = `${'The reply states only what the excerpt shows. '.repeat(8)}The outcome 'progress' is not claimed as shipped anywhere in the reply.`;
+    const r = buildEvalResult(file([freeze('miss3dddd', reps(5, false), reps(5, true, { judge_note: note }), { kind: 'miss', proven: true })]));
+    const kept = r.surfaces[0]!.flips[0]!.note;
+    expect(kept.length).toBeLessThanOrEqual(400);
+    expect(kept.endsWith('excerpt shows.')).toBe(true);
+  });
+
   test('a proven freeze that already passes on the base fails the station: it shows no miss', () => {
     const r = buildEvalResult(file([freeze('miss2bbbb', reps(5, true), reps(5, true), { kind: 'miss', proven: true })]));
     expect(r.ok).toBe(false);

@@ -189,8 +189,10 @@ describe("search_web", () => {
     expect(out).toContain("<untrusted-");
     expect(out).toContain("The first ferry leaves at 6:10.\n\nSources:\n- Timetable: https://ferry.example/times\n- Strike news: https://news.example/strike");
     const expected = modelCost(CHEAP_MODEL, { input_tokens: 4000, output_tokens: 300 }) + 2 * WEB_SEARCH_PRICE_USD;
-    // The run is charged what the search cost, so its ceiling and its rows see it.
-    expect(charged).toEqual([expected]);
+    // The estimate is reserved up front, then trued up: the run is charged what
+    // the search cost, so its ceiling and its rows see it.
+    expect(charged[0]).toBe(SEARCH_ESTIMATE_USD());
+    expect(charged.reduce((a, b) => a + b, 0)).toBeCloseTo(expected, 12);
     expect(result.details).toEqual({ searches: 2, sources: 2, cost_usd: expected });
   });
 
@@ -214,11 +216,27 @@ describe("search_web", () => {
     }) as unknown as typeof fetch;
     await expect(runTool(searchWebTool(), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow();
     expect(costs).toEqual([SEARCH_ESTIMATE_USD()]);
+    costs.length = 0;
     expect(SEARCH_ESTIMATE_USD()).toBeGreaterThan(WEB_SEARCH_TOOL.max_uses * WEB_SEARCH_PRICE_USD);
 
     globalThis.fetch = (async () => new Response("{}", { status: 429 })) as typeof fetch;
     await expect(runTool(searchWebTool(), { query: "x" }, { callId: "c", charge: (usd) => costs.push(usd) })).rejects.toThrow("(429)");
-    expect(costs).toHaveLength(1);
+    // Reserved, then given back in full.
+    expect(costs.reduce((a, b) => a + b, 0)).toBe(0);
+  });
+
+  test("a search the turn's budget cannot cover is never sent", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    let sent = 0;
+    globalThis.fetch = (async () => {
+      sent++;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const costs: number[] = [];
+    const context = { callId: "c", charge: (usd: number) => costs.push(usd), remainingUsd: () => SEARCH_ESTIMATE_USD() / 2 };
+    await expect(runTool(searchWebTool(), { query: "x" }, context)).rejects.toThrow("budget");
+    expect(sent).toBe(0);
+    expect(costs).toEqual([]);
   });
 
   test("a turn makes at most a few searches", async () => {

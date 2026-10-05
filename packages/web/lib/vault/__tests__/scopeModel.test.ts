@@ -5,6 +5,7 @@ import {
   describeVaultScope,
   findDocForFile,
   teamScopeLabel,
+  teamIdForPath,
   teamScopeWords,
   vaultPresence,
   type ScopeEvidence,
@@ -197,5 +198,23 @@ describe("findDocForFile", () => {
 
   test("a doc for the same relative path in another vault does not match", () => {
     expect(findDocForFile("/w/web", "docs/design.md", docs)).toBeNull();
+  });
+});
+
+describe("teamIdForPath", () => {
+  // A new session's stub has a path and no team until the server stamps it;
+  // its composer's @ must still reach the teammate sessions in that repo.
+  const sessions = {
+    stub: { project_path: "/w/codecast" },
+    nettle: { git_root: "/w/codecast", team_id: "t1" },
+    notes: { project_path: "/Users/ada/notes" },
+  };
+
+  test("a teamless stub resolves to the team its directory files into", () => {
+    expect(teamIdForPath("/w/codecast", sessions)).toBe("t1");
+  });
+
+  test("a directory with no team evidence stays personal", () => {
+    expect(teamIdForPath("/Users/ada/notes", sessions)).toBeNull();
   });
 });

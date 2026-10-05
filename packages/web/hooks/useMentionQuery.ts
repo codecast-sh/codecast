@@ -9,6 +9,7 @@ import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
 import type { ChatChannelRow, ChatRailRow } from "../store/chatSlice";
 import { useDebounce } from "./useDebounce";
 import { inActiveWorkspace } from "../lib/workspaceScope";
+import { teamIdForPath } from "../lib/vault/scopeModel";
 import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/mentionRanking";
 import { identityLine, identityRowOf } from "../lib/sessionIdentity";
 import { personifyAllNow } from "./usePersonifyAll";
@@ -36,6 +37,19 @@ const EMPTY_SERVER_ITEMS: MentionItem[] = [];
 // People are fully covered by the local roster cache; these are the types whose
 // cache is windowed and therefore worth re-querying server-side on @-mention.
 export const SERVER_MENTION_TYPES = ["session", "task", "doc", "plan"];
+
+/** The team a session's composer mentions from: the team stamped on its row,
+ *  or, for a new session the server has not stamped yet, the team its
+ *  directory files into. Without the fallback a fresh session's @ searches
+ *  the personal workspace and misses every teammate session. */
+export function sessionMentionTeamId(
+  s: Pick<ReturnType<typeof useInboxStore.getState>, "sessions">,
+  row: { team_id?: string | null; git_root?: string | null; project_path?: string | null } | null | undefined,
+): string | null {
+  if (row?.team_id) return String(row.team_id);
+  const path = row?.git_root || row?.project_path;
+  return path ? teamIdForPath(path, s.sessions) : null;
+}
 
 /** Scope for a surface tied to a specific entity/conversation workspace. */
 export function mentionScopeFor(

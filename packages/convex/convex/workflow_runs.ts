@@ -79,8 +79,9 @@ async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStat
   }
   const next = runEndStatus(task.status, runStatus, run.node_statuses);
   if (!next) return;
-  await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now });
-  if (next === "done" && lineRunOutcome(run.node_statuses)?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
+  const end = lineRunOutcome(run.node_statuses);
+  await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now, ...(next === "done" && end ? { closedAt: end.at } : {}) });
+  if (next === "done" && end?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
 }
 
 // ── the-line.md L4: a gate is a decision ─────────────────────────────────────
@@ -268,13 +269,13 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 // Cancel a run. Its open gate decision is withdrawn through the shared
 // withdraw path (the-line.md L4) so the queue, the stack and the ladder
 // learn the question is gone.
-export async function cancelCore(ctx: Ctx, run: any, now = Date.now()): Promise<void> {
+export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
   if (run.gate_decision_id) {
     const decision = await ctx.db.get(run.gate_decision_id);
     if (decision && decision.status === "pending") await withdrawCore(ctx, decision, now);
   }
-  await ctx.db.patch(run._id, { status: "failed", fail_reason: "Cancelled by user", updated_at: now });
+  await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
 }
 
 export const create = mutation({
@@ -746,6 +747,8 @@ export const updateProgress = mutation({
 
     // LE14: the runner's hash of the graph it executes, sent on its first report.
     graph_hash: v.optional(v.string()),
+    // LE14: each station's own hash in that graph (parser.graphNodeHashes).
+    graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
@@ -780,6 +783,7 @@ export const updateProgress = mutation({
       status: args.run_status ?? run.status,
       fail_reason: args.fail_reason,
       ...(args.graph_hash ? { graph_hash: args.graph_hash } : {}),
+      ...(args.graph_nodes?.length ? { graph_nodes: args.graph_nodes } : {}),
       updated_at: now,
     });
 
@@ -1181,6 +1185,10 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,
     gate_decision_short_id: decision?.short_id,
     gate_decision_status: decision?.status,
+    // What the last gate was answered with, in the option's own words, and
+    // what its card says the run cost (LE16 run report, LE14 versions).
+    gate_answer: decision?.status === "answered" && typeof decision.answer_index === "number" ? decision.options?.[decision.answer_index]?.label : undefined,
+    card_cost_usd: typeof decision?.card?.cost?.usd === "number" ? decision.card.cost.usd : undefined,
   };
 }
 
@@ -1255,6 +1263,28 @@ export function repairedLineStatus(
   return null;
 }
 
+const statusHistory = async (ctx: any, taskId: any) =>
+  (await ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", taskId)).collect()).filter((h: any) => h.field === "status");
+
+/**
+ * The close time a cause this repair already closed should carry: the time
+ * its run reached the end. A first pass of the repair stamped its own time;
+ * that write is the newest status row, a system's, after the run ended, at
+ * exactly the closed_at it left. A person's later close stands. Null leaves it.
+ */
+export function repairedClosedAt(
+  task: { status: string; closed_at?: number | null },
+  run: { status: string; updated_at: number; node_statuses?: Parameters<typeof lineRunOutcome>[0] },
+  history: ReadonlyArray<{ created_at: number; new_value?: string; actor_type?: string }>,
+): number | null {
+  if (run.status !== "completed" || (task.status !== "done" && task.status !== "dropped") || !task.closed_at) return null;
+  const end = lineRunOutcome(run.node_statuses);
+  if (!end || end.kind === "parked" || Math.abs(task.closed_at - end.at) < 60_000) return null;
+  const last = [...history].sort((a, b) => b.created_at - a.created_at)[0];
+  const byRepair = !!last && last.created_at > run.updated_at && last.created_at === task.closed_at && last.new_value === task.status && (last.actor_type ?? "system") === "system";
+  return byRepair ? end.at : null;
+}
+
 /**
  * One time repair (LE16): walk completed runs, and move each line cause the
  * old run end left in review to the status its run decided, through the one
@@ -1269,19 +1299,29 @@ export const repairLineCauseStatus = internalMutation({
       .withIndex("by_status", (q: any) => q.eq("status", "completed"))
       .paginate({ cursor: args.cursor ?? null, numItems: args.page ?? 200 });
     const moved: Array<{ task: string; from: string; to: string }> = [];
+    const restamped: Array<{ task: string; from: number; to: number }> = [];
     let skipped = 0;
     for (const run of page.page) {
       if (!run.task_id) continue;
       const task: any = await ctx.db.get(run.task_id);
       // Only the run the cause is bound to speaks for it now.
       if (!task || String(task.workflow_run_id ?? "") !== String(run._id)) continue;
+      // The cause closed when its run reached the end, not when this repair ran.
+      const end = lineRunOutcome(run.node_statuses);
       const next = repairedLineStatus(task, run);
-      if (!next) continue;
-      const history = await ctx.db.query("task_history").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect();
-      if (history.some((h: any) => h.field === "status" && h.created_at > run.updated_at)) { skipped++; continue; }
+      if (!next) {
+        const at = repairedClosedAt(task, run, await statusHistory(ctx, task._id));
+        if (at !== null) {
+          restamped.push({ task: task.short_id, from: task.closed_at, to: at });
+          if (!args.dry_run) await patchTask(ctx, task, { closed_at: at });
+        }
+        continue;
+      }
+      const history = await statusHistory(ctx, task._id);
+      if (history.some((h: any) => h.created_at > run.updated_at)) { skipped++; continue; }
       moved.push({ task: task.short_id, from: task.status, to: next });
-      if (!args.dry_run) await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id });
+      if (!args.dry_run) await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, ...(next !== "open" && end ? { closedAt: end.at } : {}) });
     }
-    return { scanned: page.page.length, moved, skipped, cursor: page.continueCursor, done: page.isDone };
+    return { scanned: page.page.length, moved, restamped, skipped, cursor: page.continueCursor, done: page.isDone };
   },
 });

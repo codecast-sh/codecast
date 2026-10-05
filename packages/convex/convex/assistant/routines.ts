@@ -35,6 +35,19 @@ export async function hostedOwnerRefusal(
   return null;
 }
 
+// The agent_tasks.hosted_home stamp for a routine whose home is `homeId`:
+// true when the home is a hosted conversation, else absent. This is the one
+// definition of "this routine's home is hosted": agentTasks writes it on every
+// row (insertTask, patchTask, backfillHostedHome), and the plan limit and the
+// dispatcher read the stamp rather than deriving it again.
+export async function hostedHomeStamp(
+  ctx: { db: any },
+  homeId: Id<"conversations"> | string | null | undefined,
+): Promise<true | undefined> {
+  const home = homeId ? await ctx.db.get(homeId) : null;
+  return home && isHostedAgentType(home.agent_type) ? true : undefined;
+}
+
 export type HostedRoutine = RoutineShape & {
   _id?: Id<"agent_tasks">;
   _creationTime?: number;
@@ -72,15 +85,13 @@ export async function hostedRoutineRefusal(
   if (!routine.originating_conversation_id) return null;
   const ownerRefusal = await hostedOwnerRefusal(ctx, routine.user_id, [routine.originating_conversation_id]);
   if (ownerRefusal) return ownerRefusal;
-  const home = await ctx.db.get(routine.originating_conversation_id);
-  if (!home || !isHostedAgentType(home.agent_type)) return null;
+  if (!(await hostedHomeStamp(ctx, routine.originating_conversation_id))) return null;
   if (routine.status === "paused") return null;
 
   const plan = await walletPlan(ctx, routine.user_id);
 
   let armedOthers = 0;
   if (plan.routines.max !== null) {
-    const hosted = new Map<string, boolean>([[String(home._id), true]]);
     for (const status of ARMED_STATUSES) {
       const rows = await ctx.db.query("agent_tasks")
         .withIndex("by_user_status", (q: any) => q.eq("user_id", routine.user_id).eq("status", status))
@@ -88,15 +99,7 @@ export async function hostedRoutineRefusal(
       for (const row of rows) {
         if (routine._id && String(row._id) === String(routine._id)) continue;
         if (opts.olderOnly && !olderThan(row, routine)) continue;
-        const rowHome = row.originating_conversation_id;
-        if (!rowHome) continue;
-        let isHosted = hosted.get(String(rowHome));
-        if (isHosted === undefined) {
-          const conversation = await ctx.db.get(rowHome);
-          isHosted = !!conversation && isHostedAgentType(conversation.agent_type);
-          hosted.set(String(rowHome), isHosted);
-        }
-        if (isHosted) armedOthers++;
+        if (row.hosted_home === true) armedOthers++;
       }
     }
   }

@@ -13,6 +13,7 @@ import {
   SESSION_SHORT_ID_RE,
   botHandle,
   extractMentionHandles,
+  matchHandle,
   type ChatMentionRef,
 } from "@codecast/shared/chat";
 import { entityMentionRegex } from "@codecast/shared/entities";
@@ -35,31 +36,14 @@ export async function teamRoster(ctx: ReadCtx, teamId: Id<"teams">): Promise<Doc
   return users.filter((u): u is Doc<"users"> => u !== null);
 }
 
-function emailHandle(user: Doc<"users">): string | null {
-  return emailLocalHandle(user.email ?? undefined);
-}
-
 // Resolve the handles WRITTEN in a message to real users, against this team's
 // roster only. Never against `user.name` for a human: display names are
 // self-editable, so matching them would let a member rename themselves to
 // intercept a teammate's mentions. Bots are matched on their name because an
 // anchor's name is admin-set, and a bot has no GitHub handle to match instead.
-// An ambiguous handle resolves to nobody rather than to a guess.
-// One handle → at most one roster member: a GitHub login first, then an email
-// local part, then a bot's name — and only when exactly one member matches at
-// that level. Shared by @mention resolution and by `--dm <handle>`.
-export function matchHandle(roster: Doc<"users">[], rawHandle: string): Doc<"users"> | null {
-  const handle = rawHandle.replace(/^@/, "").toLowerCase();
-  const byGithub = roster.filter(
-    (u) => !u.is_bot && u.github_username?.toLowerCase() === handle,
-  );
-  const byEmail = roster.filter((u) => !u.is_bot && emailHandle(u) === handle);
-  const byBot = roster.filter((u) => u.is_bot && botHandle(u.name) === handle);
-  return byGithub.length === 1 ? byGithub[0]
-    : byGithub.length === 0 && byEmail.length === 1 ? byEmail[0]
-    : byGithub.length === 0 && byEmail.length === 0 && byBot.length === 1 ? byBot[0]
-    : null;
-}
+// The rule is shared/chat's (matchHandle), re-exported here for @mention
+// resolution, `--dm <handle>` and every server caller that names a person.
+export { matchHandle };
 
 export async function resolveMentions(
   ctx: ReadCtx,
