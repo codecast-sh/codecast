@@ -127,7 +127,11 @@ export function useCallSync(): void {
   const transcribeOff = !!roomFlags?.transcribe_off;
   const transcribeOffAt: number | null = roomFlags?.transcribe_off_at ?? null;
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
-  const liveStartedBy = liveTranscript === undefined ? undefined : liveTranscript ? String(liveTranscript.started_by) : null;
+  // "": a live record with no scribe yet (getLive's started_by null), kept
+  // apart from null (no record) in one primitive so the effect's deps stay
+  // a string compare.
+  const liveStartedBy =
+    liveTranscript === undefined ? undefined : liveTranscript ? (liveTranscript.started_by ? String(liveTranscript.started_by) : "") : null;
   useWatchEffect(() => {
     const verdict = decideAutoScribe({
       roomKey: seatedRoomKey,
@@ -138,7 +142,7 @@ export function useCallSync(): void {
       scribeStartedAt,
       rosterIds: rosterSig ? rosterSig.split("|") : [],
       meId,
-      live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy },
+      live: liveStartedBy === undefined ? undefined : liveStartedBy === null ? null : { startedBy: liveStartedBy || null },
       scribeActive,
     });
     if (verdict === "start" && seatedRoomKey) autoScribe(seatedRoomKey);

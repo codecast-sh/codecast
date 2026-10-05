@@ -23,11 +23,12 @@ const BROWSER_VERSION = "17"; // bumped: reuse abandoned Cast tabs on the same U
 const CHAT_VERSION = "1"; // first release: channels, threads, search, anchor replies
 const DECIDE_VERSION = "3"; // v3: never post a probe or test decision; every ask reaches the real queue
 const CALLS_VERSION = "6"; // 6: filmed lines marked in the transcript, --crop and --tiles for small screen text; 5: a frame is shown by its citation, --share is public and only on request, the snap spellings; 4: cast call snap, frames of a recorded call; 3: cl-N short ids and cl-N:a-b line embeds
-const LIMITS_VERSION = "1"; // first release: usage limits are a pause, not a stop; cast usage
+const LIMITS_VERSION = "2"; // 2: a subagent or workflow agent stopped on a limit gets its work run again; 1: usage limits are a pause, not a stop; cast usage
 const COMPUTER_VERSION = "1"; // first release: cast computer, the macOS accessibility loop
 const CHECK_VERSION = "1"; // first release: cast check, one shared tsc watcher per tree and project
 const SKILLS_VERSION = "1"; // first release: the cast-* skills as one snippet
 const PR_VERSION = "1"; // first release: cast pr, the review loop, reviews delivered to the owning session
+const MODS_VERSION = "1"; // first release: cast mod, panes, commands and fences in the app
 const STATE_VERSION = "6"; // bumped: blocked declaration resurfaces a stashed session (the attention claim)
 
 export function getMemoryVersion(): string {
@@ -106,4 +107,8 @@ export function getSkillsVersion(): string {
 
 export function getPrVersion(): string {
   return PR_VERSION;
+}
+
+export function getModsVersion(): string {
+  return MODS_VERSION;
 }

@@ -36,7 +36,7 @@ cast send <id> "text"             # message another session
 cast exec "summarize this repo"   # print mode: run a prompt, print, exit
 cast spawn "audit the auth flow"  # start a session in the inbox
 cast resume auth bug              # search history and resume the match
-cast attach                       # tmux session picker TUI
+cast herd                         # live agents in herdr: a tab each, live state
 cast fork --from 15               # branch a conversation from a message
 cast tree <id>                    # show a conversation's fork tree
 cast accounts                     # save/switch/remove Claude Code account profiles

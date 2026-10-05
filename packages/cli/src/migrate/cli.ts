@@ -13,6 +13,7 @@
  */
 
 import type { Command } from "commander";
+import { commandGroup } from "../commandGroups.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import { convexClient } from "../remote/cli.js";
 import { createRunnerIo } from "./io.js";
@@ -45,7 +46,7 @@ function printBatch(b: any, devices: any[]): void {
 export function registerMigrateCommand(program: Command): void {
   const migrate = program
     .command("migrate")
-    .description("Move many sessions between this machine and a cloud host at once");
+    .description(commandGroup("migrate").description);
 
   migrate
     .command("start [sessions...]")

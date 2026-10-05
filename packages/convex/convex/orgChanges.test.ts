@@ -79,6 +79,8 @@ describe("org history round trips", () => {
   });
   test("lead restores its scope gain and takeover", async () => {
     const f = fixture(); const role = await f.role();
+    // Folders decide nothing (S35): the session is the project's because it works the project's task.
+    await f.db.patch("plans_p", { project_id: P }); await f.db.patch("conversations_c", { active_task_id: "tasks_t" });
     const before = (await f.db.get(role._id)).scope;
     await performSetProjectLead(f.ctx(), ME as any, { project_id: P as any, role_id: role._id });
     const batch = f.last(); expect((await f.db.get("conversations_c")).org_role_id).toBe(role._id);
@@ -273,6 +275,62 @@ describe("org history remaining change kinds", () => {
     expect((await f.db.get("conversations_c")).standing_role_id).toBeUndefined();
     expect(f.db._tables.agent_tasks[0].status).toBe("cancelled");
   });
+  // The intent record (initiatives-projects-role-page.md I5): one entry at a
+  // time through performRecordEntry, each write the goal's shape, so each undoes.
+  test("a record entry round trips: a milestone added, reached and removed, a question asked and answered", async () => {
+    const { performRecordEntry } = await import("./initiatives");
+    const f = fixture();
+    const goal = () => f.db.get("initiatives_i");
+    const record = async (op: any) => performRecordEntry(f.ctx(), ME as any, await goal(), op);
+    await roundTrip(f, "initiatives_i", () => record({ list: "milestones", action: "add", entry: { title: "Private beta open", date: 1_800_000_000_000 } }), ["milestones"]);
+    const key = (await goal()).milestones[0].key;
+    await roundTrip(f, "initiatives_i", () => record({ list: "milestones", action: "close", key, at: 1_800_000_500_000 }), ["milestones"]);
+    expect((await goal()).milestones).toEqual([{ key, title: "Private beta open", date: 1_800_000_000_000, done_at: 1_800_000_500_000 }]);
+    await roundTrip(f, "initiatives_i", () => record({ list: "questions", action: "add", entry: { text: "Do we price per seat?", by: "@me" } }), ["questions"]);
+    await roundTrip(f, "initiatives_i", async () => record({ list: "questions", action: "close", key: (await goal()).questions[0].key, answer: "Per seat." }), ["questions"]);
+    await roundTrip(f, "initiatives_i", () => record({ list: "decisions", action: "add", entry: { text: "Ship to brokers first", by: "@me" } }), ["decisions"]);
+    await roundTrip(f, "initiatives_i", () => record({ list: "sources", action: "add", entry: { text: "call:cl-42#14 our goal is a thousand teams" } }), ["sources"]);
+    await roundTrip(f, "initiatives_i", () => record({ list: "milestones", action: "remove", key }), ["milestones"]);
+    expect((await goal()).milestones).toBeUndefined();
+    // Every write read as a sentence in the log, and so did its way back.
+    for (const r of f.db._tables.org_changes) expect(orgLogLine({ ...r, at: r.created_at })).toMatch(/^(Record on|Change the) /);
+  });
+  // Accepting a goal change persists its evidence (I5 "Proposals"): the lines
+  // the change carries and the accepted row's links join the goal's sources.
+  test("a goal change's evidence becomes the goal's sources, once, and goes back with its undo", async () => {
+    const f = fixture(); await f.role();
+    const accept = (change: any, evidence: any[]) => applyOrgChange(f.ctx(), ME as any, { team_id: TEAM }, change, { provision: false, human_decision: "sd-1", evidence });
+    const sources = async (id = "initiatives_i") => (await f.db.get(id)).sources ?? [];
+    const link = { label: "the ads session", href: "https://codecast.sh/conversation/jx7abcd" };
+    const owner = { kind: "initiative_owner", initiative: "in-1", owner: "@growth" };
+    expect((await accept(owner, [link, { label: "Ashot said so in chat" }])).note).toContain("its record names 2 sources for it");
+    expect(await sources()).toEqual([{ kind: "link", ref: link.href }, { kind: "note", quote: "Ashot said so in chat" }]);
+    const ownerBatch = f.last();
+    expect(f.db._tables.org_changes.filter((r: any) => r.batch === ownerBatch)).toHaveLength(1);
+    // A change that moves nothing writes nothing, its evidence included.
+    const writes = writeCount(f.db);
+    expect((await accept(owner, [{ label: "another line" }])).note).toContain("already owns");
+    expect(writeCount(f.db)).toBe(writes);
+    // A source the goal already holds is skipped; a new one joins.
+    await accept({ kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] }, [link, { label: "ct-1" }]);
+    expect((await sources()).map((s: any) => s.kind)).toEqual(["link", "note", "task"]);
+    // A shape change adds its own sources and its evidence, and a second run adds nothing.
+    const shape = { kind: "initiative_shape", initiative: "in-1", why: "It pays for the rest.", sources: ["jx7c6zk:142"], questions: ["Who signs?"] };
+    await accept(shape, [link, { label: "pl-1" }]); const shapeBatch = f.last();
+    expect((await sources()).map((s: any) => s.ref ?? s.quote)).toEqual([link.href, "Ashot said so in chat", "ct-1", "jx7c6zk:142", "pl-1"]);
+    const again = writeCount(f.db);
+    expect((await accept(shape, [link, { label: "pl-1" }])).note).toContain("already reads that way");
+    expect(writeCount(f.db)).toBe(again);
+    expect((await f.db.get("initiatives_i")).questions).toHaveLength(1);
+    // A new goal carries its sources from the start: named ones, then the change's own lines, then the row's links.
+    await accept({ kind: "initiative", title: "Reach 1k teams", description: "d", projects: ["pr-1"], sources: ["ct-1"], evidence: ["said on the Monday call"] }, [link]);
+    const made = f.db._tables.initiatives.at(-1);
+    expect(made.sources).toEqual([{ kind: "task", ref: "ct-1" }, { kind: "note", quote: "said on the Monday call" }, { kind: "link", ref: link.href }]);
+    // The sources a change brought go back with it, and the ones earlier changes brought stay.
+    await f.undo(shapeBatch);
+    expect((await sources()).map((s: any) => s.ref ?? s.quote)).toEqual([link.href, "Ashot said so in chat", "ct-1"]);
+    expect([(await f.db.get("initiatives_i")).why, (await f.db.get("initiatives_i")).questions]).toEqual([undefined, undefined]);
+  });
   test("an initiative owner undo removes only the scope it gained", async () => {
     const { performUpdateInitiative } = await import("./initiatives");
     const f = fixture(); const role = await f.role();
@@ -324,7 +382,7 @@ const ORG_STATE: Record<string, string[]> = {
   plans: ["status", "project_id", "owner_role_id"],
   projects: ["status", "description", "owner_role_id", "goal", "success_metrics", "priority", "non_goals", "risks", "budget"],
   docs: ["project_id"],
-  initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics"],
+  initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics", "why", "done_when", "milestones", "questions", "decisions", "sources"],
   session_owners: ["conversation_id", "user_id"],
   org_template_instances: ["phase", "role_id", "version", "pending_upgrade"],
 };
@@ -365,11 +423,11 @@ const CASES: Case[] = [
   { kind: "task_status", change: { kind: "task_status", task: "ct-1", status: "done", reason: "finished" } },
   { kind: "project_status", change: { kind: "project_status", project: "pr-1", status: "paused", reason: "waiting" } },
   // The goals (initiatives-projects-role-page.md "I1, revised"): a set goal is cancelled by its undo, never erased; the owner role's scope gain goes back with it.
-  { kind: "initiative", setup: (f) => f.role(), change: { kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"], owner: "@growth" } },
+  { kind: "initiative", setup: (f) => f.role(), change: { kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"], owner: "@growth", why: "Teams that run an agent weekly stay.", done_when: "A thousand teams ran an agent in one week.", milestones: [{ title: "Private beta open", date: 1_800_000_000_000 }, { title: "First hundred teams" }], sources: ["call:cl-42#14 our goal is a thousand teams", "jx7c6zk:142"] } },
   { kind: "initiative_projects", change: { kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] } },
   { kind: "initiative_owner", setup: (f) => f.role(), change: { kind: "initiative_owner", initiative: "Campaign", owner: "@growth" } },
-  // Where a goal sits and how it is read: the parent and the metrics restore as fields.
-  { kind: "initiative_shape", setup: (f) => f.apply({ kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"] }), change: { kind: "initiative_shape", initiative: "in-1", parent: "Reach 1k teams", metrics: [{ name: "Campaign signups", target: "500" }] } },
+  // Where a goal sits, how it is read and what its record says (I5): the parent, the metrics, the words and each list restore as fields.
+  { kind: "initiative_shape", setup: (f) => f.apply({ kind: "initiative", title: "Reach 1k teams", description: "A thousand teams run an agent every week.", projects: ["pr-1"] }), change: { kind: "initiative_shape", initiative: "in-1", parent: "Reach 1k teams", metrics: [{ name: "Campaign signups", target: "500" }], why: "Signups are the first proof.", done_when: "Five hundred people signed up.", milestones: [{ title: "Landing page live" }], sources: ["ct-12"], questions: ["Do we price per seat?"], decisions: ["Ship to brokers first"] } },
 ];
 
 describe("S21: every change kind round trips through apply, undo and redo", () => {

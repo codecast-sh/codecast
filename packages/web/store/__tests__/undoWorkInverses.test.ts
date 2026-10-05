@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { _resetUndoStacks, getUndoHistory, performRedo, performUndo, undoEntry } from "@platform/engine";
+import { targetDayStamp } from "@codecast/shared/time";
 import { useInboxStore } from "../inboxStore";
 
 // Each work spec with an inverse names its server half explicitly. These
@@ -37,6 +38,14 @@ function undoOf(gesture: () => void): Array<[string, unknown[]]> {
   calls = [];
   expect(undoEntry(entry!.id)).toBe(true);
   return calls;
+}
+
+/** undoOf for an undo that writes back less than its forward sent (an inbox
+ *  row with no meta): it waits for that send to settle before going out. */
+async function undoOfSettled(gesture: () => void): Promise<Array<[string, unknown[]]>> {
+  const sent = undoOf(gesture);
+  for (let i = 0; i < 100 && sent.length === 0; i++) await Bun.sleep(2);
+  return sent;
 }
 
 const label = () => getUndoHistory().items[0]?.label;
@@ -174,27 +183,27 @@ describe("conversation inverses", () => {
       for (let i = 0; i < 2; i++) s().syncTable("conversations", [{ _id: CONV, title: "Auth fix", ...fields }], { isDelta: true });
     };
 
-    it("setPrivacy undo restores the prior audience, and the meta's echo retires every lock", () => {
+    it("setPrivacy undo restores the prior audience, and the meta's echo retires every lock", async () => {
       const prior = { is_private: false, team_visibility: "full", team_id: TEAM };
       inboxOnly(prior);
-      expect(undoOf(() => s().setPrivacy(CONV, true))).toEqual([["setTeamVisibility", [CONV, "full"]]]);
+      expect(await undoOfSettled(() => s().setPrivacy(CONV, true))).toEqual([["setTeamVisibility", [CONV, "full"]]]);
       expect(s().conversations[CONV]).toMatchObject({ is_private: false, team_visibility: "full" });
       echo(prior);
       expect(s().conversations[CONV]).toMatchObject(prior);
       expect(convLocks()).toEqual([]);
     });
 
-    it("setTeamVisibility undo back to private does the same", () => {
+    it("setTeamVisibility undo back to private does the same", async () => {
       inboxOnly({ is_private: true });
-      expect(undoOf(() => s().setTeamVisibility(CONV, "full"))).toEqual([["setPrivacy", [CONV, true]]]);
+      expect(await undoOfSettled(() => s().setTeamVisibility(CONV, "full"))).toEqual([["setPrivacy", [CONV, true]]]);
       echo({ is_private: true, team_visibility: "private" });
       expect(s().conversations[CONV]).toMatchObject({ is_private: true, team_visibility: "private" });
       expect(convLocks()).toEqual([]);
     });
 
-    it("switchProject undo does the same for the path and its git_root", () => {
+    it("switchProject undo does the same for the path and its git_root", async () => {
       inboxOnly({ project_path: "/src/a", git_root: "/src/a" });
-      expect(undoOf(() => s().switchProject(CONV, "/src/b"))).toEqual([["switchProject", [CONV, "/src/a"]]]);
+      expect(await undoOfSettled(() => s().switchProject(CONV, "/src/b"))).toEqual([["switchProject", [CONV, "/src/a"]]]);
       expect(s().conversations[CONV]).toMatchObject({ project_path: "/src/a", git_root: "/src/a" });
       echo({ project_path: "/src/a", git_root: "/src/a" });
       expect(s().conversations[CONV]).toMatchObject({ project_path: "/src/a", git_root: "/src/a" });
@@ -321,6 +330,31 @@ describe("initiatives owned by a role", () => {
   });
 });
 
+// The target date is a bare <input type="date">: typing a year fires one
+// change per digit (0002, 0020, 0202, 2028). Those are one gesture, one entry,
+// undone by one press back to the date it had.
+describe("an initiative's target date typed in", () => {
+  const INIT = "in_1";
+  const day = (d: string) => targetDayStamp(d)!;
+  it("coalesces the per-keystroke writes into one named entry", () => {
+    const T0 = day("2027-01-01");
+    useInboxStore.setState({
+      initiatives: { [INIT]: { _id: INIT, short_id: "in-1", title: "Win", status: "active", project_ids: [], updated_at: 1, target_date: T0 } },
+      orgTree: null,
+      orgIntents: [],
+    } as any);
+    for (const d of ["0002-01-01", "0020-01-01", "0202-01-01", "2028-01-01"]) s().updateInitiative(INIT, { target_date: day(d) });
+    const items = getUndoHistory().items;
+    expect(items).toHaveLength(1);
+    expect(items[0]!.label).toBe("Set the target of “Win” to 2028-01-01");
+    calls = [];
+    expect(performUndo()).toBe(true);
+    expect(calls).toEqual([["updateInitiative", [INIT, { target_date: T0 }]]]);
+    s().updateInitiative(INIT, { target_date: null });
+    expect(label()).toBe("Cleared the target of “Win”");
+  });
+});
+
 describe("bookmarks, saved views, comments", () => {
   it("toggleBookmark is undone by the same toggle", () => {
     useInboxStore.setState({ bookmarks: [] } as any);
@@ -346,6 +380,19 @@ describe("bookmarks, saved views, comments", () => {
     expect(calls.map(([a]) => a)).toEqual(["updateSavedView", "updateSavedView"]);
     s().updateSavedView(V, { name: "Theirs" });
     expect(label()).toBe("Edited view “Ours”");
+  });
+
+  // Stopping sharing names itself, and its undo (which shares the view with
+  // the team again) asks first, like a privacy change that widens.
+  it("updateSavedView names a share change and confirms an undo that re-shares", () => {
+    const V = "v".repeat(32);
+    useInboxStore.setState({ savedViews: { [V]: { _id: V, name: "Mine", shared: true, team_id: TEAM, updated_at: 1 } } } as any);
+    s().updateSavedView(V, { shared: false });
+    expect(label()).toBe("Stopped sharing view “Mine”");
+    expect(getUndoHistory().items[0]?.confirm).toBe(true);
+    s().updateSavedView(V, { shared: true });
+    expect(label()).toBe("Shared view “Mine” with the team");
+    expect(getUndoHistory().items[0]?.confirm).toBeFalsy();
   });
 
   it("resolving a thread is undone by reopening it; reopening records nothing", () => {
@@ -380,6 +427,31 @@ describe("bookmarks, saved views, comments", () => {
     } as any);
     s().resolveCommentThread(CONV, { messageId: "m1" }, true);
     expect(getUndoHistory().items).toHaveLength(0);
+  });
+
+  it("a code review thread's resolve and reopen each undo to the other, by the rows that flipped", () => {
+    const R1 = "1".repeat(32);
+    const R2 = "2".repeat(32);
+    useInboxStore.setState({
+      codeComments: {
+        [R1]: { _id: R1, content: "a", resolved: false, created_at: 1 },
+        [R2]: { _id: R2, content: "b", resolved: false, parent_id: R1, created_at: 2 },
+      },
+    } as any);
+    expect(undoOf(() => s().resolveCodeCommentThread([R1, R2], true))).toEqual([["resolveCodeCommentThread", [[R1, R2], false]]]);
+    expect(s().codeComments[R1].resolved).toBe(false);
+    _resetUndoStacks();
+    useInboxStore.setState({ codeComments: { [R1]: { ...s().codeComments[R1], resolved: true, resolved_at: 5 } } } as any);
+    expect(undoOf(() => s().resolveCodeCommentThread([R1], false))).toEqual([["resolveCodeCommentThread", [[R1], true]]]);
+    expect(label()).toBe("Reopened a review thread");
+    expect(s().codeComments[R1].resolved).toBe(true);
+  });
+
+  it("editCodeComment sends the prior content", () => {
+    const R1 = "1".repeat(32);
+    useInboxStore.setState({ codeComments: { [R1]: { _id: R1, content: "first", created_at: 1 } } } as any);
+    expect(undoOf(() => s().editCodeComment(R1, "second"))).toEqual([["editCodeComment", [R1, "first"]]]);
+    expect(s().codeComments[R1].content).toBe("first");
   });
 
   it("editComment sends the prior content", async () => {
@@ -448,6 +520,39 @@ describe("triggers", () => {
     expect(undoOf(() => s().setTriggerInterval(TR, 7_200_000))).toEqual([["setTriggerInterval", [TR, 3_600_000]]]);
     expect(label()).toBe("Set “Nightly digest” to every 2h");
     expect(s().agentTasks[TR].interval_ms).toBe(3_600_000);
+  });
+
+  // The triggers page's edit form: one gesture over prompt, title and
+  // schedule, undone by sending the prior values back through the same verb.
+  it("editTrigger goes back to the prior prompt, title and cadence", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Nightly digest", prompt: "digest", mode: "propose", agent_type: "claude", status: "scheduled", schedule_type: "recurring", interval_ms: 3_600_000, run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    const undo = undoOf(() => s().editTrigger(TR, { prompt: "digest v2", title: "Digest", mode: "propose", agent_type: "claude", project_path: "", schedule_type: "recurring", interval_ms: 7_200_000, run_at: 99 }));
+    expect(undo).toEqual([["editTrigger", [TR, { prompt: "digest", title: "Nightly digest", mode: "propose", agent_type: "claude", project_path: "", schedule_type: "recurring", interval_ms: 3_600_000 }]]]);
+    expect(label()).toBe("Edited “Nightly digest”");
+    expect(s().agentTasks[TR]).toMatchObject({ prompt: "digest", title: "Nightly digest", interval_ms: 3_600_000 });
+  });
+
+  it("editTrigger from recurring to an event goes back to the cadence", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Watch", prompt: "p", status: "paused", schedule_type: "recurring", interval_ms: 3_600_000, run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    const undo = undoOf(() => s().editTrigger(TR, { schedule_type: "event", event_filter: { event: "push" } }));
+    expect(undo).toEqual([["editTrigger", [TR, { schedule_type: "recurring", interval_ms: 3_600_000 }]]]);
+    expect(s().agentTasks[TR].schedule_type).toBe("recurring");
+  });
+
+  it("editTrigger on a trigger that already ran is refused before any write", () => {
+    useInboxStore.setState({
+      agentTasks: { [TR]: { _id: TR, title: "Once", prompt: "p", status: "completed", schedule_type: "once", run_at: 10 } },
+      foreignTriggers: {},
+    } as any);
+    expect(s().editTrigger(TR, { prompt: "q" })).toBe(false);
+    expect(s().agentTasks[TR].prompt).toBe("p");
+    expect(getUndoHistory().items).toHaveLength(0);
   });
 });
 

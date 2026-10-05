@@ -41,15 +41,41 @@ beforeAll(async () => {
   ({ CallMomentFrame } = await import("../CallMomentFrame"));
 }, 120_000);
 
-function render(rawId: string) {
+function render(rawId: string, entity: any = { _id: "k1", title: "Pricing review" }) {
   const host = document.getElementById("root")!;
   host.innerHTML = "";
   const root = createRoot(host);
   React.act(() =>
-    root.render(React.createElement(CallMomentFrame, { rawId, entity: { _id: "k1", title: "Pricing review" }, served: true, href: "/calls/cl-42?t=70" })),
+    root.render(React.createElement(CallMomentFrame, { rawId, entity, served: true, href: "/calls/cl-42?t=70" })),
   );
   return root;
 }
+
+// The caption is the line said at that moment (webGetCallRef's `line`), the
+// title dropping to a dim second line; a line that ended a while before the
+// moment says when, as `cast call snap` does.
+test("a moment is captioned with the line said then, a guest marked, an older line dated", () => {
+  recs = { call_started_at: T, recordings: [ready()] };
+  const line = { seq: 7, speaker_id: "guest:g1", speaker_name: "Pat Rivera", text: "The cobalt slide is next", t0: 68_000, t1: 71_000, during: true };
+  let root = render("cl-42@1:10", { _id: "k1", title: "Pricing review", line });
+  const caption = document.querySelector("[data-moment-line='7']")!;
+  expect(caption.textContent).toContain("Pat");
+  expect(caption.textContent).not.toContain("Rivera");
+  expect(caption.textContent).toContain("guest");
+  expect(caption.textContent).toContain("The cobalt slide is next");
+  expect(document.body.textContent).toContain("Pricing review");
+  expect(document.body.textContent).not.toContain("last said");
+  React.act(() => root.unmount());
+
+  root = render("cl-42@1:10", { _id: "k1", title: "Pricing review", line: { ...line, speaker_id: "ua", speaker_name: "Ada", t0: 60_000, t1: 64_000, during: false } });
+  expect(document.body.textContent).toContain("last said at 1:00");
+  React.act(() => root.unmount());
+
+  // Within a few seconds the line and the picture read as one moment.
+  root = render("cl-42@1:10", { _id: "k1", title: "Pricing review", line: { ...line, speaker_id: "ua", speaker_name: "Ada", t0: 66_000, t1: 68_000, during: false } });
+  expect(document.body.textContent).not.toContain("last said");
+  React.act(() => root.unmount());
+});
 
 test("a recorded moment is the video seeked there, linking to the page at that second", () => {
   recs = { call_started_at: T, recordings: [ready()] };
@@ -57,10 +83,32 @@ test("a recorded moment is the video seeked there, linking to the page at that s
   const video = document.querySelector("video")!;
   // 70s into the call is 10s into a file that began 60s in.
   expect(video.getAttribute("src")).toBe("https://bucket.example/calls/r1.mp4?sig=1#t=10.00");
+  // Loaded with CORS, so the drawn frame can be kept (lib/calls/momentFrames).
+  expect(video.getAttribute("crossorigin")).toBe("anonymous");
   expect(document.querySelector("a")!.getAttribute("href")).toBe("/calls/cl-42?t=70");
   expect(document.body.textContent).toContain("1:10");
   expect(document.body.textContent).toContain("Pricing review");
   React.act(() => root.unmount());
+});
+
+test("a moment drawn before on this page is its kept picture: no video, the screen still named", async () => {
+  const { keepMomentFrame, momentFrameKey, keepCallFrames } = await import("../../../lib/calls/momentFrames");
+  const realCreate = document.createElement.bind(document);
+  // jsdom has no canvas: stand one in for the keep.
+  (document as any).createElement = (tag: string) =>
+    tag === "canvas" ? { getContext: () => ({ drawImage() {} }), toBlob: (cb: any) => cb(new Blob(["x"])) } : realCreate(tag);
+  try {
+    await keepMomentFrame(momentFrameKey("r1", 10), { call: "k1", recording: "r1" }, { videoWidth: 1280, videoHeight: 720 } as any);
+  } finally {
+    (document as any).createElement = realCreate;
+  }
+  recs = { call_started_at: T, recordings: [ready()] };
+  const root = render("cl-42@1:10");
+  expect(document.querySelector("video")).toBeNull();
+  expect(document.querySelector("img")!.getAttribute("src")).toMatch(/^blob:/);
+  expect(document.querySelector("img")!.getAttribute("alt")).toBe("The call at 1:10");
+  React.act(() => root.unmount());
+  keepCallFrames("k1");
 });
 
 test("a moment outside what was recorded says so", () => {

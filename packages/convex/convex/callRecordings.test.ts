@@ -10,15 +10,16 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { anyApi } from "convex/server";
-import { CALL_RECORDING_URL_WINDOW_MS, callRecordingUrlWindow, dmRoomKey, guestIdentity, locateCallMoment } from "@codecast/shared/contracts";
+import { CALL_RECORDING_STATUSES, CALL_RECORDING_URL_WINDOW_MS, callRecordingUrlWindow, dmRoomKey, guestIdentity, isRecordingFilming, locateCallMoment, recordingStoppedItselfWords } from "@codecast/shared/contracts";
 import schema from "./schema";
 import { hashToken } from "./apiTokens";
 import { sha256Hex } from "./lib/hash";
-import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startErrorMessage } from "./callRecordings";
+import { mayWatchLive, ORPHAN_OBJECT_GRACE_MS, orphanedRecordingObjects, walkAccountedRecordingObjects, roomRecordingEnd, sharedCallVideoKey, signForCli, signingMoment, SIGNING_LEAD_MS, startFailure } from "./callRecordings";
 import { LivekitApiError } from "./lib/livekitServer";
 import { stableSigningWindow } from "./lib/r2";
 import { claimShareToken } from "./publicShare";
-import { EGRESS_BEGIN_TIMEOUT_MS, EGRESS_SAVE_TIMEOUT_MS, EGRESS_UNREACHABLE_FAIL_MS, restampRunShare, roomRecordingState } from "./lib/callRecordingRuns";
+import { roomNotice } from "./callGuests";
+import { EGRESS_BEGIN_TIMEOUT_MS, EGRESS_FINISHING_SAVE_TIMEOUT_MS, EGRESS_SAVE_TIMEOUT_MS, EGRESS_UNREACHABLE_FAIL_MS, filmedSpan, restampRunShare, roomRecordingState } from "./lib/callRecordingRuns";
 
 // The first test pays for loading the calls module graph.
 setDefaultTimeout(60_000);
@@ -36,6 +37,7 @@ const modules = {
   "./callChat.ts": () => import("./callChat"),
   "./publicShare.ts": () => import("./publicShare"),
   "./dispatch.ts": () => import("./dispatch"),
+  "./teamFeatures.ts": () => import("./teamFeatures"),
 };
 
 const ENV: Record<string, string> = {
@@ -244,6 +246,13 @@ const eventRows = (t: any) => t.run(async (ctx: any) => (await ctx.db.query("cal
 const events = async (t: any) => (await eventRows(t)).map((r: any) => (r.event_reason ? `${r.event}:${r.event_reason}` : r.event));
 const look = (t: any, run_id: string, extra: Record<string, unknown> = {}) => t.action(internal.callRecordings.reconcileRun, { run_id, once: true, ...extra });
 
+/** The room's recording as clients read it: the live room list's row (the
+ *  REC flag, the run behind it, whether a press could work), and how the
+ *  room's last run ended (the stop notice's own query). */
+const liveRoom = async (as: any, who: unknown, room: string) =>
+  (await as(String(who)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room) ?? null;
+const roomEnd = (as: any, who: unknown, room: string) => as(String(who)).query(api.callRecordings.getRoomRecordingEnd, { room_key: room });
+
 const screenShare = (who: string, sid = "TR_scr", width = 1920, height = 1080) => ({ identity: who, name: "Ana", tracks: [{ sid, type: "VIDEO", source: "SCREEN_SHARE", width, height }] });
 
 describe("pressing Record", () => {
@@ -262,8 +271,8 @@ describe("pressing Record", () => {
 
     // Shown on this round trip, before LiveKit has answered, and the run's
     // loop exists from the press.
-    const state = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(state).toMatchObject({ configured: true, live: { status: "starting", started_by: { id: String(ana), name: "Ana" }, started_at: null } });
+    const state = await liveRoom(as, ana, room);
+    expect(state).toMatchObject({ recording_configured: true, recording: true, recording_run: { status: "starting", started_by: { id: String(ana), name: "Ana" }, started_at: null } });
     expect(await events(t)).toEqual(["record_on"]);
     const loops = await t.run(async (ctx: any) => await ctx.db.query("call_recording_loops").collect());
     expect(loops).toMatchObject([{ run_id: res.recording_id, gen: 1 }]);
@@ -299,6 +308,25 @@ describe("pressing Record", () => {
     expect(await events(t)).toEqual(["record_on"]);
   });
 
+  test("a record the press made has no scribe: the first client that asks writes the words, whoever pressed", async () => {
+    const { t, ana, ben, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    // Ana presses on a phone, which never scribes.
+    const { transcript_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    const call = await t.run(async (ctx: any) => await ctx.db.get(transcript_id));
+    expect(call).toMatchObject({ started_by: ana, scribe_open: true });
+    // Nobody is writing yet, so no surface says the room is transcribed.
+    expect((await as(String(ben)).query(api.transcripts.getLive, { room_key: room })).started_by).toBeNull();
+    // Ben's window joins and asks: Ana's seat is no reason to observe.
+    expect(await as(String(ben)).mutation(api.transcripts.start, { room_key: room, auto: true })).toMatchObject({ transcript_id, role: "scribe" });
+    const taken = await t.run(async (ctx: any) => await ctx.db.get(transcript_id));
+    expect(String(taken.started_by)).toBe(String(ben));
+    expect(taken.scribe_open).toBeUndefined();
+    expect(String((await as(String(ana)).query(api.transcripts.getLive, { room_key: room })).started_by)).toBe(String(ben));
+    // From then on the seat is Ben's like any scribe's.
+    expect(await as(String(ana)).mutation(api.transcripts.start, { room_key: room, auto: true })).toMatchObject({ role: "observer" });
+  });
+
   test("nobody outside the huddle can press it, and a missing setup says so", async () => {
     const { t, ana, ben, cat, room, as } = await seed();
     await expect(as(String(cat)).mutation(api.callRecordings.startRecording, { room_key: room })).rejects.toThrow(/Cannot record this room/);
@@ -328,6 +356,29 @@ describe("pressing Record", () => {
     expect((await rows(t)).every((r: any) => r.status !== "starting" && r.status !== "recording")).toBe(true);
   });
 
+  test("a Stop ends only the run it was pressed on: one landing late leaves a newer run filming", async () => {
+    const { t, ana, ben, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const press = (who: unknown, on: boolean, runId?: string) =>
+      as(String(who)).mutation(api.dispatch.dispatch, { action: "setRoomRecording", args: [room, on, Date.now(), ...(runId ? [runId] : [])] });
+    const first = await press(ana, true);
+    await settle(t);
+    // Ben's Stop ends run 1; Ana's Stop on run 1 is still in her outbox.
+    await press(ben, false, String(first.recording_id));
+    // Past the cooldown, Ana presses Record again: run 2.
+    await t.run(async (ctx: any) => {
+      for (const r of await ctx.db.query("call_recordings").collect()) await ctx.db.patch(r._id, { stop_requested_at: Date.now() - 60_000 });
+    });
+    const second = await press(ana, true);
+    expect(second.existing).toBe(false);
+    // Ana's retried Stop lands: run 1 is over, so it ends nothing.
+    expect(await press(ana, false, String(first.recording_id))).toEqual({ stopped: 0 });
+    expect((await rows(t)).find((r: any) => r._id === second.recording_id).status).toBe("starting");
+    expect((await events(t)).filter((e: string) => e.startsWith("record_off"))).toHaveLength(1);
+    // A press on run 2 ends it.
+    expect((await press(ben, false, String(second.recording_id))).stopped).toBeGreaterThan(0);
+  });
+
   test("a press right after a stop waits for the file to save", async () => {
     const { t, ana, room, as } = await seed();
     world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
@@ -342,6 +393,55 @@ describe("pressing Record", () => {
       for (const r of await ctx.db.query("call_recordings").collect()) await ctx.db.patch(r._id, { stop_requested_at: Date.now() - 10_000, updated_at: Date.now() });
     });
     expect((await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room })).existing).toBe(false);
+  });
+});
+
+describe("a session huddle with transcription off", () => {
+  // Record films the room; it never feeds the session's agent. The room's own
+  // route (which seats the agent, mirrors its replies and dispatches its face)
+  // is owed until transcription comes back on, and only then given.
+  async function sessionRoomOff() {
+    const ctx = await seed();
+    const sroom = await ctx.t.run(async (db: any) => {
+      const conv = await db.db.insert("conversations", { user_id: ctx.ana, team_id: ctx.team, title: "Fix the auth race", agent_type: "claude_code", started_at: Date.now() } as any);
+      const key = `session:${conv}`;
+      const now = Date.now();
+      await db.db.insert("call_members", { room_key: key, team_id: ctx.team, user_id: ctx.ana, user_name: "Ana", joined_at: now, last_seen: now, muted: false, camera: false, sharing: false } as any);
+      return key;
+    });
+    await ctx.as(String(ctx.ana)).mutation(api.calls.setRoomTranscribeOff, { room_key: sroom, off: true });
+    return { ...ctx, sroom };
+  }
+  const feeds = (t: any) => t.run(async (ctx: any) => await ctx.db.query("call_agent_feeds").collect());
+
+  test("pressing Record makes the record without summoning the agent", async () => {
+    const { t, ana, as, sroom } = await sessionRoomOff();
+    const { transcript_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: sroom });
+    const call = await t.run(async (ctx: any) => await ctx.db.get(transcript_id));
+    expect(call.routes).toEqual([]);
+    expect(call.own_route_owed).toBe(true);
+    expect(await feeds(t)).toEqual([]);
+    expect(await events(t)).not.toContain("agent_joined");
+  });
+
+  test("transcription back on pays the owed route, once", async () => {
+    const { t, ana, as, sroom } = await sessionRoomOff();
+    const { transcript_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: sroom });
+    await as(String(ana)).mutation(api.calls.setRoomTranscribeOff, { room_key: sroom, off: false });
+    const call = await t.run(async (ctx: any) => await ctx.db.get(transcript_id));
+    const conv = sroom.slice("session:".length);
+    expect(call.routes).toMatchObject([{ kind: "session", target: conv, mode: "live", added_by: ana }]);
+    expect(call.own_route_owed).toBeUndefined();
+    expect((await feeds(t)).map((f: any) => String(f.conversation_id))).toEqual([conv]);
+    expect(await events(t)).toContain("agent_joined");
+
+    // Removed on purpose afterwards, it stays removed through another
+    // off and on: only an owed route is ever given.
+    await t.run(async (ctx: any) => await ctx.db.patch(transcript_id, { routes: [] }));
+    await as(String(ana)).mutation(api.calls.setRoomTranscribeOff, { room_key: sroom, off: true });
+    await as(String(ana)).mutation(api.calls.setRoomTranscribeOff, { room_key: sroom, off: false });
+    await as(String(ana)).mutation(api.transcripts.start, { room_key: sroom });
+    expect((await t.run(async (ctx: any) => await ctx.db.get(transcript_id))).routes).toEqual([]);
   });
 });
 
@@ -364,11 +464,12 @@ describe("a run, start to finish", () => {
     world.activate("EG_1", comp0.r2_key, c0);
     world.activate("EG_2", scr0.r2_key, s0);
     await look(t, recording_id);
-    const live = await as(String(ben)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(live.live).toMatchObject({ status: "recording", started_at: c0, call_short_id: call.short_id });
-    // The live state never reads the call record: writeSegments moves that
-    // row on every transcript line, and the live room list (every teammate's
-    // window) and each guest's notice carry this state.
+    expect((await liveRoom(as, ben, room)).recording_run).toMatchObject({ status: "recording", started_at: c0, call_short_id: call.short_id });
+    // The live state never reads the call record nor the presser's users
+    // row: writeSegments moves the record on every transcript line, the
+    // daemon's heartbeat and every message the presser sends move their
+    // users row, and the live room list (every teammate's window) and each
+    // guest's notice carry this state. The run keeps the presser's name.
     const state = await t.run(async (ctx: any) => {
       const db = ctx.db;
       const guarded = {
@@ -378,13 +479,26 @@ describe("a run, start to finish", () => {
           normalizeId: (table: string, id: string) => db.normalizeId(table, id),
           get: async (id: any) => {
             if (db.normalizeId("transcripts", String(id))) throw new Error("roomRecordingState read the call record");
+            if (db.normalizeId("users", String(id))) throw new Error("roomRecordingState read the presser's users row");
             return await db.get(id);
           },
         },
       };
       return await roomRecordingState(guarded, room);
     });
-    expect(state).toMatchObject({ status: "recording", call_short_id: call.short_id, video_shared: false });
+    expect(state).toMatchObject({ status: "recording", call_short_id: call.short_id, video_shared: false, started_by: { name: "Ana" } });
+    // The screen file kept its run's presser too.
+    expect((await rows(t)).every((r: any) => r.started_by_name === "Ana")).toBe(true);
+    // The presser's users row moving (a heartbeat) moves nothing the live list returns.
+    const listedBefore = (await as(String(ben)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room);
+    await t.run(async (ctx: any) => await ctx.db.patch(ana, { daemon_last_seen: Date.now() }));
+    expect((await as(String(ben)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room)).toEqual(listedBefore);
+    // A row from before runs kept the name still names the presser.
+    const legacy = await t.run(async (ctx: any) => {
+      const { runStarterName } = await import("./lib/callRecordingRuns");
+      return await runStarterName(ctx, { started_by: ana, started_by_name: undefined });
+    });
+    expect(legacy).toBe("Ana");
     // A transcript line moves the record and nothing the live list returns.
     const before = (await as(String(ben)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room);
     await t.run(async (ctx: any) => await ctx.db.patch(transcript_id, { last_seq: (call.last_seq ?? 0) + 5 }));
@@ -422,8 +536,6 @@ describe("a run, start to finish", () => {
     ]);
     expect(await events(t)).toEqual(["record_on", "record_off:pressed"]);
     expect(String((await eventRows(t))[1].user_id)).toBe(String(ben));
-    const whileStopping = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(whileStopping.live.status).toBe("stopping");
     // Stopped and saving: the room is no longer being filmed (the flag), and
     // the run says so, which is what keeps every mark off REC meanwhile.
     const listed1 = (await as(String(ana)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room);
@@ -440,10 +552,11 @@ describe("a run, start to finish", () => {
       transcript_id: String(transcript_id),
       short_id: call.short_id,
       at_ms: 5_000,
+      started_by: String(ana),
+      lost: false,
     };
-    expect(whileStopping.ended).toEqual(endFacts);
-    // The notice's own query answers the same end and nothing else.
-    expect(await as(String(ana)).query(api.callRecordings.getRoomRecordingEnd, { room_key: room })).toEqual(endFacts);
+    // The notice's own query answers the end and nothing else.
+    expect(await roomEnd(as, ana, room)).toEqual(endFacts);
     expect(await as(String(cat)).query(api.callRecordings.getRoomRecordingEnd, { room_key: room })).toBeNull();
     await settle(t);
     expect(world.stops().sort()).toEqual(["EG_1", "EG_2"]);
@@ -453,9 +566,8 @@ describe("a run, start to finish", () => {
     world.complete("EG_2", scr0.r2_key, s0, 40_000);
     await look(t, recording_id);
     await settle(t);
-    const after = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(after.live).toBeNull();
-    expect(after.ended).toMatchObject({ run_id: recording_id, status: "ready", stop_reason: "pressed" });
+    expect((await liveRoom(as, ana, room)).recording_run).toBeNull();
+    expect(await roomEnd(as, ana, room)).toMatchObject({ run_id: recording_id, status: "ready", stop_reason: "pressed" });
     expect(world.deletes).toEqual([comp0.live_frame_key]);
     expect((await rows(t)).every((r: any) => r.live_frame_key === undefined)).toBe(true);
     // Stopped by a press: told once, not again when the file lands.
@@ -510,7 +622,8 @@ describe("a run, start to finish", () => {
     }
     expect((await t.query(api.transcripts.cliListCalls, { api_token: TOKEN })).find((r: any) => r._id === transcript_id).video).toBe("ready");
     expect(await as(String(cat)).query(api.callRecordings.webCallRecordings, { call: call.short_id, url_window: win })).toBeNull();
-    expect(await as(String(cat)).query(api.callRecordings.getRoomRecording, { room_key: room })).toBeNull();
+    expect(await roomEnd(as, cat, room)).toBeNull();
+    expect((await liveRoom(as, cat, room))?.recording_run ?? null).toBeNull();
   });
 
   test("a page cannot sign further than a beat ahead of now, whatever window it asks for", () => {
@@ -561,6 +674,28 @@ describe("a run, start to finish", () => {
     // Nobody pressed it: the line says the room emptied, on the presser's row.
     expect(await events(t)).toEqual(["record_on", "record_off:room_empty"]);
     expect(String((await eventRows(t))[1].user_id)).toBe(String(ana));
+  });
+
+  test("the last teammate pressing End stops it at once; a guest left behind is not filmed alone, and stays admitted", async () => {
+    const { t, ana, ben, team, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const now = Date.now();
+    const guest = await t.run(async (ctx: any) => {
+      const link = await ctx.db.insert("call_guest_links", { room_key: room, team_id: team, token: "t".repeat(24), created_by: ana, created_at: now, expires_at: now + 3_600_000 });
+      return await ctx.db.insert("call_guests", { link_id: link, room_key: room, team_id: team, name: "Dana", secret_hash: await sha256Hex(GUEST_SECRET), status: "admitted", created_at: now, knocked_at: now, last_seen: now });
+    });
+    // Ana hangs up with Ben still there: the room is not empty.
+    await as(String(ana)).mutation(api.calls.leaveRoom, { room_key: room, hangup: true });
+    expect((await rows(t))[0].status).toBe("starting");
+    // Ben, the last teammate, presses End. (The same last leave without
+    // `hangup`, a tab closing, keeps it for a reload: the test above.)
+    await as(String(ben)).mutation(api.calls.leaveRoom, { room_key: room, hangup: true });
+    expect((await rows(t))[0]).toMatchObject({ status: "stopping", stop_reason: "room_empty" });
+    expect(await events(t)).toEqual(["record_on", "record_off:room_empty"]);
+    expect((await t.run(async (ctx: any) => await ctx.db.get(guest))).status).toBe("admitted");
   });
 
   test("a room LiveKit shows holding only a guest stops like an empty one, once no seat is held either", async () => {
@@ -616,9 +751,8 @@ describe("a run, start to finish", () => {
     expect(row).toMatchObject({ status: "failed", stop_reason: "failed", error: "LiveKit refused this server's credentials, so the recording could not start." });
     // A failed press frees the room to try again, and the room's notice can
     // say it failed rather than that a video is saving.
-    const state = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(state.live).toBeNull();
-    expect(state.ended).toMatchObject({ run_id: String(row._id), status: "failed", stop_reason: "failed", error: row.error, stopped_by: null, at_ms: null });
+    expect((await liveRoom(as, ana, room)).recording_run).toBeNull();
+    expect(await roomEnd(as, ana, room)).toMatchObject({ run_id: String(row._id), status: "failed", stop_reason: "failed", error: row.error, stopped_by: null, at_ms: null });
     expect(await events(t)).toEqual(["record_on", "record_off:failed"]);
     expect((await eventRows(t))[1].text).toBe(row.error);
   });
@@ -723,6 +857,47 @@ describe("nothing films untracked", () => {
     expect(await events(t)).toEqual(["record_on", "record_off:ended"]);
   });
 
+  // LiveKit closes an emptied room's video before codecast's own empty room
+  // stop is due (the only teammate's page reloaded, say). The look that sees
+  // it close reads the room, so the thread says why rather than a bare stop.
+  test("a room video LiveKit closes by itself says why: the room emptied, or nothing the room could see", async () => {
+    const { t, ana, ben, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t))[0];
+    const began = Date.now() - 60_000;
+    world.activate("EG_1", comp.r2_key, began);
+    await look(t, recording_id);
+    expect((await rows(t))[0].status).toBe("recording");
+    // Nobody's seat is held when LiveKit finishes the file.
+    await as(String(ana)).mutation(api.calls.leaveRoom, { room_key: room });
+    await as(String(ben)).mutation(api.calls.leaveRoom, { room_key: room });
+    world.setParticipants([]);
+    world.complete("EG_1", comp.r2_key, began, 60_000);
+    await look(t, recording_id);
+    expect((await rows(t))[0]).toMatchObject({ status: "ready", stop_reason: "room_empty" });
+    expect(await events(t)).toEqual(["record_on", "record_off:room_empty"]);
+    expect(recordingStoppedItselfWords("room_empty")).toBe("Recording stopped: no teammate was left in the call");
+  });
+
+  test("a room video LiveKit closes while the room is still seated is said as LiveKit's doing, never as unexplained", async () => {
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t))[0];
+    const began = Date.now() - 60_000;
+    world.activate("EG_1", comp.r2_key, began);
+    await look(t, recording_id);
+    world.complete("EG_1", comp.r2_key, began, 60_000);
+    await look(t, recording_id);
+    expect((await rows(t))[0]).toMatchObject({ status: "ready", stop_reason: "ended" });
+    expect(recordingStoppedItselfWords("ended")).toBe("Recording stopped: the media server closed the file");
+  });
+
   test("a stop whose save never finishes is settled from the bucket, or failed, so the room is never left saving", async () => {
     const { t, ana, room, as } = await seed();
     world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
@@ -734,19 +909,89 @@ describe("nothing films untracked", () => {
     await look(t, recording_id);
     await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
     await settle(t);
-    // LiveKit keeps reporting the egress as ending: the upload is stuck.
+    // LiveKit keeps reporting the egress as ending: it is finishing the file.
     expect(world.egresses.get("EG_1")!.status).toBe("EGRESS_ENDING");
     await look(t, recording_id);
     expect((await rows(t))[0].status).toBe("stopping");
-    const stuck = async () =>
+    const stuck = async (ms: number) =>
       t.run(async (ctx: any) => {
-        for (const r of await ctx.db.query("call_recordings").collect()) await ctx.db.patch(r._id, { stop_requested_at: Date.now() - EGRESS_SAVE_TIMEOUT_MS - 1_000 });
+        for (const r of await ctx.db.query("call_recordings").collect()) await ctx.db.patch(r._id, { stop_requested_at: Date.now() - ms });
       });
-    await stuck();
+    // Past the short timeout, a file LiveKit is visibly finishing is a long
+    // upload, not a lost one: it keeps waiting.
+    await stuck(EGRESS_SAVE_TIMEOUT_MS + 1_000);
+    await look(t, recording_id);
+    await settle(t);
+    expect((await rows(t))[0].status).toBe("stopping");
+    expect(await events(t)).toEqual(["record_on", "record_off:pressed"]);
+    // Past the longer ceiling it is stuck after all. The room was told at the
+    // stop that the video was saving, so it is told, once, that it is gone;
+    // the file's end is its stop, not the moment the save was given up.
+    await stuck(EGRESS_FINISHING_SAVE_TIMEOUT_MS + 1_000);
+    await look(t, recording_id);
+    await settle(t);
+    const lost = (await rows(t))[0];
+    expect(lost).toMatchObject({ status: "failed", error: "LiveKit never finished saving this recording.", stop_reason: "pressed" });
+    expect(lost.ended_at).toBe(lost.stop_requested_at);
+    expect((await liveRoom(as, ana, room)).recording_run).toBeNull();
+    expect(await events(t)).toEqual(["record_on", "record_off:pressed", "record_lost:failed"]);
+    expect((await eventRows(t))[2]).toMatchObject({ text: "LiveKit never finished saving this recording.", event_run_id: recording_id, user_id: ana });
+    expect(await roomEnd(as, ana, room)).toMatchObject({ run_id: recording_id, status: "failed", lost: true, started_by: String(ana) });
+    await look(t, recording_id);
+    expect(await events(t)).toHaveLength(3);
+
+    // The upload lands anyway: the bucket sweep finds the file its row
+    // kept, and the video is there to watch.
+    world.objects.set(lost.r2_key, 4242);
+    world.modified.set(lost.r2_key, Date.now());
+    expect(await t.action(internal.callRecordings.sweepRecordingObjects, {})).toMatchObject({ deleted: 0, landed: 1 });
+    await settle(t);
+    const landed = (await rows(t))[0];
+    expect(landed).toMatchObject({ status: "ready", size_bytes: 4242, stop_reason: "pressed", ended_at: lost.ended_at });
+    expect([landed.error, landed.error_kind]).toEqual([undefined, undefined]);
+    expect((await roomEnd(as, ana, room)).lost).toBe(false);
+    expect(await t.action(internal.callRecordings.sweepRecordingObjects, {})).toMatchObject({ landed: 0 });
+  });
+
+  test("a stop LiveKit ignored, or forgot, is stuck past the short timeout", async () => {
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t))[0];
+    world.activate("EG_1", comp.r2_key, Date.now() - 60_000);
+    await look(t, recording_id);
+    await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
+    await settle(t);
+    // The stop never took: LiveKit still films.
+    world.egresses.get("EG_1")!.status = "EGRESS_ACTIVE";
+    await t.run(async (ctx: any) => await ctx.db.patch(comp._id, { stop_requested_at: Date.now() - EGRESS_SAVE_TIMEOUT_MS - 1_000 }));
     await look(t, recording_id);
     await settle(t);
     expect((await rows(t))[0]).toMatchObject({ status: "failed", error: "LiveKit never finished saving this recording." });
-    expect(await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).toMatchObject({ live: null });
+  });
+
+  test("a save that fails after somebody else's stop is said once, as its own line, and owed to the presser", async () => {
+    const { t, ana, ben, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t))[0];
+    world.activate("EG_1", comp.r2_key, Date.now() - 60_000);
+    await look(t, recording_id);
+    await as(String(ben)).mutation(api.callRecordings.stopRecording, { room_key: room });
+    await settle(t);
+    expect(await events(t)).toEqual(["record_on", "record_off:pressed"]);
+    world.fail("EG_1", "upload failed: AccessDenied");
+    await look(t, recording_id);
+    await look(t, recording_id);
+    await settle(t);
+    expect(await events(t)).toEqual(["record_on", "record_off:pressed", "record_lost:failed"]);
+    // The line is the presser's, whoever stopped it.
+    expect(String((await eventRows(t))[2].user_id)).toBe(String(ana));
+    expect(await roomEnd(as, ben, room)).toMatchObject({ lost: true, started_by: String(ana), stopped_by: { id: String(ben) } });
   });
 
   test("a start LiveKit cannot even be asked about fails after the ceiling, so the room stops showing it", async () => {
@@ -860,8 +1105,22 @@ describe("guests", () => {
     const { t, ana, room, as } = await seed();
     await t.run(async (ctx: any) => await ctx.db.patch(ana, { name: undefined, github_username: "ana-gh" }));
     await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
-    const state = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(state.live.started_by.name).toBe("ana-gh");
+    expect((await liveRoom(as, ana, room)).recording_run.started_by.name).toBe("ana-gh");
+  });
+});
+
+describe("is the room being filmed", () => {
+  test("a member's REC flag and a guest's notice agree for every status a run can hold", async () => {
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await quietLoops(t);
+    for (const status of CALL_RECORDING_STATUSES) {
+      await t.run(async (ctx: any) => await ctx.db.patch(recording_id, { status }));
+      const member = (await liveRoom(as, ana, room)).recording;
+      const guest = (await t.run(async (ctx: any) => await roomNotice(ctx, room))).recording;
+      expect([status, member, guest]).toEqual([status, isRecordingFilming(status), isRecordingFilming(status)]);
+    }
   });
 });
 
@@ -957,13 +1216,21 @@ describe("who may watch and delete", () => {
     await settle(t);
     expect(world.objects.size).toBe(0);
     expect(world.deletes).toEqual(expect.arrayContaining([comp.r2_key, scr.r2_key, stray]));
-    const deleted = (await eventRows(t)).find((r: any) => r.event === "record_deleted");
+    const events = await eventRows(t);
+    const deleted = events.find((r: any) => r.event === "record_deleted");
     expect(deleted).toMatchObject({ transcript_id: call });
     expect(String(deleted.user_id)).toBe(String(ben));
+    // The delete names the run, as its start and stop did, and what it had
+    // filmed on the call's clock, so the thread can say which one went.
+    expect(deleted.event_run_id).toBe(String(recording_id));
+    expect(events.filter((r: any) => r.event === "record_on" || r.event === "record_off").map((r: any) => r.event_run_id)).toEqual(
+      expect.arrayContaining([String(recording_id)]),
+    );
+    expect(deleted.event_span.to_ms).toBeGreaterThanOrEqual(deleted.event_span.from_ms);
   });
 
-  test("frames shared from a recording as public images are deleted with it", async () => {
-    const { t, ana, cat, room, as } = await seed();
+  test("a picture of a recording goes public only by whoever may publish it, the room is told, and it comes down with it", async () => {
+    const { t, ana, ben, cat, room, as } = await seed();
     world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
     const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
     await settle(t);
@@ -971,19 +1238,65 @@ describe("who may watch and delete", () => {
     await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
     world.complete("EG_1", (await rows(t))[0].r2_key, Date.now(), 1_000);
     await look(t, recording_id);
-    const image = await t.run(async (ctx: any) => ctx.storage.store(new Blob(["png"], { type: "image/png" })));
-    const note = (storage_id: string) => t.mutation(internal.callRecordings.cliNoteFrameShare, { api_token: TOKEN, recording_id, storage_id });
-    // Ben (the token) may read the call; the same image noted twice is one row.
-    await note(String(image));
-    await note(String(image));
-    expect(await t.run(async (ctx: any) => (await ctx.db.query("call_frame_shares").collect()).length)).toBe(1);
-    // Someone who cannot read the call cannot tie images to it.
+    // Someone else's object (an attachment, an avatar, a session's image)
+    // that a client might name: sharing never takes a storage id, so it
+    // survives the recording's delete.
+    const theirs = await t.run(async (ctx: any) => ctx.storage.store(new Blob(["someone else's"], { type: "image/png" })));
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]).toString("base64");
+    const share = (api_token: string, image_base64: string, extra: Record<string, unknown> = {}) =>
+      t.action(internal.callRecordings.cliShareFrame, { api_token, recording_id, image_base64, ...extra } as any);
+    // The stop's scheduled work runs first: convex-test holds one
+    // transaction at a time, and the share's store must not land inside it.
+    await settle(t);
+    // Ana pressed Record, so a picture of it is hers to publish; Ben (the
+    // other token) may read the call but not put it on a public link, and
+    // nothing is stored when he tries.
+    const ANA = "a".repeat(64);
+    await t.run(async (ctx: any) => ctx.db.insert("api_tokens", { user_id: ana, token_hash: await hashToken(ANA), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any));
+    const stored = () => t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length);
+    const unshared = await stored();
+    await expect(share(TOKEN, png)).rejects.toThrow(/whoever recorded this call, a team admin, or the person whose screen/);
+    expect(await stored()).toBe(unshared);
+    await expect(share(ANA, png, { storage_id: String(theirs) })).rejects.toThrow();
+    // The same picture shared twice is one object, one link and one row, and
+    // the row names the object it stored and the moment it shows.
+    const first = await share(ANA, png, { at_ms: 150_400 });
+    const again = await share(ANA, png, { at_ms: 150_400 });
+    expect(again).toEqual(first);
+    const shares = await t.run(async (ctx: any) => ctx.db.query("call_frame_shares").collect());
+    expect(shares).toHaveLength(1);
+    expect(String(shares[0].storage_id)).toBe(first.storage_id);
+    expect(String(shares[0].storage_id)).not.toBe(String(theirs));
+    expect(shares[0].at_ms).toBe(150_400);
+    // The room's thread says a picture went public, once, with the moment.
+    const told = (await eventRows(t)).filter((r: any) => r.event === "frame_shared");
+    expect(told).toHaveLength(1);
+    expect(String(told[0].user_id)).toBe(String(ana));
+    expect(told[0].text).toMatch(/^cl-\d+@2:30$/);
+    // The call page lists it for every reader, with what it shows and its link.
+    const page = await as(String(ben)).query(api.callRecordings.webCallRecordings, { call: String(shares[0].transcript_id), url_window: callRecordingUrlWindow() });
+    expect(page?.frame_shares).toHaveLength(1);
+    expect(page?.frame_shares[0]).toMatchObject({ _id: String(shares[0]._id), kind: "composite", at_ms: 150_400, shared_by: String(ana), url: expect.any(String) });
+    // Only pictures: anything else would be served publicly under its type.
+    await expect(share(ANA, Buffer.from("<html>").toString("base64"))).rejects.toThrow(/PNG or JPEG/);
+    // Someone who cannot read the call cannot share from it, and nothing is stored.
     const CAT = "c".repeat(64);
     await t.run(async (ctx: any) => ctx.db.insert("api_tokens", { user_id: cat, token_hash: await hashToken(CAT), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any));
-    await expect(t.mutation(internal.callRecordings.cliNoteFrameShare, { api_token: CAT, recording_id, storage_id: String(image) })).rejects.toThrow(/Recording not found/);
+    const before = await t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length);
+    await expect(share(CAT, Buffer.from([0xff, 0xd8, 0xff, 9]).toString("base64"))).rejects.toThrow(/Recording not found/);
+    expect(await t.run(async (ctx: any) => (await ctx.db.system.query("_storage").collect()).length)).toBe(before);
+    // Taking a picture down is any reader's, as taking the video off the link
+    // is; Cat, who cannot read the call, changes nothing. Gone twice is fine.
+    expect(await as(String(cat)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: false });
+    expect(await as(String(ben)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: true });
+    expect(await as(String(ben)).mutation(api.callRecordings.deleteCallFrameShare, { share_id: String(shares[0]._id) })).toEqual({ deleted: false });
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(first.storage_id))).toBeNull();
+    // Shared again, it goes with the recording.
+    const second = await share(ANA, png, { at_ms: 150_400 });
 
     expect(await as(String(ana)).mutation(api.callRecordings.deleteRecording, { recording_id })).toEqual({ deleted: 1 });
-    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(image))).toBeNull();
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(second.storage_id))).toBeNull();
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(theirs))).not.toBeNull();
     expect(await t.run(async (ctx: any) => (await ctx.db.query("call_frame_shares").collect()).length)).toBe(0);
   });
 
@@ -1110,11 +1423,25 @@ describe("the public share link", () => {
     const benPage = await as(String(ben)).query(api.callRecordings.webCallRecordings, { call, url_window: callRecordingUrlWindow() });
     expect(benPage.can_share_video).toBe(false);
     await expect(as(String(ben)).mutation(api.callRecordings.setCallShareVideo, { call, include: true })).rejects.toThrow(/whoever recorded/);
+    // Each change is a line in the room's thread, once: the people filmed
+    // learn their faces went public, or came down, and who did it.
+    const videoLines = async () => (await eventRows(t)).filter((r: any) => r.event === "video_shared" || r.event === "video_unshared");
     await as(String(ana)).mutation(api.callRecordings.setCallShareVideo, { call, include: true });
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos).toHaveLength(1);
+    const [shared] = await videoLines();
+    // The stretch the link now shows, on the call's clock: the run it covers.
+    const callRow = await t.run(async (ctx: any) => await ctx.db.get(first.transcript_id));
+    expect(shared.event_span).toEqual(filmedSpan([(await rows(t))[0]], callRow.started_at));
+    expect(shared).toMatchObject({ event: "video_shared", transcript_id: first.transcript_id });
+    expect(String(shared.user_id)).toBe(String(ana));
     // Taking it off is anyone's who may read the call.
     expect(await as(String(ben)).mutation(api.callRecordings.setCallShareVideo, { call, include: false })).toEqual({ video_shared: false });
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos).toEqual([]);
+    await as(String(ben)).mutation(api.callRecordings.setCallShareVideo, { call, include: false });
+    expect((await videoLines()).map((r: any) => [r.event, String(r.user_id)])).toEqual([
+      ["video_shared", String(ana)],
+      ["video_unshared", String(ben)],
+    ]);
     // An admin may publish what someone else recorded.
     await t.run(async (ctx: any) => {
       const m = (await ctx.db.query("team_memberships").collect()).find((r: any) => String(r.user_id) === String(ben) && String(r.team_id) === String(team));
@@ -1130,8 +1457,7 @@ describe("the public share link", () => {
     const second = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
     await settle(t);
     await quietLoops(t);
-    const live = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-    expect(live.live.video_shared).toBe(false);
+    expect((await liveRoom(as, ana, room)).recording_run.video_shared).toBe(false);
     await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
     const comp2 = (await rows(t)).find((r: any) => String(r._id) === String(second.recording_id));
     world.complete("EG_2", comp2.r2_key, t0 + 40_000, 10_000);
@@ -1141,9 +1467,13 @@ describe("the public share link", () => {
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos.map((v: any) => v.started_at)).toEqual([t0]);
     const page = await as(String(ana)).query(api.callRecordings.webCallRecordings, { call, url_window: callRecordingUrlWindow() });
     expect(page).toMatchObject({ video_shared: true, video_later: 1, can_share_video: true });
-    // Including again moves the cutoff to now: both are on the link.
+    // Including again moves the cutoff to now: both are on the link, and
+    // that is news; including once more, with nothing new, is not.
+    expect((await videoLines()).map((r: any) => r.event)).toEqual(["video_shared", "video_unshared", "video_shared"]);
     await as(String(ana)).mutation(api.callRecordings.setCallShareVideo, { call, include: true });
     expect((await t.query(api.publicShare.getSharedCall, { share_token: token })).videos).toHaveLength(2);
+    await as(String(ana)).mutation(api.callRecordings.setCallShareVideo, { call, include: true });
+    expect((await videoLines()).map((r: any) => r.event)).toEqual(["video_shared", "video_unshared", "video_shared", "video_shared"]);
     // While a run that will be on the link records, the room is told.
     await t.run(async (ctx: any) => {
       for (const r of await ctx.db.query("call_recordings").collect()) await ctx.db.patch(r._id, { stop_requested_at: Date.now() - 60_000 });
@@ -1155,7 +1485,6 @@ describe("the public share link", () => {
       await ctx.db.patch(first.transcript_id, { share_video_through: Date.now() + 1 });
       await restampRunShare(ctx, await ctx.db.get(first.transcript_id));
     });
-    expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).live.video_shared).toBe(true);
     expect((await as(String(ana)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room).recording_run.video_shared).toBe(true);
   });
 
@@ -1199,8 +1528,6 @@ describe("a LiveKit plan out of recording minutes", () => {
       await settle(t);
       expect((await rows(t)).map((r: any) => r.status)).toEqual(["failed"]);
       expect(await events(t)).toEqual(["record_on", "record_off:failed"]);
-      const state = await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room });
-      expect(state.unavailable).toMatch(/used its recording minutes/);
       expect((await as(String(ana)).query(api.calls.getLiveRooms, {})).find((r: any) => r.room_key === room).recording_unavailable).toMatch(/used its recording minutes/);
 
       // The next press is refused with the reason, and nobody hears a thing.
@@ -1215,7 +1542,7 @@ describe("a LiveKit plan out of recording minutes", () => {
       await t.mutation(internal.callRecordings.clearRecordingOutage, { since });
       await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
       await settle(t);
-      expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).unavailable).toBeNull();
+      expect((await liveRoom(as, ana, room)).recording_unavailable).toBeNull();
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -1300,6 +1627,29 @@ describe("a refusal that passes", () => {
     expect(world.starts("room")).toBe(2);
   });
 
+  test("a screen shared while the room video waits for its retry gets no file until the room video is taken", async () => {
+    world.refuse("room", BUSY);
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([screenShare(String(ana))]);
+    const { recording_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    // Waiting out its gap: a look sees the share and leaves it alone, so the
+    // screen file cannot take the slot the room video is waiting for.
+    const waiting = (await rows(t))[0];
+    expect([waiting.status, waiting.egress_id, typeof waiting.retry_after]).toEqual(["starting", undefined, "number"]);
+    await look(t, recording_id);
+    expect((await rows(t)).filter((r: any) => r.kind === "screen")).toHaveLength(0);
+    expect(world.starts("track")).toBe(0);
+    // Once LiveKit takes the room video, the share gets its file.
+    await t.run(async (ctx: any) => await ctx.db.patch(recording_id, { retry_after: Date.now() - 1 }));
+    await look(t, recording_id);
+    await settle(t);
+    await look(t, recording_id);
+    expect((await rows(t)).find((r: any) => r.kind === "composite")).toMatchObject({ egress_id: "EG_1" });
+    expect(world.starts("track")).toBe(1);
+  });
+
   test("a room video refused for spent minutes fails at once, and is remembered", async () => {
     world.refuse("room", SPENT);
     const { t, ana, room, as } = await seed();
@@ -1315,7 +1665,7 @@ describe("a refusal that passes", () => {
     await look(t, recording_id);
     const comp = (await rows(t)).find((r: any) => r.kind === "composite");
     expect(comp).toMatchObject({ status: "failed", error: expect.stringMatching(/used its recording minutes/) });
-    expect((await as(String(ana)).query(api.callRecordings.getRoomRecording, { room_key: room })).unavailable).toMatch(/used its recording minutes/);
+    expect((await liveRoom(as, ana, room)).recording_unavailable).toMatch(/used its recording minutes/);
     await expect(as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room })).rejects.toThrow(/used its recording minutes/);
   });
 });
@@ -1368,6 +1718,64 @@ describe("the backstops", () => {
     await t.run(async (ctx: any) => await ctx.db.patch(transcript_id, { status: "ended", ended_at: Date.now() }));
     const list = await as(String(ana)).query(api.transcripts.webListCalls, {});
     expect(list.map((c: any) => String(c._id))).toContain(String(transcript_id));
+  });
+});
+
+describe("does the call have video", () => {
+  const videoFlag = async (as: any, who: unknown, id: unknown) =>
+    (await as(String(who)).query(api.transcripts.webListCalls, {})).find((c: any) => String(c._id) === String(id))?.filmed;
+
+  test("a press LiveKit refused leaves none; a run deleted takes it back, and the glyph and the list agree", async () => {
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: any, init?: any) => {
+      if (String(input).includes("StartRoomCompositeEgress")) return new Response(JSON.stringify({ code: "unauthenticated", msg: "bad key" }), { status: 401 });
+      return realFetch(input, init);
+    }) as any;
+    const refused = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    // Shown as on its way while LiveKit is being asked.
+    expect(await videoFlag(as, ana, refused.transcript_id)).toBe(true);
+    await settle(t);
+    globalThis.fetch = realFetch;
+    expect((await rows(t))[0].status).toBe("failed");
+    // The presser may still watch whatever there is (recorded_people), but
+    // there is nothing to watch.
+    const call = await t.run(async (ctx: any) => await ctx.db.get(refused.transcript_id));
+    expect(call.recorded_people.length).toBeGreaterThan(0);
+    expect(await videoFlag(as, ana, refused.transcript_id)).toBe(false);
+
+    // A run that films, then is deleted.
+    const { recording_id, transcript_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    expect(transcript_id).toBe(refused.transcript_id);
+    await settle(t);
+    await quietLoops(t);
+    const comp = (await rows(t)).find((r: any) => r._id === recording_id);
+    world.activate("EG_1", comp.r2_key, Date.now());
+    await look(t, recording_id);
+    await as(String(ana)).mutation(api.callRecordings.stopRecording, { room_key: room });
+    await settle(t);
+    world.complete("EG_1", comp.r2_key, Date.now(), 10_000);
+    await look(t, recording_id);
+    expect(await videoFlag(as, ana, transcript_id)).toBe(true);
+    await as(String(ana)).mutation(api.callRecordings.deleteRecording, { recording_id });
+    expect(await videoFlag(as, ana, transcript_id)).toBe(false);
+    // An ended huddle with nothing said and no video left is no call anybody
+    // would look for: the list drops it by the same rule the glyph reads.
+    await t.run(async (ctx: any) => await ctx.db.patch(transcript_id, { status: "ended", ended_at: Date.now() }));
+    expect(await videoFlag(as, ana, transcript_id)).toBeUndefined();
+  });
+
+  test("the backfill counts the files a call already has", async () => {
+    const { t, ana, room, as } = await seed();
+    world.setParticipants([{ identity: String(ana), name: "Ana", tracks: [] }]);
+    const { transcript_id } = await as(String(ana)).mutation(api.callRecordings.startRecording, { room_key: room });
+    await settle(t);
+    await quietLoops(t);
+    await t.run(async (ctx: any) => await ctx.db.patch(transcript_id, { video_runs: undefined }));
+    expect(await videoFlag(as, ana, transcript_id)).toBe(false);
+    await t.mutation(internal.callRecordings.backfillCallVideo, {});
+    expect(await videoFlag(as, ana, transcript_id)).toBe(true);
   });
 });
 
@@ -1446,6 +1854,45 @@ describe("a deleted team", () => {
     expect(await t.run(async (ctx: any) => await sharedCallVideoKey(ctx, call, at))).toBe(comp.r2_key);
   });
 
+  test("turning calls off for the team stops what its rooms are recording, and the thread says why", async () => {
+    const { t, team, recording_id, comp } = await filmed();
+    world.activate("EG_1", comp.r2_key, Date.now() - 5_000);
+    await look(t, recording_id);
+    // Another feature changing touches nothing.
+    await t.mutation(internal.teamFeatures.setTeamFeatureInternal, { team_id: team, feature: "org", enabled: true });
+    expect((await rows(t))[0].status).toBe("recording");
+    await t.mutation(internal.teamFeatures.setTeamFeatureInternal, { team_id: team, feature: "calls", enabled: false });
+    expect((await rows(t))[0]).toMatchObject({ status: "stopping", stop_reason: "calls_off" });
+    expect((await events(t)).at(-1)).toBe("record_off:calls_off");
+    await settle(t);
+    expect(world.stops()).toContain("EG_1");
+    // Off again is no change: nothing more is said.
+    await t.mutation(internal.teamFeatures.setTeamFeatureInternal, { team_id: team, feature: "calls", enabled: false });
+    expect((await events(t)).filter((e: string) => e.startsWith("record_off"))).toHaveLength(1);
+  });
+
+  test("retiring a team takes its shared pictures down at once, and its public link serves no words", async () => {
+    const { t, team, ana, recording_id, transcript_id, comp } = await filmed();
+    await finish(t, recording_id, comp.r2_key);
+    const image = await t.run(async (ctx: any) => ctx.storage.store(new Blob(["png"], { type: "image/png" })));
+    await t.run(async (ctx: any) => {
+      await ctx.db.insert("call_frame_shares", { recording_id, transcript_id, storage_id: image, user_id: ana, created_at: Date.now() });
+      await ctx.db.patch(transcript_id, { share_token: "4c7c324f-3077-486a-a63c-65f188d18a0c" });
+    });
+    const shared = () => t.query(api.publicShare.getSharedCall, { share_token: "4c7c324f-3077-486a-a63c-65f188d18a0c" });
+    expect(await shared()).not.toBeNull();
+    const { retireTeam } = await import("./teams");
+    await t.run(async (ctx: any) => await retireTeam(ctx, await ctx.db.get(team), ana));
+    await settle(t);
+    expect(await t.run(async (ctx: any) => (await ctx.db.query("call_frame_shares").collect()).length)).toBe(0);
+    expect(await t.run(async (ctx: any) => ctx.storage.getUrl(image))).toBeNull();
+    expect(await shared()).toBeNull();
+    // The private file waits out the restore window; the words come back with the team.
+    expect(await rows(t)).toHaveLength(1);
+    await t.run(async (ctx: any) => await ctx.db.patch(team, { deleted_at: undefined }));
+    expect(await shared()).not.toBeNull();
+  });
+
   test("a call still recording is left alone, and one fresh pass comes back for it", async () => {
     const { t, team } = await filmed();
     await retire(t, team);
@@ -1463,6 +1910,29 @@ describe("a deleted team", () => {
 // egress minutes are spent (seen on prod 2026-10-03); only the first is worth
 // another press, so the room is told which one it hit.
 describe("orphaned objects", () => {
+  test("the rows are read page by page, and every page counts", async () => {
+    const { t, room, team, ana } = await seed();
+    await t.run(async (ctx: any) => {
+      const call = await ctx.db.insert("transcripts", { room_key: room, team_id: team, started_by: ana, status: "ended", started_at: Date.now(), routes: [], last_seq: 0 } as any);
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert("call_recordings", {
+          transcript_id: call, room_key: room, team_id: team, kind: "composite", status: "ready",
+          r2_key: `calls/t${i}/${i}00-composite.mp4`, ...(i === 4 ? { live_frame_key: "calls/t4/400-composite-live.jpeg" } : {}),
+          started_by: ana, requested_at: Date.now(), updated_at: Date.now(),
+        } as any);
+      }
+    });
+    const pages: number[] = [];
+    const accounted = await walkAccountedRecordingObjects(async (args) => {
+      const page = await t.query(internal.callRecordings.accountedRecordingObjects, args);
+      pages.push(page.keys.length);
+      return page;
+    }, 2);
+    expect(pages.length).toBeGreaterThanOrEqual(3);
+    expect(accounted.keys.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-composite.mp4`).concat("calls/t4/400-composite-live.jpeg").sort());
+    expect(accounted.prefixes.sort()).toEqual([0, 1, 2, 3, 4].map((i) => `calls/t${i}/${i}00-`));
+  });
+
   test("what no row accounts for goes once it is old enough, and every LiveKit manifest goes", () => {
     const now = 10 * ORPHAN_OBJECT_GRACE_MS;
     const old = now - ORPHAN_OBJECT_GRACE_MS - 1;
@@ -1484,8 +1954,10 @@ describe("why a start failed", () => {
   const exhausted = (msg: string) =>
     new LivekitApiError("Egress/StartRoomCompositeEgress", 429, "resource_exhausted", JSON.stringify({ code: "resource_exhausted", msg }));
   test("spent minutes are not a busy minute", () => {
-    expect(startErrorMessage(exhausted("egress minutes exceeded"))).toMatch(/used its recording minutes/);
-    expect(startErrorMessage(exhausted("no egress workers available"))).toMatch(/Try again in a minute/);
+    expect(startFailure(exhausted("egress minutes exceeded"))).toMatchObject({ kind: "minutes_spent", error: expect.stringMatching(/used its recording minutes/) });
+    expect(startFailure(exhausted("no egress workers available"))).toMatchObject({ kind: "busy", error: expect.stringMatching(/Try again in a minute/) });
+    expect(startFailure(new LivekitApiError("Egress/StartRoomCompositeEgress", 401, "unauthenticated", "")).kind).toBe("credentials");
+    expect(startFailure(new Error("boom")).kind).toBe("server");
   });
 });
 
@@ -1629,7 +2101,7 @@ describe("one rule at a time", () => {
       world.objects.set(key, 1);
       world.modified.set(key, at);
     }
-    expect(await t.action(internal.callRecordings.sweepRecordingObjects, {})).toEqual({ listed: 3, deleted: 1 });
+    expect(await t.action(internal.callRecordings.sweepRecordingObjects, {})).toEqual({ listed: 3, deleted: 1, landed: 0 });
     await settle(t);
     expect(world.deletes).toEqual(["calls/gone/100-composite.mp4"]);
   });

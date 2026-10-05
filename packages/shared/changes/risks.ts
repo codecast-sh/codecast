@@ -15,6 +15,8 @@ export type RiskStory = {
   insertions: number;
   deletions: number;
   conversations: readonly VisibleConversation[];
+  /** A visible session landed it without being named its author: the work still came through a session. */
+  landed?: boolean;
   pr_ids: readonly string[];
   task_ids: readonly string[];
 };
@@ -68,7 +70,7 @@ export function computeRisks(story: RiskStory, ctx: RiskContext): Risk[] {
   if (reverts.length) out.push({ code: "revert", evidence: reverts });
   // Bulk is about source a reviewer would read; a brand commit of fonts and snapshots is not.
   const lines = story.insertions + story.deletions - story.units.reduce((n, u) => n + generatedLines(u), 0);
-  if (ctx.linked && lines > BULK_LINES && !story.pr_ids.length && !story.conversations.length && !story.task_ids.length) {
+  if (ctx.linked && lines > BULK_LINES && !story.pr_ids.length && !story.conversations.length && !story.landed && !story.task_ids.length) {
     out.push({ code: "bulk", evidence: [`${lines} lines`, ...new Set(story.units.map((u) => u.commit.sha))] });
   }
   const blocked = story.conversations.filter((c) => c.outcome_type === "blocked").map((c) => c.conversation_id);

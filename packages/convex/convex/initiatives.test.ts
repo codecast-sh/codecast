@@ -2,7 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { canAccessInitiative } from "./lib/access";
 import { performCreateRole } from "./orgRoles";
-import { addProject, create, get, list, postUpdate, removeProject, report, setProjects, update, webGet, webList, webUpdates } from "./initiatives";
+import { performUndo } from "./orgChanges";
+import { addProject, create, get, list, postUpdate, record, removeProject, report, setProjects, update, webGet, webList, webUpdates } from "./initiatives";
+import { INITIATIVE_RECORD_MAX } from "@codecast/shared/contracts/initiative";
 import { servedInitiatives } from "./lib/roleInitiatives";
 
 // Initiatives (initiatives-projects-role-page.md I1). Pinned here: who may
@@ -403,5 +405,230 @@ describe("initiatives: metrics and the chain up (I4)", () => {
     expect(served[0].metrics).toEqual([]);
     // No role: only what the projects carry.
     expect(servedInitiatives(rows, { project_ids: [Q] }).map((i) => i.short_id)).toEqual(["in-3"]);
+  });
+});
+
+// I5: the intent record. Why and done when are fields; the four lists are
+// edited one entry at a time through `record`; every reported number is kept.
+describe("initiatives: the intent record (I5)", () => {
+  const lastLog = (db: any) => db._tables.org_changes.at(-1);
+  const logCount = (db: any) => (db._tables.org_changes ?? []).length;
+
+  test("why and done when are set on create, cleared with null, and logged as the goal's shape", async () => {
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams", why: "  Teams are who we sell to.  ", done_when: "A thousand teams ran an agent this week" });
+    expect(made.row).toMatchObject({ why: "Teams are who we sell to.", done_when: "A thousand teams ran an agent this week" });
+
+    await run(update, db, { id: "in-1", why: null, done_when: "Two thousand did" });
+    const row = await db.get(made.id);
+    expect(row.why).toBeUndefined();
+    expect(row.done_when).toBe("Two thousand did");
+    const logged = lastLog(db);
+    expect(logged.kind).toBe("initiative_shape");
+    expect(logged.before).toEqual({ why: "Teams are who we sell to.", done_when: "A thousand teams ran an agent this week" });
+    expect(logged.after).toEqual({ why: null, done_when: "Two thousand did" });
+    // The undo snapshot carries both fields as they were.
+    expect(logged.writes).toEqual([{ table: "initiatives", id: made.id, before: logged.before, after: logged.after }]);
+
+    await run(update, db, { id: "in-1", done_when: "  " });
+    expect((await db.get(made.id)).done_when).toBeUndefined();
+  });
+
+  test("a milestone is added, edited, reached, reopened and removed by key; the next one is the first not reached", async () => {
+    tickingClock();
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    const beta = await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { title: " Private beta open ", date: 2000 } });
+    expect(beta).toMatchObject({ id: made.id, short_id: "in-1", scope: null });
+    expect(beta.entry).toEqual({ key: "private_beta_open", title: "Private beta open", date: 2000 });
+    // A key and a source the client chose are stored as sent.
+    const ga = await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { key: "m-ga", title: "General availability", date: 1000, source: { text: "ct-12 ship by spring" } } });
+    expect(ga.entry).toEqual({ key: "m-ga", title: "General availability", date: 1000, source: { kind: "task", ref: "ct-12", quote: "ship by spring" } });
+    // The same title again takes a numbered key; a retried add of a known key adds nothing.
+    expect((await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { title: "Private beta open" } })).entry.key).toBe("private_beta_open_2");
+    const before = logCount(db);
+    const again = await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { key: "m-ga", title: "General availability" } });
+    expect(again.entry).toEqual(ga.entry);
+    expect(again.row.milestones.map((m: any) => m.key)).toEqual(["private_beta_open", "m-ga", "private_beta_open_2"]);
+    expect(logCount(db)).toBe(before);
+
+    expect((await run(get, db, { id: "in-1" })).next_milestone.key).toBe("m-ga");
+    const reached = await run(record, db, { id: "in-1", list: "milestones", action: "close", key: "m-ga", at: 1234 });
+    expect(reached.entry.done_at).toBe(1234);
+    expect((await run(get, db, { id: "in-1" })).next_milestone.key).toBe("private_beta_open");
+    // Reaching it again without a time keeps the first one.
+    expect((await run(record, db, { id: "in-1", list: "milestones", action: "close", key: "m-ga" })).entry.done_at).toBe(1234);
+
+    const edited = await run(record, db, { id: "in-1", list: "milestones", action: "edit", key: "m-ga", entry: { title: "GA", done_at: null, source: null } });
+    expect(edited.entry).toEqual({ key: "m-ga", title: "GA", date: 1000 });
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "edit", key: "m-ga", entry: { title: " " } })).rejects.toThrow("A milestone needs a title");
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "edit", key: "m-ga", entry: { text: "x" } })).rejects.toThrow("Not a field of a milestone: text");
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "edit", key: "m-ga", entry: { date: "soon" } })).rejects.toThrow("A milestone's date is a time");
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "close", key: "nope" })).rejects.toThrow("No milestone nope on in-1");
+    await expect(run(record, db, { id: "in-1", list: "milestones", action: "edit", entry: { title: "x" } })).rejects.toThrow("Name the milestone by its key");
+
+    const gone = await run(record, db, { id: "in-1", list: "milestones", action: "remove", key: "private_beta_open_2" });
+    expect(gone.row.milestones.map((m: any) => m.key)).toEqual(["private_beta_open", "m-ga"]);
+    // A retried remove finds nothing and changes nothing.
+    expect((await run(record, db, { id: "in-1", list: "milestones", action: "remove", key: "private_beta_open_2" })).entry).toBeUndefined();
+    await run(record, db, { id: "in-1", list: "milestones", action: "remove", key: "private_beta_open" });
+    expect((await run(record, db, { id: "in-1", list: "milestones", action: "remove", key: "m-ga" })).row.milestones).toBeUndefined();
+    expect((await run(get, db, { id: "in-1" })).next_milestone).toBeNull();
+  });
+
+  test("a question is signed by who asked, answered by close and reopened by clearing the answer; a decision is never closed", async () => {
+    tickingClock();
+    const db = fixtures();
+    const role = await growthRole(db, [P]);
+    await db.insert("users", { name: "Growth bot", is_bot: true });
+    const anchor = await db.insert("anchors", { bot_user_id: db._tables.users.at(-1)._id, team_id: TEAM });
+    await db.patch(role._id, { anchor_id: anchor });
+    await db.insert("conversations", { user_id: ME, team_id: TEAM, session_id: "sess-growth", standing_role_id: role._id, is_private: false });
+    await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+
+    // A plain member may write the record: the gate is the goal's own.
+    const asked = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { text: "Do we price per seat?" } }, MATE);
+    expect(asked.entry).toEqual({ key: "do_we_price_per_seat", text: "Do we price per seat?", at: asked.entry.at, by: "@mate" });
+    expect(typeof asked.entry.at).toBe("number");
+    // The role's standing session signs as the role; a named asker and time are kept.
+    const byRole = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { text: "Which market first?" }, session_id: "sess-growth" });
+    expect(byRole.entry.by).toBe("@growth");
+    const named = await run(record, db, { id: "in-1", list: "questions", action: "add", entry: { key: "q3", text: "Who signs?", by: "Dana", at: 42 } });
+    expect(named.entry).toEqual({ key: "q3", text: "Who signs?", by: "Dana", at: 42 });
+
+    await expect(run(record, db, { id: "in-1", list: "questions", action: "close", key: "q3" })).rejects.toThrow("An answer needs words");
+    const answered = await run(record, db, { id: "in-1", list: "questions", action: "close", key: "q3", answer: " Dana does ", at: 99 });
+    expect(answered.entry).toEqual({ key: "q3", text: "Who signs?", by: "Dana", at: 42, answer: "Dana does", answered_at: 99 });
+    const reopened = await run(record, db, { id: "in-1", list: "questions", action: "edit", key: "q3", entry: { answer: null } });
+    expect(reopened.entry).toEqual({ key: "q3", text: "Who signs?", by: "Dana", at: 42 });
+
+    const decided = await run(record, db, { id: "in-1", list: "decisions", action: "add", entry: { text: "Ship to brokers first", source: { kind: "call", ref: "cl-42:14", by: "Ashot" } } });
+    expect(decided.entry).toEqual({ key: "ship_to_brokers_first", text: "Ship to brokers first", at: decided.entry.at, by: "@me", source: { kind: "call", ref: "cl-42:14", by: "Ashot" } });
+    await expect(run(record, db, { id: "in-1", list: "decisions", action: "close", key: "ship_to_brokers_first" })).rejects.toThrow("A decision is edited or removed");
+    await expect(run(record, db, { id: "in-1", list: "decisions", action: "add", entry: { text: "x", answer: "y" } })).rejects.toThrow("Not a field of a decision: answer");
+    await expect(run(record, db, { id: "in-1", list: "decisions", action: "add", entry: { by: "Dana" } })).rejects.toThrow("A decision needs words");
+    expect((await run(record, db, { id: "in-1", list: "decisions", action: "edit", key: "ship_to_brokers_first", entry: { text: "Ship to lenders first" } })).entry.text).toBe("Ship to lenders first");
+    expect((await run(record, db, { id: "in-1", list: "decisions", action: "remove", key: "ship_to_brokers_first" })).row.decisions).toBeUndefined();
+
+    await expect(run(record, db, { id: "in-1", list: "questions", action: "add", entry: { text: "Mine?" } }, STRANGER)).rejects.toThrow("Initiative not found");
+  });
+
+  test("a source is read from text or stored as sent, named by its address, and never recorded twice", async () => {
+    const db = fixtures();
+    await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    const call = await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { text: 'call:cl-42#14 "our goal is $250 or less per introduction"', by: "Ashot", at: 7 } });
+    expect(call.entry).toEqual({ kind: "call", ref: "cl-42:14", quote: "our goal is $250 or less per introduction", by: "Ashot", at: 7 });
+    const before = logCount(db);
+    // The same address again, in either form, is the entry already there.
+    expect((await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { text: "call:CL-42:14" } })).entry).toEqual(call.entry);
+    expect((await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { kind: "call", ref: "cl-42:14" } })).row.sources.length).toBe(1);
+    expect(logCount(db)).toBe(before);
+
+    const note = await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { text: "Ashot said brokers come first" } });
+    expect(note.entry).toEqual({ kind: "note", quote: "Ashot said brokers come first" });
+    expect((await run(record, db, { id: "in-1", list: "sources", action: "add", entry: { key: "session:jx7c6zk:142", kind: "session", ref: "jx7c6zk:142" } })).entry).toEqual({ kind: "session", ref: "jx7c6zk:142" });
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "add", entry: { text: "  " } })).rejects.toThrow("A source needs an address or the words said");
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "add", entry: { kind: "rumor", ref: "x" } })).rejects.toThrow("A source is one of call, chat");
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "add", entry: { kind: "task", ref: "ct-1", title: "x" } })).rejects.toThrow("Not a field of a source: title");
+
+    const edited = await run(record, db, { id: "in-1", list: "sources", action: "edit", key: "call:cl-42:14", entry: { quote: "under $250 an introduction", at: null } });
+    expect(edited.entry).toEqual({ kind: "call", ref: "cl-42:14", quote: "under $250 an introduction", by: "Ashot" });
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "edit", key: "session:jx7c6zk:142", entry: { kind: "call", ref: "cl-42:14" } })).rejects.toThrow("already on the record");
+    await expect(run(record, db, { id: "in-1", list: "sources", action: "close", key: "call:cl-42:14" })).rejects.toThrow("A source is edited or removed");
+    const gone = await run(record, db, { id: "in-1", list: "sources", action: "remove", key: "note:ashot said brokers come first" });
+    expect(gone.row.sources.map((s: any) => s.kind)).toEqual(["call", "session"]);
+  });
+
+  test("each list holds its limit and no more", async () => {
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    const entryOf = {
+      milestones: (n: number) => ({ key: `m${n}`, title: `Step ${n}` }),
+      questions: (n: number) => ({ key: `q${n}`, text: `Question ${n}`, at: n }),
+      decisions: (n: number) => ({ key: `d${n}`, text: `Decision ${n}`, at: n }),
+      sources: (n: number) => ({ kind: "task", ref: `ct-${n}` }),
+    };
+    for (const [name, max] of Object.entries(INITIATIVE_RECORD_MAX)) {
+      const list = name as keyof typeof entryOf;
+      // One short of the limit as stored, so the test makes two writes a list.
+      await db.patch(made.id, { [list]: Array.from({ length: max - 1 }, (_, i) => entryOf[list](i + 1)) });
+      expect((await run(record, db, { id: "in-1", list, action: "add", entry: entryOf[list](max) })).row[list].length).toBe(max);
+      await expect(run(record, db, { id: "in-1", list, action: "add", entry: entryOf[list](max + 1) })).rejects.toThrow(`A goal holds at most ${max} ${list}`);
+      expect((await db.get(made.id))[list].length).toBe(max);
+    }
+  });
+
+  test("a record write is logged as the goal's shape, that one list before and after, with the snapshot an undo restores", async () => {
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams" });
+    const first = await run(record, db, { id: "in-1", list: "milestones", action: "add", entry: { title: "Private beta open" } });
+    let logged = lastLog(db);
+    expect(logged).toMatchObject({ kind: "initiative_shape", workspace: WS, subject: { type: "initiative", id: made.id, short_id: "in-1" } });
+    expect(logged.before).toEqual({ milestones: null });
+    expect(logged.after).toEqual({ milestones: [first.entry] });
+    expect(logged.writes).toEqual([{ table: "initiatives", id: made.id, before: { milestones: null }, after: { milestones: [first.entry] } }]);
+    expect(db._tables.org_change_batches.at(-1)).toMatchObject({ door: "initiative", kinds: { initiative_shape: 1 } });
+
+    const count = logCount(db);
+    const reached = await run(record, db, { id: "in-1", list: "milestones", action: "close", key: "private_beta_open", at: 5 });
+    logged = lastLog(db);
+    expect(logCount(db)).toBe(count + 1);
+    expect(logged.before).toEqual({ milestones: [first.entry] });
+    expect(logged.after).toEqual({ milestones: [reached.entry] });
+    // An edit that says what is already there writes nothing.
+    await run(record, db, { id: "in-1", list: "milestones", action: "edit", key: "private_beta_open", entry: { title: "Private beta open" } });
+    expect(logCount(db)).toBe(count + 1);
+
+    // Undo puts the list back as it was, and redo reaches the milestone again.
+    const batch = db._tables.org_change_batches.at(-1)._id;
+    await performUndo(ctxOf(db), ME as any, { batch });
+    expect((await db.get(made.id)).milestones).toEqual([first.entry]);
+    await performUndo(ctxOf(db), ME as any, { batch }, true);
+    expect((await db.get(made.id)).milestones).toEqual([reached.entry]);
+  });
+
+  test("a goal is born with its first milestones and the sources that stated it", async () => {
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams", milestones: [{ title: "Private beta open", date: 2000 }, { title: "General availability" }], sources: [{ text: "ct-12" }, { text: "CT-12 again" }, { kind: "link", ref: "https://x.ai/plan" }] });
+    expect(made.row.milestones).toEqual([{ key: "private_beta_open", title: "Private beta open", date: 2000 }, { key: "general_availability", title: "General availability" }]);
+    expect(made.row.sources).toEqual([{ kind: "task", ref: "ct-12" }, { kind: "link", ref: "https://x.ai/plan" }]);
+    await expect(run(create, db, { ...inTeam, title: "Bad", milestones: [{ date: 1 }] })).rejects.toThrow("A milestone needs a title");
+  });
+
+  test("every reported value is kept oldest first, read as a trend, and leaves with its metric", async () => {
+    tickingClock();
+    const db = fixtures();
+    const made = await run(create, db, { ...inTeam, title: "Reach 1k teams", metrics: [{ name: "Weekly active teams", target: "1,000" }, { name: "Paying teams", target: "40" }] });
+    const say = (entries: string[], observed_at: number) => run(report, db, { id: "in-1", entries, source: "https://x.ai/dash", observed_at });
+    await say(["weekly_active_teams=380"], 2000);
+    await say(["weekly_active_teams=412", "paying_teams=9"], 3000);
+    // An earlier observation lands in its place; a second report for one moment replaces the first.
+    await say(["weekly_active_teams=350"], 1000);
+    const r = await say(["weekly_active_teams=415"], 3000);
+    expect(r.row.score_history.weekly_active_teams.map((s: any) => [s.value, s.observed_at])).toEqual([["350", 1000], ["380", 2000], ["415", 3000]]);
+    expect(r.row.score_history.paying_teams).toEqual([{ value: "9", observed_at: 3000, source: "https://x.ai/dash" }]);
+    expect(r.row.scoreboard.weekly_active_teams.value).toBe("415");
+
+    const shown = await run(get, db, { id: "in-1" });
+    expect(shown.trends.weekly_active_teams).toMatchObject({ direction: "up", toward: true, delta: 35 });
+    expect(shown.trends.paying_teams.direction).toBe("unknown");
+
+    // A value reported before the history existed opens it on the next report.
+    await db.patch(made.id, { score_history: undefined });
+    const next = await say(["paying_teams=12"], 4000);
+    expect(next.row.score_history).toEqual({ paying_teams: [{ value: "9", observed_at: 3000, source: "https://x.ai/dash" }, { value: "12", observed_at: 4000, source: "https://x.ai/dash" }] });
+
+    // A metric that goes takes its history; the one that stays keeps it.
+    await say(["weekly_active_teams=420"], 5000);
+    await run(update, db, { id: "in-1", metrics: [{ name: "Paying teams", target: "50" }] });
+    const row = await db.get(made.id);
+    expect(Object.keys(row.score_history)).toEqual(["paying_teams"]);
+    expect(row.score_history.paying_teams.length).toBe(2);
+    // The undo snapshot of that edit holds the values and the history that went.
+    const write = lastLog(db).writes[0];
+    expect(Object.keys(write.before.score_history).sort()).toEqual(["paying_teams", "weekly_active_teams"]);
+    expect(write.before.scoreboard.weekly_active_teams.value).toBe("420");
+    await run(update, db, { id: "in-1", metrics: [] });
+    expect((await db.get(made.id)).score_history).toBeUndefined();
   });
 });

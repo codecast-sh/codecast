@@ -22,7 +22,7 @@ import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
-import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
+import { checkoutInUseMessage, CLOUD_HOST_ACTIONS, CLOUD_LEAVE_OUT_MAX, fromConvexAgentType, isHttpOrigin, LOCAL_MIRROR_MODES, LOCAL_MIRROR_STATUSES, mirrorLaptops, parseOwnerRepo, type CloudHostAction, type CloudWorkspaceMode, type LocalMirrorMode, type MirrorResolve } from "@codecast/shared/contracts";
 import { resolveConversationRefRanked } from "./conversationSessionLookup";
 import { cloudHostReportValidator, hostReadinessValidator, localMirrorFields } from "./lib/cloudHostValidators";
 import { cloudSeedArg, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
@@ -320,7 +320,7 @@ export const reportPlacementFailure = mutation({
     await ctx.db.patch(args.conversation_id, {
       session_error: args.error,
       cloud_placement_failed_at: Date.now(),
-      cloud_context_too_large: args.context_too_large?.files.length ? { ...args.context_too_large, files: args.context_too_large.files.slice(0, 200) } : undefined,
+      cloud_context_too_large: args.context_too_large?.files.length ? { ...args.context_too_large, files: args.context_too_large.files.slice(0, CLOUD_LEAVE_OUT_MAX) } : undefined,
       updated_at: Date.now(),
     });
     return { recorded: true as const };

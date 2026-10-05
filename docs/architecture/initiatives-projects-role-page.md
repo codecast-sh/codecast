@@ -302,3 +302,92 @@ draft, says the top of the tree is what the company is for, that the tree
 has two levels, that a goal with an initiative is reshaped and never
 restated, and that a target the reviewer worked out is not a stated one.
 The goal tree focus asks for the whole tree in one run.
+
+## I5. The intent record: everything about a goal, in the fewest fields
+
+Written 2026-10-04 from the founder's direction: a goal should hold all of
+our intent and all of our progress, structured where a machine reads it and
+written where a person does, and no more complex than that needs.
+
+**The test.** Open one goal and answer, without opening anything else: what
+are we trying to reach, why does it matter, how will we know it is done, who
+drives it, what is the number now against its target and which way is it
+moving, what is the next milestone and when, what is still undecided, what
+was decided, and who said this and where.
+
+**The fields.** Seven are added to the `initiatives` row (I1, I4), all
+optional, all on the row, so every surface that reads a goal (the pages, the
+chart's Goals lens, the document view, the review) reads the same thing from
+the one synced collection:
+
+| Field | Kind | What it holds |
+| --- | --- | --- |
+| `why` | written | Why it matters, in a paragraph. |
+| `done_when` | written | What done looks like: the sentence a person checks the result against. |
+| `milestones` | structured | An ordered list of `{ key, title, date?, done_at?, source? }`, at most 12. The next milestone is the first one not done, earliest date first. Reached ones stay, so the list is also the record of progress. |
+| `score_history` | structured | Per metric key, every reported value oldest first, `{ value, observed_at, source }`, the newest 52 kept. `scoreboard` (I4) stays the latest value and is a copy written by the one reporting writer, the way `health` is a copy of the latest update. |
+| `questions` | written | Open questions: `{ key, text, at, by?, source?, answer?, answered_at? }`, at most 20. A question with an answer is closed and stays on the record. |
+| `decisions` | written | Decisions taken: `{ key, text, at, by?, source? }`, at most 40, newest last. |
+| `sources` | structured | Where the goal was stated: a list of sources, at most 20. |
+
+`description` stays what it was: the goal in a few sentences, its scope and
+context. Nothing else is added: progress is still derived from tasks, health
+is still the owner's last word, standing is still the number read against its
+target.
+
+**A source** (`IntentSource`, shared/contracts/initiative) answers "who said
+this and where": `{ kind, ref?, quote?, by?, at? }`. `kind` is `call`, `chat`,
+`doc`, `session`, `task`, `plan`, `link` or `note`; `ref` is the object's own
+address (a call id with an optional line, a chat message id, a doc id, a
+session short id with an optional line, `ct-N`, `pl-N`, a URL); `quote` is the
+words as said, kept short; `by` is who said it, a name or an `@handle`; `at`
+is when. One parser reads a source the way people and the review write one
+(`parseIntentSource`: `call:<id>#<line>`, `chat:<id>`, `doc:<id>`,
+`jx7c6zk:142`, `ct-12`, a URL, and anything else as a `note` whose text is the
+quote), and one function says where it opens (`intentSourceHref`, web lib/intentSources, since routes are the web's). A
+milestone, a question and a decision each carry at most one source of the
+same shape. `by` on a question or a decision is who asked or decided, a name
+or an `@handle`, resolved to a face at render when it matches the roster; the
+server writes the caller's handle when none is given.
+
+**The trend.** `metricTrend(history, target)` reads a metric's history into
+`up`, `down`, `flat` or `unknown` and a short series for a sparkline, and
+says whether the direction is toward the target. Every metric display shows
+now, target, the trend and the date of the last report from this one reading.
+
+**Writers.** Every write goes through the initiatives module's cores (I1,
+revised). `why` and `done_when` are fields of `performUpdateInitiative`. The
+four lists are edited one entry at a time through `performRecordEntry`
+(`initiatives.record`): add, edit, close (reach a milestone, answer a
+question) and remove, each naming the entry by key, so two people editing one
+goal never overwrite each other's list with a stale copy. `score_history` is
+written only by `performReportMetrics`, in the same patch as `scoreboard`.
+Editing `why`, `done_when`, a milestone, a question, a decision or a source
+is logged as the goal's shape (`initiative_shape`), so undo restores it.
+
+**The shell.**
+
+```bash
+cast initiative set in-N --why - --done-when "..."
+cast initiative milestone in-N "Private beta open" --date 2026-11-01 [--source <ref>]
+cast initiative milestone in-N --done <n|title> | --remove <n|title>
+cast initiative ask in-N "Do we price per seat?" [--by @handle] [--source <ref>]
+cast initiative answer in-N <n> "Per seat, decided on the Sep 30 call"
+cast initiative decide in-N "Ship to brokers first" [--by @handle] [--source <ref>]
+cast initiative source in-N <ref> [--quote "..."] [--by "Name"] [--at 2026-09-30]
+cast initiative report in-N key=value --source <href>     # appends to the history
+cast initiative show in-N [--json]                        # prints the whole record
+```
+
+**Proposals.** The `initiative` change gains `why`, `done_when`, `milestones`
+and `sources`; `initiative_shape` gains the same four plus `questions` and
+`decisions` (each a list to add, never a replacement). Accepting any goal
+change persists its evidence: every evidence line of the accepted change is
+read by `parseIntentSource` and added to the goal's `sources`, skipping ones
+already there, so a goal a review proposed can always say where the review
+read it. The S21 round trip covers the new fields.
+
+**Where it shows.** The goal page draws the record in the order of the test
+above. The list, the project page's goals strip, the chart's Goals lens and
+the document view draw the same atoms: the metric with its trend, the health
+chip, the owner face, the next milestone.

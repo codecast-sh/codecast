@@ -105,6 +105,7 @@ function answerWords(a: Attribution): string {
   const x = a.answer;
   switch (x.kind) {
     case 'footing':
+      if (x.freezeIds?.length) return `the per-freeze rubric changed on ${x.freezeIds.map((f) => f.slice(0, 8)).join(', ')} (${x.from ?? 'none'} to ${x.to ?? 'none'}): not a source change, nothing to search`;
       return `the ${x.change === 'model' ? 'model' : "judge's ruler"} moved (${x.from ?? 'none'} to ${x.to ?? 'none'}): not a source change, nothing to search`;
     case 'freeze':
       return `the frozen moment changed on ${x.freezeIds.map((f) => f.slice(0, 8)).join(', ')}: not a source change, nothing to search`;

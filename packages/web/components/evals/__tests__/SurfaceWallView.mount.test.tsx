@@ -38,8 +38,11 @@ const restoreGlobals = replaceGlobals({
 const { createRoot } = await import("react-dom/client");
 const { MemoryRouter } = await import("react-router");
 const { ShortcutProvider } = await import("../../../shortcuts");
-const { SurfaceWallView, wallOrder, newestWorsePair, attributeHref, rowHref, wallWindowFrom, wallAxisTicks, WALL_AXIS_LABEL_GAP, WALL_CADENCES, DEFAULT_WALL_CADENCE } = await import("../SurfaceWallView");
-const { movedLine } = await import("../WhatMoved");
+const { SurfaceWallView } = await import("../SurfaceWallView");
+const { wallOrder, newestWorsePair, attributeHref, rowHref, wallWindowFrom, wallAxisTicks, WALL_AXIS_LABEL_GAP, WALL_CADENCES, DEFAULT_WALL_CADENCE } = await import("../wallModel");
+const { movedLine, wallSpend } = await import("../wallModel");
+const { usd } = await import("../format");
+const { endpointLabel } = await import("../bisectModel");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -176,6 +179,22 @@ describe("the wall", () => {
     await m.unmount();
   });
 
+  it("names one spend window in the header, the surface column and the foot, and the rows add up to the total", async () => {
+    const m = await mount();
+    const summary = m.container.querySelector(".ev-wall-summary")!.textContent!;
+    const window = summary.match(/in (\d+ days?)$/)![1];
+    const foot = m.container.querySelector(".ev-wall-row--spend .ev-wall-rate")!;
+    expect(foot.querySelector(".ev-wall-sub")!.textContent).toBe(window);
+    expect(summary).toContain(foot.querySelector(".ev-tabular")!.textContent!);
+    expect([...m.container.querySelectorAll('[role="columnheader"]')].map((h) => h.textContent)).toContain(window);
+    // Every figure is wallSpend over the same window: each row's cell, and the rows together make the total.
+    const from = wallWindowFrom(data, HOME_NOW);
+    for (const s of data.surfaces) expect(m.container.querySelector(`[data-ev-wall-row="${s.id}"] .ev-wall-spend`)!.textContent).toBe(usd(wallSpend(s.spendByDay, from, HOME_NOW).usd));
+    const rowsUsd = data.surfaces.reduce((t, s) => t + wallSpend(s.spendByDay, from, HOME_NOW).usd, 0);
+    expect(rowsUsd).toBeCloseTo(wallSpend(data.spendByDay, from, HOME_NOW).usd, 1);
+    await m.unmount();
+  });
+
   it("shares one hover cursor across every strip and tips the batch under the pointer", async () => {
     const m = await mount();
     const settle = data.surfaces.find((s) => s.id === "settle")!;
@@ -244,6 +263,11 @@ describe("the wall", () => {
     // The open bisect rides the foot as a ribbon; the finished one does not.
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-1003"]')).not.toBeNull();
     expect(m.container.querySelector('[data-ev-bisect-ribbon="b-settle-0927"]')).toBeNull();
+    // Its ends read as every bisect page writes them: a batch as its local time, never a sliced UTC name.
+    const open = data.bisects.find((b) => b.id === "b-settle-1003")!;
+    const range = m.container.querySelector('[data-ev-bisect-ribbon="b-settle-1003"] .ev-wall-ribbon-range')!.textContent;
+    expect(range).toBe(`${endpointLabel(open.good)} to ${endpointLabel(open.bad)}`);
+    expect(range).not.toMatch(/\d{4}-\d{2}-(\s|$)/);
     expect(m.container.querySelector("[data-ev-sim-line]")).not.toBeNull();
     await m.unmount();
   });
@@ -254,6 +278,31 @@ describe("the wall", () => {
     expect(m.container.textContent).toContain("Nothing has moved in the window");
     expect(m.container.textContent).toContain("No bisect is running.");
     expect(m.container.textContent).toContain("No Multiplayer sim session on this machine yet.");
+    await m.unmount();
+  });
+
+  it("marks a Multiplayer sim session that exited non-zero as broken, never as a pass", async () => {
+    // A real session: `killUndo --sweep 25` exited 1 after 10 s with no run recorded.
+    const base = data.sim!;
+    const broke = { ...base, exit: 1, runs: 0, failed: 0, scenarios: 0, failing: [], finishedAt: base.finishedAt ?? base.startedAt };
+    const m = await mount({ ...data, sim: broke });
+    const line = m.container.querySelector("[data-ev-sim-line]")!;
+    expect(line.textContent).toContain("exited 1 before any run");
+    expect(line.textContent).not.toContain("none failed");
+    expect(line.querySelector("[data-ev-verdict]")!.getAttribute("data-ev-verdict")).toBe("crash");
+    await m.unmount();
+    const ok = await mount({ ...data, sim: { ...base, exit: 0, failed: 0, failing: [], runs: Math.max(1, base.runs), finishedAt: base.finishedAt ?? base.startedAt } });
+    expect(ok.container.querySelector("[data-ev-sim-line] [data-ev-verdict]")!.getAttribute("data-ev-verdict")).toBe("pass");
+    await ok.unmount();
+  });
+
+  it("never shows a pass for a Multiplayer sim session that has not finished", async () => {
+    // No finishedAt: still running, or killed before it wrote one.
+    const open = { ...data.sim!, exit: null, failed: 0, failing: [], runs: 4, finishedAt: null };
+    const m = await mount({ ...data, sim: open });
+    const line = m.container.querySelector("[data-ev-sim-line]")!;
+    expect(line.textContent).toContain("running or cut short");
+    expect(line.querySelector("[data-ev-verdict]")!.getAttribute("data-ev-verdict")).not.toBe("pass");
     await m.unmount();
   });
 });

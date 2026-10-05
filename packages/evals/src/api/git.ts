@@ -1,14 +1,14 @@
-import { spawnSync } from 'node:child_process';
 import { existsSync, openSync, readFileSync, readSync, closeSync, statSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 
 import { EVALS_PATCH_SHA_RE, EVALS_SHA_RE, type CommitRef, type CommitResponse, type PatchResponse } from '@codecast/shared/contracts/evalsApi';
 
+import { git, gitLog, onMainLine, resolveCommit, type LoggedCommit } from '../git';
 import { declaredPaths, repoGit } from '../history/attribution';
 import { homePaths, treeRoot } from '../paths';
 import { treePatchPath } from '../../../web/store/__tests__/sim/history';
-import { mainLineRefs, readHeads, resolveCommit } from '../provenance';
+import { mainLineRefs, placeByHeads } from '../provenance';
 
 // The git the api child reads for the pages: one commit in full (the commit
 // panel), and the commits that touched a surface's declared sources inside a
@@ -16,10 +16,8 @@ import { mainLineRefs, readHeads, resolveCommit } from '../provenance';
 // array, never a shell string, and every sha a client sends is checked
 // against EVALS_SHA_RE and `git rev-parse --verify <sha>^{commit}` first.
 
-const SESSION_TRAILER = 'Codecast-Session';
-const FORMAT = `--format=%H%x1f%s%x1f%an%x1f%aI%x1f%(trailers:key=${SESSION_TRAILER},valueonly,separator=%x2C)%x1f%P%x1e`;
-
-const git = (args: string[], root = treeRoot()) => spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+/** How much of a diff's text the page gets (a commit's or a kept patch's): a huge one would stall the diff view and the daemon that forwards it. */
+export const PATCH_TEXT_MAX = 2 * 1024 * 1024;
 
 export class BadSha extends Error {}
 
@@ -31,36 +29,8 @@ export function verifiedSha(sha: string): string {
   return full;
 }
 
-interface Logged extends CommitRef {
-  parents: string[];
-}
-
-/** Whether `sha` is on the main line, asked once per process per sha. */
-const onMainCache = new Map<string, boolean>();
-function onMain(sha: string): boolean {
-  const hit = onMainCache.get(sha);
-  if (hit !== undefined) return hit;
-  const yes = mainLineRefs().some((ref) => git(['merge-base', '--is-ancestor', sha, ref]).status === 0);
-  onMainCache.set(sha, yes);
-  return yes;
-}
-
-/** `git log` rows as CommitRefs, each mapped to its main-line twin through heads.json when it sits on no branch. */
-function log(args: string[], known: { onMain?: boolean } = {}): Logged[] {
-  const r = git(['log', FORMAT, ...args]);
-  if (r.status !== 0) return [];
-  const heads = readHeads();
-  return r.stdout
-    .split('\x1e')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => {
-      const [sha = '', subject = '', author = '', at = '', session = '', parents = ''] = l.split('\x1f');
-      const main = known.onMain ?? onMain(sha);
-      const entry = heads?.heads[sha];
-      return { sha, subject, author, at, session: session.trim().split(',')[0] || null, mainSha: main ? sha : (entry?.mainSha ?? null), onMain: main, parents: parents.split(' ').filter(Boolean) };
-    });
-}
+/** `git log` rows as CommitRefs, newest first, each placed on the main line or mapped to its twin through heads.json. */
+const log = (args: string[], known: { onMain?: boolean } = {}): LoggedCommit[] => gitLog(args, known.onMain ? onMainLine : placeByHeads());
 
 /** One commit as the pages name it. */
 export function commitRef(sha: string): CommitRef | null {
@@ -104,9 +74,10 @@ export function commitDetail(sha: string, surface: string | null, whole: boolean
   const [c] = log(['-1', full]);
   if (!c) throw new BadSha(`${sha} is not a commit in this repo`);
   const limit = !whole && surface ? ['--', ...declaredPaths(surface, [full], repoGit())] : [];
-  const body = git(['show', '-s', '--format=%B', full]).stdout.trimEnd();
-  const numstat = git(['show', '--format=', '--numstat', '-z', full, ...limit]).stdout;
-  const status = git(['show', '--format=', '--name-status', '-z', full, ...limit]).stdout.split('\0');
+  const show = (args: string[]) => git(treeRoot(), ['show', ...args, full, ...limit]);
+  const body = git(treeRoot(), ['show', '-s', '--format=%B', full]).out.trimEnd();
+  const numstat = show(['--format=', '--numstat', '-z']).out;
+  const status = show(['--format=', '--name-status', '-z']).out.split('\0');
   const statusOf = new Map<string, string>();
   for (let i = 0; i + 1 < status.length; ) {
     const s = status[i]!;
@@ -137,13 +108,13 @@ export function commitDetail(sha: string, surface: string | null, whole: boolean
     }
     files.push({ path, status: statusOf.get(path) ?? 'M', additions: m[1] === '-' ? 0 : Number(m[1]), deletions: m[2] === '-' ? 0 : Number(m[2]) });
   }
-  const diff = git(['show', '--format=', '--patch', '--no-color', full, ...limit]).stdout;
+  // A lockfile or vendor commit can run to tens of MiB; the page gets its first PATCH_TEXT_MAX, as a kept patch does.
+  const shown = show(['--format=', '--patch', '--no-color']);
+  const text = shown.out;
+  const truncated = text.length > PATCH_TEXT_MAX || !shown.ok;
   const { parents, ...commit } = c;
-  return { commit, parents, body, whole: whole || !surface, files, diff };
+  return { commit, parents, body, whole: whole || !surface, files, diff: text.slice(0, PATCH_TEXT_MAX), truncated };
 }
-
-/** How much of a patch's text the page gets: a huge one would stall the diff view. */
-export const PATCH_TEXT_MAX = 2 * 1024 * 1024;
 
 /**
  * One kept tree patch (EVALS_HOME/trees/<sha>.patch): its files with line
@@ -180,8 +151,7 @@ function simPatchDetail(sha: string): PatchResponse | null {
 /** `git apply --numstat`, which applies nothing: each file's added and removed lines. */
 function numstat(args: string[], input?: Buffer): PatchResponse['files'] {
   const files: PatchResponse['files'] = [];
-  const out = spawnSync('git', args, { cwd: treeRoot(), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...(input ? { input } : {}) }).stdout ?? '';
-  for (const line of out.split('\n')) {
+  for (const line of git(treeRoot(), args, input).out.split('\n')) {
     const m = /^(\d+|-)\t(\d+|-)\t(.+)$/.exec(line);
     if (m) files.push({ path: m[3]!, additions: m[1] === '-' ? 0 : Number(m[1]), deletions: m[2] === '-' ? 0 : Number(m[2]) });
   }

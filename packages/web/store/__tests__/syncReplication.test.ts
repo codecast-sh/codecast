@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
-import { applyUpdatesToStore } from "../syncReplication";
+import { applyUpdatesToStore, followerActionTee } from "../syncReplication";
 import {
   CLIENT_SYNC_REGISTRY,
   REPLICATION_CLASSIFICATION,
@@ -137,5 +137,38 @@ describe("replicated facts and locks", () => {
     // A clear made after the kill lands.
     useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { inbox_killed_at: null } }, 40);
     expect((useInboxStore.getState().sessions as any)[id].inbox_killed_at).toBeNull();
+  });
+
+  // ct-57027: a follower's write reached this host as a mut and is held here
+  // under a mirrored lock. The server refused it, so no echo retires that
+  // lock; the follower's rollback releases it and puts the prior value back.
+  it("a sibling's refused write releases the mirrored lock and restores the prior value", () => {
+    const id = "f".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, title: "server" }], { isDelta: true });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "refused" } }, 10);
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]?.value).toBe("refused");
+
+    const tee = followerActionTee({ post: (m: any) => posted.push(m), onMessage: () => () => {} } as any, "w1");
+    const posted: any[] = [];
+    const after = { ...useInboxStore.getState(), sessions: { [id]: { _id: id, title: "server" } } };
+    tee("rename", [{ op: "replace", path: ["sessions", id, "title"], value: "server" }], after, {
+      refused: [{ key: `sessions:${id}:title`, storeKey: "sessions", recordId: id, field: "title", ts: 10, value: "refused", prior: "server", hadPrior: true }],
+    });
+    expect(posted[0].updates[0].release).toEqual({ [id]: { title: "refused" } });
+
+    applyUpdatesToStore(posted[0].updates, { optimistic: true });
+    expect((useInboxStore.getState().sessions as any)[id].title).toBe("server");
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]).toBeUndefined();
+  });
+
+  // A later write on the field (this window's own, or a newer sibling's) has
+  // moved past the refused value: the release leaves it alone.
+  it("a refused-write release leaves a field that has moved on", () => {
+    const id = "g".repeat(32);
+    useInboxStore.getState().syncTable("sessions", [{ _id: id, session_id: `s-${id}`, updated_at: 1, title: "server" }], { isDelta: true });
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "newer" } }, 20);
+    useInboxStore.getState().applyReplicatedFields("sessions", { [id]: { title: "server" } }, 30, { [id]: { title: "refused" } });
+    expect((useInboxStore.getState().sessions as any)[id].title).toBe("newer");
+    expect((useInboxStore.getState().pending as any)[`sessions:${id}:title`]?.value).toBe("newer");
   });
 });

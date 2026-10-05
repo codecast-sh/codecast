@@ -115,6 +115,10 @@ export type OutboxEntry = {
 };
 
 /** One field lock an action planted on a localFirst row, and what it replaced. */
+/** What an action tee call carries beyond its patches: `refused` names the
+ *  locks a refused dispatch rolled back, so a replica can release its mirror. */
+export type ActionTeeMeta = { refused?: ActionFieldLock[] };
+
 export type ActionFieldLock = {
   key: string;
   storeKey: string;
@@ -367,7 +371,10 @@ export type UndoConfig = {
   tombstone?: (store: string, row: unknown) => boolean;
   ignoreKeys?: ReadonlySet<string>; // never captured (clientState, tabs, pagination, ...)
   beforeReplay?: (entry: UndoEntry, dir: "undo" | "redo") => void;
-  afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[]) => void;
+  // `how` says who wrote the values: "replay" when the engine wrote the
+  // applied cells itself (an undo, a redo restoring fields), "reinvoke" when
+  // a redo re-ran the original action, whose body announces its own effects.
+  afterReplay?: (entry: UndoEntry, dir: "undo" | "redo", applied: readonly CellChange[], how: "replay" | "reinvoke") => void;
   restoreView?: (draft: any, field: string, value: unknown) => void;
   keyboardWindowMs?: number; // default 300_000
   stackLimit?: number; // default 100
@@ -481,6 +488,6 @@ export type PlatformStoreInternals = {
   _clearRuntimeBindings: () => void;
   _setDispatchError: (fn: (action: string, error: unknown, args?: unknown) => void) => void;
   _setStorageHealth: (fn: ((healthy: boolean, elapsedMs: number) => void) | null) => void;
-  _setActionTee: (fn: ((actionName: string, patches: any[], state: any) => void) | null) => void;
+  _setActionTee: (fn: ((actionName: string, patches: any[], state: any, meta?: ActionTeeMeta) => void) | null) => void;
   _dispatch: (action: string, args: any, patches?: any, result?: any) => Promise<any>;
 };

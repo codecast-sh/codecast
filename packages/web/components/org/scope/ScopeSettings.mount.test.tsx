@@ -25,14 +25,16 @@ async function verify() {
   const { ORG_FIXTURE } = await import("../orgFixture");
   const tree = ORG_FIXTURE as OrgTree;
   const calls: string[] = [];
-  const state: any = { currentUser: { _id: "fixture-user-me" }, orgTree: tree, chatChannels: {}, orgIntents: [], setRoleLine: () => {}, dropOrgIntent: () => {} };
+  const state: any = { currentUser: { _id: "fixture-user-me" }, clientState: { ui: {} }, projects: {}, orgTree: tree, chatChannels: {}, orgIntents: [], setRoleLine: () => {}, dropOrgIntent: () => {} };
   const useInboxStore = Object.assign((sel: any) => sel(state), { getState: () => state, setState: () => {} });
   mock.module("../../../store/inboxStore", () => ({ ...realInboxStore, useInboxStore, useTrackedStore: () => state }));
   mock.module("../../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: () => ({ data: undefined }) }));
   mock.module("../../../hooks/useSyncWorkflows", () => ({ useWorkflows: () => ({ workflows: [] }) }));
-  mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => Date.now() }));
+  mock.module("../../../hooks/useCoarseNow", () => ({ useCoarseNow: () => Date.now(), useNowWhen: () => Date.now() }));
   mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-  mock.module("../../tasks/TaskCommentStream", () => ({ Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }) }));
+  // Keep the module's other exports: mock.module is process wide in a bun run.
+  const realCommentStream = { ...(await import("../../tasks/TaskCommentStream")) };
+  mock.module("../../tasks/TaskCommentStream", () => ({ ...realCommentStream, Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }) }));
   mock.module("../OrgScopePanel", () => ({ GatedScopeEditor: () => React.createElement("div", { "data-scope-editor": true }), InlineEdit: () => null }));
   mock.module("../RetireRoleConfirm", () => ({ RetireRoleConfirm: () => null }));
   mock.module("../../anchor/SlackConnect", () => ({ SlackConnect: () => null }));
@@ -98,6 +100,18 @@ async function verify() {
     assert.ok(rs.disabled, "the root's switch cannot be turned on");
     assert.match(text(), /root role proposes and you apply/);
   }
+
+  // ── the line (plan pl-838): "Edit this line" goes to its stations; a customized copy says whose ──
+  await render({ ...growth, trust: "direct" } as OrgRole);
+  const edit = q<HTMLAnchorElement>("a[data-line-edit-link]")!;
+  assert.ok(edit, "the Workflow section links to line settings");
+  assert.match(edit.getAttribute("href")!, /^\/line\/settings\?(project=[^&]+&)?section=stations$/);
+  assert.equal(q("[data-line-customized-note]"), null, "the shipped line is not called customized");
+  state.projects = { pz: { _id: "pz", short_id: "pr-9", title: "Atlas", workspace: "user:fixture-user-me" } };
+  await render({ ...growth, trust: "direct", line_workflow_slug: "line-pr-9" } as OrgRole);
+  assert.equal(q("[data-line-customized-note]")?.textContent, "Atlas's customized line");
+  assert.equal(q<HTMLAnchorElement>("a[data-line-edit-link]")!.getAttribute("href"), "/line/settings?project=pr-9&section=stations");
+  state.projects = {};
 
   // ── a viewer who cannot edit: the switch is there to read, not to press ──
   await render({ ...growth, trust: "direct" } as OrgRole, false);

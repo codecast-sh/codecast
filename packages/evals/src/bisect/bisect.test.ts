@@ -8,9 +8,10 @@ import { runRowProblems, type BisectState, type CommitRef, type RunRow } from '@
 import type { AttributionGit } from '../history/attribution';
 import type { PromptReader } from '../history/epochs';
 import { costBound, costLine, planFrom, renderPlan, searchable, type PlanArgs, type PlanWorld } from './plan';
-import { crashedFocus, readProbe, renderBatch, renderClasses, treeLabel, type CheckExit, type ProbeEnv, type Tree } from './probe';
+import { renderBatch, renderClasses, treeLabel, type CheckExit, type ProbeEnv, type Tree } from './probe';
+import { crashedFocus, readProbe } from './reading';
 import { runBisect, startRefusal } from './runner';
-import { bisectPaths, readBisectState, readSteps, requestStop } from './state';
+import { bisectPaths, readBisectState, readSteps, recordedState, requestStop, writePendingState } from './state';
 
 // The bisect engine on a synthetic world: a linear main line C(0)..C(6),
 // freeze A breaking somewhere inside it, B and D passing throughout as the
@@ -59,7 +60,8 @@ const batchOf = (batch: string, at: string, by: Record<string, Partial<RunRow>>,
 
 /** The good batch at C(0) passes everything; the bad batch at C(6) fails A (and E when `two`). */
 function world(o: { two?: boolean; bad?: Partial<RunRow>; good?: Partial<RunRow> } = {}): RunRow[] {
-  const at6 = { gitHead: C(6), mainSha: C(6), ...o.bad };
+  // The bad side rendered another prompt (a source change): with the same prompt on both sides a call surface's fall is noise.
+  const at6 = { gitHead: C(6), mainSha: C(6), promptSha: 'p6', ...o.bad };
   return [
     ...batchOf('good', day(1), { [A]: { ...o.good }, [B]: { ...o.good }, [D]: { ...o.good }, ...(o.two ? { [E]: { ...o.good } } : {}) }),
     ...batchOf('bad', day(5), { [A]: { ...at6, score: 0.2 }, [B]: at6, [D]: at6, ...(o.two ? { [E]: { ...at6, score: 0.2 } } : {}) }),
@@ -221,6 +223,42 @@ describe('the plan: Tier 0 answers and the cost bound', () => {
   });
 });
 
+describe('a call surface whose flipped freezes rendered one prompt on both sides', () => {
+  test('the moved commit is not a source change: the source line says so, nothing is offered to search, and the answer is noise', () => {
+    const rows = world({ bad: { promptSha: 'p0' } });
+    const plan = planFrom(args(), { ...W(), rows });
+    const source = plan.attribution.checklist.find((c) => c.class === 'source')!;
+    expect(source.differs).toBe(false);
+    expect(source.detail).toContain('same rendered prompts on every flipped freeze');
+    expect(plan.attribution.answer.kind).toBe('noise');
+    expect(plan.attribution.checklist.find((c) => c.class === 'noise')!.detail).toContain('on the 1 flipped freeze only');
+    expect(searchable(plan.attribution)).toBe(false);
+  });
+});
+
+describe('two bare commits with no batch on either', () => {
+  // Regression: title-20261005-074131 (good and bad two commits nobody graded) weighed no freeze, every candidate rendered
+  // alike on the empty set, renderPlan pinned all 31 as one class and bisectSignal filed a regression nobody observed.
+  test('nothing fell, so the source does not light, the answer is noise, a render does not pin, and nothing is filed', async () => {
+    const rows = world();
+    const bare = args({ good: C(2).slice(0, 9), bad: C(5).slice(0, 9) });
+    const p = planFrom(bare, { rows, ...W(rows) });
+    expect(p.attribution.good.batch).toBeNull();
+    expect(p.attribution.bad.batch).toBeNull();
+    expect(p.freezes).toEqual([]);
+    const source = p.attribution.checklist.find((c) => c.class === 'source')!;
+    expect(source.differs).toBe(false);
+    expect(source.detail).toBe('no freeze graded on both sides fell (the commit moved, 222222222 to 555555555): nothing for a commit to explain');
+    expect(p.attribution.answer.kind).toBe('noise');
+    expect(searchable(p.attribution)).toBe(false);
+    expect(startRefusal(p)).not.toBeNull();
+    const env = fakeEnv(rows, { render: () => 'same' });
+    const done = await renderPlan(p, bare, { rows, ...W(rows) }, env, { toolHead: 'tool' });
+    expect(done.plan.attribution.answer.kind).toBe('noise');
+    expect(env.calls).toEqual([]);
+  });
+});
+
 describe('Tier 1: dry renders fold candidates into classes', () => {
   test('neighbours that render alike fold; a load error is a skip of its own; renders on record are not run again', async () => {
     const rows = world();
@@ -322,6 +360,23 @@ describe('the search, with a fake check', () => {
     expect(readBisectState('echo-a')!.finishedAt).not.toBeNull();
   });
 
+  test("the api child's pending placeholder is a fresh start, not a resume: same answer, kept start time, no pending flag", async () => {
+    const env = fakeEnv(world(), { render: threeClasses });
+    const plan = planFrom(args(), { ...W(), rows: env.world });
+    const placed = writePendingState('echo-p', plan, 'evals-bisect-echo-p');
+    expect(readBisectState('echo-p')).toMatchObject({ status: 'planning', pending: true, seq: 0 });
+    // Not a bisect a runner goes on from, and the CLI's own start may take the id.
+    expect(recordedState('echo-p')).toBeNull();
+    expect(() => writePendingState('echo-p', plan, null)).toThrow('already exists');
+    const s = await run('echo-p', env);
+    expect(s.pending).toBeUndefined();
+    expect(s.startedAt).toBe(placed.startedAt);
+    expect(s.answer).toMatchObject({ kind: 'culprit', commit: { sha: C(3) } });
+    // A default budget still follows the bound the renders narrowed, as on a start with no placeholder.
+    expect(s.plan.bound).toMatchObject({ classes: 3, probes: 2 });
+    expect(readSteps('echo-p')[0]).toMatchObject({ seq: 1, kind: 'plan' });
+  });
+
   test('a probe whose surface does not load is a skip, and the answer widens to a range', async () => {
     const env = fakeEnv(world(), { render: threeClasses, loadError: (t, dry) => (idx(t.sha) === 4 && !dry ? 'no seam' : null) });
     const s = await run('echo-b', env);
@@ -348,6 +403,21 @@ describe('the search, with a fake check', () => {
     const s = await run('echo-d', env);
     expect(s.answer).toEqual({ kind: 'drift', detail: "The good control read good and the bad control read good on today's tool and judge." });
     expect(env.calls.filter((c) => !c.dry).length).toBe(2);
+  });
+
+  test('a stable control failing at either end is drift, even when the flipped freeze reproduces', async () => {
+    const env = fakeEnv(world(), { render: threeClasses, score: (t, f) => (f === A && idx(t.sha) >= 3 ? 0.2 : f === D && idx(t.sha) === 6 ? 0.3 : 0.9) });
+    const s = await run('echo-control-drift', env);
+    expect(s.answer).toEqual({ kind: 'drift', detail: "The good control read good and the bad control read bad; the control freeze d4d4d4d4 failed at the bad end on today's tool and judge." });
+    expect(env.calls.filter((c) => !c.dry).length).toBe(2);
+  });
+
+  test('a probe where a stable control fails is a skip, so it never moves a bound', async () => {
+    const env = fakeEnv(world(), { render: threeClasses, score: (t, f) => (f === A && idx(t.sha) >= 3 ? 0.2 : f === B && idx(t.sha) === 4 ? 0.3 : 0.9) });
+    const s = await run('echo-control-probe', env);
+    expect(probeKinds(s)).toContain('probe@4c1:skip');
+    expect(s.probes.find((p) => p.kind === 'probe' && p.sha === C(4))!.skipReason).toBe('the control freeze b2b2b2b2 failed here');
+    expect(s.answer).toMatchObject({ kind: 'range', tier: 2 });
   });
 
   // 2026-10-04: every rep of title-20261004-120047 crashed (the probe tree ran its own, older harness, which

@@ -516,6 +516,13 @@ function ringOutCard(r: FaceRowInput["rings"]["outgoing"][number], hangUp: boole
   };
 }
 
+/** A call is up on this card: a room held on purpose (the card offers Mute
+ *  only then) or somebody just stepped in. A burst is not a call and gets no
+ *  stage, no recording mark and no door to the call. */
+export function isCallCard(card: FaceCard): boolean {
+  return (card.kind === "live" && card.mute) || card.kind === "joined-notice";
+}
+
 /**
  * The row. Pure: everything it reads is in `input`, and `prev` is the row it
  * last produced (or null), which is what lets a state hold through a seam.

@@ -6,7 +6,7 @@ import { createPortal } from "react-dom";
 import { copyToClipboard } from "../lib/utils";
 import { useInboxStore } from "../store/inboxStore";
 import { addImagePin } from "../lib/reviewActions";
-import type { PendingComment } from "../lib/quoteFormat";
+import { pinNumbers, type PendingComment } from "../lib/quoteFormat";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { CommentEditor } from "./MessageReview";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -30,6 +30,9 @@ type ImageGalleryContextType = {
   // only sees images that have MOUNTED — the virtualized feed never mounts most
   // of them — so a whole-session open must carry its own list. Cleared on close.
   openList: (images: GalleryImage[], index: number) => void;
+  // The conversation whose quote batch notes pinned in this transcript join,
+  // when the viewer can reply here. Framed pages read it to take notes too.
+  quoteTo?: string;
 };
 
 const ImageGalleryContext = createContext<ImageGalleryContextType | null>(null);
@@ -204,14 +207,15 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     if (!canPin) return "";
     return JSON.stringify((s.reviewComments[conversationId!] ?? []).filter((c) => c.image?.point).map((c) => [c.id, c.image!.src, c.image!.point, c.body]));
   });
-  const pinsBySrc = useMemo(() => {
+  const { pinsBySrc, pinNumber } = useMemo(() => {
     const by = new Map<string, PendingComment[]>();
-    if (!pinsSig) return by;
-    for (const c of useInboxStore.getState().reviewComments[conversationId!] ?? []) {
+    if (!pinsSig) return { pinsBySrc: by, pinNumber: new Map<string, number>() };
+    const comments = useInboxStore.getState().reviewComments[conversationId!] ?? [];
+    for (const c of comments) {
       if (!c.image?.point) continue;
       by.set(c.image.src, [...(by.get(c.image.src) ?? []), c]);
     }
-    return by;
+    return { pinsBySrc: by, pinNumber: pinNumbers(comments) };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinsSig]);
   const pinCount = useMemo(() => [...pinsBySrc.values()].reduce((n, l) => n + l.length, 0), [pinsBySrc]);
@@ -226,7 +230,8 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
     else if (e.key === "0") { e.preventDefault(); e.stopPropagation(); zoom.reset(); }
   }, [close, goNext, goPrev, zoom.reset]), isOpen ? document : null);
 
-  const ctx = useMemo(() => ({ register, open, openList }), [register, open, openList]);
+  const quoteTo = canPin ? conversationId : undefined;
+  const ctx = useMemo(() => ({ register, open, openList, quoteTo }), [register, open, openList, quoteTo]);
 
   // Keep the active thumb visible as arrow keys / clicks move the selection.
   const activeThumbRef = useRef<HTMLButtonElement | null>(null);
@@ -363,12 +368,12 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                   canPin && !zoom.zoomed ? "cursor-crosshair" : ""}`}
                 onClick={pinAt}
               />
-              {currentPins.map((c, i) => (
+              {currentPins.map((c) => (
                 <ImagePin
                   key={c.id}
                   conversationId={conversationId!}
                   comment={c}
-                  number={i + 1}
+                  number={pinNumber.get(c.id) ?? 0}
                   scale={zoom.scale}
                   editing={editingId === c.id}
                   author={author}

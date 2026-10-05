@@ -8,30 +8,16 @@
 import type { BisectResponse, BisectState, BisectStep } from "@codecast/shared/contracts/evalsApi";
 import { formatDuration } from "../../lib/conversationFormat";
 import { formatTimeAgo } from "../../lib/messageNavigator";
-import { EVALS_STALL_MS } from "../../lib/evals/hooks";
 import { AttributionAnswerCard, AttributionEvidence, CandidateList } from "./AttributionView";
 import { BisectRuler } from "./BisectRuler";
 import { CommitPanel } from "./CommitPanel";
-import { CopyCommand, EvalsLink, SeparationMark, VerdictGlyph, batchLabel, plural, shortSha, usd, type VerdictState } from "./parts";
-import { splitBatchNames } from "./format";
-import { bisectStatusWord, endpointLabel, isBisectLive, isBisectStalled, rulerModel, tierWord, type RulerModel } from "./bisectModel";
+import { CopyCommand, EvalsLink, LogTail, SeparationMark, VerdictGlyph } from "./parts";
+import { splitBatchNames, plural, pLabel, shortSha, usd, batchLabel } from "./format";
+import { bisectStatusWord, endpointLabel, isBisectLive, answerStepText, rulerModel, tierWord, type RulerModel, bisectGlyph, bisectOutcomeOf, bisectSummaryWord, isStalled } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
 
-export function bisectGlyph(state: Pick<BisectState, "status" | "answer">): VerdictState {
-  if (isBisectLive(state.status)) return "unscored";
-  if (state.answer?.kind === "culprit") return "fail";
-  if (state.answer?.kind === "range") return "mixed";
-  if (state.status === "failed") return "crash";
-  return "dry";
-}
-
 const elapsed = (from: number, to: number) => formatDuration(from, to) || "under a minute";
-
-/** Stalled: the server says so, or a live bisect has written no step for five minutes. */
-export function isStalled(data: Pick<BisectResponse, "state" | "stalled">, now: number): boolean {
-  return isBisectStalled({ ...data.state, stalled: data.stalled }, now, EVALS_STALL_MS);
-}
 
 function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state: BisectState; model: RulerModel; logTail: string[]; stalled: boolean; now: number; onStop: () => void; stopping: boolean }) {
   const live = isBisectLive(state.status);
@@ -40,7 +26,7 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
   return (
     <aside className="ev-card evb-rail evb-area-rail" data-evb-rail>
       <h2>
-        <VerdictGlyph state={bisectGlyph(state)} size={11} />
+        <VerdictGlyph state={bisectGlyph(bisectOutcomeOf(state))} title={bisectSummaryWord(bisectOutcomeOf(state))} size={11} />
         {live ? "Running" : "Finished"}
       </h2>
       <div className="evb-spend">
@@ -72,34 +58,80 @@ function Rail({ state, model, logTail, stalled, now, onStop, stopping }: { state
         <dt>Tier</dt>
         <dd>{tierWord(state.tier)}</dd>
       </dl>
-      {state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : live ? <span className="text-[11.5px] ev-quiet">Running detached; it writes log.txt in its bisect folder.</span> : null}
+      {/* The tmux session ends with the run, so the attach line is offered only while there is something to attach to. */}
+      {live && (state.tmux ? <CopyCommand command={`tmux attach -t ${state.tmux}`} /> : <span className="text-[11.5px] ev-quiet">Running detached; it writes job.log in its bisect folder.</span>)}
       {live && (
-        <button type="button" className="evb-btn evb-btn--stop self-start" onClick={onStop} disabled={stopping} data-evb-stop>
+        <button type="button" className="ev-btn ev-btn--lg ev-btn--stop self-start" onClick={onStop} disabled={stopping} data-evb-stop>
           {stopping ? "Stopping between reps..." : "Stop"}
         </button>
       )}
-      {logTail.length > 0 && (
-        <div className="flex flex-col gap-1.5">
-          <span className="text-[11px] ev-quiet">Log tail</span>
-          <pre className="evb-log" data-evb-log>
-            {logTail.join("\n")}
-          </pre>
-        </div>
-      )}
+      <LogTail lines={logTail} label={state.pending && state.status === "failed" ? "What the job printed before it ended" : "Log tail"} data-evb-log />
     </aside>
   );
 }
 
-/** What the bisect answered. */
-export function BisectResult({ state, now }: { state: BisectState; now: number }) {
+/** What every answer rests on: the controls on the flipped freezes, and whether the bad end separated from the good. */
+function ControlsLine({ controls }: { controls: NonNullable<BisectResponse["controls"]> }) {
+  const { good, bad, separation: sep } = controls;
+  const words =
+    sep.kind === "worse"
+      ? `the bad end separated worse, p ${pLabel(sep.p)} on the flipped freezes`
+      : sep.kind === "too-few"
+        ? `too few reps to separate (${Math.min(good.reps, bad.reps)} a side, 5 needed), so nothing shows the regression reproduces`
+        : `they did not separate (${sep.kind === "better" ? "the bad end read better" : "not separated"}, p ${pLabel(sep.p)})`;
+  return (
+    <div className="evb-controls" data-evb-controls={sep.kind}>
+      <SeparationMark result={sep} />
+      <span>
+        <span className="ev-quiet">Controls </span>
+        {good.passed} of {good.reps} passed at the good end, {bad.passed} of {bad.reps} at the bad end: {words}.
+      </span>
+    </div>
+  );
+}
+
+/** The classes a probe could not load, each with its reason: a gap the answer cannot see into. */
+function UnloadedClasses({ state }: { state: BisectState }) {
+  const skipped = (state.classes ?? []).filter((c) => c.skip);
+  if (!skipped.length) return null;
+  return (
+    <ul className="evb-unloaded" data-evb-unloaded={skipped.length}>
+      {skipped.map((c) => (
+        <li key={c.n}>
+          <span className="ev-mono">{shortSha(c.representative)}</span>
+          {c.shas.length > 1 ? ` (and ${plural(c.shas.length - 1, "commit")} that render alike)` : ""} does not load: <span className="ev-mono">{c.skip}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Why a bisect ended without an answer, from its one status. */
+function endedWords(state: BisectState, steps: readonly BisectStep[]): string {
+  // The runner's own stop line names the one halt that ended it (stop file, time limit or budget); the status alone cannot tell time from budget.
+  const halt = [...steps].reverse().find((x) => x.text.startsWith("stopped: "))?.text.slice("stopped: ".length);
+  if ((state.status === "stopped" || state.status === "budget") && halt) return halt;
+  if (state.status === "stopped") return "it was stopped (the stop file was written)";
+  if (state.status === "budget") return `its budget of ${usd(state.budgetUsd)} would have been passed`;
+  const error = [...steps].reverse().find((x) => x.kind === "error");
+  if (state.status === "failed") return `it failed${error ? `: ${error.text}` : ""}`;
+  return bisectStatusWord(state.status);
+}
+
+export function BisectResult({ state, now, steps = [], controls = null }: { state: BisectState; now: number; steps?: readonly BisectStep[]; controls?: BisectResponse["controls"] }) {
   const ans = state.answer;
   if (!ans) {
     if (isBisectLive(state.status)) return null;
+    const ran = state.probes.some((p) => !p.recorded && p.reps.some((r) => r.runId !== null || r.passed !== null));
     return (
-      <section className="ev-card evb-result" data-evb-result="none">
+      <section className="ev-card evb-result" data-evb-result="none" data-evb-ran={ran}>
         <div className="evb-answer-say">
-          It {bisectStatusWord(state.status)} before an answer, with {plural(state.candidates.length, "candidate")} searched down to the bracketed range above. Start it again from the attribution page to carry on; its recorded probes count as evidence.
+          {ran
+            ? `It ended before an answer because ${endedWords(state, steps)}, with ${plural(state.candidates.length, "candidate")} searched down to the bracketed range above, for ${usd(state.spentUsd)}. Start it again from the attribution page to carry on; its recorded probes count as evidence.`
+            : `Stopped before any rep ran: ${endedWords(state, steps)}. Nothing was searched and nothing was spent.`}
         </div>
+        {controls && <ControlsLine controls={controls} />}
+        <UnloadedClasses state={state} />
       </section>
     );
   }
@@ -147,12 +179,22 @@ export function BisectResult({ state, now }: { state: BisectState; now: number }
       </div>
     );
   }
+  // A range or a culprit is only as good as the controls under it: when they did not separate, say so first.
+  const reproduced = !controls || controls.separation.kind === "worse";
   return (
-    <section className="ev-card evb-result" data-evb-result={ans.kind}>
+    <section className="ev-card evb-result" data-evb-result={ans.kind} data-evb-reproduced={reproduced}>
+      {controls && <ControlsLine controls={controls} />}
+      {!reproduced && (
+        <div className="evb-reason" role="status" data-evb-not-reproduced>
+          <strong>The controls did not show the regression reproduces.</strong> The {ans.kind === "culprit" ? "culprit" : "range"} below is where the majority reads pointed, not a confirmed answer: run the bisect again with more reps before acting on it.
+        </div>
+      )}
+      <UnloadedClasses state={state} />
       <div className="evb-result-head">
         <VerdictGlyph state={ans.kind === "culprit" ? "fail" : "mixed"} size={16} />
-        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "commit")}</span>
-        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : "render alike or would not separate: the answer is this range."}</span>
+        <span className="evb-answer-num">{ans.kind === "culprit" ? shortSha(ans.commit.sha) : plural(ans.candidates.length, "candidate")}</span>
+        {/* A range's reason is the runner's own answer line, never rebuilt here. */}
+        <span className="evb-answer-say">{ans.kind === "culprit" ? ans.commit.subject : (answerStepText(steps) ?? "")}</span>
       </div>
       <div className="flex items-center gap-3 flex-wrap text-[12px]">
         <span className="ev-quiet">Confirmation</span>
@@ -216,8 +258,8 @@ export function BisectView({ data, steps, now, onStop, stopping }: BisectViewPro
   return (
     <div className="evb-page" data-evb-bisect={state.id} data-evb-status={state.status}>
       <header className="evb-head">
-        <VerdictGlyph state={bisectGlyph(state)} size={14} />
-        <h1>Bisect {state.id}</h1>
+        <VerdictGlyph state={bisectGlyph(bisectOutcomeOf(state))} title={bisectSummaryWord(bisectOutcomeOf(state))} size={14} />
+        <h1 className="ev-page-title">Bisect {state.id}</h1>
         <EvalsLink className="ev-chip" href={evalsHref.surface(state.surface)}>
           {state.surface}
         </EvalsLink>
@@ -238,7 +280,7 @@ export function BisectView({ data, steps, now, onStop, stopping }: BisectViewPro
         </div>
         <Rail state={state} model={model} logTail={data.logTail} stalled={stalled} now={now} onStop={onStop} stopping={stopping} />
         <div className="evb-area-rest flex flex-col gap-4 min-w-0">
-          <BisectResult state={state} now={now} />
+          <BisectResult state={state} now={now} steps={steps} controls={data.controls ?? null} />
           <Steps steps={steps} surface={state.surface} />
         </div>
       </div>

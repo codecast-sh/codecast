@@ -7,7 +7,6 @@ import { useInboxStore } from "../store/inboxStore";
 import { subscribeGestures } from "../store/gestureBridge";
 import { applyBridgedGesture } from "../store/syncReplication";
 import { ThemeProvider } from "@/components/ThemeProvider";
-import { NavigationProgress } from "@/components/NavigationProgress";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Toaster } from "@/components/ui/sonner";
 import { DesktopProvider } from "@/components/DesktopProvider";
@@ -138,7 +137,6 @@ export function Providers({ children }: { children: ReactNode }) {
       <ThemeProvider>
         <ShortcutProvider>
         <TipProvider>
-        <NavigationProgress />
         {children}
         <ErrorBoundary name="DesktopProvider" level="inline">
           <DesktopProvider />

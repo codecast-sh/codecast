@@ -5,13 +5,14 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
+import { resolveEvalsBatchRef, type SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
 import { EmptyState } from "../../EmptyState";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
 import { useTabActive } from "../../../hooks/usePagePresence";
-import { DEFAULT_SURFACE_FILTERS, SurfaceView, orderedPair, type SurfaceFilters } from "../SurfaceView";
-import { surfaceColumns } from "../Seismograph";
+import { SurfaceView } from "../SurfaceView";
 import { evalsHref, type EvalsView } from "../evalsPaths";
+import { surfaceColumns } from "../seismographModel";
+import { DEFAULT_SURFACE_FILTERS, orderedPair, type SurfaceFilters } from "../surfaceModel";
 
 /** A batch whose newest rep landed this recently is still landing: follow /changes for it. */
 const LANDING_MS = 15 * 60_000;
@@ -36,7 +37,11 @@ export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surfac
   const models = seenModels.current.models;
 
   const byBatch = useMemo(() => (data ? surfaceColumns(data.batches, "ordinal", 1000).byBatch : null), [data]);
-  const pair = byBatch && view.batch && view.compare && byBatch.has(view.batch) && byBatch.has(view.compare) ? orderedPair(byBatch, view.batch, view.compare) : null;
+  // The address names a labelled batch by its hash (evalsBatchRef); the surface's own batches say which one.
+  const named = (ref: string | null) => (ref && byBatch ? resolveEvalsBatchRef(ref, byBatch.keys()) : ref);
+  const pinned = named(view.batch);
+  const compare = named(view.compare);
+  const pair = byBatch && pinned && compare && byBatch.has(pinned) && byBatch.has(compare) ? orderedPair(byBatch, pinned, compare) : null;
   const batches = useEvalsResource("GET /batches", pair ? { query: { surface: view.surface, a: pair[0], b: pair[1] } } : null);
   const epoch = useEvalsResource("GET /epoch", epochN !== null ? { query: { surface: view.surface, n: epochN } } : null);
 
@@ -70,8 +75,8 @@ export function SurfacePage({ view }: { view: Extract<EvalsView, { view: "surfac
       models={models}
       filters={filters}
       onFilters={setFilters}
-      pinned={view.batch}
-      compare={view.compare}
+      pinned={pinned}
+      compare={compare}
       onPins={onPins}
       batches={{ res: batches.data, loading: !!pair && batches.loading, error: batches.error }}
       epoch={{ n: epochN, res: epoch.data, loading: epochN !== null && epoch.loading, error: epoch.error }}

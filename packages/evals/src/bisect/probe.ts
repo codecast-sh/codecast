@@ -4,14 +4,12 @@ import { join } from 'node:path';
 import type { Candidate, RenderClass, RunRow } from '@codecast/shared/contracts/evalsApi';
 
 import { baseLoadErrors, checkArgs, dropBaseTree, prepareTreeAt, type TreeCheck } from '../commands/line';
-import { repPassed } from '../adapters/replay';
-import { batchSet, scoreOrZero } from '../commands/verdict';
+import { batchSet } from '../commands/verdict';
 import { BISECT_CADENCE } from '../commands/check';
 import { gradedSet } from '../history/flips';
 import { indexedRuns } from '../history/runIndex';
 import { homePaths, REPO_ROOT } from '../paths';
 import { gitHead } from '../state';
-import { median, separate } from '../stats';
 
 // A probe runs `check` at one commit (and, for a dirty rep's edits, its
 // patch) in a detached worktree, and reads what it recorded back from the run
@@ -223,48 +221,6 @@ export function mapToClass(side: RunRow[], classes: RenderClass[], focus: string
   if (!key) return null;
   const hits = classes.filter((c) => !c.skip && focus.every((f) => c.promptShas[f] === key[f])).map((c) => c.n);
   return hits.length ? (which === 'bad' ? hits.at(-1)! : hits[0]!) : null;
-}
-
-// ── Classifying a replay probe ──────────────────────────────────────────────
-
-/** A probe's reading before the unsure rule: `split` asks for 2 more reps per freeze. */
-export type Reading = 'good' | 'bad' | 'split';
-
-/**
- * How a probe's reps read. In flip mode, each focus freeze's majority over
- * its reps (a tie is neither), and the probe is bad when most focus freezes
- * fail as they did on the bad side, good when most pass as on the good side.
- * In score mode, the focus scores against the good control's: separated
- * worse is bad, too few to separate is a split, otherwise good.
- */
-/** The focus freezes a set has no scored rep on: every rep there crashed, so the set says nothing about them. */
-export const crashedFocus = (set: RunRow[], focus: string[]): string[] => focus.filter((f) => !set.some((r) => r.freezeId === f && r.status !== 'crash'));
-
-export function readProbe(set: RunRow[], focus: string[], mode: 'flip' | 'score', goodControl: RunRow[]): Reading {
-  const ran = set.filter((r) => focus.includes(r.freezeId) && r.status !== 'crash');
-  if (mode === 'score') {
-    const s = separate(ran.map(scoreOrZero), goodControl.filter((r) => focus.includes(r.freezeId)).map(scoreOrZero));
-    return s.kind === 'worse' ? 'bad' : s.kind === 'too-few' ? 'split' : 'good';
-  }
-  const votes = focus.map((f) => {
-    const reps = ran.filter((r) => r.freezeId === f);
-    const passed = reps.filter(repPassed).length;
-    return !reps.length || passed * 2 === reps.length ? 0 : passed * 2 > reps.length ? 1 : -1;
-  });
-  const [good, bad] = [votes.filter((v) => v > 0).length, votes.filter((v) => v < 0).length];
-  return bad * 2 > focus.length ? 'bad' : good * 2 > focus.length ? 'good' : 'split';
-}
-
-/**
- * The unsure rule: a probe still split after its extra reps sides with the
- * control its focus median sits nearer, the bad one on a tie, and is marked
- * unsure so the answer's confidence drops.
- */
-export function unsureSide(set: RunRow[], focus: string[], good: RunRow[], bad: RunRow[]): 'good' | 'bad' {
-  const med = (s: RunRow[]) => median(s.filter((r) => focus.includes(r.freezeId)).map(scoreOrZero));
-  const [p, g, b] = [med(set), med(good), med(bad)];
-  if (!Number.isFinite(p) || !Number.isFinite(g) || !Number.isFinite(b)) return 'bad';
-  return Math.abs(p - g) < Math.abs(p - b) - 1e-9 ? 'good' : 'bad';
 }
 
 /** A probe batch's graded reps (one per seed; crashes and dry reps left out). */

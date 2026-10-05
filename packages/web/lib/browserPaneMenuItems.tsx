@@ -20,6 +20,11 @@ import { CtxItem, CtxSeparator } from "../components/ui/context-menu";
 import { openBrowserPane } from "./stage";
 import { copyToClipboard } from "./utils";
 
+/** Copy a page address, saying so. */
+export function copyAddress(url: string): void {
+  void copyToClipboard(url).then(() => toast.success("Address copied"));
+}
+
 export function browserPaneMenuItems(url: string, opts?: { paneLabel?: string }) {
   return (
     <>
@@ -41,7 +46,7 @@ export function browserPaneMenuItems(url: string, opts?: { paneLabel?: string })
       <CtxSeparator />
       <CtxItem
         icon={Copy}
-        onSelect={() => void copyToClipboard(url).then(() => toast.success("Address copied"))}
+        onSelect={() => copyAddress(url)}
       >
         Copy address
       </CtxItem>

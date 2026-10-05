@@ -15,10 +15,11 @@ import {
   type CallVideoFile,
   type CallVideoNotice,
 } from "../../lib/calls/callVideo";
+import { isMediaDenial } from "../../lib/calls/mediaDenial";
 import { RecordingMark } from "./RecordingMark";
 import { ParticipantTag } from "./GuestTag";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { fmtClock } from "./speakers";
+import { formatCallTime } from "@codecast/shared/entities";
 import "./callVideoPlayer.css";
 
 // A call's video on its page, kept in step with the transcript the way the
@@ -60,6 +61,13 @@ import "./callVideoPlayer.css";
 // control on a video without one, while the room's file that carries the
 // voices is playing unseen with its controls off. So the toolbar has its own
 // mute and volume while a screen is shown, and they act on the room's file.
+// A phone browser (iOS Safari above all) plays sound only from a play() made
+// inside a tap on that element, and the room's file is started by the
+// screen's play, not by a tap: the browser refuses, and the screen would run
+// silent with nothing saying why. So a refused play of the room's file turns
+// the mute button into "Tap for sound", whose tap is the gesture the browser
+// wants. A phone also ignores a page's volume, so there the toolbar offers
+// mute alone.
 //
 // ONE SHAPE. The picture's box is 16:9 whatever the file's own shape, capped
 // by the space the page leaves after its header and a floor for the thread
@@ -113,6 +121,7 @@ export function CallVideoPlayer({
   missedMs = null,
   onJump,
   refreshing = false,
+  onViewPick,
   className = "",
 }: {
   files: readonly CallVideoFile[];
@@ -134,6 +143,11 @@ export function CallVideoPlayer({
   /** The files' URLs are being signed again (the page slept past them): a
    *  refused element is waiting for the next ones, not dead. */
   refreshing?: boolean;
+  /** The reader picked a view (a screen, or back to the room): the host
+   *  writes it to its address, so a reload or a copied address opens on the
+   *  picture that was up. Only a pick: a view a link landed on is already
+   *  in the address. */
+  onViewPick?: (view: CallView | null) => void;
   className?: string;
 }) {
   const playable = useMemo(() => playableFiles(files), [files]);
@@ -205,14 +219,31 @@ export function CallVideoPlayer({
     if (f.el.playbackRate !== d.el.playbackRate) f.el.playbackRate = d.el.playbackRate;
     if (d.el.paused !== f.el.paused) {
       if (d.el.paused) f.el.pause();
-      else void f.el.play().catch(() => {});
+      else playRoom(f.el);
     }
+  };
+
+  // The room's sound refused for want of a tap (SOUND above): the toolbar
+  // asks for one. Cleared the moment the room's file does play.
+  const [soundBlocked, setSoundBlocked] = useState(false);
+  /** Play the room's file, noting a refusal that a tap would lift. */
+  const playRoom = (el: HTMLVideoElement) =>
+    void el.play().catch((err) => {
+      if (isMediaDenial(err)) setSoundBlocked(true);
+    });
+  /** The tap that lifts it: play the room's file inside the gesture, at the
+   *  moment the screen is showing. */
+  const unblockSound = () => {
+    const el = mainEl.current;
+    if (!el) return;
+    el.muted = false;
+    el.play().then(follow, () => {});
   };
 
   const showMain = (file: CallVideoFile, seconds: number, play: boolean) => {
     if (file.id === main?.id && mainEl.current) {
       mainEl.current.currentTime = seconds;
-      if (play) void mainEl.current.play().catch(() => {});
+      if (play) playRoom(mainEl.current);
       return;
     }
     pending.current.set(file.id, { seconds, play });
@@ -262,6 +293,7 @@ export function CallVideoPlayer({
   /** Switch the view to a screen file (or back to the room), at the moment
    *  the picture is at now; a screen that was not up now jumps to its start. */
   const pickView = (file: CallVideoFile | null) => {
+    onViewPick?.(file ? { screen: true, identity: file.participant_identity ?? null } : null);
     if (!file) {
       const s = screenEl.current;
       const playing = !!s && !s.paused;
@@ -412,6 +444,7 @@ export function CallVideoPlayer({
           onError={onError(main)}
           onEnded={onMainEnded}
           {...driverHandlers}
+          onPlaying={() => setSoundBlocked(false)}
         />
         {screen && (
           <video
@@ -482,7 +515,7 @@ export function CallVideoPlayer({
       )}
       <div className={CALL_VIDEO_BAR}>
         <span className="tabular-nums text-sol-text-secondary" title="Where in the call this is, in the transcript's clock">
-          {fmtClock(callMs)}
+          {formatCallTime(callMs)}
         </span>
         {chips.length > 0 && (
           <span className="flex items-center gap-0.5 rounded-md bg-white/[0.05] p-0.5" role="radiogroup" aria-label="What to watch">
@@ -501,12 +534,12 @@ export function CallVideoPlayer({
                   title={
                     up
                       ? `${label} at full size: the text on it legible, the room's sound underneath`
-                      : `${label}, shared at ${fmtClock(at)}. Jump there`
+                      : `${label}, shared at ${formatCallTime(at)}. Jump there`
                   }
                 >
                   <MonitorUp className="h-3 w-3" /> {label}
                   <ParticipantTag identity={f.participant_identity} />
-                  {several && !up && <span className="text-sol-text-dim">· {fmtClock(at)}</span>}
+                  {several && !up && <span className="text-sol-text-dim">· {formatCallTime(at)}</span>}
                 </ViewChip>
               );
             })}
@@ -518,7 +551,7 @@ export function CallVideoPlayer({
               Recording {runIndex + 1} of {leads.length}
             </span>
             {leads.map((f, i) => {
-              const from = fmtClock(callMsOf(f, callStartedAt, 0));
+              const from = formatCallTime(callMsOf(f, callStartedAt, 0));
               return (
                 <button
                   key={f.id}
@@ -543,6 +576,16 @@ export function CallVideoPlayer({
           // wrap it there and move the transcript down when the view
           // switches.
           <span className="group/vol relative flex items-center" role="group" aria-label="The room's sound">
+            {soundBlocked ? (
+              <button
+                type="button"
+                onClick={unblockSound}
+                className="flex items-center gap-1 rounded bg-sol-violet/15 px-1.5 py-0.5 text-sol-violet transition-colors hover:bg-sol-violet/25"
+              >
+                <VolumeX className="h-3.5 w-3.5" />
+                Tap for sound
+              </button>
+            ) : (
             <button
               type="button"
               onClick={() => setMainSound({ muted: !sound.muted })}
@@ -553,7 +596,9 @@ export function CallVideoPlayer({
             >
               {sound.muted || sound.volume === 0 ? <VolumeX className="h-3.5 w-3.5" /> : <Volume2 className="h-3.5 w-3.5" />}
             </button>
-            <span className="absolute bottom-full left-1/2 z-10 hidden -translate-x-1/2 pb-1.5 group-focus-within/vol:block group-hover/vol:block">
+            )}
+            {/* No slider on a touch screen: a phone ignores a page's volume. */}
+            <span className="absolute bottom-full left-1/2 z-10 hidden -translate-x-1/2 pb-1.5 group-focus-within/vol:block group-hover/vol:block [@media(pointer:coarse)]:!hidden">
               <span className="flex rounded-md bg-sol-base03 px-2.5 py-2 shadow-lg ring-1 ring-white/[0.08]">
                 <input
                   type="range"

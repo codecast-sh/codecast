@@ -80,6 +80,34 @@ describe("undo card focus return", () => {
     expect(doc.activeElement).toBe(composer);
   });
 
+  // A surface that marks itself role=dialog without being modal (the docked
+  // composer, the Fleet drill-in) is part of the page: the field the user
+  // was typing in there is where focus goes back, not an older field.
+  it("opened from a field in a docked, non-modal dialog, focus returns to that field", () => {
+    const search = el("input");
+    search.focus();
+    const dock = el("div", { role: "dialog" });
+    const dockField = el("textarea", {}, dock);
+    dockField.focus();
+    undoTimeline.open();
+    mountCard();
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(dockField);
+  });
+
+  it("a modal dialog is still passed over for the field behind it", () => {
+    const composer = el("textarea");
+    composer.focus();
+    const modal = el("div", { role: "dialog", "aria-modal": "true" });
+    const input = el("input", {}, modal);
+    input.focus();
+    undoTimeline.open();
+    modal.remove();
+    mountCard();
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(composer);
+  });
+
   it("a close after focus moved elsewhere leaves it there", () => {
     const button = el("button");
     const other = el("input");
@@ -89,5 +117,66 @@ describe("undo card focus return", () => {
     other.focus();
     undoTimeline.close();
     expect(doc.activeElement).toBe(other);
+  });
+
+  // Focus on the page itself (nothing focused) is a place too: the card gives
+  // it back as it found it, never to a field that had focus earlier, where the
+  // next single-key shortcut would type.
+  it("opened from the page body, focus returns to the body, interactive or peek", () => {
+    const composer = el("textarea");
+    composer.focus();
+    composer.blur();
+    expect(doc.activeElement).toBe(doc.body);
+    undoTimeline.open();
+    const card = mountCard();
+    expect(card.contains(doc.activeElement)).toBe(true);
+    undoTimeline.close();
+    card.remove();
+    expect(doc.activeElement).toBe(doc.body);
+    // The held peek never takes focus; its fade-out leaves the body as it was.
+    undoTimeline.open("peek");
+    el("div", { role: "dialog", "data-undo-timeline": "peek" });
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+
+  it("opened from the palette over the page body, focus returns to the body", () => {
+    const composer = el("textarea");
+    composer.focus();
+    composer.blur();
+    const palette = el("div", { "cmdk-root": "" });
+    const input = el("input", {}, palette);
+    input.focus();
+    undoTimeline.open();
+    palette.remove();
+    mountCard();
+    undoTimeline.close();
+    expect(doc.activeElement).toBe(doc.body);
+  });
+});
+
+
+// The card and the toaster share the bottom-right corner. While the card is
+// open the toaster rises above it, and a press on a toast (closing a tip or
+// an error) is not a press outside the card.
+describe("the undo card and the toaster", () => {
+  it("a press on a toast does not close the card; a press on the page does", () => {
+    doc.body.innerHTML = "";
+    const card = el("div", { role: "dialog", "data-undo-timeline": "interactive" });
+    const row = el("button", {}, card);
+    const toaster = el("ol", { "data-sonner-toaster": "" });
+    const close = el("button", {}, el("li", { "data-sonner-toast": "" }, toaster));
+    const page = el("button");
+    expect(undoTimeline.pressLeavesCard(row, card)).toBe(false);
+    expect(undoTimeline.pressLeavesCard(close, card)).toBe(false);
+    expect(undoTimeline.pressLeavesCard(page, card)).toBe(true);
+  });
+
+  it("the toaster's lift clears the card's top edge", async () => {
+    const { toasterLiftFor } = await import("../undoCardToasterLift");
+    // A 400px card sitting 16px off the bottom of an 800px viewport.
+    expect(toasterLiftFor(384, 800)).toBe(424);
+    // The full-width phone sheet at the very bottom.
+    expect(toasterLiftFor(500, 800)).toBe(308);
   });
 });

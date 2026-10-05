@@ -177,6 +177,9 @@ export function LiveRoomCard({ row }: { row: LiveRoomRow }) {
           <Text style={[styles.cardLabel, row.redacted && styles.cardLabelRedacted]} numberOfLines={1}>
             {row.label}
           </Text>
+          {/* Being filmed, said before anyone walks in: the web's
+              LiveRoomLabel dot, off the same row. */}
+          {row.recording && <RNView style={styles.recDot} accessible accessibilityLabel="This call is being recorded" />}
         </RNView>
         <Text style={styles.cardSub} numberOfLines={1}>{peopleLine(row)}</Text>
       </RNView>
@@ -202,7 +205,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   cardMine: { backgroundColor: Theme.green + "16", borderColor: Theme.green + "44" },
   cardMain: { flex: 1, minWidth: 0 },
   cardHead: { flexDirection: "row", alignItems: "center" },
-  cardLabel: { flex: 1, fontSize: 14, fontWeight: "600", color: Theme.text },
+  cardLabel: { flexShrink: 1, fontSize: 14, fontWeight: "600", color: Theme.text },
+  recDot: { width: 6, height: 6, borderRadius: 3, marginLeft: 6, backgroundColor: Theme.red },
   cardLabelRedacted: { fontStyle: "italic", color: Theme.textMuted },
   cardSub: { fontSize: 11.5, color: Theme.textMuted, marginTop: 2 },
   actionJoin: {

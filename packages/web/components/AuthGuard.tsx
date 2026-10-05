@@ -5,11 +5,11 @@ import { useLocalAuth } from "../lib/localAuth";
 import { oauthJustFailed } from "../lib/oauthReturn";
 import { AppLoader } from "./AppLoader";
 
-function RedirectUnsignedIn() {
+function RedirectUnsignedIn({ to }: { to: string }) {
   const router = useRouter();
   useMountEffect(() => {
     if (oauthJustFailed()) router.replace("/login?reason=oauth");
-    else router.push("/");
+    else router.push(to);
   });
   return null;
 }
@@ -33,22 +33,27 @@ function RedirectUnsignedIn() {
  * marketing home page in an always-on-top square. Invisible glass is the
  * honest signed-out state there, and children resume the moment a sign-in
  * flips the gate.
+ *
+ * signedOutPath: where a signed-out visitor is sent (the home page by
+ * default; the simple lane sends them to its own welcome).
  */
 export function AuthGuard({
   children,
   guestOk,
   blankSignedOut,
+  signedOutPath = "/",
 }: {
   children: React.ReactNode;
   guestOk?: boolean;
   blankSignedOut?: boolean;
+  signedOutPath?: string;
 }) {
   return (
     <LocalFirstAuthGuard
       guestOk={guestOk}
       useLocalAuth={useLocalAuth}
       loading={blankSignedOut ? null : <AppLoader />}
-      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn />}
+      unauthenticated={blankSignedOut ? null : <RedirectUnsignedIn to={signedOutPath} />}
     >
       {children}
     </LocalFirstAuthGuard>

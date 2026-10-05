@@ -42,5 +42,19 @@ describe("Shift and a digit belongs to the page", () => {
     expect(answerKeyAllowed(ev({ shiftKey: true, key: "1" }))).toBe(false);
     expect(answerKeyAllowed(ev({ shiftKey: true, key: "!" }))).toBe(false);
     expect(answerKeyAllowed(ev({ shiftKey: true, key: "Enter", code: "Enter" }))).toBe(true);
-  });
+   }, 60_000);
+});
+
+// The undo timeline owns its Enter, digits and x while focused. A decision
+// surface that passes no keyScope (DecisionDocument, the queue's compact card,
+// the Line's awaiting cards) once answered on the timeline's Enter.
+describe("a focused key-owning region keeps the answer keys", () => {
+  test("answerKeyAllowed refuses a key whose target is inside another region that owns its keys", async () => {
+    const { answerKeyAllowed } = await import("../ChangeCardView");
+    const inTimeline = { closest: (sel: string) => (sel.includes("[data-owns-keys]") ? {} : null) };
+    const ev = (o: Partial<KeyboardEvent>) => ({ metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, key: "Enter", code: "Enter", ...o }) as KeyboardEvent;
+    expect(answerKeyAllowed(ev({ target: inTimeline as any }))).toBe(false);
+    expect(answerKeyAllowed(ev({ key: "1", code: "Digit1", target: inTimeline as any }))).toBe(false);
+    expect(answerKeyAllowed(ev({ target: { closest: () => null } as any }))).toBe(true);
+   }, 60_000);
 });

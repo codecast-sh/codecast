@@ -1,6 +1,10 @@
 .cc-review-tray-jump {
   display: block;
   text-align: left;
+  /* Room around the text for the hover wash, pulled back into the rail's
+     indent so the text stays put; the height matches the remove button. */
+  padding: 0.15rem 0.35rem;
+  margin-left: -0.35rem;
   border-radius: 3px;
   cursor: pointer;
 }

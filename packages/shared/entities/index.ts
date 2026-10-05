@@ -15,7 +15,7 @@
 
 import { isPrivateHost } from "../contracts/browserPaneOffer";
 import { callAnchorHref, callFrameHref, parseCallMomentParam } from "../contracts/callLinks";
-import { formatCallTime } from "../contracts/callRecordings";
+import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/callRecordings";
 
 export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call";
 
@@ -490,8 +490,9 @@ export function parseGitHubLocationUrl(href: string | undefined | null): GitHubL
 /** A call with a turn range, as prose writes it. */
 export const CALL_TURNS_REF_SOURCE = "(?:cl-\\d+|[a-z0-9]{32}):\\d+(?:-\\d+)?";
 
-/** A time into a call: `754s`, `12:34`, `1:02:03`. */
-export const CALL_TIME_SOURCE = "\\d+s|\\d+(?::[0-5]\\d){1,2}";
+/** A time into a call (`754s`, `12:34`, `1:02:03`) and its reader live in
+ *  contracts/callRecordings, beside the clock that writes it. */
+export { CALL_TIME_SOURCE, parseCallTime };
 
 /** A moment of a call, as prose writes it: `cl-42@12:34`. */
 export const CALL_MOMENT_REF_SOURCE = `(?:cl-\\d+|[a-z0-9]{32})@(?:${CALL_TIME_SOURCE})`;
@@ -502,14 +503,6 @@ export type CallRef = {
   /** A moment: ms since the call started. Present only on `cl-42@12:34`. */
   at_ms?: number;
 };
-
-/** A time into a call in ms (`754s`, `12:34`, `1:02:03`), or null. */
-export function parseCallTime(text: string | null | undefined): number | null {
-  const s = (text || "").trim();
-  if (!new RegExp(`^(?:${CALL_TIME_SOURCE})$`, "i").test(s)) return null;
-  if (/s$/i.test(s)) return Number(s.slice(0, -1)) * 1000;
-  return s.split(":").reduce((acc, part) => acc * 60 + Number(part), 0) * 1000;
-}
 
 /** The player clock for a time into a call (contracts/callRecordings holds
  *  it, beside the spans it names). */

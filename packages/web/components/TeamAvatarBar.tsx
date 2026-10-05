@@ -3,23 +3,20 @@ import { useCallsAvailable } from "../lib/teamFeatures";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMemo } from "react";
 import { toast } from "sonner";
-import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2, SquareArrowOutUpRight } from "lucide-react";
+import { UserRound, Filter, Link2, Headphones, PanelTop, PictureInPicture2 } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useSyncTeamMembers } from "../hooks/useSyncTeamMembers";
 import { useFaceRow } from "../hooks/useFaceRow";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
-import { POP_OUT_PEOPLE_TITLE, canPopOutCall, useFacesFloating } from "../lib/desktop";
-import { focusExistingHuddle } from "../lib/calls/huddleWindow";
-import { popOutCall } from "../lib/calls/popOutCall";
-import { openCallStage, requestCallThread } from "../lib/calls/callStage";
-import { useRoomThreadUnread } from "../hooks/useRoomThreadUnread";
-import { UnreadCount } from "./calls/UnreadCount";
+import { POP_OUT_PEOPLE_TITLE, useFacesFloating } from "../lib/desktop";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { memberDisplayName } from "./presence/memberPresence";
 import { popOutPeople } from "./people/popOutPeople";
 import { FaceRow } from "./faces/FaceRow";
 import { EngagementCard } from "./faces/EngagementCard";
-import { CallCardRecordingMark } from "./calls/RoomRecording";
+import { OpenCallButton } from "./calls/OpenCallButton";
+import { isCallCard } from "../lib/faces/faceRow";
+import { CallCardRecordButton, CallCardRecordingMark } from "./calls/RoomRecording";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -86,9 +83,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // Something is happening on the row: an engagement, a ring, a voice. The
   // minimal style hides the bar otherwise (globals.css).
   const live = !!row.me || row.links.length > 0;
-  // A call is up: a room I hold on purpose (the card offers Mute only then)
-  // or somebody just stepped in. A burst is not a call and gets no stage.
-  const inCall = (row.card.kind === "live" && row.card.mute) || row.card.kind === "joined-notice";
+  const inCall = isCallCard(row.card);
 
   if (!effectiveTeamId || rosterCount === 0) {
     return <TeamMembersPump teamId={effectiveTeamId} />;
@@ -135,16 +130,6 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
     );
   }
 
-  const openTheCall = () => {
-    if (canPopOutCall()) {
-      void focusExistingHuddle().then((shown) => {
-        if (!shown) void popOutCall();
-      });
-      return;
-    }
-    openCallStage();
-  };
-
   return (
     <div
       className="people-bar flex items-center gap-1 px-2"
@@ -178,7 +163,8 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
             inCall && (
               <>
                 <CallCardRecordingMark />
-                <OpenCallButton onClick={openTheCall} />
+                <CallCardRecordButton />
+                <OpenCallButton />
               </>
             )
           }
@@ -223,7 +209,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
       <ShortcutTooltip label={POP_OUT_PEOPLE_TITLE}>
         <TopbarButton
           data-pop-out
-          className="hidden xl:flex"
+          className="ml-1 hidden xl:flex"
           onClick={() => (floating.available ? floating.setFloating(true) : void popOutPeople())}
           aria-label={POP_OUT_PEOPLE_TITLE}
         >
@@ -267,35 +253,5 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         )}
       </ContextMenu>
     </div>
-  );
-}
-
-/** The door to the stage, wearing the count of what was typed in the call's
- *  chat while it sat collapsed here: the same count the stage's own thread
- *  button wears. Its own component so the chat subscription lives only as
- *  long as the call does. */
-function OpenCallButton({ onClick }: { onClick: () => void }) {
-  const roomKey = useInboxStore((s) => s.call.roomKey ?? null);
-  const { unread, latest } = useRoomThreadUnread(roomKey);
-  const label = canPopOutCall() ? "Pop out the call" : "Open the call";
-  return (
-    <ShortcutTooltip label={label}>
-      <span className="engagement-card-toggles">
-        <button
-          type="button"
-          onClick={() => {
-            if (unread > 0) requestCallThread();
-            onClick();
-          }}
-          data-open-call
-          data-card-action="open"
-          className="engagement-card-toggle relative"
-          aria-label={unread > 0 ? `${label}, ${unread} new in its chat` : label}
-        >
-          <SquareArrowOutUpRight className="h-3.5 w-3.5" />
-          <UnreadCount count={unread} agent={!!latest?.agent} className="absolute -right-1.5 -top-1.5" />
-        </button>
-      </span>
-    </ShortcutTooltip>
   );
 }
