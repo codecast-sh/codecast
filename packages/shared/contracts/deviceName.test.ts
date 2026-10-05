@@ -75,4 +75,10 @@ describe("compareMachineChips", () => {
       "MacBook-Pro", "Cloud Linux", "grok-bot-vm-23079abc", "htch-runtime",
     ]);
   });
+
+  it("orders same-named hosts live first, then the offline ones most recently seen first", () => {
+    const host = (id: string, online: boolean, last_seen: number) => ({ id, label: "Linux - ip-10-0-0-1", platform: "linux", is_remote: true, online, last_seen });
+    const devices = [host("dead-long", false, 1), host("asleep", false, 50), host("live", true, 10)];
+    expect([...devices].sort(compareMachineChips).map((d) => d.id)).toEqual(["live", "asleep", "dead-long"]);
+  });
 });

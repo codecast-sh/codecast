@@ -12,6 +12,42 @@ export function deviceWakesOnUse(d: { is_remote?: boolean; platform?: string }):
   return d.is_remote === true && /^(linux|darwin|macos)$/i.test(d.platform ?? "");
 }
 
+/**
+ * How far a host's last report may trail the newest report from the same
+ * laptop before the laptop is taken to have dropped it. The laptop reports
+ * every host in its registry each pass (every 15 minutes, cloud/hostReports).
+ */
+export const CLOUD_HOST_REPORT_GAP_MS = 60 * 60 * 1000;
+
+type RetiredProbe = {
+  is_remote?: boolean;
+  platform?: string;
+  online?: boolean;
+  cloud_host?: { managed_by: string; state: string; at: number } | null;
+};
+
+/**
+ * A cloud host that is gone, not asleep: offline, and its managing laptop
+ * either reports the instance missing or has reported on its other hosts
+ * well after it last mentioned this one (the instance was terminated or
+ * replaced and left the registry). A row with no report at all counts as
+ * gone once some laptop reports on another host. Its device row outlives the
+ * instance, and without this rule it reads exactly like a sleeping host that
+ * "boots when the session starts", so a launch parks on it and waits forever.
+ */
+export function cloudHostRetired(d: RetiredProbe, roster: RetiredProbe[]): boolean {
+  if (!deviceWakesOnUse(d) || d.online) return false;
+  const own = d.cloud_host;
+  if (own?.state === "missing") return true;
+  let newest = 0;
+  for (const o of roster) {
+    if (o === d || !o.cloud_host || !deviceWakesOnUse(o)) continue;
+    if (own && o.cloud_host.managed_by !== own.managed_by) continue;
+    newest = Math.max(newest, o.cloud_host.at);
+  }
+  return newest - (own?.at ?? 0) > CLOUD_HOST_REPORT_GAP_MS;
+}
+
 /** True if `p` is at or below a known project root (`root` or a child of it). */
 export function pathUnderRoot(p: string, root: string): boolean {
   return p === root || p.startsWith(root.endsWith("/") ? root : root + "/");
