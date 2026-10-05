@@ -17,7 +17,7 @@ import {
   PERSONAL_SCOPE,
   deriveTeamForRoot,
   findDocForFile,
-  type ScopeEvidence,
+  sessionScopeEvidence,
   type VaultTeamScope,
 } from "../../lib/vault/scopeModel";
 import type { DocItem } from "../../store/inboxStore";
@@ -66,19 +66,7 @@ export function useVaultTeamResolver(): (root: string | undefined) => VaultTeamS
   const teams = state.teams;
 
   return useMemo(() => {
-    const byVerdict = new Map<string, ScopeEvidence>();
-    for (const id in state.sessions) {
-      const s = state.sessions[id];
-      const path = s?.git_root || s?.project_path;
-      if (!path) continue;
-      const teamId = s.team_id ?? null;
-      const isPrivate = !!s.is_private;
-      const key = `${path}|${teamId ?? ""}|${isPrivate ? 1 : 0}`;
-      const seen = byVerdict.get(key);
-      if (seen) seen.weight = (seen.weight ?? 1) + 1;
-      else byVerdict.set(key, { path, teamId, isPrivate, weight: 1 });
-    }
-    const evidence = [...byVerdict.values()];
+    const evidence = sessionScopeEvidence(state.sessions);
 
     const teamNameById: Record<string, string> = {};
     for (const team of teams ?? []) {

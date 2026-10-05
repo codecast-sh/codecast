@@ -2,7 +2,7 @@
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
@@ -63,7 +63,7 @@ import {
   writeDeviceAccountStamp,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, type RemoteHost } from "./remote/session-move.js";
+import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
 import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
 import {
@@ -283,9 +283,12 @@ import {
   PASTE_START,
   clientAcceptsBracketedPaste,
   deliverTextIntoPane,
+  deliveryTimeoutMsFor,
   typedNewlineKey,
   pasteAndSubmitText,
   prepareInjectedContent,
+  tmuxLiteralArg,
+  stripComposerChrome,
 } from "./tmuxPaste.js";
 import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
 import { formatFeedResults } from "./formatter.js";
@@ -450,6 +453,28 @@ function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: st
     env: { ...SAFE_ENV, ...opts?.env },
   }).toString();
 }
+
+/**
+ * Type a launch command into a fresh pane's shell and press Enter. A shell
+ * still starting keeps typed input in the terminal's line buffer, which holds
+ * 1024 bytes on macOS: a longer launch line lost its tail and its Enter, and
+ * the agent never started (a zsh login on the Mac host, 2026-10-05). So a long
+ * command goes into a private script the shell sources, and only that short
+ * line is typed. The script removes itself first; the shell keeps it open.
+ */
+async function typeIntoPane(target: string, command: string): Promise<void> {
+  let line = command;
+  if (Buffer.byteLength(command) > PANE_TYPED_LINE_MAX) {
+    const dir = path.join(CONFIG_DIR, "launch-scripts");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `${randomUUID()}.sh`);
+    fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
+    line = `. ${shq(file)}`;
+  }
+  await tmuxExec(["send-keys", "-t", target, "-l", tmuxLiteralArg(line)]);
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+}
+const PANE_TYPED_LINE_MAX = 512;
 
 async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
   return _execFileAsync("tmux", args, {
@@ -1766,7 +1791,7 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // during one BOTH the mark and the JSONL echo ack stall past the TTL (2026-07-13 storm:
 // 'gogo' processed 7x, ct-38507). The hard cap is the last-resort redelivery deadline when
 // confirmation never arrives.
-const messagesInFlight = new Map<string, { ts: number; conversationId: string }>();
+const messagesInFlight = new Map<string, { ts: number; conversationId: string; ttlMs?: number }>();
 // `pasted` flips once the paste was SEEN in the composer and submitted: only
 // such an entry is vouched to the server (collectPastedInjectedIds, the
 // paste_verified stamp). A pre-paste entry exists solely for dedup.
@@ -1782,7 +1807,11 @@ export function latestInjectionTsFor(conversationId: string): number | null {
   }
   return latest;
 }
+// The floor; an entry carries its own ttl once its delivery budget is known
+// (deliveryTimeoutMsFor plus IN_FLIGHT_GRACE_MS), since a typed payload runs
+// well past the base budget.
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
+const IN_FLIGHT_GRACE_MS = 60_000;
 const INJECTION_DEDUP_TTL_MS = 60_000;
 const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
 
@@ -5980,8 +6009,7 @@ async function executeRemoteCommand(
 
         try {
           tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          await typeIntoPane(tmuxSession, cmdText);
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
           log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
         } catch (spawnErr) {
@@ -6349,7 +6377,7 @@ async function executeRemoteCommand(
         if (agentType === "codex" && activeCodexAppServer) {
           try {
             const sandbox = codexPermissions.sandbox;
-            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
+            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs, conversationId || undefined);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
                 cwd,
@@ -6450,8 +6478,7 @@ async function executeRemoteCommand(
               transcript: path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`),
             });
           }
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          await typeIntoPane(tmuxSession, cmdText);
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
           if (worktreeResult) {
             resultObj.worktree_name = worktreeResult.worktreeName;
@@ -7813,8 +7840,7 @@ async function executeRemoteCommand(
                 markClaudeSessionLive(tmuxSession, blankAccount.account);
               }
               await stampCodexPaneAccount(blankAgentType, tmuxSession, conversationId);
-              tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-              tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+              await typeIntoPane(tmuxSession, blankCmdText);
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
                 projectPath: cwd,
@@ -8471,6 +8497,7 @@ export async function buildCodexStableContext(
   config: Config | null,
   cwd?: string,
   prefs?: StableLaunchPrefs,
+  session?: string,
 ): Promise<BuiltStableContext | undefined> {
   let mode: "team" | "solo" | null;
   if (prefs?.stable_mode === "off") mode = null;
@@ -8482,6 +8509,7 @@ export async function buildCodexStableContext(
     global: !!config?.stable_global,
     exclude: prefs?.stable_exclude ?? [],
     cwd,
+    session,
   });
 }
 
@@ -8502,7 +8530,7 @@ export async function writeGrokStableRulesFile(
   key: string,
   conversationId?: string,
 ): Promise<string | undefined> {
-  const built = await buildCodexStableContext(config, cwd, prefs);
+  const built = await buildCodexStableContext(config, cwd, prefs, conversationId);
   if (!built) return undefined;
   const dir = path.join(CONFIG_DIR, "stable-rules");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -14706,12 +14734,13 @@ function tmuxComposerRegion(pane: string): string | null {
   return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
 }
 
+// Both checks read the whole capture: the caller sizes it to the payload. A
+// fixed window shorter than a long draft lost the prompt line above it, read
+// the unsent message as gone, and acked it as delivered (jx76c85, 2026-10-05).
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
-  const lines = paneContent.split("\n");
-  const recent = lines.slice(-80).join("\n");
-  const fromPrompt = tmuxComposerRegion(recent);
+  const fromPrompt = tmuxComposerRegion(paneContent);
   if (fromPrompt === null) return false;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
@@ -14724,8 +14753,7 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
 export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
-  const recent = paneContent.split("\n").slice(-80).join("\n");
-  const composer = tmuxComposerRegion(recent);
+  const composer = tmuxComposerRegion(paneContent);
   if (composer === null) return false;
   const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
   return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
@@ -14843,7 +14871,26 @@ export function extractTmuxLiveRegion(paneContent: string): string {
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
   }
-  if (sepIdx.length >= 2) {
+  // A composer box taller than the tail leaves only its bottom rule in it: a
+  // long typed draft renders in full, where a paste collapses to one chip line.
+  // The pane then read "unknown" with no ❯ in view, and every later message
+  // held until a person pressed Enter (jx76rqh, 2026-10-05). When nothing under
+  // that lone rule is a dialog and the nearest rule above it opens onto the
+  // composer caret, the box runs from there.
+  let rows = tail;
+  let boxTop = sepIdx.length >= 2 ? sepIdx[sepIdx.length - 2] : -1;
+  if (sepIdx.length === 1) {
+    const below = tail.slice(sepIdx[0] + 1);
+    if (!below.some((line) => /[❯›]/.test(line) || isMenuFooterRow(line))) {
+      const bottom = lines.length - tail.length + sepIdx[0];
+      for (let i = bottom - 1; i >= 0; i--) {
+        if (!isSep(lines[i])) continue;
+        if (COMPOSER_CARET_ROW.test(lines[i + 1] ?? "")) { rows = lines; boxTop = i; }
+        break;
+      }
+    }
+  }
+  if (boxTop >= 0) {
     // Input box: take the box body AND everything below the box (the footer).
     // The footer is where Claude Code renders "esc to interrupt" while it is
     // generating — and the input box (❯) stays visible the whole time for
@@ -14852,7 +14899,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // it; the queued text never submitted, never acked, and retried forever.
     // Nothing but the live footer renders below the box, so this can't pull in
     // scrollback (the reason the region is narrowed in the first place).
-    const top = sepIdx[sepIdx.length - 2];
+    const top = boxTop;
     // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
     // The running turn's only marker is now its own status line, rendered
     // above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry that line
@@ -14863,10 +14910,10 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // (2026-09-29, jx74ek4). It cannot be scrollback: the finished form reads
     // differently, and everything above the newest ⏺ is left out.
     let status: string[] = [];
-    for (let i = top - 1; i >= 0 && !/^⏺/.test(tail[i]); i--) {
-      if (CLAUDE_TURN_STATUS_LINE.test(tail[i])) { status = [tail[i]]; break; }
+    for (let i = top - 1; i >= 0 && !/^⏺/.test(rows[i]); i--) {
+      if (CLAUDE_TURN_STATUS_LINE.test(rows[i])) { status = [rows[i]]; break; }
     }
-    return [...status, ...tail.slice(top + 1)].join("\n");
+    return [...status, ...rows.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -16849,6 +16896,15 @@ class InputBlockedError extends Error {
   }
 }
 
+// An error the delivery layer must see as is: a pane holding for a human, a
+// write it must reconcile before writing again, or a write cap that is spent.
+// No fallback (a resume, a repair, a second pane) may swallow one of these and
+// write the message somewhere else.
+function isDeliveryVerdict(err: unknown): boolean {
+  if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
+  return /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED|INJECT_EXHAUSTED):/.test(err instanceof Error ? err.message : String(err));
+}
+
 // Is this "menu" the message being delivered, sitting in the composer? Typed
 // text renders in the composer as itself, so a message that is a numbered list
 // scrolls to "❯ 1. …" over its "2. …" rows: exactly a dialog with its cursor on
@@ -17544,8 +17600,6 @@ export async function tmuxComposerDraft(
 // composer holds as real text only matches once the frame is out of the way
 // (ct-49607). Both sides go through this, so a payload containing box glyphs
 // still compares against itself.
-const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
-
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {
@@ -17736,7 +17790,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
   try {
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
-    if (!opts?.delivery || error instanceof InputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
+    if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
     throw new TmuxDeliveryUncertainError(String(error));
   }
 }
@@ -17966,7 +18020,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!settled || !/paste has not appeared intact|^AGENT_STDIN_NOT_READY: composer never showed/.test(message)) throw error;
-        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript; writing it again`);
+        // The write after this one is counted and capped by journal.begin
+        // (TMUX_PASTE_WRITE_CAP): a payload that reaches the agent and comes
+        // back changed must not be typed forever.
+        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript after ${delivery.journal.writesOf(opts!.delivery!.messageId)} write(s); writing it again`);
         delivery.journal.release(opts!.delivery!.messageId);
         prior = null;
         pasteAt = Date.now();
@@ -24125,7 +24182,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+      if (isDeliveryVerdict(err)) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -24496,8 +24553,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // plain-argv exec contract holds).
     const releaseSpawn = await accountLifecycleGate.acquireResume(agentType);
     try {
-      await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
-      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+      await typeIntoPane(tmuxSession, `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`);
       if (agentType === "claude") {
         await new Promise(resolve => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
       }
@@ -24602,7 +24658,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             break;
           }
       } catch (err) {
-        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
       }
     }
     if (!ready) {
@@ -24650,7 +24706,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           }
         }
       } catch (err) {
-        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
       }
     }
 
@@ -24664,7 +24720,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+    if (isDeliveryVerdict(err)) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -24895,7 +24951,7 @@ async function repairAndResumeSession(
           return true;
         }
       } catch (err) {
-        if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(err instanceof Error ? err.message : String(err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
         log(`Convex regeneration failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
@@ -25092,7 +25148,7 @@ async function recoverBlankCodexForDelivery(
   if (unavailable()) return false;
   const params = blankCodexRecoveryParams(data, projectPath, resolveCodexPermissionDefaults(config));
   if (!params) return false;
-  const builtContext = await buildCodexStableContext(config, projectPath!, {});
+  const builtContext = await buildCodexStableContext(config, projectPath!, {}, conversationId);
   if (unavailable()) return false;
   const response = await startCodexThreadThenRecordStableContext(
     () => server!.threadStart({ ...params, ...(builtContext ? { developerInstructions: builtContext.text } : {}) }),
@@ -25224,8 +25280,7 @@ async function startFreshSessionForDelivery(
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
     if (blankAccount.account) await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", blankAccount.account).catch(() => {});
     markClaudeSessionLive(tmuxSession, blankAccount.account);
-    tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+    await typeIntoPane(tmuxSession, blankCmdText);
     const entry: StartedSessionInfo = {
       tmuxSession,
       projectPath,
@@ -25746,9 +25801,7 @@ async function deliverMessageIntoSession(
         // still-booting pane. Falling through would start a SECOND instance
         // beside it (the incident's duplicated-backend shape) — rethrow so the
         // delivery layer retries into the same pane after backoff instead.
-        if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
-          throw err;
-        }
+        if (isDeliveryVerdict(err)) throw err;
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
         // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
         if (Date.now() - entry.startedAt > 60_000) {
@@ -25884,9 +25937,7 @@ async function deliverMessageIntoSession(
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
       // parallel instance beside it — rethrow and let the retry re-enter this
       // same pane after backoff.
-      if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
-        throw err;
-      }
+      if (isDeliveryVerdict(err)) throw err;
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
       if (noteUnresolvablePane(sessionId, msg)) {
         if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
@@ -30496,8 +30547,7 @@ async function main(): Promise<void> {
                 await setTmuxSessionOption(tmuxSession, name, value);
               },
               async launchLiteral({ tmuxSession, command }) {
-                await tmuxExec(["send-keys", "-l", "-t", `${tmuxSession}:0.0`, command]);
-                await tmuxExec(["send-keys", "-t", `${tmuxSession}:0.0`, "Enter"]);
+                await typeIntoPane(`${tmuxSession}:0.0`, command);
               },
               async listCandidates({ expectedTmuxSession }) {
                 let names: string[];
@@ -30807,11 +30857,12 @@ async function main(): Promise<void> {
         const inFlight = messagesInFlight.get(msg._id);
         if (inFlight !== undefined) {
           const age = Date.now() - inFlight.ts;
-          if (age < IN_FLIGHT_HARD_TTL_MS) {
+          const ttlMs = inFlight.ttlMs ?? IN_FLIGHT_HARD_TTL_MS;
+          if (age < ttlMs) {
             logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
             continue;
           }
-          logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
+          logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${ttlMs / 1000}s TTL, retrying`);
           messagesInFlight.delete(msg._id);
         }
         messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
@@ -30878,22 +30929,36 @@ async function main(): Promise<void> {
         }
 
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        // The budget scales with the payload: a typed message runs minutes past
+        // the base. The in-flight entry outlives the budget by a grace, and on a
+        // timeout it is held until the attempt itself settles, so a retry never
+        // writes over a live attempt (five copies of one trigger prompt, 2026-10-05).
+        let timedOut = false;
+        let attempt: Promise<boolean> | undefined;
+        const releaseInFlight = () => {
+          messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(msg.conversation_id);
+        };
         try {
           const rawAgent = typeof msg.conversation_agent_type === "string" ? msg.conversation_agent_type : undefined;
+          const agentType = rawAgent ? fromConvexAgentType(rawAgent) : undefined;
+          const timeoutMs = deliveryTimeoutMsFor(messageContent, agentType, DELIVERY_TIMEOUT_MS);
+          messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, ttlMs: timeoutMs + IN_FLIGHT_GRACE_MS });
+          attempt = deliverMessage(
+            msg.conversation_id,
+            messageContent,
+            conversationCache,
+            syncService,
+            msg._id,
+            titleCache,
+            agentType,
+          );
           const delivered = await Promise.race([
-            deliverMessage(
-              msg.conversation_id,
-              messageContent,
-              conversationCache,
-              syncService,
-              msg._id,
-              titleCache,
-              rawAgent ? fromConvexAgentType(rawAgent) : undefined,
-            ),
+            attempt,
             new Promise<never>((_, reject) => {
               timeoutHandle = setTimeout(
-                () => reject(new Error(`deliverMessage timed out after ${DELIVERY_TIMEOUT_MS / 1000}s`)),
-                DELIVERY_TIMEOUT_MS,
+                () => { timedOut = true; reject(new Error(`deliverMessage timed out after ${timeoutMs / 1000}s`)); },
+                timeoutMs,
               );
             }),
           ]);
@@ -30985,6 +31050,22 @@ async function main(): Promise<void> {
             // own pace.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.holdReason}: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason, err.recheckMs);
+          } else if (err instanceof TmuxDeliveryExhaustedError) {
+            // The pane took this payload TMUX_PASTE_WRITE_CAP times and the
+            // transcript never echoed it exactly. The agent most likely ran it
+            // each time (a client that rewrites what it echoes), so a further
+            // write is harm, not recovery. Terminal on the server (cancelled
+            // never re-pends), and said in the conversation itself, where the
+            // person reading the session sees it.
+            logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} ${errMsg}`);
+            syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
+            syncService.addMessage({
+              conversationId: msg.conversation_id,
+              role: "system",
+              subtype: "delivery_failed",
+              timestamp: Date.now(),
+              content: `A message to this session was written into its terminal ${err.writes} times and its transcript never echoed it exactly, so delivery stopped and the message was cancelled. The agent may have taken it each time. Message: ${messageContent.slice(0, 200).replace(/\s+/g, " ")}${messageContent.length > 200 ? "…" : ""}`,
+            }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
@@ -31000,8 +31081,10 @@ async function main(): Promise<void> {
           }
         } finally {
           if (timeoutHandle) clearTimeout(timeoutHandle);
-          messagesInFlight.delete(msg._id);
-          conversationDeliveryActive.delete(msg.conversation_id);
+          // A timed-out attempt is still running in the pane: keep its slot
+          // until it settles (the entry's ttl reclaims one that never does).
+          if (timedOut && attempt) attempt.then(releaseInFlight, releaseInFlight);
+          else releaseInFlight();
         }
       }
     } else {

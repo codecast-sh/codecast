@@ -1,11 +1,17 @@
 // The Evals foundation (U6): the fixture world answers every route in the
 // contract with contract-shaped values, the store turns each way the evals can
 // be out of reach into the right connection state, the shell paints the right
-// screen for each, and the chart parts draw what they say they draw.
+// screen for each, and the chart parts draw what they say they draw. The
+// shell reads the app only through its host (host.tsx), which the last block
+// holds: another host's router and screens take over, and the shell's sources
+// carry no import of the app, no utility class and no --sol-* token.
 
 import { afterAll, describe, expect, it } from "bun:test";
 import { act } from "react";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import { JSDOM } from "jsdom";
+import { formatUsd } from "@codecast/shared/render/changeCardHtml";
 import { EVALS_ROUTE_KEYS, matchEvalsRoute, runRowProblems, type EvalsRouteKey } from "@codecast/shared/contracts/evalsApi";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
@@ -30,7 +36,9 @@ const { fixtureTransport, readEvalsFixtureMode } = await import("../../../lib/ev
 const { EvalsShell } = await import("../EvalsShell");
 const { ScoreStrip } = await import("../charts/ScoreStrip");
 const { Well } = await import("../charts/Well");
-const { VerdictGlyph, SeparationMark, ScoreBar, ProvenanceChips } = await import("../parts");
+const { VerdictGlyph, SeparationMark, ScoreBar, ProvenanceChips, EvalsLink } = await import("../parts");
+const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
+const { usd } = await import("../format");
 
 afterAll(() => {
   closeDomWindow(dom);
@@ -250,5 +258,109 @@ describe("the chart parts", () => {
     expect(container.querySelector(".ev-chip--dirty")?.textContent).toContain("patch");
     expect(container.querySelector(".ev-chip--live")?.textContent).toContain("not reproducible");
     await unmount();
+  });
+});
+
+describe("the host seam", () => {
+  it("renders through the host a provider hands it: its screens and its router", async () => {
+    useEvalsStore.setState({ connection: "no-daemon", unreachableReason: "no-devices", unreachableDetail: null, stderr: null, health: null });
+    const went: string[] = [];
+    const host = {
+      ...codecastEvalsHost,
+      useConnection: () => ({ state: "elsewhere", screen: <div data-other-screen>another app's screen</div> }),
+      useNavigate: () => (href: string) => void went.push(href),
+    };
+    const { container, unmount } = await mount(
+      <EvalsHostProvider host={host}>
+        <EvalsShell view={{ view: "home", cadence: null }}>
+          <div data-child>child</div>
+        </EvalsShell>
+        <EvalsLink href="/evals/bisect" data-other-link>bisects</EvalsLink>
+      </EvalsHostProvider>,
+    );
+    expect(container.querySelector("[data-evals-shell]")?.getAttribute("data-evals-connection")).toBe("elsewhere");
+    expect(container.querySelector("[data-other-screen]")).not.toBeNull();
+    expect(container.querySelector("[data-child]")).toBeNull();
+    expect(container.textContent).not.toContain("Can't reach the local daemon");
+    await act(async () => container.querySelector<HTMLAnchorElement>("[data-other-link]")!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 })));
+    expect(went).toEqual(["/evals/bisect"]);
+    await unmount();
+  });
+
+  const EVALS = resolve(import.meta.dir, "..");
+  const WEB = resolve(EVALS, "../..");
+  const SHELL = ["EvalsShell.tsx", "EvalsNav.tsx", "parts.tsx", "format.ts", ...readdirSync(join(EVALS, "pages")).map((f) => `pages/${f}`)];
+  /** Each view group the shell's rules already hold, with its stylesheet. */
+  const BISECT_GROUP = ["AttributionView.tsx", "CommitPanel.tsx", "BisectRuler.tsx", "BisectView.tsx", "BisectListView.tsx", "BisectPlanPanel.tsx", "bisectModel.ts"];
+  const FREEZE_GROUP = ["FreezeView.tsx", "FreezeLedger.tsx", "freezeModel.ts", "CompareView.tsx", "ComparePanel.tsx", "EpochDiffSheet.tsx"];
+  const RUN_GROUP = ["RunView.tsx", "GateList.tsx", "JudgeChecks.tsx", "CostTrack.tsx", "runModel.ts"];
+  const SURFACE_GROUP = ["SurfaceView.tsx", "SurfaceWallView.tsx", "WhatMoved.tsx", "Seismograph.tsx", "seismographModel.ts", "surfaceModel.ts", "wallModel.ts", "verdictModel.ts", ...readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)];
+  const SOURCES = [...SHELL, ...BISECT_GROUP, ...FREEZE_GROUP, ...RUN_GROUP, ...SURFACE_GROUP];
+  const STYLESHEETS = ["evals.css", "bisect.css", "freeze.css", "run.css", "runPanels.css", "surface.css", "wall.css"];
+  /** Codecast's run anatomy: the host renders it under a run (useRunPanels), so no shared view imports it. */
+  const ANATOMY = new Set(["CallPane", "AgentTranscript", "GuardLog", "RunFiles", "runPanels"].map((f) => `components/evals/${f}`));
+  /** What a shell file may import from outside the area: react, icons, the contract and the area's own hooks. */
+  const OUTSIDE = new Set(["react", "lucide-react", "@codecast/shared/contracts/evalsApi", "lib/evals/hooks"]);
+
+  /** The literal class text of every className in a source: the strings and template runs inside each attribute's value. */
+  function classTokens(text: string): string[] {
+    const out: string[] = [];
+    for (const m of text.matchAll(/className=/g)) {
+      let i = m.index! + m[0].length;
+      let value: string;
+      if (text[i] === '"') value = text.slice(i, text.indexOf('"', i + 1) + 1);
+      else {
+        let depth = 0;
+        const from = i;
+        do depth += text[i] === "{" ? 1 : text[i] === "}" ? -1 : 0;
+        while (++i < text.length && depth > 0);
+        value = text.slice(from, i);
+      }
+      // A compared string (`x === "culprit" ?`) is not class text. Template holes are code, and each run between them
+      // continues the token before it (`ev-chip--${tone}`).
+      const literals = [...value.replace(/[!=]==?\s*"[^"]*"/g, "").replace(/\$\{[^}]*\}/g, "\u0000").matchAll(/"([^"]*)"|`([^`]*)`/g)].map((l) => l[1] ?? l[2]);
+      for (const lit of literals) out.push(...lit.split(/\s+/).filter((t) => t && !t.startsWith("\u0000")).map((t) => t.replaceAll("\u0000", "")));
+    }
+    return out;
+  }
+
+  it("keeps the shell's sources free of the app: no import of its own, no utility class, no CSS import", () => {
+    const problems: string[] = [];
+    for (const file of SOURCES) {
+      const text = readFileSync(join(EVALS, file), "utf8");
+      for (const m of text.matchAll(/^(?:import|export)\b[^;]*?\bfrom\s+"([^"]+)"|^import\s+"([^"]+)"/gm)) {
+        const spec = m[1] ?? m[2];
+        if (spec.endsWith(".css")) problems.push(`${file}: imports ${spec}; the mount root imports the stylesheets once`);
+        const inWeb = spec.startsWith(".") ? relative(WEB, resolve(dirname(join(EVALS, file)), spec)) : spec;
+        if (!OUTSIDE.has(inWeb) && !inWeb.startsWith("components/evals/")) problems.push(`${file}: imports ${spec}; the app is reached through useEvalsHost()`);
+        if (ANATOMY.has(inWeb)) problems.push(`${file}: imports ${spec}; codecast's run anatomy reaches a run through useRunPanels`);
+      }
+      for (const token of classTokens(text)) if (!token.startsWith("ev-")) problems.push(`${file}: class "${token}" is not an ev-* rule`);
+      if (text.includes("--sol-")) problems.push(`${file}: reads a --sol-* token; the views read --ev-*`);
+    }
+    expect(problems).toEqual([]);
+  });
+
+  it("reads colour and type only through --ev-* tokens, each of which tokens.css declares", () => {
+    const tokens = readFileSync(join(EVALS, "tokens.css"), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+    const declared = new Set([...tokens.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+    expect([...declared].filter((t) => !t.startsWith("--ev-"))).toEqual([]);
+    // A view's own inline variable (an animation delay, the ruler's geometry) is set where it is read, not a theme token.
+    const inline = new Set(SOURCES.concat(readdirSync(EVALS).filter((f) => f.endsWith(".tsx")), readdirSync(join(EVALS, "charts")).map((f) => `charts/${f}`)).flatMap((f) => [...readFileSync(join(EVALS, f), "utf8").matchAll(/["'](--ev-[\w-]+)["']/g)].map((m) => m[1])));
+    for (const sheet of STYLESHEETS) {
+      const css = readFileSync(join(EVALS, sheet), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+      expect({ sheet, foreign: css.match(/--(?:sol|font)-[\w-]+/g) ?? [] }).toEqual({ sheet, foreign: [] });
+      // A sheet's own variable (the wall's column template) is declared where it is read, and only under --ev-*.
+      const own = new Set([...css.matchAll(/[{;]\s*(--[\w-]+)\s*:/g)].map((m) => m[1]));
+      expect({ sheet, declares: [...own].filter((t) => !t.startsWith("--ev-")) }).toEqual({ sheet, declares: [] });
+      const read = new Set([...css.matchAll(/var\((--ev-[\w-]+)/g)].map((m) => m[1]));
+      expect({ sheet, undeclared: [...read].filter((t) => !declared.has(t) && !inline.has(t) && !own.has(t)) }).toEqual({ sheet, undeclared: [] });
+    }
+  });
+
+  it("writes dollars the way the change cards do, from a dime up", () => {
+    for (const v of [0.1, 0.5, 2.96, 9.994, 9.996, 10, 39.4, 1234.5]) expect(usd(v)).toBe(formatUsd(v));
+    expect(usd(0.004)).toBe("$0.004");
+    expect(usd(0)).toBe("$0");
   });
 });

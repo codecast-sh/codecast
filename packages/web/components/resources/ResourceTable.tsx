@@ -5,10 +5,10 @@
 // its processes; a process several sessions share appears once, in its own
 // row, and each session that uses it points there instead of adding it.
 import React from "react";
-import { ChevronRight, ExternalLink, Moon, Play, Share2, Square } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, ExternalLink, Moon, Play, Share2, Square } from "lucide-react";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 import { cn } from "../../lib/utils";
-import { KIND_LABEL, fmtAgo, fmtBytes, fmtCpu, projectName, type TableRow, type Usage } from "./resourceModel";
+import { KIND_LABEL, fmtAgo, fmtBytes, fmtCpu, projectName, type Sort, type SortBy, type TableRow, type Usage } from "./resourceModel";
 import type { ResourceActions, ResourceMachine, ResourceSession, ResourceSessionState } from "./types";
 
 const STATE_STYLE: Record<ResourceSessionState, { dot: string; label: string }> = {
@@ -38,6 +38,19 @@ function Num({ value, share, tone, className }: { value: string; share: number; 
   );
 }
 
+function Head({ col, sort, onSort, right, className, title, children }: { col: SortBy; sort: Sort; onSort: (by: SortBy) => void; right?: boolean; className?: string; title?: string; children: React.ReactNode }) {
+  const active = sort.by === col;
+  const Arrow = sort.dir === "asc" ? ChevronUp : ChevronDown;
+  return (
+    <span role="columnheader" aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"} className={cn("min-w-0", right && "text-right", className)}>
+      <button type="button" onClick={() => onSort(col)} title={title} className={cn("inline-flex items-center gap-0.5 uppercase tracking-wide hover:text-sol-text", right && "flex-row-reverse", active && "text-sol-text")}>
+        {children}
+        <Arrow className={cn("h-3 w-3", active ? "opacity-100" : "opacity-0")} />
+      </button>
+    </span>
+  );
+}
+
 function Disabled({ why, children }: { why: string; children: React.ReactNode }) {
   return <span title={why} className="inline-flex cursor-not-allowed items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-sol-text-dim opacity-60">{children}</span>;
 }
@@ -61,7 +74,10 @@ function ProcessTable({ processes, totals, remainder, machines }: { processes: R
       {shown.map((p) => (
         <div key={`${p.pid}:${p.startedAt ?? 0}`} className="grid grid-cols-[4rem_minmax(0,1fr)_4.5rem_4.5rem_4.5rem] gap-x-3 py-[3px] text-sol-text-secondary sm:grid-cols-[4rem_minmax(0,1fr)_5.5rem_4.5rem_5rem_5rem]">
           <span className="tabular-nums text-sol-text-dim">{p.pid}</span>
-          <span className="truncate" title={p.name}>{p.name}</span>
+          <span className="flex min-w-0 items-center gap-1">
+            <span className="truncate" title={p.name}>{p.name}</span>
+            {p.detached && <span className="shrink-0 rounded border border-sol-border/40 px-1 text-[9px] text-sol-text-dim" title="Started by this session outside its process tree (backgrounded or reparented). It keeps running here if the session moves.">detached</span>}
+          </span>
           <span className="hidden text-sol-text-muted sm:block">{KIND_LABEL[p.kind].toLowerCase()}</span>
           <span className={cn("text-right tabular-nums", totals.cpu > 0 && p.cpu / totals.cpu > 0.3 && "text-sol-blue")}>{fmtCpu(p.cpu)}</span>
           <span className="text-right tabular-nums">{fmtBytes(p.rss)}</span>
@@ -113,9 +129,11 @@ export type ResourceTableProps = {
   actions?: ResourceActions;
   actionsDisabledReason?: string;
   showMachine: boolean;
+  sort: Sort;
+  onSort: (by: SortBy) => void;
 };
 
-export function ResourceTable({ rows, sharedRows, totals, machines, now, selected, onToggle, actions, actionsDisabledReason, showMachine }: ResourceTableProps) {
+export function ResourceTable({ rows, sharedRows, totals, machines, now, selected, onToggle, actions, actionsDisabledReason, showMachine, sort, onSort }: ResourceTableProps) {
   const [open, setOpen] = React.useState<Set<string>>(new Set());
   const toggleOpen = (k: string) => setOpen((s) => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n; });
   const machineName = (id: string) => machines.find((m) => m.deviceId === id)?.name ?? id;
@@ -225,12 +243,12 @@ export function ResourceTable({ rows, sharedRows, totals, machines, now, selecte
     <div role="table" aria-label="Resources by session">
       <div className={cn(COLS, "sticky top-0 z-[1] border-b border-sol-border/30 bg-sol-bg px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim")}>
         <span />
-        <span>Name</span>
-        <span className="hidden sm:block">State</span>
-        <span className="text-right">CPU</span>
-        <span className="text-right" title="Resident memory, including pages shared between processes. Not the same as memory a move would free.">Resident</span>
-        <span className="hidden text-right sm:block">Procs</span>
-        <span className="hidden text-right sm:block">Idle</span>
+        <Head col="name" sort={sort} onSort={onSort}>Name</Head>
+        <Head col="state" sort={sort} onSort={onSort} className="hidden sm:block">State</Head>
+        <Head col="cpu" sort={sort} onSort={onSort} right>CPU</Head>
+        <Head col="memory" sort={sort} onSort={onSort} right title="Resident memory, including pages shared between processes. Not the same as memory a move would free.">Resident</Head>
+        <Head col="procs" sort={sort} onSort={onSort} right className="hidden sm:block">Procs</Head>
+        <Head col="idle" sort={sort} onSort={onSort} right className="hidden sm:block">Idle</Head>
       </div>
       {rows.map((r) => renderRow(r))}
       <div className={cn(COLS, "px-3 py-1.5 text-[11px] text-sol-text-muted")}>

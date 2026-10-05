@@ -118,6 +118,14 @@ export const assistantTables = {
     // set one (the start of Stripe's billing cycle); the wallet's creation
     // before that. Written only by lib/wallet's alignPeriod.
     period_anchor: v.optional(v.number()),
+    // The end of the last period Stripe confirmed paid, while a live
+    // subscription bills this wallet; absent otherwise. A period ending later
+    // grants the free allowance until its payment lands (lib/wallet
+    // allowancePlan), so a renewal that is never paid grants nothing.
+    paid_through: v.optional(v.number()),
+    // When billing last read this wallet's subscription from Stripe. A read
+    // older than this one is a stale snapshot and is not applied (billing.ts).
+    subscription_read_at: v.optional(v.number()),
   })
     .index("by_user", ["user_id"])
     .index("by_stripe_customer", ["stripe_customer_id"]),

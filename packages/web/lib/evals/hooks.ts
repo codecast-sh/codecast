@@ -3,8 +3,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import type { ChangesResponse, EvalsRouteKey, EvalsResponse } from "@codecast/shared/contracts/evalsApi";
-import { useEvalsStore, evalsCacheKey } from "../../store/evalsStore";
+import type { ChangesResponse, EvalsRouteKey, EvalsResponse, HealthResponse } from "@codecast/shared/contracts/evalsApi";
+import { useEvalsStore, evalsCacheKey, type EvalsResource } from "../../store/evalsStore";
 import { useTabVisible } from "../../hooks/usePagePresence";
 import type { EvalsArgs } from "./client";
 
@@ -79,6 +79,34 @@ export function useEvalsResource<K extends EvalsRouteKey>(key: K, args: EvalsArg
     [res, reload],
   );
 }
+
+/** How the area is doing: GET /health as last read, whether it is connected, and the transport's kind ("fixture" marks the dev world). */
+export function useEvalsHealth(): { health: HealthResponse | null; connected: boolean; transport: string | null; refresh: () => void } {
+  const health = useEvalsStore((s) => s.health);
+  const connected = useEvalsStore((s) => s.connection === "connected");
+  const transport = useEvalsStore((s) => s.transport?.kind ?? null);
+  const refresh = useCallback(() => void useEvalsStore.getState().refreshHealth(), []);
+  return useMemo(() => ({ health, connected, transport, refresh }), [health, connected, transport, refresh]);
+}
+
+/** Every answer the area holds, by cache key: what the search can resolve without asking. */
+export function useEvalsLoaded(): Record<string, EvalsResource> {
+  return useEvalsStore((s) => s.resources);
+}
+
+/**
+ * The area's verbs outside a render: `call` one route for its answer (a
+ * start, a stop, a price), `load` an answer into the cache, and `invalidate`
+ * the cached answers a write made stale.
+ */
+export function useEvalsClient() {
+  return useMemo(() => {
+    const { call, load, invalidate } = useEvalsStore.getState();
+    return { call, load, invalidate };
+  }, []);
+}
+
+export { useDebounce } from "../../hooks/useDebounce";
 
 function subscribeVisibility(fn: () => void): () => void {
   document.addEventListener("visibilitychange", fn);

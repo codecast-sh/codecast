@@ -3,7 +3,7 @@
 // real data.
 
 import type { SimCatalogResponse, SimInvariant, SimRunResponse, SimRunRow, SimScenario, SimSessionSummary } from "@codecast/shared/contracts/evalsApi";
-import { makeRng } from "@codecast/shared/random";
+import { makeRng } from "@platform/evals/analysis";
 import { simGridOf } from "../../../../store/__tests__/sim/grid";
 import { simFixtureRun } from "../sim";
 import { DAY, type FixtureState, fixtureHex, iso, stampOf } from "./model";

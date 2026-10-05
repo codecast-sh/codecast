@@ -41,20 +41,21 @@ mock.module("../../hooks/useSyncSettings", () => ({
   ...syncSettings,
   useSettingsData: (name: any, team?: any) => {
     const real = realSettingsData(name, team);
-    return name === "connections" && connectionsError ? { data: undefined, error: connectionsError } : real;
+    return name === "whiskConnection" && connectionsError ? { data: undefined, error: connectionsError } : real;
   },
 }));
 mock.module("../../hooks/useQueryNoThrow", () => ({
   useQueryNoThrow: (ref: any) => {
     const name = getFunctionName(ref);
-    const data = name === "auth:signInProviders" ? { google: true } : name === "googleOAuth:connectAvailable" ? connectAvailable : undefined;
+    const data = name === "auth:signInProviders" ? { google: true } : name === "whisk:connectAvailable" ? connectAvailable : undefined;
     return { data, error: undefined, retry() {} };
   },
 }));
 
 const { useInboxStore } = await import("../../store/inboxStore");
 const { settingsDataKey } = await import("../../lib/settingsData");
-const { ASKS } = await import("../../components/simple/lane");
+const { ASKS, ASK_FIRST } = await import("../../components/simple/lane");
+const { disconnectNote } = await import("../../components/simple/connectionWords");
 const { MAIL_COMING, assistantPromise } = await import("../../components/simple/assistantPromise");
 const { default: Welcome } = await import("./page");
 
@@ -89,20 +90,20 @@ async function open(path = "/welcome") {
 }
 
 /** Drops one settings feed from the store, as before it first answers. */
-function unanswered(name: "connections" | "googleConnections") {
+function unanswered(name: "whiskConnection") {
   const key = settingsDataKey(name, "u_me", undefined)!;
   const { [key]: _gone, ...rest } = useInboxStore.getState().settingsData as Record<string, unknown>;
   useInboxStore.setState({ settingsData: rest } as any);
 }
 
-function setGoogle(connected: boolean) {
-  const s = useInboxStore.getState();
-  const conn = settingsDataKey("connections", "u_me", undefined)!;
-  const goog = settingsDataKey("googleConnections", "u_me", undefined)!;
-  s.syncRecord("settingsData", conn, { _id: conn, value: { apps: connected ? [{ id: "gmail", status: "connected", detail: "maya@x.me", disconnect_id: "g1" }] : [] } } as any);
-  s.syncRecord("settingsData", goog, {
-    _id: goog,
-    value: connected ? [{ _id: "g1", email: "maya@x.me", pending: false, assistant: true, can: { read_mail: true, modify_mail: true, send_mail: true, calendar: true } }] : [],
+/** The person's mail connection through Whisk, as whisk.connection answers it. */
+function setMail(connected: boolean) {
+  const key = settingsDataKey("whiskConnection", "u_me", undefined)!;
+  useInboxStore.getState().syncRecord("settingsData", key, {
+    _id: key,
+    value: connected
+      ? { connected: true, whisk_url: "https://whisk.email", email: "maya@x.me", mailboxes: ["maya@x.me"], can: { read_mail: true, modify_mail: true, send_mail: true, calendar: true }, connected_at: 1 }
+      : { connected: false, whisk_url: "https://whisk.email" },
   } as any);
 }
 
@@ -143,7 +144,7 @@ describe("/welcome", () => {
     signedIn = true;
   });
 
-  test("signed out where Google cannot be connected: no promise of mail or calendar", async () => {
+  test("signed out where mail cannot be connected: no promise of mail or calendar", async () => {
     signedIn = false;
     connectAvailable = false;
     await open();
@@ -155,10 +156,12 @@ describe("/welcome", () => {
   });
 
   test("not connected: connect, and Not now moves on and joins the lane", async () => {
-    setGoogle(false);
+    setMail(false);
     await open();
     await settle(() => text().includes("Bring in your mail and calendar"));
-    expect(text()).toContain("I ask before I send an email or change your calendar.");
+    expect(text()).toContain(ASK_FIRST);
+    expect(text()).toContain(disconnectNote(false));
+    expect(text()).toContain("One step with Whisk");
     await act(async () => { button("Not now")!.click(); });
     await settle(() => text().includes("What can I take off your plate?"));
     expect(text()).toContain(ASKS.planWeek);
@@ -166,7 +169,7 @@ describe("/welcome", () => {
   });
 
   test("connected: the first ask is about the week, and tapping it starts and lands", async () => {
-    setGoogle(true);
+    setMail(true);
     await open();
     await settle(() => text().includes(ASKS.week));
     await act(async () => { (container().querySelector(".wl-lead") as HTMLButtonElement).click(); });
@@ -176,46 +179,45 @@ describe("/welcome", () => {
     expect(starts[0]).toMatchObject({ agent_type: "codecast", first_message: ASKS.week });
   });
 
-  test("connected: the first ask waits for what the grant allows, never showing a weaker one", async () => {
-    setGoogle(true);
-    unanswered("googleConnections");
+  test("connected: the first ask waits for the connection to answer, never showing a weaker one", async () => {
+    setMail(true);
+    unanswered("whiskConnection");
     await open();
     await settle(() => text().includes("Getting things ready"));
     await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
     expect(text()).not.toContain(ASKS.replies);
     expect(text()).not.toContain(ASKS.week);
-    await act(async () => { setGoogle(true); });
+    await act(async () => { setMail(true); });
     await settle(() => text().includes(ASKS.week));
     expect(text()).not.toContain(ASKS.replies);
   });
 
   test("a skipped visit, connected since, waits for the grant before choosing the first ask", async () => {
-    setGoogle(true);
-    unanswered("connections");
-    unanswered("googleConnections");
+    setMail(true);
+    unanswered("whiskConnection");
     await open("/welcome?step=start");
     await settle(() => text().includes("Getting things ready"));
     await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
     expect(text()).not.toContain(ASKS.planWeek);
     expect(text()).not.toContain(ASKS.replies);
     expect(text()).not.toContain(ASKS.week);
-    await act(async () => { setGoogle(true); });
+    await act(async () => { setMail(true); });
     await settle(() => text().includes(ASKS.week));
     expect(text()).not.toContain(ASKS.planWeek);
     expect(text()).not.toContain(ASKS.replies);
   });
 
-  test("a connections read that fails still lets the person on: the connect screen and its Not now", async () => {
-    unanswered("connections");
-    connectionsError = new Error("listConnections failed");
+  test("a connection read that fails still lets the person on: the connect screen and its Not now", async () => {
+    unanswered("whiskConnection");
+    connectionsError = new Error("whisk.connection failed");
     await open();
     await settle(() => text().includes("Bring in your mail and calendar"));
     expect(button("Not now")).toBeTruthy();
     connectionsError = undefined;
   });
 
-  test("where Google cannot be connected: straight to the asks, saying mail and calendar are coming", async () => {
-    setGoogle(false);
+  test("where mail cannot be connected: straight to the asks, saying mail and calendar are coming", async () => {
+    setMail(false);
     connectAvailable = false;
     await open();
     await settle(() => text().includes("What can I take off your plate?"));

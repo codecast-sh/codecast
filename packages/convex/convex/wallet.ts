@@ -7,11 +7,13 @@
 // from an action, and the plan screen's query.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { internal } from "./_generated/api";
 import { internalMutation, query } from "./functions";
 import { planIdValidator } from "./assistantSchema";
 import {
   credit,
   ensureWallet,
+  reconcileWallet,
   releaseTurn,
   reserve as reserveTurn,
   setPlan as setWalletPlan,
@@ -88,5 +90,31 @@ export const setPlan = internalMutation({
   handler: async (ctx, { user_id, plan, ...subscription }) => {
     const wallet = await setWalletPlan(ctx, user_id, plan, subscription);
     return wallet._id;
+  },
+});
+
+/** The hourly leak sweep (crons.ts): pages every wallet and schedules
+ *  reconcileOne for each that holds anything, so each person's heavier
+ *  reconcile runs in its own transaction. The lease only frees leaked holds
+ *  it can see cheaply; this catches the rest, holds whose turn row was
+ *  deleted included. Safe to rerun. */
+export const reconcile = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ scanned: number; scheduled: number; done: boolean }> => {
+    const page = await ctx.db.query("wallets").paginate({ cursor: args.cursor ?? null, numItems: 200 });
+    const holding = page.page.filter((wallet) => wallet.period_reserved_usd > 0);
+    for (const wallet of holding) await ctx.scheduler.runAfter(0, internal.wallet.reconcileOne, { user_id: wallet.user_id });
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.wallet.reconcile, { cursor: page.continueCursor });
+    return { scanned: page.page.length, scheduled: holding.length, done: page.isDone };
+  },
+});
+
+/** Gives back one person's leaked holds (lib/wallet's reconcileWallet). */
+export const reconcileOne = internalMutation({
+  args: { user_id: v.id("users") },
+  handler: async (ctx, args): Promise<number> => {
+    const released = await reconcileWallet(ctx, args.user_id);
+    if (released > 0) console.log("wallet_reconcile", { user_id: args.user_id, released });
+    return released;
   },
 });

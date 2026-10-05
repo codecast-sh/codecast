@@ -1,0 +1,26 @@
+{
+  "name": "changes-story canvas-embed",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:canvas-embed"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:canvas-embed",
+    "title": "changes-story canvas-embed"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/canvas-embed.json"
+  },
+  "judge": "The article tells that the failed-payment banner now suggests retrying only on cards that can take the charge, leaving out expired and maxed-out cards and saying why. It includes the session's canvas of which cards a retry can use, embedded as a figure (a cast-canvas block) after a sentence saying what it shows.",
+  "notes": null,
+  "tags": [],
+  "id": "9240901b-68c7-4213-ba01-d31e76933882",
+  "createdAt": "2026-10-05T22:58:09.893Z"
+}

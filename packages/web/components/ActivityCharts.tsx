@@ -4,6 +4,12 @@ import { Activity, ChevronLeft, ChevronRight, Clock, LayoutGrid, MessageSquare, 
 import { useTheme } from "./ThemeProvider";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { HEAT_COLORS_LIGHT, HEAT_COLORS_DARK, heatColor, useContainerWidth, HoverTip } from "./ActivityHeatmap";
+import { BrushRect as DayBrushRect } from "./evals/charts/BrushRect";
+import { useDayBrush } from "./evals/charts/useDayBrush";
+import { MONTHS, timeAxisLabels } from "./evals/charts/scale";
+
+// The day axis and the brush are the Evals charts' own (components/evals/charts); these charts reuse them.
+export { timeAxisLabels, useDayBrush };
 
 // Detailed activity charts (hour-of-day punchcard + per-day/hourly series),
 // shared by the team profile Timeline tab (authed punchcard query) and the
@@ -102,8 +108,6 @@ function addDays(key: string, n: number): string {
   return dateKey(new Date(y, m - 1, d + n));
 }
 
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-
 function shortDay(key: string): string {
   const [y, m, d] = key.split("-").map(Number);
   const sameYear = y === new Date().getFullYear();
@@ -197,31 +201,8 @@ export function RangeControl({ value, onChange, days }: { value: DayRange; onCha
   );
 }
 
-/** Drag across a day chart to zoom into that span. Indices are plot slots;
- *  `pick` gets them ordered and only for a span of two or more slots. */
-export function useDayBrush(pick: (a: number, b: number) => void) {
-  // The ref is the truth (mouse events can outrun renders); state only paints.
-  const ref = useRef<{ a: number; b: number } | null>(null);
-  const [drag, setDrag] = useState<{ a: number; b: number } | null>(null);
-  const set = (d: { a: number; b: number } | null) => { ref.current = d; setDrag(d); };
-  return {
-    drag,
-    start: (i: number) => set({ a: i, b: i }),
-    move: (i: number) => { if (ref.current && ref.current.b !== i) set({ ...ref.current, b: i }); },
-    end: () => {
-      const d = ref.current;
-      if (d && d.a !== d.b) pick(Math.min(d.a, d.b), Math.max(d.a, d.b));
-      set(null);
-    },
-    cancel: () => set(null),
-  };
-}
-
-export function BrushRect({ drag, toX, top, height }: { drag: { a: number; b: number } | null; toX: (i: number) => number; top: number; height: number }) {
-  if (!drag || drag.a === drag.b) return null;
-  const x1 = toX(Math.min(drag.a, drag.b));
-  const x2 = toX(Math.max(drag.a, drag.b));
-  return <rect x={x1} y={top} width={x2 - x1} height={height} className="fill-sol-cyan/10 stroke-sol-cyan/50" strokeWidth={0.5} pointerEvents="none" />;
+export function BrushRect(props: { drag: { a: number; b: number } | null; toX: (i: number) => number; top: number; height: number }) {
+  return <DayBrushRect {...props} className="fill-sol-cyan/10 stroke-sol-cyan/50" />;
 }
 
 const zeros24 = () => new Array(24).fill(0);
@@ -232,30 +213,6 @@ function hourLabel(h: number): string {
   if (hh === 0) return "12a";
   if (hh === 12) return "12p";
   return hh < 12 ? `${hh}a` : `${hh - 12}p`;
-}
-
-// X-axis ticks for a continuous day series: weekly on short ranges, month
-// starts otherwise, suppressing labels that would crowd the previous one.
-/** `minGap` is the least distance between two labels' centres, in px: a caller whose labels are wider than the default's passes their width plus a gutter. */
-export function timeAxisLabels(dates: string[], toX: (i: number) => number, minGap = 28): { label: string; x: number }[] {
-  const labels: { label: string; x: number }[] = [];
-  const mn = MONTHS;
-  // Under ten days a Monday-only axis leaves one label or none, so every day ticks.
-  const daily = dates.length <= 10;
-  const weekly = dates.length <= 45;
-  let lastM = -1;
-  let lastX = -Infinity;
-  for (let i = 0; i < dates.length; i++) {
-    const [y, m, d] = dates[i].split("-").map(Number);
-    const isTick = daily || (weekly ? new Date(y, m - 1, d).getDay() === 1 : m - 1 !== lastM);
-    if (!isTick) continue;
-    lastM = m - 1;
-    const x = toX(i);
-    if (x - lastX < minGap) continue;
-    lastX = x;
-    labels.push({ label: weekly ? `${mn[m - 1]} ${d}` : mn[m - 1], x });
-  }
-  return labels;
 }
 
 /** `range`/`onRangeChange` make the window controlled by a page that shares

@@ -1,83 +1,79 @@
 // Part of the Evals UI's wire contract (docs/architecture/evals-ui.md). Every
 // party imports it through ../evalsApi.ts. What each endpoint takes and
-// answers (section 3.4). PURE isomorphic data: no Node or DOM APIs.
+// answers (section 3.4). The neutral answers live in @platform/evals/contract,
+// generic over the row; codecast's are those on its own RunRow, extended
+// where codecast says more (the run folder, the sim). Extension rather than an
+// intersection, so a widened field (an overview's surfaces) reads as
+// codecast's type alone and its array methods keep codecast's row. The run
+// anatomy, file, patch, search and sim shapes are codecast's own. PURE
+// isomorphic data: no Node or DOM APIs.
 
-import type { EvalFlip } from "../evalResult";
-import type { BatchStats, BatchVerdict, CommitRef, Epoch, EvalRoute, EvalVisibility, FlipsResult, FootingMarker, GuardStatus, PromptFilePair, RunDiffEntry, RunRow, RunRowStatus, SeparationResult, SpendDay, StalenessWord } from "./core";
-import type { BisectAnswer, BisectState, BisectStep, BisectSummary } from "./bisect";
+import type {
+  ChangesResponse as CoreChangesResponse,
+  CompareResponse as CoreCompareResponse,
+  FreezeResponse as CoreFreezeResponse,
+  MovedEvent as CoreMovedEvent,
+  OverviewResponse as CoreOverviewResponse,
+  RunResponse as CoreRunResponse,
+  SurfaceInfo as CoreSurfaceInfo,
+  SurfaceOverview as CoreSurfaceOverview,
+  SurfaceResponse as CoreSurfaceResponse,
+  TokenUsage,
+} from "@platform/evals/contract";
+import type { EvalRoute, GuardStatus, RunRow, StalenessWord } from "./core";
 import type { SimEvent, SimFinal, SimGridCell, SimInvariant, SimJob, SimMinimal, SimResult, SimRunRow, SimScenario, SimSession, SimSessionSummary, SimShrinkProgress, SimWorld } from "./sim";
+
+export type {
+  AttributionQuery,
+  BatchesQuery,
+  BatchesResponse,
+  BisectListResponse,
+  BisectQuery,
+  BisectResponse,
+  ChangesQuery,
+  CheckResultJson,
+  CommitQuery,
+  CommitResponse,
+  CompareQuery,
+  EpochQuery,
+  EpochResponse,
+  FreezeInfo,
+  GateResultJson,
+  HealthResponse,
+  LedgerCell,
+  LedgerRow,
+  MomentMessage,
+  OverviewQuery,
+  RunResultJson,
+  RunSendView,
+  ScoreJson,
+  ScoreVersion,
+  SurfaceQuery,
+  TokenUsage,
+} from "@platform/evals/contract";
 
 // ── Endpoints (section 3.4) ─────────────────────────────────────────────────
 
-export interface HealthResponse {
-  root: string;
-  evalsHome: string;
-  /** The eval tool's own commit. */
-  gitHead: string | null;
-  runsIndexed: number;
-  index: { state: "cold" | "building" | "warm"; done: number; total: number | null };
-  pid: number;
-  startedAt: string;
-}
-
-export interface OverviewQuery {
-  /** A cadence name, or `all`. */
-  cadence?: string;
-}
-
-/** One surface's row on the wall. */
-export interface SurfaceOverview {
-  id: string;
-  title: string;
+/** One surface's row on the wall: a call or an agent surface, its model, and where it stands against its sources. */
+export interface SurfaceOverview extends CoreSurfaceOverview {
   route: EvalRoute;
   model: string;
-  freezes: { public: number; private: number };
-  /** The last 30 days of batches, oldest first. */
-  strip: BatchStats[];
-  /** The reps behind the strip as faint dots, one per status and pixel row of score (scored reps only): the wall's resolution, not every rep. */
-  dots: Array<{ batch: string; at: string; score: number | null; status: RunRowStatus }>;
-  latest: BatchVerdict | null;
   staleness: StalenessWord;
-  /** This surface's model and judge spend per day over the last 30 days; the wall sums it over its own window (wallSpend), as it does the total. */
-  spendByDay: SpendDay[];
-  epochs: Epoch[];
-  footing: FootingMarker[];
-  /** A batch is still landing reps. */
-  landing: boolean;
 }
 
-/** A "What moved" line. */
-export type MovedEvent = { at: string; surface: string | null } & (
-  | { kind: "epoch"; epoch: number; batch: string; changedFreezes: number }
-  | { kind: "footing"; batch: string; change: "model" | "judge"; from: string | null; to: string | null }
-  /** broke and fixed count the flips that say something; `noise` the ones on flapping freezes or an unchanged prompt (isNoiseFlip). */
-  | { kind: "flips"; batch: string; broke: number; fixed: number; noise?: number }
-  | { kind: "bisect"; id: string; outcome: BisectAnswer["kind"] | null }
-  | { kind: "sim-failure"; session: string; run: string; scenario: string; invariant: string }
-);
+/** A "What moved" line for a multiplayer sim run that failed: codecast's own kind. */
+export type SimFailureMoved = { at: string; surface: string | null } & { kind: "sim-failure"; session: string; run: string; scenario: string; invariant: string };
 
-export interface OverviewResponse {
-  cadence: string;
+/** A "What moved" line. */
+export type MovedEvent = CoreMovedEvent | SimFailureMoved;
+
+export interface OverviewResponse extends CoreOverviewResponse<SimFailureMoved> {
   surfaces: SurfaceOverview[];
-  moved: MovedEvent[];
-  spendByDay: SpendDay[];
-  bisects: BisectSummary[];
   sim: SimSessionSummary | null;
 }
 
-export interface SurfaceQuery {
-  from?: string;
-  to?: string;
-  model?: string;
-  cadence?: string;
-  dry?: boolean;
-  bisect?: boolean;
-}
-
 /** A surface's meta as the header shows it. */
-export interface SurfaceInfo {
-  id: string;
-  title: string;
+export interface SurfaceInfo extends CoreSurfaceInfo {
   route: EvalRoute;
   model: string;
   criteria: string | null;
@@ -87,89 +83,11 @@ export interface SurfaceInfo {
   maxUsdPerRep: number;
 }
 
-/** One well of the freeze ledger. */
-export interface LedgerCell {
-  reps: number;
-  passed: number;
-  mean: number | null;
-  /** Passed by majority; null when no rep scored. */
-  majority: boolean | null;
-  /** The majority flipped against this freeze's previous batch on the same footing. */
-  flip: EvalFlip["direction"] | null;
-}
-
-export interface LedgerRow {
-  freezeId: string;
-  name: string;
-  visibility: EvalVisibility;
-  flips: number;
-  /** By batch name. */
-  cells: Record<string, LedgerCell>;
-}
-
-export interface SurfaceResponse {
+export interface SurfaceResponse extends CoreSurfaceResponse<RunRow> {
   surface: SurfaceInfo;
-  runs: RunRow[];
-  batches: BatchStats[];
-  epochs: Epoch[];
-  footing: FootingMarker[];
-  ledger: LedgerRow[];
-  /** Commits that touched the declared sources inside the window. */
-  commits: CommitRef[];
-  /**
-   * The newest graded batch in the window weighed the way the wall weighs it
-   * (against batches that began before it), so the page can say what brought
-   * the investigator here. Null when the window holds no graded batch.
-   */
-  latest: BatchVerdict | null;
 }
 
-/** A conversation message as a surface's describe() renders the moment (@platform/evals ConvoMessage). */
-export interface MomentMessage {
-  n: number;
-  id: string;
-  at: string;
-  channel: string;
-  room?: string | null;
-  isGroup: boolean;
-  direction: "in" | "out" | "system";
-  from: string;
-  to?: string | null;
-  text: string;
-  status?: string | null;
-  meta?: Record<string, unknown>;
-}
-
-/** A freeze's own record (@platform/evals Freeze plus its meta). */
-export interface FreezeInfo {
-  id: string;
-  name: string;
-  surface: string;
-  visibility: EvalVisibility;
-  createdAt: string;
-  asOf: string;
-  anchor: { kind: "message" | "run"; id: string };
-  subject: { kind: string; id: string; title: string; subtitle?: string | null };
-  trigger: { type: string; data?: Record<string, unknown> } | null;
-  notes: string | null;
-  /** The judge's criteria. */
-  judge: string | null;
-  tags: string[];
-  freezeSha: string | null;
-}
-
-export interface FreezeResponse {
-  freeze: FreezeInfo;
-  /** The label from EVALS_HOME/labels, or a fixture's inline label. Its shape is the surface's own. */
-  label: unknown;
-  labelSource: "labels" | "inline" | null;
-  moment: MomentMessage[];
-  /** Where "frozen here" cuts the moment: messages before this index happened before asOf. */
-  cutAt: number;
-  production: { messages: MomentMessage[]; verdict: { score: number; pass: boolean; reasoning?: string | null } | null } | null;
-  runs: RunRow[];
-  epochs: Epoch[];
-}
+export type FreezeResponse = CoreFreezeResponse<RunRow>;
 
 /** run.json (layout.ts RunJson), with the provenance fields the writer adds. */
 export interface RunJson {
@@ -193,88 +111,6 @@ export interface RunJson {
   batch: string;
   cadence?: string | null;
   title: string;
-}
-
-/** result.json (layout.ts writeRunFolder). */
-export interface RunResultJson {
-  scenario: string;
-  seed: number;
-  title: string;
-  startedAt: string;
-  endedBecause: "done" | "failed" | "budget";
-  stopReason: string | null;
-  steps: number;
-  virtualElapsedMs: number;
-  realElapsedMs: number;
-  costUsd: number;
-  captures: number;
-}
-
-export interface GateResultJson {
-  id: string;
-  title?: string | null;
-  pass: boolean;
-  decidedBy?: "mechanical" | "judge";
-  evidence: {
-    summary: string;
-    scanned?: number;
-    /** Held because there was nothing to check. */
-    vacuous?: boolean;
-    excerpts?: Array<{ where: string; text: string }>;
-  };
-}
-
-export interface CheckResultJson {
-  id: string;
-  ask?: string | null;
-  weight: number;
-  score: number;
-  reasoning?: string | null;
-  evidence?: string | null;
-  must?: number | null;
-}
-
-/** score.json (@platform/evals Score) as the run folder holds it. */
-export interface ScoreJson {
-  pass: boolean;
-  score: number;
-  passMark: number;
-  gates: GateResultJson[];
-  checks: CheckResultJson[];
-  missedFloors?: Array<{ id: string; score: number; must: number }>;
-  judgeCostUsd?: number | null;
-  judgeModel?: string | null;
-  scoredAt?: string | null;
-}
-
-/** One score version of a rep: score.json, score.<scoredAt>.json, or a legacy before-file. */
-export interface ScoreVersion {
-  file: string;
-  scoredAt: string | null;
-  judgeModel: string | null;
-  score: number;
-  pass: boolean;
-  /** Folders from before every rejudge was kept hold only the first and latest. */
-  legacy: boolean;
-}
-
-/** A send the rep made (@platform/evals RunSend). */
-export interface RunSendView {
-  seq: number;
-  at: string;
-  label: string | null;
-  rail: string | null;
-  to: string | null;
-  audience: string;
-  text: string;
-  chars: number;
-}
-
-export interface TokenUsage {
-  input: number | null;
-  output: number | null;
-  cacheRead: number | null;
-  cacheWrite: number | null;
 }
 
 /** One `callN` folder: the request, the rendered prompt and the reply. */
@@ -333,26 +169,13 @@ export interface RunFileEntry {
   size: number;
 }
 
-export interface RunResponse {
-  row: RunRow;
+/** A rep as the run page reads it: the shared answer plus the run folder's anatomy. */
+export interface RunResponse extends CoreRunResponse<RunRow> {
   run: RunJson;
-  result: RunResultJson | null;
-  score: ScoreJson | null;
-  scoreVersions: ScoreVersion[];
-  /** When the rep is unscored: what it will be held to. */
-  rubric: { criteria: string | null; passMark: number } | null;
-  sends: RunSendView[];
   calls: CallDetail[];
   agents: AgentDetail[];
-  judge: { model: string | null; prompt: string; reply: string | null; costUsd: number | null } | null;
   guard: GuardEntry[];
   files: RunFileEntry[];
-  /** The tail of run.log, shown first when the rep crashed. */
-  logTail: string | null;
-  /** This batch's other reps on the same freeze. */
-  siblings: RunRow[];
-  /** The same freeze in the previous and next batch, by run id. */
-  adjacent: { previous: string | null; next: string | null };
   /** org-review only: grade-auto.json and hashes.json. */
   extra: { gradeAuto?: unknown; hashes?: unknown } | null;
 }
@@ -369,77 +192,7 @@ export interface RunFileResponse {
   truncated: boolean;
 }
 
-export interface CompareQuery {
-  a: string;
-  b: string;
-}
-
-export interface CompareResponse {
-  a: RunRow;
-  b: RunRow;
-  diff: RunDiffEntry[];
-  replies: { a: string | null; b: string | null };
-  prompts: PromptFilePair[];
-}
-
-export interface BatchesQuery {
-  surface: string;
-  a: string;
-  b: string;
-}
-
-export interface BatchesResponse {
-  /** b weighed against a. */
-  verdict: BatchVerdict;
-  flips: FlipsResult;
-  /** Per gate: failing reps in a and in b. */
-  gateDeltas: Array<{ id: string; a: number; b: number }>;
-  /** The flips as before/after pairs, for ExamplePair. */
-  examples: EvalFlip[];
-  /** The prompt files of the first flipped freeze, before and after. */
-  promptDiffs: PromptFilePair[];
-}
-
-export interface EpochQuery {
-  surface: string;
-  n: number;
-}
-
-export interface EpochResponse {
-  epoch: Epoch;
-  previous: Epoch | null;
-  diffs: PromptFilePair[];
-  commits: CommitRef[];
-}
-
-export interface AttributionQuery {
-  surface: string;
-  /** Left out, Tier 0 finds the ends itself (section 5): bad is the newest red batch, good the newest earlier batch it holds still against. */
-  good?: string;
-  bad?: string;
-  /** Search every commit in the range, not only those touching declared sources (--all-commits). */
-  allCommits?: boolean;
-  /** Weigh only this freeze (an id or an id prefix), as `bisect plan --freeze` does, so the free answer and the plan read the same freezes. */
-  freeze?: string;
-}
-
-export interface CommitQuery {
-  surface?: string;
-  /** 1 for the whole commit; else only the surface's declared sources. */
-  whole?: boolean;
-}
-
-export interface CommitResponse {
-  commit: CommitRef;
-  parents: string[];
-  body: string;
-  whole: boolean;
-  files: Array<{ path: string; status: string; additions: number; deletions: number }>;
-  /** Unified diff text, cut at 2 MiB as a patch's is. */
-  diff: string;
-  /** Set when the diff text was cut; the file list is always whole. */
-  truncated?: boolean;
-}
+export type CompareResponse = CoreCompareResponse<RunRow>;
 
 /** One kept tree patch: the uncommitted edits a dirty rep ran on top of its gitHead. */
 export interface PatchResponse {
@@ -448,10 +201,6 @@ export interface PatchResponse {
   /** The patch text (`git diff --binary`), cut at 2 MiB so a huge patch cannot stall the page. */
   diff: string;
   truncated: boolean;
-}
-
-export interface ChangesQuery {
-  since: number;
 }
 
 export interface SearchQuery {
@@ -484,38 +233,8 @@ export function searchRows(rows: ReadonlyArray<Pick<RunRow, "id" | "surface" | "
   runs.sort((a, b) => b.stamp.localeCompare(a.stamp));
   return { freezes: [...freezes.values()], runs: runs.slice(0, EVALS_SEARCH_LIMIT).map(({ stamp: _stamp, ...r }) => r) };
 }
-
-export interface ChangesResponse {
-  cursor: number;
-  runs: RunRow[];
-  bisects: BisectSummary[];
+export interface ChangesResponse extends CoreChangesResponse<RunRow> {
   jobs: SimJob[];
-}
-
-export interface BisectListResponse {
-  bisects: BisectSummary[];
-  /** The bisect holding the one-bisect lock (bisects/running.json, its process alive), else null: a start waits for it. */
-  running: string | null;
-}
-
-export interface BisectQuery {
-  since?: number;
-}
-
-export interface BisectResponse {
-  state: BisectState;
-  steps: BisectStep[];
-  cursor: number;
-  logTail: string[];
-  /** No new step for 5 minutes while running. */
-  stalled: boolean;
-  /**
-   * The two controls on the flipped freezes, once either has a rep: how many
-   * passed at each end, and whether the bad end separated from the good one
-   * (the stats `check` uses). What every answer rests on, so the page leads
-   * with it. Null before any control rep.
-   */
-  controls?: { good: { passed: number; reps: number }; bad: { passed: number; reps: number }; separation: SeparationResult } | null;
 }
 
 export interface SimCatalogResponse {

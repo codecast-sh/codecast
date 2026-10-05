@@ -1,0 +1,51 @@
+/* Generated from src/tokens.ts by src/build.ts. Do not edit by hand. */
+
+:root {
+  --pd-font-ui: "Instrument Sans Variable", "Instrument Sans", system-ui, sans-serif;
+  --pd-font-read: "Newsreader Variable", "Newsreader", Georgia, serif;
+  --pd-font-mono: "Fragment Mono", ui-monospace, monospace;
+  --pd-radius: 6px;
+  --pd-radius-lg: 10px;
+  --pd-t-view: 150ms cubic-bezier(0.3, 0.9, 0.3, 1);
+  --pd-t-fast: 90ms ease-out;
+  --pd-t-ease: cubic-bezier(0.3, 0.9, 0.3, 1);
+  --pd-bg: #f6f3ec;
+  --pd-bg-raised: #fdfbf6;
+  --pd-bg-sunken: #efebe1;
+  --pd-bg-hover: #f0ecdf;
+  --pd-ink: #201c17;
+  --pd-ink-muted: #6b6355;
+  --pd-ink-faint: #8a806c;
+  --pd-rule: #e4ddce;
+  --pd-rule-strong: #cfc6b2;
+  --pd-accent: #c93a0e;
+  --pd-accent-ink: #fdfbf6;
+  --pd-accent-soft: #c93a0e14;
+  --pd-star: #c98a0e;
+  --pd-ok: #3d7a44;
+  --pd-danger: #b3261e;
+  --pd-shadow: 0 1px 2px rgba(32, 28, 23, 0.06), 0 8px 32px rgba(32, 28, 23, 0.09);
+  --pd-shadow-high: 0 2px 6px rgba(32, 28, 23, 0.1), 0 20px 60px rgba(32, 28, 23, 0.18);
+  --pd-selection: #c93a0e26;
+}
+
+:root[data-theme="dark"], :root.dark {
+  --pd-bg: #161310;
+  --pd-bg-raised: #1e1a15;
+  --pd-bg-sunken: #100e0b;
+  --pd-bg-hover: #241f19;
+  --pd-ink: #ece5d8;
+  --pd-ink-muted: #a49a8a;
+  --pd-ink-faint: #8f8676;
+  --pd-rule: #2b261f;
+  --pd-rule-strong: #3d372d;
+  --pd-accent: #ef5a24;
+  --pd-accent-ink: #161310;
+  --pd-accent-soft: #ef5a241f;
+  --pd-star: #d9a940;
+  --pd-ok: #6aa872;
+  --pd-danger: #e05b52;
+  --pd-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 32px rgba(0, 0, 0, 0.45);
+  --pd-shadow-high: 0 2px 6px rgba(0, 0, 0, 0.5), 0 20px 60px rgba(0, 0, 0, 0.6);
+  --pd-selection: #ef5a2433;
+}

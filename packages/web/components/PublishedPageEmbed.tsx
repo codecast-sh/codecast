@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useMutation } from "convex/react";
 import Link from "next/link";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -6,6 +6,7 @@ import { Link as LinkIcon, Link2, ArrowUpRight, ChevronsUpDown, Columns2, Messag
 import { toast } from "sonner";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { linkPreviewStale } from "@codecast/convex/convex/lib/linkPreviewMeta";
+import { PAGE_HEIGHT_MESSAGE } from "../../shared/render/pageTheme";
 import { useFrameTheme } from "../hooks/useFrameTheme";
 import { usePageNotes } from "../hooks/usePageNotes";
 import { useNativeBrowserPane } from "../hooks/useNativeBrowserPane";
@@ -218,6 +219,28 @@ const EMBED_HEIGHT_EXPANDED = "70vh";
 // The frame height a reader drags to, kept across embeds and reloads.
 const EMBED_HEIGHT_KEY = "codecast.pageEmbed.height";
 const EMBED_MIN_HEIGHT = 120;
+// The tallest a page may fit the frame to before it scrolls inside it.
+const EMBED_FIT_MAX = 900;
+
+/** The height a framed published page reports its content needs (see
+ *  shared/render/pageTheme.ts), clamped to the frame's range. Null until the
+ *  page reports, and for a report too small to be a real layout (a page whose
+ *  content is all absolutely positioned measures its body at a few pixels). */
+function useReportedHeight(frameRef: RefObject<HTMLIFrameElement | null>): number | null {
+  const [height, setHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const m = e.data as { type?: unknown; height?: unknown } | null;
+      if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      if (m?.type !== PAGE_HEIGHT_MESSAGE || typeof m.height !== "number" || !Number.isFinite(m.height)) return;
+      if (m.height < EMBED_MIN_HEIGHT) return;
+      setHeight(Math.min(EMBED_FIT_MAX, Math.round(m.height)));
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [frameRef]);
+  return height;
+}
 
 /**
  * Block-level inline embed of a published page: a titled card framing the
@@ -234,14 +257,20 @@ export function PublishedPageEmbed({ slug, caption, height }: {
 }) {
   const meta = usePageMeta(slug);
   const [expanded, setExpanded] = useState(false);
-  // A given height (a slice inside a decision card) wins over the reader's
-  // saved one until they drag this frame.
-  const [dragged, setDragged] = useState(() => height ?? savedGripHeight(EMBED_HEIGHT_KEY, EMBED_MIN_HEIGHT) ?? EMBED_HEIGHT);
+  // The height this frame was dragged to wins over everything until expanded.
+  const [dragged, setDragged] = useState<number | null>(null);
   const onResized = useCallback((h: number) => {
     setDragged(h);
     setExpanded(false);
   }, []);
   const frameRef = useRef<HTMLIFrameElement>(null);
+  // Then the page's own content height, kept within a given height (a slice
+  // inside a decision card); then that given height, then the reader's saved one.
+  const reported = useReportedHeight(frameRef);
+  const [fallback] = useState(() => height ?? savedGripHeight(EMBED_HEIGHT_KEY, EMBED_MIN_HEIGHT) ?? EMBED_HEIGHT);
+  const frameHeight = expanded
+    ? EMBED_HEIGHT_EXPANDED
+    : dragged ?? (reported !== null ? Math.min(reported, height ?? EMBED_FIT_MAX) : fallback);
   const { theme, onLoad: onThemeLoad } = useFrameTheme(frameRef);
   const notes = usePageNotes(frameRef, slug, meta?.title || "Published page");
   const onLoad = useCallback(() => {
@@ -285,7 +314,7 @@ export function PublishedPageEmbed({ slug, caption, height }: {
         src={src}
         onLoad={onLoad}
         className="w-full bg-sol-card"
-        style={{ height: expanded ? EMBED_HEIGHT_EXPANDED : dragged }}
+        style={{ height: frameHeight }}
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         title={title}
       />

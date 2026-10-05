@@ -1,14 +1,21 @@
-// The outcome of a Google connect that landed on a lane page. Every page on
-// googleOAuth.ts GOOGLE_RETURN_PATHS must finish the pending connection
-// (useConnectorReturn spends the confirm token in this signed-in tab), so
-// mounting this one component is how a lane page becomes a return page: it
-// runs the confirm step and says how it went.
+// The outcome of a mail and calendar connect that landed back on a lane page.
+// /connect/whisk finishes the connection in the signed-in tab and sends the
+// browser to the page the connect started from (convex/whisk.ts
+// WHISK_RETURN_PATHS) with `?whisk=connected` or `?whisk=error&reason=`;
+// mounting this one component is how a lane page says how it went. It reads
+// the return through the one connector-return hook (useConnectorReturn).
 import { CircleAlert, CircleCheck } from "lucide-react";
 import { useConnectorReturn } from "../../hooks/useConnectorReturn";
-import { plainConnectError } from "./lane";
+import { WHISK_RETURN_KEY } from "../../lib/connectorReturn";
+import { LANE_COPY } from "./lane";
+
+/** The lane reads only the mail connect's return, and says it in place. */
+const WHISK_ONLY = { extra: [WHISK_RETURN_KEY], quiet: true } as const;
 
 export function ConnectNotice({ success }: { success: string }) {
-  const notice = useConnectorReturn();
+  const read = useConnectorReturn(WHISK_ONLY);
+  // Every connector return is read once and cleared; only Whisk's speaks here.
+  const notice = read && read.kind !== "confirm" && read.provider === WHISK_RETURN_KEY ? read : null;
   if (notice?.kind === "success") {
     return (
       <div className="sl-callout sl-rise" style={{ marginBottom: "0.9rem" }}>
@@ -21,7 +28,7 @@ export function ConnectNotice({ success }: { success: string }) {
     return (
       <div className="sl-callout is-sun sl-rise" style={{ marginBottom: "0.9rem" }}>
         <CircleAlert size={18} />
-        <span>{plainConnectError(notice.reason) ?? "Google didn't connect. Try again."}</span>
+        <span>{notice.reason || LANE_COPY.connections.failed}</span>
       </div>
     );
   }

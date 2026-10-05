@@ -1,6 +1,6 @@
 // A Littlebird-shaped day for scale tests: deterministic, so the cluster
 // timing test and the Convex read-size tests see the same rows.
-import { makeRng } from "../../random";
+import { makeRng } from "@platform/evals/analysis";
 import type { ChangeCommit } from "../types";
 import { commit, MIN, T0 } from "./commit";
 

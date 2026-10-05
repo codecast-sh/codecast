@@ -2,11 +2,11 @@ import { existsSync, rmSync } from 'node:fs';
 
 import type { BisectAnswer, BisectPlan, BisectProbe, BisectRep, BisectState, Candidate, ProbeVerdict, RenderClass, RunRow, SeparationResult } from '@codecast/shared/contracts/evalsApi';
 import { formatCost } from '@platform/cli-kit/format';
+import { separate } from '@platform/evals/analysis';
 
 import { repPassed } from '../adapters/replay';
 import { BISECT_CADENCE } from '../commands/check';
 import { scoreOrZero } from '../commands/verdict';
-import { separate } from '../stats';
 import { argsOf, CONFIRM_REPS, legacyMap, NO_LEGACY, planFrom, planSearchable, renderPlan, type LegacyMap, type PlanArgs, type PlanWorld } from './plan';
 import { candidateKey, missingReps, probeSet, treeLabel, treeOf, type ProbeEnv, type Tree } from './probe';
 import { crashedFocus, failedControls, readProbe, unsureSide } from './reading';

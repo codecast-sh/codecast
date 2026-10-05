@@ -34,8 +34,9 @@ import { maskToken } from "./redact.js";
 import { parseConversationRef, buildConversationUrl } from "./conversationRef.js";
 import { matchProject, looksLikeConvexId } from "./projectRef.js";
 import { groundUpdateBody } from "@codecast/shared/contracts/goalsBrief";
-import { RECORD_NOUN, healthText, initiativeLine, initiativeShowLines, metricRecordLine, parseInitiativeHealth, parseInitiativeStatus, parseMilestoneArg, pickRecordEntry, readSourceArg, recordWriteLines, scopeSentence, type RecordEntry } from "./initiativeCommand.js";
-import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, type InitiativeRecordList, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { SOURCE_NEEDED, answerWrite, healthText, initiativeLine, initiativeShowLines, metricRecordLine, milestoneWrite, parseInitiativeHealth, parseInitiativeStatus, pickRecordEntry, readDayArg, readMilestoneArg, readMomentArg, readSourceArg, recordVerb, recordWriteLines, removeWrite, saidWrite, scopeSentence, sourceFillIn, sourceWrite, unread, type Read, type RecordWrite } from "./initiativeCommand.js";
+import { INITIATIVE_RECORD_LISTS, metricReadings, metricTrends, type IntentSource } from "@codecast/shared/contracts/initiative";
+import { ORG_CONTEXT_GUIDANCE, orgWhereLines } from "@codecast/shared/contracts/orgWhere";
 import { targetDayStamp } from "@codecast/shared/time";
 import {
   parseEntityUrl,
@@ -13922,6 +13923,18 @@ async function resolveOrgTarget(ref: string, ws: Workspace): Promise<OrgTarget> 
 }
 
 org
+  .command("where")
+  .description("Where this session sits: the work it is bound to, the role that answers for it and the chain above, the goals it serves, and every role with what it looks after")
+  .option("--team <name|id>", "Team workspace (default: the session's own team)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const where = await cliPost("/cli/org/where", { ...(options.team ? workspaceArgs(await readWorkspace(options.team)) : {}), session: callingSession() });
+    if (options.json) { console.log(JSON.stringify(where, null, 2)); return; }
+    if (!where) { console.log(`${c.dim}No org in this workspace: no roles are seated, or the org is off for it.${c.reset}`); return; }
+    console.log(`${orgWhereLines(where).join("\n")}\n\n${c.dim}${ORG_CONTEXT_GUIDANCE}${c.reset}`);
+  });
+
+org
   .command("ls")
   .alias("list")
   .description("Show the org tree for the active workspace")
@@ -17394,57 +17407,56 @@ const initiativeCmd = program
   .description("Manage initiatives (a goal above projects, with an owner and a health)")
   .showHelpAfterError(true);
 
+// An argument read by the pure half (initiativeCommand.ts), or the exit that says why it could not be.
+function initiativeArg<T>(read: Read<T>): T {
+  if (unread(read)) { console.error(read.error); process.exit(1); }
+  return read as T;
+}
+
+// 'none' on the command line clears a value: the pure half takes it as null.
+const initiativeCleared = (text: string | undefined): string | null | undefined => (NONE(text) ? null : text);
+
 // A target is a calendar day, stored through the shared pair the web reads
-// with. A milestone's --date and a source's --at are days read the same way.
-function initiativeTargetArg(text: string, flag = "--target"): number | null {
-  if (NONE(text)) return null;
-  const stamp = targetDayStamp(text);
-  if (stamp === null) { console.error(`Invalid ${flag} "${text}": use YYYY-MM-DD, or "none" to clear`); process.exit(1); }
-  return stamp;
+// with, and so is a milestone's --date. When something was said, reached or
+// observed is a moment (readMomentArg), never a day stamp.
+function initiativeTargetArg(text: string): number | null {
+  return NONE(text) ? null : initiativeArg(readDayArg(text, "--target", true));
 }
 
 // A source as a person types one: an address, the words said, or both.
-function initiativeSourceArg(text: string, extra: Pick<IntentSource, "by" | "at" | "quote"> = {}): IntentSource {
-  const source = readSourceArg(text, extra);
-  if (!source) { console.error("A source needs an address (a call, chat, doc, session, ct-N, pl-N or a link) or the words said"); process.exit(1); }
-  return source;
-}
+const initiativeSourceArg = (text: string): IntentSource => initiativeArg(readSourceArg(text) ?? { error: SOURCE_NEEDED });
 
-// "Private beta open=2026-11-01" is a milestone with its day.
-function initiativeMilestoneArg(text: string): { title: string; date?: number } {
-  const milestone = parseMilestoneArg(text);
-  if (!milestone) { console.error(`Invalid milestone "${text}": use "Title" or "Title=YYYY-MM-DD"`); process.exit(1); }
-  return milestone;
-}
-
-// Which entry a person means by its number or its words, after one read of the goal.
-async function initiativeEntry(ref: string, list: InitiativeRecordList, pick: string): Promise<RecordEntry> {
-  const row = await cliPost("/cli/initiatives/get", { id: ref });
-  if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
-  const picked = pickRecordEntry(row, list, pick);
-  if ("error" in picked) { console.error(picked.error); process.exit(1); }
-  return picked;
-}
-
-// One op on the intent record (the wire is initiatives.record's RecordOp),
-// signed by the calling session so a role's entry carries the role's handle.
-async function initiativeRecord(ref: string, verb: string, op: { list: InitiativeRecordList; action: "add" | "edit" | "close" | "remove"; key?: string; entry?: Record<string, any>; at?: number; answer?: string }): Promise<void> {
-  const body: Record<string, any> = { id: ref, ...op };
+// One write of the intent record (the wire is initiatives.record's op), signed
+// by the calling session so a role's entry carries the role's handle. An entry
+// that is there is named after one read of the goal; a miss prints what the
+// goal holds and the command to type next.
+async function initiativeWrite(ref: string, built: Read<RecordWrite>): Promise<void> {
+  const write = initiativeArg(built);
+  const { list } = write.op;
   const sessionId = detectCurrentSessionId();
-  if (sessionId) body.session_id = sessionId;
-  const result = await cliPost("/cli/initiatives/record", body);
-  for (const line of recordWriteLines(c, verb, result, op.list)) console.log(line);
-}
-
-// What --by and --source add to a new question or decision.
-function initiativeSaid(options: { by?: string; source?: string }): Record<string, any> {
-  return { ...(options.by ? { by: options.by } : {}), ...(options.source ? { source: initiativeSourceArg(options.source) } : {}) };
+  const post = (op: RecordWrite["op"]) => cliPost("/cli/initiatives/record", { id: ref, ...op, ...(sessionId ? { session_id: sessionId } : {}) });
+  let op = write.op;
+  if (write.pick) {
+    const row = await cliPost("/cli/initiatives/get", { id: ref });
+    if (!row) { console.error("Initiative not found (or not visible to you)"); process.exit(1); }
+    op = { ...op, key: initiativeArg(pickRecordEntry(row, list, write.pick.text, write.pick)).key };
+  }
+  let result = await post(op);
+  let verb = recordVerb(write, result);
+  // A source whose address was already there: what was typed now fills what the entry lacks.
+  const fill = sourceFillIn(write, result);
+  if (fill.write) {
+    result = await post(fill.write.op);
+    verb = recordVerb(fill.write, result);
+  }
+  for (const line of recordWriteLines(c, verb, result, list)) console.log(line);
+  if (fill.kept.length) console.log(`  ${c.dim}Kept as the record already says: ${fill.kept.join(", ")}${c.reset}`);
 }
 
 // A person writes a health as "on track"; the wire says on_track.
 function initiativeHealthArg(text: string): string {
   const health = parseInitiativeHealth(text);
-  if (!health) { console.error(`Invalid --health "${text}" — on_track, at_risk, or off_track`); process.exit(1); }
+  if (!health) { console.error(`Invalid --health "${text}": on_track, at_risk, or off_track`); process.exit(1); }
   return health;
 }
 
@@ -17453,7 +17465,7 @@ function initiativeMetricsArg(raw: string[]): Array<{ name: string; target: stri
   if (raw.length === 1 && NONE(raw[0])) return [];
   return raw.map((entry) => {
     const at = entry.indexOf("=");
-    if (at <= 0 || !entry.slice(at + 1).trim()) { console.error(`Invalid --metric "${entry}" — use name=target, like "Weekly active teams=1000"`); process.exit(1); }
+    if (at <= 0 || !entry.slice(at + 1).trim()) { console.error(`Invalid --metric "${entry}": use name=target, like "Weekly active teams=1000"`); process.exit(1); }
     return { name: entry.slice(0, at).trim(), target: entry.slice(at + 1).trim() };
   });
 }
@@ -17495,8 +17507,8 @@ initiativeCmd
   .option("--team <name|id|personal>", "Workspace to create in (default: the active team)")
   .action(async (title: string, options: any) => {
     // Read every argument before the workspace is resolved, so a mistyped one costs no call.
-    const milestones = options.milestone?.map(initiativeMilestoneArg);
-    const sources = options.source?.map((s: string) => initiativeSourceArg(s));
+    const milestones = options.milestone?.map((m: string) => initiativeArg(readMilestoneArg(m)));
+    const sources = options.source?.map(initiativeSourceArg);
     const ws = await writeWorkspace(options.team);
     const body: Record<string, any> = { title, ...workspaceScope(ws) };
     if (options.metric) body.metrics = initiativeMetricsArg(options.metric);
@@ -17508,7 +17520,7 @@ initiativeCmd
     if (options.owner) body.owner = options.owner;
     if (options.status) {
       body.status = parseInitiativeStatus(options.status);
-      if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
+      if (!body.status) { console.error(`Invalid --status "${options.status}": proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
     if (options.target) body.target_date = initiativeTargetArg(options.target);
     if (options.priority) body.priority = options.priority;
@@ -17567,7 +17579,7 @@ initiativeCmd
   .option("--health <h>", "on_track, at_risk, or off_track (default: as the last update said)")
   .action(async (ref: string, bodyArg: string | undefined, options: any) => {
     const text = bodyArg !== undefined ? bodyArg : process.stdin.isTTY ? "" : readStdinBody();
-    if (!text.trim()) { console.error("Empty update — pass text or '-' with a heredoc"); process.exit(1); }
+    if (!text.trim()) { console.error("Empty update: pass text or '-' with a heredoc"); process.exit(1); }
     const body: Record<string, any> = { id: ref, body: text };
     if (options.health) body.health = initiativeHealthArg(options.health);
     const sessionId = detectCurrentSessionId();
@@ -17622,7 +17634,7 @@ initiativeCmd
     if (options.description !== undefined) body.description = NONE(options.description) ? null : options.description;
     if (options.status) {
       body.status = parseInitiativeStatus(options.status);
-      if (!body.status) { console.error(`Invalid --status "${options.status}" — proposed, planned, active, completed, or cancelled`); process.exit(1); }
+      if (!body.status) { console.error(`Invalid --status "${options.status}": proposed, planned, active, completed, or cancelled`); process.exit(1); }
     }
     if (options.owner !== undefined) body.owner = NONE(options.owner) ? null : options.owner;
     if (options.target) body.target_date = initiativeTargetArg(options.target);
@@ -17644,13 +17656,10 @@ initiativeCmd
   .command("report <in-N> <key=value...>")
   .description("Report a metric's current value, with its source (the owner, its role, or an admin)")
   .requiredOption("--source <href>", "A link or codecast short id a person can open")
-  .option("--observed-at <iso>", "When the value was observed (default: now)")
+  .option("--observed-at <date>", "When the value was observed: YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time (default: now)")
   .action(async (ref: string, entries: string[], options: any) => {
     const body: Record<string, any> = { id: ref, entries, source: options.source };
-    if (options.observedAt) {
-      body.observed_at = Date.parse(options.observedAt);
-      if (!Number.isFinite(body.observed_at)) { console.error(`Invalid --observed-at "${options.observedAt}" — use an ISO date`); process.exit(1); }
-    }
+    if (options.observedAt) body.observed_at = initiativeArg(readMomentArg(options.observedAt, "--observed-at"));
     const sessionId = detectCurrentSessionId();
     if (sessionId) body.session_id = sessionId;
     const result = await cliPost("/cli/initiatives/report", body);
@@ -17662,40 +17671,32 @@ initiativeCmd
 
 // The intent record (I5): four lists on the goal, each written one entry at a
 // time. An entry is named by its number as `show` prints it, or by its words.
+// Each command reads its arguments into one write (initiativeCommand.ts).
 initiativeCmd
   .command("milestone")
-  .description("Add a milestone, or mark one reached (--done) or take one off (--remove)")
+  .description("Add a milestone, or mark one reached (--done), change one (--edit) or take one off (--remove)")
   .argument("<in-N>", "Initiative short id or id")
-  .argument("[title]", stdinText("The milestone to add"))
-  .option("--date <date>", "The day it is due (YYYY-MM-DD)")
-  .option("--source <ref>", "Where it was set: an address (call:<id>#<line>, a session short id, ct-N, a link) or the words said")
+  .argument("[title]", stdinText("The milestone to add, as \"Title\" or \"Title=YYYY-MM-DD\"; with --edit, its new title"))
+  .option("--date <date>", "The day it is due (YYYY-MM-DD; with --edit, 'none' clears)")
+  .option("--source <ref>", "Where it was set: an address (call:<id>#<line>, a session short id, ct-N, a link) or the words said (with --edit, 'none' clears)")
   .option("--done <n|title>", "Mark a milestone reached, by its number in `show` or its title")
+  .option("--at <date>", "With --done or --edit, the day it was reached: YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time (default: now; with --edit, 'none' reopens it)")
+  .option("--edit <n|title>", "Change a milestone: a new title, --date, --source or --at")
   .option("--remove <n|title>", "Take a milestone off the record")
   .action(async (ref: string, title: string | undefined, options: any) => {
-    const pick = options.done ?? options.remove;
-    if ([title, options.done, options.remove].filter((x) => x !== undefined).length !== 1) {
-      console.error("Give one of: a title to add, --done <n|title>, or --remove <n|title>");
-      process.exit(1);
-    }
-    if (pick !== undefined) {
-      const { key } = await initiativeEntry(ref, "milestones", pick);
-      return initiativeRecord(ref, options.done !== undefined ? "Reached a milestone of" : "Removed a milestone from", { list: "milestones", action: options.done !== undefined ? "close" : "remove", key });
-    }
-    const entry: Record<string, any> = { title };
-    if (options.date) entry.date = initiativeTargetArg(options.date, "--date");
-    if (options.source) entry.source = initiativeSourceArg(options.source);
-    await initiativeRecord(ref, "Added a milestone to", { list: "milestones", action: "add", entry });
+    await initiativeWrite(ref, milestoneWrite(ref, title, { done: options.done, edit: options.edit, remove: options.remove, date: initiativeCleared(options.date), source: initiativeCleared(options.source), at: initiativeCleared(options.at) }));
   });
 
 initiativeCmd
   .command("ask")
-  .description("Put an open question on the record: something still undecided")
+  .description("Put an open question on the record: something still undecided (--edit changes one)")
   .argument("<in-N>", "Initiative short id or id")
-  .argument("<question>", stdinText("The question"))
+  .argument("[question]", stdinText("The question; with --edit, its new words"))
   .option("--by <who>", "Who asks: a name or an @handle (default: you, or the role this session works as)")
   .option("--source <ref>", "Where it was asked: an address or the words said")
-  .action(async (ref: string, question: string, options: any) => {
-    await initiativeRecord(ref, "Asked on", { list: "questions", action: "add", entry: { text: question, ...initiativeSaid(options) } });
+  .option("--edit <n|words>", "Change a question that is there: new words, --by or --source ('none' clears either)")
+  .action(async (ref: string, question: string | undefined, options: any) => {
+    await initiativeWrite(ref, saidWrite(ref, "questions", question, { edit: options.edit, by: initiativeCleared(options.by), source: initiativeCleared(options.source) }));
   });
 
 initiativeCmd
@@ -17704,33 +17705,34 @@ initiativeCmd
   .argument("<in-N>", "Initiative short id or id")
   .argument("<n|text>", "The question, by its number in `show` or its words")
   .argument("<answer>", stdinText("The answer"))
-  .action(async (ref: string, pick: string, answer: string) => {
-    const { key } = await initiativeEntry(ref, "questions", pick);
-    await initiativeRecord(ref, "Answered a question on", { list: "questions", action: "close", key, answer });
+  .option("--replace", "Put this answer in place of the one an answered question has")
+  .option("--at <date>", "The day it was answered: YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time (default: now)")
+  .action(async (ref: string, pick: string, answer: string, options: any) => {
+    await initiativeWrite(ref, answerWrite(ref, pick, answer, { replace: options.replace, at: options.at }));
   });
 
 initiativeCmd
   .command("decide")
-  .description("Put a decision on the record: what was decided, by whom and where")
+  .description("Put a decision on the record: what was decided, by whom and where (--edit changes one)")
   .argument("<in-N>", "Initiative short id or id")
-  .argument("<decision>", stdinText("The decision"))
+  .argument("[decision]", stdinText("The decision; with --edit, its new words"))
   .option("--by <who>", "Who decided: a name or an @handle (default: you, or the role this session works as)")
   .option("--source <ref>", "Where it was decided: an address or the words said")
-  .action(async (ref: string, decision: string, options: any) => {
-    await initiativeRecord(ref, "Recorded a decision on", { list: "decisions", action: "add", entry: { text: decision, ...initiativeSaid(options) } });
+  .option("--edit <n|words>", "Change a decision that is there: new words, --by or --source ('none' clears either)")
+  .action(async (ref: string, decision: string | undefined, options: any) => {
+    await initiativeWrite(ref, saidWrite(ref, "decisions", decision, { edit: options.edit, by: initiativeCleared(options.by), source: initiativeCleared(options.source) }));
   });
 
 initiativeCmd
   .command("source")
-  .description("Add where the goal was stated: who said it and where")
+  .description("Add where the goal was stated: who said it and where. An address already on the record gains the quote, who and when it lacks")
   .argument("<in-N>", "Initiative short id or id")
   .argument("<ref>", "call:<id>#<line>, chat:<id>, doc:<id>, a session short id with an optional :line, ct-N, pl-N, a link, or the words said")
   .option("--quote <text>", stdinText("The words as said"))
   .option("--by <name>", "Who said it: a name or an @handle")
-  .option("--at <date>", "The day it was said (YYYY-MM-DD)")
+  .option("--at <date>", "When it was said: YYYY-MM-DD, or YYYY-MM-DDTHH:MM for a time")
   .action(async (ref: string, source: string, options: any) => {
-    const at = options.at ? initiativeTargetArg(options.at, "--at") ?? undefined : undefined;
-    await initiativeRecord(ref, "Added a source to", { list: "sources", action: "add", entry: initiativeSourceArg(source, { quote: options.quote, by: options.by, at }) });
+    await initiativeWrite(ref, sourceWrite(source, { quote: options.quote, by: options.by, at: options.at }));
   });
 
 // The one way to take a question, a decision or a source back off the record.
@@ -17739,12 +17741,9 @@ initiativeCmd
   .description("Remove one entry from an initiative's record")
   .argument("<in-N>", "Initiative short id or id")
   .requiredOption("--list <list>", INITIATIVE_RECORD_LISTS.join(", "))
-  .requiredOption("--remove <n|key>", "The entry, by its number in `show`, its key or its words")
+  .requiredOption("--remove <n|key>", "The entry, by its number in `show`, its key (a source's address) or its words")
   .action(async (ref: string, options: any) => {
-    const list = INITIATIVE_RECORD_LISTS.find((l) => l === options.list);
-    if (!list) { console.error(`Invalid --list "${options.list}": ${INITIATIVE_RECORD_LISTS.join(", ")}`); process.exit(1); }
-    const { key } = await initiativeEntry(ref, list, options.remove);
-    await initiativeRecord(ref, `Removed a ${RECORD_NOUN[list]} from`, { list, action: "remove", key });
+    await initiativeWrite(ref, removeWrite(ref, options.list, options.remove));
   });
 
 // --- Plans ---
@@ -20505,6 +20504,9 @@ workflow
   .option("--task <short_id>", "Bind workflow to a task (injects task context)")
   .option("--plan <short_id>", "Bind workflow to a plan (injects plan context)")
   .option("--review-backend <agent>", "Agent for the review station (claude, codex, ...)")
+  .option("--force", "Start even though the task already has a live run (one cause holds one run)")
+  .option("--detach", "Hand the run to this machine's daemon and return at once with its id")
+  .option("--json", "With --detach: print {run_id, task} as JSON")
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -20588,7 +20590,7 @@ workflow
       const slug = graph.name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
       // the-line.md L8 node fidelity: the one serializer carries definition,
       // reviewer, timeout, temperature, doc and category per node.
-      const { graphToPushPayload } = await import("./workflow/runner.js");
+      const { graphToPushPayload, runRegistrationIsFatal } = await import("./workflow/runner.js");
       const { nodes, edges, stack } = graphToPushPayload(graph);
 
       try {
@@ -20609,14 +20611,28 @@ workflow
           // The session behind the run: hands spawn under it (and its role)
           // even when the daemon executes the run later.
           spawner_session: runOpts.spawnerSession,
+          ...(options.force ? { force: true } : {}),
+          ...(options.detach ? { detach: true, run_on_device: deviceId() } : {}),
         });
         if (createResult?.run_id) {
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
         }
       } catch (err: any) {
+        if (runRegistrationIsFatal({ detach: options.detach, taskId: runOpts.taskId, planId: runOpts.planId })) {
+          console.error(`Failed to register workflow run: ${err.message}`);
+          process.exit(1);
+        }
         console.error(`Warning: failed to register workflow run: ${err.message}`);
       }
+    }
+
+    if (options.detach) {
+      // The daemon executes it (`cast workflow run-daemon`); nothing runs here.
+      if (!runOpts.runId) { console.error("--detach needs a registered run: sign in, and leave out --dry-run"); process.exit(1); }
+      if (options.json) console.log(JSON.stringify({ run_id: runOpts.runId, task: runOpts.taskId ?? null }));
+      else console.log(`Run ${runOpts.runId} handed to this machine's daemon${runOpts.taskId ? ` for ${runOpts.taskId}` : ""}`);
+      return;
     }
 
     const outcome = await runWorkflow(graph, runOpts);

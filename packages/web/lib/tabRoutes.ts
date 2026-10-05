@@ -1,12 +1,16 @@
 // Which paths the dashboard tab shell can hold. Pure (no store import) so the
 // store's own tab writers can apply the same rule the router compat layer uses;
-// src/routes.manifest.test.ts parses the sets below for parity with App.tsx.
+// src/routes.manifest.test.ts imports the sets below for parity with App.tsx.
 
 import { countLeaves, findLeaf, leavesOf, sanitizeLayout, setLeafPath } from "../store/stageSplit";
 import { tabSafePath, tabSafeTitle } from "./tabSafePath";
 // The single-segment routes that live inside the shell, shared with the
 // desktop hand-off gate (which may import nothing, so the list lives there).
 import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
+// The lane's roots and the prefix rule, from the import-free module the lane's
+// boot script is inlined from, so the tab shell and the lane agree on its paths.
+import { LANE_ROOTS, isUnderRoot } from "../components/simple/laneBoot";
+import { WHISK_RETURN_PATH } from "@codecast/convex/convex/lib/whisk";
 
 export { IN_SHELL_ROOT_SEGMENTS };
 
@@ -17,7 +21,7 @@ export { IN_SHELL_ROOT_SEGMENTS };
 // on these routes, or it rewrites the URL via replaceState without navigating React
 // Router (e.g. clicking "Sign in" lands you on /login in the address bar while the
 // marketing page stays mounted until a manual reload).
-const NON_TAB_EXACT = new Set([
+export const NON_TAB_EXACT = new Set([
   "/",
   // The published-page identity relay (redirects out to /a/<slug>; /pages
   // itself stays a tab page, so this is exact, not a prefix).
@@ -65,14 +69,14 @@ const NON_TAB_EXACT = new Set([
 // readable, no shell. The tab shell intercepting one would rewrite that
 // window's URL and paint a blank pane. "/repo" is a different route and stays
 // tab-routable — the rule below matches "/r" and "/r/…" only.
-// "/simple" and "/welcome" are the hosted assistant's own shell (SimpleShell)
-// and its front door: a whole app of their own, never a tab.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/compare", "/a", "/r", "/slack/connect", "/simple", "/welcome"];
+// LANE_ROOTS are the hosted assistant's own shell (SimpleShell) and its front
+// door: a whole app of their own, never a tab.
+export const NON_TAB_PREFIXES: readonly string[] = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/compare", "/a", "/r", "/slack/connect", WHISK_RETURN_PATH, ...LANE_ROOTS];
 
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];
   if (NON_TAB_EXACT.has(clean)) return true;
-  if (NON_TAB_PREFIXES.some((p) => clean === p || clean.startsWith(p + "/"))) return true;
+  if (NON_TAB_PREFIXES.some((p) => isUnderRoot(clean, p))) return true;
   // A bare single segment that isn't a known in-shell route is a public-profile
   // handle (App.tsx serves PublicProfile at root-level ":username", outside the
   // shell). Without this, a signed-in user's in-app click to /<handle> would be

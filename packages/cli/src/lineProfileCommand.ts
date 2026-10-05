@@ -8,8 +8,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import type { EvalRepsFile } from "@codecast/shared/contracts/evalResult";
-import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } from "../../evals/src/evalResult.js";
+import { buildEvalResult, evalResultLines, repsFileProblem, unscoredSurfaces } from "@platform/evals/analysis";
+import type { EvalRepsFile } from "@platform/evals/contract";
 import { fmt } from "./colors.js";
 import { findLineProfile, formatLineProfile, LINE_PROFILE_REL_PATH, LineProfileError, loadLineProfile, starterLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
 import { apiPost, type PublishDeps } from "./castApi.js";

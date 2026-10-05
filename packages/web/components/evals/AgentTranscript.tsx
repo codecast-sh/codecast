@@ -4,7 +4,8 @@
 // dry run used (args.json).
 
 import type { AgentDetail, AgentItem } from "@codecast/shared/contracts/evalsApi";
-import { TextPane, TokenLine } from "./CallPane";
+import { TokenLine } from "./CallPane";
+import { TextPane } from "./parts";
 
 function toolInput(input: unknown): string {
   if (input && typeof input === "object") {

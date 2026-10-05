@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { WorkState } from "@codecast/shared/contracts";
 import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
-import { HAND_GROUPS, boundTaskOf, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, stateLineBesideName, subtaskCounts, tokensUncounted } from "../scopePage";
+import { HAND_GROUPS, boundTaskOf, feedKindsFor, feedLinkIsServerOwned, feedStateTone, groupHands, queryProblem, roleStanding, scopeQueryRef, stateLineBesideName, subtaskCounts, tokensUncounted } from "../scopePage";
 import { ORG_STATE_META } from "../../components/org/orgMeta";
 
 describe("scope page rules", () => {
@@ -54,6 +54,16 @@ describe("scope page rules", () => {
     expect(feedStateTone("update", "digest")).toBe(feedStateTone("task", "open"));
     expect(feedStateTone("call", "live")).toBe("var(--sol-green)");
     expect(feedStateTone("call", "ended")).toBe(feedStateTone("task", "open"));
+  });
+
+  test("the goal and call chips are offered only where the scope names goals", () => {
+    const work = { project_ids: ["p1"], plan_ids: [] };
+    for (const scope of [{ role_id: "r1" }, { scope: work }, { scope: { ...work, initiative_ids: [] } }]) {
+      expect(feedKindsFor(scope)).not.toContain("goal");
+      expect(feedKindsFor(scope)).not.toContain("call");
+      expect(feedKindsFor(scope)).toContain("decision");
+    }
+    expect(feedKindsFor({ scope: { ...work, initiative_ids: ["in-1"] } })).toEqual(expect.arrayContaining(["session", "goal", "call"]));
   });
 
   test("published pages leave the SPA; app routes stay in it", () => {

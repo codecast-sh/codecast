@@ -110,17 +110,48 @@ describe("reserve", () => {
     expect([after.period_cost_usd, after.period_reserved_usd]).toEqual([1.9, 0]);
   });
 
-  test("a hold whose turn row was deleted is still given back, and the refusal never throws", async () => {
+  test("a refusal the leaked holds cannot cover still frees them, so a smaller ask fits", async () => {
+    const { t, user, turn, wallet, ledger } = await setup({ period_cap_usd: 2, period_cost_usd: 1.6 });
+    const crashed = await turn();
+    await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: crashed, amount_usd: 0.4 });
+    await t.run((ctx) => ctx.db.patch(crashed, { status: "failed", ended_at: Date.now() - LEAK_GRACE_MS }));
+    // Room 0 plus the leaked 0.4 is short of 1: refused, but the leak is given back.
+    const next = await turn();
+    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: next, amount_usd: 1 })).toBe(false);
+    expect((await wallet()).period_reserved_usd).toBe(0);
+    expect((await ledger()).filter((row) => row.kind === "release").map((row) => row.turn_id)).toEqual([crashed]);
+    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: next, amount_usd: 0.4 })).toBe(true);
+    // The hourly reconcile then finds nothing left to free.
+    expect(await t.mutation(internal.wallet.reconcileOne, { user_id: user })).toBe(0);
+  });
+
+  test("a hold whose turn row was deleted is left by the lease and given back by the reconcile", async () => {
     const { t, user, conversation, turn, wallet, ledger } = await setup({ period_cap_usd: 2, period_cost_usd: 1 });
     const gone = await turn();
     await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: gone, amount_usd: 0.9 });
     await t.run((ctx) => ctx.db.delete(gone));
-    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: await turn(), amount_usd: 0.5 })).toBe(true);
-    expect((await wallet()).period_reserved_usd).toBe(0.5);
+    // The lease reads only holding turns, so it cannot see this hold and refuses without throwing.
+    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: await turn(), amount_usd: 0.5 })).toBe(false);
+    expect(await t.mutation(internal.wallet.reconcile, {})).toEqual({ scanned: 1, scheduled: 1, done: true });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await t.finishInProgressScheduledFunctions();
+    expect((await wallet()).period_reserved_usd).toBe(0);
+    expect(await t.mutation(internal.wallet.reconcileOne, { user_id: user })).toBe(0);
     const release = (await ledger()).find((row) => row.kind === "release")!;
     expect([release.turn_id, release.amount_usd, release.conversation_id]).toEqual([gone, 0.9, conversation]);
-    // Nothing left to give back: a refusal over the room returns false.
-    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: await turn(), amount_usd: 0.6 })).toBe(false);
+    expect(await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: await turn(), amount_usd: 0.5 })).toBe(true);
+    expect((await wallet()).period_reserved_usd).toBe(0.5);
+  });
+
+  test("the reconcile never takes a live turn's hold or one still inside the grace", async () => {
+    const { t, user, turn, wallet } = await setup({ period_cap_usd: 2, period_cost_usd: 0 });
+    const live = await turn();
+    const ending = await turn();
+    await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: live, amount_usd: 0.3 });
+    await t.mutation(internal.wallet.reserve, { user_id: user, turn_id: ending, amount_usd: 0.4 });
+    await t.run((ctx) => ctx.db.patch(ending, { status: "done", ended_at: Date.now() }));
+    expect(await t.mutation(internal.wallet.reconcileOne, { user_id: user })).toBe(0);
+    expect((await wallet()).period_reserved_usd).toBe(0.7);
   });
 });
 

@@ -3,6 +3,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import {
+  buildStableContext,
   ensureStableHookForLaunch,
   installStableHookCodex,
   installStableHookCursor,
@@ -61,6 +62,38 @@ describe("stable-context recording", () => {
         items: [{ id: "conversations456", title: "Prior work" }],
       }),
     });
+  });
+
+  test("appends where the session sits in the org after the feed, asked for by the session being started", async () => {
+    const asked: Record<string, any> = {};
+    const where = {
+      workspace: { kind: "team", id: "t1", name: "Acme" },
+      session: { short_id: "jx1", title: "Sitemap fix", person: "Ashot", lead: null },
+      work: { task: null, plan: null, project: null },
+      seat: { how: "none", handles: [] },
+      card: null,
+      chain: [],
+      roles: [{ handle: "growth", name: "Growth lead", reports_to: "Ashot", scope: ["Growth"], whole_workspace: false, seat: false }],
+      people: [{ name: "Ashot", role: "admin", is_me: true }],
+    };
+    globalThis.fetch = (async (input, init) => {
+      const url = String(input);
+      asked[url] = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify(url.endsWith("/cli/org/where") ? where : { conversations: [] }), { status: 200 });
+    }) as typeof fetch;
+
+    const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "team", global: false, cwd: "/repo", session: "conversations123" });
+
+    expect(asked["https://example.site/cli/org/where"]).toEqual({ api_token: "secret", session: "conversations123" });
+    expect(built!.text).toMatch(/<\/stable-context>\n\n<org-context workspace="Acme">/);
+    expect(built!.text).toContain("@growth Growth lead · reports to Ashot · looks after Growth");
+  });
+
+  test("leaves the org out when the workspace has none", async () => {
+    globalThis.fetch = (async (input) =>
+      new Response(String(input).endsWith("/cli/org/where") ? "null" : JSON.stringify({ conversations: [] }), { status: 200 })) as typeof fetch;
+    const built = await buildStableContext({ auth_token: "secret", convex_url: "https://example.cloud" }, { mode: "solo", global: false, cwd: "/repo" });
+    expect(built!.text.endsWith("</stable-context>")).toBe(true);
   });
 
   test("does not make an unkeyed recording request", async () => {

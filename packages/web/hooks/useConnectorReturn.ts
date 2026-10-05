@@ -7,13 +7,14 @@
 // hook reads the callback once on mount, clears it from the address bar, and
 // spends the token in this session. Every page a connector may return to
 // mounts it: /settings/integrations for all of them, and the pages Google's
-// connector accepts as a return_to (googleOAuth.ts GOOGLE_RETURN_PATHS).
+// connector accepts as a return_to (googleOAuth.ts GOOGLE_RETURN_PATHS), and
+// the simple lane's pages for the mail connect through Whisk (ConnectNotice).
 
 import { useState } from "react";
 import { useAction } from "convex/react";
 import { toast } from "sonner";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { APP_DESCRIPTORS } from "@codecast/shared/contracts";
+import { APP_DESCRIPTORS, type AppId } from "@codecast/shared/contracts";
 import { parseConnectorReturn, strippedUrl, type ConnectorReturn } from "../lib/connectorReturn";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -21,16 +22,20 @@ const api = _api as any;
 
 /** The callback's outcome, once known: an error to show (in the connector's
  *  words, for describeConnectorError), or a success. Null when the page was
- *  opened without a callback, or while a confirmation is still in flight. */
-export function useConnectorReturn(): ConnectorReturn | null {
+ *  opened without a callback, or while a confirmation is still in flight.
+ *  `extra` names providers besides the apps (parseConnectorReturn); `quiet`
+ *  skips the success toast, for a page that says it in place. */
+export function useConnectorReturn<X extends string = never>(
+  { extra = [], quiet = false }: { extra?: readonly X[]; quiet?: boolean } = {},
+): ConnectorReturn<AppId | X> | null {
   const confirmConnector = useAction(api.oauthConnectors.confirmConnection);
   const confirmGoogle = useAction(api.googleOAuth.confirmConnection);
-  const [notice, setNotice] = useState<ConnectorReturn | null>(null);
+  const [notice, setNotice] = useState<ConnectorReturn<AppId | X> | null>(null);
 
   // ONE read of the landing URL. Re-reading it would let a back-navigation
   // replay a confirmation the user already spent.
   useWatchEffect(() => {
-    const hit = parseConnectorReturn(window.location.hash, window.location.search);
+    const hit = parseConnectorReturn(window.location.hash, window.location.search, extra);
     if (!hit) return;
     window.history.replaceState(
       null,
@@ -39,8 +44,9 @@ export function useConnectorReturn(): ConnectorReturn | null {
     );
     if (hit.kind !== "confirm") {
       setNotice(hit);
-      if (hit.kind === "success") {
-        toast.success(hit.provider === "github" ? "GitHub App installed" : `${APP_DESCRIPTORS[hit.provider].name} connected`);
+      const app = (APP_DESCRIPTORS as Partial<Record<string, { name: string }>>)[hit.kind === "success" ? hit.provider : ""];
+      if (hit.kind === "success" && !quiet && app) {
+        toast.success(hit.provider === "github" ? "GitHub App installed" : `${app.name} connected`);
       }
       return;
     }

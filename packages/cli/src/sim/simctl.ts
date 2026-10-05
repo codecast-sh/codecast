@@ -1,19 +1,13 @@
 /**
- * `xcrun simctl` and `axe` as functions, run so they work wherever the caller
- * is: a laptop terminal, an agent under the laptop daemon, or an agent under a
- * cloud Mac's codecast service.
- *
- * The cloud service is a system LaunchDaemon (hosts/provisionMac.ts), so the
- * agents it starts live in launchd's system domain. CoreSimulator refuses to
- * boot a device from there; it needs the user's own domain. When this process
- * sits in the system domain as a normal user and has passwordless sudo, every
- * simulator command is hopped into the user's domain with
- * `sudo launchctl asuser <uid> sudo -u <user>`, so it runs as the same user,
- * just under the right launchd. `CAST_SIM_HOP=0` turns the hop off.
+ * `xcrun simctl` and `axe` as functions. They behave the same wherever the
+ * caller runs: a laptop terminal, an agent under the laptop daemon, or an agent
+ * under a cloud Mac's codecast service (a system LaunchDaemon). CoreSimulator
+ * starts its service in the user's own launchd domain from any of those, so
+ * nothing here needs a GUI login or a domain hop (measured on the AWS Mac,
+ * 2026-10-05: a cold boot, screenshot and describe-ui from a LaunchDaemon).
  */
 
 import * as fs from "node:fs";
-import * as os from "node:os";
 import { spawnSync } from "../proc.js";
 import { readPool, writePool, type PoolDevice } from "./pool.js";
 
@@ -24,26 +18,8 @@ export interface RunResult {
   stderr: string;
 }
 
-let hopCache: string[] | undefined;
-
-/** The prefix that moves a command into this user's launchd domain, or [] when it is already there. */
-export function domainHop(): string[] {
-  if (hopCache) return hopCache;
-  hopCache = [];
-  if (process.platform !== "darwin" || process.env.CAST_SIM_HOP === "0") return hopCache;
-  const uid = process.getuid?.() ?? 0;
-  if (uid === 0) return hopCache;
-  const manager = spawnSync("launchctl", ["managername"], { encoding: "utf-8" }).stdout?.trim();
-  if (manager !== "System") return hopCache;
-  if (spawnSync("sudo", ["-n", "true"], { stdio: "ignore" }).status !== 0) return hopCache;
-  hopCache = ["sudo", "-n", "launchctl", "asuser", String(uid), "sudo", "-n", "-u", os.userInfo().username, "--preserve-env=HOME,PATH"];
-  return hopCache;
-}
-
 export function run(cmd: string, args: string[], opts: { timeoutMs?: number; input?: string } = {}): RunResult {
-  const hop = domainHop();
-  const [file, ...rest] = hop.length ? [...hop, cmd, ...args] : [cmd, ...args];
-  const r = spawnSync(file, rest, {
+  const r = spawnSync(cmd, args, {
     encoding: "utf-8",
     timeout: opts.timeoutMs ?? 120_000,
     maxBuffer: 64 * 1024 * 1024,

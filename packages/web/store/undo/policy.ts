@@ -8,7 +8,7 @@
 // receives only the specs, as PlatformConfig.undo.specs.
 import type { UndoSpec } from "@platform/engine";
 import { NEVER_UNDO_POLICY } from "./policies/never";
-import { SESSIONS_UNDO_POLICY } from "./policies/sessions";
+import { revivesKilledRow, SESSIONS_UNDO_POLICY } from "./policies/sessions";
 import { WORK_UNDO_POLICY } from "./policies/work";
 import { keepConversationRows, priorUnknown } from "./thinConversation";
 
@@ -27,11 +27,13 @@ export const UNDO_POLICY: UndoPolicy = Object.assign({}, ...Object.values(UNDO_P
 // Every spec gets the thin-conversation rule (./thinConversation.ts): a
 // gesture on a row with no loaded meta keeps the row on undo and restores its
 // fields from the inbox row, and one with no inbox row either is not recorded.
+// Nor is any gesture that brought a killed row back (revivesKilledRow): its
+// undo would cross the server's kill transition again.
 const keepingConversationRows = (spec: UndoSpec): UndoSpec => {
   const own = spec.spell;
   return {
     ...spec,
-    label: (ctx) => (priorUnknown(ctx) ? null : spec.label(ctx)),
+    label: (ctx) => (priorUnknown(ctx) || revivesKilledRow(ctx) ? null : spec.label(ctx)),
     spell: own ? (cells, ctx) => own(keepConversationRows(cells, ctx), ctx) : (cells, ctx) => keepConversationRows(cells, ctx),
   };
 };

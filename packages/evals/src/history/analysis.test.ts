@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runRowProblems, type CommitRef, type RunRow } from '@codecast/shared/contracts/evalsApi';
+import { separate } from '@platform/evals/analysis';
 
 import { batchVerdict, BISECT_CADENCE, upTo, verdictLinesOf } from '../commands/verdict';
-import { separate } from '../stats';
 import type { HeadsFile } from '../provenance';
 import { attribute, type AttributionGit, type AttributionInput } from './attribution';
 import { epochPromptDiffs, epochsOf, footingMarkers, type PromptReader } from './epochs';

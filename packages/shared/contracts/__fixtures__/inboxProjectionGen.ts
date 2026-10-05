@@ -5,7 +5,7 @@
 // data, importing only pure modules: the fixtures must load in the Convex runtime,
 // bun and the browser bundle alike.
 
-import { makeRng, type Rng } from "../../random";
+import { makeRng, type Rng } from "@platform/evals/analysis";
 import type { ProjectableInboxRow } from "../inboxProjection";
 
 // Every property run is replayable from its seed.

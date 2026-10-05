@@ -37,7 +37,8 @@
   background: var(--sol-bg);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-border) 90%, transparent);
 }
-.lset-index-link:hover { color: var(--sol-text); }
+.lset-index-link:hover, .lset-index-link[aria-current] { color: var(--sol-text); }
+.lset-index-link[aria-current]::before { background: var(--line-belt); }
 .lset-index-link:hover::before { box-shadow: 0 0 0 2px var(--line-belt); }
 
 .lset-main { min-width: 0; display: flex; flex-direction: column; gap: 34px; }
@@ -252,3 +253,6 @@
 /* The key hints need a keyboard: a narrow floor (a phone, a touch tablet) drops them. */
 @container line-floor (max-width: 760px) { .lset-footer { display: none; } }
 @media (pointer: coarse) { .lset-footer { display: none; } }
+
+/* Inside a station panel the timeout row ends the panel: no rule under it. */
+[data-station-panel] .lset-row { border-bottom: 0; padding-bottom: 0; }
