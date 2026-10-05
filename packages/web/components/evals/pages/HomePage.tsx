@@ -3,33 +3,32 @@
 // follows GET /changes and reloads when something moves.
 
 import { useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { EmptyState } from "../../EmptyState";
 import { useEvalsChanges, useEvalsResource } from "../../../lib/evals/hooks";
-import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { useTabActive } from "../../../hooks/usePagePresence";
 import { evalsHref, type EvalsView } from "../evalsPaths";
+import { useEvalsHost } from "../host";
 import { SurfaceWallView } from "../SurfaceWallView";
 import { isBisectLive } from "../bisectModel";
 import { DEFAULT_WALL_CADENCE } from "../wallModel";
 
 export function HomePage({ view }: { view: Extract<EvalsView, { view: "home" }> }) {
-  const router = useRouter();
-  const active = useTabActive();
-  const now = useCoarseNow(60_000);
+  const host = useEvalsHost();
+  const { EmptyState } = host.ui;
+  const navigate = host.useNavigate();
+  const active = host.useActive();
+  const now = host.useNow(60_000);
   const cadence = view.cadence ?? DEFAULT_WALL_CADENCE;
   const overview = useEvalsResource("GET /overview", { query: { cadence } });
   const data = overview.data;
   const live = !!data && (data.surfaces.some((s) => s.landing) || data.bisects.some((b) => isBisectLive(b.status)));
   const reload = overview.reload;
   useEvalsChanges(live, useCallback(() => reload(), [reload]));
-  const open = useCallback((href: string) => router.push(href), [router]);
-  const setCadence = useCallback((c: string) => router.push(evalsHref.home({ cadence: c === DEFAULT_WALL_CADENCE ? null : c })), [router]);
+  const open = useCallback((href: string) => navigate(href), [navigate]);
+  const setCadence = useCallback((c: string) => navigate(evalsHref.home({ cadence: c === DEFAULT_WALL_CADENCE ? null : c })), [navigate]);
 
   if (!data) {
     if (overview.error) {
       return (
-        <div data-evals-page="home" className="flex flex-col items-center">
+        <div data-evals-page="home" className="ev-stack">
           <EmptyState title="The wall could not be read" description={overview.error} />
           <button type="button" className="ev-chip" onClick={reload}>
             Try again
@@ -38,7 +37,7 @@ export function HomePage({ view }: { view: Extract<EvalsView, { view: "home" }> 
       );
     }
     return (
-      <div data-evals-page="home" className="h-full flex items-center justify-center text-[12px] ev-quiet" data-evals-loading>
+      <div data-evals-page="home" className="ev-note ev-note--center" data-evals-loading>
         Reading every surface's last 30 days...
       </div>
     );

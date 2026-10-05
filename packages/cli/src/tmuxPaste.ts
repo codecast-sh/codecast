@@ -11,6 +11,27 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 
+/**
+ * Literal text as the argument of `send-keys -l`.
+ *
+ * tmux's command parser ends a command at an argument whose last character is
+ * an unescaped `;` and drops that character (cmd-parse.y,
+ * cmd_parse_from_arguments): `send-keys -l 'abc;'` types `abc`, and a lone
+ * `;` types nothing. The one escape it honours is a backslash right before
+ * that final `;`, which the parser turns back into the semicolon, so text
+ * ending in `;` goes out with a `\` inserted before it. Only the last
+ * character is read this way; a `;` anywhere else is sent as typed.
+ *
+ * Why it matters: typed delivery writes a message in 128-character chunks, so
+ * every chunk that happened to end on a `;` lost it. A trigger prompt typed
+ * into jx7b88a on 2026-10-05 reached Claude six characters short, the
+ * transcript never matched the payload the receipt was waiting for, and the
+ * daemon wrote the same message five times over 100 minutes.
+ */
+export function tmuxLiteralArg(text: string): string {
+  return text.endsWith(";") ? `${text.slice(0, -1)}\\;` : text;
+}
+
 /** Runs `tmux <args>`. Injected so callers retain their own timeout/env policy. */
 export type TmuxExec = (args: string[]) => Promise<unknown>;
 
@@ -77,9 +98,37 @@ export function typedNewlineKey(agentType: AgentClientId | undefined, text: stri
 // One `send-keys -l` per chunk, small ones. Claude Code reads a single input
 // burst of roughly 500 characters or more as a paste even without bracket
 // markers, and wraps it in <pasted_content> like any other (2.1.289: 450 typed
-// clean, 512 wrapped). 128 keeps a pane that reads slowly under load clear of
-// that even when it takes three writes in one read.
+// clean, 512 wrapped).
 const TYPED_CHUNK_CHARS = 128;
+
+// Small chunks alone do not keep reads small. A client starved of CPU reads
+// whatever piled up in the pty since its last read, so at load 240 an idle
+// composer read the chunks of a 7 KB message as one burst, opened a paste that
+// never closed, and took every later Enter as a newline: the message sat
+// unsent while the session's queue grew behind it (jx76c85, 2026-10-05). So
+// the next chunk waits until the pane shows the last one, which proves the
+// client has read it. The wait is bounded; past it typing goes on as before.
+const TYPED_ECHO_BUDGET_MS = 5_000;
+const TYPED_ECHO_TAIL_CHARS = 24;
+
+/** Text with whitespace and box-drawing frame glyphs removed, so a composer's
+ *  soft wraps and borders never break a comparison with the payload. */
+export const stripComposerChrome = (s: string) => s.replace(/[\s─-╿]+/g, "");
+
+async function awaitTypedEcho(exec: TmuxExec, target: string, typedSoFar: string, budgetMs: number): Promise<void> {
+  const tail = stripComposerChrome(typedSoFar).slice(-TYPED_ECHO_TAIL_CHARS);
+  if (!tail) return;
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    try {
+      const out = await exec(["capture-pane", "-p", "-J", "-t", target]) as { stdout?: string } | undefined;
+      if (stripComposerChrome(out?.stdout ?? "").includes(tail)) return;
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 // Newline keys whose byte can ride inside a literal chunk: tmux sends the "\n"
 // in `send-keys -l` as the same 0x0a byte C-j sends, so a multi-line message
@@ -100,21 +149,44 @@ export async function typeTextIntoPane(
   target: string,
   text: string,
   newlineKey: string,
+  echoBudgetMs = TYPED_ECHO_BUDGET_MS,
 ): Promise<void> {
   const prepared = prepareInjectedContent(text, { bracketed: true });
   const literalNewline = LITERAL_NEWLINE[newlineKey];
   const lines = literalNewline === undefined ? prepared.split("\n") : [prepared.replace(/\n/g, literalNewline)];
+  let typed = "";
   for (const [index, line] of lines.entries()) {
     if (index > 0) await exec(["send-keys", "-t", target, newlineKey]);
     for (let at = 0; at < line.length;) {
       // Never leave a lone character for the last write: that is the one write
       // a dialog could read as a keypress.
       const end = line.length - (at + TYPED_CHUNK_CHARS) === 1 ? at + TYPED_CHUNK_CHARS - 1 : at + TYPED_CHUNK_CHARS;
+      if (typed) await awaitTypedEcho(exec, target, typed, echoBudgetMs);
       // `--` ends tmux's option parsing, so a chunk that starts with "-" is text.
-      await exec(["send-keys", "-t", target, "-l", "--", line.slice(at, end)]);
+      await exec(["send-keys", "-t", target, "-l", "--", tmuxLiteralArg(line.slice(at, end))]);
+      typed += line.slice(at, end);
       at = end;
     }
+    typed += "\n";
   }
+}
+
+// A typed write is paced by the pane's echo of the chunk before it, which
+// took 0.33 s a chunk on 2026-10-05 (157 KB in 409 s, jx7b88a). One second a
+// chunk is three times that; the 5 s echo budget is the ceiling under load.
+export const TYPED_CHUNK_TIMEOUT_MS = 1_000;
+
+/**
+ * How long one delivery attempt of this text may run before the daemon
+ * treats it as hung: the base covers a paste and its verification, and a
+ * payload this client would type gets one allowance per chunk on top. A
+ * flat budget timed out a 7 minute typed write at 3 minutes and started a
+ * retry over the live attempt; the second copy then queued behind the first.
+ */
+export function deliveryTimeoutMsFor(text: string, agentType: AgentClientId | undefined, baseMs: number): number {
+  const prepared = prepareInjectedContent(text, { bracketed: true });
+  if (typedNewlineKey(agentType, prepared, true) === null) return baseMs;
+  return baseMs + Math.ceil(prepared.length / TYPED_CHUNK_CHARS) * TYPED_CHUNK_TIMEOUT_MS;
 }
 
 /**
@@ -127,10 +199,10 @@ export async function deliverTextIntoPane(
   exec: TmuxExec,
   target: string,
   text: string,
-  opts: { bracketed?: boolean; agentType?: AgentClientId; idle?: boolean } = {},
+  opts: { bracketed?: boolean; agentType?: AgentClientId; idle?: boolean; echoBudgetMs?: number } = {},
 ): Promise<void> {
   const newlineKey = typedNewlineKey(opts.agentType, text, opts.idle === true);
-  if (newlineKey) return typeTextIntoPane(exec, target, text, newlineKey);
+  if (newlineKey) return typeTextIntoPane(exec, target, text, newlineKey, opts.echoBudgetMs);
   return pasteTextIntoPane(exec, target, text, opts.bracketed ?? true);
 }
 
@@ -163,7 +235,7 @@ export async function pasteTextIntoPane(
       "-t",
       target,
       "-l",
-      prepareInjectedContent(payload, { bracketed: false }),
+      tmuxLiteralArg(prepareInjectedContent(payload, { bracketed: false })),
     ]);
   } finally {
     // `paste-buffer -d` removes the buffer on success. If paste itself fails,

@@ -1,4 +1,4 @@
-// Three asks with their Accept and Skip fit the first desktop screen at
+// Three asks with their Approve, Reject and Reply fit the first desktop screen at
 // 1440 by 900 (org eval round 3: the third ask's buttons sat below the fold;
 // round 12: they sat at it again, with the asks the analyzer writes now).
 // jsdom lays nothing out, so this is a height budget: the spacing and line
@@ -12,6 +12,9 @@
 // every card, three to four lines of why, two to four of effect. Change the
 // card's spacing and this test moves with it; change the words the analyzer
 // may write (orgInit ORG_ASKS_RULE) and it says so.
+// A proposal that is one ask draws its entries straight under the title
+// (S39), so the second budget is the first entry's: its Approve ends above the
+// fold too, with the letter's own words as the sentence and the reason.
 // Run: bun components/org/StaffingPane.fit.test.tsx
 // FIT_PROPOSAL=<an org eval run's proposal.json> measures a real proposal.
 import assert from "node:assert/strict";
@@ -83,6 +86,7 @@ async function verifyFit() {
   const { StaffingPane } = await import("./StaffingPane");
   const { ORG_FIXTURE } = await import("./orgFixture");
   const { ORG_STAFFING_FIXTURE_HEALTH, ORG_STAFFING_FIXTURE_PROPOSAL } = await import("./orgStaffingFixture");
+  const { UNION_GOALS_DATA, UNION_GOALS_PROPOSAL, UNION_GOALS_TREE } = await import("./goalsFixture");
   const { findHeadOfPeople } = await import("./staffingModel");
 
   // The round 12 shapes, the analyzer's own words (~/.cache/org-eval/union/
@@ -105,8 +109,8 @@ async function verifyFit() {
   const noop = () => {};
   const root = createRoot(document.getElementById("root")!);
   await act(async () => root.render(React.createElement(StaffingPane, {
-    tree: headOfPeopleTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, head: findHeadOfPeople(headOfPeopleTree), reviewing: false, now: Date.now(), hasThread: true, selectedChangeId: null, titleInPageHeader: true,
-    onSelectChange: noop, onDecide: noop, onDecideAsk: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireHeadOfPeople: noop, onProposeNow: noop, onAskAbout: noop, onAskAboutAsk: noop,
+    tree: headOfPeopleTree, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [proposal], proposal, head: findHeadOfPeople(headOfPeopleTree), reviewing: false, now: Date.now(), thread: { conversation_id: "fixture-thread-conv" }, threadComposerOnScreen: true, selectedChangeId: null, titleInPageHeader: true,
+    onSelectChange: noop, onDecide: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireHeadOfPeople: noop, onProposeNow: noop,
   } as any)));
   const q = (sel: string, from: ParentNode = document) => { const el = from.querySelector(sel); assert.ok(el, `missing ${sel}`); return el!; };
 
@@ -128,11 +132,11 @@ async function verifyFit() {
     const titleH = wrappedLines(asks[i].title, fontPx(title)) * lineHeight(title);
     const whyH = wrappedLines(asks[i].why, fontPx(why)) * lineHeight(why);
     // The effect line carries its own prefix, on the same line as the words.
-    const effectH = wrappedLines(`If you accept: ${asks[i].effect}`, fontPx(effect)) * lineHeight(effect);
-    const buttonH = util(q("[data-ask-accept]", controls), "h") || 28;
+    const effectH = wrappedLines(`If you approve: ${asks[i].effect}`, fontPx(effect)) * lineHeight(effect);
+    const buttonH = util(q("[data-ask-approve]", controls), "h") || 28;
     const controlsBottom = top + 1 + util(head, "pt") + titleH + util(why, "mt") + whyH + util(effect, "mt") + effectH + util(controls, "mt") + buttonH;
     const bottom = controlsBottom + util(head, "pb") + 1 + util(fold, "h") + 1;
-    report.push(`card ${i + 1}: ${Math.round(top)} to ${Math.round(bottom)} (buttons end at ${Math.round(controlsBottom)}); title ${wrappedLines(asks[i].title, fontPx(title))} lines, why ${wrappedLines(asks[i].why, fontPx(why))}, effect ${wrappedLines(`If you accept: ${asks[i].effect}`, fontPx(effect))}`);
+    report.push(`card ${i + 1}: ${Math.round(top)} to ${Math.round(bottom)} (buttons end at ${Math.round(controlsBottom)}); title ${wrappedLines(asks[i].title, fontPx(title))} lines, why ${wrappedLines(asks[i].why, fontPx(why))}, effect ${wrappedLines(`If you approve: ${asks[i].effect}`, fontPx(effect))}`);
     lastControlsBottom = controlsBottom;
     y = bottom;
   });
@@ -142,11 +146,42 @@ async function verifyFit() {
   if (!real) {
     assert.deepEqual(asks.map((a) => wrappedLines(a.title, 14.5)), [2, 2, 2]);
     assert.deepEqual(asks.map((a) => wrappedLines(a.why, 12.5)), [3, 3, 4]);
-    assert.deepEqual(asks.map((a) => wrappedLines(`If you accept: ${a.effect}`, 12.5)), [2, 4, 3]);
+    assert.deepEqual(asks.map((a) => wrappedLines(`If you approve: ${a.effect}`, 12.5)), [2, 4, 3]);
   }
-  // The third ask's Accept and Skip are on the first screen, with room for a
+  // The third ask's Approve, Reject and Reply are on the first screen, with room for a
   // one line difference between the wrap model and the browser.
   assert.ok(lastControlsBottom + 18.75 <= SCREEN_H, `the third ask's buttons end at ${Math.round(lastControlsBottom)}; the screen ends at ${SCREEN_H}`);
+
+  // ── one ask: the first entry's Approve on the first screen ──
+  // Union's goals proposal (op-54, eleven changes in one ask): the purpose is
+  // the first entry, with the longest sentence and the longest field value the
+  // analyzer has written. The entry is read the way it is drawn in the narrow
+  // layout: the number column (20) beside the text, the sentence at 13.5 over
+  // 20, then the fields at 12.5 over 20 in a label gutter of 86, the reason
+  // at 12 over 1.6, and the verdict row under it all, 12 above and 28 tall.
+  await act(async () => root.render(React.createElement(StaffingPane, {
+    tree: UNION_GOALS_TREE, health: ORG_STAFFING_FIXTURE_HEALTH, proposals: [UNION_GOALS_PROPOSAL], proposal: UNION_GOALS_PROPOSAL, head: findHeadOfPeople(UNION_GOALS_TREE), reviewing: false, now: Date.now(), thread: { conversation_id: "fixture-thread-conv" }, threadComposerOnScreen: true, selectedChangeId: null, titleInPageHeader: true,
+    live: { tree: UNION_GOALS_TREE, goals: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, plans: [], tasks: [] },
+    onSelectChange: noop, onDecide: noop, onEditRole: noop, onSelectNode: noop, onOpenSession: noop, onPickProposal: noop, onHireHeadOfPeople: noop, onProposeNow: noop,
+  } as any)));
+  assert.equal(document.querySelector("[data-asks-header]"), null);
+  assert.equal(document.querySelector("[data-ask-fold]"), null, "one ask: no fold, the entries are the column");
+  const first = q("[data-ask-rows] [data-subject]");
+  assert.equal(first.getAttribute("data-subject-variant"), "full");
+  const sentence = q("[data-subject-sentence]", first);
+  // The entry's own width: the column (380) less its gutters (32) and the number column (20).
+  const ENTRY_W = 380 - 32 - 20;
+  const sentenceLines = wrappedLines(sentence.textContent!, 13.5, ENTRY_W);
+  const fields = [...first.querySelectorAll<HTMLElement>("[data-field]")];
+  // A field's label sits in the gutter; its value wraps in what is left. A list behind a summary is one line until opened.
+  const fieldLines = fields.reduce((n, dd) => n + wrappedLines(dd.textContent!, 12.5, ENTRY_W - 86), 0);
+  const reasonLines = [...first.querySelectorAll<HTMLElement>("[data-subject-reasons] p")].reduce((n, p) => n + wrappedLines(p.textContent!, 12, Math.min(ENTRY_W, 70 * 0.6 * 12)), 0);
+  const entryTop = PANE_TOP + 1 + 13;
+  const acceptBottom = entryTop + sentenceLines * 20 + 8 + fieldLines * 20 + 8 + reasonLines * 12 * 1.6 + 12 + 28;
+  console.log(`lone ask, first entry: sentence ${sentenceLines} lines, fields ${fieldLines}, reason ${reasonLines}; Approve ends at ${Math.round(acceptBottom)} of ${SCREEN_H}`);
+  // The purpose's sentence is 80 characters: two lines at this width. Without the count the budget measures nothing.
+  assert.equal(sentenceLines, 2);
+  assert.ok(acceptBottom + 20 <= SCREEN_H, `the first entry's Approve ends at ${Math.round(acceptBottom)}; the screen ends at ${SCREEN_H}`);
 
   await act(async () => root.unmount());
   closeDomWindow(dom);

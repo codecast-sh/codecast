@@ -385,7 +385,9 @@ export const getConnectUrl = action({
     const who = await ctx.runQuery(internalApi.googleOAuth.resolveConnectUser, {
       api_token: args.api_token,
     });
-    if (!who) return { ok: false, error: "Authentication failed — sign in and retry from the Apps tab" };
+    // Refusals are stable codes; the web describes them in one table
+    // (packages/shared/contracts/connectorReasons.ts) for every surface.
+    if (!who) return { ok: false, error: "signed_out" };
     const grants = args.grant === undefined ? [] : Array.isArray(args.grant) ? args.grant : [args.grant];
     const state = await signStateWith(env.clientSecret, {
       user_id: who.user_id,
@@ -508,7 +510,7 @@ export const storeConnection = internalMutation({
   },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string; id?: string; pending?: boolean }> => {
     const userId = (ctx.db as any).normalizeId("users", args.user_id);
-    if (!userId) return { ok: false, error: "bad_user" };
+    if (!userId) return { ok: false, error: "signed_out" };
     const now = Date.now();
     const existing = await (ctx.db as any)
       .query("google_installations")
@@ -565,7 +567,7 @@ export const finishConfirm = internalMutation({
   ): Promise<{ ok: boolean; error?: string; revoke_enc?: string }> => {
     const rowId = (ctx.db as any).normalizeId("google_installations", args.installation_id);
     const row = rowId ? await ctx.db.get(rowId) : null;
-    if (!row) return { ok: false, error: "not_found" };
+    if (!row) return { ok: false, error: "no_such_installation" };
     const r = row as any;
     // Already confirmed — a re-clicked link is a no-op, not an error.
     if (!r.pending_confirm_hash) return { ok: true };
@@ -598,7 +600,7 @@ export const finishConfirm = internalMutation({
 
 // confirmConnection: the landing page calls this with the installation + confirm params
 // from the callback redirect, in the signed-in session. Success activates the
-// row; every failure says what the user should do next.
+// row; every failure is a stable code the landing page puts in plain words.
 export const confirmConnection = action({
   args: { api_token: v.optional(v.string()), installation_id: v.string(), confirm_token: v.string() },
   handler: async (ctx, args): Promise<{ ok: boolean; error?: string }> => {
@@ -607,9 +609,7 @@ export const confirmConnection = action({
     const who = await ctx.runQuery(internalApi.googleOAuth.resolveConnectUser, {
       api_token: args.api_token,
     });
-    if (!who) {
-      return { ok: false, error: "Authentication failed — sign in, then reopen this confirmation link" };
-    }
+    if (!who) return { ok: false, error: "signed_out" };
     const res = await ctx.runMutation(internalApi.googleOAuth.finishConfirm, {
       user_id: who.user_id,
       installation_id: args.installation_id,
@@ -620,14 +620,9 @@ export const confirmConnection = action({
       if (refreshToken) await revokeAtGoogle(refreshToken);
     }
     if (res.ok) return { ok: true };
-    const explain: Record<string, string> = {
-      not_found: "No such pending Gmail connection — connect again from the Apps tab",
-      expired: "This confirmation link expired; the grant was revoked — connect again from the Apps tab",
-      bad_token: "Confirmation token mismatch — use the exact link Google redirected you to, or connect again from the Apps tab",
-      wrong_account:
-        "This Gmail connect flow was started by a DIFFERENT codecast account; the connection was discarded and the Google grant revoked — connect from your own Apps tab",
-    };
-    return { ok: false, error: explain[res.error ?? ""] ?? res.error ?? "confirm_failed" };
+    // A stable code (no_such_installation, expired, bad_token, wrong_account), described
+    // by the page the person landed on (shared/contracts/connectorReasons.ts).
+    return { ok: false, error: res.error ?? "confirm_failed" };
   },
 });
 
@@ -761,7 +756,7 @@ export const disconnect = action({
       installation_id: args.installation_id,
       include_pending: true,
     });
-    if (!conn) return { ok: false, error: "No such Gmail connection for this account — check the Apps tab" };
+    if (!conn) return { ok: false, error: "no_such_installation" };
     const refreshToken = await decryptRefreshToken(conn.refresh_token_enc, env.clientSecret);
     if (refreshToken) await revokeAtGoogle(refreshToken);
     await ctx.runMutation(internalApi.googleOAuth.deleteConnection, {

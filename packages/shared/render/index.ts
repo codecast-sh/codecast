@@ -11,3 +11,4 @@ export * from "./toolNames";
 export * from "./format";
 export * from "./toolCall";
 export * from "./toolVisual";
+export * from "./pageTheme";

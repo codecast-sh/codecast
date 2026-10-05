@@ -1,21 +1,22 @@
 // /welcome: where someone new to codecast starts (plan pl-840 onboarding,
 // docs/architecture/hosted-assistant.md). Three screens: sign in, connect
-// Google, and the first useful thing, which starts a conversation and lands
+// mail and calendar, and the first useful thing, which starts a conversation and lands
 // in it in the simple lane. Which screen shows is onboarding.ts welcomeStep;
 // a move between screens runs as one view transition (the orb glides, the old
 // screen leaves the way the person is heading, the new one rises in order).
 //
-// It is also a page Google's connect returns to (googleOAuth.ts
-// GOOGLE_RETURN_PATHS), so it always mounts ConnectNotice, which runs the
-// confirm step. Anyone who acts here (connects, skips, or starts) is moved to
-// the simple lane (`client_state.ui.lane`).
+// Mail and calendar connect through Whisk, the family's mail app, and the
+// connect comes back here (convex/whisk.ts WHISK_RETURN_PATHS), so it always
+// mounts ConnectNotice, which says how it went. Anyone who acts here
+// (connects, skips, or starts) is moved to the simple lane
+// (`client_state.ui.lane`).
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { ArrowRight, ArrowUpRight, CalendarDays, Check, Mail, ShieldCheck } from "lucide-react";
-import { oauthProviderButton, type OAuthProviderId } from "@platform/auth/web";
+import type { OAuthProviderId } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { AuthProviderButtons, ProviderGlyph } from "../../components/AuthProviderButtons";
+import { AuthProviderButtons } from "../../components/AuthProviderButtons";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { isDesktopShell } from "../../lib/desktop";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -25,14 +26,15 @@ import { useInboxStore } from "../../store/inboxStore";
 import { MAIL_COMING, assistantPromise, useConnectAvailable } from "../../components/simple/assistantPromise";
 import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
-import { calendarAbility, emailAbility } from "../../components/simple/connectionWords";
+import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
-import { LANE_PATHS, conversationPath, firstAsks, plainConnectError, type GoogleAbilities } from "../../components/simple/lane";
+import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
 import { laneOf, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
 import { startConversationWith } from "../../components/simple/startConversation";
-import { useLaneFont } from "../../components/simple/useLaneFont";
-import { useLaneGoogle } from "../../components/simple/useLaneGoogle";
+import "../../components/simple/laneLook";
+import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
+import { useLaneMail } from "../../components/simple/useLaneMail";
 import { SKIP_PARAM, SKIP_VALUE, stepDirection, welcomeStep, welcomeTrail, type WelcomeStep } from "./onboarding";
 import "../../components/simple/simple.css";
 import "./welcome.css";
@@ -43,15 +45,9 @@ const CONNECTED_PAUSE_MS = 1100;
 const SEND_OFF_MS = 260;
 
 const STEP_NAMES: Record<WelcomeStep, string> = { signin: "Sign in", connect: "Connect", start: "Start" };
-const GOOGLE = oauthProviderButton("google");
+/** Connect says what Connections says, so the two screens never disagree. */
+const CONNECT_WORDS = LANE_COPY.connections;
 const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
-
-/** Whether to offer the connect screen. A backend that cannot answer is
- *  treated as able, so the screen shows and any refusal is said there. */
-function useOfferConnect(): boolean | undefined {
-  const { available, failed } = useConnectAvailable();
-  return failed ? true : available;
-}
 
 /** Moving to the lane is what arriving through /welcome means, written the
  *  first time the person acts here. */
@@ -76,7 +72,7 @@ function moveTo(from: WelcomeStep, to: WelcomeStep, set: (s: WelcomeStep) => voi
 }
 
 /** The screen on show, which follows `target` through a transition. `hold`
- *  keeps the connect screen up a moment after Google connects, so "Connected"
+ *  keeps the connect screen up a moment after mail connects, so "Connected"
  *  is seen before the next screen arrives. */
 function useShownStep(target: WelcomeStep | null, hold: boolean): WelcomeStep | null {
   const [shown, setShown] = useState<WelcomeStep | null>(target);
@@ -98,7 +94,7 @@ function useShownStep(target: WelcomeStep | null, hold: boolean): WelcomeStep | 
 }
 
 export default function Welcome() {
-  useLaneFont();
+  useLaneDocumentTitle();
   const signedIn = useLocalAuth();
   return (
     <div data-simple-lane data-welcome>
@@ -129,7 +125,7 @@ function Frame({ step, trail, connected = false, children }: { step: WelcomeStep
           </ol>
         ) : null}
       </header>
-      <ConnectNotice success="Google is connected." />
+      <ConnectNotice success={CONNECT_WORDS.success} />
       <main className="wl-stage" data-step={step ?? "loading"}>
         <Orb step={step} connected={connected} />
         {children}
@@ -198,23 +194,23 @@ function SignIn({ mail }: { mail: boolean }) {
 function SignedIn() {
   const [params, setParams] = useSearchParams();
   const skipped = params.get(SKIP_PARAM) === SKIP_VALUE;
-  const available = useOfferConnect();
-  const google = useLaneGoogle(LANE_PATHS.welcome);
+  const mail = useLaneMail(LANE_PATHS.welcome);
+  const { available } = mail;
   const target = welcomeStep({
     signedIn: true,
     connectAvailable: available,
-    connectionsKnown: google.known,
-    connected: google.connected,
+    connectionsKnown: mail.known,
+    connected: mail.connected,
     skipped,
   });
-  const shown = useShownStep(target, google.connected && !skipped);
+  const shown = useShownStep(target, mail.connected && !skipped);
   const trail = welcomeTrail(available);
 
   return (
-    <Frame step={shown} trail={trail} connected={google.connected}>
+    <Frame step={shown} trail={trail} connected={mail.connected}>
       {shown === "connect" ? (
         <Connect
-          google={google}
+          mail={mail}
           onSkip={() => {
             joinLane();
             setParams({ [SKIP_PARAM]: SKIP_VALUE });
@@ -222,10 +218,10 @@ function SignedIn() {
         />
       ) : shown === "start" ? (
         <Start
-          can={google.connected ? google.can : null}
+          can={mail.connected ? mail.can : null}
           // "Connect" goes back only for someone who skipped it here.
-          onConnect={available !== false && skipped && !google.connected ? () => setParams({}) : null}
-          // Where Google cannot be connected yet, say so once.
+          onConnect={available !== false && skipped && !mail.connected ? () => setParams({}) : null}
+          // Where mail cannot be connected yet, say so once.
           mailComing={available === false}
         />
       ) : (
@@ -237,9 +233,9 @@ function SignedIn() {
 
 // ── 2. Connect ─────────────────────────────────────────────────────────────
 
-function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>; onSkip: () => void }) {
-  const { actions, connected, email } = google;
-  // Google's consent screen replaces this page and returns to it (the desktop
+function Connect({ mail, onSkip }: { mail: ReturnType<typeof useLaneMail>; onSkip: () => void }) {
+  const { actions, connected, email } = mail;
+  // Whisk's approval screen replaces this page and returns to it (the desktop
   // app hands it to the system browser instead), so the line under the
   // buttons says where the person is about to go.
   const [opened, setOpened] = useState(false);
@@ -247,14 +243,14 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
   return (
     <section className="wl-screen" aria-labelledby="wl-connect-title">
       <h1 id="wl-connect-title" className="sl-page-title sl-rise" style={rise(1)}>Bring in your mail and calendar</h1>
-      <p className="sl-lede sl-rise" style={rise(2)}>One step with Google, and I can start on your week right away.</p>
+      <p className="sl-lede sl-rise" style={rise(2)}>One step with Whisk, our mail app, and I can start on your week right away.</p>
       <div className="sl-card wl-services sl-rise" style={rise(3)}>
-        <Service icon={<Mail size={19} />} title="Email">{emailAbility(null)}</Service>
-        <Service icon={<CalendarDays size={19} />} title="Calendar">{calendarAbility(null)}</Service>
+        <Service icon={<Mail size={19} />} title={CONNECT_WORDS.email}>{emailAbility(null)}</Service>
+        <Service icon={<CalendarDays size={19} />} title={CONNECT_WORDS.calendar}>{calendarAbility(null)}</Service>
       </div>
       <p className="wl-promise sl-rise" style={rise(4)}>
         <ShieldCheck size={18} aria-hidden />
-        <span>I ask before I send an email or change your calendar. Nothing goes out without your yes.</span>
+        <span>{ASK_FIRST}</span>
       </p>
       {error ? (
         <p className="sl-callout is-sun wl-error" role="alert">{error}</p>
@@ -277,8 +273,7 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
                 void actions.connect();
               }}
             >
-              {GOOGLE ? <span className="wl-g" aria-hidden><ProviderGlyph button={GOOGLE} className="wl-g-mark" /></span> : null}
-              Connect Google
+              {CONNECT_WORDS.connect}
             </button>
             <button type="button" className="sl-btn is-no" onClick={onSkip}>Not now</button>
           </>
@@ -286,12 +281,10 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
       </div>
       {opened && !connected && !error ? (
         <p className="wl-aside sl-rise" role="status">
-          {isDesktopShell()
-            ? "Finish in your browser. This page moves on by itself once you're done."
-            : "Taking you to Google. You'll come straight back here."}
+          {isDesktopShell() ? CONNECT_WORDS.browserNote : CONNECT_WORDS.leaving}
         </p>
       ) : (
-        <p className="wl-aside sl-rise" style={rise(6)}>You can disconnect any time from Connections.</p>
+        <p className="wl-aside sl-rise" style={rise(6)}>{disconnectNote(false)}</p>
       )}
     </section>
   );
@@ -299,7 +292,7 @@ function Connect({ google, onSkip }: { google: ReturnType<typeof useLaneGoogle>;
 
 // ── 3. The first useful thing ──────────────────────────────────────────────
 
-function Start({ can, onConnect, mailComing }: { can: GoogleAbilities | null; onConnect: (() => void) | null; mailComing: boolean }) {
+function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onConnect: (() => void) | null; mailComing: boolean }) {
   const navigate = useNavigate();
   const { lead, more } = firstAsks(can);
   const [leaving, setLeaving] = useState<string | null>(null);

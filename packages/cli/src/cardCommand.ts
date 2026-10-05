@@ -22,9 +22,9 @@ import {
   type ChangeCard,
   type ChangeVerdict,
 } from "@codecast/shared/contracts/changeCard";
-import type { EvalResult } from "@codecast/shared/contracts/evalResult";
 import { goalRefLabel, type GoalsBrief } from "@codecast/shared/contracts/goalsBrief";
 import { renderChangeCardHtml } from "@codecast/shared/render/changeCardHtml";
+import type { EvalResult } from "@platform/evals/contract";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";

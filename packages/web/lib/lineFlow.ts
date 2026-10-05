@@ -24,6 +24,7 @@ import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
 import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
+import { isConvexId } from "./entityLinks";
 import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
 
 export const HOUR = 60 * 60 * 1000;
@@ -268,9 +269,12 @@ export function goalChip(ref: string | null | undefined, initiatives: GoalRow[],
   const [head, metric] = raw.split(":");
   const initiative = initiatives.find((i) => i.short_id === head);
   if (initiative) return { ref: raw, label: metric ? `${initiative.title} · ${metric}` : initiative.title, kind: "initiative", priority: initiative.priority ?? "unranked" };
-  const project = projects.find((p) => p.short_id === head);
+  // A ground may name a project by its row id as well as its short id.
+  const project = projects.find((p) => p.short_id === head || (p as { _id?: string })._id === head);
   if (project) return { ref: raw, label: project.title, kind: "project", priority: project.priority ?? "unranked" };
-  return { ref: raw, label: raw, kind: "unknown", priority: "unranked" };
+  // A ref this workspace cannot name is never shown as its key: a row id is
+  // a project elsewhere, any other ref a goal this workspace does not hold.
+  return { ref: raw, label: isConvexId(head) ? "a project in another workspace" : "a goal outside this workspace", kind: "unknown", priority: "unranked" };
 }
 
 const SEVERITIES = new Set(["urgent", "high", "medium", "low", "none"]);
@@ -519,7 +523,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
 export function silentText(src: Pick<SenseSource, "newest" | "silent">, now: number): string {
   // Nothing in the window: silent at least that long, unless the finder may be newer than it.
   if (src.newest) return `silent ${ageShort(now - src.newest.created_at)}`;
-  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}` : "nothing filed yet";
+  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}+` : "nothing filed yet";
 }
 
 /** "3d", "5h", "12m": the largest unit, for a sentence. */

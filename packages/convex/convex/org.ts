@@ -549,7 +549,8 @@ export type FeedRow = {
 };
 // One position per source: the last row emitted from it. A row is "after"
 // the cursor when it is older, or the same age with a smaller id.
-type FeedCursor = Partial<Record<FeedKind, { ts: number; id: string }>>;
+type FeedPosition = { ts: number; id: string };
+type FeedCursor = Partial<Record<FeedKind, FeedPosition>>;
 
 const FEED_LIMIT_DEFAULT = 40;
 const FEED_LIMIT_MAX = 200;
@@ -559,9 +560,11 @@ const COMMIT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const ARTIFACTS_PER_MEMBER = 100;
 /** Runs the feed reads from the workspace's newest (by_workspace_updated). */
 const RUNS_PER_WORKSPACE = 200;
-/** Calls the feed reads from a team's newest (by_team_started), and how many
- *  of them a page keeps: each kept call costs its own access check. */
+/** Calls the feed reads from a team's newest (by_team_started) in one window,
+ *  how many windows a page may read before it ships what it has, and how many
+ *  matching calls a page keeps: each kept call costs its own access check. */
 const CALLS_PER_TEAM = 60;
+const CALL_WINDOWS_PER_PAGE = 4;
 const CALL_ROWS_PER_PAGE = 8;
 /** The decision statuses the feed shows: an ask that waits, and one answered. */
 const DECISION_STATUSES = ["pending", "answered"] as const;
@@ -724,6 +727,71 @@ async function scopeMemberIds(ctx: Ctx, resolved: ResolvedScope): Promise<Id<"us
   return (await createTeamFeedFilter(ctx as any, resolved.teamId)).memberships.map((m: any) => m.user_id as Id<"users">);
 }
 
+/** Calls that name a goal in scope (I5): its short id or title in the call's
+ *  title or summary, or a source on the goal's record that cites the call.
+ *  Each team's calls are read newest first from `from` down, a window at a
+ *  time, until a page's worth is kept, `enough` says the page is full without
+ *  reading further, the windows a page may read are spent, or the calls run
+ *  out. `at` is how far the scan read and `more` whether calls wait past it.
+ *  The words themselves (the segments) are never read, and only a call that
+ *  matches is access checked, a few a page. */
+async function callsNamingGoals(
+  ctx: Ctx,
+  resolved: ResolvedScope,
+  opts: { from?: FeedPosition; actor: ReturnType<typeof actorCache>; enough: (at: FeedPosition, kept: number) => boolean },
+): Promise<{ rows: FeedRow[]; at?: FeedPosition; more: boolean }> {
+  const goals = resolved.initiatives ?? [];
+  const cited = new Set<string>();
+  const names: string[] = [];
+  for (const goal of goals) {
+    if (goal.short_id) names.push(goal.short_id);
+    if ((goal.title ?? "").trim().length >= 3) names.push(goal.title);
+    const sourced: Array<IntentSource | undefined> = [...(goal.sources ?? []), ...[goal.milestones, goal.questions, goal.decisions].flatMap((list: any[] | undefined) => (list ?? []).map((e) => e.source))];
+    for (const s of sourced) if (s?.kind === "call" && s.ref) cited.add(parseCallRef(s.ref)?.call ?? s.ref.toLowerCase());
+  }
+  // `team_id` here is routing (whose calls to window); canReadCall decides.
+  const teams = new Set<string>(resolved.teamId ? [String(resolved.teamId)] : goals.map((g) => g.team_id).filter(Boolean).map(String));
+  const rows: FeedRow[] = [];
+  let at = opts.from;
+  let more = teams.size > 0;
+  scan: for (let read = 0; more && read < CALL_WINDOWS_PER_PAGE && !(at && opts.enough(at, rows.length)); read++) {
+    const windows: any[][] = [];
+    for (const teamId of teams) {
+      windows.push(await ctx.db.query("transcripts")
+        .withIndex("by_team_started", (q: any) => (at ? q.eq("team_id", teamId).lt("started_at", at.ts) : q.eq("team_id", teamId)))
+        .order("desc")
+        .take(CALLS_PER_TEAM));
+    }
+    // A full window hides that team's older calls, so this pass reads no
+    // further down than the newest edge of a full one.
+    const floor = Math.max(...windows.filter((w) => w.length === CALLS_PER_TEAM).map((w) => w[w.length - 1].started_at));
+    more = floor > -Infinity;
+    for (const t of windows.flat().filter((c) => c.started_at >= floor).sort((a, b) => b.started_at - a.started_at)) {
+      // addressesAgent is the whole word, case folded name match: "in-3" is
+      // not named by "in-30".
+      const named = cited.has(String(t._id)) || (!!t.short_id && cited.has(t.short_id)) || addressesAgent(`${t.title ?? ""}\n${t.summary ?? ""}`, names);
+      if (named) {
+        if (rows.length >= CALL_ROWS_PER_PAGE) { more = true; break scan; }
+        if (await canReadCall(ctx as any, resolved.userId, t)) {
+          rows.push({
+            kind: "call",
+            id: t._id.toString(),
+            short_id: t.short_id ?? undefined,
+            title: t.title || "Call",
+            state: t.status,
+            actor: await opts.actor(t.started_by),
+            updated_at: t.started_at,
+            href: `/calls/${t.short_id ?? t._id}`,
+            preview: preview(t.summary),
+          });
+        }
+      }
+      at = { ts: t.started_at, id: t._id.toString() };
+    }
+  }
+  return { rows, at, more };
+}
+
 export async function computeScopeFeed(
   ctx: Ctx,
   resolved: ResolvedScope,
@@ -763,8 +831,10 @@ export async function computeScopeFeed(
   const before = (q: any, field: string, kind: FeedKind) => (cursor[kind] ? q.lt(field, cursor[kind]!.ts) : q);
   const goals = resolved.initiatives ?? [];
   const goalHref = (goal: any) => `/initiatives/${goal.short_id ?? goal._id}`;
-  /** A source whose window was cut at a row cap: more of it waits past the page. */
-  const cut = new Set<FeedKind>();
+  // A source that windows a member's or the workspace's rows runs only when
+  // the scope holds something its filter can match: a goal with no projects
+  // has no project, plan, task or session, and reads none of them.
+  const hasSessionsOrTasks = sessionIds.size > 0 || taskShortIds.size > 0;
 
   if (want("session")) {
     sources.set("session", await Promise.all(sessions.map(async ({ session, raw }) => ({
@@ -805,7 +875,7 @@ export async function computeScopeFeed(
       preview: preview(p.goal ?? p.description),
     }))));
   }
-  if (want("doc")) {
+  if (want("doc") && (projectIds.size > 0 || planShortIds.size > 0)) {
     // A member's docs, newest change first, kept when filed under a project
     // or plan in scope.
     const docById = new Map<string, any>();
@@ -835,7 +905,7 @@ export async function computeScopeFeed(
     }
     sources.set("doc", rows);
   }
-  if (want("artifact")) {
+  if (want("artifact") && hasSessionsOrTasks) {
     // A member's pages, newest first: kept when the owning session is in
     // scope or the page is attached to a task in scope (the-line.md L6). A
     // page in through both is one row, keyed by slug.
@@ -866,7 +936,7 @@ export async function computeScopeFeed(
     }
     sources.set("artifact", rows);
   }
-  if (want("decision")) {
+  if (want("decision") && hasSessionsOrTasks) {
     // Decisions on a task in scope, plus the open ones asked by a session in
     // scope that name no task (the-line.md L10). One row per decision.
     // Read per member and status, newest asked first.
@@ -973,52 +1043,7 @@ export async function computeScopeFeed(
     }
     sources.set("goal", rows);
   }
-  if (want("call") && goals.length) {
-    // Calls that name a goal in scope: its short id or title in the call's
-    // title or summary, or a source on the goal's record that cites the call.
-    // One window of each team's newest calls; the words themselves (the
-    // segments) are never read, and only a call that matches is access
-    // checked, a few a page.
-    const cited = new Set<string>();
-    const names: string[] = [];
-    for (const goal of goals) {
-      if (goal.short_id) names.push(goal.short_id);
-      if ((goal.title ?? "").trim().length >= 3) names.push(goal.title);
-      const sourced: Array<IntentSource | undefined> = [...(goal.sources ?? []), ...[goal.milestones, goal.questions, goal.decisions].flatMap((list: any[] | undefined) => (list ?? []).map((e) => e.source))];
-      for (const s of sourced) if (s?.kind === "call" && s.ref) cited.add(parseCallRef(s.ref)?.call ?? s.ref.toLowerCase());
-    }
-    // `team_id` here is routing (whose calls to window); canReadCall decides.
-    const teams = new Set<string>(resolved.teamId ? [String(resolved.teamId)] : goals.map((g) => g.team_id).filter(Boolean).map(String));
-    const candidates: any[] = [];
-    for (const teamId of teams) {
-      candidates.push(...await ctx.db.query("transcripts")
-        .withIndex("by_team_started", (q: any) => before(q.eq("team_id", teamId), "started_at", "call"))
-        .order("desc")
-        .take(CALLS_PER_TEAM));
-    }
-    const rows: FeedRow[] = [];
-    for (const t of candidates.sort((a, b) => b.started_at - a.started_at)) {
-      // addressesAgent is the whole word, case folded name match: "in-3" is
-      // not named by "in-30".
-      const named = cited.has(String(t._id)) || (!!t.short_id && cited.has(t.short_id)) || addressesAgent(`${t.title ?? ""}\n${t.summary ?? ""}`, names);
-      if (!named) continue;
-      if (rows.length >= CALL_ROWS_PER_PAGE) { cut.add("call"); break; }
-      if (!(await canReadCall(ctx as any, resolved.userId, t))) continue;
-      rows.push({
-        kind: "call",
-        id: t._id.toString(),
-        short_id: t.short_id ?? undefined,
-        title: t.title || "Call",
-        state: t.status,
-        actor: await actor(t.started_by),
-        updated_at: t.started_at,
-        href: `/calls/${t.short_id ?? t._id}`,
-        preview: preview(t.summary),
-      });
-    }
-    sources.set("call", rows);
-  }
-  if (want("run")) {
+  if (want("run") && (taskShortIds.size > 0 || planShortIds.size > 0)) {
     // Runs (the-line.md L10): every workflow run bound to a task or plan in
     // scope. The state is the run's status plus its current node's label; the
     // actor is the session that started it.
@@ -1108,12 +1133,24 @@ export async function computeScopeFeed(
   // row that page emitted; untouched sources keep their old position.
   const remaining = new Map<FeedKind, FeedRow[]>();
   for (const [kind, rows] of sources) remaining.set(kind, rows.filter((r) => afterCursor(r, cursor[kind])).sort(rowOrder));
-  const merged = Array.from(remaining.values()).flat().sort(rowOrder);
-  const page = merged.slice(0, limit);
+  let merged = Array.from(remaining.values()).flat().sort(rowOrder);
+  // Calls are scanned last, against the rows above: the scan stops reading as
+  // soon as the rows it has passed fill the page.
+  const calls = want("call") && goals.length
+    ? await callsNamingGoals(ctx, resolved, { from: cursor.call, actor, enough: (at, kept) => kept + merged.filter((r) => !afterCursor(r, at)).length >= limit })
+    : undefined;
+  if (calls) merged = [...merged, ...calls.rows].sort(rowOrder);
+  // A scan that stopped with calls unread holds back every row older than
+  // where it stopped, of any kind, with its cursor untouched: a call found on
+  // a later page never lands under rows older than it.
+  const ready = calls?.more ? merged.filter((r) => !!calls.at && !afterCursor(r, calls.at)) : merged;
+  const page = ready.slice(0, limit);
   const next: FeedCursor = { ...cursor };
   for (const row of page) next[row.kind] = { ts: row.updated_at, id: row.id };
-  // A cut source's rows all shipped: its next window starts past them.
-  const hasMore = merged.length > page.length || cut.size > 0;
+  // The call source's position is how far its scan read, once every call it
+  // kept has shipped: the calls it passed over are never read again.
+  if (calls?.at && calls.rows.every((r) => page.includes(r))) next.call = calls.at;
+  const hasMore = merged.length > page.length || !!calls?.more;
 
   // Thumbnails only for the rows that ship: an image artifact or a page
   // thumbnail, and the newest image a session showed.

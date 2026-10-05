@@ -16,7 +16,7 @@
 // world/multiplayer.ts; this file builds the state and answers the routes.
 
 import { type BatchesResponse, type BisectPlanRequest, type BisectResponse, type CommitRef, type CommitResponse, type CompareResponse, type EpochResponse, type EvalsRouteKey, type FreezeResponse, type MovedEvent, type OverviewResponse, type PatchResponse, type PromptFilePair, type RunDiffEntry, type RunFileResponse, type RunRow, type RunRowStatus, type SurfaceOverview, type SurfaceResponse, searchRows, spendByDayOf } from "@codecast/shared/contracts/evalsApi";
-import { makeRng } from "@codecast/shared/random";
+import { makeRng } from "@platform/evals/analysis";
 import { sessionTrailerValue } from "@codecast/shared/blame";
 import { type Batch, DAY, EvalsFixtureMiss, type FixtureState, JUDGE_MODEL, PASS_MARK, RECENT_SUBJECTS, SESSIONS, SUBJECTS, SURFACE_DEFS, batchOf, batchStats, clamp01, epochsOf, fixtureHex, flipsBetween, footingMarkers, gradedBatches, iso, ledger, round, rowsIn, rowsOf, stampOf, sum, surfaceDef, uuid, verdict } from "./world/model";
 import { byteLength, examplesOf, momentOf, promptPair, replyOf, runFileTexts, runResponse } from "./world/runText";
@@ -254,7 +254,9 @@ function surfaceResponse(st: FixtureState, id: string, q: Record<string, string>
   };
 }
 
-function freezeResponse(st: FixtureState, id: string): FreezeResponse {
+function freezeResponse(st: FixtureState, ref: string): FreezeResponse {
+  // An address carries a freeze by its 8-character prefix, which the api resolves; so does the fixture.
+  const id = st.freezes.has(ref) ? ref : ([...st.freezes.keys()].find((k) => k.startsWith(ref)) ?? ref);
   const f = st.freezes.get(id);
   if (!f) throw new EvalsFixtureMiss(`no freeze ${id}`);
   const def = surfaceDef(st, f.surface);

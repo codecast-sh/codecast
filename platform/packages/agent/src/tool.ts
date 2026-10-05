@@ -23,15 +23,31 @@ export interface ToolContext {
   signal?: AbortSignal;
   /**
    * Adds dollars the tool spent outside the run's model calls (a paid search,
-   * a model call of its own) to the run's cost. The run counts it against
-   * `ceilingUsd` before the next model call and includes it in `costUsd`.
-   * Ignores amounts that are not finite and positive.
+   * a model call of its own) to the run's cost. The run counts it at once, so
+   * `remainingUsd` here and in sibling calls sees it, checks it against
+   * `ceilingUsd` before the next model call, and includes it in `costUsd`.
+   * Calls run in parallel and the ceiling is only enforced before model
+   * calls, so a paid tool reserves its estimate before it spends: check
+   * `remainingUsd()`, charge the estimate, then charge the difference once the
+   * real cost is known. A negative amount gives back part of what this call
+   * charged, never more. Ignores amounts that are not finite.
    */
   charge(usd: number): void;
+  /** Dollars the run has left under `ceilingUsd`, after everything charged so far, sibling calls included. Never negative. */
+  remainingUsd(): number;
 }
 
-/** What `runTool` takes: a `ToolContext` whose `charge` defaults to dropping the amount. */
-export type RunToolContext = Omit<ToolContext, "charge"> & { charge?: ToolContext["charge"] };
+/**
+ * What `runTool` takes: a `ToolContext` whose `charge` defaults to dropping
+ * the amount and whose `remainingUsd` defaults to no limit.
+ */
+export type RunToolContext = Omit<ToolContext, "charge" | "remainingUsd"> & Partial<Pick<ToolContext, "charge" | "remainingUsd">>;
+
+/** How a run meters its tools: what each call charges, by call id, and what is left. */
+export interface ToolMeter {
+  charge(usd: number, callId: string): void;
+  remainingUsd(): number;
+}
 
 /** A block a tool may hand back: text, or an image the model can look at. */
 export type ToolContent = TextContent | ImageContent;
@@ -88,7 +104,11 @@ export async function runTool(tool: Tool, args: unknown, ctx: RunToolContext): P
   const source = tool.source;
   let output: ToolOutput;
   try {
-    output = await tool.run(args as Static<TSchema>, { ...ctx, charge: ctx.charge ?? (() => {}) });
+    output = await tool.run(args as Static<TSchema>, {
+      ...ctx,
+      charge: ctx.charge ?? (() => {}),
+      remainingUsd: ctx.remainingUsd ?? (() => Number.POSITIVE_INFINITY),
+    });
   } catch (error) {
     if (source === undefined) throw error;
     throw new Error(untrusted(source, error instanceof Error ? error.message : String(error), { label: `${tool.name} failed` }));
@@ -103,14 +123,21 @@ export async function runTool(tool: Tool, args: unknown, ctx: RunToolContext): P
 
 /**
  * The pi-agent-core view of a tool, which the loop validates and executes.
- * `charge` receives what the tool spends, with the call's id.
+ * `meter` receives what the tool spends, with the call's id, and tells it what is left.
  */
-export function toAgentTool(tool: Tool, charge?: (usd: number, callId: string) => void): AgentTool {
+export function toAgentTool(tool: Tool, meter?: ToolMeter): AgentTool {
   return {
     name: tool.name,
     label: tool.label ?? tool.name,
     description: tool.description,
     parameters: tool.parameters,
-    execute: (callId, params, signal) => runTool(tool, params, { callId, signal, charge: charge && ((usd) => charge(usd, callId)) }),
+    execute: (callId, params, signal) => runTool(tool, params, meteredContext(callId, signal, meter)),
   };
+}
+
+/** The context a metered call runs with: `meter`'s charge bound to the call's id. */
+export function meteredContext(callId: string, signal: AbortSignal | undefined, meter?: ToolMeter): RunToolContext {
+  return meter
+    ? { callId, signal, charge: (usd) => meter.charge(usd, callId), remainingUsd: meter.remainingUsd }
+    : { callId, signal };
 }

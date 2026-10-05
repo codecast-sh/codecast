@@ -28,6 +28,7 @@ import { renderMarkdownDocument, restyleMarkdownDocument } from "./artifactMarkd
 import { mediaBucketFromEnv, r2Presign } from "./lib/r2";
 import { CAST_PLAYER_JS } from "./lib/castPlayer";
 import { pageUsesPlayer } from "@codecast/shared/contracts";
+import { injectPageTheme } from "@codecast/shared/render";
 import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1157,7 @@ export const serve = httpAction(async (ctx, request) => {
   if (kind === "bundle") {
     html = injectBase(html, doc.version < artifact.version ? `_v/${doc.version}/` : "./");
   }
+  if (kind !== "markdown") html = injectPageTheme(html);
   html = injectPlayer(html, apiBase);
   // A card's live thumbnail: the page alone. No bar means no view beacon and
   // no comment polling, so a gallery of previews counts nothing as a view.

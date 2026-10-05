@@ -1,9 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import { BlogNav, SOL } from "../blog/blogChrome";
 import { useRouteMeta } from "../pageMeta";
-import { COMPARISONS, compareHref } from "./comparisons";
+import { ComparisonList } from "./ComparisonList";
 
 export default function CompareIndexPage() {
   useRouteMeta("/compare");
@@ -21,18 +20,7 @@ export default function CompareIndexPage() {
           actually for, and when the other one is the better choice.
         </p>
 
-        <ul className="space-y-6">
-          {COMPARISONS.map((c) => (
-            <li key={c.slug} className="rounded-lg p-6" style={{ border: `1px solid ${SOL.base2}` }}>
-              <Link href={compareHref(c.slug)}>
-                <h2 className="font-mono text-xl font-bold mb-2 hover:underline" style={{ color: SOL.base03 }}>
-                  {c.title}
-                </h2>
-              </Link>
-              <p className="text-sm leading-relaxed" style={{ color: SOL.base01 }}>{c.dek}</p>
-            </li>
-          ))}
-        </ul>
+        <ComparisonList />
       </div>
     </main>
   );

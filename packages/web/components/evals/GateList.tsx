@@ -11,7 +11,7 @@ import { gateAnchor, orderGates, gateEvidenceWords } from "./runModel";
 export function AnchorLink({ anchor, href, onAnchor, label }: { anchor: string; href: string; onAnchor: (anchor: string) => void; label: string }) {
   return (
     <a
-      className="ev-row-anchor inline-flex items-center gap-1"
+      className="ev-row-anchor"
       href={href}
       aria-label={label}
       onClick={(e) => {
@@ -20,7 +20,7 @@ export function AnchorLink({ anchor, href, onAnchor, label }: { anchor: string; 
         onAnchor(anchor);
       }}
     >
-      <Link2 className="w-3 h-3" /> link
+      <Link2 /> link
     </a>
   );
 }
@@ -37,7 +37,7 @@ export function GateList({ gates, target, anchorHref, onAnchor }: { gates: reado
               {g.pass ? (
                 <VerdictGlyph state={g.evidence.vacuous ? "dry" : "pass"} title={g.evidence.vacuous ? "held, nothing to check" : "held"} />
               ) : (
-                <span className="ev-gate-x inline-flex">
+                <span className="ev-gate-x">
                   <VerdictGlyph state="crash" title="gate failed" />
                 </span>
               )}

@@ -9,6 +9,7 @@ Snippets:
   memory        Cross-session recall (cast search / context / feed)
   messaging     Session-to-session messages (cast send)
   pr            Review and steer pull requests from the shell (cast pr)
+  mods          Agents build mods that extend the codecast app, live in the conversation (cast mod)
   forks         Delegate nested workers, hand off independent inbox threads, or run a prompt
   tasks         Work tracking for agents (cast task / plan)
   triggers      Delayed, recurring, and event-driven agent runs (cast trigger)
@@ -20,6 +21,7 @@ Snippets:
   calls         Read transcribed team calls (cast calls)
   browser       Use your Chrome through the Cast extension
   computer      Drive a native macOS app (cast computer)
+  sim           Drive iOS simulators from a shared pool, on a laptop or a cloud Mac (cast sim)
   check         Typecheck through one shared tsc watcher per project (cast check)
   decide        Hand your human one well-formed decision (cast decide)
   limits        Keep working through usage limits (codecast recovers parked sessions)

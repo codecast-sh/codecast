@@ -5,7 +5,7 @@
 
 import type { BatchStats, BatchVerdict, BisectState, BisectStep, CommitRef, Epoch, EvalRoute, FlipsResult, Footing, FootingMarker, LedgerRow, RunRow, SeparationResult, SimCatalogResponse, SimRunResponse, SimSessionSummary, StalenessWord, VerdictFlip } from "@codecast/shared/contracts/evalsApi";
 // The engine's own night-by-night test, so a pooled verdict's p here is the one verdict.ts would print.
-import { separateNights } from "../../../../../evals/src/stats";
+import { separateNights } from "@platform/evals/analysis";
 
 /** A route the world has no answer for (an unknown id): the transport turns it into a 404. */
 export class EvalsFixtureMiss extends Error {}

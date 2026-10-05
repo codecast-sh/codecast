@@ -12,7 +12,14 @@
     "./cli": "./src/cli/index.ts",
     "./fs": "./src/fs/index.ts",
     "./fixture": "./src/fixture.ts",
-    "./snippet": "./src/snippet.ts"
+    "./snippet": "./src/snippet.ts",
+    "./contract": "./src/contract/index.ts",
+    "./analysis": "./src/analysis/index.ts",
+    "./query": "./src/query/index.ts",
+    "./client": "./src/client/index.ts",
+    "./react": "./src/react/index.ts",
+    "./react/styles.css": "./src/react/styles.css",
+    "./react/tokens.css": "./src/react/tokens.css"
   },
   "files": [
     "src"
@@ -25,9 +32,31 @@
     "@platform/cli-kit": "file:../cli-kit",
     "commander": "^12.1.0"
   },
+  "peerDependencies": {
+    "lucide-react": ">=0.500.0",
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "peerDependenciesMeta": {
+    "lucide-react": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "~19.2.0",
+    "happy-dom": "20.11.1",
+    "lucide-react": "^0.556.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
     "typescript": "^5.7.2"
   }
 }

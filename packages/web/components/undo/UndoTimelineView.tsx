@@ -29,7 +29,11 @@ export type UndoTimelineViewProps = {
   onUndoTo: (id: string) => void;
   onRedoTo: (id: string) => void;
   onOpen: (visit: ResolvedVisit) => void;
-  onOpenOrg: () => void;
+  /** Whether this frame has a place for the object; false hides its title
+   *  link and leaves O idle. Default: every object opens. */
+  canOpen?: (visit: ResolvedVisit) => boolean;
+  /** null = the frame has no org record. */
+  onOpenOrg: (() => void) | null;
   onClose: () => void;
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
@@ -49,15 +53,17 @@ function heldControl(target: EventTarget | null): boolean {
   return target instanceof Element && !!target.closest("button, a[href]");
 }
 
-export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
+export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canOpen = () => true, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
   const peek = mode === "peek";
   // A peek shows the head with a few rows either side; interactive shows all.
   const { rows, headIndex, atEnd } = useMemo(() => {
-    if (!peek) return { rows: model.rows, headIndex: model.headIndex, atEnd: true };
+    // A frame with no org record leaves its org rows inert.
+    const all = onOpenOrg ? model.rows : model.rows.map((r) => (r.act?.kind === "org" ? { ...r, act: null } : r));
+    if (!peek) return { rows: all, headIndex: model.headIndex, atEnd: true };
     const from = Math.max(0, model.headIndex - PEEK_ABOVE);
-    const to = Math.min(model.rows.length, model.headIndex + PEEK_BELOW + 1);
-    return { rows: model.rows.slice(from, to), headIndex: model.headIndex - from, atEnd: to === model.rows.length };
-  }, [model, peek]);
+    const to = Math.min(all.length, model.headIndex + PEEK_BELOW + 1);
+    return { rows: all.slice(from, to), headIndex: model.headIndex - from, atEnd: to === all.length };
+  }, [model, peek, !onOpenOrg]);
 
   const [selected, setSelected] = useState<string>(() => model.headId ?? model.rows[model.rows.length - 1]?.id ?? "");
   const [folds, setFolds] = useState<ReadonlySet<string>>(() => new Set());
@@ -150,14 +156,14 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
 
   const act = (row: UndoTimelineRow | undefined) => {
     if (!row?.act) return;
-    if (row.act.kind === "org") onOpenOrg();
+    if (row.act.kind === "org") onOpenOrg?.();
     else if (row.act.kind === "back") onUndoTo(row.id);
     else onRedoTo(row.id);
   };
   const open = (row: UndoTimelineRow | undefined) => {
     if (!row) return;
-    if (row.state === "external") onOpenOrg();
-    else if (row.visits[0]) onOpen(row.visits[0]);
+    if (row.state === "external") onOpenOrg?.();
+    else if (row.visits[0] && canOpen(row.visits[0])) onOpen(row.visits[0]);
   };
   const toggleFold = (id: string) => setFolds((cur) => {
     const next = new Set(cur);
@@ -264,6 +270,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
                   onFold={() => toggleFold(row.id)}
                   onAct={() => act(row)}
                   onOpen={() => open(row)}
+                  opens={!!row.visits[0] && canOpen(row.visits[0])}
                   refCb={(el) => { if (el) rowEls.current.set(row.id, el); else rowEls.current.delete(row.id); }}
                 />
               ))}
@@ -356,7 +363,7 @@ function RowDot({ row }: { row: UndoTimelineRow }) {
   }
 }
 
-function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, refCb }: {
+function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, opens, refCb }: {
   row: UndoTimelineRow;
   aboveHead: boolean;
   /** A peek takes no keys: its selection marks the head, not a target for Enter. */
@@ -366,6 +373,8 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
   onFold: () => void;
   onAct: () => void;
   onOpen: () => void;
+  /** The frame has a place for the row's object. */
+  opens: boolean;
   refCb: (el: HTMLDivElement | null) => void;
 }) {
   const undone = row.state === "undone" || row.state === "partial";
@@ -375,7 +384,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
   // group names several objects, so no one title speaks for it. Only a live
   // object (an archived doc resolves to its kind word), and only on a row in
   // force: an undone or refused row's line 2 is its state.
-  const showTitle = !!visit?.entity && !row.fold && row.state === "done" && !undoLabelNamesTitle(row.label, visit.title);
+  const showTitle = opens && !!visit?.entity && !row.fold && row.state === "done" && !undoLabelNamesTitle(row.label, visit.title);
   const actLabel = undoActLabel(row.act);
   // A group with nothing to report on line 2 puts its fold there.
   const foldInline = !!row.fold && !row.detail;
@@ -390,9 +399,11 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
       data-undo-flash={flashing ? "" : undefined}
       className={cn(
         "group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors duration-300",
+        // The row's fill, named once so the overlaid action button can match it.
+        "[--undo-row-bg:var(--sol-bg)] bg-[var(--undo-row-bg)]",
         flashing
-          ? "bg-sol-yellow/[0.12] border-sol-yellow/40"
-          : "data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25",
+          ? "[--undo-row-bg:color-mix(in_srgb,var(--sol-yellow)_12%,var(--sol-bg))] border-sol-yellow/40"
+          : "data-[selected=true]:[--undo-row-bg:color-mix(in_srgb,var(--sol-cyan)_9%,var(--sol-bg))] data-[selected=true]:border-sol-cyan/25",
       )}
     >
       <div className="relative pl-[30px]">
@@ -408,7 +419,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
           </span>
           <span className="ml-auto flex-shrink-0 text-[10.5px] text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
         </div>
-        <div className="flex items-center gap-2 min-h-[18px]">
+        <div className="relative flex items-center gap-2 min-h-[18px]">
           {foldInline && <HistoryFold open={foldOpen} onClick={onFold} tabIndex={-1} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
           {showTitle && (
             // Line 2 is where it happened, and the object is the first word of
@@ -439,10 +450,14 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
               onClick={(e) => { e.stopPropagation(); onAct(); }}
               tabIndex={-1}
               className={cn(
-                // Out of flow until hover or selection, so the detail gets the full line.
-                "ml-auto flex-shrink-0 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
+                // Laid over the line's end on the row's own fill (a short fade
+                // into the text before it), so showing it moves nothing.
+                "absolute right-0 top-1/2 -translate-y-1/2 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
+                "bg-[var(--undo-row-bg)] before:absolute before:right-full before:inset-y-0 before:w-5 before:pointer-events-none before:bg-[linear-gradient(to_left,var(--undo-row-bg),transparent)]",
                 peek ? "group-hover:inline-flex" : "group-hover:inline-flex group-data-[selected=true]:inline-flex",
-                row.act?.kind === "org" ? "text-sol-violet hover:bg-sol-violet/10" : "text-sol-cyan hover:bg-sol-cyan/10",
+                row.act?.kind === "org"
+                  ? "text-sol-violet hover:bg-[color-mix(in_srgb,var(--sol-violet)_10%,var(--undo-row-bg))]"
+                  : "text-sol-cyan hover:bg-[color-mix(in_srgb,var(--sol-cyan)_10%,var(--undo-row-bg))]",
               )}
               data-undo-act={row.act?.kind}
             >

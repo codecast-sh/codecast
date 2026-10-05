@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { mirrorAgentTurn } from "./callChat";
 import { syncAgentFeeds } from "./transcripts";
-import { ask, brief, FACE_HOST_AGENT, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
+import { ask, brief, dispatchFace, FACE_HOST_AGENT, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
 import { makeFakeDb } from "./testDb";
 
 // An agent fed live into a huddle gets a face in the room when its team has
@@ -67,14 +67,15 @@ afterEach(() => {
   globalThis.fetch = realFetch;
 });
 
-function recordFetch() {
+function recordFetch(reply: (url: string) => unknown = () => ({})) {
   const sent: { url: string; body: any }[] = [];
   globalThis.fetch = (async (url: string, init: any) => {
     sent.push({ url, body: JSON.parse(init.body) });
-    return new Response("{}", { status: 200 });
+    return new Response(JSON.stringify(reply(url)), { status: 200 });
   }) as any;
   return sent;
 }
+const LK = "https://lk.example/twirp/livekit.";
 
 describe("the flags", () => {
   test("faces off, or unset, a feed joins nothing and its replies go to chat only, real-time on or not", async () => {
@@ -202,12 +203,36 @@ describe("the wire", () => {
     const sent = recordFetch();
     const actx = { runQuery: async () => ({ room_key: "session:conv1", conversation_id: "conv1", name: "Ember", avatar: "fox" }) };
     await call(join, actx, { feed_id: "f1", realtime: true });
-    expect(sent[0].url).toBe("https://lk.example/twirp/livekit.AgentDispatchService/CreateDispatch");
-    expect(sent[0].body).toEqual({
+    expect(sent.map((x) => x.url)).toEqual([`${LK}AgentDispatchService/ListDispatch`, `${LK}AgentDispatchService/CreateDispatch`]);
+    expect(sent[1].body).toEqual({
       room: "session:conv1",
       agentName: FACE_HOST_AGENT,
       metadata: JSON.stringify({ conversation_id: "conv1", name: "Ember", ...faceForAvatar("fox"), realtime: true }),
     });
+  });
+
+  const cfg = { secret: "s", lkUrl: "wss://lk.example", lkKey: "lkkey", lkSecret: ENV.LIVEKIT_API_SECRET };
+  const faceFeed = { room_key: "session:conv1", conversation_id: "conv1", name: "Ember", avatar: "fox" };
+  const listing = (status: string | null, conversation = "conv1") => ({
+    agentDispatches: [{ id: "AD_1", agentName: FACE_HOST_AGENT, metadata: JSON.stringify({ conversation_id: conversation }), state: { jobs: status === null ? [] : [{ state: status ? { status } : {} }] } }],
+  });
+
+  test("a face already on its way or in the room is not sent twice", async () => {
+    for (const status of [null, "", "JS_PENDING", "JS_RUNNING"]) {
+      const sent = recordFetch((url) => (url.endsWith("ListDispatch") ? listing(status) : {}));
+      expect(await dispatchFace(cfg, faceFeed, false)).toBe(false);
+      expect(sent.map((x) => x.url)).toEqual([`${LK}AgentDispatchService/ListDispatch`]);
+    }
+  });
+
+  test("a finished dispatch is cleared and a new one goes; another agent's is left alone", async () => {
+    const sent = recordFetch((url) => (url.endsWith("ListDispatch") ? listing("JS_FAILED") : {}));
+    expect(await dispatchFace(cfg, faceFeed, false)).toBe(true);
+    expect(sent.map((x) => x.url.slice(LK.length))).toEqual(["AgentDispatchService/ListDispatch", "AgentDispatchService/DeleteDispatch", "AgentDispatchService/CreateDispatch"]);
+    expect(sent[1].body).toEqual({ dispatchId: "AD_1", room: "session:conv1" });
+    const other = recordFetch((url) => (url.endsWith("ListDispatch") ? listing("JS_RUNNING", "conv2") : {}));
+    expect(await dispatchFace(cfg, faceFeed, false)).toBe(true);
+    expect(other.map((x) => x.url.slice(LK.length))).toEqual(["AgentDispatchService/ListDispatch", "AgentDispatchService/CreateDispatch"]);
   });
 
   test("tell puts the reply on the voice's topic", async () => {

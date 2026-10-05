@@ -11,7 +11,8 @@ describe("session rows a mod reads", () => {
       currentUser: { _id: "u1", name: "Me" },
       sessions: {
         s1: { _id: "s1", session_id: "s1", user_id: "u1", title: "Mine, waiting", agent_type: "claude_code", message_count: 12, updated_at: now - 60_000, started_at: now - 3_600_000, turn_completed_at: now - 60_000, awaiting_input: true, is_idle: true, is_connected: true, status: "active" },
-        s2: { _id: "s2", session_id: "s2", user_id: "u9", title: "Someone else's", agent_type: "claude_code", message_count: 3, updated_at: now - 30_000, status: "active" },
+        // A subagent: the inbox never shows it as its own row.
+        s2: { _id: "s2", session_id: "s2", user_id: "u9", title: "A subagent", agent_type: "claude_code", message_count: 3, updated_at: now - 30_000, status: "active", is_subagent: true, parent_conversation_id: "s1", awaiting_input: true, is_idle: true },
       },
     } as any);
     const rows = queryCollection("sessions", { fields: ["title", "state", "mine", "inbox", "waiting_since"] });

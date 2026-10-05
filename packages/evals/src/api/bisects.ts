@@ -1,10 +1,10 @@
 import { join } from 'node:path';
 
 import type { BisectPlanRequest, BisectResponse, BisectStartRequest, BisectState } from '@codecast/shared/contracts/evalsApi';
+import { separate } from '@platform/evals/analysis';
 
 import { BISECT_ID_RE, bisectPaths, bisectsDir, LIVE_STATUSES, listBisects, readBisectState, readSteps, requestStop } from '../bisect/state';
 import { writeJsonAtomic } from '../paths';
-import { separate } from '../stats';
 import { readJsonFile, tailLines } from './files';
 import { stillRunning, type Launched } from './spawn';
 

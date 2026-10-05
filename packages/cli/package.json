@@ -22,6 +22,7 @@
     "@inquirer/prompts": "^8.2.0",
     "@platform/auth": "file:../../platform/packages/auth",
     "@platform/cli-kit": "file:../../platform/packages/cli-kit",
+    "@platform/evals": "file:../../platform/packages/evals",
     "@platform/flags": "file:../../platform/packages/flags",
     "@platform/snippets": "file:../../platform/packages/snippets",
     "@types/ws": "^8.18.1",

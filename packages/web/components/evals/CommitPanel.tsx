@@ -1,5 +1,5 @@
 // One commit as the bisect pages show an answer: subject, author, date, the
-// session that wrote it (its Codecast-Session trailer), its main-line twin
+// session that wrote it (the host reads that from the commit's trailer), its main-line twin
 // when it sits on no branch, and its diff, limited to the surface's declared
 // sources unless "Whole commit" is picked. CommitPanel reads GET /commit/:sha;
 // CommitPanelView takes the answer as props. PatchPanel is the same for a
@@ -8,25 +8,25 @@
 import { useMemo, useRef, useState } from "react";
 import { GitCommitHorizontal } from "lucide-react";
 import type { CommitRef, CommitResponse, PatchResponse } from "@codecast/shared/contracts/evalsApi";
-import { splitSessionTrailer } from "@codecast/shared/blame";
-import { parseUnifiedDiffSections } from "../../lib/unifiedDiffParser";
-import { formatTimeAgo } from "../../lib/messageNavigator";
-import { DiffView } from "../DiffView";
-import { EntityIdPill } from "../EntityIdPill";
-import { SegmentedToggle } from "../SegmentedToggle";
 import { useEvalsResource } from "../../lib/evals/hooks";
-import "./bisect.css";
 import { offBranchWords, shortSha } from "./format";
-import { commitSessionId } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
+import { useEvalsHost, type EvalsHost } from "./host";
 import { EvalsLink } from "./parts";
+
+/** The session that wrote a commit, as the host reads its trailer value; null when it names none or the host reads no sessions. */
+export function useCommitSession(commit: Pick<CommitRef, "session">): string | null {
+  const read = useEvalsHost().commitSession;
+  return commit.session && read ? read.id(commit.session) : null;
+}
 
 /** The session pill and the off-branch twin: what every commit line in these pages carries. */
 export function CommitMarks({ commit }: { commit: CommitRef }) {
-  const session = commitSessionId(commit);
+  const { SessionPill } = useEvalsHost().ui;
+  const session = useCommitSession(commit);
   return (
     <>
-      {session && <EntityIdPill type="session" id={session} compact />}
+      {session && <SessionPill id={session} />}
       {!commit.onMain && (
         <span className="ev-chip ev-chip--offbranch" title={offBranchWords(commit).title} data-ev-offbranch={commit.mainSha && commit.mainSha !== commit.sha ? "twin" : "none"}>
           {offBranchWords(commit).label}
@@ -41,39 +41,48 @@ const SCOPES = [
   { key: "whole", label: "Whole commit" },
 ];
 
+/** A diff's text split per file, by the host's parser; a host without one shows the file list alone. */
+function useDiffSections(data: { diff: string; files: Array<{ path: string }> } | null): Sections {
+  const parse = useEvalsHost().parseUnifiedDiff;
+  return useMemo(() => (data && parse ? parse(data.diff, data.files.map((f) => f.path)) : []), [data, parse]);
+}
+
 export function CommitPanelView({ data, loading = false, error = null, whole, onWhole, now = Date.now() }: { data: CommitResponse | null; loading?: boolean; error?: string | null; whole: boolean; onWhole: (whole: boolean) => void; now?: number }) {
-  const sections = useMemo(() => (data ? parseUnifiedDiffSections(data.diff, data.files.map((f) => f.path)) : []), [data]);
+  const host = useEvalsHost();
+  const { SegmentedToggle } = host.ui;
+  const sections = useDiffSections(data);
   if (!data) {
     return (
-      <section className="ev-card evb-commit" data-evb-commit="loading">
-        <div className="px-4 py-4 text-[12px] ev-quiet">{error ? `Could not read the commit: ${error}` : loading ? "Reading the commit..." : "No commit."}</div>
+      <section className="ev-card ev-b-commit" data-evb-commit="loading">
+        <div className="ev-note ev-b-commit-wait">{error ? `Could not read the commit: ${error}` : loading ? "Reading the commit..." : "No commit."}</div>
       </section>
     );
   }
   const c = data.commit;
   // The trailer already shows as the session pill above.
-  const body = splitSessionTrailer(data.body.split("\n").slice(1).join("\n")).message.trim();
+  const rest = data.body.split("\n").slice(1).join("\n");
+  const body = (host.commitSession ? host.commitSession.strip(rest) : rest).trim();
   return (
-    <section className="ev-card evb-commit" data-evb-commit={c.sha}>
-      <header className="evb-commit-head">
-        <div className="evb-commit-meta">
+    <section className="ev-card ev-b-commit" data-evb-commit={c.sha}>
+      <header className="ev-b-commit-head">
+        <div className="ev-b-commit-meta">
           <span className="ev-chip" title={c.sha}>
             <GitCommitHorizontal /> {shortSha(c.sha, 10)}
           </span>
           <CommitMarks commit={c} />
           <span>{c.author}</span>
-          <span title={c.at}>{formatTimeAgo(Date.parse(c.at), now)} ago</span>
+          <span title={c.at}>{host.format.timeAgo(Date.parse(c.at), now)} ago</span>
           {data.parents[0] && <span className="ev-mono">parent {shortSha(data.parents[0])}</span>}
         </div>
-        <div className="evb-commit-subject">{c.subject}</div>
-        {body && <div className="evb-note whitespace-pre-wrap">{body}</div>}
+        <div className="ev-b-commit-subject">{c.subject}</div>
+        {body && <div className="ev-b-note ev-b-commit-body">{body}</div>}
         {!c.onMain && !(c.mainSha && c.mainSha !== c.sha) && (
-          <div className="evb-note" data-evb-no-twin>
+          <div className="ev-b-note" data-evb-no-twin>
             {offBranchWords(c).title}
             {c.near && (
               <>
                 {" "}
-                <EvalsLink className="evb-link" href={evalsHref.commit(c.near)}>
+                <EvalsLink className="ev-b-link" href={evalsHref.commit(c.near)}>
                   Open {shortSha(c.near)}
                 </EvalsLink>
               </>
@@ -81,8 +90,8 @@ export function CommitPanelView({ data, loading = false, error = null, whole, on
           </div>
         )}
       </header>
-      <div className="evb-commit-bar">
-        <span className="text-[11.5px] ev-quiet">
+      <div className="ev-b-commit-bar">
+        <span className="ev-b-fine ev-quiet">
           {data.files.length} {data.files.length === 1 ? "file" : "files"}
           {data.whole ? " in the whole commit" : " in the surface's declared sources"}
           {data.truncated ? ", the text cut at 2 MiB" : ""}
@@ -94,58 +103,59 @@ export function CommitPanelView({ data, loading = false, error = null, whole, on
   );
 }
 
-type Sections = ReturnType<typeof parseUnifiedDiffSections>;
+type Sections = ReturnType<NonNullable<EvalsHost["parseUnifiedDiff"]>>;
 
 /** The file list with line counts, then each file's diff: what a commit and a patch both show. */
 function DiffFiles({ files, sections, empty }: { files: Array<{ path: string; additions: number; deletions: number }>; sections: Sections; empty: string }) {
+  const { DiffView } = useEvalsHost().ui;
   return (
     <>
       {files.length > 0 && (
-        <div className="evb-files">
+        <div className="ev-b-files">
           {files.map((f) => (
             <span key={f.path}>
-              {f.path} <span className="evb-file-add">+{f.additions}</span> <span className="evb-file-del">-{f.deletions}</span>
+              {f.path} <span className="ev-b-file-add">+{f.additions}</span> <span className="ev-b-file-del">-{f.deletions}</span>
             </span>
           ))}
         </div>
       )}
       {sections.length ? (
         sections.map((s) => (
-          <div key={s.filePath} className="evb-commit-file">
-            <div className="evb-commit-file-name">{s.filePath}</div>
+          <div key={s.filePath} className="ev-b-commit-file">
+            <div className="ev-b-commit-file-name">{s.filePath}</div>
             <DiffView hunks={s.hunks} oldStr={s.oldContent} newStr={s.newContent} showLineNumbers contextLines={3} />
           </div>
         ))
       ) : (
-        <div className="px-4 py-4 text-[12px] ev-quiet">{empty}</div>
+        <div className="ev-note ev-b-commit-wait">{empty}</div>
       )}
     </>
   );
 }
 
 export function PatchPanelView({ data, loading = false, error = null, base = null }: { data: PatchResponse | null; loading?: boolean; error?: string | null; base?: string | null }) {
-  const sections = useMemo(() => (data ? parseUnifiedDiffSections(data.diff, data.files.map((f) => f.path)) : []), [data]);
+  const sections = useDiffSections(data);
   if (!data) {
     return (
-      <section className="ev-card evb-commit" data-evb-patch="loading">
-        <div className="px-4 py-4 text-[12px] ev-quiet">{error ? `Could not read the patch: ${error}` : loading ? "Reading the patch..." : "No patch."}</div>
+      <section className="ev-card ev-b-commit" data-evb-patch="loading">
+        <div className="ev-note ev-b-commit-wait">{error ? `Could not read the patch: ${error}` : loading ? "Reading the patch..." : "No patch."}</div>
       </section>
     );
   }
   return (
-    <section className="ev-card evb-commit" data-evb-patch={data.sha}>
-      <header className="evb-commit-head">
-        <div className="evb-commit-meta">
+    <section className="ev-card ev-b-commit" data-evb-patch={data.sha}>
+      <header className="ev-b-commit-head">
+        <div className="ev-b-commit-meta">
           <span className="ev-chip ev-chip--dirty" title={`EVALS_HOME/trees/${data.sha}.patch`}>
             patch {shortSha(data.sha, 10)}
           </span>
           {base && <span className="ev-mono">on top of {shortSha(base)}</span>}
         </div>
-        <div className="evb-commit-subject">Uncommitted edits{base ? ` on top of ${shortSha(base)}` : ""}</div>
-        <div className="evb-note">What the rep ran beyond its head: the surface's declared sources, fixtures and freezes as the disk held them. A replay applies it with git apply on a worktree at the head.</div>
+        <div className="ev-b-commit-subject">Uncommitted edits{base ? ` on top of ${shortSha(base)}` : ""}</div>
+        <div className="ev-b-note">What the rep ran beyond its head: the surface's declared sources, fixtures and freezes as the disk held them. A replay applies it with git apply on a worktree at the head.</div>
       </header>
-      <div className="evb-commit-bar">
-        <span className="text-[11.5px] ev-quiet">
+      <div className="ev-b-commit-bar">
+        <span className="ev-b-fine ev-quiet">
           {data.files.length} {data.files.length === 1 ? "file" : "files"}
           {data.truncated ? ", the text cut at 2 MiB" : ""}
         </span>

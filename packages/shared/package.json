@@ -30,6 +30,7 @@
     "./contracts/ingest": "./contracts/ingest.ts",
     "./contracts/replay": "./contracts/replay.ts",
     "./contracts/appConnector": "./contracts/appConnector.ts",
+    "./contracts/connectorReasons": "./contracts/connectorReasons.ts",
     "./contracts/codecastSignature": "./contracts/codecastSignature.ts",
     "./contracts/codecastConfig": "./contracts/codecastConfig.ts",
     "./contracts/changeCard": "./contracts/changeCard.ts",
@@ -41,6 +42,7 @@
     "./contracts/executiveAssistantPrompt": "./contracts/executiveAssistantPrompt.ts",
     "./contracts/orgIdentity": "./contracts/orgIdentity.ts",
     "./contracts/goalsBrief": "./contracts/goalsBrief.ts",
+    "./contracts/expectations": "./contracts/expectations.ts",
     "./contracts/roleAutonomy": "./contracts/roleAutonomy.ts",
     "./contracts/orgAvatars": "./contracts/orgAvatars.ts",
     "./contracts/orgTemplateBind": "./contracts/orgTemplateBind.ts",
@@ -49,6 +51,7 @@
     "./contracts/orgTemplateState": "./contracts/orgTemplateState.ts",
     "./contracts/orgTemplateLearning": "./contracts/orgTemplateLearning.ts",
     "./contracts/orgLead": "./contracts/orgLead.ts",
+    "./contracts/orgWhere": "./contracts/orgWhere.ts",
     "./contracts/orgRoute": "./contracts/orgRoute.ts",
     "./contracts/initiative": "./contracts/initiative.ts",
     "./contracts/orgAssignee": "./contracts/orgAssignee.ts",
@@ -90,7 +93,6 @@
     "./agents": "./agents/index.ts",
     "./search": "./search/index.ts",
     "./async": "./async/index.ts",
-    "./random": "./random/index.ts",
     "./changes": "./changes/index.ts",
     "./contracts/mods": "./contracts/mods.ts",
     "./mods/sdk": "./mods/sdk.ts",
@@ -99,6 +101,7 @@
   "dependencies": {
     "css-tree": "3.2.1",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/evals": "file:../../platform/packages/evals",
     "@platform/fence": "file:../../platform/packages/fence"
   },
   "devDependencies": {

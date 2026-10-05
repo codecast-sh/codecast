@@ -92,11 +92,13 @@ function LoginForm() {
           <p className="text-sol-text-muted mt-3 text-sm">
             {reason === "slack"
               ? "Sign in with the Codecast account that started this Slack connection."
-              : reason === "session_expired"
-                ? "Your session expired. Please sign in again."
-                : reason === "oauth"
-                  ? "GitHub sign-in didn't complete. Please try again."
-                  : "Sign in to access your conversations"}
+              : reason === "whisk"
+                ? "Sign in with the Codecast account that started connecting your mail and calendar."
+                : reason === "session_expired"
+                  ? "Your session expired. Please sign in again."
+                  : reason === "oauth"
+                    ? "GitHub sign-in didn't complete. Please try again."
+                    : "Sign in to access your conversations"}
           </p>
         </div>
 

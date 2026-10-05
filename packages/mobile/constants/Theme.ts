@@ -170,8 +170,14 @@ export const Theme: Palette = liveView(
 // back a live view, so `styles.row` read during render is the active scheme's
 // row style. Name the factory parameter `Theme` to keep the body unchanged.
 export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette) => T): T {
+  return schemedStyles((scheme) => build(Palettes[scheme]));
+}
+
+// The same live sheet for a surface with a palette of its own (the assistant
+// lane draws from @platform/design): the factory gets the scheme's name.
+export function schemedStyles<T extends StyleSheet.NamedStyles<T>>(build: (scheme: ColorScheme) => T): T {
   const sheets: Partial<Record<ColorScheme, T>> = {};
-  const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(Palettes[scheme]));
+  const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(scheme));
   return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
 }
 

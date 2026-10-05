@@ -1,6 +1,6 @@
 /* One surface over time (docs/architecture/evals-ui.md 4.2 and 6): the
    seismograph, the cost track, the assay plate and the compare drawer.
-   Colour only through var(--sol-*); state also by shape. */
+   Colour and type only through var(--ev-*) (tokens.css); state also by shape. */
 
 .ev-sf { max-width: 1680px; }
 
@@ -8,16 +8,20 @@
 
 .ev-sf-head { display: flex; gap: 32px; align-items: flex-start; justify-content: space-between; }
 .ev-sf-head-main { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.ev-sf-crumb { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--sol-text-dim); }
-.ev-sf-crumb a:hover { color: var(--sol-text); }
+.ev-sf-crumb { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--ev-text-dim); }
+.ev-sf-crumb a:hover { color: var(--ev-text); }
+.ev-sf-crumb svg { width: 0.75rem; height: 0.75rem; }
 .ev-sf-head-nums { display: flex; gap: 28px; flex-shrink: 0; padding-top: 18px; }
-.ev-sf-num-label { margin-top: 6px; font-size: 11px; color: var(--sol-text-dim); }
+.ev-sf-num-label { margin-top: 6px; font-size: 11px; color: var(--ev-text-dim); }
 
-.ev-sf-criteria { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--sol-text-muted); }
-.ev-sf-criteria-toggle { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 600; color: var(--sol-text); cursor: pointer; }
+.ev-sf-criteria { display: flex; align-items: baseline; gap: 8px; min-width: 0; font-size: 12.5px; color: var(--ev-text-muted); }
+.ev-sf-criteria-toggle { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 0; border: 0; background: none; font-size: 12px; font-weight: 600; color: var(--ev-text); cursor: pointer; }
+.ev-sf-criteria-toggle svg { width: 0.75rem; height: 0.75rem; transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1); }
+.ev-sf-criteria-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
 .ev-sf-criteria-peek { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ev-sf-criteria-body { max-width: 760px; line-height: 1.55; }
 .ev-sf-criteria-body p { margin: 0; }
+.ev-sf-criteria-body .ev-chips { margin-top: 0.5rem; }
 
 /* ── Toolbar ────────────────────────────────────────────────────────────── */
 
@@ -31,14 +35,14 @@
   height: 28px;
   padding: 0 9px;
   font-size: 12px;
-  color: var(--sol-text-dim);
+  color: var(--ev-text-dim);
   background: none;
   border: 1px solid var(--ev-rule);
   border-radius: 6px;
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease;
 }
-.ev-sf-toggle:hover { color: var(--sol-text); }
+.ev-sf-toggle:hover { color: var(--ev-text); }
 .ev-sf-toggle-box {
   width: 9px;
   height: 9px;
@@ -46,8 +50,8 @@
   border-radius: 2px;
   transition: background 120ms ease;
 }
-.ev-sf-toggle[aria-pressed="true"] { color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-cyan) 55%, transparent); }
-.ev-sf-toggle[aria-pressed="true"] .ev-sf-toggle-box { background: var(--sol-cyan); border-color: var(--sol-cyan); }
+.ev-sf-toggle[aria-pressed="true"] { color: var(--ev-text); border-color: color-mix(in srgb, var(--ev-cyan) 55%, transparent); }
+.ev-sf-toggle[aria-pressed="true"] .ev-sf-toggle-box { background: var(--ev-cyan); border-color: var(--ev-cyan); }
 
 /* ── Layout: the main column and, when two batches are pinned, the drawer ─ */
 
@@ -63,57 +67,60 @@
 
 .ev-sf-chart-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 16px; margin-bottom: 8px; }
 .ev-sf-chart-head h2 { margin: 0; }
-.ev-sf-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 11.5px; color: var(--sol-text-muted); }
+.ev-sf-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 11.5px; color: var(--ev-text-muted); }
 .ev-sf-legend > span { display: inline-flex; align-items: center; gap: 5px; }
 .ev-sf-legend-hatch {
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  background-image: repeating-linear-gradient(135deg, var(--sol-yellow) 0 1px, transparent 1px 3px);
+  background-image: repeating-linear-gradient(135deg, var(--ev-yellow) 0 1px, transparent 1px 3px);
   background-color: var(--ev-hatch);
 }
-.ev-sf-legend-median { width: 14px; height: 0; border-top: 1.75px solid var(--sol-text); }
+.ev-sf-legend-median { width: 14px; height: 0; border-top: 1.75px solid var(--ev-text); }
 .ev-sf-legend-notch { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid currentColor; }
-.ev-sf-refreshing { font-size: 11px; font-weight: 400; color: var(--sol-text-dim); }
+.ev-sf-count { font-size: 12px; font-weight: 400; }
+.ev-sf-refreshing { font-size: 11px; font-weight: 400; color: var(--ev-text-dim); }
 
 .ev-sf-chart-body {
   border: 1px solid var(--ev-rule);
   border-radius: 8px;
   overflow: hidden;
-  background: var(--sol-bg);
+  background: var(--ev-bg);
 }
-.ev-sf-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; font-size: 11px; color: var(--sol-text-dim); }
+.ev-sf-keys { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; font-size: 11px; color: var(--ev-text-dim); }
 .ev-sf-keys > span { display: inline-flex; align-items: center; gap: 4px; }
 .ev-sf-note { margin: 0; padding: 12px 2px; font-size: 12px; line-height: 1.5; }
 
-.ev-sf-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--sol-text-dim); cursor: pointer; }
-.ev-sf-iconbtn:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
+.ev-sf-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--ev-text-dim); cursor: pointer; }
+.ev-sf-iconbtn:hover { color: var(--ev-text); background: var(--ev-bg-highlight); }
 
 /* ── Seismograph ────────────────────────────────────────────────────────── */
 
 .ev-sf-seis { position: relative; user-select: none; }
+.ev-sf-seis-svg { display: block; overflow: visible; }
+.ev-brush { fill: color-mix(in srgb, var(--ev-cyan) 10%, transparent); stroke: color-mix(in srgb, var(--ev-cyan) 50%, transparent); }
 .ev-sf-band { fill: transparent; pointer-events: none; }
-.ev-sf-band--alt { fill: color-mix(in srgb, var(--sol-text) 4.5%, transparent); }
-.ev-sf-perf { stroke: var(--sol-text-dim); stroke-width: 1.5; stroke-dasharray: 1.5 3.5; stroke-linecap: round; pointer-events: none; }
+.ev-sf-band--alt { fill: color-mix(in srgb, var(--ev-text) 4.5%, transparent); }
+.ev-sf-perf { stroke: var(--ev-text-dim); stroke-width: 1.5; stroke-dasharray: 1.5 3.5; stroke-linecap: round; pointer-events: none; }
 .ev-sf-epoch-label { cursor: pointer; outline: none; }
-.ev-sf-epoch-label rect { fill: var(--sol-card); stroke: var(--ev-rule); stroke-width: 1; transition: stroke 120ms ease; }
-.ev-sf-epoch-label text { font: 600 10.5px var(--font-mono); fill: var(--sol-text-muted); font-variant-ligatures: none; }
-.ev-sf-epoch-label:hover rect, .ev-sf-epoch-label:focus-visible rect { stroke: var(--sol-cyan); }
-.ev-sf-epoch-label:hover text, .ev-sf-epoch-label:focus-visible text { fill: var(--sol-text); }
-.ev-sf-gridline { stroke: var(--sol-text); stroke-width: 0.5; opacity: 0.12; pointer-events: none; }
-.ev-sf-passmark { stroke: var(--sol-text); stroke-width: 0.9; stroke-dasharray: 4 3; opacity: 0.55; pointer-events: none; }
-.ev-sf-ylabel { font: 10px var(--font-mono); fill: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
-.ev-sf-ylabel--mark { fill: var(--sol-text); }
-.ev-sf-ylabel--halo { paint-order: stroke; stroke: var(--sol-card); stroke-width: 3px; stroke-linejoin: round; }
-.ev-sf-xlabel { font: 10.5px var(--font-ui); fill: var(--sol-text-dim); }
-.ev-sf-lane-label { font: 10.5px var(--font-mono); fill: currentColor; }
-.ev-sf-axis { stroke: var(--sol-border); stroke-width: 1; }
+.ev-sf-epoch-label rect { fill: var(--ev-card); stroke: var(--ev-rule); stroke-width: 1; transition: stroke 120ms ease; }
+.ev-sf-epoch-label text { font: 600 10.5px var(--ev-font-mono); fill: var(--ev-text-muted); font-variant-ligatures: none; }
+.ev-sf-epoch-label:hover rect, .ev-sf-epoch-label:focus-visible rect { stroke: var(--ev-cyan); }
+.ev-sf-epoch-label:hover text, .ev-sf-epoch-label:focus-visible text { fill: var(--ev-text); }
+.ev-sf-gridline { stroke: var(--ev-text); stroke-width: 0.5; opacity: 0.12; pointer-events: none; }
+.ev-sf-passmark { stroke: var(--ev-text); stroke-width: 0.9; stroke-dasharray: 4 3; opacity: 0.55; pointer-events: none; }
+.ev-sf-ylabel { font: 10px var(--ev-font-mono); fill: var(--ev-text-dim); font-variant-numeric: tabular-nums; }
+.ev-sf-ylabel--mark { fill: var(--ev-text); }
+.ev-sf-ylabel--halo { paint-order: stroke; stroke: var(--ev-card); stroke-width: 3px; stroke-linejoin: round; }
+.ev-sf-xlabel { font: 10.5px var(--ev-font-ui); fill: var(--ev-text-dim); }
+.ev-sf-lane-label { font: 10.5px var(--ev-font-mono); fill: currentColor; }
+.ev-sf-axis { stroke: var(--ev-border); stroke-width: 1; }
 .ev-sf-hit { fill: transparent; cursor: crosshair; }
 .ev-sf-pass-through, .ev-sf-cursor, .ev-sf-median { pointer-events: none; }
-.ev-sf-pin { fill: color-mix(in srgb, var(--sol-cyan) 14%, transparent); stroke: color-mix(in srgb, var(--sol-cyan) 55%, transparent); stroke-width: 1; }
-.ev-sf-pin-letter { font: 700 10px var(--font-mono); fill: var(--sol-cyan); }
-.ev-sf-cursor { stroke: var(--sol-text); stroke-width: 1; opacity: 0.3; }
-.ev-sf-median { fill: none; stroke: var(--sol-text); stroke-width: 1.75; stroke-linejoin: round; }
+.ev-sf-pin { fill: color-mix(in srgb, var(--ev-cyan) 14%, transparent); stroke: color-mix(in srgb, var(--ev-cyan) 55%, transparent); stroke-width: 1; }
+.ev-sf-pin-letter { font: 700 10px var(--ev-font-mono); fill: var(--ev-cyan); }
+.ev-sf-cursor { stroke: var(--ev-text); stroke-width: 1; opacity: 0.3; }
+.ev-sf-median { fill: none; stroke: var(--ev-text); stroke-width: 1.75; stroke-linejoin: round; }
 .ev-sf-dot { cursor: pointer; }
 .ev-sf-dot:hover > :not(circle[fill^="url"]) { stroke-width: 2; }
 
@@ -123,9 +130,9 @@
 
 /* ── Cost track ─────────────────────────────────────────────────────────── */
 
-.ev-sf-cost { border-top: 1px solid var(--ev-rule); padding: 6px 0 4px; background: var(--sol-bg); }
-.ev-sf-cost-model { fill: color-mix(in srgb, var(--sol-text) 42%, transparent); }
-.ev-sf-cost-judge { fill: color-mix(in srgb, var(--sol-violet) 70%, transparent); }
+.ev-sf-cost { border-top: 1px solid var(--ev-rule); padding: 6px 0 4px; background: var(--ev-bg); }
+.ev-sf-cost-model { fill: color-mix(in srgb, var(--ev-text) 42%, transparent); }
+.ev-sf-cost-judge { fill: color-mix(in srgb, var(--ev-violet) 70%, transparent); }
 
 /* ── The assay plate ────────────────────────────────────────────────────── */
 
@@ -133,16 +140,13 @@
   overflow-x: auto;
   border: 1px solid var(--ev-rule);
   border-radius: 10px;
-  background: var(--sol-card);
+  background: var(--ev-card);
   padding: 8px 10px 10px;
 }
 .ev-sf-plate { border-collapse: separate; border-spacing: 0; }
 .ev-sf-plate th, .ev-sf-plate td { padding: 0; text-align: center; vertical-align: middle; }
 .ev-sf-plate td { width: calc(var(--ev-well) + 6px); height: calc(var(--ev-well) + 8px); }
 .ev-sf-plate td > *, .ev-sf-plate td svg { margin: 0 auto; }
-.ev-sf-plate .is-pinned { background: color-mix(in srgb, var(--sol-cyan) 11%, transparent); }
-.ev-sf-plate .is-hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
-.ev-sf-plate .is-pinned.is-hover { background: color-mix(in srgb, var(--sol-cyan) 17%, transparent); }
 .ev-sf-plate thead th { height: 26px; }
 .ev-sf-plate-col button {
   position: relative;
@@ -161,12 +165,12 @@
   left: 2px;
   bottom: 5px;
   font-size: 10px;
-  color: var(--sol-text-dim);
+  color: var(--ev-text-dim);
   white-space: nowrap;
   pointer-events: none;
 }
-.ev-sf-plate-tick { width: 1px; height: 4px; background: var(--sol-border); }
-.ev-sf-plate-pin { font: 700 10px var(--font-mono); color: var(--sol-cyan); }
+.ev-sf-plate-tick { width: 1px; height: 4px; background: var(--ev-border); }
+.ev-sf-plate-pin { font: 700 10px var(--ev-font-mono); color: var(--ev-cyan); }
 .ev-sf-plate-name {
   position: sticky;
   left: 0;
@@ -175,15 +179,14 @@
   max-width: 240px;
   padding-right: 12px !important;
   text-align: left !important;
-  background: var(--sol-card);
+  background: var(--ev-card);
 }
 tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: calc(var(--ev-well) + 8px); }
-.ev-sf-plate-link { display: inline-flex; min-width: 0; font: 12px var(--font-mono); color: var(--sol-text); font-variant-ligatures: none; }
+.ev-sf-plate-link { display: inline-flex; min-width: 0; font: 12px var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
 .ev-sf-plate-link:hover { text-decoration: underline; text-underline-offset: 2px; }
-.ev-sf-plate-flips { padding-left: 12px !important; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); text-align: right !important; }
-.ev-sf-plate-flips.has-flips { color: var(--sol-text); font-weight: 600; }
+.ev-sf-plate-flips { padding-left: 12px !important; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ev-text-dim); text-align: right !important; }
 .ev-sf-well-link { display: inline-flex; border-radius: 50%; }
-.ev-sf-well-link:focus-visible { outline: 2px solid var(--sol-cyan); outline-offset: 1px; }
+.ev-sf-well-link:focus-visible { outline: 2px solid var(--ev-cyan); outline-offset: 1px; }
 
 /* ── Compare drawer ─────────────────────────────────────────────────────── */
 
@@ -204,25 +207,25 @@ tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: 
 .ev-sf-compare-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }
 .ev-sf-compare-actions .ev-btn { white-space: nowrap; }
 .ev-sf-sets { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
-.ev-sf-set { min-width: 0; padding: 10px 12px; border: 1px solid var(--ev-rule); border-radius: 7px; background: var(--sol-bg); }
-.ev-sf-set-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-muted); }
+.ev-sf-set { min-width: 0; padding: 10px 12px; border: 1px solid var(--ev-rule); border-radius: 7px; background: var(--ev-bg); }
+.ev-sf-set-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ev-text-muted); }
 .ev-sf-pinmark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 15px;
   height: 15px;
-  font: 700 9.5px var(--font-mono);
-  color: var(--sol-cyan);
-  border: 1px solid color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+  font: 700 9.5px var(--ev-font-mono);
+  color: var(--ev-cyan);
+  border: 1px solid color-mix(in srgb, var(--ev-cyan) 55%, transparent);
   border-radius: 3px;
 }
 .ev-sf-set-num { margin: 8px 0 6px; font-size: 28px; line-height: 1; font-weight: 500; letter-spacing: -0.02em; }
 .ev-sf-set-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 0; font-size: 11.5px; }
-.ev-sf-set-facts dt { color: var(--sol-text-dim); }
-.ev-sf-set-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--sol-text); }
-.ev-sf-set-foot { margin-top: 6px; font: 10.5px var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ev-sf-verdict { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 9px 12px; border-radius: 7px; background: var(--sol-bg-alt); font-size: 13px; }
+.ev-sf-set-facts dt { color: var(--ev-text-dim); }
+.ev-sf-set-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--ev-text); }
+.ev-sf-set-foot { margin-top: 6px; font: 10.5px var(--ev-font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-sf-verdict { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 9px 12px; border-radius: 7px; background: var(--ev-bg-alt); font-size: 13px; }
 .ev-sf-verdict [data-ev-separation] span { font-size: 13px !important; font-weight: 600; }
 .ev-sf-section { display: flex; flex-direction: column; gap: 8px; }
 .ev-sf-section h4 { margin: 0; }
@@ -232,47 +235,45 @@ tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: 
 .ev-sf-examples { display: flex; flex-direction: column; gap: 14px; }
 .ev-sf-example-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
 .ev-sf-example-head > span:first-child { font-weight: 600; }
-.ev-sf-example-name { font-family: var(--font-mono); color: var(--sol-text); font-variant-ligatures: none; }
+.ev-sf-example-name { font-family: var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
 .ev-sf-example-name:hover { text-decoration: underline; text-underline-offset: 2px; }
 .ev-sf-select {
   margin-left: auto;
   height: 24px;
   max-width: 180px;
   padding: 0 6px;
-  font: 11.5px var(--font-mono);
-  color: var(--sol-text);
-  background: var(--sol-bg);
+  font: 11.5px var(--ev-font-mono);
+  color: var(--ev-text);
+  background: var(--ev-bg);
   border: 1px solid var(--ev-rule);
   border-radius: 5px;
 }
 
-/* ── Epoch sheet (portaled out of the area, so it carries the area's tokens) ─ */
+/* ── Epoch sheet (portaled out of the area; tokens.css declares the tokens on the root too) ─ */
 
 .ev-sf-sheet {
-  --ev-rule: color-mix(in srgb, var(--sol-border) 45%, transparent);
-  --ev-hatch: color-mix(in srgb, var(--sol-yellow) 18%, transparent);
   width: min(880px, 92vw) !important;
   max-width: none !important;
   padding: 0 !important;
   display: flex;
   flex-direction: column;
-  color: var(--sol-text);
-  background: var(--sol-bg) !important;
+  color: var(--ev-text);
+  background: var(--ev-bg) !important;
   border-color: var(--ev-rule) !important;
-  font-family: var(--font-ui);
+  font-family: var(--ev-font-ui);
 }
 .ev-sf-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 22px 14px; border-bottom: 1px solid var(--ev-rule); }
-.ev-sf-sheet-title { display: flex; align-items: center; gap: 10px; font-size: 16px !important; font-weight: 600; color: var(--sol-text) !important; }
-.ev-sf-sheet-sub { margin-top: 6px; font-size: 12.5px !important; color: var(--sol-text-muted) !important; }
-.ev-sf-epoch-chip { padding: 1px 7px; font: 600 12px var(--font-mono); color: var(--sol-text); border: 1px solid var(--ev-rule); border-radius: 4px; background: var(--sol-card); }
+.ev-sf-sheet-title { display: flex; align-items: center; gap: 10px; font-size: 16px !important; font-weight: 600; color: var(--ev-text) !important; }
+.ev-sf-sheet-sub { margin-top: 6px; font-size: 12.5px !important; color: var(--ev-text-muted) !important; }
+.ev-sf-epoch-chip { padding: 1px 7px; font: 600 12px var(--ev-font-mono); color: var(--ev-text); border: 1px solid var(--ev-rule); border-radius: 4px; background: var(--ev-card); }
 .ev-sf-sheet-body { flex: 1; overflow-y: auto; padding: 16px 22px 28px; display: flex; flex-direction: column; gap: 22px; }
 .ev-sf-sheet-freeze { display: flex; flex-direction: column; gap: 8px; }
 .ev-sf-sheet-freeze + .ev-sf-sheet-freeze { margin-top: 10px; }
-.ev-sf-sheet-freeze-name { font: 600 12.5px var(--font-mono); color: var(--sol-text); font-variant-ligatures: none; }
+.ev-sf-sheet-freeze-name { font: 600 12.5px var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
 .ev-sf-commits { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .ev-sf-commits li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; }
-.ev-sf-commit-subject { color: var(--sol-text); }
-.ev-sf-commit { color: var(--sol-text-muted); cursor: pointer; }
+.ev-sf-commit-subject { color: var(--ev-text); }
+.ev-sf-commit { color: var(--ev-text-muted); cursor: pointer; }
 .ev-sf-commit line { stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; opacity: 0.75; }
 .ev-sf-commit:hover line { opacity: 1; stroke-width: 2.2; }
 .ev-sf-footing-rule { stroke: currentColor; stroke-width: 1.25; stroke-dasharray: 4 3; opacity: 0.6; pointer-events: none; }
@@ -282,12 +283,9 @@ tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: 
 .ev-sf-verdictline-main { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .ev-sf-verdictline-base { display: flex; align-items: center; gap: 7px; }
 /* The baseline's mark, as the seismograph draws it under its axis. */
-.ev-sf-basemark { flex: none; width: 14px; height: 6px; border-left: 2px solid var(--sol-cyan); border-right: 2px solid var(--sol-cyan); background: linear-gradient(var(--sol-cyan), var(--sol-cyan)) center / 100% 1px no-repeat; opacity: 0.8; }
+.ev-sf-basemark { flex: none; width: 14px; height: 6px; border-left: 2px solid var(--ev-cyan); border-right: 2px solid var(--ev-cyan); background: linear-gradient(var(--ev-cyan), var(--ev-cyan)) center / 100% 1px no-repeat; opacity: 0.8; }
 .ev-sf-nowrap { white-space: nowrap; }
 .ev-sf-verdictline .ev-btn { height: 22px; }
 
 /* A freeze that flipped between the pinned pair: a mark before its name, and its row first. */
 .ev-sf-pairflip { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
-/* The name cell is sticky, so the tint mixes into the card colour rather than into transparency. */
-.ev-sf-plate tr.is-pair-broke > th { background: color-mix(in srgb, var(--sol-magenta) 7%, var(--sol-card)); }
-.ev-sf-plate tr.is-pair-fixed > th { background: color-mix(in srgb, var(--sol-cyan) 7%, var(--sol-card)); }

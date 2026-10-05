@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "../proc.js";
+import { isWriteConflict } from "../cliHttp.js";
 import { ensureUp, hostForDevice, readHosts, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { learnHostDeviceId } from "../cloud/prepare.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
@@ -314,9 +315,4 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
     },
   };
   return io;
-}
-
-/** A Convex write that lost an optimistic-concurrency race: nothing was applied, so it can be sent again. */
-export function isWriteConflict(err: unknown): boolean {
-  return /OptimisticConcurrencyControlFailure/.test(err instanceof Error ? err.message : String(err));
 }

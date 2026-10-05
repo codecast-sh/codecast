@@ -129,6 +129,7 @@ const Triggers = lazy(() => import("@/app/triggers/page"));
 const TriggerDetail = lazy(() => import("@/app/triggers/[id]/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
 const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
+const WhiskReturn = lazy(() => import("@/app/connect/whisk/page"));
 
 const Team = lazy(() => import("@/app/team/page"));
 const TeamActivity = lazy(() => import("@/app/team/activity/page"));
@@ -237,6 +238,8 @@ export function App() {
             <Route path="reset-password" element={<E name="ResetPassword"><ResetPassword /></E>} />
             <Route path="auth/cli" element={<E name="AuthCli"><AuthCli /></E>} />
             <Route path="slack/connect" element={<E name="SlackConnect"><SlackConnect /></E>} />
+            {/* Whisk's return after connecting mail and calendar (convex/whisk.ts). */}
+            <Route path="connect/whisk" element={<E name="WhiskReturn"><WhiskReturn /></E>} />
             {/* Identity relay for published-page comments (artifact bar → sign in). */}
             <Route path="pages/auth" element={<E name="ArtifactAuth"><ArtifactAuth /></E>} />
             <Route path="join/:code" element={<E name="JoinTeam"><JoinTeam /></E>} />
