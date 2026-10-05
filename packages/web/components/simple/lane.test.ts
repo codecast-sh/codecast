@@ -295,6 +295,9 @@ describe("connections", () => {
     const { plainConnectError, missingAbilities } = await import("./lane");
     expect(plainConnectError("Google OAuth not configured (GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET)")).toBe("Connecting Google isn't switched on here yet.");
     expect(plainConnectError("Couldn't reach Gmail")).toBe("Couldn't reach Gmail");
+    // Codes from Google's callback and the confirm step read through the connectors' one table.
+    expect(plainConnectError("access_denied")).toBe("You declined the authorization.");
+    expect(plainConnectError("wrong_account")).toContain("different account");
     expect(plainConnectError(null)).toBeNull();
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: true, calendar: true })).toBe(false);
     expect(missingAbilities({ read_mail: true, modify_mail: true, send_mail: false, calendar: true })).toBe(true);

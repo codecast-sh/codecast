@@ -9,7 +9,7 @@ import { useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Flag, Plus } from "lucide-react";
+import { FileText, Flag, Plus } from "lucide-react";
 import { INITIATIVE_STATUS_LABEL, metricReadings, metricTrends, milestoneCounts, nextMilestone, type InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -63,7 +63,11 @@ export function InitiativesList() {
               What the company is trying to reach. Each one names the projects that carry it and one owner who drives it.
             </p>
           </div>
-          {!creating && rows.length > 0 && <NewButton onClick={() => setCreating(true)} />}
+          <div className="flex shrink-0 items-center gap-3">
+            {/* The same goals as one page to read top to bottom, with their projects, roles and people. */}
+            <Link href="/company" className="inline-flex items-center gap-1.5 text-[12.5px] no-underline hover:underline" style={{ color: "var(--sol-text-muted)" }} data-initiatives-document><FileText className="w-3.5 h-3.5" /> {phone ? "Document" : "Read as a document"}</Link>
+            {!creating && rows.length > 0 && <NewButton onClick={() => setCreating(true)} />}
+          </div>
         </header>
 
         {creating && <CreateInitiative onDone={() => setCreating(false)} />}

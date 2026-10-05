@@ -18,7 +18,7 @@ import { inlineImageMarker } from "../inlineImage.js";
 import { spawnSync } from "../proc.js";
 import { agentTempPath } from "../tempFiles.js";
 import { acquire, heldByCaller, lockDir, poolStatus, readPool, releaseLock, writePool, type PoolEntry } from "./pool.js";
-import { axe, axeBin, boot, bundleIdOf, DEFAULT_POOL_SIZE, domainHop, ensurePool, hasSimctl, listDevices, listRuntimes, screenshot, shutdown, simctl, why } from "./simctl.js";
+import { axe, axeBin, boot, bundleIdOf, DEFAULT_POOL_SIZE, ensurePool, hasSimctl, listDevices, listRuntimes, screenshot, shutdown, simctl, why } from "./simctl.js";
 import { describeUi, findElements, formatElement, formatTree, screenPoints, type UiElement } from "./ui.js";
 
 const OK = fmt.success(icons.check);
@@ -369,7 +369,7 @@ A session acquires one pool simulator and every other verb targets it:
 
   sim
     .command("doctor")
-    .description("What this machine has for simulators: Xcode, runtimes, axe, pool, launchd domain")
+    .description("What this machine has for simulators: Xcode, runtimes, axe, pool")
     .action(() => {
       const xcode = spawnSync("xcode-select", ["-p"], { encoding: "utf-8" }).stdout?.trim();
       console.log(`xcode:    ${xcode || "none"}${hasSimctl() ? "" : "  (no simctl: install Xcode)"}`);
@@ -379,7 +379,5 @@ A session acquires one pool simulator and every other verb targets it:
       }
       console.log(`axe:      ${axeBin() ?? "missing (brew install cameroncooke/axe/axe)"}`);
       console.log(`pool:     ${readPool().length} simulator(s), locks in ${lockDir()}`);
-      const hop = domainHop();
-      console.log(`domain:   ${hop.length ? "system (commands hop into the user's domain via sudo launchctl asuser)" : "user"}`);
     });
 }

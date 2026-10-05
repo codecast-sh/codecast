@@ -151,6 +151,30 @@ describe("the gate (LE11, LE16)", () => {
   });
 });
 
+describe("a person's status wins (LM3)", () => {
+  test("dropping a cause stops its live run and withdraws nothing it should keep", async () => {
+    const { t, ids, read } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run).toMatchObject({ status: "failed", fail_reason: "Stopped: the cause was dropped by a person" });
+    expect((await read()).task.status).toBe("dropped");
+  });
+
+  test("the line's own drop station does not stop the run that is dropping", async () => {
+    const { t, ids } = await setup({ status: "in_review" }, { current_node_id: "drop" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run.status).toBe("running");
+  });
+
+  test("a session's close is not a person's: the run goes on", async () => {
+    const { t, ids } = await setup({ status: "in_progress" }, { current_node_id: "implement" });
+    await t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "dropped", conversation_id: "sess-line" });
+    const run = await t.run(async (ctx) => (await ctx.db.get(ids.runId)) as any);
+    expect(run.status).toBe("running");
+  });
+});
+
 describe("the repair (LE16)", () => {
   test("moves causes the old run end left in review, dry run first", async () => {
     const { t, ids, end, read } = await setup({ status: "in_review", closed_at: T0 + 2 }, { status: "completed" });

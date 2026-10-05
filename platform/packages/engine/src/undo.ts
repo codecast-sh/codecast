@@ -1024,15 +1024,18 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
   // A step of `entry` starts: its replay (or, with no `sent`, a redo's
   // re-invoke, which the history follows by its forward dispatch) supersedes
   // the replay before it. That one stays findable until this step settles
-  // (supersededReplay), and rebases deferred under it lapse.
+  // (supersededReplay), with the rebases deferred under it.
   const beginStep = (entry: UndoEntry, dir: "undo" | "redo", sent: readonly CellChange[] | undefined) => {
+    // Rebases deferred under the replay (a refused forward below it) go with
+    // it: they apply if it is refused, whatever step came since.
     entry.supersededReplay = entry.replayOutboxIds?.length && entry.replayDir
-      ? { ids: entry.replayOutboxIds, dir: entry.replayDir }
+      ? { ids: entry.replayOutboxIds, dir: entry.replayDir, ...(entry.replayDeferred?.length ? { deferred: entry.replayDeferred } : {}) }
       : undefined;
     entry.replayOutboxIds = sent ? [] : undefined;
     entry.replayDir = sent ? dir : undefined;
     entry.replaySent = sent?.filter((c) => !isStamp(c));
     entry.replayDeferred = undefined;
+    entry.forwardRefused = undefined;
   };
 
   const undoGeneric = (entry: UndoEntry): UndoOutcome => {
@@ -1234,6 +1237,7 @@ export function createUndoController(deps: UndoControllerDeps): UndoController {
         rebaseUndoneAfter(refresh, refresh.changes ?? [], changes);
         refresh.changes = changes;
         refresh.planted = planted;
+        refresh.priorOutboxIds = refresh.outboxIds;
         refresh.outboxIds = [commit.outboxId];
         noteSends(changes, [commit.outboxId], carriedMore);
         refresh.objects = objectsOf(changes);

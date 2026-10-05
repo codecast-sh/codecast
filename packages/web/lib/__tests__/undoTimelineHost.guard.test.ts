@@ -23,3 +23,24 @@ describe("hosts whose doorways run in every layout branch", () => {
     });
   }
 });
+
+// UndoReach mounts the card in frames outside the dashboard, whose openers
+// assume the dashboard's tab shell. Each such frame says where the card's open
+// acts lead (`frame=`), or is listed here as a frame whose readers belong in
+// the full app (the default acts leave for it: useOpenSession never opens in
+// place outside the tab shell).
+const OPENS_FULL_APP = new Set(["components/repo/RepoPageShell.tsx"]);
+
+describe("every frame that mounts UndoReach decides where its card's links go", () => {
+  const root = join(import.meta.dir, "../..");
+  const files = new Bun.Glob("{app,components,src}/**/*.tsx").scanSync({ cwd: root });
+  for (const rel of files) {
+    if (rel.includes("__tests__") || rel.endsWith(".test.tsx") || rel === "components/undo/UndoTimeline.tsx") continue;
+    const src = readFileSync(join(root, rel), "utf8");
+    for (const m of src.matchAll(/<UndoReach\b([^>]*)\/>/g)) {
+      test(`${rel} passes a frame or opens the full app`, () => {
+        expect(m[1]!.includes("frame=") || OPENS_FULL_APP.has(rel)).toBe(true);
+      });
+    }
+  }
+});

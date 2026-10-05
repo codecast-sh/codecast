@@ -16,8 +16,11 @@ export function humanizeConvexError(err: unknown, fallback = "Something went wro
   // dispatch.dispatch) arrives with one lead per hop, its structured data
   // flattened into the text of the outer one — so strip every lead, then
   // read the message back out of the JSON the inner ConvexError became.
+  // String(err) puts the error's own name ahead of the wrapper, so a lead can come first too.
+  const LEADS = /^(\s*(Uncaught\s+)?(Convex|ArgumentValidation)?Error:\s*)+/i;
+  msg = msg.replace(LEADS, "");
   msg = msg.replace(/^\[CONVEX [^\]]*\]\s*(\[Request ID: [^\]]*\]\s*)?Server Error\s*/i, "");
-  msg = msg.replace(/^(\s*(Uncaught\s+)?(Convex|ArgumentValidation)?Error:\s*)+/i, "");
+  msg = msg.replace(LEADS, "");
   msg = msg.trim();
   if (msg.startsWith("{")) {
     try {

@@ -36,7 +36,7 @@ describe("parseConnectorReturn", () => {
     expect(parseConnectorReturn("", "?linear=error&reason=denied")).toEqual({
       kind: "error",
       provider: "linear",
-      reason: "denied",
+      reason: "You declined the authorization.",
     });
   });
 
@@ -44,16 +44,16 @@ describe("parseConnectorReturn", () => {
     expect(parseConnectorReturn("", "?notion=error")).toEqual({
       kind: "error",
       provider: "notion",
-      reason: "The connection was refused",
+      reason: "The connection didn't finish. Try again.",
     });
   });
 
   test("reads the GitHub App install return, which names no provider", () => {
     expect(parseConnectorReturn("", "?success=true")).toEqual({ kind: "success", provider: "github" });
-    expect(parseConnectorReturn("", "?error=missing_team")).toEqual({
+    expect(parseConnectorReturn("", "?error=install_not_fresh")).toEqual({
       kind: "error",
       provider: "github",
-      reason: "missing_team",
+      reason: expect.stringContaining("Uninstall the Codecast app"),
     });
   });
 
@@ -68,13 +68,32 @@ describe("parseConnectorReturn", () => {
   });
 });
 
-describe("describeConnectorError", () => {
-  test("turns our own reason codes into sentences", () => {
-    expect(describeConnectorError("missing_team")).toContain("team");
+describe("a reason read from the URL", () => {
+  test("a Google cancel lands as words, on any return page", () => {
+    expect(parseConnectorReturn("", "?google=error&reason=access_denied")).toEqual({
+      kind: "error",
+      provider: "gmail",
+      reason: "You declined the authorization.",
+    });
   });
 
-  test("passes a connector's own words through untouched", () => {
-    expect(describeConnectorError("Linear OAuth not configured")).toBe("Linear OAuth not configured");
+  test("a link's own words never reach the page", () => {
+    const hit = parseConnectorReturn("", "?google=error&reason=Your+Google+account+is+locked.+Call+1-800-555-0100");
+    expect(hit).toEqual({ kind: "error", provider: "gmail", reason: "The connection didn't finish. Try again." });
+    expect(parseConnectorReturn("", "?error=Call+us+now")).toMatchObject({ reason: "The connection didn't finish. Try again." });
+  });
+
+  test("prototype keys read as the generic line, never an object", () => {
+    for (const reason of ["__proto__", "constructor", "toString"]) {
+      const hit = parseConnectorReturn("", `?google=error&reason=${reason}`) as { reason: unknown };
+      expect(hit.reason).toBe("The connection didn't finish. Try again.");
+      expect(describeConnectorError(reason)).toBe("The connection didn't finish. Try again.");
+    }
+  });
+
+  test("the described reason survives the surfaces describing it again", () => {
+    const hit = parseConnectorReturn("", "?google=error&reason=wrong_account") as { reason: string };
+    expect(describeConnectorError(hit.reason)).toBe(hit.reason);
   });
 });
 

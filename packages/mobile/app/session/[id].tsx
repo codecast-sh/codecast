@@ -3,7 +3,7 @@ import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { optionalNative } from '@/lib/optionalNative';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
-import { useLocalSearchParams, Stack, useRouter, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter, useFocusEffect, router } from 'expo-router';
 import { useQuery, useMutation, useConvex } from 'convex/react';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
@@ -205,6 +205,8 @@ type Message = {
   files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
+  /** A synthetic pull request row: the PR it opens. */
+  pr?: { repository: string; number: number };
   usage?: {
     input_tokens: number;
     output_tokens: number;
@@ -2344,13 +2346,20 @@ function SystemMessage({ message }: { message: Message }) {
     const prMatch = prContent.match(/^#(\d+)\s+(.*)/);
     const prNum = prMatch ? prMatch[1] : '';
     const prTitle = prMatch ? prMatch[2] : prContent;
+    const pr = message.pr;
     return (
-      <RNView style={styles.prCard}>
+      <TouchableOpacity
+        style={styles.prCard}
+        disabled={!pr}
+        activeOpacity={0.6}
+        onPress={() => pr && router.push(`/pr/${pr.repository}/${pr.number}` as any)}
+        accessibilityRole="button"
+      >
         <FontAwesome name="code-fork" size={11} color={Theme.violet} style={{ marginRight: 6 }} />
         <RNText style={styles.prNumber}>#{prNum}</RNText>
         <RNText style={styles.prTitle} numberOfLines={1}>{prTitle}</RNText>
         <RNText style={styles.commitTime}>{formatTimestamp(message.timestamp)}</RNText>
-      </RNView>
+      </TouchableOpacity>
     );
   }
 
@@ -3679,7 +3688,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     _id: string; sha: string; message: string; timestamp: number;
   }>;
   const pullRequests = useConversationPullRequests(gitLinkConversationId) as Array<{
-    _id: string; number: number; title: string;
+    _id: string; number: number; title: string; repository?: string;
     created_at: number; merged_at?: number;
   }>;
 
@@ -3723,6 +3732,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           content: `#${pr.number} ${pr.title}`,
           timestamp: pr.merged_at || pr.created_at,
           message_uuid: `pr-${pr.number}`,
+          pr: pr.repository ? { repository: pr.repository, number: pr.number } : undefined,
         });
       }
     }

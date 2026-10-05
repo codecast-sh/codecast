@@ -1034,12 +1034,14 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "mods",
     aliases: ["mod", "plugins", "extensions"],
     name: "Mods",
-    desc: "Extend the codecast app with panes, commands and blocks (cast mod)",
+    desc: "Agents build mods that extend the codecast app, live in the conversation (cast mod)",
     detail:
-      "Adds `cast mod` so agents can build mods: small sandboxed modules that add panes, palette " +
-      "commands and new kinds of fenced blocks to the codecast app, reading your sessions, tasks, plans " +
-      "and pull requests from the local store. A mod runs only in your app, can touch only what its " +
-      "manifest grants, and every version keeps its source.",
+      "Teaches agents to build mods: small sandboxed modules that add panes, palette commands, sidebar " +
+      "sections, fenced blocks and new kinds of tracked objects (bug-14) to the codecast app, reading your " +
+      "sessions, tasks, plans and pull requests from the local store. The agent pushes each change and the " +
+      "running pane redraws inline in the conversation, so you watch it take shape and say what to change. " +
+      "A mod touches only what its manifest grants; a local half that runs on your machine starts only " +
+      "after you approve it in your own terminal, and every version keeps its source.",
     writesTo: "CLAUDE.md — a ## Mods section with the build loop",
     shipped: "2026-10-05",
     enabledKey: "mods_enabled",

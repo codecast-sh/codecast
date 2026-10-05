@@ -47,17 +47,26 @@ export type LineRun = {
   gate_decision_id?: string;
   gate_decision_short_id?: string;
   gate_decision_status?: string;
+  /** The last gate's answer, in the option's words (workflow_runs.enrichRun). */
+  gate_answer?: string;
+  /** The cost the run's card records, in dollars. */
+  card_cost_usd?: number;
   gate_node_id?: string;
+  gate_choices?: Array<{ key: string; label: string; target: string }>;
+  gate_response?: string;
+  /** LE14: the content hash of the graph the run executed. */
+  graph_hash?: string;
+  merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string };
   primary_conversation_id?: string;
   primary_session_id?: string;
   fail_reason?: string;
-  node_statuses?: Array<{ node_id: string; status: string; result_preview?: string; session?: any }>;
+  node_statuses?: Array<{ node_id: string; status: string; outcome?: string; label?: string; session_id?: string; started_at?: number; completed_at?: number; result_preview?: string; session?: any }>;
   created_at: number;
   updated_at: number;
 };
 
 const lineRunSig = (r: LineRun) =>
-  `${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}`;
+  `${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_cost_usd ?? ""}`;
 const newestFirst = (a: LineRun, b: LineRun) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0);
 
 /** A run belongs to the active workspace by its stored access key (L8). A

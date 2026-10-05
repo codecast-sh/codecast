@@ -16,7 +16,7 @@ import {
   type LineValueSource,
   type PublishedLineProfile,
 } from "@codecast/shared/contracts/lineProfile";
-import { DAEMON_COMMAND_TTL_MS, deviceDisplayName } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, deviceDisplayName, humanizeConvexError } from "@codecast/shared/contracts";
 import { lineProjectParam } from "./line/lineStations";
 import { DISPATCH_REFUSED } from "./sessionCommands";
 
@@ -273,7 +273,9 @@ export const isLineEditRow = (row: { kind?: string } | null | undefined): row is
 export function lineEditStatus(row: LineEditRow, lp: Facts, now: number): LineEditStatus {
   const base = { requestId: row._id };
   if (row.error || row.result === DISPATCH_REFUSED) {
-    const out = editOutcome({ executed_at: row.executed_at ?? now, error: row.error ?? "The edit was refused" });
+    // A server refusal carries the client's error text; a daemon's is its own message.
+    const error = row.result === DISPATCH_REFUSED ? humanizeConvexError(row.error, "The edit was refused") : row.error ?? "The edit was refused";
+    const out = editOutcome({ executed_at: row.executed_at ?? now, error });
     return { ...base, at: row.executed_at ?? row.requested_at, state: "refused", message: out.state === "refused" ? out.message : "The edit was refused" };
   }
   if (!row.executed_at) {
@@ -349,6 +351,11 @@ export function lineSettingsHref(t: LineSettingsTarget = {}): string {
   if (t.station) q.set("station", t.station);
   const s = q.toString();
   return s ? `/line/settings?${s}` : "/line/settings";
+}
+
+/** A project's Line tab (the-line-model.md LM7): its flow, sources, stations and versions. */
+export function lineTabHref(project: string | { _id: string }): string {
+  return `/projects/${typeof project === "string" ? project : project._id}?tab=line`;
 }
 
 /** What a link into the page asks for, from its search params. An unknown section is ignored. */

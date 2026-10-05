@@ -225,7 +225,7 @@ async function verifyInitiatives() {
   // The goal, top to bottom in the order of I5's test: what it is for, the
   // number, why, done when, milestones, what is undecided, what was decided,
   // who said it; then what carries it, what the owner said, what is under it.
-  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "metrics", "why", "done_when", "milestones", "questions", "decisions", "sources", "projects", "updates", "sub"]);
+  assert.deepEqual(qa("[data-initiative-section]").map((s) => s.getAttribute("data-initiative-section")), ["description", "why", "done_when", "metrics", "milestones", "questions", "decisions", "sources", "projects", "updates", "sub"]);
   assert.ok(q("[data-initiative-scroll] [data-initiative-record='in-1']"), "the record is the one component, mounted in the scroll");
   // Measured by: the tile every surface draws, now against the target, with its source.
   const tile = q("[data-initiative-metric='weekly_active_teams']")!;

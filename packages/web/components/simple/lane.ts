@@ -17,6 +17,7 @@ import { ARMED_STATUSES, isTriggerFailing, lastRunHeadline, type TaskRow } from 
 import type { GoogleCapabilities } from "@codecast/convex/convex/googleOAuth";
 import type { WalletAccountLine } from "@codecast/convex/convex/lib/wallet";
 import { sessionLiveAt } from "../../lib/liveness";
+import { describeConnectorError } from "../../lib/connectorReturn";
 
 import { LANE_PATHS, conversationPath } from "./lanePaths";
 
@@ -698,12 +699,14 @@ export function firstAsks(can: GoogleAbilities | null | undefined): { lead: stri
 
 // ── Connections ────────────────────────────────────────────────────────────
 
-/** A connect or disconnect refusal in plain words. The server names env
- *  variables when Google is not set up, which means nothing to this reader. */
+/** A connect or disconnect refusal in plain words, through the connectors'
+ *  one reason table (shared/contracts/connectorReasons.ts). The lane adds only the
+ *  not-configured case: the server names env variables there, which the
+ *  settings page wants and this reader does not. */
 export function plainConnectError(message: string | null | undefined): string | null {
   if (!message) return null;
   if (/not configured|GOOGLE_OAUTH/i.test(message)) return "Connecting Google isn't switched on here yet.";
-  return message;
+  return describeConnectorError(message);
 }
 
 /** What the person's Google grant lets the assistant do (googleOAuth.listConnections `can`). */

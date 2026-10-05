@@ -4347,6 +4347,20 @@ cliRoute("/cli/line/profile/publish", async (ctx, body) => {
 cliRoute("/cli/goals/brief", async (ctx, body) => {
   return await ctx.runQuery(api.goals.brief, body);
 });
+// A project's expectations (the-line-model.md LM5). brief is what a judge
+// reads: the active lines with ids, under the version a finding cites.
+cliRoute("/cli/expectations/show", async (ctx, body) => {
+  return await ctx.runQuery(api.expectations.show, body);
+});
+cliRoute("/cli/expectations/brief", async (ctx, body) => {
+  return await ctx.runQuery(api.expectations.brief, body);
+});
+cliRoute("/cli/expectations/propose", async (ctx, body) => {
+  return await ctx.runMutation(api.expectations.propose, body);
+});
+cliRoute("/cli/expectations/resolve", async (ctx, body) => {
+  return await ctx.runMutation(api.expectations.resolve, body);
+});
 cliRoute("/cli/calls/list", async (ctx, body) => {
   return await ctx.runQuery(api.transcripts.cliListCalls, body);
 });
