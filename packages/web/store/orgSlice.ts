@@ -326,6 +326,31 @@ export type OrgSliceActions = {
    *  orgChanges.redo. */
   redoOrgChange: (batch: string, opts?: { with?: string[]; line?: string }) => void;
   setOrgFocusChangeId: (changeId: string | null) => void;
+} & OrgServerVerbs<Promise<any>>;
+
+/** Org gestures whose result the server shapes (new roles, a closed handoff,
+ *  a wiped chart): each resolves to the mutation's result so the caller can
+ *  word its toast, and paints nothing until the tree echoes. Each still goes
+ *  through the store, so it is classified and the org record lists it. */
+type OrgServerVerbs<R> = {
+  /** Split a role into two leads (S34): orgSplit.split. */
+  splitOrgRole: (args: { role_id: string; halves: { name: string; handle: string; refs: string[] }[]; standing_session: "keep" | "retire" }) => R;
+  /** Run or close a role's handoff (S32): orgHandoff.settle. */
+  settleOrgHandoff: (roleId: string, how: "run" | "close") => R;
+  /** The line's merge step (L12): orgLineMerge.setLineMerge. */
+  setOrgLineMerge: (roleId: string, on: boolean, perDay?: number) => R;
+  /** Reset the org (S27): orgRoles.reset. */
+  resetOrg: (teamId?: string) => R;
+  /** Bring an unseated role's agent online: orgRoles.provision. */
+  provisionOrgRole: (roleId: string) => R;
+  /** A template role's setup item (H3): orgTemplates.setup. */
+  markOrgTemplateSetup: (instanceKey: string, id: string, status: "done" | "open" | "skipped") => R;
+  /** A template role's routine (H3): orgTemplates.activateRoutine. */
+  activateOrgTemplateRoutine: (taskId: string) => R;
+  /** The host step (H3): orgTemplates.requestBind, with secrets already sealed. */
+  requestOrgTemplateBind: (instanceKey: string, secrets: { key: string; payload: { provider: string; epk: string; iv: string; ct: string } }[], deviceId?: string) => R;
+  /** Whether Codecast may learn from the workspace's template roles (H12): orgTemplateLearning.setLearning. */
+  setOrgTemplateLearning: (teamId: string | undefined, enabled: boolean) => R;
 };
 
 export type OrgSliceState = OrgSliceData & OrgSliceActions;
@@ -334,7 +359,7 @@ export type OrgSliceState = OrgSliceData & OrgSliceActions;
 // as a promise; the function BODY returns nothing. The slice is written against
 // the body's signature, the store interface against the caller's.
 type OrgSliceImpl = OrgSliceData &
-  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireExecutiveAssistant"> & {
+  Omit<OrgSliceActions, "reparentOrgSession" | "reparentOrgRole" | "staffHeadOfPeople" | "hireExecutiveAssistant" | keyof OrgServerVerbs<unknown>> & OrgServerVerbs<void> & {
     hireExecutiveAssistant: (input: OrgHireAssistantInput) => void;
     reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => void;
     reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => void;
@@ -1275,6 +1300,18 @@ export function createOrgSlice(): OrgSliceImpl {
     // boundary it lives (the person's own for a global assistant, which is not
     // the active workspace's tree), so nothing is stubbed on the tree.
     hireExecutiveAssistant: asyncAction(function (this: OrgDraft, _input: OrgHireAssistantInput) {}),
+
+    // The server shapes each of these (org.tree echoes the result), and the
+    // caller awaits it to word its toast. The arguments ride to the dispatch.
+    splitOrgRole: asyncAction(function (this: OrgDraft, _args: Parameters<OrgServerVerbs<void>["splitOrgRole"]>[0]) {}),
+    settleOrgHandoff: asyncAction(function (this: OrgDraft, _roleId: string, _how: "run" | "close") {}),
+    setOrgLineMerge: asyncAction(function (this: OrgDraft, _roleId: string, _on: boolean, _perDay?: number) {}),
+    resetOrg: asyncAction(function (this: OrgDraft, _teamId?: string) {}),
+    provisionOrgRole: asyncAction(function (this: OrgDraft, _roleId: string) {}),
+    markOrgTemplateSetup: asyncAction(function (this: OrgDraft, _instanceKey: string, _id: string, _status: "done" | "open" | "skipped") {}),
+    activateOrgTemplateRoutine: asyncAction(function (this: OrgDraft, _taskId: string) {}),
+    requestOrgTemplateBind: asyncAction(function (this: OrgDraft, _instanceKey: string, _secrets: Parameters<OrgServerVerbs<void>["requestOrgTemplateBind"]>[1], _deviceId?: string) {}),
+    setOrgTemplateLearning: asyncAction(function (this: OrgDraft, _teamId: string | undefined, _enabled: boolean) {}),
 
     // Every change the server would take (proposed or failed, S4) flips to
     // accepted, one intent each, so a refusal of the whole call puts every
