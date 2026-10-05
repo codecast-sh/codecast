@@ -1,4 +1,5 @@
 import { captureError } from '@/lib/analytics';
+import { AccountRecoveryBanner } from '@/components/AccountRecoveryBanner';
 import { optionalNative } from '@/lib/optionalNative';
 import { StyleSheet, FlatList, ActivityIndicator, ScrollView, TouchableOpacity, Keyboard, KeyboardAvoidingView, Platform, Share, View as RNView, Image, ActionSheetIOS, Alert, Pressable, Clipboard, Modal, Animated, Easing, Dimensions, useWindowDimensions, InteractionManager, type LayoutChangeEvent } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
@@ -30,6 +31,7 @@ import { isTrustedImageSrc } from '@/lib/convex';
 import { parseInboundSessionMessage, isSessionMessage, isAgentMessage, parseAgentAuthoredMessage, parseUnwrappedSessionReport, parseUserMessage, isScheduledTaskMessage, parseChatWakePrompt, chatWakePlace, chatWakeAction, parseHuddleSummaryTag, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
 import { buildNavigatorRows, sampleTicks, isStickyEligible, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
+import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
 import { isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
 import { MessageNavigatorSheet } from '@/components/session/MessageNavigatorSheet';
 import { SentFileBlock, type SentFileData } from '@/components/session/SentFileBlock';
@@ -49,9 +51,12 @@ import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
+import { SlashCommandPills } from '@/components/session/SlashCommandPills';
 import { PulsingDot } from '@/components/SessionItem';
 import { AssignmentChip, AssignedToYouBanner } from '@/components/AssignmentChip';
-import { SessionHuddleButton } from '@/components/calls/SessionHuddleButton';
+import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
+import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
+import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
@@ -525,21 +530,6 @@ function toolLabel(name: string): string {
   return name.startsWith('mcp__') && !mcpToolNames[name] ? label.slice(0, 12) : label;
 }
 
-function hasRichMarkdown(text: string): boolean {
-  const markers = [
-    /^#{1,3}\s+\S/m,
-    /\|.+\|.+\|/,
-    /^```\w*/m,
-    /^\d+\.\s+\*\*[^*]+\*\*/m,
-    /^-\s+\[[ x]\]/im,
-  ];
-  let hits = 0;
-  for (const m of markers) {
-    if (m.test(text)) hits++;
-    if (hits >= 2) return true;
-  }
-  return false;
-}
 
 const PLAN_PREFIXES = [
   /^implement\s+the\s+following\s+plan\s*:\s*/i,
@@ -3007,7 +2997,7 @@ function seedComposerDraft(conversationId: string, draftProp?: string | null): s
   return persisted;
 }
 
-function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; draft?: string | null; autoFocus?: boolean }) {
+function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus }: { conversationId: Id<"conversations">; isActive: boolean; isOwner: boolean; draft?: string | null; autoFocus?: boolean }) {
   const Theme = useTheme();
   const insets = useSafeAreaInsets();
   const { height: winHeight } = useWindowDimensions();
@@ -3220,6 +3210,18 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   };
 
   const canSend = !!message.trim() || selectedImages.length > 0;
+  const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
+  const agentWorking = !!agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus);
+  const showStop = agentWorking && isOwner && !canSend;
+
+  // The interrupt is the shared store action (web's Escape); the daemon judges
+  // whether the agent is mid-turn and paints the interruption line.
+  const handleStop = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    useInboxStore.getState().sendEscape(conversationId).catch((err: unknown) => {
+      setError(err instanceof Error ? err.message : 'Could not stop the agent');
+    });
+  };
 
   // Shared between the inline card and the fullscreen editor so both modes show
   // the same attachments/errors and drive the same send.
@@ -3279,17 +3281,22 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
           new session the JS thread is often still catching up (create, cache
           write, keyboard) while the native field already shows text. Keep the
           grey look; handleSend no-ops if the box is still empty. */}
+      {/* While the agent works and the box is empty, the send slot becomes
+          stop: the same interrupt web's Escape sends. Typing turns it back
+          into send, so a follow-up can always be queued. */}
       <NativePressable
-        style={[styles.sendButton, !canSend && styles.sendButtonDisabled]}
-        onPress={handleSend}
+        style={[styles.sendButton, showStop ? styles.stopButton : !canSend && styles.sendButtonDisabled]}
+        onPress={showStop ? handleStop : handleSend}
         activeOpacity={0.7}
         delayPressIn={0}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         pressRetentionOffset={{ top: 20, bottom: 20, left: 20, right: 20 }}
         accessibilityRole="button"
-        accessibilityLabel="Send"
+        accessibilityLabel={showStop ? 'Stop the agent' : 'Send'}
       >
-        <FontAwesome name="arrow-up" size={14} color="#fff" />
+        {showStop
+          ? <FontAwesome name="stop" size={11} color="#fff" />
+          : <FontAwesome name="arrow-up" size={14} color="#fff" />}
       </NativePressable>
     </RNView>
   );
@@ -3300,21 +3307,22 @@ function MessageInput({ conversationId, isActive, draft, autoFocus }: { conversa
   // the agent is not actively producing; a pill tap sends its text directly
   // through the shared dispatch, long-press fills the composer instead.
   const suggestionsEnabled = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
-  const agentStatus = managedSession?.managed ? managedSession.agent_status : undefined;
 
   return (
     <RNView style={[styles.inputContainer, { paddingBottom: insets.bottom || 12 }]}>
+      {conversationId ? <AccountRecoveryBanner conversationId={conversationId} /> : null}
       {errorBannerEl}
       {imageStripEl}
       {suggestionsEnabled && (
         <SuggestionPills
           conversationId={conversationId}
-          idle={!(agentStatus && ACTIVE_AGENT_STATUSES.has(agentStatus))}
+          idle={!agentWorking}
           hidden={!!message.trim() || selectedImages.length > 0}
           onSend={(t) => dispatchSend(t)}
           onEdit={(t) => { setMessage(t); inputRef.current?.focus(); }}
         />
       )}
+      <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />
       <RNView style={styles.composerCard}>
         <TextInput
           key={epoch}
@@ -3400,6 +3408,7 @@ const DESIGN_MOCK_CONVO: ConversationData = {
   _id: DESIGN_MOCK_ID,
   title: 'Counterparty matching strategy optimization',
   status: 'archived',
+  is_own: true,
   agent_type: 'claude',
   model: 'opus-4-8',
   started_at: DESIGN_MOCK_STARTED,
@@ -4319,29 +4328,9 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       showToast('Select messages to copy');
     };
 
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options: ['Copy whole conversation', 'Select messages', 'Cancel'],
-          cancelButtonIndex: 2,
-        },
-        (buttonIndex) => {
-          if (buttonIndex === 0) {
-            handleCopyAll();
-            return;
-          }
-          if (buttonIndex === 1) {
-            openMessageSelect();
-          }
-        }
-      );
-      return;
-    }
-
-    Alert.alert('Copy', undefined, [
-      { text: 'Copy whole conversation', onPress: handleCopyAll },
-      { text: 'Select messages', onPress: openMessageSelect },
-      { text: 'Cancel', style: 'cancel' },
+    showActionSheet('Copy', [
+      { label: 'Copy whole conversation', onPress: handleCopyAll },
+      { label: 'Select messages', onPress: openMessageSelect },
     ]);
   }, [handleCopyAll, handleStartShareSelection, shareSelectionMode, showToast]);
 
@@ -4377,75 +4366,53 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     onRefused: showToast,
   });
 
+  // The chip strip shows the model and the branch; the rest wait behind one
+  // "+N" tap so the strip under the title stays a single calm line.
+  const [chipsExpanded, setChipsExpanded] = useState(false);
+  const extraChipCount = [
+    (conversation?.fork_count ?? 0) > 0,
+    !!conversation && isConvexId(conversation._id),
+    !!latestUsage,
+    !!conversation?.parent_conversation_id,
+    !!conversation?.forked_from_details,
+  ].filter(Boolean).length;
+  const huddle = useSessionHuddle(conversation?._id ? String(conversation._id) : '', conversation?.team_id ? String(conversation.team_id) : null);
+  const [renameVisible, setRenameVisible] = useState(false);
+
+  // Ordered by how often a phone user reaches for each: a live huddle first
+  // (time-sensitive), then the everyday reads and shares, then recovery, then
+  // the rare ones behind "More…" so the first sheet stays short.
   const handleMoreActions = useCallback(() => {
-    const options: string[] = [];
-    options.push(conversation?.is_favorite ? 'Unfavorite' : 'Favorite');
-    options.push('Share');
-    options.push('Search');
-    options.push('Messages');
-    options.push('Copy');
-    if (conversation?.session_id) options.push('Copy Resume Command');
-    if (conversation && isConvexId(conversation._id)) {
-      options.push(isRestarting ? 'Restarting…' : 'Restart Session');
-    }
-    options.push(collapsed ? 'Expand Messages' : 'Collapse Messages');
+    const items: SheetItem[] = [];
+    if (huddle.enabled && huddle.inRoom > 0) items.push({ label: `Join Huddle (${huddle.inRoom})`, onPress: huddle.press });
+    items.push({ label: 'Search', onPress: () => setSearchVisible(v => !v) });
+    items.push({ label: 'Share', onPress: handleShareConversation });
+    items.push({ label: 'Copy', onPress: handleCopyMenu });
     // git_diff lives off the conversation doc now and is fetched lazily on
     // expand; surface "View Diff" whenever there's a branch (panel stays empty
     // if there turns out to be no diff).
-    const hasDiff = !!conversation?.git_branch;
-    if (hasDiff) { setDiffWanted(true); options.push(diffExpanded ? 'Hide Diff' : 'View Diff'); }
-    if (hasForkFamily) options.push('Fork Tree');
-    options.push('Dismiss');
-    options.push('Cancel');
-
-    const destructiveIndex = options.indexOf('Dismiss');
-
-    if (Platform.OS === 'ios') {
-      ActionSheetIOS.showActionSheetWithOptions(
-        {
-          options,
-          cancelButtonIndex: options.length - 1,
-          destructiveButtonIndex: destructiveIndex,
-        },
-        (idx) => {
-          const label = options[idx];
-          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
-          else if (label === 'Share') handleShareConversation();
-          else if (label === 'Search') setSearchVisible(v => !v);
-          else if (label === 'Messages') setNavSheetVisible(true);
-          else if (label === 'Copy') handleCopyMenu();
-          else if (label === 'Copy Resume Command') handleCopyResume();
-          else if (label === 'Restart Session') restartSession();
-          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
-          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
-          else if (label === 'Fork Tree') setTreeModalVisible(true);
-          else if (label === 'Dismiss') handleDismiss();
-        }
-      );
-      return;
+    if (conversation?.git_branch) {
+      setDiffWanted(true);
+      items.push({ label: diffExpanded ? 'Hide Diff' : 'View Diff', onPress: () => setDiffExpanded(d => !d) });
     }
-
-    Alert.alert('Actions', undefined, [
-      ...options.slice(0, -1).map(label => ({
-        text: label,
-        style: (label === 'Dismiss' ? 'destructive' : 'default') as any,
-        onPress: () => {
-          if (label === 'Favorite' || label === 'Unfavorite') handleToggleFavorite();
-          else if (label === 'Share') handleShareConversation();
-          else if (label === 'Search') setSearchVisible(v => !v);
-          else if (label === 'Messages') setNavSheetVisible(true);
-          else if (label === 'Copy') handleCopyMenu();
-          else if (label === 'Copy Resume Command') handleCopyResume();
-          else if (label === 'Restart Session') restartSession();
-          else if (label === 'Expand Messages' || label === 'Collapse Messages') setCollapsed(c => !c);
-          else if (label === 'View Diff' || label === 'Hide Diff') setDiffExpanded(d => !d);
-          else if (label === 'Fork Tree') setTreeModalVisible(true);
-          else if (label === 'Dismiss') handleDismiss();
-        },
-      })),
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [conversation, collapsed, diffExpanded, hasForkFamily, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
+    if (allSessionImages.length > 0) {
+      items.push({ label: `Images (${allSessionImages.length})`, onPress: () => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); } });
+    }
+    if (boardHref) items.push({ label: 'Open Board', onPress: () => router.push(boardHref as never) });
+    if (huddle.enabled && huddle.inRoom === 0 && !huddle.pressDisabled) items.push({ label: 'Start Huddle', onPress: huddle.press });
+    items.push({ label: 'Rename', onPress: () => setRenameVisible(true) });
+    items.push({ label: conversation?.is_favorite ? 'Unfavorite' : 'Favorite', onPress: handleToggleFavorite });
+    if (conversation && isConvexId(conversation._id)) {
+      items.push({ label: isRestarting ? 'Restarting…' : 'Restart Session', onPress: () => { if (!isRestarting) restartSession(); } });
+    }
+    const rare: SheetItem[] = [];
+    if (hasForkFamily) rare.push({ label: 'Fork Tree', onPress: () => setTreeModalVisible(true) });
+    rare.push({ label: collapsed ? 'Expand Messages' : 'Collapse Messages', onPress: () => setCollapsed(c => !c) });
+    if (conversation?.session_id) rare.push({ label: 'Copy Resume Command', onPress: handleCopyResume });
+    items.push({ label: 'More…', onPress: () => showActionSheet(undefined, rare) });
+    items.push({ label: 'Dismiss', destructive: true, onPress: handleDismiss });
+    showActionSheet(undefined, items);
+  }, [conversation, collapsed, diffExpanded, hasForkFamily, huddle, allSessionImages.length, boardHref, router, handleToggleFavorite, handleShareConversation, handleCopyMenu, handleCopyResume, handleDismiss, restartSession, isRestarting]);
 
   const handleConfirmShareSelection = useCallback(async () => {
     if (selectedMessageIds.size === 0) return;
@@ -4753,33 +4720,28 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             style={styles.headerFace}
             badge={conversation.agent_type ? <AgentLogoSvg agentType={conversation.agent_type} size={10} /> : undefined}
           />
-          <MobileSessionIdentityLine
-            row={identityRow}
-            title={conversation.title || 'Conversation'}
-            style={styles.headerTitleText}
-            maxFontSizeMultiplier={CHROME_FONT_CAP}
-          />
-          {conversation?._id && <SessionHuddleButton conversationId={String(conversation._id)} teamId={conversation.team_id ? String(conversation.team_id) : null} />}
-          {allSessionImages.length > 0 && (
-            <TouchableOpacity
-              onPress={() => { setGalleryIndex(Math.max(0, allSessionImages.length - 1)); setGalleryVisible(true); }}
-              style={styles.headerIconBtn}
-              hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }}
-              activeOpacity={0.6}
-            >
-              <Feather name="image" size={17} color={Theme.textMuted} />
-            </TouchableOpacity>
-          )}
+          {/* Tap the title to rename (the web's inline title edit). */}
+          <Pressable
+            style={styles.headerTitlePress}
+            onPress={() => setRenameVisible(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Rename session"
+          >
+            <MobileSessionIdentityLine
+              row={identityRow}
+              title={conversation.title || 'Conversation'}
+              style={[styles.headerTitleText, styles.headerTitleInPress]}
+              maxFontSizeMultiplier={CHROME_FONT_CAP}
+            />
+          </Pressable>
+          {/* Two actions at most: the prompt list and More. Huddle, images and
+              the board live in More, where a live huddle is listed first. */}
           {navigatorRows.length > 0 && (
             <MessageListButton count={promptCount} onPress={openNavigatorSheet} />
           )}
-          {boardHref && (
-            <TouchableOpacity onPress={() => router.push(boardHref as never)} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 4 }} activeOpacity={0.6} accessibilityLabel="Open the board">
-              <Feather name="columns" size={17} color={Theme.textMuted} />
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6}>
+          <TouchableOpacity onPress={handleMoreActions} style={styles.headerIconBtn} hitSlop={{ top: 12, bottom: 12, left: 4, right: 12 }} activeOpacity={0.6} accessibilityLabel="More actions">
             <Feather name="more-horizontal" size={18} color={Theme.textMuted} />
+            {huddle.enabled && huddle.inRoom > 0 && <RNView style={styles.moreLiveDot} />}
           </TouchableOpacity>
         </RNView>
         <Animated.View
@@ -4817,12 +4779,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                   canEdit={!!conversation.is_own}
                   showToast={showToast}
                 />
-                {(conversation.fork_count ?? 0) > 0 && (
-                  <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, chipTint(Theme.violet)]}>
-                    <FontAwesome name="code-fork" size={10} color={Theme.violet} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
-                  </Pressable>
-                )}
                 {conversation.git_branch && (
                   <Pressable
                     onPress={() => {
@@ -4839,42 +4795,60 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.green }]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
-                <AssignmentChip
-                  conversationId={isConvexId(conversation._id) ? conversation._id : null}
-                  ownerDeviceId={(conversation as any).owner_device_id}
-                  showToast={showToast}
-                />
-                {latestUsage && (
-                  <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
-                    <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
-                      {Math.round((latestUsage.contextSize / 200000) * 100)}%
-                    </RNText>
-                  </RNView>
-                )}
-                {conversation.parent_conversation_id && (
+                {chipsExpanded ? (
+                  <>
+                    {(conversation.fork_count ?? 0) > 0 && (
+                      <Pressable onPress={() => setTreeModalVisible(true)} style={[styles.metaChip, chipTint(Theme.violet)]}>
+                        <FontAwesome name="code-fork" size={10} color={Theme.violet} />
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>{conversation.fork_count}</RNText>
+                      </Pressable>
+                    )}
+                    <AssignmentChip
+                      conversationId={isConvexId(conversation._id) ? conversation._id : null}
+                      ownerDeviceId={(conversation as any).owner_device_id}
+                      showToast={showToast}
+                    />
+                    {latestUsage && (
+                      <RNView style={[styles.metaChip, chipTint(Theme.textDim)]}>
+                        <FontAwesome name="bar-chart" size={10} color={Theme.textDim} />
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>
+                          {Math.round((latestUsage.contextSize / 200000) * 100)}%
+                        </RNText>
+                      </RNView>
+                    )}
+                    {conversation.parent_conversation_id && (
+                      <Pressable
+                        onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
+                        style={[styles.metaChip, chipTint(Theme.violet)]}
+                      >
+                        <FontAwesome name="level-up" size={10} color={Theme.violet} />
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
+                      </Pressable>
+                    )}
+                    {conversation.forked_from_details && (
+                      <Pressable
+                        onPress={() => {
+                          const details = conversation.forked_from_details!;
+                          if (details.share_token) {
+                            void openLink(conversationShareLink(details.share_token));
+                          } else {
+                            router.push(`/session/${details.conversation_id}`);
+                          }
+                        }}
+                        style={[styles.metaChip, chipTint(Theme.cyan)]}
+                      >
+                        <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
+                        <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
+                      </Pressable>
+                    )}
+                  </>
+                ) : extraChipCount > 0 && (
                   <Pressable
-                    onPress={() => router.push(`/session/${conversation.parent_conversation_id}`)}
-                    style={[styles.metaChip, chipTint(Theme.violet)]}
+                    onPress={() => setChipsExpanded(true)}
+                    style={[styles.metaChip, chipTint(Theme.textDim)]}
+                    accessibilityLabel={`Show ${extraChipCount} more details`}
                   >
-                    <FontAwesome name="level-up" size={10} color={Theme.violet} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.violet }]}>Parent</RNText>
-                  </Pressable>
-                )}
-                {conversation.forked_from_details && (
-                  <Pressable
-                    onPress={() => {
-                      const details = conversation.forked_from_details!;
-                      if (details.share_token) {
-                        void openLink(conversationShareLink(details.share_token));
-                      } else {
-                        router.push(`/session/${details.conversation_id}`);
-                      }
-                    }}
-                    style={[styles.metaChip, chipTint(Theme.cyan)]}
-                  >
-                    <FontAwesome name="code-fork" size={10} color={Theme.cyan} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.cyan }]}>@{conversation.forked_from_details.username}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, { color: Theme.textDim }]}>+{extraChipCount}</RNText>
                   </Pressable>
                 )}
               </ScrollView>
@@ -5387,6 +5361,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           <MessageInput
             conversationId={id as Id<"conversations">}
             isActive={isActive}
+            isOwner={!!conversation.is_own}
             draft={conversation?.draft_message}
             autoFocus={focusParam === '1'}
           />
@@ -5417,6 +5392,12 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         rows={navigatorRows}
         currentMessageId={activeStickyId}
         onSelect={jumpToMessage}
+      />
+      <RenameSessionSheet
+        conversationId={String(conversation._id)}
+        title={conversation.title || ''}
+        visible={renameVisible}
+        onClose={() => setRenameVisible(false)}
       />
       <Modal visible={treeModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setTreeModalVisible(false)}>
         <RNView style={styles.treeModal}>
@@ -5480,6 +5461,23 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   headerTitleText: {
     ...S.headerTitleText,
     color: Theme.text,
+  },
+  headerTitlePress: {
+    flex: 1,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+  },
+  headerTitleInPress: {
+    flex: 0,
+  },
+  moreLiveDot: {
+    position: 'absolute',
+    top: 7,
+    right: 6,
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: Theme.green,
   },
   floatingSessionHeader: {
     position: 'absolute',
@@ -5901,6 +5899,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   sendButtonDisabled: {
     backgroundColor: Theme.bgHighlight,
+  },
+  stopButton: {
+    backgroundColor: Theme.red,
   },
   // Workflow event anchors
   wfStartedRow: {

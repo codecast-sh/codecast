@@ -7,6 +7,7 @@
  */
 
 import { entityRoute, parseEntityUrl, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { LANE_PATHS } from '@codecast/web/components/simple/lanePaths';
 
 /**
  * One URL vocabulary for every surface. `www.` hosts count: people paste them
@@ -57,6 +58,7 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   task: '/task',
   plan: '/plan',
   doc: '/doc',
+  decision: '/decisions',
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
 };
@@ -115,6 +117,9 @@ export function mobileRouteForUrl(url: string): string | null {
     if (!org[1]) return '/org';
     return /[?&]tab=/.test(url) ? `/org/${org[1]}/board` : `/org/${org[1]}`;
   }
+  // The assistant lane lives at the same addresses on the phone
+  // (app/(simple)), so its links open there unchanged.
+  if (path === LANE_PATHS.home || path.startsWith(`${LANE_PATHS.home}/`)) return path.replace(/\/+$/, '') || LANE_PATHS.home;
   // Team invites are completed on the web; the Chat tab (where the team
   // lives on the phone) is the nearest screen. The web's chat and calls
   // pages land there too.

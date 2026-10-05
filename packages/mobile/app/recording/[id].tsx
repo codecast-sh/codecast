@@ -27,11 +27,12 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCallDetail } from '@codecast/web/hooks/useSyncCalls';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
+import { useCallRecordings } from '@codecast/web/lib/calls/callRecordingsFeed';
+import { playableFiles, videoAt } from '@codecast/web/lib/calls/callVideo';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
 import { parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
 import { buildEntityUrl, callRefId, formatCallTime, isConvexId } from '@codecast/shared/entities';
 import { openWebPage } from '@/lib/links';
-import { fmtClock } from '@codecast/web/components/calls/speakers';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
@@ -176,8 +177,28 @@ export default function RecordingDetailScreen() {
       setPosition(atMs);
     } catch {}
   }, [url, atMs]);
-  // Where the call's video plays: the web page, at the same moment.
-  const videoUrl = call?.filmed ? buildEntityUrl('call', atMs !== null ? callRefId(String(call._id), null, atMs) : String(call._id)) : null;
+  // The call's video, played by the phone itself: the same rows the web's
+  // player reads (useCallRecordings: the call page's access check, URLs
+  // presigned for a short window), and the same file the web would show at
+  // this moment (videoAt), opened at its offset with a media fragment. The
+  // viewer needs no session, which a sheet opened on the web page would
+  // (it shares no cookies with the app, so a private call asks for a fresh
+  // sign in). With no file at the moment, the call's web page is the way.
+  const recs = useCallRecordings(call?.filmed ? id : null);
+  const videoFiles = (recs?.recordings ?? []).map((r) => ({ ...r, id: r._id }));
+  const atVideo = recs
+    ? atMs !== null
+      ? videoAt(videoFiles, recs.call_started_at, atMs)
+      : (() => {
+          const first = playableFiles(videoFiles).find((f) => f.kind === 'composite') ?? playableFiles(videoFiles)[0];
+          return first ? { file: first, seconds: 0 } : null;
+        })()
+    : null;
+  const videoUrl = atVideo?.file.url
+    ? `${atVideo.file.url}#t=${Math.floor(atVideo.seconds)}`
+    : call?.filmed
+      ? buildEntityUrl('call', atMs !== null ? callRefId(String(call._id), null, atMs) : String(call._id))
+      : null;
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
@@ -221,7 +242,7 @@ export default function RecordingDetailScreen() {
                   dateStyle: 'medium',
                   timeStyle: 'short',
                 })}
-                {call.ended_at ? `  ·  ${fmtClock(call.ended_at - call.started_at)}` : ''}
+                {call.ended_at ? `  ·  ${formatCallTime(call.ended_at - call.started_at)}` : ''}
               </RNText>
 
               {url ? (
@@ -234,7 +255,7 @@ export default function RecordingDetailScreen() {
                     style={styles.playBtn} activeOpacity={0.7}>
                     <FontAwesome name={playing ? 'pause' : 'play'} size={16} color="#fff" />
                   </TouchableOpacity>
-                  <RNText style={styles.playerTime}>{fmtClock(position)}</RNText>
+                  <RNText style={styles.playerTime}>{formatCallTime(position)}</RNText>
                   <RNText style={styles.playerHint} maxFontSizeMultiplier={CHROME_FONT_CAP}>
                     Tap any line to jump there
                   </RNText>
@@ -244,7 +265,13 @@ export default function RecordingDetailScreen() {
               {videoUrl ? (
                 <RNView style={styles.videoNote}>
                   <RNText style={[styles.hint, styles.videoText]}>
-                    {atMs !== null ? `This call has video. It plays on the web for now, at ${formatCallTime(atMs)}.` : 'This call has video. It plays on the web for now.'}
+                    {atVideo
+                      ? atMs !== null
+                        ? `This call has video. Plays in a viewer at ${formatCallTime(atMs)}.`
+                        : 'This call has video. Plays in a viewer.'
+                      : atMs !== null
+                        ? `This call has video. It plays on the web, at ${formatCallTime(atMs)}.`
+                        : 'This call has video. It plays on the web.'}
                   </RNText>
                   <TouchableOpacity onPress={() => void openWebPage(videoUrl)} activeOpacity={0.6} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
                     <RNText style={styles.videoLink}>Open video</RNText>
@@ -295,7 +322,7 @@ export default function RecordingDetailScreen() {
                 activeOpacity={0.6}
                 disabled={!url}
               >
-                <RNText style={styles.lineTime}>{fmtClock(item.t0)}</RNText>
+                <RNText style={styles.lineTime}>{formatCallTime(item.t0)}</RNText>
                 <RNText style={styles.lineText}>{item.text}</RNText>
               </TouchableOpacity>
             );
