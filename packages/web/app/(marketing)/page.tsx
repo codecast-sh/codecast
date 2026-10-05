@@ -1,6 +1,8 @@
 "use client";
 
 import Link from "next/link";
+import { LANE_PATHS } from "../../components/simple/lanePaths";
+import { assistantInvite, useConnectAvailable } from "../../components/simple/assistantPromise";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useConvexAuth } from "convex/react";
@@ -138,6 +140,9 @@ export default function LandingPage() {
   const localAuthed = useLocalAuth();
   const router = useRouter();
   const [desktop, setDesktop] = useState(false);
+  // The invitation for visitors who don't write code promises mail and
+  // calendar only where this deployment can connect them.
+  const connect = useConnectAvailable();
 
   // The root is the marketing site for every browser, signed in or not (the
   // nav offers "Open app"). Only the desktop shell never shows it: a build
@@ -203,6 +208,13 @@ export default function LandingPage() {
             </Button>
           </Link>
         </div>
+        {/* For a visitor who does not write code: the hosted assistant. */}
+        <p className="mt-5 text-center text-[14px]" style={{ color: '#657b83' }}>
+          Don't write code?{" "}
+          <Link href={LANE_PATHS.welcome} className="font-medium text-[#073642] underline underline-offset-4 decoration-[#93a1a1] hover:text-[#cb4b16] hover:decoration-[#cb4b16] transition-colors">
+            {assistantInvite(connect.available === true)}
+          </Link>
+        </p>
       </section>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
