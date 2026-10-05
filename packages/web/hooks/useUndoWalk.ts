@@ -1,5 +1,5 @@
 "use client";
-// Owns ui.undo and ui.redo, and drives the held-modifier peek of the undo
+// Owns ui.undo, ui.redo and ui.undoHistory, and drives the held-modifier peek of the undo
 // timeline (docs/architecture/undo-history.md S9, doorway 4). Each press
 // commits at once; the pure reducer in lib/undoWalk decides what the card
 // shows. The modifier is tracked with window key listeners, the way
@@ -7,21 +7,22 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useEventListener } from "./useEventListener";
 import { subscribeShortcutUsed, useShortcutAction, useShortcuts } from "../shortcuts/ShortcutProvider";
-import { isEditableTarget, shortcutAllowedAt, type DispatchSource } from "@platform/keys";
+import { shortcutAllowedAt, type DispatchSource } from "@platform/keys";
 import { getShortcutsForAction, isMac, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
-import { KEY_OWNERSHIP } from "../shortcuts/keyOwnership";
+import { KEY_OWNERSHIP, keysOwnedElsewhere } from "../shortcuts/keyOwnership";
 import { bridge, isElectron } from "../lib/desktop";
-import { getUndoHistory, performRedo, performUndo } from "../store/undoStack";
+import { commitPendingUndoGestures, getUndoHistory, performRedo, performUndo } from "../store/undoStack";
 import * as undoTimeline from "../lib/undoTimelineOpen";
 import { fireUndoHistoryMilestone } from "../lib/undoHistory";
-import { WALK_IDLE, createFieldUndoGuard, walk, walkTimer, walkView, type WalkEvent, type WalkState } from "../lib/undoWalk";
+import { useUndoReach } from "./useUndoUnreachable";
+import { WALK_IDLE, createFieldUndoGuard, fieldHoldsText, isTextEditingControl, richEditorCanStep, richEditorOf, walk, walkTakesPinKey, walkTimer, walkView, type RichEditor, type WalkEvent, type WalkState } from "../lib/undoWalk";
 
 const CARD_SELECTOR = "[data-undo-timeline]";
 /** The shortcut context live while the card peeks or fades: it routes H to
  *  undoWalk.pin ahead of every other H binding. */
 const WALK_CONTEXT = "undoWalk";
 /** Actions that are part of the walk; any other dispatched action ends it. */
-const WALK_ACTIONS: ReadonlySet<ShortcutAction> = new Set(["ui.undo", "ui.redo", "undoWalk.pin"]);
+const WALK_ACTIONS: ReadonlySet<ShortcutAction> = new Set(["ui.undo", "ui.redo", "undoWalk.pin", "ui.undoHistory"]);
 
 function walkModifier(): "Meta" | "Control" {
   return isMac ? "Meta" : "Control";
@@ -41,9 +42,12 @@ function landingTop(dir: "undo" | "redo"): string | undefined {
 
 const CAPTURE: AddEventListenerOptions = { capture: true };
 
-/** Whether the browser has an undo (redo) of its own left, where it can say
- *  reliably: Chromium answers queryCommandEnabled from its undo stack. */
-function nativeCanStep(dir: "undo" | "redo"): boolean | undefined {
+/** Whether the field has an undo (redo) of its own left, where that can be
+ *  said reliably: a rich editor answers from its own history, and Chromium
+ *  answers queryCommandEnabled from the browser's undo stack. */
+function nativeCanStep(dir: "undo" | "redo", field: Element): boolean | undefined {
+  const editor = richEditorOf(field);
+  if (editor) return richEditorCanStep(editor, dir);
   if (typeof document === "undefined" || typeof navigator === "undefined") return undefined;
   if (!isElectron() && !/\bChrom(e|ium)\//.test(navigator.userAgent)) return undefined;
   try {
@@ -59,6 +63,8 @@ function pointerOverCard(): boolean {
 }
 
 export function useUndoWalk(): void {
+  // This window can reach its history while the walk is mounted, so it records.
+  useUndoReach();
   const state = useRef<WalkState>(WALK_IDLE);
   const held = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -81,7 +87,9 @@ export function useUndoWalk(): void {
 
     const before = walkView(prev);
     const after = walkView(next);
-    setContext(WALK_CONTEXT, after.open && after.mode === "peek");
+    // The pin key is live only in the keyboard's peek: a hovered peek takes
+    // no keys, so an H typed there reaches the field and ends the walk.
+    setContext(WALK_CONTEXT, walkTakesPinKey(next));
     if (after.open) {
       if (!before.open || before.mode !== after.mode) undoTimeline.open(after.mode);
     } else if (before.open) {
@@ -98,11 +106,31 @@ export function useUndoWalk(): void {
     // when the browser finds nothing left in the field, the press comes back
     // here. A named step (the palette's row, typed into its input) is no edit
     // of the field it was picked from, so it never defers.
+    // A field holding text keeps its own undo while it has one; text the app
+    // put there that nobody edited (a draft seeded as a triage step lands on
+    // its session) has none, so the press is the app's. A region with no value
+    // to read keeps the chord.
     const focus = typeof document !== "undefined" ? document.activeElement : null;
-    if (source === "key" && focus && isEditableTarget(focus)) {
-      const declined = fields.current!.declines(dir, focus, getUndoHistory(), () => {
+    // A region that owns its keys (the branch map, the vault explorer, an
+    // active review) keeps the chord, as it keeps every plain key; a text
+    // field inside one is judged below like any other.
+    // A checkbox, radio, date or range has no text history: its press is the
+    // app's (isTextEditingControl, the same rule the desktop menu applies).
+    // The undo card's own root owns its keys, and the step is the card's own
+    // (the desktop Edit menu hands its ⌘Z back here while the card has focus).
+    if (source === "key" && focus && !isTextEditingControl(focus) && keysOwnedElsewhere(focus, focus.closest(CARD_SELECTOR))) return false;
+    // A gesture still waiting on its exit animation is the newest entry: it
+    // records now, so the field's judgement and the landing below see it.
+    commitPendingUndoGestures();
+    if (source === "key" && focus && isTextEditingControl(focus)) {
+      const fallback = () => {
         if (document.activeElement === focus) step(dir, source);
-      }, nativeCanStep(dir));
+      };
+      const text = fieldHoldsText(focus);
+      if (text === null) return false;
+      const declined = text
+        ? fields.current!.keepsWithText(focus, fallback, nativeCanStep(dir, focus))
+        : fields.current!.declines(dir, focus, getUndoHistory(), fallback, nativeCanStep(dir, focus));
       if (declined) return false;
     }
     const landed = landingTop(dir);
@@ -124,11 +152,22 @@ export function useUndoWalk(): void {
   useShortcutAction("ui.redo", useCallback((source: DispatchSource) => step("redo", source), [step]));
 
   // H while the card peeks or fades pins it. The binding exists only in the
-  // walk's context, so it never takes an H from anyone else.
+  // walk's context, so it never takes an H from anyone else, and never in a
+  // hovered peek.
   useShortcutAction("undoWalk.pin", useCallback(() => {
-    const phase = state.current.phase;
-    if (phase !== "peek" && phase !== "fading") return false;
+    if (!walkTakesPinKey(state.current)) return false;
     feed({ type: "pin" });
+    return true;
+  }, [feed]));
+
+  // The history chord opens the interactive card, or closes it. Pressed while
+  // the walk's peek shows (the walk modifier is already held, so it is one
+  // added key), it is the request to use that card: it pins it, as a press
+  // on the card does, rather than taking it away.
+  useShortcutAction("ui.undoHistory", useCallback(() => {
+    const phase = state.current.phase;
+    if (phase === "peek" || phase === "fading" || phase === "hovered") feed({ type: "cardPress" });
+    else undoTimeline.toggle("interactive");
     return true;
   }, [feed]));
 
@@ -181,7 +220,35 @@ export function useUndoWalk(): void {
   });
 
   useEventListener("input", (e: Event) => {
-    if (e.target instanceof Element) fields.current!.edited(e.target);
+    // A non-text control's input (a checkbox click) is no text edit.
+    if (e.target instanceof Element && isTextEditingControl(e.target)) fields.current!.edited(e.target);
+  }, undefined, CAPTURE);
+
+  // A rich editor edits without input events (richEditorOf): it reports its
+  // own changes, heard from the first time it takes focus. Only a change made
+  // while the user's key, paste, cut or drop on that field is in flight is
+  // the user's edit; a draft seeded from the store or a collaborator's edit
+  // is not, as a value set from code is no edit of a plain field.
+  const watched = useRef(new WeakSet<RichEditor>());
+  const userEvent = useRef<Node | null>(null);
+  useEffect(() => {
+    const mark = (e: Event) => {
+      const target = e.target instanceof Node ? e.target : null;
+      userEvent.current = target;
+      setTimeout(() => { if (userEvent.current === target) userEvent.current = null; }, 0);
+    };
+    const kinds = ["keydown", "beforeinput", "paste", "cut", "drop"] as const;
+    for (const k of kinds) window.addEventListener(k, mark, CAPTURE);
+    return () => { for (const k of kinds) window.removeEventListener(k, mark, CAPTURE); };
+  }, []);
+  useEventListener("focusin", (e: FocusEvent) => {
+    const field = e.target;
+    const editor = richEditorOf(field);
+    if (!editor || !(field instanceof Element) || watched.current.has(editor)) return;
+    watched.current.add(editor);
+    editor.on("update", () => {
+      if (userEvent.current && field.contains(userEvent.current)) fields.current!.edited(field);
+    });
   }, undefined, CAPTURE);
 
   // Leaving the window drops the key state with it.
@@ -195,4 +262,16 @@ export function useUndoWalk(): void {
     if (state.current.phase !== "fading") return;
     if ((e.target as Element | null)?.closest?.(CARD_SELECTOR)) feed({ type: "pointerEnter" });
   });
+
+  // Leaving the card resumes the fade; a press on it is the request to use it.
+  useEventListener("pointerout", (e: PointerEvent) => {
+    if (state.current.phase !== "hovered") return;
+    if ((e.relatedTarget as Element | null)?.closest?.(CARD_SELECTOR)) return;
+    feed({ type: "pointerLeave" });
+  });
+  useEventListener("pointerdown", (e: PointerEvent) => {
+    const phase = state.current.phase;
+    if (phase !== "peek" && phase !== "fading" && phase !== "hovered") return;
+    if ((e.target as Element | null)?.closest?.(CARD_SELECTOR)) feed({ type: "cardPress" });
+  }, undefined, CAPTURE);
 }
