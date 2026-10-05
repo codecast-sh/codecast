@@ -4,6 +4,7 @@ import { useLocation } from "react-router";
 import { useInboxStore, isSessionHidden } from "../store/inboxStore";
 import { isInboxSessionView, resolveSessionSelectKind } from "../lib/inboxRouting";
 import { requestStagePlacement, sessionPanePath } from "../lib/stage";
+import { isNonTabRoute } from "../lib/tabRoutes";
 
 // The one way to open a session from wherever the user is standing — the rail
 // click, the Ctrl+Tab switcher, Ctrl+I/Ctrl+P jumps and the recents menu all
@@ -18,7 +19,10 @@ export function useOpenSession(): (id: string) => void {
   // tab path (same distinction DashboardLayout draws).
   const routerLocation = useLocation();
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
-  const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
+  // In place only inside the tab shell: on a route outside it (the simple
+  // lane, the standalone /r pages) usePathname still reports the active tab,
+  // and writing the store's pointer there opens nothing on screen.
+  const isOnInboxPage = !isNonTabRoute(routerLocation.pathname) && isInboxSessionView(pathname, inboxSource);
   const isOnSettingsPage = routerLocation.pathname.startsWith("/settings");
   const kind = resolveSessionSelectKind({ isOnSettingsPage, isOnInboxPage });
 

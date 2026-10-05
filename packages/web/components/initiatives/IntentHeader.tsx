@@ -108,7 +108,7 @@ function IntentTitle({ title, onRename, label = "Title", accent, phone, data }: 
   }
   return (
     <h1
-      className={cn("min-w-0 truncate font-semibold tracking-tight leading-none", size, onRename && "cursor-text")}
+      className={cn("min-w-0 line-clamp-2 font-semibold tracking-tight leading-[1.15]", size, onRename && "cursor-text")}
       style={{ fontFamily: "var(--font-serif)" }}
       onClick={onRename ? () => setDraft(title) : undefined}
       title={onRename ? "Click to rename" : title}

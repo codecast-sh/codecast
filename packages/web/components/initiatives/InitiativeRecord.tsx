@@ -44,17 +44,28 @@ export function RecordSection({ name, label, count, action, children }: { name: 
   );
 }
 
-export function InitiativeRecord({ initiative, now }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number }) {
+/** `part` splits the record where the goal's numbers go on its page: the
+ *  intent (why, done when) reads before them, the progress (milestones,
+ *  questions, decisions, sources) after. Without it, the whole record. */
+export function InitiativeRecord({ initiative, now, part }: { initiative: InitiativeRow; all: InitiativeRow[]; now: number; part?: "intent" | "progress" }) {
   const who = useWho();
   const record = useCallback((op: InitiativeRecordOp) => useInboxStore.getState().recordInitiativeEntry(initiative._id, op), [initiative._id]);
   return (
-    <div className="space-y-7" data-initiative-record={initiative.short_id || initiative._id}>
-      <Written initiative={initiative} field="why" label="Why it matters" rows={4} markdown placeholder="What changes for the company when this is reached, and what it costs to miss it." empty="Nobody has said why this matters yet." />
-      <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." empty="Nobody has said what done looks like yet." />
-      <Milestones initiative={initiative} now={now} record={record} />
-      <Questions initiative={initiative} now={now} record={record} who={who} />
-      <Decisions initiative={initiative} now={now} record={record} who={who} />
-      <Sources initiative={initiative} now={now} record={record} />
+    <div className="space-y-7" data-initiative-record={initiative.short_id || initiative._id} data-initiative-record-part={part}>
+      {part !== "progress" && (
+        <>
+          <Written initiative={initiative} field="why" label="Why it matters" rows={4} markdown placeholder="What changes for the company when this is reached, and what it costs to miss it." empty="Nobody has said why this matters yet." />
+          <Written initiative={initiative} field="done_when" label="Done when" rows={3} placeholder="The sentence a person checks the result against." empty="Nobody has said what done looks like yet." />
+        </>
+      )}
+      {part !== "intent" && (
+        <>
+          <Milestones initiative={initiative} now={now} record={record} />
+          <Questions initiative={initiative} now={now} record={record} who={who} />
+          <Decisions initiative={initiative} now={now} record={record} who={who} />
+          <Sources initiative={initiative} now={now} record={record} />
+        </>
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@
  * Runtime neutral: no Node built-ins, safe in a Convex action. See README.md.
  */
 export { defineTool, runTool, toAgentTool } from "./tool";
-export type { RunToolContext, Tool, ToolContent, ToolContext, ToolOutput, ToolRisk } from "./tool";
+export type { RunToolContext, Tool, ToolContent, ToolContext, ToolMeter, ToolOutput, ToolRisk } from "./tool";
 export { DEFAULT_MAX_TOKENS, MAX_DEADLINE_MS, MIN_OUTPUT_TOKENS, THINKING_BUDGETS, gateByRisk, planOutput, runAssistant } from "./run";
 export type {
   Gate,

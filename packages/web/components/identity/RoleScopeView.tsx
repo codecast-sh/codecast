@@ -17,6 +17,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight, FolderInput } from "lucide-react";
+import { ProgressBar } from "../initiatives/InitiativeAtoms";
 import { cn } from "../../lib/utils";
 import { groupsLine, planStateLine, projectStateLine, sessionsLine, type RoleScopeModel, type RoleScopeParty, type ScopePlan, type ScopeProject } from "../../lib/roleScope";
 import { INITIATIVE_HEALTH_LABEL } from "@codecast/shared/contracts/initiative";
@@ -254,14 +255,9 @@ function PlanLine({ p }: { p: ScopePlan }) {
 const CARD = "rounded-xl border border-sol-border/40 bg-sol-card overflow-hidden";
 const STATUS_TONE: Record<string, string> = { active: "var(--sol-green)", paused: "var(--sol-yellow)", done: "var(--sol-cyan)", archived: "var(--sol-text-dim)" };
 
-function Bar({ done, total, className }: { done: number; total: number; className?: string }) {
-  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-  return (
-    <span className={cn("h-1 rounded-full overflow-hidden shrink-0 bg-sol-border/30", className)} aria-hidden>
-      <span className="block h-full bg-sol-green" style={{ width: `${pct}%` }} />
-    </span>
-  );
-}
+/** Tasks done over tasks, the bar every goal and project page draws (InitiativeAtoms ProgressBar), without its count: the card prints its own. */
+const Bar = ({ done, total, className }: { done: number; total: number; className?: string }) =>
+  <ProgressBar bare progress={{ done, total, in_progress: 0, open: total - done }} className={cn("shrink-0", className)} />;
 
 /** A project as a card: its lead, the initiatives it belongs to, its open and
  *  done tasks, the plans inside it and the sessions at work in it. The role
