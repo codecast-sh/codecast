@@ -396,3 +396,14 @@ test("keycaps show only while focus is inside a scoped card, and the card wears 
   expect(container.querySelector("[data-scope]")!.hasAttribute("data-keys-live")).toBe(true);
   await unmount();
 });
+
+test("a goal named only by its key is said in words, and the generic signal kind is not a source", async () => {
+  const keyed: ChangeCard = { ...card, goal: { ...card.goal, ref: "sd7dqnq9hny1dtzy83as2av4z18c9z2z", name: "sd7dqnq9hny1dtzy83as2av4z18c9z2z" }, cause: { ...card.cause, signals: 1, sources: ["signal"] } };
+  const { container, unmount } = await mount(<ChangeCardView card={keyed} />);
+  const facts = container.querySelector(".cc-cause-facts")!.textContent!;
+  expect(facts).not.toContain("sd7dqnq9hny1dtzy83as2av4z18c9z2z");
+  expect(facts).toContain("serves a project in another workspace");
+  expect(facts).toContain("1 signal");
+  expect(facts).not.toContain("from signal");
+  await unmount();
+});

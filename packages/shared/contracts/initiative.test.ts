@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chainLine, initiativeChain, initiativeStanding, metricKeyOf, metricLine, metricNumber, metricReading, metricReadings, type InitiativeRow } from "./initiative";
+import { chainLine, initiativeChain, initiativeStanding, metricAgainst, metricKeyOf, metricLine, metricNumber, metricReaches, metricReading, metricReadings, type InitiativeRow } from "./initiative";
 import { formatScheduledTask, parseScheduledTask, roleCardInitiativeLine, type RoleCard } from "./machineMessages";
 
 const DAY = 86_400_000;
@@ -41,6 +41,18 @@ describe("a metric read against its target (I4)", () => {
     expect(metricLine(metricReading(m), now)).toBe("Weekly active teams: not reported yet, target 1,000");
     expect(metricLine(metricReading(m, { value: "412", observed_at: now - 3 * DAY, source: "ct-1" }), now)).toBe("Weekly active teams: 412 of 1,000, behind (3 days ago)");
     expect(metricLine(metricReading(m, { value: "1,100", observed_at: now, source: "ct-1" }), now)).toBe("Weekly active teams: 1,100 of 1,000, met (today)");
+    // A number to stay under, and a target that is not a number, never read "of".
+    const read = (target: string, value?: string) => metricReading({ key: "k", name: "K", target }, value === undefined ? null : { value, observed_at: now, source: "ct-1" });
+    expect(metricAgainst(read("1,000", "412"))).toBe("412 of 1,000");
+    expect(metricAgainst(read("under 20", "34"))).toBe("34, target under 20");
+    expect(metricAgainst(read("< 5%", "7%"))).toBe("7%, target < 5%");
+    // "<" followed by a space is still a number to stay under.
+    expect([read("< 5%", "7%").standing, read("< 5%", "3%").standing, read("<= 5", "5").standing]).toEqual(["behind", "met", "met"]);
+    expect(metricAgainst(read("at most 10", "4"))).toBe("4, target at most 10");
+    expect(metricAgainst(read("shipped", "3"))).toBe("3, target shipped");
+    expect(metricAgainst(read("under 20"))).toBe("target under 20");
+    expect(metricLine(read("under 20", "34"), now)).toBe("K: 34, target under 20, behind (today)");
+    expect([metricReaches("1,000"), metricReaches("at least 40"), metricReaches("under 20"), metricReaches("shipped")]).toEqual([true, true, false, false]);
   });
 
   test("a key is the name as a slug, the way a template scoreboard key reads", () => {

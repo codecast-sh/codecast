@@ -38,7 +38,12 @@ const { freezeFixture } = await import("../__fixtures__/freeze");
 const { FreezeView, FreezeRepStrip } = await import("../FreezeView");
 const { defaultFreezePair, batchColumns, shownRep, promptFilePairs, attributionEnds, pairStory, tickLabel } = await import("../freezeModel");
 const { FreezePage } = await import("../pages/FreezePage");
+const { ComparePanel } = await import("../ComparePanel");
+const { EpochDiffSheet } = await import("../EpochDiffSheet");
+const { codecastEvalsHost, EvalsHostProvider } = await import("../host");
+const { surfaceFixture } = await import("../__fixtures__/surface");
 type FreezePair = import("../FreezeView").FreezePair;
+type EvalsHost = import("../host").EvalsHost;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
 setDefaultTimeout(60_000);
@@ -198,7 +203,7 @@ describe("the view", () => {
     expect(container.querySelector('[data-ev-card-slot="B"]')?.textContent).toContain("after the flip");
     expect(container.querySelector("[data-ev-prompt-changed]")?.textContent).toMatch(/Prompt changed/);
     // A prompt change is a new epoch, not a verdict: the banner borrows none of the fixed pass, fail or gate colours.
-    expect(container.querySelector("[data-ev-prompt-changed]")?.getAttribute("style") ?? "").not.toMatch(/sol-(magenta|cyan|red)/);
+    expect([...container.querySelector("[data-ev-prompt-changed]")!.classList].filter((c) => /^ev-(pass|fail|gate)$/.test(c))).toEqual([]);
     expect(container.querySelector("[data-ev-prompt-diff]")).not.toBeNull();
     expect(container.querySelector("[data-ev-pair-why]")?.textContent).toMatch(/last pass before the newest flip/);
     await unmount();
@@ -316,5 +321,77 @@ describe("the connected page", () => {
     await settle();
     expect(container.textContent).toContain("No freeze with this id");
     await unmount();
+  });
+});
+
+describe("another host", () => {
+  // Plain stand-ins for every slot the group draws: a product without codecast's components still gets working views.
+  const Sheet = {
+    Root: ({ open, children }: { open: boolean; children: React.ReactNode }) => (open ? <div data-other-sheet>{children}</div> : null),
+    // The host's own props (side, hideClose) stay with it; the view's class and data attributes reach the element.
+    Content: ({ children, side: _side, hideClose: _hideClose, ...rest }: { children: React.ReactNode; side?: string; hideClose?: boolean }) => <section {...rest}>{children}</section>,
+    Title: ({ children }: { children: React.ReactNode }) => <h2>{children}</h2>,
+    Description: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
+    Close: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  };
+  const host = {
+    ...codecastEvalsHost,
+    ui: {
+      ...codecastEvalsHost.ui,
+      KeyCap: ({ children }: { children: React.ReactNode }) => <kbd data-other-key>{children}</kbd>,
+      HoverTip: ({ children }: { children: React.ReactNode }) => <div data-other-tip>{children}</div>,
+      SegmentedToggle: ({ items, onChange }: { items: { key: string; label: string }[]; onChange: (k: string) => void }) => (
+        <span data-other-toggle>
+          {items.map((i) => (
+            <button key={i.key} type="button" onClick={() => onChange(i.key)}>
+              {i.label}
+            </button>
+          ))}
+        </span>
+      ),
+      ExamplePair: ({ ex }: { ex: { freeze: string } }) => <div data-other-pair={ex.freeze} />,
+      SessionPill: ({ id }: { id: string }) => <span data-other-session={id} />,
+      Sheet,
+    },
+  } as unknown as EvalsHost;
+  const settle = surfaceFixture();
+  const stats = (batch: string) => settle.data.batches.find((b) => b.batch === batch)!;
+
+  it("draws the freeze page's tooltip and pairing toggle from the host, and the toggle still sets the cards", async () => {
+    const { container, unmount } = await mount(
+      <EvalsHostProvider host={host}>
+        <FreezeView freeze={fx.freeze} cells={fx.cells} footing={fx.footing} pinnedBatch={null} pair={fx.pick} pick={fx.pick} runA={fx.runs[fx.pick.a!]} runB={fx.runs[fx.pick.b!]} onPair={() => {}} />
+      </EvalsHostProvider>,
+    );
+    await act(async () => void container.querySelector(`[data-ev-rep="${fx.pick.a}"]`)!.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true })));
+    expect(container.querySelector("[data-other-tip]")?.textContent).toContain("click to set");
+    const prodB = [...container.querySelectorAll("[data-other-toggle] button")].find((b) => b.textContent === "prod and B")!;
+    await click(prodB);
+    expect(container.querySelector("[data-ev-cards]")?.getAttribute("data-ev-cards")).toBe("prod-b");
+    await unmount();
+  });
+
+  it("draws the compare drawer's key and flip pairs, and the epoch sheet, from the host", async () => {
+    const drawer = await mount(
+      <EvalsHostProvider host={host}>
+        <ComparePanel surface="settle" route={settle.data.surface.route} a={stats(settle.pair[0])} b={stats(settle.pair[1])} res={settle.batches} loading={false} error={null} onClose={() => {}} />
+      </EvalsHostProvider>,
+    );
+    expect(drawer.container.querySelector("[data-ev-attribute] [data-other-key]")?.textContent).toBe("b");
+    expect([...drawer.container.querySelectorAll("[data-other-pair]")].map((e) => e.getAttribute("data-other-pair"))).toEqual(settle.batches.examples.map((e) => e.freeze));
+    expect(drawer.container.querySelector(".cc-example")).toBeNull();
+    await drawer.unmount();
+    const n = settle.epoch.epoch.n;
+    const sheet = await mount(
+      <EvalsHostProvider host={host}>
+        <EpochDiffSheet surface="settle" n={n} res={settle.epoch} loading={false} error={null} freezeNames={{}} onClose={() => {}} />
+      </EvalsHostProvider>,
+    );
+    const open = sheet.container.querySelector(`[data-other-sheet] [data-ev-epoch-sheet="${n}"]`)!;
+    expect(open).not.toBeNull();
+    expect(open.querySelector("[data-other-key]")?.textContent).toBe("esc");
+    expect(open.querySelectorAll("[data-ev-commit]").length).toBe(settle.epoch.commits.length);
+    expect(open.querySelectorAll("[data-other-session]").length).toBe(settle.epoch.commits.filter((c) => c.session).length);
+    await sheet.unmount();
   });
 });

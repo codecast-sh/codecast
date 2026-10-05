@@ -18,6 +18,7 @@ import {
   rowChangedSomething,
   rowRoleIds,
   type OrgChangeFact,
+  type OrgLandedRow,
   type OrgLogDoor,
   type OrgLogFields,
   type OrgLogGesture,
@@ -58,6 +59,8 @@ type State = {
   records?: Map<string, any>;
   /** Each touched session's owners before this row's first owner write. */
   owners?: Map<string, { set: string[]; rows: OwnerRowSnapshot[] }>;
+  /** The rows written since `takeOrgRows` last read them; absent until a door asks. */
+  landed?: OrgLandedRow[];
 };
 
 export type OrgWrite = { table: string; id: string; before: Record<string, any>; after: Record<string, any> };
@@ -285,6 +288,7 @@ async function writeRow(ctx: any, userId: Id<"users">, where: OrgLogWhere, row: 
     writes: [...(stateOf(ctx).writes?.values() ?? [])].filter((w) => canonical(w.before) !== canonical(w.after)),
     created_at: now,
   });
+  stateOf(ctx).landed?.push({ kind: row.kind, subject: row.subject, before: row.before, after: row.after, labels: row.labels, batch: String(batch) });
   if (row.undoes) await ctx.db.patch(row.undoes, { undone_by: id });
   const head = await ctx.db.get(batch);
   await ctx.db.patch(batch, {
@@ -296,6 +300,17 @@ async function writeRow(ctx: any, userId: Id<"users">, where: OrgLogWhere, row: 
     updated_at: now,
   });
   return id;
+}
+
+/** The rows this transaction wrote since the last call, as the log stored
+ *  them. The first call arms the list. A door that stamps its own record with
+ *  what an apply moved (a proposal's accept) reads them here, so it never
+ *  reads the log back or guesses which rows of a shared batch are its own. */
+export function takeOrgRows(ctx: any): OrgLandedRow[] {
+  const s = stateOf(ctx);
+  const rows = s.landed ?? [];
+  s.landed = [];
+  return rows;
 }
 
 // ── What a core calls ────────────────────────────────────────────────────────

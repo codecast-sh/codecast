@@ -8,8 +8,9 @@ import { useInboxStore } from "../../store/inboxStore";
 import { ApprovalCard } from "../../components/simple/ApprovalCard";
 import { Composer } from "../../components/simple/Composer";
 import { ConversationRow } from "../../components/simple/ConversationRow";
-import { HOME_APPROVALS, HOME_IDEAS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeView, routineLastRun, routineSchedule, runsToday } from "../../components/simple/lane";
+import { HOME_APPROVALS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeIdeas, homeView, routineLastRun, routineSchedule, runsToday } from "../../components/simple/lane";
 import { useLaneData, useLaneRoutines } from "../../components/simple/useLane";
+import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
 import { useStartConversation } from "../../components/simple/startConversation";
 import { taskDisplayTitle } from "../../components/triggerTasks";
 
@@ -21,6 +22,7 @@ export default function SimpleHome() {
   const bands = useMemo(() => homeBands(conversations, approvalCounts, now), [conversations, approvalCounts, now]);
   const today = useMemo(() => routines.filter((r) => runsToday(r, now)), [routines, now]);
   const start = useStartConversation();
+  const mail = useLaneMailAbilities();
   const navigate = useNavigate();
   const [seed, setSeed] = useState<{ text: string; at: number } | null>(null);
   const [allDone, setAllDone] = useState(false);
@@ -33,7 +35,7 @@ export default function SimpleHome() {
     <main>
       <h1 className="sl-hello sl-rise" style={{ ["--i" as any]: i++ }}>{greeting(now, name)}</h1>
       <p className="sl-lede sl-rise" style={{ ["--i" as any]: i++ }}>
-        {words.lede}
+        {words.lede(mail.can)}
       </p>
       <div className="sl-rise" style={{ ["--i" as any]: i++ }}>
         <Composer
@@ -42,9 +44,9 @@ export default function SimpleHome() {
           seed={seed}
           onSend={(text) => navigate(conversationPath(start(text)))}
         />
-        {nothingYet ? (
+        {nothingYet && mail.known ? (
           <div className="sl-ideas">
-            {HOME_IDEAS.map((idea) => (
+            {homeIdeas(mail.can).map((idea) => (
               <button key={idea} type="button" className="sl-idea" onClick={() => setSeed({ text: idea, at: Date.now() })}>
                 {idea}
               </button>

@@ -51,6 +51,19 @@ describe("history conversion", () => {
     expect(messagesToRows(rowsToMessages(transcript))).toEqual(transcript);
   });
 
+  it("round trips the content-less row a failed model call leaves, as an error the model never sees", () => {
+    const rows: MessageRow[] = [
+      { role: "user", content: "Hi", timestamp: 1, message_uuid: "u1" },
+      { role: "assistant", model: "claude-sonnet-5-5", timestamp: 2, usage: usage(50, 7), message_uuid: "a1", api_message_id: "msg_f" },
+      { role: "user", content: "Hello?", timestamp: 3, message_uuid: "u2" },
+    ];
+    const messages = rowsToMessages(rows);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+    expect((messages[1] as AssistantMessage).stopReason).toBe("error");
+    expect(messagesToRows(messages)).toEqual(rows);
+    expect(prepareContext(messages).map((message) => message.role)).toEqual(["user", "user"]);
+  });
+
   it("round trips pi messages through rows with their content, calls and results intact", () => {
     const messages = rowsToMessages(transcript);
     const again = rowsToMessages(messagesToRows(messages));

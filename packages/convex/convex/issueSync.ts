@@ -14,6 +14,7 @@
 // tasks, and the change-feed interceptor lives in the wrapped builders.
 
 import { v } from "convex/values";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import {
   action,
@@ -823,7 +824,7 @@ async function fireTriggers(
   // user chosen strings, and "issues" is one every team writes. The CLI
   // shorthands (issue_opened ...) are expanded to this provider pair before
   // they are stored, so this one call covers both spellings.
-  await ctx.scheduler.runAfter(0, internal.agentTasks.matchTaskTriggers, {
+  await scheduleTriggerMatch(ctx, {
     event_type: eventType,
     action,
     repository,

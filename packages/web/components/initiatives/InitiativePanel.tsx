@@ -73,8 +73,10 @@ export function InitiativePanel({ initiative, all, now, tab, onTab, onClose, clo
       ) : (
         <div className="flex-1 min-h-0 overflow-y-auto px-4 py-4 space-y-7" data-initiative-scroll>
           <Description initiative={initiative} />
+          {/* The record's reading order (I5 "The test"): what, why, done when, then the number, then how it is going. */}
+          <InitiativeRecord initiative={initiative} all={all} now={now} part="intent" />
           <Metrics initiative={initiative} all={all} now={now} />
-          <InitiativeRecord initiative={initiative} all={all} now={now} />
+          <InitiativeRecord initiative={initiative} all={all} now={now} part="progress" />
           <Projects initiative={initiative} now={now} />
           <Updates initiative={initiative} now={now} />
           <SubInitiatives rows={subInitiatives(all, initiative._id)} now={now} />

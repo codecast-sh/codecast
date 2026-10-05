@@ -2,12 +2,13 @@
 // (docs/architecture/initiatives-projects-role-page.md I5): the Goals lens'
 // own tree, projects and first goals proposal (components/org/goalsFixture),
 // with each live goal's intent record filled in (why, done when, milestones,
-// numbers over time), one goal that feeds another, and a second small
-// proposal that changes the roles. Read by the model and mount tests and
+// numbers over time), one goal that feeds another, the tasks under each
+// project, and a second small proposal that changes the roles. Read by the model and mount tests and
 // the rig.
 import type { InitiativeRow, InitiativeScore } from "@codecast/shared/contracts/initiative";
 import { UNION_GOALS_CHANGES, UNION_GOALS_DATA, UNION_GOALS_PROPOSAL, UNION_GOALS_TREE } from "../org/goalsFixture";
 import type { OrgProposalChange, OrgProposalRow } from "../org/orgStaffingTypes";
+import type { BoardTask } from "../../lib/initiatives";
 import type { CompanyMember, CompanyProject } from "./companyModel";
 
 const DAY = 86_400_000;
@@ -69,12 +70,18 @@ const TEN_BROKERS: InitiativeRow = {
 
 export const COMPANY_FIXTURE_INITIATIVES: InitiativeRow[] = [...live, TEN_BROKERS];
 
-/** The lens' projects as the store holds them: each with its last change and its task counts. */
-export const COMPANY_FIXTURE_PROJECTS: CompanyProject[] = UNION_GOALS_DATA.projects.map((p, i) => ({
-  ...p,
-  updated_at: T0 - (i * 2 + 1) * DAY,
-  task_counts: i % 4 === 3 ? { total: 0, done: 0, in_progress: 0 } : { total: 6 + i * 3, done: 2 + i * 2, in_progress: 1 + (i % 3) },
-}));
+/** The lens' projects as the store holds them: each with its last change. */
+export const COMPANY_FIXTURE_PROJECTS: CompanyProject[] = UNION_GOALS_DATA.projects.map((p, i) => ({ ...p, updated_at: T0 - (i * 2 + 1) * DAY }));
+
+/** The workspace's tasks: every fourth project has none; the others have work
+ *  done, in progress and open, plus rows a project's board never lists (a
+ *  dropped task, an agent's own row), which no count may include. */
+export const COMPANY_FIXTURE_TASKS: BoardTask[] = COMPANY_FIXTURE_PROJECTS.flatMap((p, i) => {
+  if (i % 4 === 3) return [];
+  const of = (n: number, task: BoardTask): BoardTask[] => Array.from({ length: n }, () => ({ project_id: p._id, source: "human", ...task }));
+  const done = 2 + i * 2, doing = 1 + (i % 3), total = 6 + i * 3;
+  return [...of(done, { status: "done" }), ...of(doing, { status: "in_progress" }), ...of(total - done - doing, { status: "open" }), ...of(2, { status: "dropped" }), ...of(1, { status: "open", source: "agent" })];
+});
 
 export const COMPANY_FIXTURE_TREE = UNION_GOALS_TREE;
 

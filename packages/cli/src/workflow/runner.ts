@@ -615,6 +615,14 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
   };
 }
 
+// LE1.4 one live run per cause: a run the server could not register must not
+// execute when it is bound to a cause (the refusal of a second live run, or
+// any failure that would leave a cause-bound run invisible) or handed to the
+// daemon. Only an unbound local run may carry on unregistered.
+export function runRegistrationIsFatal(opts: { detach?: boolean; taskId?: string; planId?: string }): boolean {
+  return !!(opts.detach || opts.taskId || opts.planId);
+}
+
 // the-line.md L8 node fidelity: the one serializer for a workflow push. Every
 // node attribute the daemon needs to run the stored graph as a local run
 // would (definition, reviewer, timeout, temperature, and the gate's doc and
@@ -1108,7 +1116,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     graph.goal = options.goalOverride;
   }
 
-  const { validateWorkflow, graphHash } = await import("./parser");
+  const { validateWorkflow, graphHash, graphNodeHashes } = await import("./parser");
   const errors = validateWorkflow(graph);
   if (errors.length > 0) {
     console.error(`${c.red}Workflow validation errors:${c.reset}`);
@@ -1182,6 +1190,7 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
       node_id: startNode.id,
       node_status: "running",
       graph_hash: hash,
+      graph_nodes: graphNodeHashes(graph),
     });
   }
 

@@ -90,6 +90,17 @@ test("the header links to the selected project's settings, and every empty stati
   await done();
 });
 
+test("a workspace with nothing on its line lists its projects, each with the step that starts its line", async () => {
+  const fresh = { _id: "p2", short_id: "pr-2", title: "Matching", workspace: WS };
+  const { host, done } = await mount({ projects: { p1: project, p2: fresh } });
+  const rows = Object.fromEntries([...host.querySelectorAll<HTMLElement>("[data-line-project-start]")].map((r) => [r.dataset.lineProjectStart, r.querySelector("a")?.getAttribute("href")]));
+  // A profiled project opens its Line tab; one without a profile opens its setup.
+  expect(rows["pr-1"]).toBe("/projects/pr-1?tab=line");
+  expect(rows["pr-2"]).toBe("/line/settings?project=pr-2");
+  expect(host.querySelector("[data-line-setup] h2")?.textContent).toBe("Start a line on one of this workspace's projects");
+  await done();
+});
+
 test("a build row on the project's customized line wears the chip; a shipped run does not", async () => {
   const { host, done } = await mount({
     tasks: { t1: cause("t1", "ct-1"), t2: cause("t2", "ct-2") },

@@ -187,4 +187,20 @@ describe("entityRemarkPlugins contextual pull request references", () => {
     expect(html).toContain('data-ref-nth="1"');
     expect(html).toContain('data-ref-nth="2"');
   });
+
+  // `op-55#3` is one change of a proposal. Scanned as `op-55` alone, its tail
+  // was left as text and the pull request scan took `#3` for a pull request.
+  test("a proposal's change (op-N#seq) is one reference, never a proposal and a pull request", () => {
+    const html = render("Start with op-55#3 and say the word.");
+    expect(html).toContain(">op-55#3</a>");
+    expect(html.match(/<a/g)?.length).toBe(1);
+    expect(html).not.toContain("pr:");
+    expect(html).not.toContain("#3|");
+  });
+
+  test("a proposal followed by a real pull request number keeps both", () => {
+    const html = render("op-55 shipped in #3263");
+    expect(html).toContain(">op-55</a>");
+    expect(html).toContain(">pr:?#3263|#3263</a>");
+  });
 });

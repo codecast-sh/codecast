@@ -65,7 +65,8 @@ import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, filterInboxScope, isSub } from "../store/inboxStore";
+import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
 import { liveMachineRoster } from "../hooks/useSyncDevices";
@@ -84,9 +85,7 @@ import { useThreadUnreadSync } from "../hooks/useThreadsSync";
 import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
-import { useSyncDocs, useSyncMentionDocs } from "../hooks/useSyncDocs";
-import { useSyncMentionPlans } from "../hooks/useSyncPlans";
-import { useSyncMentionTasks } from "../hooks/useSyncTasks";
+import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
@@ -196,10 +195,26 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sessionsWakeSig(s.sessions), meId, s.sessionsWithQueuedMessages, s.blockedReviveRequestedAt, pendingSendWakeSig(s.pendingMessages), resolveShowOld(s.clientState.ui), coarseNow],
   );
+  // The hover breakdown: every agent of mine with a process behind it,
+  // subagents included, by the same live rule the dots and buckets read.
+  const fleet = useMemo(
+    () => agentFleetCounts(Object.values(filterInboxScope(s.sessions, "mine", meId)), isSub, coarseNow),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessionsWakeSig(s.sessions), meId, coarseNow],
+  );
   if (working.length === 0) return null;
   const activeAgentCount = working.length;
+  // The placement chokepoint's working set is the badge's number; an agent it
+  // counts is awake even if the fleet rule has not caught up to it yet.
+  const awakeAgents = Math.max(fleet.sessions.awake, activeAgentCount);
+  const n = (count: number, noun: string) => `${count} ${noun}${count !== 1 ? "s" : ""}`;
   return (
-    <ShortcutTooltip label={`${activeAgentCount} agent${activeAgentCount !== 1 ? 's' : ''} running`}>
+    <ShortcutTooltip label={
+      <div className="flex flex-col gap-0.5">
+        <span>{activeAgentCount + fleet.subagents.working} working: {n(activeAgentCount, "agent")} + {n(fleet.subagents.working, "subagent")}</span>
+        <span className="text-sol-text-muted">{awakeAgents + fleet.subagents.awake} awake: {n(awakeAgents, "agent")} + {n(fleet.subagents.awake, "subagent")}</span>
+      </div>
+    }>
       <TopbarChip
         onClick={() => {
           const store = useInboxStore.getState();
@@ -382,7 +397,7 @@ function useWindowTitle(path: string) {
     // the URL's ?s= deep link is the fallback inside tabTitle.
     const inboxish = path.startsWith("/inbox") || path.startsWith("/conversation");
     const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
-    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels);
+    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels, undefined, undefined, undefined, undefined, s);
     return appDocumentTitle(label, rest);
   });
   useWatchEffect(() => {

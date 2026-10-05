@@ -1,7 +1,7 @@
 // Which /welcome screen someone sees, as a pure rule so it is testable
-// without a browser. Three screens: sign in, connect Google, and the first
-// useful thing. The connect screen drops out where the deployment cannot
-// connect Google, and for anyone already connected or who chose "Not now".
+// without a browser. Three screens: sign in, connect mail and calendar, and
+// the first useful thing. The connect screen drops out where the deployment
+// cannot connect mail, and for anyone already connected or who chose "Not now".
 
 export type WelcomeStep = "signin" | "connect" | "start";
 
@@ -12,9 +12,9 @@ export const SKIP_VALUE = "start";
 
 export interface WelcomeFacts {
   signedIn: boolean;
-  /** googleOAuth.connectAvailable; undefined while it loads. */
+  /** whisk.connectAvailable; undefined while it loads. */
   connectAvailable: boolean | undefined;
-  /** Whether the connections list has answered (useLaneGoogle `known`). */
+  /** Whether the mail connection has answered (useLaneMail `known`). */
   connectionsKnown: boolean;
   connected: boolean;
   skipped: boolean;

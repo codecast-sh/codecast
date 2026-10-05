@@ -925,9 +925,9 @@ export function FloatingFaceRow({
               </button>
             </div>
             {callRoomOf(row) && chrome.onExpand && (
-              <button type="button" className="faces-btn" data-chrome-btn="open" onClick={chrome.onExpand} title="Open the call window">
+              <button type="button" className="faces-btn" data-chrome-btn="open" onClick={chrome.onExpand} title="Expand the call">
                 <Maximize2 className="h-4 w-4" />
-                <span className="faces-btn-word">Open</span>
+                <span className="faces-btn-word">Expand</span>
               </button>
             )}
             <button type="button" className="faces-btn" data-chrome-btn="close" onClick={chrome.onClose} title={chrome.closeTitle}>

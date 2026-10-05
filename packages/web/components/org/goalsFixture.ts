@@ -9,8 +9,9 @@ import type { OrgTree } from "./orgTypes";
 import type { OrgHealth, OrgProposalChange, OrgProposalRow } from "./orgStaffingTypes";
 import { ORG_STAFFING_FIXTURE_HEALTH } from "./orgStaffingFixture";
 
-const change = (id: string, seq: number, c: OrgProposalChange["change"], status: OrgProposalChange["status"] = "proposed", proposal_id = "fixture-goals-proposal"): OrgProposalChange =>
-  ({ _id: id, proposal_id, seq, change: c, rationale: `why ${id}`, evidence: [], status });
+// A fixture change's reason reads as one: a placeholder like the key itself would print on the card.
+const change = (id: string, seq: number, c: OrgProposalChange["change"], status: OrgProposalChange["status"] = "proposed", proposal_id = "fixture-goals-proposal", rationale = "The work already points at this; the record does not hold it yet."): OrgProposalChange =>
+  ({ _id: id, proposal_id, seq, change: c, rationale, evidence: [], status });
 
 export const GOALS_FIXTURE_DATA: { initiatives: typeof FIXTURE_INITIATIVES; projects: GoalProject[] } = {
   initiatives: FIXTURE_INITIATIVES,
@@ -109,20 +110,20 @@ export const UNION_GOALS_DATA: { initiatives: readonly InitiativeRow[]; projects
 
 const PURPOSE = "Broker high-value introductions that become real transactions";
 const EVERY_PROJECT = UNION_PROJECTS.map((p) => p.title);
-const u = (id: string, seq: number, c: OrgProposalChange["change"]) => change(`union-${id}`, seq, c, "proposed", "fixture-union-goals-proposal");
+const u = (id: string, seq: number, c: OrgProposalChange["change"], why: string) => change(`union-${id}`, seq, c, "proposed", "fixture-union-goals-proposal", why);
 
 export const UNION_GOALS_CHANGES: OrgProposalChange[] = [
-  u("purpose", 1, { kind: "initiative", title: PURPOSE, description: "Union is a curated relationship network that brokers high-value introductions. The business earns its fee when an introduction becomes a real transaction. Every goal below serves this.", owner: "Ashot Petrosian", projects: EVERY_PROJECT }),
-  u("revenue", 2, { kind: "initiative", title: "Make revenue", description: "First on the list of core focuses; the fee paperwork for the first paying client is the work in flight.", owner: "Samvit Ramadurgam", parent: PURPOSE, projects: ["People & Deals"], metrics: [{ name: "Fees collected", target: "The first dollar" }] }),
-  u("funnel", 3, { kind: "initiative", title: "Increase top of funnel", description: "Measured by the north star on the admin home page: cold emails delivered per day, about 90 today.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Infrastructure"], metrics: [{ name: "Cold emails per day", target: "10,000" }] }),
-  u("conversion", 4, { kind: "initiative", title: "Improve funnel conversion rate", description: "The share of first-emailed people who reach a delivered introduction.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Callers & Call Management", "camerons ideas"], metrics: [{ name: "Email to intro rate", target: "0.20%" }, { name: "Cold email reply rate", target: "1% higher" }] }),
-  u("cost", 5, { kind: "initiative", title: "Decrease cost per match", description: "What one delivered introduction costs in sending, enrichment and model spend.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel"], metrics: [{ name: "Dollars per intro", target: "$250" }] }),
-  u("network", 6, { kind: "initiative_shape", initiative: "in-2", parent: PURPOSE }),
-  u("launch", 7, { kind: "initiative", title: "Fundraise and then public launch", description: "The raise closes before the public launch, not after.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Public Launch & Fundraise"] }),
-  u("team", 8, { kind: "initiative", title: "Build a team of intense and aligned people", description: "Hiring, onboarding and the weekly cadence that keeps the team pointed one way.", owner: "Samvit Ramadurgam", parent: PURPOSE, projects: ["People & Deals"] }),
-  u("quality-shape", 9, { kind: "initiative_shape", initiative: "in-4", parent: PURPOSE, metrics: [{ name: "Trust breaking issues per day", target: "0" }, { name: "Average comms score per conversation", target: "0.9 or higher" }] }),
-  u("quality-projects", 10, { kind: "initiative_projects", initiative: "in-4", projects: ["Agent Quality"] }),
-  u("leads", 11, { kind: "initiative_shape", initiative: "in-1", parent: PURPOSE }),
+  u("purpose", 1, { kind: "initiative", title: PURPOSE, description: "Union is a curated relationship network that brokers high-value introductions. The business earns its fee when an introduction becomes a real transaction. Every goal below serves this.", owner: "Ashot Petrosian", projects: EVERY_PROJECT }, "Every call and the #team thread say this is what Union is for; nothing on the initiatives page does."),
+  u("revenue", 2, { kind: "initiative", title: "Make revenue", description: "First on the list of core focuses; the fee paperwork for the first paying client is the work in flight.", owner: "Samvit Ramadurgam", parent: PURPOSE, projects: ["People & Deals"], metrics: [{ name: "Fees collected", target: "The first dollar" }] }, "First on the list of core focuses in the Monday call; the fee paperwork for the first paying client is in flight."),
+  u("funnel", 3, { kind: "initiative", title: "Increase top of funnel", description: "Measured by the north star on the admin home page: cold emails delivered per day, about 90 today.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Infrastructure"], metrics: [{ name: "Cold emails per day", target: "10,000" }] }, "The admin home page calls cold emails per day the north star; no goal carries it."),
+  u("conversion", 4, { kind: "initiative", title: "Improve funnel conversion rate", description: "The share of first-emailed people who reach a delivered introduction.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Callers & Call Management", "camerons ideas"], metrics: [{ name: "Email to intro rate", target: "0.20%" }, { name: "Cold email reply rate", target: "1% higher" }] }, "Three projects measure the same rate from different ends; one goal gives them a shared target."),
+  u("cost", 5, { kind: "initiative", title: "Decrease cost per match", description: "What one delivered introduction costs in sending, enrichment and model spend.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel"], metrics: [{ name: "Dollars per intro", target: "$250" }] }, "Spend per intro came up in two calls this week without a number anyone owns."),
+  u("network", 6, { kind: "initiative_shape", initiative: "in-2", parent: PURPOSE }, "The private network goal exists but hangs off nothing; it serves the purpose like the rest."),
+  u("launch", 7, { kind: "initiative", title: "Fundraise and then public launch", description: "The raise closes before the public launch, not after.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Public Launch & Fundraise"] }, "The raise and the launch were ordered in the Thursday call; neither has a goal yet."),
+  u("team", 8, { kind: "initiative", title: "Build a team of intense and aligned people", description: "Hiring, onboarding and the weekly cadence that keeps the team pointed one way.", owner: "Samvit Ramadurgam", parent: PURPOSE, projects: ["People & Deals"] }, "Hiring threads name alignment as the bar; the goal makes it a thing the team reads back."),
+  u("quality-shape", 9, { kind: "initiative_shape", initiative: "in-4", parent: PURPOSE, metrics: [{ name: "Trust breaking issues per day", target: "0" }, { name: "Average comms score per conversation", target: "0.9 or higher" }] }, "AgentWatch already reports both numbers daily; the goal only writes down the targets."),
+  u("quality-projects", 10, { kind: "initiative_projects", initiative: "in-4", projects: ["Agent Quality"] }, "The Agent Quality project does this goal's work and is carried by no goal."),
+  u("leads", 11, { kind: "initiative_shape", initiative: "in-1", parent: PURPOSE }, "The leads goal exists but hangs off nothing; it serves the purpose like the rest."),
 ];
 
 /** The proposal row, for the dev preview (`/org?preview=1&proposal=op-54&lens=goals`) and the rig. */

@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { useRouteMeta } from "../pageMeta";
 import { earlyAccessMailto } from "@/lib/siteLinks";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { ComparisonList } from "../compare/ComparisonList";
 
 function CheckIcon({ className, color }: { className?: string; color: string }) {
   return (
@@ -271,6 +272,16 @@ export default function PricingPage() {
             </a>
           </div>
         </div>
+      </section>
+
+      <section className="max-w-3xl mx-auto px-6 pb-24">
+        <h2 className="font-mono text-2xl font-bold mb-3" style={{ color: "#002b36" }}>
+          Comparing tools?
+        </h2>
+        <p className="leading-relaxed mb-8" style={{ color: "#586e75" }}>
+          Side by side comparisons with other coding agent tools, including when the other one is the better choice.
+        </p>
+        <ComparisonList />
       </section>
     </main>
   );

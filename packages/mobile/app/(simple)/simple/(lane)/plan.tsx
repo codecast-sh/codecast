@@ -7,6 +7,7 @@ import { Pressable, View } from 'react-native';
 import { router } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import Animated, { FadeIn } from 'react-native-reanimated';
+import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 import { Text } from '@/components/Themed';
 import { openLink, openWebPage } from '@/lib/links';
 import { PLANS } from '@codecast/shared/contracts/assistant';
@@ -16,10 +17,29 @@ import { planDay, usePlanFigures } from '@codecast/web/components/simple/usePlan
 import { supportMailto } from '@codecast/web/lib/siteLinks';
 import { LaneTop, useTabBarClearance } from '@/components/simple/LaneChrome';
 import { Callout, LaneButton, LanePage, LaneRow, Pill, Rise, SectionHead } from '@/components/simple/LaneUI';
-import { useLaneTheme } from '@/components/simple/laneTheme';
+import { LANE_RADIUS_SM, LANE_READ_FACES, useLaneTheme } from '@/components/simple/laneTheme';
 
 const openPage = (url: string) => void openWebPage(url);
 const WORDS = LANE_COPY.plan;
+
+/** Money set aside for work in progress, as the web's .sl-meter-held draws
+ *  it: wash stripes over the track, 6 on and 5 off, so it reads apart from
+ *  both the track and what is used. */
+function HeldStripes({ width, color }: { width: number; color: string }) {
+  if (width <= 0) return null;
+  return (
+    <View style={{ width: `${width * 100}%` }}>
+      <Svg width="100%" height="100%">
+        <Defs>
+          <Pattern id="held" patternUnits="userSpaceOnUse" width={11} height={11} patternTransform="rotate(45)">
+            <Rect width={6} height={11} fill={color} />
+          </Pattern>
+        </Defs>
+        <Rect width="100%" height="100%" fill="url(#held)" />
+      </Svg>
+    </View>
+  );
+}
 
 export default function SimplePlan() {
   const { c, s } = useLaneTheme();
@@ -36,19 +56,19 @@ export default function SimplePlan() {
       </Rise>
 
       <Rise i={2} style={[s.card, { paddingHorizontal: 19, paddingTop: 20, paddingBottom: 18 }]}>
-        <Text style={{ fontSize: 20, lineHeight: 25, fontWeight: '600', letterSpacing: -0.4, color: c.ink }}>
+        <Text style={{ fontFamily: LANE_READ_FACES.semiBold, fontSize: 22.5, lineHeight: 28, letterSpacing: -0.1, color: c.ink }}>
           {known ? usageHeadline(figures) : WORDS.checking}
         </Text>
         <View
           accessibilityRole="progressbar"
           accessibilityLabel={WORDS.meterLabel}
           accessibilityValue={{ min: 0, max: Math.round(figures.cap_usd * 100), now: Math.round(Math.min(figures.used_usd, figures.cap_usd) * 100) }}
-          style={{ flexDirection: 'row', height: 15, marginTop: 16, marginBottom: 11, borderRadius: 999, overflow: 'hidden', backgroundColor: c.inkWash }}
+          style={{ flexDirection: 'row', height: 15, marginTop: 16, marginBottom: 11, borderRadius: 999, overflow: 'hidden', backgroundColor: c.wash }}
         >
           {known ? (
             <>
-              <Animated.View entering={FadeIn.duration(900)} style={{ width: `${fill.used * 100}%`, borderRadius: 999, backgroundColor: full ? c.sun : c.tide }} />
-              <View style={{ width: `${fill.held * 100}%`, backgroundColor: c.tideWash2 }} />
+              <Animated.View entering={FadeIn.duration(900)} style={{ width: `${fill.used * 100}%`, borderRadius: 999, backgroundColor: full ? c.accent : c.ink }} />
+              <HeldStripes width={fill.held} color={c.wash} />
             </>
           ) : null}
         </View>
@@ -84,18 +104,18 @@ export default function SimplePlan() {
                 style={[
                   s.card,
                   { gap: 9, paddingHorizontal: 17, paddingTop: 16, paddingBottom: 16 },
-                  current && { borderColor: c.tideWash2, borderWidth: 1.5 },
+                  current && { borderColor: c.soft },
                 ]}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                   <Text style={{ fontSize: 17, fontWeight: '600', color: c.ink }}>{p.label}</Text>
                   {current ? <Pill label={WORDS.yours} /> : null}
-                  <Text style={{ marginLeft: 'auto', fontSize: 20, fontWeight: '600', letterSpacing: -0.5, color: c.ink, fontVariant: ['tabular-nums'] }}>{planPrice(p)}</Text>
+                  <Text style={{ marginLeft: 'auto', fontFamily: LANE_READ_FACES.medium, fontSize: 26, letterSpacing: -0.25, color: c.ink, fontVariant: ['lining-nums', 'tabular-nums'] }}>{planPrice(p)}</Text>
                 </View>
                 <View style={{ gap: 3 }}>
                   {planPoints(p).map((point) => (
                     <View key={point} style={{ flexDirection: 'row', gap: 8 }}>
-                      <Feather name="check" size={14} color={c.tideInk} style={{ marginTop: 3 }} />
+                      <Feather name="check" size={14} color={c.mark} style={{ marginTop: 3 }} />
                       <Text style={{ flex: 1, fontSize: 14, lineHeight: 20, color: c.soft }}>{point}</Text>
                     </View>
                   ))}
@@ -136,10 +156,10 @@ export default function SimplePlan() {
                   style={({ pressed }) => ({
                     paddingVertical: 9,
                     paddingHorizontal: 16,
-                    borderRadius: 18,
+                    borderRadius: LANE_RADIUS_SM,
                     borderWidth: 1,
                     borderColor: c.lineStrong,
-                    backgroundColor: pressed ? c.tideWash : c.sheet,
+                    backgroundColor: pressed ? c.hover : c.sheet,
                     alignItems: 'center',
                     opacity: disabled ? 0.45 : 1,
                   })}
@@ -152,7 +172,7 @@ export default function SimplePlan() {
           </View>
         </View>
         {billing.error ? (
-          <Callout sun icon={<Feather name="alert-circle" size={17} color={c.sun} />} style={{ marginTop: 12 }}>
+          <Callout accent icon={<Feather name="alert-circle" size={17} color={c.accent} />} style={{ marginTop: 12 }}>
             {billing.error}
           </Callout>
         ) : null}

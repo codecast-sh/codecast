@@ -1,6 +1,6 @@
 ---
 name: cast-org
-description: Talk through the organization of agents and people around this work with the person, in this session: who reports to whom, what each role looks after, where their sessions go. Reads what the code and the sessions say before it trusts a plan or a task, asks what the records cannot settle, and posts each agreed change as a small proposal that renders inline for them to accept. Use when asked who is working on what, to set up or review the org, to hire a lead or a head of people, or when the chart has drifted from reality.
+description: Talk through the organization of agents and people around this work with the person, in this session: who reports to whom, what each role looks after, where their sessions go. Reads what the code and the sessions say before it trusts a plan or a task, asks what the records cannot settle, and posts each agreed change as a small proposal that renders inline for them to approve. Use when asked who is working on what, to set up or review the org, to hire a lead or a head of people, or when the chart has drifted from reality.
 argument-hint: "[--team <name>|personal] [what to change, in plain words]"
 ---
 
@@ -9,8 +9,8 @@ company set; the projects that carry each; the plans and tasks inside a
 project; the roles that lead projects and own initiatives; the people they
 report to; and the sessions that do the work. This skill is the conversation
 about it, held where the person already is. The org page holds the same
-conversation beside the chart. A change is accepted on a card here or on that
-page, and nothing moves until they accept it.
+conversation beside the chart. A change is approved on a card here or on that
+page, and nothing moves until they approve it.
 
 ## Look first
 
@@ -52,12 +52,23 @@ the answer, and move on. Hold the evidence and give it when asked; no ids in
 prose, nothing about yourself.
 
 When something is agreed, or the records settle it on their own, post it as
-a small proposal and put its short id on its own line, where it renders as a
-card with Accept, Skip and Ask:
+a small proposal:
 
 ```bash
 cast org propose --spec proposal.json [--supersedes op-N]
 ```
+
+Put its short id on its own line, where it renders as a card. The card says
+each change in a plain sentence, with what was there before and the reason
+you gave. The command also prints each change's number. When the conversation
+turns to one change, write the short id, `#` and that number on its own
+line, and it renders as the card for the one role, goal or record it changes.
+
+The person answers the card: they approve a change, reject it or write back
+on it, and their answers reach you together, as one message that names each
+change. What they approved is already applied when you read it. Their words
+on a rejection or a note are their edit: revise the proposal from them and
+say what changed in a sentence.
 
 Many small proposals over the conversation, never one document. An edit the
 person gives in plain words folds into the next proposal, or into one you
@@ -69,10 +80,11 @@ cast org revise op-N --amend 1 --edits '{"scope":{"add":["pr-12"]}}' --rationale
 cast org revise op-N --add change.json          # one spec change, or a list
 ```
 
-A change they already decided is refused by name. A proposal somebody else
-posted is theirs: an edit on it lands on the page by change number, and a
-withdraw is theirs, on the page or with `cast org proposals --withdraw op-N`
-at their own shell.
+A change they already decided is refused by name, a rejected one included:
+what replaces it goes in with `--add`. A change they wrote back on still
+waits, and takes `--amend`. A proposal somebody else posted is theirs: an
+edit on it lands on the page by change number, and a withdraw is theirs, on
+the page or with `cast org proposals --withdraw op-N` at their own shell.
 
 Proposals already open outrank a new one on the same subject. Read them
 back in a few plain lines, compare with what health says now, and name a
@@ -83,6 +95,6 @@ again and do not withdraw them.
 
 A change no proposal carries, a role retired, created or moved by hand, is
 made on the org page and nowhere else; a shell is refused, so point them at
-the page, not at a command. The hire and every accept are theirs: no session
+the page, not at a command. The hire and every approval are theirs: no session
 decides a staffing change. A head of people, once hired (`cast org staff`, or
 the button on the page), holds this conversation weekly without them.

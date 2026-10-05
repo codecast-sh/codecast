@@ -6,6 +6,7 @@ import { useParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, TaskItem, PlanItem, DocItem } from "../../../store/inboxStore";
+import { isConvexId } from "../../../lib/entityLinks";
 import { useSyncTasks } from "../../../hooks/useSyncTasks";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { TaskListContent } from "../../tasks/page";
@@ -49,11 +50,14 @@ import {
   ChevronDown,
   Activity,
   CalendarClock,
-  CalendarDays,
   History,
   Megaphone,
   FolderOpen,
+  Workflow,
 } from "lucide-react";
+import { ProjectLineTab } from "../../../components/line/ProjectLineTab";
+import { ForeignWorkspaceNotice } from "../../../components/ForeignWorkspaceNotice";
+import { useForeignWorkspace } from "../../../hooks/useForeignWorkspace";
 import { taskPriority } from "../../../lib/taskPriority";
 import { DocDates } from "../../../components/DocDates";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -61,7 +65,7 @@ import { ProjectLeadChip } from "../../../components/charter/ProjectLeadChip";
 import { useProjectLead } from "../../../hooks/useProjectLead";
 import { ProjectInitiatives } from "../../../components/initiatives/ProjectInitiatives";
 import { ProgressBar, TargetDate } from "../../../components/initiatives/InitiativeAtoms";
-import { IntentHeader, IntentIdChip, IntentPickChip, IntentTabs, useIntentTab, type IntentTab } from "../../../components/initiatives/IntentHeader";
+import { IntentHeader, IntentIdChip, IntentPickChip, IntentTabs, IntentTargetChip, useIntentTab, type IntentTab } from "../../../components/initiatives/IntentHeader";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 import { InlineEdit } from "../../../components/org/OrgScopePanel";
@@ -212,7 +216,7 @@ function SectionHeader({ icon: Icon, label, count }: { icon: typeof Target; labe
 // Which face of the project you're on. Tasks is the default: a project is
 // somewhere to work; the others are the ways you step back from it: overview
 // for shape, updates for narration, timeline for the record.
-const PROJECT_TABS = ["tasks", "overview", "updates", "timeline"] as const;
+const PROJECT_TABS = ["tasks", "overview", "updates", "timeline", "line"] as const;
 type ProjectTab = (typeof PROJECT_TABS)[number];
 const PROJECT_ACCENT = "var(--sol-cyan)";
 const PROJECT_STATUS_OPTIONS = PROJECT_STATUS_ORDER.map((key) => {
@@ -222,25 +226,33 @@ const PROJECT_STATUS_OPTIONS = PROJECT_STATUS_ORDER.map((key) => {
 
 function ProjectDetailContent() {
   const params = useParams();
-  const projectId = params.id as string;
+  // The address names the project by its id, or by its `pj-` short id: a
+  // project's card on a role's page and on a goal's page links that way.
+  const projectRef = params.id as string;
 
   useSyncProjects();
   useSyncTasks();
 
-  const { tab, setTab } = useIntentTab(PROJECT_TABS, `/projects/${projectId}`);
+  const { tab, setTab } = useIntentTab(PROJECT_TABS, `/projects/${projectRef}`);
   const phone = useIsPhone();
   const now = useCoarseNow(60_000);
   const counted = useTasksBackfilled();
   useSyncPlans();
   useSyncDocs();
 
-  // Local-first: the store already holds every project the rail lists, so a
-  // project you click renders NOW and the server row enriches it when it lands.
-  // Gating the whole surface on the query meant a spinner on every open — and,
-  // offline, a spinner forever beside a sidebar happily naming the same project.
-  const { data: serverProject } = useQueryNoThrow(api.projects.webGet, projectId ? { id: projectId } : "skip");
-  const storeProjects = useInboxStore((s) => s.projects);
-  const project = serverProject ?? (projectId ? (storeProjects as any)[projectId] : undefined);
+  // Local-first: the page paints the STORE row, which holds every project the
+  // rail lists and which updateProject patches in the same tick, so a project
+  // you click renders now and a rename, a status pick or a new deadline shows
+  // at once. The per view query only fills what the store has not cached yet:
+  // its snapshot moves when the dispatch lands and the query re-runs, so the
+  // store's word wins field by field.
+  const storeProject = useInboxStore((s) => (projectRef ? (s.projects as any)[projectRef] ?? Object.values(s.projects as Record<string, any>).find((p) => p.short_id === projectRef) : undefined));
+  const projectId: string = storeProject?._id ?? projectRef;
+  const { data: serverProject } = useQueryNoThrow(api.projects.webGet, isConvexId(projectId) ? { id: projectId } : "skip");
+  const project = useMemo(
+    () => (serverProject || storeProject ? { ...(serverProject ?? {}), ...(storeProject ?? {}) } : undefined),
+    [serverProject, storeProject],
+  );
 
   // Workspace-scoped enumeration (the one sanctioned reader): the store caches
   // rows from every workspace viewed, so these lists must be keyed to the
@@ -250,6 +262,10 @@ function ProjectDetailContent() {
   const wsDocs = useWorkspaceCollection<DocItem>("docs");
 
   const updateProject = useInboxStore((s) => s.updateProject);
+  // A project opened from another workspace: its tasks, plans, docs and line
+  // feed from the active workspace, so the page says where it lives instead
+  // of drawing empty lists that are not true.
+  const foreign = useForeignWorkspace(project);
 
   // The org tree feeds the store per view, the way the org page mounts it;
   // the page reads only the roles (useProjectLead), never the tree, so a
@@ -260,14 +276,8 @@ function ProjectDetailContent() {
   useSyncOrgTreeFeeder();
   const { roles: charterRoles } = useProjectLead(projectId);
 
-  // The charter (org-staffing.md S7) reads the STORE row first: updateProject
-  // patches it in the same tick, while webGet's snapshot only moves once the
-  // dispatch lands and the query re-runs. The server row fills what the store
-  // has not cached yet.
-  const charter = useMemo(
-    () => charterOf({ ...(serverProject ?? {}), ...((storeProjects as any)[projectId] ?? {}) }, "project"),
-    [serverProject, storeProjects, projectId],
-  );
+  // The charter (org-staffing.md S7), from the same merged row.
+  const charter = useMemo(() => charterOf(project ?? {}, "project"), [project]);
   const handleCharterChange = useCallback((patch: CharterPatch) => updateProject(projectId, patch), [projectId, updateProject]);
 
   // Plans in this project
@@ -338,25 +348,15 @@ function ProjectDetailContent() {
     toast.success(`Project marked as ${status}`);
   }, [projectId, updateProject]);
 
-  const [editingDeadline, setEditingDeadline] = useState(false);
-  // Commit on blur or Enter, never on change — a date input fires onChange on
-  // the first keystroke of a typed year, and committing there would store
-  // year 0002 and slam the editor shut mid-typing.
-  const handleDeadlineCommit = useCallback((value: string) => {
-    setEditingDeadline(false);
-    if (!value) return;
-    // yyyy-mm-dd → end of that day LOCAL time, so a project "due Sep 26" is
-    // on time all of Sep 26, not just until midnight UTC.
-    const [y, m, d] = value.split("-").map(Number);
-    if (!y || y < 1990 || !m || !d) return;
+  // A project's deadline is the end of its day in LOCAL time, so a project
+  // "due Sep 26" is on time all of Sep 26, not just until midnight UTC.
+  const handleDeadlineCommit = useCallback((day: string) => {
+    const [y, m, d] = day.split("-").map(Number);
     const ts = new Date(y, m - 1, d, 23, 59, 59).getTime();
     if (ts !== project?.target_date) updateProject(projectId, { target_date: ts });
   }, [projectId, updateProject, project?.target_date]);
-  const handleDeadlineClear = useCallback(() => {
-    setEditingDeadline(false);
-    // null rides through the dispatch to webUpdate, which drops the field.
-    updateProject(projectId, { target_date: null });
-  }, [projectId, updateProject]);
+  // null rides through the dispatch to webUpdate, which drops the field.
+  const handleDeadlineClear = useCallback(() => updateProject(projectId, { target_date: null }), [projectId, updateProject]);
 
   if (!project) {
     return (
@@ -371,18 +371,24 @@ function ProjectDetailContent() {
 
   const hasContent = projectPlans.length > 0 || projectTasks.length > 0 || projectDocs.length > 0;
   // The Tasks tab carries no count of its own: the list below reports what it
-  // is actually showing (the board hides agent-internal tasks by default), and
-  // the project's raw totals sit in the header's chips. Two numbers that
-  // disagree are worse than one.
+  // is actually showing, and the header's bar counts the same rows by the
+  // board's rule. Two numbers that disagree are worse than one.
+  const phoneScroll = phone && tab !== "tasks";
+  const body = phoneScroll ? "shrink-0" : "flex-1 overflow-y-auto";
   const tabs: IntentTab<ProjectTab>[] = [
     { key: "tasks", label: "Tasks", icon: ListChecks },
     { key: "overview", label: "Overview", icon: Target, count: projectPlans.length + projectDocs.length },
     { key: "updates", label: "Updates", icon: Megaphone },
     { key: "timeline", label: "Timeline", icon: History },
+    // The project's line (LM7): its flow, sources, stations, versions.
+    { key: "line", label: "Line", icon: Workflow },
   ];
 
   return (
-    <div className="h-full flex flex-col" data-project-page={project._id} data-scope-tab-active={tab}>
+    // On a phone the header would hold most of the screen above a reading
+    // tab, so there the page scrolls as one and the header scrolls away. The
+    // Tasks tab keeps its own scroller (its list virtualizes against it).
+    <div className={cn("h-full flex flex-col", phoneScroll && "overflow-y-auto")} data-project-page={project._id} data-scope-tab-active={tab}>
       {/* The header a goal's page wears (components/initiatives/IntentHeader):
           the same title, the same line of chips, the same tab strip. */}
       <IntentHeader
@@ -395,7 +401,7 @@ function ProjectDetailContent() {
         renameLabel="Project title"
         titleData={{ "data-project-title": "" }}
         idChip={project.short_id ? <IntentIdChip id={project.short_id} accent={PROJECT_ACCENT} /> : null}
-        share={<ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: ((storeProjects as any)[project._id] ?? project).share_token }} />}
+        share={<ShareControl label="project" path={`/projects/${project._id}`} publicShare={{ kind: "project", id: project._id, token: project.share_token }} />}
         phone={phone}
         // Line two, in a goal's order: status, who leads it, when it is due,
         // how far along, what is filed here, and the goals it is part of.
@@ -406,57 +412,32 @@ function ProjectDetailContent() {
           </IntentPickChip>
           <ProjectLeadChip projectId={project._id} editable />
 
-          {/* Deadline. Click to change; the burndown projects against it. */}
-          {editingDeadline ? (
-            <span className="flex items-center gap-1.5">
-              <input
-                type="date"
-                autoFocus
-                defaultValue={project.target_date ? toDateInput(project.target_date) : ""}
-                className="text-xs bg-transparent text-sol-text border-b border-sol-cyan/40 outline-none tabular-nums"
-                onBlur={(e) => handleDeadlineCommit(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setEditingDeadline(false);
-                  if (e.key === "Enter") handleDeadlineCommit((e.target as HTMLInputElement).value);
-                }}
-              />
-              {project.target_date && (
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={handleDeadlineClear}
-                  className="text-[10px] text-sol-text-dim hover:text-sol-red transition-colors"
-                  title="Clear the deadline"
-                >
-                  clear
-                </button>
+          {/* Deadline: the header's one target day control; the burndown projects against it. */}
+          <IntentTargetChip
+            data-project-pick="target"
+            day={project.target_date ? toDateInput(project.target_date) : undefined}
+            label="Project deadline"
+            emptyLabel="No deadline"
+            accent={PROJECT_ACCENT}
+            onCommit={handleDeadlineCommit}
+            onClear={handleDeadlineClear}
+          >
+            {project.target_date ? <TargetDate ts={project.target_date} now={now} done={project.status === "done"} local /> : null}
+          </IntentTargetChip>
+
+          {!foreign && <ProgressBar progress={progress} partial={!counted} className="w-[150px]" />}
+
+          {/* What else is filed here: plans and docs. The bar already says the tasks. */}
+          {projectPlans.length + projectDocs.length > 0 && (
+            <span className="inline-flex items-center gap-3 text-[11.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-project-counts>
+              {projectPlans.length > 0 && (
+                <span className="inline-flex items-center gap-1" title="Plans" data-project-count="plans"><Target className="w-3 h-3" /> {projectPlans.length}</span>
+              )}
+              {projectDocs.length > 0 && (
+                <span className="inline-flex items-center gap-1" title="Docs" data-project-count="docs"><FileText className="w-3 h-3" /> {projectDocs.length}</span>
               )}
             </span>
-          ) : (
-            <button
-              onClick={() => setEditingDeadline(true)}
-              className="inline-flex items-center gap-1.5 -mx-1 px-1 h-6 rounded-md transition-colors hover:bg-sol-bg-highlight/70"
-              title="Set the project deadline"
-              data-project-pick="target"
-            >
-              <CalendarDays className="w-3.5 h-3.5" style={{ color: "var(--sol-text-dim)" }} />
-              {project.target_date
-                ? <TargetDate ts={project.target_date} now={now} done={project.status === "done"} />
-                : <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No deadline</span>}
-            </button>
           )}
-
-          <ProgressBar progress={progress} partial={!counted} className="w-[150px]" />
-
-          {/* What is filed here: plans, tasks, docs. */}
-          <span className="inline-flex items-center gap-3 text-[11.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-project-counts>
-            {projectPlans.length > 0 && (
-              <span className="inline-flex items-center gap-1" title="Plans"><Target className="w-3 h-3" /> {projectPlans.length}</span>
-            )}
-            <span className="inline-flex items-center gap-1" title="Tasks"><ListChecks className="w-3 h-3" /> {projectTasks.length}</span>
-            {projectDocs.length > 0 && (
-              <span className="inline-flex items-center gap-1" title="Docs"><FileText className="w-3 h-3" /> {projectDocs.length}</span>
-            )}
-          </span>
 
           {/* The goals this project carries (initiatives-projects-role-page.md
               I1), each with its first number. Nothing renders when it is in none. */}
@@ -504,20 +485,35 @@ function ProjectDetailContent() {
 
       {/* The project's tasks, through the same list surface /tasks uses —
           same filters, grouping, board, palette and saved views. */}
-      {tab === "tasks" ? (
+      {/* The Line tab reads where the project lives (ProjectLineTab), so it
+          shows from any workspace, under a note that names that workspace. */}
+      {foreign && tab === "line" ? (
+        <div className={body}>
+          <div className="max-w-[78rem] mx-auto px-4 sm:px-6 pt-5"><ForeignWorkspaceNotice foreign={foreign} what="project" readable /></div>
+          <ProjectLineTab projectId={project._id} />
+        </div>
+      ) : foreign ? (
+        <div className={body}>
+          <div className="max-w-[60rem] mx-auto px-4 sm:px-6 py-5"><ForeignWorkspaceNotice foreign={foreign} what="project" /></div>
+        </div>
+      ) : tab === "tasks" ? (
         <div className="flex-1 min-h-0">
           <TaskListContent projectId={projectId} />
         </div>
       ) : tab === "updates" ? (
-        <div className="flex-1 overflow-y-auto">
+        <div className={body}>
           <ProjectUpdates projectId={projectId} />
         </div>
       ) : tab === "timeline" ? (
-        <div className="flex-1 overflow-y-auto">
+        <div className={body}>
           <ProjectTimeline projectId={projectId} />
         </div>
+      ) : tab === "line" ? (
+        <div className={body}>
+          <ProjectLineTab projectId={project._id} />
+        </div>
       ) : (
-      <div className="flex-1 overflow-y-auto">
+      <div className={body}>
         {/* Overview answers "what is this and how is it going" — it deliberately
             does NOT list tasks. It used to, and that list was a worse copy of
             the Tasks tab beside it: no filters, no grouping, no board, no

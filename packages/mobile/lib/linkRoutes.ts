@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { entityRoute, parseEntityUrl, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { entityRoute, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { LANE_PATHS } from '@codecast/web/components/simple/lanePaths';
 
 /**
@@ -61,6 +61,7 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   decision: '/decisions',
   // A call opens on the recording screen, which reads any call's words.
   call: '/recording',
+  pr: '/pr',
 };
 
 /** The mobile route for an object id, or null when that type has no screen.
@@ -70,6 +71,11 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
 export function mobileEntityRoute(type: EntityType, id: string): string | null {
   const base = MOBILE_ENTITY_ROUTE[type];
   if (!base) return null;
+  // A pull request (codecast's page or GitHub's) opens the phone's PR screen.
+  if (type === 'pr') {
+    const ref = parseRepoObjectId(id);
+    return ref?.type === 'pr' ? `${base}/${ref.repository}/${ref.number}` : null;
+  }
   if (type === 'call') {
     const web = entityRoute('call', id);
     if (web?.startsWith('/calls/')) return `${base}/${web.slice('/calls/'.length)}`;

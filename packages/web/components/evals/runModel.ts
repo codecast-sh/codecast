@@ -1,8 +1,10 @@
-// What the run and compare pages decide (evals-ui.md 4.4): tabs and their
-// fragments, gate and check order, guard counts, the file tree, and the
-// neighbours a rep steps to. Pure, beside the views that draw it.
+// What the run and compare pages decide (evals-ui.md 4.4): the run page's own
+// tabs and the fragment that opens one, gate and check order, and the
+// neighbours a rep steps to. Pure, beside the views that draw it. The tabs a
+// host adds under a run (codecast's calls, agent, guard and files) are the
+// host's to decide (host.tsx useRunPanels).
 
-import { type RunDiffEntry, type RunRow, type GateResultJson, GUARD_STATUSES, type GuardEntry, type GuardStatus, type CheckResultJson, type RunFileEntry, type Epoch, type FreezeResponse, type RunResponse, type ScoreJson } from "@codecast/shared/contracts/evalsApi";
+import type { RunDiffEntry, RunRow, GateResultJson, CheckResultJson, Epoch, FreezeResponse, RunResponse, ScoreJson } from "@codecast/shared/contracts/evalsApi";
 import { score2, batchLabel } from "./format";
 import { PASS_MARK } from "./charts/scale";
 
@@ -40,69 +42,28 @@ export function gateEvidenceWords(g: GateResultJson): string {
   return g.evidence.summary;
 }
 
-export const GUARD_WORDS: Record<GuardStatus, string> = {
-  SERVED: "answered from the frozen world",
-  UNSERVED: "a read the frozen world did not capture",
-  LIVE: "read the live workspace: not reproducible",
-  REFUSED: "an attempted write, refused",
-  UNKNOWN: "a command the CLI does not have",
-  HELP: "asked for help text",
-};
-
-/** Counts per status from the entries, so the strip agrees with the table under it. */
-export function guardCounts(entries: readonly GuardEntry[]): Record<GuardStatus, number> {
-  const out = Object.fromEntries(GUARD_STATUSES.map((s) => [s, 0])) as Record<GuardStatus, number>;
-  for (const e of entries) if (e.status) out[e.status]++;
-  return out;
-}
-
 export const checkAnchor = (id: string) => `check-${id}`;
 
 /** A check's own state, read the way ScoreBar draws it: at the pass mark and over its `must` floor. */
 export const checkPasses = (c: Pick<CheckResultJson, "score" | "must">, passMark = PASS_MARK) => c.score >= passMark && (c.must === null || c.must === undefined || c.score >= c.must);
 
-const LANGUAGES: Record<string, string> = { json: "json", jsonl: "json", md: "markdown", ts: "typescript", log: "text", txt: "text", patch: "diff" };
-
-export const fileLanguage = (path: string) => LANGUAGES[path.split(".").pop() ?? ""] ?? "text";
-
-/** Files under their folders, folders in path order, a folder's own files before its subfolders. */
-export function fileTree(files: readonly RunFileEntry[]): Array<{ dir: string; files: RunFileEntry[] }> {
-  const groups = new Map<string, RunFileEntry[]>();
-  for (const f of files) {
-    if (f.kind === "dir") {
-      if (!groups.has(f.path)) groups.set(f.path, []);
-      continue;
-    }
-    const cut = f.path.lastIndexOf("/");
-    const dir = cut < 0 ? "" : f.path.slice(0, cut);
-    groups.set(dir, [...(groups.get(dir) ?? []), f]);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => (a === "" ? -1 : b === "" ? 1 : a.localeCompare(b)))
-    .map(([dir, list]) => ({ dir, files: list.sort((a, b) => a.path.localeCompare(b.path)) }));
-}
-
 // ── What the page decides ───────────────────────────────────────────────────
 
-export type RunTab = "verdict" | "moment" | "calls" | "agent" | "guard" | "files";
+/** The tabs every run has. A host's panels follow them, each tab named by its panel's id. */
+export const RUN_TABS = ["verdict", "moment"] as const;
+export type RunTab = (typeof RUN_TABS)[number];
 
-export const RUN_TAB_WORDS: Record<RunTab, string> = { verdict: "Verdict", moment: "Moment and reply", calls: "Calls", agent: "Agent", guard: "Guard", files: "Files" };
-
-/** The tabs a rep has: Calls when it made calls, Agent and Guard on agent routes. */
-export function runTabs(run: Pick<RunResponse, "run" | "calls" | "agents" | "guard">): RunTab[] {
-  const agent = run.run.route === "agent" || run.agents.length > 0;
-  return ["verdict", "moment", ...(run.calls.length || !agent ? (["calls"] as const) : []), ...(agent ? (["agent"] as const) : []), ...(agent || run.guard.length ? (["guard"] as const) : []), "files"];
-}
+export const RUN_TAB_WORDS: Record<RunTab, string> = { verdict: "Verdict", moment: "Moment and reply" };
 
 /**
  * The tab a fragment names. A gate or check address (`#gate-no-leak`,
- * `#check-criteria`) lives on the Verdict tab; a tab's own name opens it.
+ * `#check-criteria`) lives on the Verdict tab; any other name is a tab's, and
+ * the view opens Verdict when the run has no tab by that name.
  */
-export function tabOfHash(hash: string, tabs: readonly RunTab[]): { tab: RunTab; target: string | null } {
+export function tabOfHash(hash: string): { tab: string; target: string | null } {
   const h = decodeURIComponent(hash.replace(/^#/, ""));
   if (h.startsWith("gate-") || h.startsWith("check-")) return { tab: "verdict", target: h };
-  if ((tabs as readonly string[]).includes(h)) return { tab: h as RunTab, target: null };
-  return { tab: "verdict", target: null };
+  return { tab: h || "verdict", target: null };
 }
 
 /** The prompt epoch a batch ran in: the last one that began at or before it. */

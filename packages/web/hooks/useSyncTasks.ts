@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -9,7 +9,8 @@ import { countLogMissedRows, runReconcileCrawl, syncMetaKey } from "./reconcileC
 import { useBootstrapCollection } from "./useBootstrapCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import { track } from "../lib/analytics";
-import { useWorkspaceArgs, type WorkspaceArgs } from "./useWorkspaceArgs";
+import { useWorkspaceArgs, useFeederWorkspace, type WorkspaceArgs } from "./useWorkspaceArgs";
+import { useSyncCollection } from "./useSyncCollection";
 
 const api = _api as any;
 
@@ -202,6 +203,23 @@ export function useSyncTasks() {
  * Lives in `store.mentionIndex.tasks` so it doesn't fight the active-team
  * `store.tasks` collection that page views render.
  */
+/**
+ * Per-view feeder: one project's tasks in the workspace it lives in, for a
+ * project page opened from another workspace (its Line tab reads the
+ * project's causes there). The workspace feeder above covers the active
+ * workspace, so this one subscribes only when `workspace` names another.
+ */
+export function useSyncProjectTasks(projectId: string | null | undefined, workspace: string | null | undefined, enabled = true) {
+  const { args } = useFeederWorkspace(workspace);
+  const teamId = args === "skip" ? "skip" : args.team_id ?? "";
+  const queryArgs = useMemo(
+    () => (!enabled || !projectId || !workspace || teamId === "skip" ? "skip" : { ...(teamId ? { team_id: teamId, workspace: "team" } : { workspace: "personal" }), project_id: projectId, include_derived: true }),
+    [enabled, projectId, workspace, teamId],
+  );
+  return useSyncCollection("tasks", api.tasks.webList, queryArgs as any, { select: selectTaskItems });
+}
+const selectTaskItems = (r: any) => r?.items ?? r;
+
 export function useSyncMentionTasks() {
   const syncMentionIndex = useInboxStore((s) => s.syncMentionIndex);
   const result = useQueryNoThrow(api.tasks.webMentionList, { workspace: "all" } as any).data;
