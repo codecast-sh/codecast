@@ -280,9 +280,6 @@ function HostFeeders() {
   // layout when it lived in DashboardLayoutInner.
   usePrefetch();
   useSyncDocs();
-  useSyncMentionTasks();
-  useSyncMentionDocs();
-  useSyncMentionPlans();
   // THE feeder mount set (useSyncCore, sync-convergence C5): live window,
   // liveness overlay, recovery probes, team feeders, sync-log applier, the
   // decision queue and labels — one hook both platforms mount, so web and

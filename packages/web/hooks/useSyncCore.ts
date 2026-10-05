@@ -7,6 +7,9 @@ import { useSyncBuckets } from "./useSyncBuckets";
 import { useSyncSessionReads } from "./useSyncSessionReads";
 import { useInboxDigestCompare } from "./useInboxDigestCompare";
 import { emitSyncWake } from "./syncWake";
+import { useSyncMentionTasks } from "./useSyncTasks";
+import { useSyncMentionDocs } from "./useSyncDocs";
+import { useSyncMentionPlans } from "./useSyncPlans";
 
 export type SyncCoreProfile = "web" | "mobile";
 
@@ -47,6 +50,11 @@ export function useSyncCore(profile: SyncCoreProfile): void {
   useSyncBuckets();
   useSyncSessionReads();
   useInboxDigestCompare();
+  // The task/doc/plan index every search's instant tier reads (Cmd-K, the
+  // phone's search, @-mentions): small rows across every workspace.
+  useSyncMentionTasks();
+  useSyncMentionDocs();
+  useSyncMentionPlans();
 
   // eslint-disable-next-line no-restricted-syntax -- platform wake-source wiring
   useEffect(() => {
