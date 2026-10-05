@@ -1003,7 +1003,7 @@ The heart of the conversation is the reporting structure: who reports to whom, w
 
 Knowledge stays behind the words. The Head of People holds the evidence and gives it when asked. A message never cites IDs, never talks about itself, and never names the thread it is written in.
 
-A picture renders inline where a picture beats prose. When the Head of People has something the person can agree to, it posts a small proposal and puts its short ID on its own line. The message then draws a live card: the change as a small tree, what moves, and Accept, Skip and Ask. The chart on the org page shows the same change as ghosts. The person agrees to many small things as the conversation goes, never to one large document. A change the person has not accepted changes nothing.
+A picture renders inline where a picture beats prose. When the Head of People has something the person can agree to, it posts a small proposal and puts its short ID on its own line. The message then draws a live card: each change as a plain sentence, the fields it moves with what was there before, the reason under it, Accept and Skip on each, and Accept all, Chart and Ask at the foot (S39). When the talk turns to one change, the proposal's short ID, `#` and the change's number on its own line draws that change's card alone. The chart on the org page shows the same change as ghosts. The person agrees to many small things as the conversation goes, never to one large document. A change the person has not accepted changes nothing.
 
 The same conversation runs on the org page, beside the chart, and from `/cast-org` in any session.
 
@@ -1546,3 +1546,43 @@ A section the role has nothing for is left out. `cast brief` prints the shape of
 **Rules feed the template learning loop** (org-hire.md H12). When a role hired from a template stands in an opted-in workspace, the pass reads the rules it learned since the last pass as one more signal beside what people typed and where the hire stalled. The model generalizes them into lessons about the template; every lesson still goes through the leak check, and a rule is read once (its key joins the instance's `seen` list). A role that was not hired from a template feeds nothing.
 
 **The role page shows it.** The Overview carries a Playbook block under "Where it stands": the metric with its readings and milestones, the rules with what taught each, what was refuted, the standing decisions with who and when, the open threads with a due date that turns yellow when it has passed, and a line for how the role wakes and why, with the date it last tuned itself.
+
+## S39. A proposal's changes as cards, one per subject
+
+Written 2026-10-05. A proposal used to draw its changes as a small tree in a conversation and as one row per change on the org page. A person does not decide rows. They decide what happens to a role, a goal, a project or a record, and two rows about one goal (move it, then give it a project) read as two decisions where there is one. So the unit a person reads and decides is the subject, and every surface draws the same card for it.
+
+**One card per subject.** `proposalSubjects(changes, live)` (`components/org/proposalSubjects.ts`, pure, built on `proposalChangeRows` so no ref is resolved twice) groups one proposal's changes by what they change:
+
+| Changes | One card for |
+| --- | --- |
+| Everything on one handle: a new role, its move, what it looks after, its routine, its session, a retirement | that role |
+| A new goal, where it sits, how it is measured, the projects that carry it, its owner | that goal |
+| A project's priority, lead and status | that project |
+| A plan's status, and where it is filed | that plan; the tasks it closes ride with it, named under "Closes with it" |
+| A task's status | that task |
+
+A limit is never a row or a number on a card (S23.2): it rides with its role's card and is decided with it. A proposal that holds only a limit draws one plain sentence. A removed change is in no card. Cards are ordered goals, projects, roles, plans, tasks; goals and roles parents first, projects by the priority the proposal leaves them with.
+
+**What a card says.** One sentence, verb first, naming the subject: "Make Platform the top priority.", "Move Activation under the purpose, give it two measures and have Onboarding carry it." The sentence is the shared contract's (`changeSentence(change, { brief, names })` in `shared/contracts/orgProposal.ts`), so the card, the log and the shell say one thing; a card whose lead change creates its subject uses that change's sentence alone. Under it, a row per field the changes move, with what was there before and what replaces it, then the reason each change gave, the sources behind one control, and Accept and Skip. The field labels read aloud with their value (Priority, Sits, Owned by, Measured by, Carried by, Reports to, Looks after, Starts work, Runs, Session, Status, Led by) and never say scope, charter, limit, a change number or a kind name. A measure's target is drawn as its author wrote it. A goal with sub goals in the same proposal does not list its projects: it says how many, "through the goals below", and opens to the list. When a proposal sets one top level goal and places other goals under it, that goal is "the purpose" in every sentence that names it. The number beside a card is its place in the list, not a change number.
+
+**A verdict covers the card.** Accept sends every change of the card that still waits, the riders and carried tasks included, in apply order (`decideTogether` in `components/org/proposalDecide.ts`, over `orderOrgChanges`), as one line of history. They are N decide calls: if one arrives before the change it depends on, the server refuses that one, its row goes back to waiting and a toast names it, and nothing wrong is applied. A decided card shows its status in words (Accepted, Skipped, Failed with the note and Retry, "1 of 2 accepted" on a mixed card). An accept is not taken back from the card; the way back is the org record's Undo (S21).
+
+**One component, four places.** `ProposalSubjectCard` is callback driven and reads no store, so each host keeps its own decide: the proposal card in a conversation (the letter's lead, the cards on hairlines, then a closing row with Chart and Ask on the left and "Accept all N" and "Skip all" on the right), the org page's panel (the cards of each ask; a proposal with one ask draws them straight under the title), `/company`, and the chart's ghost strip. `useSubjectLive` (`proposalHooks.ts`) is the one place the live records a card compares against are gathered.
+
+**One change, by its number: `op-N#seq`.** A change's number is its `seq`: given at create, kept through an amend and a remove, never reused, and printed by `cast org propose` and `cast org apply` as `#n` beside each change. The ref is the grammar the server already used (`findChange`, and its error lines), now parsed in one place (`parseProposalChangeRef`, `shared/entities`). It types as a proposal. In a sentence it is the proposal's pill with the number after its title, and it opens the org page with that change in focus (`/org?proposal=op-N&focus=n`; `#` in a URL is a fragment, so the link never carries it). Alone on its line it draws the card of the subject that holds that change, with every other change to the same subject: a second unit of verdict would leave riders behind, and a change that only makes sense beside its sibling reads cold. That card has no frame around it and no list: a line saying where it sits ("First of nine in" and the proposal's title as a link), the card, Accept and Skip. A number the proposal does not have, a removed change and a proposal the reader may not see each draw one quiet line. The Head of People's prompt teaches the form in one sentence (`head-of-people-prompt.md`, "Talk it through"); the number it writes is the one `cast org propose` printed, never the change's place in the spec it posted, because the parser may fold two spec rows into one.
+
+**The before stamp.** Before an accept, "what was there before" is the live record. After it, the live record is the new value, so a card that kept reading it would say "top priority, was top priority", and any later edit to the record would rewrite what the card says the person agreed to. So the accept stamps what it moved on the change row: `applied_diff` on `org_proposal_changes`, written by `acceptOne` in the same transaction as the apply, so a throw discards both. It is not computed a second time: the apply's own log rows are caught as they are written (`takeOrgRows`, `lib/orgChangeLog.ts`) and cut by `orgAppliedDiff` (`shared/contracts/orgChange.ts`) to the fields a card draws (`ORG_DIFF_FIELDS`), with the name of each id they mention and the log batch. A goal change's record lists are stamped as the entries it added, never as the whole lists. Nothing is stamped for a skip, a failed apply, an apply that moved nothing, a limit, or a row accepted before the field existed.
+
+**A decided card reads the stamp.**
+
+| The change is | Before comes from |
+| --- | --- |
+| waiting, or failed (a failed apply wrote nothing) | the live record |
+| accepted, not yet applied | the live record; a field that already reads as the new value is drawn with no before |
+| applied | the stamp; with no stamp, only what was set |
+| skipped | nothing: the card shows what was proposed |
+| any, in a proposal of another workspace | nothing: the reader's own records are not that company's |
+
+**Order of shipping.** The field is optional, so Convex goes first and an older web ignores it. A change ref on a client older than the renderer is the proposal's pill followed by plain text.
+
+Left out on purpose: an Undo on a decided card (the stamp carries the batch for it), and one call that accepts a whole card (a card is N decide calls until the noise shows up in use).

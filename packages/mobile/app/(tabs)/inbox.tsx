@@ -1,6 +1,6 @@
 import { StyleSheet, FlatList, RefreshControl, TouchableOpacity, View as RNView, Modal, Alert, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, ActionSheetIOS, Switch } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
-import { useWorkspaceFeatureState } from '@/lib/teamFeatures';
+import { useActiveTeamFeature, useWorkspaceFeatureState } from '@/lib/teamFeatures';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
@@ -30,6 +30,8 @@ import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/tr
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
 import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
 import { useInstantSessionRows, mergeSearchRows, type SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
+import { useRemoteSearch } from '@codecast/web/hooks/useRemoteSearch';
+import { ObjectSearchSections } from '@/components/search/ObjectSearchSections';
 import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceDisplayName } from '@/components/DevicesSection';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
@@ -973,19 +975,15 @@ class SearchErrorBoundary extends Component<{ resetKey: string; children: ReactN
 // above instead of unmounting InboxScreen. The cached sessions answer on the
 // first keystroke (the same instant tier web's search uses); the server's
 // message-content matches land on top when the debounced query returns.
-function SearchResultsList({ query, serverQuery, userOnly, onOpen }: { query: string; serverQuery: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
+function SearchResultsList({ query, userOnly, onOpen }: { query: string; userOnly: boolean; onOpen: (conversationId: string) => void }) {
   const Theme = useTheme();
+  // Cmd-K's two tiers: the store answers on the first keystroke, the server's
+  // matches (session content and titles, chat) land on top after a pause.
   const instantRows = useInstantSessionRows(query, 12, { mineOnly: userOnly });
-  const searchResults = useQuery(
-    api.conversations.searchConversations,
-    serverQuery.length >= 2 ? { query: serverQuery, limit: 30, userOnly } : "skip",
-  );
-  const serverRows = useMemo(() => {
-    if (!searchResults) return undefined;
-    return ('results' in searchResults ? searchResults.results : searchResults) as unknown as SessionSearchRow[];
-  }, [searchResults]);
-  const searchResultsList = useMemo(() => mergeSearchRows(serverRows, instantRows), [serverRows, instantRows]);
-  const serverPending = serverRows === undefined || serverQuery !== query.trim();
+  const chatOn = useActiveTeamFeature('chat');
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id ?? null);
+  const remote = useRemoteSearch(query, { enabled: true, limit: 30, userOnly, chatTeamId: chatOn ? activeTeamId : null });
+  const searchResultsList = useMemo(() => mergeSearchRows(remote.searchRows as SessionSearchRow[], instantRows), [remote.searchRows, instantRows]);
   return (
     <FlatList
       data={searchResultsList}
@@ -993,18 +991,19 @@ function SearchResultsList({ query, serverQuery, userOnly, onOpen }: { query: st
         <SearchResultItem result={item} onPress={() => onOpen(item.conversationId)} />
       )}
       keyExtractor={(item) => item.conversationId}
-      contentContainerStyle={searchResultsList.length === 0 ? styles.emptyList : styles.listContent}
+      contentContainerStyle={styles.listContent}
       ListEmptyComponent={
-        serverPending ? (
+        remote.searchAwaiting ? (
           <RNView style={styles.emptyInbox}>
             <ActivityIndicator size="small" color={Theme.textMuted} />
           </RNView>
         ) : (
           <RNView style={styles.emptyInbox}>
-            <RNText style={styles.emptyText}>No results for "{query.trim()}"</RNText>
+            <RNText style={styles.emptyText}>No sessions match "{query.trim()}"</RNText>
           </RNView>
         )
       }
+      ListFooterComponent={<ObjectSearchSections query={query} chatHits={remote.chatHits} />}
       showsVerticalScrollIndicator={false}
       keyboardShouldPersistTaps="handled"
     />
@@ -1725,7 +1724,6 @@ export default function InboxScreen() {
         <SearchErrorBoundary resetKey={`${debouncedQuery}|${userOnly}`}>
           <SearchResultsList
             query={searchQuery}
-            serverQuery={debouncedQuery}
             userOnly={userOnly}
             onOpen={(conversationId) => router.push(`/session/${conversationId}`)}
           />

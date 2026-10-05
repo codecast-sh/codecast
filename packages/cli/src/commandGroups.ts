@@ -84,6 +84,11 @@ export const COMMAND_GROUPS: readonly CommandGroup[] = [
     load: () => import("./workspace/cli.js").then((m) => m.registerWorkspaceCommand),
   },
   {
+    token: "land",
+    description: `Find the work every worktree and cloud host holds that main does not, and release finished trees`,
+    load: () => import("./land/cli.js").then((m) => m.registerLandCommand),
+  },
+  {
     token: "dev",
     args: ["[service...]"],
     hasOptions: true,

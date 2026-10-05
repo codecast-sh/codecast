@@ -131,7 +131,7 @@ describe("proposal progress and grouping", () => {
     expect(changeLine(P.changes[2].change)).toBe("Create the project Platform");
     expect(changeLine(P.changes[3].change)).toBe("@growth may use up to 800,000 tokens a day");
     expect(changeLine(P.changes[4].change)).toBe('@growth runs "Weekly growth review" every week');
-    expect(changeLine(P.changes[5].change)).toBe("Write the charter of Growth, owned by @growth, priority p1: Double organic signups by December");
+    expect(changeLine(P.changes[5].change)).toBe("Make Growth a high priority, make @growth its lead and write down what it is for and how it is measured");
     expect(changeLine({ kind: "move", handle: "content", reports_to: "@growth" })).toBe("Move @content under @growth");
     expect(changeLine({ kind: "move", handle: "content", reports_to: "me", scope_add: ["A", "B"], scope_remove: ["C"] })).toBe("Move @content under you; now also looks after A and B; no longer looks after C");
     expect(changeLine({ kind: "scope", handle: "product", add: ["X", "Y"], remove: ["Z"] })).toBe("@product also looks after X and Y and stops looking after Z");

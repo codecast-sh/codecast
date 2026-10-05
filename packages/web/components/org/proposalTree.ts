@@ -9,7 +9,7 @@ import { describeOrgChange, editedOrgChange, isOrgQuietChange, quietChangeSenten
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import type { OrgParentRef, OrgTree } from "./orgTypes";
 import type { OrgProposalChange } from "./orgStaffingTypes";
-import { ghostsFor, roleNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
+import { ghostsFor, refResolves, roleNodeId, type OrgGhostOptions, type OrgGhostPlan, type OrgGhostStub } from "./orgLayout";
 import { CHANGE_KIND_WORD } from "./orgMeta";
 
 /** One face on a row: a person, a role (live or a stub), an offered session,
@@ -57,17 +57,23 @@ export type ProposalTreeRow = {
 
 const strip = (h: string) => h.replace(/^@/, "").trim().toLowerCase();
 
-const faceOfRef = (plan: OrgGhostPlan, ref: OrgParentRef | null | undefined): ProposalTreeFace | null => {
+/** A person or a role of a tree as a face, by the ref a record stores: who a
+ *  role reports to, who owns a goal. A ref the tree does not hold reads as "a
+ *  person" or "a role". The subject model reads a record's before through
+ *  this, so a face is built in one place. */
+export function partyFace(tree: Pick<OrgTree, "people" | "roles">, ref: OrgParentRef | null | undefined, stubs: OrgGhostPlan["stubs"] = {}): ProposalTreeFace | null {
   if (!ref) return null;
   if (ref.kind === "user") {
-    const p = plan.merged.people.find((x) => x.user_id === ref.user_id);
+    const p = tree.people.find((x) => x.user_id === ref.user_id);
     return p ? { kind: "person", id: p.user_id, name: p.name, image: p.image, me: p.is_me } : { kind: "unknown", id: ref.user_id, name: "a person" };
   }
-  const r = plan.merged.roles.find((x) => x._id === ref.role_id);
+  const r = tree.roles.find((x) => x._id === ref.role_id);
   return r
-    ? { kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar, stub: plan.stubs[roleNodeId(r._id)] }
+    ? { kind: "role", id: r._id, name: r.name, handle: r.handle, avatar: r.avatar, stub: stubs[roleNodeId(r._id)] }
     : { kind: "unknown", id: ref.role_id, name: "a role" };
-};
+}
+
+const faceOfRef = (plan: OrgGhostPlan, ref: OrgParentRef | null | undefined): ProposalTreeFace | null => partyFace(plan.merged, ref, plan.stubs);
 
 /** "Matching Engine & Funnel · from Market growth mandate": the scope by
  *  name (a ref the tree already knows reads as its title), then the seat. */
@@ -105,15 +111,25 @@ function nestGoalRows(all: ProposalTreeRow[]): ProposalTreeRow[] {
     if (!same) { rows.push(r); continue; }
     rows[rows.indexOf(same)] = { ...same, tag: `${same.tag}, ${r.tag}`, detail: [same.detail, r.detail].filter(Boolean).join(" · ") || null, owner: same.owner ?? r.owner, from: same.from ?? r.from, status: same.status === r.status ? same.status : "proposed", unresolved: same.unresolved || r.unresolved, line: `${same.line}; ${r.line}` };
   }
-  const isChild = (r: ProposalTreeRow) => r.parent?.kind === "goal" && rows.some((p) => p !== r && p.node.kind === "goal" && p.node.id === r.parent!.id);
-  const out: ProposalTreeRow[] = [];
-  const emit = (r: ProposalTreeRow) => {
-    if (out.includes(r)) return;
-    out.push(r);
-    if (r.node.kind === "goal") for (const k of rows) if (isChild(k) && k.parent!.id === r.node.id) emit(k);
+  // Only a goal row is a parent, so every other row gets an id nothing names.
+  return treeOrder(rows, (r) => (r.node.kind === "goal" ? `goal:${r.node.id}` : `row:${r.change_id}`), (r) => (r.parent?.kind === "goal" ? `goal:${r.parent.id}` : null));
+}
+
+/** Parents first: an item whose parent is also in the list follows it; the
+ *  rest keep their order. Items caught in a loop come last, in their order. */
+export function treeOrder<T>(items: readonly T[], idOf: (t: T) => string, parentOf: (t: T) => string | null): T[] {
+  const isChild = (t: T) => { const p = parentOf(t); return p !== null && items.some((x) => x !== t && idOf(x) === p); };
+  const seen = new Set<T>();
+  const out: T[] = [];
+  const emit = (t: T) => {
+    if (seen.has(t)) return;
+    seen.add(t);
+    out.push(t);
+    const id = idOf(t);
+    for (const k of items) if (isChild(k) && parentOf(k) === id) emit(k);
   };
-  for (const r of rows) if (!isChild(r)) emit(r);
-  for (const r of rows) emit(r);
+  for (const t of items) if (!isChild(t)) emit(t);
+  for (const t of items) emit(t);
   return out;
 }
 
@@ -194,6 +210,13 @@ function rowsOf(tree: OrgTree | null, changes: readonly OrgProposalChange[], ord
       default: return null;
     }
   };
+  // The project a change names, as a record: its live id when the workspace's
+  // projects are in hand, else the ref as written. A change to its fields and a
+  // change to its status name the same record, so they share a subject.
+  const projectFace = (ref: string, title?: string): ProposalTreeFace => {
+    const live = refResolves(ref, opts.projects ?? []);
+    return { kind: "record", record: "project", id: live?.id ?? ref, name: title ?? live?.title ?? ref };
+  };
   const chipOf = (changeId: string): string | null => {
     if (!plan) return null;
     for (const chips of Object.values(plan.chips)) for (const c of chips) if (c.change_id === changeId) return c.chip;
@@ -231,7 +254,12 @@ function rowsOf(tree: OrgTree | null, changes: readonly OrgProposalChange[], ord
         const record = ch.kind === "task_status" ? "task" : ch.kind === "plan_status" ? "plan" : "project";
         const ref = ch.kind === "task_status" ? ch.task : ch.kind === "plan_status" ? ch.plan : ch.project;
         const closes = ch.status === "done" || ch.status === "dropped" || ch.status === "abandoned" ? ch.status : null;
-        return { ...base, tag: `→ ${ch.status}`, node: { kind: "record", id: ref, name: ch.title ?? ref, record }, parent: null, detail: ch.reason, closes };
+        return { ...base, tag: `→ ${ch.status}`, node: ch.kind === "project_status" ? projectFace(ref, ch.title) : { kind: "record", id: ref, name: ch.title ?? ref, record }, parent: null, detail: ch.reason, closes };
+      }
+      case "project_meta": {
+        // The project is the subject; its lead after the change rides as the owner.
+        const owner = ownerFace(ch.owner);
+        return { ...base, tag: CHANGE_KIND_WORD.project_meta, node: projectFace(ch.project), parent: null, owner: owner?.face ?? null, chip: chipOf(c._id), unresolved: !!owner?.unresolved };
       }
       case "retire": {
         const { face, unresolved } = roleFace(ch.handle);

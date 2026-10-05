@@ -18,6 +18,19 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Mail and calendar go through Whisk
+
+Decided 2026-10-05. Codecast never holds Gmail or Calendar tokens. Whisk
+(`~/src/mail`, whisk.email) is the family's mail and calendar engine, and its
+Google verification (project `mailones`, `gmail.modify`, CASA assessment due
+Nov 29 2026) is the only one the product needs. A person connects mail from
+codecast through `whisk.email/connect`; Whisk mints a revocable app token,
+codecast stores it encrypted and calls the same Whisk functions the `whisk`
+CLI calls. Codecast keeps Google sign-in with basic scopes only. Whisk's
+design tokens live in `@platform/design`, and the simple lane is built on
+them so the lane and Whisk read as one product; Whisk remains a complete app
+on its own.
+
 ## Pieces and who owns which files
 
 Parallel implementers own disjoint files. Shared files (schema, registry,
@@ -97,9 +110,9 @@ How the engine (`assistant/turns.ts`, `assistant/history.ts`) does it:
 
 - **Lease** is `leaseTurn`, called by `wake` and at the end of every turn. It
   reserves the plan's `turn_ceiling_usd`, or whatever room is left above
-  `MIN_TURN_USD`. The run's ceiling keeps one web search's estimate of that
-  aside (`runCeiling`), because a tool's own spend is checked only before the
-  next model call. The lease also schedules `expire` for the deadline plus a
+  `MIN_TURN_USD`. The run's ceiling is the whole reservation: a paid tool
+  (search_web) reserves its own estimate through `ctx.remainingUsd` and
+  `ctx.charge` before it spends. The lease also schedules `expire` for the deadline plus a
   margin: a turn whose action died is ended there and charged the cost it
   recorded as it went (`record` keeps `cost_usd` current).
 - **Input.** `begin` writes queued pending rows into the transcript as the

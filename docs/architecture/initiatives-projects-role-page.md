@@ -385,9 +385,47 @@ and `sources`; `initiative_shape` gains the same four plus `questions` and
 change persists its evidence: every evidence line of the accepted change is
 read by `parseIntentSource` and added to the goal's `sources`, skipping ones
 already there, so a goal a review proposed can always say where the review
-read it. The S21 round trip covers the new fields.
+read it. A change that moved nothing (the owner it names already owns the
+goal, the projects are already carried, a goal of that title already exists)
+writes no sources either: the sources ride the change's own log row, and a
+row for a change that did not happen would misname what was done. The lists
+on a proposal are adds, applied through `performUpdateInitiative` as one
+patch and one log row per change; a proposed question or decision is signed
+by the person who accepted it. The S21 round trip covers the new fields.
 
-**Where it shows.** The goal page draws the record in the order of the test
-above. The list, the project page's goals strip, the chart's Goals lens and
-the document view draw the same atoms: the metric with its trend, the health
-chip, the owner face, the next milestone.
+**Where it shows.** One header (`components/initiatives/IntentHeader`) on
+the goal page and the project page: stripe, glyph or face, title, id, then
+one chip line (status, owner or lead, health, target, progress, the first
+metric, the next milestone). One set of atoms
+(`components/initiatives/InitiativeAtoms`) on every surface that names a
+goal, the chart's Goals lens included: `MetricTile` (now against the target,
+the trend arrow, a sparkline; sizes `tile`, `line`, `chip`),
+`NextMilestoneChip`, `HealthChip`, `OwnerChip`, `ProgressBar`, `SourceLink`,
+`UpdateLine`.
+
+The goal page has two tabs. **Goal** is the record in the order of the test
+above: what it is, why it matters, done when, measured by, milestones, open
+questions, decisions, sources, then the projects, the owner's updates and
+the goals under it. **Activity** (`?tab=activity`) is the scope feed
+(scopes-and-feed.md F2), the same engine and the same component a role's
+page uses, over the goal's projects and its sub goals' projects. The scope
+takes `initiative_ids`, admitted by the initiatives' own access rule, and
+the feed gains what only a goal has: its updates (kind `update`), its
+reached milestones, asked and answered questions and decisions (kind
+`goal`), and calls whose title or summary names the goal or that one of its
+sources cites (kind `call`). No second feed engine exists.
+
+**The company as a document.** `/company` (`components/company`) reads the
+whole company top to bottom from the store alone: the name and purpose (why
+each top level goal matters), the goals with owner, health, number, next
+milestone and target, the goals under each, the projects each carries with
+lead, status, last change and counts, the projects nothing carries, then the
+roles and the people. The outline is `goalsPlan`, the chart's own reading,
+so the document and the chart place every goal the same way; `companyDoc`
+(`companyModel.ts`, pure) joins the rest. Open proposal changes draw in
+place with Accept and Skip: a proposed goal where it would sit, a change to
+a goal under it, role changes among the roles. A project an open proposal
+places is drawn under its goal and is not listed as carried by nothing. A
+project's lead is a role it names or whose scope lists it; a whole workspace
+role is nobody's lead. With no purpose written, a proposed top level goal's
+sentence stands as the purpose, marked proposed.

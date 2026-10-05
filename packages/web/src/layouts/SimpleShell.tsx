@@ -3,6 +3,7 @@
 // floating tab bar on a phone, and the page. It mounts the same store
 // feeders and write wiring as the dashboard (LaneSync), so every lane surface
 // reads the store the rest of the app reads.
+import { useMemo } from "react";
 import { Link, NavLink, Outlet, useMatch, useNavigate } from "react-router";
 import { ArrowLeft, CalendarClock, CircleGauge, Hand, House, LayoutGrid, Moon, MoreHorizontal, Plug, Sun } from "lucide-react";
 import { AuthGuard } from "@/components/AuthGuard";
@@ -10,12 +11,12 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { useTheme } from "@/components/ThemeProvider";
 import { useInboxStore } from "@/store/inboxStore";
-import { LANE_COPY, LANE_PATHS, LANE_SECTIONS, conversationTitle, type LaneSectionKey } from "@/components/simple/lane";
+import { LANE_COPY, LANE_PATHS, LANE_SECTIONS, conversationPath, conversationTitle, type LaneSectionKey } from "@/components/simple/lane";
 import { useLaneData } from "@/components/simple/useLane";
 import { useSetLane } from "@/components/simple/useSetLane";
 import { useLaneFont } from "@/components/simple/useLaneFont";
 import { LaneSync } from "@/components/simple/LaneSync";
-import { UndoReach } from "@/components/undo/UndoTimeline";
+import { UndoReach, type UndoCardFrame } from "@/components/undo/UndoTimeline";
 import "@/components/simple/simple.css";
 
 const ICONS: Record<LaneSectionKey, typeof House> = { home: House, approvals: Hand, routines: CalendarClock, connections: Plug, plan: CircleGauge };
@@ -123,7 +124,19 @@ function LaneChrome() {
   );
 }
 
+/** The undo card's open acts in the lane: a session opens as the lane's own
+ *  conversation page; anything else has no page here, so its row shows no
+ *  link rather than throwing the person out into the full app. */
+function useLaneUndoFrame(): UndoCardFrame {
+  const navigate = useNavigate();
+  return useMemo(() => ({
+    openVisit: (visit) => (visit.sessionId ? () => navigate(conversationPath(visit.sessionId!)) : null),
+    openOrg: null,
+  }), [navigate]);
+}
+
 export default function SimpleShell() {
+  const undoFrame = useLaneUndoFrame();
   return (
     <AuthGuard signedOutPath={LANE_PATHS.welcome}>
       <LaneSync />
@@ -131,7 +144,7 @@ export default function SimpleShell() {
       {/* The lane's gestures record undo history (a routine paused from its
           page takes an Undo toast), so the lane reaches it the way the
           dashboard does. */}
-      <UndoReach />
+      <UndoReach frame={undoFrame} />
     </AuthGuard>
   );
 }

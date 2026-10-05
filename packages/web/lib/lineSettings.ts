@@ -16,7 +16,7 @@ import {
   type LineValueSource,
   type PublishedLineProfile,
 } from "@codecast/shared/contracts/lineProfile";
-import { DAEMON_COMMAND_TTL_MS, deviceDisplayName } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, deviceDisplayName, humanizeConvexError } from "@codecast/shared/contracts";
 import { lineProjectParam } from "./line/lineStations";
 import { DISPATCH_REFUSED } from "./sessionCommands";
 
@@ -273,7 +273,9 @@ export const isLineEditRow = (row: { kind?: string } | null | undefined): row is
 export function lineEditStatus(row: LineEditRow, lp: Facts, now: number): LineEditStatus {
   const base = { requestId: row._id };
   if (row.error || row.result === DISPATCH_REFUSED) {
-    const out = editOutcome({ executed_at: row.executed_at ?? now, error: row.error ?? "The edit was refused" });
+    // A server refusal carries the client's error text; a daemon's is its own message.
+    const error = row.result === DISPATCH_REFUSED ? humanizeConvexError(row.error, "The edit was refused") : row.error ?? "The edit was refused";
+    const out = editOutcome({ executed_at: row.executed_at ?? now, error });
     return { ...base, at: row.executed_at ?? row.requested_at, state: "refused", message: out.state === "refused" ? out.message : "The edit was refused" };
   }
   if (!row.executed_at) {
