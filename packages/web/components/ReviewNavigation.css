@@ -81,3 +81,37 @@
   background: var(--sol-yellow);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
+/* An answer to an org proposal card (S39) shares the quote rows' density. The
+   proposal's title is one quiet line over its rows; the verdict word leads
+   each row in the verdict's colour; the card's sentence sits beside it in the
+   quote's quiet ink, and the person's words take the note line below. */
+.cc-review-tray-group {
+  color: var(--sol-text-dim);
+  font-size: 0.7rem;
+  line-height: 1.3;
+  margin-bottom: -0.2rem;
+  /* The list is a capped flex column that scrolls; with overflow hidden this
+     line is the one item allowed to shrink, and it went to zero height the
+     moment the rows overflowed. It keeps its line. */
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cc-review-tray-verdict {
+  font-weight: 600;
+  font-size: 0.74rem;
+  line-height: 1.4;
+  margin-right: 0.4rem;
+}
+.cc-review-tray-verdict[data-verdict="approve"] { color: var(--sol-violet); }
+.cc-review-tray-verdict[data-verdict="reject"] { color: color-mix(in srgb, var(--sol-red) 80%, var(--sol-text)); }
+.cc-review-tray-verdict[data-verdict="note"] { color: var(--sol-text-muted); }
+.cc-review-tray-item[data-review-answer="approve"] { border-left-color: color-mix(in srgb, var(--sol-violet) 70%, var(--sol-border)); }
+.cc-review-tray-item[data-review-answer="reject"] { border-left-color: color-mix(in srgb, var(--sol-red) 60%, var(--sol-border)); }
+.cc-review-tray-item[data-review-answer="note"] { border-left-color: var(--sol-border); }
+.cc-review-tray-sentence {
+  display: inline;
+  font-style: normal;
+}
+.cc-review-tray-jump:disabled { cursor: default; }

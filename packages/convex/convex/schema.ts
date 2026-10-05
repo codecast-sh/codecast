@@ -19,6 +19,7 @@ import { assistantTables } from "./assistantSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
+import { expectationTables } from "./expectationsSchema";
 import { machineResourceTables } from "./machineResourcesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
@@ -86,6 +87,25 @@ const linkableEntityTypeValidator = v.union(
   v.literal("task"),
   v.literal("plan"),
 );
+
+// The record an org log row is about (OrgLogSubject): on the log row, and on
+// the copy a proposal change keeps of what its accept moved.
+const orgLogSubjectValidator = v.object({
+  type: v.union(v.literal("role"), v.literal("project"), v.literal("plan"), v.literal("task"), v.literal("session"), v.literal("initiative")),
+  id: v.string(),
+  short_id: v.optional(v.string()),
+  label: v.string(),
+});
+
+// A person's answer (S39, OrgChangeReply): approve, reject or a note, with
+// their words, so a card says it after a reload and on another device. On a
+// proposal change row, and on the proposal row for a note on the whole.
+const orgChangeReplyValidator = v.object({
+  verdict: v.union(v.literal("approve"), v.literal("reject"), v.literal("note")),
+  text: v.optional(v.string()),
+  at: v.number(),
+  by: v.optional(v.id("users")),
+});
 
 export default defineSchema({
   // Capability library tables (fleet mirror + catalog cache). Defined in their
@@ -845,6 +865,15 @@ export default defineSchema({
     // Clients show it only while the row is working and the stamp is fresh
     // (shared isSessionActivityFresh).
     activity: v.optional(v.object({ text: v.string(), tool: v.string(), at: v.number() })),
+    // The open agent-status check for this conversation (messages.ts
+    // nextAgentStatusProbe): one scheduled check per window, with the evidence
+    // of every batch in the window folded in. Server bookkeeping, never sent.
+    agent_status_probe: v.optional(v.object({
+      due_at: v.number(),
+      at: v.number(),
+      has_assistant_message: v.boolean(),
+      has_tool_result_reply: v.boolean(),
+    })),
     // Serving URL of the newest image in this conversation (attachment,
     // screenshot, or a trusted markdown image in prose) — the inbox row
     // thumbnail. Denormalized at message-write time (latestImagePreviewUrl);
@@ -1612,7 +1641,7 @@ export default defineSchema({
     team_id: v.optional(v.id("teams")),
     workspace: v.string(),
     door: v.union(v.literal("proposal"), v.literal("settings"), v.literal("chart"), v.literal("project_page"), v.literal("initiative"), v.literal("cli"), v.literal("history")),
-    gesture: v.union(v.literal("accept_ask"), v.literal("accept_all"), v.literal("accept_change"), v.literal("save"), v.literal("drag"), v.literal("command"), v.literal("undo"), v.literal("redo")),
+    gesture: v.union(v.literal("accept_ask"), v.literal("accept_all"), v.literal("accept_change"), v.literal("reply"), v.literal("save"), v.literal("drag"), v.literal("command"), v.literal("undo"), v.literal("redo")),
     // The proposal and the ask the gesture accepted, when there was one.
     proposal: v.optional(v.object({ id: v.id("org_proposals"), short_id: v.string(), title: v.optional(v.string()) })),
     ask: v.optional(v.object({ index: v.number(), title: v.string() })),
@@ -1643,12 +1672,7 @@ export default defineSchema({
     workspace: v.string(),
     seq: v.number(), // rising per workspace
     kind: v.string(), // OrgLogKind
-    subject: v.object({
-      type: v.union(v.literal("role"), v.literal("project"), v.literal("plan"), v.literal("task"), v.literal("session"), v.literal("initiative")),
-      id: v.string(),
-      short_id: v.optional(v.string()),
-      label: v.string(),
-    }),
+    subject: orgLogSubjectValidator,
     // OrgLogFields, OrgLogEffects: typed in the contract, the fields that
     // moved and what the change did beyond its subject. Never a sentence.
     before: v.any(),
@@ -1717,6 +1741,10 @@ export default defineSchema({
     // at create and checked as a partition of the changes; a row without
     // them derives them on read (resolveOrgAsks).
     asks: v.optional(v.array(v.object({ title: v.string(), why: v.string(), effect: v.string(), seqs: v.array(v.number()) }))),
+    // The person's words on the whole proposal (S39): a reply's note that
+    // names no change, kept here so the ledger's closing row says it after
+    // the send, on a reload and on another device. The latest such note wins.
+    reply: v.optional(orgChangeReplyValidator),
     created_at: v.number(),
     updated_at: v.number(),
     resolved_at: v.optional(v.number()),
@@ -1754,6 +1782,23 @@ export default defineSchema({
     decided_at: v.optional(v.number()),
     applied_note: v.optional(v.string()),
     applied_at: v.optional(v.number()),
+    // What the accept moved (S39), an OrgAppliedDiffRow per log row the apply
+    // wrote: its typed before and after, cut to the fields a card draws.
+    // Absent on a row accepted before the field, on a skip, on a failed or
+    // no-op apply and on a limit.
+    applied_diff: v.optional(v.array(v.object({
+      kind: v.string(), // OrgLogKind
+      subject: orgLogSubjectValidator,
+      before: v.any(),
+      after: v.any(),
+      added: v.optional(v.object({ milestones: v.optional(v.array(v.string())), questions: v.optional(v.array(v.string())), decisions: v.optional(v.array(v.string())), sources: v.optional(v.array(v.string())) })),
+      labels: v.record(v.string(), v.string()),
+      batch: v.optional(v.string()),
+    }))),
+    // The person's answer to this change (orgChangeReplyValidator). Shown
+    // while `at` is later than the row's last revision; an amend makes the
+    // row answerable again.
+    reply: v.optional(orgChangeReplyValidator),
   }).index("by_proposal", ["proposal_id", "seq"]),
 
   // ── Roles hired from a template (docs/architecture/org-hire.md W8) ──
@@ -3418,6 +3463,9 @@ export default defineSchema({
     .index("by_github_pr_id", ["github_pr_id"])
     .index("by_repository", ["repository"])
     .index("by_repository_number", ["repository", "number"])
+    // Open PRs of one repository: check and push webhooks look a head sha or a
+    // base branch up among these, never among every PR the repository ever had.
+    .index("by_repository_state", ["repository", "state"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     .index("by_updated_at", ["updated_at"]),
 
@@ -7042,6 +7090,7 @@ export default defineSchema({
     // The line's merge step landed (the-line.md L12): what went where, when.
     merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()) })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
+    graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
   })
     .index("by_share_token", ["share_token"])
     .index("by_user_id", ["user_id"])
@@ -7847,6 +7896,7 @@ export default defineSchema({
 
   ...issueSyncTables,
   ...agentTables,
+  ...expectationTables,
   ...assistantTables,
 
 }, {

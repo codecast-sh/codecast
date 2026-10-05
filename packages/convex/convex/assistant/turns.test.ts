@@ -1,21 +1,22 @@
 // The hosted assistant's turn engine under convex-test, on pi-ai's faux
 // provider (plan pl-840, docs/architecture/hosted-assistant.md "The turn"):
-// a plain reply, a tool call, an approval answered each way, a wallet with
-// no room, a run that runs out of time and carries on, input that lands while
-// a turn runs, the per-plan turn limit, a dead run's lease expiring, a run
+// a plain reply, a tool call, an approval answered each way (and answered
+// with no usage left), a wallet with no room, a safety stop before a run, a
+// run that runs out of time and carries on, input that lands while a turn
+// runs, the per-plan turn limit, a dead run's lease expiring, a run
 // that fails, and a run that reaches its ceiling. After each, the wallet must
 // balance: every turn charged once, nothing left reserved, and the period's
 // usage equal to the charges.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
-import { defineTool, Type, type Tool } from "@platform/agent";
+import { declineText, defineTool, Type, type Tool } from "@platform/agent";
 import schema from "../schema";
 import { api, internal } from "../_generated/api";
 import type { Id } from "../_generated/dataModel";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "../pendingMessages";
 import { finalizeAnswer } from "../sessionDecisions";
 import { decisionAnswerClientId } from "@codecast/shared/contracts";
-import { ensureWallet, reserve } from "../lib/wallet";
+import { ensureWallet, LEAK_GRACE_MS, reserve } from "../lib/wallet";
 import { allModules as modules, loadPiAi } from "../testModules.testkit";
 import { toolsFor } from "./tools";
 import { ALWAYS_ALLOW, APPROVE, DECLINE, allowScope, approvalContext, leaseTurn, systemPrompt, turnDeps, withRules } from "./turns";
@@ -432,6 +433,134 @@ describe("approvals", () => {
     ]);
   });
 
+  test("Always allow given twice for the same people writes one rule", async () => {
+    const { t, user, conversationId, start } = await parkOnApproval();
+    const other = await start();
+    faux.setResponses([callTool("send_mail", draft, "call_other")]);
+    await say(t, other, user, "Tell Dana Thursday works");
+    await settle(t);
+    expect((await state(t, conversationId, user)).decisions.map((d) => d.status)).toEqual(["pending", "pending"]);
+    faux.setResponses([reply("Sent."), reply("Sent too.")]);
+    await answer(t, user, 1);
+    await answer(t, user, 1);
+    const s = await expectBalanced(t, conversationId, user);
+    expect(sent).toEqual([draft, draft]);
+    expect(s.rules).toHaveLength(1);
+  });
+
+  test("an allow rule for someone never waives the card once outside content is in front of the model", async () => {
+    const { t, user, conversationId } = await setup();
+    await t.run((ctx) => ctx.db.insert("assistant_rules", { user_id: user, tool: "send_mail", decision: "allow", match: "dana@example.com", created_at: Date.now() }));
+    // list_tasks brings in text the person did not write, as mail would; the
+    // send that follows it is asked even though the rule names its recipient.
+    faux.setResponses([callTool("list_tasks", {}), callTool("send_mail", draft, "call_send")]);
+    await say(t, conversationId, user, "Check my list and tell Dana");
+    await settle(t);
+    const s = await expectBalanced(t, conversationId, user);
+    expect(sent).toEqual([]);
+    expect(s.turns[0]).toMatchObject({ status: "waiting", reason: "approval", pending_call: { tool_call_id: "call_send" } });
+    expect(s.decisions.map((d) => d.status)).toEqual(["pending"]);
+  });
+
+  async function emptyWallet(t: T, user: Id<"users">) {
+    await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      await ctx.db.patch(wallet._id, { period_cost_usd: wallet.period_cap_usd });
+    });
+  }
+
+  test("an answer that lands with no usage left answers the call as not run, before the line, and never runs it later", async () => {
+    const { t, user, conversationId } = await parkOnApproval();
+    const before = await state(t, conversationId, user);
+    await emptyWallet(t, user);
+    const calls = faux.state.callCount;
+    await answer(t, user, 1);
+
+    let s = await expectBalanced(t, conversationId, user, before.wallet.period_cap_usd - before.wallet.period_cost_usd);
+    expect(faux.state.callCount).toBe(calls);
+    expect(sent).toEqual([]);
+    expect(s.decisions[0].status).toBe("answered");
+    expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "approval"], ["done", "budget"]]);
+    // The Always allow still stands: the person chose it.
+    expect(s.rules).toHaveLength(1);
+    const tail = s.messages.slice(-3);
+    expect(tail[0].tool_calls?.[0].id).toBe("call_send");
+    expect(tail[1].tool_results?.[0]).toMatchObject({ tool_use_id: "call_send", is_error: true });
+    expect(tail[1].tool_results?.[0].content).toContain("no usage left");
+    expect(tail[2]).toMatchObject({ role: "assistant" });
+    expect(tail[2].content).toContain("upgrade or add usage");
+    expect(s.managed?.agent_status).toBe("idle");
+
+    // The period resets; the next message runs a turn that does not send.
+    await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      await ctx.db.patch(wallet._id, { period_cost_usd: 0 });
+    });
+    faux.setResponses([reply("I didn't send it. Want me to try again?")]);
+    await say(t, conversationId, user, "Did it go out?");
+    await settle(t);
+    s = await state(t, conversationId, user);
+    expect(sent).toEqual([]);
+    expect(s.wallet.period_reserved_usd).toBe(0);
+    expect(s.turns[s.turns.length - 1]).toMatchObject({ status: "done", reason: "done" });
+    expect(s.messages[s.messages.length - 1].content).toBe("I didn't send it. Want me to try again?");
+  });
+
+  test("writing again with no usage left takes the card down and answers the call as not run", async () => {
+    const { t, user, conversationId } = await parkOnApproval();
+    const before = await state(t, conversationId, user);
+    await emptyWallet(t, user);
+    await say(t, conversationId, user, "Never mind");
+    await settle(t);
+    const s = await expectBalanced(t, conversationId, user, before.wallet.period_cap_usd - before.wallet.period_cost_usd);
+    expect(sent).toEqual([]);
+    expect(s.decisions[0].status).toBe("withdrawn");
+    expect(s.turns.map((turn) => turn.status)).toEqual(["done", "done"]);
+    expect(s.messages.slice(-3).map((m) => [m.role, m.tool_results?.[0]?.tool_use_id ?? m.content])).toEqual([
+      ["user", "call_send"],
+      ["user", "Never mind"],
+      ["assistant", expect.stringContaining("upgrade or add usage")],
+    ]);
+    // The result names the real reason, as begin would: the person moved on.
+    const result = s.messages[s.messages.length - 3].tool_results?.[0].content;
+    expect(result).toBe(declineText("send_mail", "The person wrote again instead of answering, so it did not run."));
+    expect(result).not.toContain("usage");
+  });
+
+  test("Decline with no usage left answers the call as declined, the same words a turn with room writes", async () => {
+    const { t, user, conversationId } = await parkOnApproval();
+    const before = await state(t, conversationId, user);
+    await emptyWallet(t, user);
+    const calls = faux.state.callCount;
+    await answer(t, user, 2);
+    let s = await expectBalanced(t, conversationId, user, before.wallet.period_cap_usd - before.wallet.period_cost_usd);
+    expect(faux.state.callCount).toBe(calls);
+    expect(sent).toEqual([]);
+    expect(s.rules).toEqual([]);
+    expect(s.turns.map((turn) => [turn.status, turn.reason])).toEqual([["done", "approval"], ["done", "budget"]]);
+    const tail = s.messages.slice(-2);
+    expect(tail[0].tool_results?.[0]).toEqual({ tool_use_id: "call_send", content: declineText("send_mail"), is_error: true });
+    expect(tail[1].content).toContain("upgrade or add usage");
+
+    // After the period resets, the model reads a declined call, not a usage limit.
+    await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      await ctx.db.patch(wallet._id, { period_cost_usd: 0 });
+    });
+    let seen = "";
+    faux.setResponses([(context: unknown) => {
+      seen = JSON.stringify(context);
+      return reply("Understood, it stays unsent.");
+    }]);
+    await say(t, conversationId, user, "Ok");
+    await settle(t);
+    s = await state(t, conversationId, user);
+    expect(sent).toEqual([]);
+    expect(seen).toContain("The person declined send_mail");
+    expect(seen).not.toContain("no usage left");
+    expect(s.messages[s.messages.length - 1].content).toBe("Understood, it stays unsent.");
+  });
+
   test("an answer whose message lands before the decision turns answered still runs", async () => {
     const { t, user, conversationId } = await parkOnApproval();
     faux.setResponses([reply("Sent it.")]);
@@ -482,6 +611,30 @@ describe("limits", () => {
     expect(line.content).toContain("upgrade or add usage");
     expect(s.pending.every((row) => row.status === "delivered")).toBe(true);
     expect(s.managed?.agent_status).toBe("idle");
+  });
+
+  test("a hold an ended turn leaked is freed for the next turn even when it is short of the ceiling", async () => {
+    const { t, user, conversationId } = await setup();
+    const crashed = await t.run(async (ctx) => {
+      const wallet = await ensureWallet(ctx, user);
+      const turnId = await ctx.db.insert("assistant_turns", { conversation_id: conversationId, user_id: user, status: "running", cost_reserved_usd: 0 });
+      expect(await reserve(ctx, user, turnId, 0.1)).toBe(true);
+      // Its finish failed to settle; the wallet has no room beside the leak.
+      await ctx.db.patch(turnId, { status: "failed", ended_at: Date.now() - LEAK_GRACE_MS });
+      await ctx.db.patch(wallet._id, { period_cost_usd: wallet.period_cap_usd - 0.1 });
+      return turnId;
+    });
+    faux.setResponses([reply("Here is your week.")]);
+    await say(t, conversationId, user, "Plan my week");
+    const started = await state(t, conversationId, user);
+    const turn = started.turns.find((row) => row._id !== crashed)!;
+    expect(turn).toMatchObject({ status: "running", cost_reserved_usd: 0.1 });
+    expect(started.ledger.filter((row) => row.kind === "release").map((row) => row.turn_id)).toEqual([crashed]);
+    await settle(t);
+    const s = await state(t, conversationId, user);
+    expect(s.turns.find((row) => row._id === turn._id)).toMatchObject({ status: "done" });
+    expect(s.turns.find((row) => row._id === turn._id)!.reason).not.toBe("budget");
+    expect(s.wallet.period_reserved_usd).toBe(0);
   });
 
   test("a run that reaches its deadline is continued by a new turn", async () => {
@@ -620,6 +773,8 @@ describe("more limits", () => {
     faux.setResponses([callTool("slow_lookup", { q: "flights" })]);
     await say(t, conversationId, user, "Find me flights");
     const running = (async () => settle(t))();
+    // Blocked once the run is under way (its call is stored), not before it begins.
+    while (!(await state(t, conversationId, user)).messages.some((m) => m.tool_calls?.length)) await pause(10);
     await t.run((ctx) => ctx.db.patch(conversationId, { pending_api_error_kind: "safety" } as any));
     await running;
     await settle(t);
@@ -708,6 +863,23 @@ describe("more limits", () => {
     expect(s.turns.map((turn) => [turn.status, turn.reason, turn.cost_usd])).toEqual([["failed", "error", 0]]);
   });
 
+  test("a conversation safety-blocked between its lease and its run: the run never starts", async () => {
+    const { t, user, conversationId } = await setup();
+    faux.setResponses([callTool("send_mail", { to: ["dana@example.com"], subject: "x", body: "y" })]);
+    const calls = faux.state.callCount;
+    await say(t, conversationId, user, "Hi");
+    await t.run((ctx) => ctx.db.patch(conversationId, { pending_api_error_kind: "safety" } as any));
+    await settle(t);
+    const s = await expectBalanced(t, conversationId, user);
+    expect(faux.state.callCount).toBe(calls);
+    expect(s.turns.map((turn) => [turn.status, turn.reason, turn.cost_usd, turn.error])).toEqual([["failed", "error", 0, "Safety stop"]]);
+    expect(s.managed?.agent_status).toBe("idle");
+    // Nothing sent here can start a turn, so the line asks for no retry.
+    const line = s.messages[s.messages.length - 1].content ?? "";
+    expect(line).toContain("safety check");
+    expect(line).not.toContain("try again");
+  });
+
   test("a conversation deleted before its lease expires: the sweep still ends and settles the turn", async () => {
     const { t, user, conversationId } = await setup();
     const id = await t.run(async (ctx) => {
@@ -775,6 +947,34 @@ describe("pieces", () => {
     expect(await call("create_event", { title: "Lunch", attendees: ["Dana <dana@example.com>"] })).toBe("ask");
     // The person sees a doc's new text before it replaces the old, every time.
     expect(await call("replace_doc", { doc: "d", content: "x" })).toBe("ask");
+  });
+
+  test("rules: with outside content in view, only rules that reach no one outside the account apply", async () => {
+    const gate = withRules(() => "ask", [
+      { tool: "send_mail", decision: "allow", match: "dana@example.com" },
+      { tool: "create_event", decision: "allow", match: "dana@example.com" },
+      { tool: "create_event", decision: "allow", match: "no one" },
+      { tool: "archive", decision: "allow" },
+      { tool: "label", decision: "refuse" },
+    ], () => true);
+    const call = async (name: string, input: Record<string, unknown>) => {
+      const decided = await gate({ id: "c", name, input, risk: "write" });
+      return typeof decided === "string" ? decided : decided.verdict;
+    };
+    expect(await call("send_mail", { to: ["dana@example.com"] })).toBe("ask");
+    expect(await call("create_event", { title: "Lunch", attendees: ["dana@example.com"] })).toBe("ask");
+    expect(await call("create_event", { title: "Focus" })).toBe("allow");
+    expect(await call("archive", { thread_ids: ["t"] })).toBe("allow");
+    expect(await call("label", { thread_ids: ["t"], add: ["x"] })).toBe("refuse");
+  });
+
+  test("an image sent to the assistant is refused in words, never dropped", async () => {
+    const { t, user, conversationId } = await setup();
+    await expect(t.run(async (ctx) => {
+      const image = await ctx.storage.store(new Blob(["x"]));
+      await enqueuePendingMessage(ctx, await ctx.db.get(conversationId), user, { content: "What's this receipt?", image_storage_id: image, human: true });
+    })).rejects.toThrow(/can't read images/);
+    expect((await state(t, conversationId, user)).pending).toHaveLength(0);
   });
 
   test("Always allow is offered only where a rule can be narrowed", () => {

@@ -1,0 +1,413 @@
+// One run as a report (docs/architecture/the-line-end-to-end.md LE16, the
+// line model LM7): what the run did and what is true now, the path it took in
+// the line's phases with each station's result in one line, and, across runs,
+// what each version of the line delivered (LE14, keyed by graph_hash). The run
+// page, the task page's Line block, the /line rows and the project's Line tab
+// all read it, so a run is told the same way everywhere. Pure: no store, no
+// React.
+import { CARD_GATE_NODE_ID, isLineRun, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
+import { runNodeLine, runNodeRows, type RunNodeRow } from "../workflowRun";
+import { SHIPPED_LINE } from "./shippedLine.generated";
+
+// ── the shape a report reads ─────────────────────────────────────────────────
+
+export type ReportNode = { node_id: string; status: string; outcome?: string; label?: string; session_id?: string; session?: { _id: string; title?: string } | null; started_at?: number; completed_at?: number; result_preview?: string; activity?: string };
+
+/** A run row as the store holds it (workflow_runs.enrichRun). */
+export type ReportRun = {
+  _id: string;
+  status: string;
+  task_id?: string;
+  task_short_id?: string;
+  current_node_id?: string;
+  current_node_label?: string;
+  workflow_name?: string;
+  node_statuses?: ReportNode[];
+  gate_node_id?: string;
+  gate_choices?: Array<{ key: string; label: string; target?: string }>;
+  gate_response?: string;
+  gate_answer?: string;
+  gate_decision_short_id?: string;
+  gate_decision_status?: string;
+  card_cost_usd?: number;
+  graph_hash?: string;
+  /** Each station's own hash in that graph (runner graphNodeHashes), so two versions say which stations changed. */
+  graph_nodes?: Array<{ id: string; h: string }>;
+  fail_reason?: string;
+  total_tokens?: number;
+  created_at: number;
+  updated_at: number;
+};
+
+/** What a report knows about the cause the run worked on. */
+export type ReportTask = { short_id?: string; status: string; watch_until?: number | null; resolved_at?: number | null; readiness_note?: string | null; review_verdict?: { verdict: string } | null };
+
+// ── phases ───────────────────────────────────────────────────────────────────
+
+export type LinePhaseKey = "understand" | "prove" | "build" | "check" | "decide" | "ship";
+
+/** The line's stations in the six phases a person reads (LE16). Every station
+ *  of line.cast sits in exactly one; a project's copy keeps the station ids. */
+export const LINE_PHASES: ReadonlyArray<{ key: LinePhaseKey; label: string; stations: readonly string[] }> = [
+  { key: "understand", label: "Understand", stations: ["ground", "park", "plan", "plan_gate", "analyze"] },
+  { key: "prove", label: "Prove", stations: ["prove", "red", "dissolve"] },
+  { key: "build", label: "Build", stations: ["implement", "reopen"] },
+  { key: "check", label: "Check", stations: ["verify", "green", "eval", "unscored", "review"] },
+  { key: "decide", label: "Decide", stations: ["card_draft", "card_write", "card", "decide", "drop"] },
+  { key: "ship", label: "Ship", stations: ["ship", "merge", "watch"] },
+];
+
+const PHASE_OF = new Map(LINE_PHASES.flatMap((p) => p.stations.map((s) => [s, p.key] as const)));
+export const phaseOfStation = (id: string): LinePhaseKey | null => PHASE_OF.get(id) ?? null;
+
+const GATES = new Set(["plan_gate", CARD_GATE_NODE_ID]);
+
+// ── a station's result, in one line ──────────────────────────────────────────
+
+const WORDS: Record<string, { done: string; failed?: string; live?: string }> = {
+  ground: { done: "Tied the cause to a goal and rated it", live: "Grounding the cause" },
+  park: { done: "Parked: not ready to build" },
+  plan: { done: "Wrote the plan", live: "Writing the plan" },
+  analyze: { done: "Read the cause and its signals", live: "Reading the cause" },
+  prove: { done: "Looked for the miss", failed: "Could not look for the miss", live: "Looking for the miss" },
+  red: { done: "Showed the miss failing on the base", failed: "No miss shown" },
+  dissolve: { done: "Closed: the miss did not reproduce" },
+  implement: { done: "Built the change", failed: "Build stopped", live: "Building the change" },
+  reopen: { done: "Sent back to build with the note" },
+  verify: { done: "Checks passed", failed: "Checks failed", live: "Running the checks" },
+  green: { done: "The miss passes now", failed: "Still red" },
+  eval: { done: "Evals passed", failed: "Evals failed", live: "Running the evals" },
+  unscored: { done: "The evals could not score the change" },
+  review: { done: "Review approved", failed: "Review stopped", live: "Reviewing the diff" },
+  card_draft: { done: "Assembled the card" },
+  card_write: { done: "Wrote the card", live: "Writing the card" },
+  card: { done: "Card ready", failed: "Card refused" },
+  drop: { done: "Closed the cause" },
+  ship: { done: "Landed the change", failed: "Not shipped", live: "Shipping" },
+  merge: { done: "Merged", failed: "Merge refused" },
+  watch: { done: "Started the watch" },
+};
+
+/** What a station does, in the words its result uses (the Line tab lists
+ *  stations this way, so a station reads the same there and on a run). */
+const GATE_WORDS: Record<string, string> = { plan_gate: "A person answers the plan", [CARD_GATE_NODE_ID]: "A person answers the card: ship, revise or drop" };
+export const stationWords = (id: string): string | null => GATE_WORDS[id] ?? WORDS[id]?.done ?? null;
+
+/** Steps that only assemble the card: a run that passed them says so in the
+ *  folded line, and the phase reads by its answer. */
+const ROUTINE = new Set(["card_draft", "card_write", "card"]);
+
+const REVIEW_WORDS: Record<string, string> = { approve: "Review approved", changes: "Review asked for changes", reject: "Review rejected the change" };
+
+/** "[S] Ship :: Land the change" → "Ship". */
+export const choiceWords = (label: string) => label.replace(/^\[[^\]]*\]\s*/, "").split("::")[0].trim() || label;
+
+/** The words of the option a gate was answered with: the decision's own
+ *  option (enrichRun) for the run's last gate, else the run's key mirror. */
+export function gateAnswer(run: Pick<ReportRun, "gate_answer" | "gate_choices" | "gate_node_id">, node: { node_id: string; outcome?: string }, response?: string): string | null {
+  if (run.gate_answer && run.gate_node_id === node.node_id) return choiceWords(run.gate_answer);
+  const key = (node.outcome ?? response ?? "").trim().toUpperCase();
+  const hit = key ? run.gate_choices?.find((c) => c.key.toUpperCase() === key) : undefined;
+  return hit ? choiceWords(hit.label) : null;
+}
+
+/** "noted": a step that did not do its part but did not stop the run either
+ *  (the merge left to a person), drawn neutral rather than as a failure. */
+export type StepState = "done" | "failed" | "live" | "waiting" | "noted";
+/** Every step is named by its station; `note` says why when the result
+ *  needs it (a merge left to a person); `href` is where the result leads:
+ *  the session that did the step, or the task when a person finished it. */
+export type ReportStep = { id: string; label: string; state: StepState; result: string; note?: string; href?: string; hrefTitle?: string; at?: number };
+
+function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null): ReportStep {
+  const gate = GATES.has(row.id);
+  // The merge step never fails a run (line.cast): a refused merge leaves the
+  // change to a person, and the task's blocker comment says what is left.
+  if (row.id === "merge" && row.status === "failed") {
+    const landed = task?.status === "done";
+    const ref = task?.short_id ?? run.task_short_id;
+    return {
+      id: row.id,
+      label: row.label,
+      state: "noted",
+      result: landed ? "Landed by hand" : "Left to a person to land",
+      note: "the line could not merge it",
+      ...(ref ? { href: `/tasks/${ref}`, hrefTitle: "The task's comments say why the merge was left and what is left to land" } : {}),
+      at: row.completed_at ?? row.started_at,
+    };
+  }
+  const answer = gate ? gateAnswer(run, { node_id: row.id, outcome: row.outcome }, run.gate_node_id === row.id ? run.gate_response : undefined) : null;
+  // A gate the runner closed with the answer's key is answered, not failed.
+  const state: StepState = gate && answer ? "done"
+    : row.current && run.status === "paused" ? "waiting"
+    : row.status === "running" || row.current ? "live"
+    : row.status === "failed" ? "failed" : "done";
+  const words = WORDS[row.id];
+  const own = runNodeLine(row);
+  // The card's own decision names the gate it answered.
+  const decision = gate && run.gate_node_id === row.id ? run.gate_decision_short_id : undefined;
+  const result = gate
+    ? (answer ? `Answered ${answer}${decision ? ` (${decision})` : ""}` : state === "waiting" ? "Waiting for an answer" : "Asked")
+    : row.id === "review" && task?.review_verdict && state !== "live"
+      ? REVIEW_WORDS[task.review_verdict.verdict] ?? "Reviewed"
+      : own ?? (state === "failed" ? words?.failed ?? "Failed" : state === "live" ? words?.live ?? "Running" : state === "waiting" ? "Waiting" : words?.done ?? "Done");
+  const sid = row.session?._id ?? row.session?.session_id ?? row.session_id;
+  return {
+    id: row.id,
+    label: row.label,
+    state,
+    result,
+    ...(sid ? { href: `/conversation/${row.session?._id ?? sid}`, hrefTitle: row.session?.title ? `Open the session: ${row.session.title}` : "Open the session that did this" }
+      : decision ? { href: `/decisions/${decision}`, hrefTitle: "Open the decision" } : {}),
+    at: row.completed_at ?? row.started_at,
+  };
+}
+
+/** `steps` are what a reader reads; `routine` are steps that passed and only
+ *  assembled something (the card), folded with `folded`, the stations not reached. */
+export type ReportPhase = { key: LinePhaseKey | "steps"; label: string; steps: ReportStep[]; routine: ReportStep[]; folded: Array<{ id: string; label: string }>; state: StepState | "skipped" };
+
+const isHidden = (r: RunNodeRow) => r.id === "start" || r.id === "exit" || r.type === "start" || r.type === "exit";
+const reached = (r: RunNodeRow) => r.status !== "pending" || r.current;
+
+/**
+ * The path a run took (LE16): for a line run, the six phases with the
+ * stations it reached, each with its one line result and the session that did
+ * it; the stations it did not reach fold under each phase. Another workflow's
+ * run is one group of its steps. `workflow` is the run's stored graph; a line
+ * run without one reads the shipped line's.
+ */
+export function runPath(run: ReportRun, workflow?: { nodes?: Array<{ id: string; label?: string; type?: string }> } | null, task?: ReportTask | null): ReportPhase[] {
+  const line = isLineRun(run.node_statuses);
+  const rows = runNodeRows(run, workflow ?? (line ? SHIPPED_LINE : null)).filter((r) => !isHidden(r));
+  if (!line) {
+    const steps = rows.filter(reached).map((r) => stepOf(r, run, task));
+    return [{ key: "steps", label: "Steps", steps, routine: [], folded: rows.filter((r) => !reached(r)).map((r) => ({ id: r.id, label: r.label })), state: phaseState(steps) }];
+  }
+  const byPhase = new Map<string, RunNodeRow[]>();
+  for (const r of rows) {
+    const key = phaseOfStation(r.id) ?? "build";
+    byPhase.set(key, [...(byPhase.get(key) ?? []), r]);
+  }
+  return LINE_PHASES.map((p) => {
+    const own = byPhase.get(p.key) ?? [];
+    const all = own.filter(reached).sort((a, b) => (a.started_at ?? Infinity) - (b.started_at ?? Infinity)).map((r) => stepOf(r, run, task));
+    const isRoutine = (s: ReportStep) => ROUTINE.has(s.id) && s.state === "done";
+    const steps = all.filter((s) => !isRoutine(s));
+    return { key: p.key, label: p.label, steps, routine: all.filter(isRoutine), folded: own.filter((r) => !reached(r)).map((r) => ({ id: r.id, label: r.label })), state: all.length ? phaseState(all) : "skipped" };
+  });
+}
+
+function phaseState(steps: ReportStep[]): StepState {
+  steps = steps.filter((s) => s.state !== "noted");
+  if (steps.length === 0) return "done";
+  if (steps.some((s) => s.state === "waiting")) return "waiting";
+  if (steps.some((s) => s.state === "live")) return "live";
+  // A phase that recovered (checks failed, then passed) reads by its last word.
+  const last = steps[steps.length - 1];
+  return last?.state === "failed" ? "failed" : "done";
+}
+
+// ── the outcome, first ───────────────────────────────────────────────────────
+
+/** "Oct 12": the day a watch ends. */
+export const shortDay = (at: number) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+
+export type OutcomeTone = "shipped" | "closed" | "live" | "waiting" | "failed" | "calm";
+export type RunOutcome = { tone: OutcomeTone; end: LineRunEnd | null; text: string };
+
+const nodeOf = (run: ReportRun, id: string) => run.node_statuses?.find((n) => n.node_id === id);
+const ran = (run: ReportRun, id: string) => nodeOf(run, id)?.status === "completed";
+const labelOf = (run: ReportRun, id?: string) => (id ? run.node_statuses?.find((n) => n.node_id === id)?.label ?? SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? run.current_node_label ?? id : "the start");
+
+/**
+ * What the run did and what is true now, in one sentence (LE16). A shipped
+ * run says the day it shipped and where its watch stands, read from the
+ * cause: watching until a day, the watch ended quiet, or its signal came
+ * back. `brief` is a row's version: what the run did, without the watch the
+ * cause's own line already says.
+ */
+export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.now(), brief = false): RunOutcome {
+  const ended = lineRunOutcome(run.node_statuses as any);
+  const end = ended?.kind ?? null;
+  const at = labelOf(run, run.current_node_id);
+  if (run.status === "pending") return { tone: "calm", end, text: "Queued to start." };
+  if (run.status === "paused") {
+    const gate = run.gate_node_id ?? run.current_node_id;
+    return { tone: "waiting", end, text: gate === CARD_GATE_NODE_ID ? "Waiting for an answer on the card." : gate === "plan_gate" ? "Waiting for an answer on the plan." : `Waiting for an answer at ${at}.` };
+  }
+  if (run.status === "running") return { tone: "live", end, text: `Working: at ${at}.` };
+  if (run.status === "failed") return { tone: "failed", end, text: stopWords(run, at) };
+  if (end === "shipped") {
+    const watch = task?.watch_until ?? null;
+    // A merge the line could not do, on a cause that is done, landed by hand.
+    const shipped = `Shipped ${shortDay(ended!.at)}${nodeOf(run, "merge")?.status === "failed" && task?.status === "done" ? " by hand" : ""}`;
+    // LM3: a watch that reopens moves the cause to open; any other status
+    // after a ship is a later run's or a person's, and this run still shipped.
+    if (task && (task.status === "open" || task.status === "backlog")) return { tone: "failed", end, text: brief ? `${shipped}, then reopened.` : `${shipped}, then reopened: its signal came back during the watch.` };
+    if (brief) return { tone: "shipped", end, text: `${shipped}.` };
+    if (watch && watch > now) return { tone: "shipped", end, text: `${shipped}; watching ${ran(run, "red") ? "the miss" : "its signals"} until ${shortDay(watch)}.` };
+    return { tone: "shipped", end, text: task?.resolved_at ? `${shipped}. The watch ended quiet.` : `${shipped}.` };
+  }
+  if (end === "dropped") return { tone: "closed", end, text: nodeOf(run, CARD_GATE_NODE_ID) ? "Dropped at the card." : "Dropped at the plan." };
+  if (end === "dissolved") return { tone: "closed", end, text: "Closed without a change: the miss did not reproduce." };
+  if (end === "parked") return { tone: "calm", end, text: `Parked: the cause is not ready to build.${task?.readiness_note ? ` ${task.readiness_note.trim().replace(/\.?$/, ".")}` : ""}` };
+  if (ran(run, "unscored")) return { tone: "failed", end, text: "Stopped: the evals could not score the change." };
+  if (nodeOf(run, "ship")?.status === "failed") return { tone: "failed", end, text: "Not shipped: the ship step failed." };
+  if (task?.review_verdict?.verdict === "reject" && ran(run, "review")) return { tone: "closed", end, text: "Review rejected the change." };
+  return { tone: "calm", end, text: "Finished." };
+}
+
+/** The run's state in one word, for a title bar beside the outcome
+ *  sentence: the line's word (Shipped, Watching, Dropped), never the engine's. */
+export function runWord(run: ReportRun, task?: ReportTask | null, now = Date.now()): { word: string; tone: OutcomeTone } {
+  const o = runOutcome(run, task, now);
+  const word = run.status === "pending" ? "Queued"
+    : run.status === "running" ? "Running"
+    : run.status === "paused" ? "Waiting"
+    : o.end === "shipped" ? (o.tone === "failed" ? "Reopened" : task?.status === "done" && task.watch_until && task.watch_until > now ? "Watching" : "Shipped")
+    : o.end === "dropped" ? "Dropped"
+    : o.end === "dissolved" ? "Closed"
+    : o.end === "parked" ? "Parked"
+    : o.tone === "failed" ? "Stopped"
+    : o.tone === "closed" ? "Rejected"
+    : "Finished";
+  return { word, tone: o.tone };
+}
+
+const TIMES = ["", "once", "twice", "three times", "four times", "five times"];
+
+/** Why a run stopped, in words: the engine's reasons ("no outgoing edge from
+ *  prove (…)", "max_visits=2 exceeded on prove", "hand jx79xc0 killed after
+ *  30m at prove") read as what happened, with the station's own name. */
+export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)): string {
+  const why = run.fail_reason?.trim().replace(/\.$/, "") ?? "";
+  let m: RegExpMatchArray | null;
+  if (!why) return `Stopped at ${at}.`;
+  if (/^stopped\b/i.test(why)) return `${why}.`;
+  if ((m = why.match(/^no outgoing edge from (\S+)/))) return `Stopped at ${labelOf(run, m[1])}: the line had no next step.`;
+  if ((m = why.match(/^max_visits=(\d+) exceeded on (\S+)/))) return `Stopped: ${labelOf(run, m[2])} looped ${TIMES[Number(m[1])] ?? `${m[1]} times`}.`;
+  if ((m = why.match(/^hand \S+ killed after \d+\s*m(?:in)?(?: at (\S+))?/))) return `Stopped: ${labelOf(run, m[1] ?? run.current_node_id)}'s session ran out of time.`;
+  if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return `Stopped: the question was ${m[1]}.`;
+  return `Stopped at ${at}: ${why}.`;
+}
+
+// ── the runs on a cause ──────────────────────────────────────────────────────
+
+export type CauseRunEntry =
+  | { kind: "run"; run: ReportRun; superseded: boolean }
+  | { kind: "folded"; runs: ReportRun[]; text: string };
+
+const reachedPhase = (r: ReportRun, phase: LinePhaseKey) =>
+  (r.node_statuses ?? []).some((n) => n.status !== "pending" && phaseOfStation(n.node_id) === phase);
+
+/**
+ * The runs on a cause, newest first, as a reader takes them in: a run that
+ * stopped and was followed by a later one is superseded, and two or more such
+ * runs in a row fold into one line ("3 earlier attempts stopped before the
+ * build"), so the run that matters is not buried under its retries. `newest`
+ * is the cause's newest run time when `runs` leaves the newest out.
+ */
+export function causeRunEntries(runs: ReadonlyArray<ReportRun>, newest = runs[0]?.created_at ?? 0): CauseRunEntry[] {
+  const out: CauseRunEntry[] = [];
+  let group: ReportRun[] = [];
+  const flush = () => {
+    if (group.length >= 2) {
+      const where = !group.some((r) => reachedPhase(r, "build")) ? " before the build" : !group.some((r) => reachedPhase(r, "ship")) ? " before shipping" : "";
+      out.push({ kind: "folded", runs: group, text: `${group.length} earlier attempts stopped${where}` });
+    } else for (const r of group) out.push({ kind: "run", run: r, superseded: true });
+    group = [];
+  };
+  for (const r of runs) {
+    if (r.status === "failed" && r.created_at < newest) { group.push(r); continue; }
+    flush();
+    out.push({ kind: "run", run: r, superseded: false });
+  }
+  flush();
+  return out;
+}
+
+// ── versions: what each graph delivered (LE14) ───────────────────────────────
+
+export type LineVersion = { hash: string; first: number; last: number; runs: number; shipped: number; revised: number; dropped: number; stopped: number; reopened: number; costUsd: number | null; live: number; nodes: ReportRun["graph_nodes"] | null; change: string };
+
+const stationName = (id: string) => SHIPPED_LINE.nodes.find((n) => n.id === id)?.label ?? id;
+const names = (ids: string[]) => (ids.length > 2 ? `${ids.length} stations` : ids.map(stationName).join(" and "));
+
+/** What one version changed from the one before it, in words: "Prove
+ *  edited", "Eval added, Unscored removed". Read from each station's hash. */
+export function versionChange(nodes: ReportRun["graph_nodes"] | null, prev: ReportRun["graph_nodes"] | null | undefined): string {
+  if (prev === undefined) return "First recorded version";
+  if (!nodes?.length || !prev?.length) return "Changed; not recorded which stations";
+  const was = new Map(prev.map((n) => [n.id, n.h]));
+  const now = new Map(nodes.map((n) => [n.id, n.h]));
+  const edited = nodes.filter((n) => was.has(n.id) && was.get(n.id) !== n.h).map((n) => n.id);
+  const added = nodes.filter((n) => !was.has(n.id)).map((n) => n.id);
+  const removed = prev.filter((n) => !now.has(n.id)).map((n) => n.id);
+  const parts = [edited.length ? `${names(edited)} edited` : "", added.length ? `${names(added)} added` : "", removed.length ? `${names(removed)} removed` : ""].filter(Boolean);
+  return parts.length ? parts.join(", ") : "Line settings edited";
+}
+
+/**
+ * One row per graph the project's line ran, newest first: its runs, how many
+ * shipped, were sent back to revise, were dropped, stopped before an answer,
+ * and whose cause reopened in watch after it shipped, what its cards say it
+ * cost, and what it changed from the version before. A run that recorded no
+ * hash (before LE14) groups as "unrecorded".
+ */
+export function lineVersions(runs: ReadonlyArray<ReportRun>, reopenedAt: (taskId: string) => number[]): LineVersion[] {
+  const out = new Map<string, LineVersion>();
+  for (const r of runs) {
+    if (!isLineRun(r.node_statuses)) continue;
+    const hash = r.graph_hash || "unrecorded";
+    const v = out.get(hash) ?? { hash, first: r.created_at, last: r.created_at, runs: 0, shipped: 0, revised: 0, dropped: 0, stopped: 0, reopened: 0, costUsd: null, live: 0, nodes: null, change: "" };
+    v.runs++;
+    v.first = Math.min(v.first, r.created_at);
+    v.last = Math.max(v.last, r.created_at);
+    if (!v.nodes && r.graph_nodes?.length) v.nodes = r.graph_nodes;
+    const end = lineRunOutcome(r.node_statuses as any);
+    if (end?.kind === "shipped") {
+      v.shipped++;
+      if (r.task_id && reopenedAt(r.task_id).some((t) => t > end.at)) v.reopened++;
+    }
+    if (end?.kind === "dropped") v.dropped++;
+    if (ran(r, "reopen")) v.revised++;
+    if (r.status === "failed" && end?.kind !== "shipped" && end?.kind !== "dropped") v.stopped++;
+    if (r.status === "running" || r.status === "paused" || r.status === "pending") v.live++;
+    if (typeof r.card_cost_usd === "number") v.costUsd = (v.costUsd ?? 0) + r.card_cost_usd;
+    out.set(hash, v);
+  }
+  // Each recorded version against the one that ran before it.
+  const recorded = [...out.values()].filter((v) => v.hash !== "unrecorded").sort((a, b) => a.first - b.first);
+  recorded.forEach((v, i) => { v.change = versionChange(v.nodes, i === 0 ? undefined : recorded[i - 1].nodes); });
+  const unrecorded = out.get("unrecorded");
+  if (unrecorded) unrecorded.change = "Runs from before versions were recorded";
+  return [...out.values()].sort((a, b) => b.last - a.last);
+}
+
+// ── where a cause is (LM3) ───────────────────────────────────────────────────
+
+/**
+ * Where a cause is, in one sentence (the-line-model.md LM3's "also shown"):
+ * the newest run speaks while it runs; otherwise the task status the line
+ * wrote, with the watch day after a ship and "reopened" when a signal came
+ * back during the watch.
+ */
+export function causeWhere(task: ReportTask, latest: ReportRun | null, reopened: boolean, now = Date.now()): RunOutcome {
+  const live = latest && (latest.status === "running" || latest.status === "paused" || latest.status === "pending");
+  if (live) return runOutcome(latest, task, now);
+  if (task.status === "dropped") return { tone: "closed", end: "dropped", text: "Dropped." };
+  if (task.status === "done" && task.watch_until && task.watch_until > now) {
+    const at = latest ? lineRunOutcome(latest.node_statuses as any) : null;
+    return { tone: "shipped", end: "shipped", text: `Shipped${at?.kind === "shipped" ? ` ${shortDay(at.at)}` : ""} · watching until ${shortDay(task.watch_until)}` };
+  }
+  if ((task.status === "open" || task.status === "backlog") && reopened) return { tone: "failed", end: null, text: "Reopened: its signal came back during the watch." };
+  if (latest) {
+    const said = runOutcome(latest, task, now);
+    if (task.status === "open" || task.status === "backlog") return said.end === "parked" ? said : { tone: "calm", end: null, text: "Waiting to be admitted." };
+    return said;
+  }
+  if (task.status === "done") return { tone: "shipped", end: null, text: "Done." };
+  if (task.status === "open" || task.status === "backlog") return { tone: "calm", end: null, text: "Waiting to be admitted." };
+  return { tone: "calm", end: null, text: task.status === "in_review" ? "In review." : "In progress." };
+}

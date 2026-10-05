@@ -29,7 +29,11 @@ export type UndoTimelineViewProps = {
   onUndoTo: (id: string) => void;
   onRedoTo: (id: string) => void;
   onOpen: (visit: ResolvedVisit) => void;
-  onOpenOrg: () => void;
+  /** Whether this frame has a place for the object; false hides its title
+   *  link and leaves O idle. Default: every object opens. */
+  canOpen?: (visit: ResolvedVisit) => boolean;
+  /** null = the frame has no org record. */
+  onOpenOrg: (() => void) | null;
   onClose: () => void;
   /** The first look at every key: the card's own chords (⌘Z steps while it
    *  is open). Return true when handled. */
@@ -49,15 +53,17 @@ function heldControl(target: EventTarget | null): boolean {
   return target instanceof Element && !!target.closest("button, a[href]");
 }
 
-export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
+export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canOpen = () => true, onOpenOrg, onClose, onKey, flash }: UndoTimelineViewProps) {
   const peek = mode === "peek";
   // A peek shows the head with a few rows either side; interactive shows all.
   const { rows, headIndex, atEnd } = useMemo(() => {
-    if (!peek) return { rows: model.rows, headIndex: model.headIndex, atEnd: true };
+    // A frame with no org record leaves its org rows inert.
+    const all = onOpenOrg ? model.rows : model.rows.map((r) => (r.act?.kind === "org" ? { ...r, act: null } : r));
+    if (!peek) return { rows: all, headIndex: model.headIndex, atEnd: true };
     const from = Math.max(0, model.headIndex - PEEK_ABOVE);
-    const to = Math.min(model.rows.length, model.headIndex + PEEK_BELOW + 1);
-    return { rows: model.rows.slice(from, to), headIndex: model.headIndex - from, atEnd: to === model.rows.length };
-  }, [model, peek]);
+    const to = Math.min(all.length, model.headIndex + PEEK_BELOW + 1);
+    return { rows: all.slice(from, to), headIndex: model.headIndex - from, atEnd: to === all.length };
+  }, [model, peek, !onOpenOrg]);
 
   const [selected, setSelected] = useState<string>(() => model.headId ?? model.rows[model.rows.length - 1]?.id ?? "");
   const [folds, setFolds] = useState<ReadonlySet<string>>(() => new Set());
@@ -150,14 +156,14 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
 
   const act = (row: UndoTimelineRow | undefined) => {
     if (!row?.act) return;
-    if (row.act.kind === "org") onOpenOrg();
+    if (row.act.kind === "org") onOpenOrg?.();
     else if (row.act.kind === "back") onUndoTo(row.id);
     else onRedoTo(row.id);
   };
   const open = (row: UndoTimelineRow | undefined) => {
     if (!row) return;
-    if (row.state === "external") onOpenOrg();
-    else if (row.visits[0]) onOpen(row.visits[0]);
+    if (row.state === "external") onOpenOrg?.();
+    else if (row.visits[0] && canOpen(row.visits[0])) onOpen(row.visits[0]);
   };
   const toggleFold = (id: string) => setFolds((cur) => {
     const next = new Set(cur);
@@ -264,6 +270,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, onOp
                   onFold={() => toggleFold(row.id)}
                   onAct={() => act(row)}
                   onOpen={() => open(row)}
+                  opens={!!row.visits[0] && canOpen(row.visits[0])}
                   refCb={(el) => { if (el) rowEls.current.set(row.id, el); else rowEls.current.delete(row.id); }}
                 />
               ))}
@@ -356,7 +363,7 @@ function RowDot({ row }: { row: UndoTimelineRow }) {
   }
 }
 
-function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, refCb }: {
+function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, opens, refCb }: {
   row: UndoTimelineRow;
   aboveHead: boolean;
   /** A peek takes no keys: its selection marks the head, not a target for Enter. */
@@ -366,6 +373,8 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
   onFold: () => void;
   onAct: () => void;
   onOpen: () => void;
+  /** The frame has a place for the row's object. */
+  opens: boolean;
   refCb: (el: HTMLDivElement | null) => void;
 }) {
   const undone = row.state === "undone" || row.state === "partial";
@@ -375,7 +384,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
   // group names several objects, so no one title speaks for it. Only a live
   // object (an archived doc resolves to its kind word), and only on a row in
   // force: an undone or refused row's line 2 is its state.
-  const showTitle = !!visit?.entity && !row.fold && row.state === "done" && !undoLabelNamesTitle(row.label, visit.title);
+  const showTitle = opens && !!visit?.entity && !row.fold && row.state === "done" && !undoLabelNamesTitle(row.label, visit.title);
   const actLabel = undoActLabel(row.act);
   // A group with nothing to report on line 2 puts its fold there.
   const foldInline = !!row.fold && !row.detail;

@@ -1319,8 +1319,10 @@ function defaultPanelBounds() {
 function setCallWindowShape(win, size, opts) {
   const next = normalizeCallWindowSize(size);
   if (next === callWindowSize) {
-    // Same shape, but a hidden window asked to show itself again.
-    if (opts && opts.reveal && next !== "idle" && !win.isVisible()) revealCallWindow(win, next);
+    // Same shape, asked to show itself again: a hidden window, or a stage
+    // that is up but behind the app. Expanding a stage that is already open
+    // is a request to see it, and only the shell can bring it to the front.
+    if (opts && opts.reveal && next !== "idle" && (!win.isVisible() || next === "panel")) revealCallWindow(win, next);
     return next;
   }
   rememberCallWindowPlace(win);

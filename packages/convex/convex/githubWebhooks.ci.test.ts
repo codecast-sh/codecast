@@ -6,7 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import schema from "./schema";
-import { makeFakeDb, schemaIndexes } from "./testDb";
+import { armedTriggerRows, makeFakeDb, schemaIndexes } from "./testDb";
 import { defaultBranchCiRun, processWorkflowRunEvent } from "./githubWebhooks";
 import { createSource, triggerSourceName } from "./ingest";
 
@@ -66,7 +66,7 @@ function world() {
       event_group_tallies: [],
       event_samples: [],
       external_events: [],
-      agent_tasks: [],
+      agent_tasks: armedTriggerRows("check_failed", "check_recovered"),
       conversations: [],
       pull_requests: [],
     },

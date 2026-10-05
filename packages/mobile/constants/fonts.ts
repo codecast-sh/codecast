@@ -28,6 +28,15 @@ export type FaceSet = { readonly [K in keyof typeof Mono]: string };
  */
 export const FaceContext = createContext<FaceSet | null>(null);
 
+/**
+ * The colour a subtree sets its uncoloured text in. Absent, it is the app
+ * palette's text colour. Every Themed Text paints a colour, so a nested one
+ * (a plain run inside a markdown paragraph) would repaint the app's colour
+ * over the paragraph's; a surface with its own palette (the assistant lane)
+ * names its ink here so nested runs keep it.
+ */
+export const InkContext = createContext<string | null>(null);
+
 // Medium, Bold and Italic load after first paint (app/_layout.tsx). Text laid
 // out in a face that is not registered yet is measured in the system font and
 // then drawn in the wider mono face without being measured again, which

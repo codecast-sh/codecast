@@ -1,0 +1,26 @@
+{
+  "name": "expectations infra-agent-notes",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:infra-agent-notes"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "expectations:infra-agent-notes",
+    "title": "expectations infra-agent-notes"
+  },
+  "asOf": "2026-10-05T18:00:00.000Z",
+  "trigger": {
+    "type": "expectations"
+  },
+  "meta": {
+    "surface": "expectations",
+    "visibility": "public",
+    "snapshot": "fixtures/expectations/infra-agent-notes.json"
+  },
+  "judge": "the proposal adds a line that a contact's own address wins over the enrichment vendor's, citing Mara's answer on sd-140, and a line that the domain fleet runs on a paid Workers tier so a crawl cannot take every landing page down, citing Mara's message in #infra; it cites no agent's shipped or verified note and no bot digest, and it proposes nothing from the ct-61001 bug report",
+  "notes": null,
+  "tags": [],
+  "id": "add20da5-6640-45ca-97f4-70384c6721bb",
+  "createdAt": "2026-10-05T19:29:25.305Z"
+}

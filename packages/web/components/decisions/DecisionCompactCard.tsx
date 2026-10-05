@@ -152,6 +152,8 @@ export function DecisionCompactCardView({
     ...(!lineGate ? [{ key: "who", className: "min-w-0", node: <span className="inline-flex min-w-0 gap-1">from <AskingSessionView decision={decision} session={session} onJumpToAsk={onJumpToAsk} label={askingSessionName(session?.title || decision.session_title, taskRef) || "a session"} /></span> }] : []),
     ...(stack ? [{ key: "stack", node: <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="text-sol-cyan hover:underline">{stack.title}</Link> }] : []),
     ...(decision.holder?.kind === "role" ? [{ key: "lead", className: "cc-nowrap text-sol-green", node: "with a lead" }] : []),
+    // The run that asked (LE16): its report tells the path to this card.
+    ...(decision.workflow_run_id ? [{ key: "run", className: "cc-nowrap", node: <Link href={runHref(decision.workflow_run_id)} className="hover:underline" title="The run that made this card: the path it took" data-card-run>the run</Link> }] : []),
   ] : [];
 
   const openLink = (

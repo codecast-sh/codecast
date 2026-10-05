@@ -218,8 +218,17 @@ export async function propose(deps: OrgInitDeps, options: any): Promise<void> {
   if (options.json) { console.log(JSON.stringify({ ...result, url: proposalUrl(deps, result.short_id) }, null, 2)); return; }
   const n = result.changes?.length ?? parsed.spec.changes.length;
   console.log(`${fmt.success("✓")} ${fmt.highlight(result.short_id)} ${parsed.spec.title} ${fmt.muted(`· ${n} change${n === 1 ? "" : "s"} · ${parsed.spec.mode}`)}`);
+  // The numbers are the server's: the parser may fold two spec rows into one,
+  // so a change's number is read here, never counted from the spec.
+  for (const row of result.changes ?? []) console.log(`  ${changeRow(row)}`);
   for (const a of parsed.spec.asks ?? []) console.log(`  ${fmt.muted(`ask: ${a.title} (${a.seqs.length} change${a.seqs.length === 1 ? "" : "s"})`)}`);
   console.log(`  ${fmt.accent(proposalUrl(deps, result.short_id))}`);
+}
+
+/** One change as the shell names it: its number in the proposal (the n of
+ *  `op-N#n` and of `cast org revise`), then what it does. */
+function changeRow(row: { seq: number; line?: string; change?: unknown }): string {
+  return `${fmt.muted(`#${row.seq}`)} ${row.line ?? describeOrgChange(row.change as OrgChange)}`;
 }
 
 // ── revise (S18) ─────────────────────────────────────────────────────────────
@@ -345,7 +354,7 @@ export async function showProposal(deps: OrgInitDeps, ref: string, options: any)
   const depends = orgChangeDependencies(changes.map((c: any) => ({ seq: c.seq, change: c.change as OrgChange })));
   console.log(fmt.muted("  in apply order (a row that seats or depends on another says so):"));
   for (const row of changes) {
-    console.log(`  ${statusTag(row.status)} ${fmt.muted(`#${row.seq}`)} ${describeOrgChange(row.change as OrgChange)}${row.applied_note ? ` ${fmt.muted(row.applied_note)}` : ""}`);
+    console.log(`  ${statusTag(row.status)} ${changeRow(row)}${row.applied_note ? ` ${fmt.muted(row.applied_note)}` : ""}`);
     const dep = row.depends ?? depends[row.seq];
     if (dep) console.log(`      ${fmt.muted(dep)}`);
   }

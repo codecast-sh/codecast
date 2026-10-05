@@ -296,40 +296,80 @@ describe("org history remaining change kinds", () => {
     for (const r of f.db._tables.org_changes) expect(orgLogLine({ ...r, at: r.created_at })).toMatch(/^(Record on|Change the) /);
   });
   // Accepting a goal change persists its evidence (I5 "Proposals"): the lines
-  // the change carries and the accepted row's links join the goal's sources.
+  // the change carries and the accepted row's links join the goal's sources,
+  // in a log row of their own beside the change's.
   test("a goal change's evidence becomes the goal's sources, once, and goes back with its undo", async () => {
     const f = fixture(); await f.role();
     const accept = (change: any, evidence: any[]) => applyOrgChange(f.ctx(), ME as any, { team_id: TEAM }, change, { provision: false, human_decision: "sd-1", evidence });
     const sources = async (id = "initiatives_i") => (await f.db.get(id)).sources ?? [];
     const link = { label: "the ads session", href: "https://codecast.sh/conversation/jx7abcd" };
+    // A link keeps its label as the words said, and a codecast address reads as the object it opens.
+    const said = { kind: "session", ref: "jx7abcd", quote: "the ads session" };
     const owner = { kind: "initiative_owner", initiative: "in-1", owner: "@growth" };
     expect((await accept(owner, [link, { label: "Ashot said so in chat" }])).note).toContain("its record names 2 sources for it");
-    expect(await sources()).toEqual([{ kind: "link", ref: link.href }, { kind: "note", quote: "Ashot said so in chat" }]);
+    expect(await sources()).toEqual([said, { kind: "note", quote: "Ashot said so in chat" }]);
+    // One entry, two rows: the owner and the sources are each judged on their own fields when undone.
     const ownerBatch = f.last();
-    expect(f.db._tables.org_changes.filter((r: any) => r.batch === ownerBatch)).toHaveLength(1);
-    // A change that moves nothing writes nothing, its evidence included.
+    const goalFields = (r: any) => Object.keys(r.writes.find((w: any) => w.id === "initiatives_i").after);
+    expect(f.db._tables.org_changes.filter((r: any) => r.batch === ownerBatch).map((r: any) => [r.kind, goalFields(r)])).toEqual([["initiative_owner", ["owner"]], ["initiative_shape", ["sources"]]]);
+    // A change that moves nothing else still says where the review read it, and a second run adds nothing.
+    expect((await accept(owner, [{ label: "another line" }])).note).toBe('@growth already owns in-1 "Campaign"; its record names 1 source for it');
+    expect((await sources()).at(-1)).toEqual({ kind: "note", quote: "another line" });
     const writes = writeCount(f.db);
-    expect((await accept(owner, [{ label: "another line" }])).note).toContain("already owns");
+    expect((await accept(owner, [{ label: "another line" }])).note).toBe('@growth already owns in-1 "Campaign"');
     expect(writeCount(f.db)).toBe(writes);
-    // A source the goal already holds is skipped; a new one joins.
-    await accept({ kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] }, [link, { label: "ct-1" }]);
-    expect((await sources()).map((s: any) => s.kind)).toEqual(["link", "note", "task"]);
+    // A source the goal already holds is skipped. A path reads as the object it opens, with no words when the label only repeats it, and a path that opens no object leaves the label as a note.
+    await accept({ kind: "initiative_projects", initiative: "in-1", projects: ["pr-1"] }, [link, { label: "ct-1", href: "/tasks/ct-1" }, { label: "the pricing page", href: "/settings/billing" }]);
+    expect((await sources()).slice(3)).toEqual([{ kind: "task", ref: "ct-1" }, { kind: "note", quote: "the pricing page" }]);
     // A shape change adds its own sources and its evidence, and a second run adds nothing.
     const shape = { kind: "initiative_shape", initiative: "in-1", why: "It pays for the rest.", sources: ["jx7c6zk:142"], questions: ["Who signs?"] };
     await accept(shape, [link, { label: "pl-1" }]); const shapeBatch = f.last();
-    expect((await sources()).map((s: any) => s.ref ?? s.quote)).toEqual([link.href, "Ashot said so in chat", "ct-1", "jx7c6zk:142", "pl-1"]);
+    expect((await sources()).slice(5).map((s: any) => s.ref)).toEqual(["jx7c6zk:142", "pl-1"]);
     const again = writeCount(f.db);
     expect((await accept(shape, [link, { label: "pl-1" }])).note).toContain("already reads that way");
     expect(writeCount(f.db)).toBe(again);
     expect((await f.db.get("initiatives_i")).questions).toHaveLength(1);
-    // A new goal carries its sources from the start: named ones, then the change's own lines, then the row's links.
-    await accept({ kind: "initiative", title: "Reach 1k teams", description: "d", projects: ["pr-1"], sources: ["ct-1"], evidence: ["said on the Monday call"] }, [link]);
-    const made = f.db._tables.initiatives.at(-1);
-    expect(made.sources).toEqual([{ kind: "task", ref: "ct-1" }, { kind: "note", quote: "said on the Monday call" }, { kind: "link", ref: link.href }]);
     // The sources a change brought go back with it, and the ones earlier changes brought stay.
     await f.undo(shapeBatch);
-    expect((await sources()).map((s: any) => s.ref ?? s.quote)).toEqual([link.href, "Ashot said so in chat", "ct-1"]);
+    expect(await sources()).toHaveLength(5);
     expect([(await f.db.get("initiatives_i")).why, (await f.db.get("initiatives_i")).questions]).toEqual([undefined, undefined]);
+    // A shape change that moves nothing says only what its evidence added.
+    expect((await accept({ kind: "initiative_shape", initiative: "in-1", parent: null }, [{ label: "said at standup" }])).note).toBe('the goal "Campaign" (in-1) gained 1 source');
+    // A new goal carries its record from the start: the named sources, then the change's own lines, then the row's links, and the questions and decisions the card showed.
+    const create = { kind: "initiative", title: "Reach 1k teams", description: "d", projects: ["pr-1"], sources: ["ct-1"], evidence: ["said on the Monday call"], questions: ["Who pays?"], decisions: ["Ship to brokers first"] };
+    await accept(create, [link]);
+    const made = f.db._tables.initiatives.at(-1);
+    expect(made.sources).toEqual([{ kind: "task", ref: "ct-1" }, { kind: "note", quote: "said on the Monday call" }, said]);
+    expect([made.questions.map((q: any) => q.text), made.decisions.map((d: any) => d.text)]).toEqual([["Who pays?"], ["Ship to brokers first"]]);
+    // A goal of that title already exists: nothing is set twice, and evidence it does not hold still joins.
+    expect((await accept(create, [{ label: "pl-1" }])).note).toBe(`the goal "Reach 1k teams" already exists (${made.short_id}); its record names 1 source for it`);
+    expect(f.db._tables.initiatives.at(-1)._id).toBe(made._id);
+  });
+  // The sources are a row of their own, so a source the goal gains later
+  // leaves the owner change free to go back; the sources that moved stay.
+  test("a source the goal gains later does not block the undo of the change that brought the first", async () => {
+    const { performRecordEntry } = await import("./initiatives");
+    const f = fixture(); await f.role();
+    await applyOrgChange(f.ctx(), ME as any, { team_id: TEAM }, { kind: "initiative_owner", initiative: "in-1", owner: "@growth" } as any, { provision: false, human_decision: "sd-1", evidence: [{ label: "Growth owns this", href: "https://codecast.sh/calls/cl-42?turns=14" }] });
+    const batch = f.last();
+    await performRecordEntry(f.ctx(), ME as any, await f.db.get("initiatives_i"), { list: "sources", action: "add", entry: { text: "ct-1" } });
+    const { preview } = await planUndo(f.ctx(), ME as any, batch);
+    expect(preview.will_change.map((r) => orgLogLine(r))).toEqual(["The goal Campaign has no owner"]);
+    expect(preview.left_alone).toHaveLength(1);
+    await f.undo(batch);
+    const goal = await f.db.get("initiatives_i");
+    expect(goal.owner).toBeUndefined();
+    expect(goal.sources).toEqual([{ kind: "call", ref: "cl-42:14", quote: "Growth owns this" }, { kind: "task", ref: "ct-1" }]);
+  });
+  // Each list of a shape change adds what the goal does not hold, compared by
+  // its words whatever their case and spacing, up to the room the list has.
+  test("a shape change adds only what the goal does not hold and has room for", async () => {
+    const f = fixture();
+    await f.db.patch("initiatives_i", { milestones: Array.from({ length: 11 }, (_, i) => ({ key: `m${i}`, title: `Step ${i}` })), decisions: [{ key: "brokers", text: "Ship to brokers first", at: 1 }] });
+    const result = await f.apply({ kind: "initiative_shape", initiative: "in-1", why: "It pays.", milestones: [{ title: "step  3" }, { title: "Private beta open" }, { title: "General availability" }], decisions: [" ship to  Brokers first"] });
+    expect((result as any).note).toBe('the goal "Campaign" (in-1) says why it matters and gained 1 milestone; it has no room for 1 milestone');
+    const goal = await f.db.get("initiatives_i");
+    expect([goal.milestones.length, goal.milestones.at(-1).title, goal.decisions.length]).toEqual([12, "Private beta open", 1]);
   });
   test("an initiative owner undo removes only the scope it gained", async () => {
     const { performUpdateInitiative } = await import("./initiatives");

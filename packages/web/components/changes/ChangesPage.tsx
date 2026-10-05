@@ -40,12 +40,12 @@ import { TooltipProvider } from "../ui/tooltip";
 import { TimelineHeader, type FilterOptions } from "./ChangesHeader";
 import { commitPath } from "./EvidenceDrawer";
 import { assignAreaColors } from "./areaColor";
-import { hasProse, nameOfPerson, peopleOf, personFor } from "./editionModel";
+import { nameOfPerson, peopleOf, personFor } from "./editionModel";
 import { plural } from "./format";
 import { NoMatch } from "./StoryParts";
 import { StoryRow } from "./StoryRow";
 import { StoryCtx, createFocusStore, type StoryContext } from "./storyContext";
-import { buildTimeline, finishedWeeks, type TimelineDay, type TimelineWeek } from "./timelineModel";
+import { buildTimeline, finishedWeeks, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { changesHref, clearFilters, hasFilters, useChangesUrlState } from "./useChangesUrlState";
 
@@ -114,7 +114,7 @@ function DaySection({ day, today }: { day: TimelineDay; today: string }) {
  * opens the page; earlier ones sit where the timeline enters them.
  */
 function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label: string; byKey: ReadonlyMap<string, Story>; onOpen: (key: string) => void }) {
-  const top = week.top.map((k) => byKey.get(k)).filter((s): s is Story => !!s && hasProse(s));
+  const top = weekTop(week, byKey);
   return (
     <section className="chg-week grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label}>
       <h2 className="self-start pt-0.5 font-mono text-[12px] text-sol-text/55">{label}</h2>
