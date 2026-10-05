@@ -16,10 +16,12 @@
  * devices.ts / conversations.ts / dispatch.ts can all import it.
  */
 import { v } from "convex/values";
+import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS, pathUnderRoot } from "./deviceRouting";
 import { releasePreviousOwner } from "./sessionRelease";
 import {
+  CLOUD_START_RUN_MS,
   cloudPlacementFor,
   deviceDisplayName,
   deviceWakesOnUse,
@@ -33,14 +35,14 @@ import {
 } from "@codecast/shared/contracts";
 
 /** The daemon poll's command TTL (users.daemonHeartbeat expires older ones). */
-export const COMMAND_TTL_MS = 5 * 60 * 1000;
+export const COMMAND_TTL_MS = DAEMON_COMMAND_TTL_MS;
 /**
  * How long one `cast cloud start` may run (the daemon's child timeout: a cold
  * EC2 boot, a clone and an install). A claimed cloud_spawn stays LIVE this
  * long from its claim, well past the 5-minute poll TTL that would otherwise
  * let a second child start beside the first.
  */
-export const CLOUD_SPAWN_RUN_MS = 25 * 60 * 1000;
+export const CLOUD_SPAWN_RUN_MS = CLOUD_START_RUN_MS;
 
 type Ctx = { db: any };
 
@@ -177,6 +179,27 @@ export async function supersedeCloudSpawns(ctx: Ctx, userId: Id<"users">, conver
     n++;
   }
   return n;
+}
+
+/** The placement fields an un-park clears: the row stops waiting on the host. */
+export const CLOUD_UNPARK_PATCH = {
+  cloud_placement: undefined,
+  cloud_placement_token: undefined,
+  cloud_placement_failed_at: undefined,
+} as const;
+
+/**
+ * A parked row moving onto a machine that is not a wake-on-use host stops
+ * waiting for the host: its live cloud_spawn is retired and the returned
+ * fields (spread into the move's own patch) clear the park. Without this the
+ * row keeps `cloud_placement: "pending"` under its new owner, and no daemon
+ * ever delivers its messages (canDaemonSeePendingMessage). Every device move
+ * goes through here; a move onto the host itself leaves the park alone.
+ */
+export async function unparkForMove(ctx: Ctx, conv: any, target: any): Promise<Partial<typeof CLOUD_UNPARK_PATCH>> {
+  if (conv.cloud_placement !== "pending" || !target || deviceWakesOnUse(target)) return {};
+  await supersedeCloudSpawns(ctx, conv.user_id, conv._id);
+  return { ...CLOUD_UNPARK_PATCH };
 }
 
 const byRecency = (a: any, b: any) => b.last_seen - a.last_seen;

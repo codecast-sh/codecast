@@ -13,8 +13,9 @@
 //             cause needs 128 signals to tie a single-signal p0 at the
 //             same severity.
 import type { GoalPriority } from "@codecast/shared/contracts/goalsBrief";
+import type { TaskPriority } from "@codecast/shared/tasks";
 
-export type Severity = "urgent" | "high" | "medium" | "low" | "none";
+export type Severity = TaskPriority;
 
 const GOAL_WEIGHT: Record<GoalPriority, number> = { p0: 8, p1: 4, p2: 2, p3: 1 };
 const SEVERITY_WEIGHT: Record<Severity, number> = { urgent: 4, high: 3, medium: 2, low: 1, none: 1 };

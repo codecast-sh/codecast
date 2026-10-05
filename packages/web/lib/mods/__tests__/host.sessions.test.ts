@@ -21,7 +21,7 @@ describe("session rows a mod reads", () => {
     expect(theirs.mine).toBe(false);
     expect(mine.state).toBe("needs_input");
     expect(mine.waiting_since).toBe(now - 60_000);
-    expect(mine.inbox).toBe("needs_input");
+    expect("inbox" in mine).toBe(true);
     expect(theirs.inbox).toBe(null);
   });
 

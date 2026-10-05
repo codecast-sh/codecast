@@ -42,6 +42,7 @@ async function setup() {
   const t = convexTest(schema, {
     "./_generated/server.ts": () => import("./_generated/server"),
     "./signals.ts": () => import("./signals"),
+    "./notificationRouter.ts": () => import("./notificationRouter"),
   });
   const userId = await t.run(async (ctx) => {
     const id = await ctx.db.insert("users", { name: "Finder" } as any);
@@ -127,6 +128,9 @@ describe("signals.ingest", () => {
     }));
     expect(history.some((h: any) => h.field === "status" && h.old_value === "done" && h.new_value === "open")).toBe(true);
     expect(comments.some((c: any) => c.text.includes("Reopened during watch"))).toBe(true);
+    // LE16: the cause's people hear it reopened.
+    const notes = await t.run(async (ctx) => await ctx.db.query("notifications").collect());
+    expect(notes.map((n: any) => [n.type, n.message])).toEqual([["cause_reopened", expect.stringContaining("sentry saw it again during the watch")]]);
   });
 
   test("the quiet close stamps resolved_at and clears the watch; a reopen clears it", async () => {
@@ -140,7 +144,12 @@ describe("signals.ingest", () => {
     });
     await t.mutation(internal.signals.sweepWatches, {});
     const a = await task(shipped.task_id);
+    // A shipped cause is already done: the quiet end keeps it done and says so.
     expect(a).toMatchObject({ status: "done", closed_at: shipAt });
+    const quietNotes = await t.run(async (ctx) => (await ctx.db.query("task_comments").collect()).filter((c: any) => c.task_id === shipped.task_id));
+    expect(quietNotes.some((c: any) => c.text.startsWith("Watch ended quiet: no new signal from"))).toBe(true);
+    const moves = await t.run(async (ctx) => (await ctx.db.query("task_history").collect()).filter((h: any) => h.field === "status" && h.task_id === shipped.task_id));
+    expect(moves).toHaveLength(0);
     expect(a.watch_until).toBeUndefined();
     expect(a.resolved_at).toBeGreaterThan(shipAt);
     const b = await task(open.task_id);
@@ -278,5 +287,106 @@ describe("the judge's request and reply", () => {
     expect(parseAttachJudgeReply('{"answer":"ct-99"}', candidates)).toBeNull();
     expect(parseAttachJudgeReply("I think ct-1", candidates)).toBeNull();
     expect(parseAttachJudgeReply(null, candidates)).toBeNull();
+  });
+});
+
+// `cast line profile --publish` (line-profile.md LP3): the whole resolved
+// profile lands on each project its finders file into, and a publish that
+// changes nothing writes nothing.
+describe("signals.publishProfile", () => {
+  const facts = {
+    team: null, project: "Agent Quality", principles: ["docs/line/principles.md"], prompting: "https://example.com/prompting.md",
+    size_budget: 400, watch_days: 7, commands: { check: "bun test", prove: null, eval: "line.ts eval", ship: null }, caps: { cards: 5 },
+    sources: { team: "default" as const, project: "file" as const, "commands.check": "file" as const, "caps.cards": "default" as const },
+    notes: ["no prove command: the prove station passes with a note"], warnings: [], file: ".codecast/line.toml",
+  };
+  const finder = { id: "clusters", source: "AgentWatch", kind: ["bug"], fingerprint: "union:cluster:<id>" };
+
+  async function seed() {
+    const base = await setup();
+    const { id, other } = await base.t.run(async (ctx) => {
+      for (const device_id of ["dev-a", "dev-b"]) await ctx.db.insert("devices", { user_id: base.userId, device_id, label: device_id, platform: "darwin", last_seen: T0 } as any);
+      const other = await ctx.db.insert("users", { name: "Eve" } as any);
+      await ctx.db.insert("devices", { user_id: other, device_id: "eve-mac", label: "Eve's Mac", platform: "darwin", last_seen: T0 } as any);
+      const id = await ctx.db.insert("projects", { user_id: base.userId, workspace: `user:${base.userId}`, title: "Agent Quality", short_id: "pj-1", status: "active", created_at: T0, updated_at: T0 } as any);
+      return { id, other };
+    });
+    const publish = (over: Record<string, any> = {}) => base.t.mutation(api.signals.publishProfile, {
+      api_token: TOKEN, workspace: "personal", root: "/src/union", device_id: "dev-a",
+      groups: [{ project: "Agent Quality", default: true, finders: [finder] }], profile: facts, ...over,
+    } as any);
+    const row = async () => (await base.t.run(async (ctx) => await ctx.db.get(id)) as any).line_profile;
+    return { publish, row, userId: base.userId, other };
+  }
+
+  test("every resolved value, its sources, the file and the publishing device land on the row", async () => {
+    const { publish, row, userId } = await seed();
+    expect((await publish()).projects[0]).toMatchObject({ short_id: "pj-1", finders: 1, changed: true });
+    const p = await row();
+    expect(p).toMatchObject({ ...facts, default: true, root: "/src/union", device_id: "dev-a", publisher_user_id: String(userId), finders: [{ ...finder, source: "agentwatch" }] });
+    expect(p.published_at).toBe(p.changed_at);
+  });
+
+  test("an identical publish writes nothing; a value change moves changed_at, a device change only published_at", async () => {
+    const { publish, row } = await seed();
+    await publish();
+    const first = await row();
+    expect((await publish()).projects[0].changed).toBe(false);
+    expect(await row()).toEqual(first);
+
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await publish({ device_id: "dev-b" })).projects[0].changed).toBe(true);
+    const moved = await row();
+    expect(moved).toMatchObject({ device_id: "dev-b", changed_at: first.changed_at });
+    expect(moved.published_at).toBeGreaterThan(first.published_at);
+
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await publish({ device_id: "dev-b", profile: { ...facts, watch_days: 14 } })).projects[0].changed).toBe(true);
+    const edited = await row();
+    expect(edited.watch_days).toBe(14);
+    expect(edited.changed_at).toBeGreaterThan(first.changed_at);
+  });
+
+  test("a device that is not the caller's is not published: an edit is never routed to someone else's machine", async () => {
+    const { publish, row } = await seed();
+    await publish({ device_id: "eve-mac" });
+    const p = await row();
+    expect(p.root).toBe("/src/union");
+    expect(p.device_id).toBeUndefined();
+    expect(p.publisher_user_id).toBeUndefined();
+  });
+
+  test("the CLI route forwards the publisher's device_id (cliRoute strips it otherwise)", async () => {
+    const http = (await import("node:fs")).readFileSync(`${import.meta.dir}/http.ts`, "utf-8");
+    const at = http.indexOf('cliRoute("/cli/line/profile/publish"');
+    expect(at).toBeGreaterThan(-1);
+    expect(http.slice(at, at + 300)).toContain("{ forwardDeviceId: true }");
+  });
+
+  test("a project another profile's finders file into gets the finders, not that profile's values", async () => {
+    const { publish, row } = await seed();
+    await publish({ groups: [{ project: "Agent Quality", default: false, finders: [finder] }] });
+    const p = await row();
+    expect(p).toMatchObject({ default: false, root: "/src/union", finders: [{ ...finder, source: "agentwatch" }] });
+    expect(p.commands).toBeUndefined();
+    expect(p.watch_days).toBeUndefined();
+  });
+
+  test("a project with its own profile keeps it when a neighbour's finders name it", async () => {
+    const { publish, row } = await seed();
+    await publish();
+    const own = await row();
+    const out = await publish({ root: "/src/neighbour", groups: [{ project: "Agent Quality", default: false, finders: [] }], profile: { ...facts, watch_days: 30 } });
+    expect(out.projects[0].changed).toBe(false);
+    expect(await row()).toEqual(own);
+  });
+
+  test("a CLI that sends finders only still publishes them", async () => {
+    const { publish, row } = await seed();
+    await publish({ profile: undefined, device_id: undefined });
+    const p = await row();
+    expect(p.finders).toHaveLength(1);
+    expect(p.watch_days).toBeUndefined();
+    expect((await publish({ profile: undefined, device_id: undefined })).projects[0].changed).toBe(false);
   });
 });

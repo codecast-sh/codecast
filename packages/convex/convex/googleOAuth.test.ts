@@ -45,11 +45,22 @@ import {
   getOwnedConnection,
   listConnections,
   resolveConnectUser,
-  signStateWith,
   storeConnection,
   claimRefresh,
   writeRefreshOutcome,
+  CALENDAR_EVENTS_SCOPE,
+  CALENDAR_FULL_SCOPE,
+  GMAIL_MODIFY_SCOPE,
+  GOOGLE_RETURN_PATHS,
+  getAccessTokenForUser,
+  googleAccessTokenForUser,
+  googleScopeGranted,
+  pickConnectionForUser,
+  connectionScopesForUser,
+  googleAccount,
+  rankGoogleConnections,
 } from "./googleOAuth";
+import { signStateWith } from "./lib/hmac";
 
 const CLIENT_ID = "test-client.apps.googleusercontent.com";
 const CLIENT_SECRET = "test-client-secret";
@@ -78,6 +89,7 @@ const registry: Record<string, any> = {
   "googleOAuth:deleteConnection": deleteConnection,
   "googleOAuth:claimRefresh": claimRefresh,
   "googleOAuth:writeRefreshOutcome": writeRefreshOutcome,
+  "googleOAuth:pickConnectionForUser": pickConnectionForUser,
 };
 
 // Action/httpAction ctx: no db — run* dispatches to the real registered
@@ -568,7 +580,9 @@ describe("listConnections", () => {
     expect(mine).toHaveLength(1);
     expect(mine[0].email).toBe("person@gmail.com");
     expect(mine[0].granted_scopes).toEqual([GMAIL_READONLY_SCOPE]);
+    expect(mine[0].can).toEqual({ read_mail: true, modify_mail: false, send_mail: false, calendar: false });
     expect(mine[0].pending).toBe(true);
+    expect(mine[0].assistant).toBe(false);
     // Neither the ciphertext nor the confirm-token hash leaks to the client.
     expect(JSON.stringify(mine)).not.toContain("refresh_token_enc");
     expect(JSON.stringify(mine)).not.toContain("pending_confirm_hash");
@@ -576,6 +590,7 @@ describe("listConnections", () => {
     await (confirmConnection as any)._handler(ctx, p);
     mine = await (listConnections as any)._handler(dbCtx(OWNER, t), {});
     expect(mine[0].pending).toBe(false);
+    expect(mine[0].assistant).toBe(true);
 
     // Another user sees nothing; an unauthenticated caller sees nothing.
     expect(await (listConnections as any)._handler(dbCtx("u_other", t), {})).toHaveLength(0);
@@ -757,5 +772,323 @@ describe("getFreshAccessToken: cache, single flight and fenced writes", () => {
     expect(res.error).toContain("reconnect Gmail");
     expect(t.google_installations[0].last_error).toContain("invalid_grant");
     expect(t.google_installations[0].refresh_lease_id).toBeUndefined();
+  });
+});
+
+describe("incremental grants: Gmail modify and Calendar", () => {
+  const scopeOf = async (args: any) => {
+    const res = await (getConnectUrl as any)._handler(actionCtx(OWNER, tables()), args);
+    expect(res.ok).toBe(true);
+    return new URL(res.url).searchParams.get("scope");
+  };
+
+  test("each grant asks readonly AND the grant, never the grant alone", async () => {
+    expect(await scopeOf({ grant: "gmail.modify" })).toBe(`${GMAIL_READONLY_SCOPE} ${GMAIL_MODIFY_SCOPE}`);
+    expect(await scopeOf({ grant: "calendar.events" })).toBe(`${GMAIL_READONLY_SCOPE} ${CALENDAR_EVENTS_SCOPE}`);
+  });
+
+  test("several grants in one ask: mail and calendar together, each scope once", async () => {
+    expect(await scopeOf({ grant: ["gmail.modify", "calendar.events", "gmail.modify"] })).toBe(
+      `${GMAIL_READONLY_SCOPE} ${GMAIL_MODIFY_SCOPE} ${CALENDAR_EVENTS_SCOPE}`,
+    );
+  });
+
+  test("a broader grant covers the narrower call; nothing covers a scope never granted", () => {
+    expect(googleScopeGranted([GMAIL_READONLY_SCOPE, GMAIL_MODIFY_SCOPE], GMAIL_SEND_SCOPE)).toBe(true);
+    expect(googleScopeGranted([GMAIL_MODIFY_SCOPE], GMAIL_READONLY_SCOPE)).toBe(true);
+    expect(googleScopeGranted([CALENDAR_FULL_SCOPE], CALENDAR_EVENTS_SCOPE)).toBe(true);
+    expect(googleScopeGranted([GMAIL_READONLY_SCOPE, GMAIL_SEND_SCOPE], GMAIL_MODIFY_SCOPE)).toBe(false);
+    expect(googleScopeGranted([GMAIL_READONLY_SCOPE], CALENDAR_EVENTS_SCOPE)).toBe(false);
+  });
+});
+
+describe("return_to: where the connect lands", () => {
+  async function landing(args: any, reqParams: (state: string) => Record<string, string>) {
+    stubGoogle();
+    const ctx = actionCtx(OWNER, tables());
+    const minted = await (getConnectUrl as any)._handler(ctx, args);
+    expect(minted.ok).toBe(true);
+    const state = new URL(minted.url).searchParams.get("state")!;
+    const resp = await callbackHandler(ctx, callbackRequest(reqParams(state)));
+    return new URL(resp.headers.get("Location")!);
+  }
+
+  test("no return_to lands on the settings page, which runs the confirm step", async () => {
+    const loc = await landing({}, (state) => ({ code: "c", state }));
+    expect(loc.pathname).toBe("/settings/integrations");
+    expect(loc.searchParams.get("google")).toBe("pending");
+    expect(new URLSearchParams(loc.hash.slice(1)).get("confirm")).toBeTruthy();
+  });
+
+  test("an allowed page rides the signed state: the simple lane gets its own confirm, and its own errors", async () => {
+    const loc = await landing({ return_to: "/simple/connections" }, (state) => ({ code: "c", state }));
+    expect(loc.pathname).toBe("/simple/connections");
+    expect(loc.searchParams.get("google")).toBe("pending");
+    const declined = await landing({ return_to: "/welcome" }, (state) => ({ error: "access_denied", state }));
+    expect(declined.pathname).toBe("/welcome");
+    expect(declined.searchParams.get("google")).toBe("error");
+  });
+
+  test("any other path is refused at mint: an off-list page could read the confirm token", async () => {
+    for (const bad of ["/a/attacker-page", "https://evil.example/simple/connections", "//evil.example", "/settings/integrations/../../a/x"]) {
+      const res = await (getConnectUrl as any)._handler(actionCtx(OWNER, tables()), { return_to: bad });
+      expect(res.ok).toBe(false);
+      expect(res.error).toContain("return_to must be one of");
+    }
+    expect([...GOOGLE_RETURN_PATHS]).toEqual(["/settings/integrations", "/simple/connections", "/welcome"]);
+  });
+
+  test("the callback re-checks the list: even a validly signed off-list path lands on the default", async () => {
+    stubGoogle();
+    const state = await signStateWith(CLIENT_SECRET, { user_id: OWNER, ts: Date.now(), return_to: "/a/attacker-page" });
+    const resp = await callbackHandler(actionCtx(OWNER, tables()), callbackRequest({ code: "c", state }));
+    expect(new URL(resp.headers.get("Location")!).pathname).toBe("/settings/integrations");
+  });
+
+  test("an unverified state cannot pick the landing page of a decline", async () => {
+    const forged = btoa(JSON.stringify({ user_id: OWNER, ts: Date.now(), return_to: "/welcome" })) + ".bad";
+    const resp = await callbackHandler(actionCtx(OWNER, tables()), callbackRequest({ error: "access_denied", state: forged }));
+    expect(new URL(resp.headers.get("Location")!).pathname).toBe("/settings/integrations");
+  });
+});
+
+describe("googleAccessTokenForUser: the assistant's token getter", () => {
+  const OTHER = "u_other";
+  const tokenResponse = () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const u = typeof input === "string" ? input : input.url;
+      if (u !== GOOGLE_TOKEN_URL) throw new Error(`unexpected fetch: ${u}`);
+      calls.push(String(init?.body ?? ""));
+      return jsonResponse({ access_token: "ya29.for-the-tool", expires_in: 3599 });
+    }) as any;
+    return calls;
+  };
+  // A server ctx with NO session: the turn engine's action. Only the user id
+  // the engine resolved says whose connection this is.
+  const serverCtx = (t: Record<string, any[]>) => actionCtx(null, t);
+  const rows = async (...overrides: Record<string, any>[]) =>
+    tables({
+      users: [{ _id: OWNER }, { _id: OTHER }],
+      google_installations: await Promise.all(
+        overrides.map(async (o, i) => confirmedRow(await encryptRefreshToken(`1//rt-${i}`, CLIENT_SECRET), { _id: `gi_${i + 1}`, ...o })),
+      ),
+    });
+
+  test("no Google client configured: not_configured, nothing read", async () => {
+    delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+    const res = await googleAccessTokenForUser(serverCtx(await rows({})), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(res).toMatchObject({ ok: false, code: "not_configured" });
+  });
+
+  test("no confirmed connection: not_connected (a pending row does not count)", async () => {
+    tokenResponse();
+    const none = await googleAccessTokenForUser(serverCtx(tables()), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(none).toMatchObject({ ok: false, code: "not_connected" });
+    expect((none as any).error).toContain("Not connected");
+    const pending = await rows({ pending_confirm_hash: "h", pending_expires_at: Date.now() + 60_000 });
+    expect(await googleAccessTokenForUser(serverCtx(pending), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE })).toMatchObject({
+      ok: false,
+      code: "not_connected",
+    });
+  });
+
+  test("connected without the scope: missing_scope, naming the grant to ask for", async () => {
+    tokenResponse();
+    const res = await googleAccessTokenForUser(serverCtx(await rows({})), { user_id: OWNER, scope: CALENDAR_EVENTS_SCOPE });
+    expect(res).toMatchObject({ ok: false, code: "missing_scope", grant: "calendar.events" });
+    expect((res as any).error).toContain("Missing scope");
+  });
+
+  test("picks the connection that holds the scope and returns a fresh token, with no session or api token", async () => {
+    const calls = tokenResponse();
+    const t = await rows(
+      { email: "home@gmail.com", updated_at: 5 },
+      { email: "work@gmail.com", granted_scopes: [GMAIL_READONLY_SCOPE, CALENDAR_EVENTS_SCOPE], updated_at: 1 },
+    );
+    const res = await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: CALENDAR_EVENTS_SCOPE });
+    expect(res).toMatchObject({ ok: true, access_token: "ya29.for-the-tool", email: "work@gmail.com", installation_id: "gi_2" });
+    expect(new URLSearchParams(calls[0]).get("refresh_token")).toBe("1//rt-1");
+    // Cached: the next ask for the same connection skips Google.
+    await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: CALENDAR_EVENTS_SCOPE });
+    expect(calls).toHaveLength(1);
+  });
+
+  test("a broader grant serves a narrower scope, and `email` pins the account", async () => {
+    tokenResponse();
+    const t = await rows(
+      { email: "a@gmail.com", granted_scopes: [GMAIL_READONLY_SCOPE, GMAIL_MODIFY_SCOPE], updated_at: 1 },
+      { email: "b@gmail.com", granted_scopes: [GMAIL_READONLY_SCOPE], updated_at: 9 },
+    );
+    expect(await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_SEND_SCOPE })).toMatchObject({
+      ok: true,
+      email: "a@gmail.com",
+    });
+    expect(
+      await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_MODIFY_SCOPE, email: "b@gmail.com" }),
+    ).toMatchObject({ ok: false, code: "missing_scope", grant: "gmail.modify" });
+  });
+
+  test("never another user's connection", async () => {
+    tokenResponse();
+    const t = await rows({ scope_user_id: OTHER });
+    expect(await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE })).toMatchObject({
+      ok: false,
+      code: "not_connected",
+    });
+  });
+
+  test("a revoked grant is reconnect, not a throw", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400, headers: { "Content-Type": "application/json" } })) as any;
+    const res = await googleAccessTokenForUser(serverCtx(await rows({})), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(res).toMatchObject({ ok: false, code: "reconnect" });
+  });
+
+  /** Google refuses one refresh token (revoked) and grants the rest. */
+  const revokeOne = (revoked: string) => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      const refresh = new URLSearchParams(String(init?.body ?? "")).get("refresh_token");
+      calls.push(refresh ?? "");
+      return refresh === revoked
+        ? new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400, headers: { "Content-Type": "application/json" } })
+        : jsonResponse({ access_token: `ya29.${refresh}`, expires_in: 3599 });
+    }) as any;
+    return calls;
+  };
+
+  test("a revoked newest connection hands over to an older one that works, and is tried last from then on", async () => {
+    const calls = revokeOne("1//rt-0");
+    const t = await rows({ email: "new@gmail.com", updated_at: 9 }, { email: "old@gmail.com", updated_at: 1 });
+    const first = await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(first).toMatchObject({ ok: true, email: "old@gmail.com", installation_id: "gi_2", access_token: "ya29.1//rt-1" });
+    expect(calls).toEqual(["1//rt-0", "1//rt-1"]);
+    // The dead row now carries last_error, so the next ask goes straight to
+    // the working one (cached, so Google is not called again either).
+    expect(t.google_installations[0].last_error).toContain("invalid_grant");
+    expect(t.google_installations[0].last_error_kind).toBe("revoked");
+    const again = await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(again).toMatchObject({ ok: true, email: "old@gmail.com" });
+    expect(calls).toHaveLength(2);
+  });
+
+  test("a pinned account never falls back to another, and every dead connection reads as reconnect", async () => {
+    revokeOne("1//rt-0");
+    const t = await rows({ email: "new@gmail.com", updated_at: 9 }, { email: "old@gmail.com", updated_at: 1 });
+    expect(
+      await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE, email: "new@gmail.com" }),
+    ).toMatchObject({ ok: false, code: "reconnect" });
+    // Every candidate dead: the answer is the first one's failure.
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400, headers: { "Content-Type": "application/json" } })) as any;
+    const all = await rows({ email: "new@gmail.com", updated_at: 9 }, { email: "old@gmail.com", updated_at: 1 });
+    expect(await googleAccessTokenForUser(serverCtx(all), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE })).toMatchObject({
+      ok: false,
+      code: "reconnect",
+    });
+  });
+
+  test("one account rule: healthy first, then the one that allows the most, then the newest", () => {
+    const readOnly = { email: "r@gmail.com", granted_scopes: [GMAIL_READONLY_SCOPE], updated_at: 9 };
+    const full = { email: "f@gmail.com", granted_scopes: [GMAIL_MODIFY_SCOPE, CALENDAR_EVENTS_SCOPE], updated_at: 1 };
+    const deadFull = { ...full, email: "d@gmail.com", updated_at: 5, last_error_kind: "revoked" as const };
+    const unreadable = { ...full, email: "u@gmail.com", updated_at: 6, last_error_kind: "undecryptable" as const };
+    const olderReadOnly = { ...readOnly, email: "o@gmail.com", updated_at: 2 };
+    expect(rankGoogleConnections([readOnly, deadFull, olderReadOnly, unreadable, full]).map((c) => c.email)).toEqual([
+      "f@gmail.com",
+      "r@gmail.com",
+      "o@gmail.com",
+      "u@gmail.com",
+      "d@gmail.com",
+    ]);
+    expect(googleAccount([deadFull, readOnly])?.email).toBe("r@gmail.com");
+    // A failure the next call may clear moves nothing.
+    expect(googleAccount([readOnly, { ...full, last_error_kind: "transient" as const }])?.email).toBe("f@gmail.com");
+    expect(googleAccount([])).toBeUndefined();
+  });
+
+  test("a pinned account that died fails its turn, and every reader then moves to the healthy one", async () => {
+    revokeOne("1//rt-0");
+    const t = await rows({ email: "new@gmail.com", updated_at: 9 }, { email: "old@gmail.com", updated_at: 1 });
+    // Equal grants, both healthy: the newest is the turn's account.
+    const before = await (connectionScopesForUser as any)._handler(dbCtx(null, t), { user_id: OWNER });
+    expect(googleAccount(before)?.email).toBe("new@gmail.com");
+    expect(
+      await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE, email: "new@gmail.com" }),
+    ).toMatchObject({ ok: false, code: "reconnect" });
+    // The failure ranks it last: the next turn's account, the getter's first
+    // candidate and the Connections screen's mark all name the live one.
+    const after = await (connectionScopesForUser as any)._handler(dbCtx(null, t), { user_id: OWNER });
+    expect(after.map((c: any) => [c.email, c.last_error_kind ?? null])).toEqual([["old@gmail.com", null], ["new@gmail.com", "revoked"]]);
+    expect(googleAccount(after)?.email).toBe("old@gmail.com");
+    const picked = await (pickConnectionForUser as any)._handler(dbCtx(null, t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE });
+    expect(picked.candidates.map((c: any) => c.email)).toEqual(["old@gmail.com", "new@gmail.com"]);
+    const listed = await (listConnections as any)._handler(dbCtx(OWNER, t), {});
+    expect(listed.filter((r: any) => r.assistant).map((r: any) => r.email)).toEqual(["old@gmail.com"]);
+    expect(
+      await googleAccessTokenForUser(serverCtx(t), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE, email: "old@gmail.com" }),
+    ).toMatchObject({ ok: true, email: "old@gmail.com" });
+  });
+
+  test("the failure code comes from the refresh's kind, not its wording: an unreadable token is reconnect, a 5xx is unavailable", async () => {
+    tokenResponse();
+    const unreadable = await rows({ refresh_token_enc: "not-a-ciphertext" });
+    expect(await googleAccessTokenForUser(serverCtx(unreadable), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE })).toMatchObject({
+      ok: false,
+      code: "reconnect",
+    });
+    // The release records it, so the account ranks like a revoked one, and
+    // the lease is free for the next caller.
+    expect(unreadable.google_installations[0]).toMatchObject({ last_error_kind: "undecryptable", refresh_lease_id: undefined });
+    expect(unreadable.google_installations[0].last_error).toContain("cannot be read");
+    let asked = 0;
+    globalThis.fetch = (async () => {
+      asked++;
+      return new Response(JSON.stringify({ error: "backend_error" }), { status: 503, headers: { "Content-Type": "application/json" } });
+    }) as any;
+    const down = await rows({ email: "a@gmail.com", updated_at: 9 }, { email: "b@gmail.com", updated_at: 1 });
+    expect(await googleAccessTokenForUser(serverCtx(down), { user_id: OWNER, scope: GMAIL_READONLY_SCOPE })).toMatchObject({
+      ok: false,
+      code: "unavailable",
+    });
+    // A passing outage is no reason to answer from the other account.
+    expect(asked).toBe(1);
+  });
+
+  test("a transient failure on the turn's account keeps it the turn's account, and the next good refresh clears the stamp", async () => {
+    // A full grant (the turn's account) and a readonly one, both healthy.
+    const t = await rows(
+      { email: "full@gmail.com", granted_scopes: [GMAIL_MODIFY_SCOPE, CALENDAR_EVENTS_SCOPE], updated_at: 1 },
+      { email: "ro@gmail.com", updated_at: 9 },
+    );
+    const account = async () => googleAccount(await (connectionScopesForUser as any)._handler(dbCtx(null, t), { user_id: OWNER }))?.email;
+    expect(await account()).toBe("full@gmail.com");
+    const pinned = { user_id: OWNER, scope: GMAIL_READONLY_SCOPE, email: "full@gmail.com" };
+    // Google answers 503 once, then is unreachable once.
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "backend_error" }), { status: 503, headers: { "Content-Type": "application/json" } })) as any;
+    expect(await googleAccessTokenForUser(serverCtx(t), pinned)).toMatchObject({ ok: false, code: "unavailable" });
+    expect(t.google_installations[0]).toMatchObject({ last_error_kind: "transient" });
+    expect(await account()).toBe("full@gmail.com");
+    globalThis.fetch = (async () => { throw new Error("network down"); }) as any;
+    expect(await googleAccessTokenForUser(serverCtx(t), pinned)).toMatchObject({ ok: false, code: "unavailable" });
+    expect(await account()).toBe("full@gmail.com");
+    const listed = await (listConnections as any)._handler(dbCtx(OWNER, t), {});
+    expect(listed.filter((r: any) => r.assistant).map((r: any) => r.email)).toEqual(["full@gmail.com"]);
+    // Google is back: the same pinned account refreshes and the stamp goes.
+    tokenResponse();
+    expect(await googleAccessTokenForUser(serverCtx(t), pinned)).toMatchObject({ ok: true, email: "full@gmail.com" });
+    expect(t.google_installations[0].last_error).toBeUndefined();
+    expect(t.google_installations[0].last_error_kind).toBeUndefined();
+  });
+
+  test("the internal action answers the same as the helper", async () => {
+    tokenResponse();
+    const res = await (getAccessTokenForUser as any)._handler(serverCtx(await rows({})), {
+      user_id: OWNER,
+      scope: GMAIL_READONLY_SCOPE,
+    });
+    expect(res).toMatchObject({ ok: true, access_token: "ya29.for-the-tool", email: "person@gmail.com" });
   });
 });

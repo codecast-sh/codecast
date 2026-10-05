@@ -5,10 +5,11 @@ import { syncAgentFeeds } from "./transcripts";
 import { ask, brief, FACE_HOST_AGENT, FACE_TOPIC, faceForAvatar, handleFaceRequest, join, leave, said, tell } from "./callFace";
 import { makeFakeDb } from "./testDb";
 
-// An agent fed live into a huddle gets a voice in the room when its team has
-// agent_voices on: the face worker is dispatched in, reads its brief, hands
-// the session work, and tells the room each reply. These pin the gate, when
-// each step happens, and what goes over the wire.
+// An agent fed live into a huddle gets a face in the room when its team has
+// agent_faces on, and a live model behind it with agent_realtime too: the
+// face worker is dispatched in, reads its brief, hands the session work, and
+// tells the room each reply. These pin the gates, when each step happens,
+// and what goes over the wire.
 
 const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
 
@@ -27,7 +28,7 @@ function ctxWith(tables: Record<string, any[]>) {
 const faceCalls = (ctx: { _scheduled: { name: string; args: any }[] }) =>
   ctx._scheduled.filter((s) => s.name.startsWith("callFace:"));
 
-const team = (on = true) => ({ _id: "team1", name: "Team", features: { agent_voices: on } });
+const team = (faces = true, realtime = true) => ({ _id: "team1", name: "Team", features: { agent_faces: faces, agent_realtime: realtime } });
 const transcript = (over: Record<string, unknown> = {}) => ({
   _id: "t1",
   room_key: "session:conv1",
@@ -75,9 +76,9 @@ function recordFetch() {
   return sent;
 }
 
-describe("the agent_voices flag", () => {
-  test("off, or unset, a feed joins no voice and its replies go to chat only", async () => {
-    for (const teams of [[team(false)], [{ _id: "team1", name: "Team" }]]) {
+describe("the flags", () => {
+  test("faces off, or unset, a feed joins nothing and its replies go to chat only, real-time on or not", async () => {
+    for (const teams of [[team(false)], [team(false, false)], [{ _id: "team1", name: "Team" }]]) {
       const ctx = ctxWith({ teams, transcripts: [transcript()], conversations: [conversation], call_agent_feeds: [], messages: [] });
       await syncAgentFeeds(ctx, transcript() as any);
       expect(ctx.db._tables.call_agent_feeds).toHaveLength(1);
@@ -85,11 +86,13 @@ describe("the agent_voices flag", () => {
     }
   });
 
-  test("on, a feed row inserted sends the voice in", async () => {
-    const ctx = ctxWith({ transcripts: [transcript()], conversations: [conversation], call_agent_feeds: [], messages: [] });
-    await syncAgentFeeds(ctx, transcript() as any);
-    const row = ctx.db._tables.call_agent_feeds[0];
-    expect(faceCalls(ctx)).toEqual([{ name: "callFace:join", args: { feed_id: row._id } }]);
+  test("faces on, a feed row inserted sends the face in, real-time only when that is on too", async () => {
+    for (const realtime of [false, true]) {
+      const ctx = ctxWith({ teams: [team(true, realtime)], transcripts: [transcript()], conversations: [conversation], call_agent_feeds: [], messages: [] });
+      await syncAgentFeeds(ctx, transcript() as any);
+      const row = ctx.db._tables.call_agent_feeds[0];
+      expect(faceCalls(ctx)).toEqual([{ name: "callFace:join", args: { feed_id: row._id, realtime } }]);
+    }
   });
 
   test("on, but the worker unconfigured, nothing joins", async () => {
@@ -99,10 +102,12 @@ describe("the agent_voices flag", () => {
     expect(faceCalls(ctx)).toEqual([]);
   });
 
-  test("off, the worker's requests reach nothing", async () => {
-    const ctx = ctxWith({ teams: [team(false)], call_agent_feeds: [feed()], transcripts: [transcript()], conversations: [conversation], messages: [] });
-    expect(await call(brief, ctx, { conversation_id: "conv1", room_key: "session:conv1" })).toBeNull();
-    expect(await call(ask, ctx, { conversation_id: "conv1", room_key: "session:conv1", text: "look" })).toBe(false);
+  test("without real-time on, the worker's requests reach nothing", async () => {
+    for (const teams of [[team(false)], [team(true, false)]]) {
+      const ctx = ctxWith({ teams, call_agent_feeds: [feed()], transcripts: [transcript()], conversations: [conversation], messages: [] });
+      expect(await call(brief, ctx, { conversation_id: "conv1", room_key: "session:conv1" })).toBeNull();
+      expect(await call(ask, ctx, { conversation_id: "conv1", room_key: "session:conv1", text: "look" })).toBe(false);
+    }
   });
 });
 
@@ -193,15 +198,15 @@ describe("what the worker reads and writes", () => {
 });
 
 describe("the wire", () => {
-  test("join dispatches the worker, told whose voice and which face", async () => {
+  test("join dispatches the worker, told whose face, which one, and the mode", async () => {
     const sent = recordFetch();
     const actx = { runQuery: async () => ({ room_key: "session:conv1", conversation_id: "conv1", name: "Ember", avatar: "fox" }) };
-    await call(join, actx, { feed_id: "f1" });
+    await call(join, actx, { feed_id: "f1", realtime: true });
     expect(sent[0].url).toBe("https://lk.example/twirp/livekit.AgentDispatchService/CreateDispatch");
     expect(sent[0].body).toEqual({
       room: "session:conv1",
       agentName: FACE_HOST_AGENT,
-      metadata: JSON.stringify({ conversation_id: "conv1", name: "Ember", ...faceForAvatar("fox") }),
+      metadata: JSON.stringify({ conversation_id: "conv1", name: "Ember", ...faceForAvatar("fox"), realtime: true }),
     });
   });
 

@@ -144,7 +144,7 @@ function roleOpeningMessage(name: string, workspace: string, role: RoleBootstrap
       ? `Write to them with \`cast role wake @${role.parentHandle} "<what they will decide and why>"\`.`
       : `Raise it in this thread: say what they will decide and why in your pinned state (\`cast state --status blocked\`), and post a real choice between options as a \`cast decide\` card here, with your recommendation.`}`,
     ``,
-    `Answer people here, in plain words, and say where each piece of work went. A message from another session is a colleague's, not your person's; answer it with \`cast send <its id>\`.`,
+    `Answer people here, in plain words, and say where each piece of work went. The person sees only your last message of each turn, so make it stand on its own: what you found, what you did and where it went, what you need from them, and any page, image or canvas they should see. A message from another session is a colleague's, not your person's; answer it with \`cast send <its id>\`.`,
     ``,
     `Your brief is your memory between turns (\`cast brief edit -\`). Keep in it what you learned about your area, what people asked you to remember, and one dated line per project under \`## Where it stands\`, which is what people read on your page.`,
     ``,

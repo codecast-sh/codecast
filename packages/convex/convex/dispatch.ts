@@ -1,7 +1,7 @@
 import { mutation, syncAckPositions } from "./functions";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
-import { guardClientResolution, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
+import { guardClientResolution, hostedAnswerRefusal, personMayResolve, reopenCore, settleClientResolution } from "./sessionDecisions";
 import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./decisionStacks";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
@@ -19,6 +19,7 @@ import { resolveAssigneeToUserId, recalcPlanProgress, subscribeUser, resolveWork
 import { api, internal } from "./_generated/api";
 import { sentryStatusFor } from "./sources/sentry";
 import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType, type ConvexAgentType,
+  isHostedAgentType,
   checkoutInUseMessage,
   normalizeCloudWorkspace,
   posixRepoBasename,
@@ -31,6 +32,7 @@ import { writeObjectShareLink } from "./publicShare";
 import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
+import { startHostedConversationFor } from "./assistant/entry";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser } from "./pendingMessages";
 import { enqueueCloudSpawn, performCloudHostAction, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
@@ -51,7 +53,8 @@ import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
-import { canAccessConversation, requireTeamMembership, patchConversationVisibility } from "./lib/access";
+import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
+import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { addConversationToWorkItem } from "./conversationLinks";
@@ -417,6 +420,13 @@ export async function applyPatches(
         }
         if (!permitted) continue;
         if (table === "session_decisions" && safe.status !== "answered" && safe.status !== "dismissed") continue;
+        // A hosted assistant's question is answered by its owner only. The
+        // refusal throws, so the outbox treats it as permanent and the client
+        // takes its painted answer back instead of showing it as answered.
+        if (table === "session_decisions") {
+          const refusal = await hostedAnswerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId });
+          if (refusal) throw new Error(refusal);
+        }
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         // Favorite membership belongs to the conversation's runner principal,
         // not to second-party inbox owners. Those owners may triage the row but
@@ -717,6 +727,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setRoleLine: async (ctx, _userId, [roleId, slug]: [string, string]) => {
     return await ctx.runMutation!((api as any).orgRoles.setLine, { role_id: roleId, slug });
   },
+  // A project's customized line (plan pl-838): the whole workflow by slug.
+  // `create` (the fork) refuses a slug that already has a row, so a page that
+  // has not seen the fork yet can never write the shipped stations over it.
+  saveLineWorkflow: async (ctx, _userId, [wf, opts]: [{ slug: string; name: string; goal?: string; source?: string; nodes: any[]; edges: any[] }, { create?: boolean } | undefined]) => {
+    const { slug, name, goal, source, nodes, edges } = wf;
+    return await ctx.runMutation!((api as any).workflows.webUpsert, { slug, name, goal, source, nodes, edges, ...(opts?.create ? { create_only: true } : {}) });
+  },
+  // Stop customizing: the fork goes, roles on it having moved back first.
+  removeLineWorkflow: async (ctx, _userId, [slug]: [string]) => {
+    return await ctx.runMutation!((api as any).workflows.webRemove, { slug });
+  },
   // A role following a chat channel (agent-channels.md C1). orgChannels
   // resolves the role by short id or handle and checks the admin grant.
   followOrgChannel: async (ctx, _userId, [roleShortId, channelId, follow]: [string, string, boolean]) => {
@@ -754,6 +775,35 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(input.project_path ? { project_path: input.project_path } : {}),
       ...(input.adopt_conversation_id ? { adopt_conversation_id: input.adopt_conversation_id } : {}),
     });
+  },
+  // Org gestures the server shapes (orgSlice OrgServerVerbs): each runs the
+  // mutation the page used to call itself, and returns its result.
+  splitOrgRole: async (ctx, _userId, [args]: [{ role_id: string; halves: { name: string; handle: string; refs: string[] }[]; standing_session: "keep" | "retire" }]) => {
+    return await ctx.runMutation!((api as any).orgSplit.split, { role_id: args.role_id, halves: args.halves, standing_session: args.standing_session });
+  },
+  settleOrgHandoff: async (ctx, _userId, [roleId, how]: [string, "run" | "close"]) => {
+    return await ctx.runMutation!((api as any).orgHandoff.settle, { role_id: roleId, how });
+  },
+  setOrgLineMerge: async (ctx, _userId, [roleId, on, perDay]: [string, boolean, number | undefined]) => {
+    return await ctx.runMutation!((api as any).orgLineMerge.setLineMerge, { role_id: roleId, on, ...(perDay !== undefined ? { per_day: perDay } : {}) });
+  },
+  resetOrg: async (ctx, _userId, [teamId]: [string | undefined]) => {
+    return await ctx.runMutation!((api as any).orgRoles.reset, teamId ? { team_id: teamId } : {});
+  },
+  provisionOrgRole: async (ctx, _userId, [roleId]: [string]) => {
+    return await ctx.runMutation!((api as any).orgRoles.provision, { role_id: roleId });
+  },
+  markOrgTemplateSetup: async (ctx, _userId, [instanceKey, id, status]: [string, string, "done" | "open" | "skipped"]) => {
+    return await ctx.runMutation!((api as any).orgTemplates.setup, { instance_key: instanceKey, id, status, from_agent: false });
+  },
+  activateOrgTemplateRoutine: async (ctx, _userId, [taskId]: [string]) => {
+    return await ctx.runMutation!((api as any).orgTemplates.activateRoutine, { task_id: taskId });
+  },
+  requestOrgTemplateBind: async (ctx, _userId, [instanceKey, secrets, deviceId]: [string, any[], string | undefined]) => {
+    return await ctx.runMutation!((api as any).orgTemplates.requestBind, { instance_key: instanceKey, secrets, ...(deviceId ? { device_id: deviceId } : {}) });
+  },
+  setOrgTemplateLearning: async (ctx, _userId, [teamId, enabled]: [string | undefined, boolean]) => {
+    return await ctx.runMutation!((api as any).orgTemplateLearning.setLearning, { ...(teamId ? { team_id: teamId } : {}), enabled });
   },
   // `seen` (org-staffing.md S18): what the page showed when the verdict was
   // pressed; the mutation refuses a verdict the author revised under the reader.
@@ -932,7 +982,18 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
 
-  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean }]) => {
+  createSession: async (ctx, userId, [opts]: [{ agent_type?: string; project_path?: string; git_root?: string; session_id?: string; linked_object?: { type: string; id: string }; model?: string; effort?: string; isolated?: boolean; worktree_name?: string; stable_mode?: string; stable_exclude?: string[]; target_device_id?: string; cloud_device_id?: string; cloud_workspace?: string; cloud_start_from?: string; agent_definition?: string; private?: boolean; first_message?: string; first_message_client_id?: string }]) => {
+    // A hosted conversation (the simple lane's assistant) runs in this
+    // backend: no device, no daemon command. Its start queues the first
+    // message in the same transaction, idempotent on session_id like below.
+    if (isHostedAgentType(opts.agent_type)) {
+      const started = await startHostedConversationFor(ctx as any, userId, {
+        session_id: opts.session_id,
+        firstMessage: opts.first_message,
+        first_message_client_id: opts.first_message_client_id,
+      });
+      return started.conversation_id;
+    }
     const sessionId = opts.session_id || crypto.randomUUID();
     // Dispatch args are v.any(): the mode and the seed choice are normalised at the boundary.
     const cloudWorkspace = normalizeCloudWorkspace(opts.cloud_workspace);
@@ -1231,11 +1292,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // moveSessionToDevice, which painted the sessionCommands row keyed by
   // requestId. A remote destination is a move_to_device on the source daemon
   // (it transfers the worktree, then resumes there); a local one re-homes the
-  // session and resumes it on that device. Both writers carry the request id.
+  // session and resumes it on that device, or brings it back from a cloud host
+  // as a real move (sessionMigrations.runHere). Both writers carry the request id.
   moveSessionToDevice: async (ctx, _userId, [requestId, convId, toDeviceId, toRemote]: [string, string, string, boolean]) => {
     return toRemote
       ? await ctx.runMutation!(api.devices.moveToRemote, { conversation_id: convId, to_device_id: toDeviceId, request_id: requestId })
-      : await ctx.runMutation!(api.devices.reassignToDevice, { conversation_id: convId, device_id: toDeviceId, request_id: requestId });
+      : await ctx.runMutation!(api.sessionMigrations.runHere, { conversation_id: convId, device_id: toDeviceId, request_id: requestId });
   },
 
   // A cloud session's live mirror into a laptop worktree: the web stamps
@@ -1490,6 +1552,30 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await (ctx as any).runMutation(api.projects.webUpdate, { id, ...charterWire(fields) });
   },
 
+  // An edit of a project's .codecast/line.toml from /line/settings (pl-838).
+  // The file is the truth, so the store's paint is only a preview: this asks
+  // the daemon on the machine that published the profile to apply the edits
+  // in place, validate them with the loader and republish, and answers the
+  // daemon command id the page watches for a refusal. The checkout and the
+  // machine come from the row, never the client. A throw is a permanent
+  // refusal, so the client takes its paint back.
+  // The store paints a sessionCommands row keyed by `requestId`; the command
+  // carries it, so sessionCommands.results settles that row from the daemon's
+  // answer (and its later republish report) in whichever window asked.
+  editLineProfile: async (ctx, userId, [requestId, projectId, edits]: [string, string, unknown]) => {
+    if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
+    if (!Array.isArray(edits) || edits.length === 0 || edits.length > 50) throw new ConvexError("An edit names one to fifty changes");
+    const project = await ctx.db.get(projectId as Id<"projects">);
+    if (!project || !(await canAccessProject(ctx as any, userId, project))) throw new ConvexError("Project not found");
+    const lp = project.line_profile;
+    if (!lp?.root || !lp.device_id) throw new ConvexError("No machine has published this line's file yet: run cast line profile --publish in its checkout");
+    // Only the publisher's own machine is ever a target: the row names who
+    // published it, and enqueueConfigCommand refuses a device not the viewer's.
+    if (lp.publisher_user_id && lp.publisher_user_id !== String(userId)) throw new ConvexError("The checkout is on a teammate's machine: its owner can edit this file");
+    const commandId = await enqueueConfigCommand(ctx as any, userId, "line_profile_edit", JSON.stringify({ root: lp.root, edits }), lp.device_id, requestId);
+    return { command_id: commandId };
+  },
+
   // Naming a project's lead (org-roles-run-work.md R4): the owner and, when
   // the role's scope does not list the project, the scope, in one transaction.
   setProjectLead: async (ctx, userId, [projectId, roleId, opts]: [string, string | null, { leave_sessions?: boolean } | undefined]) => {
@@ -1524,6 +1610,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   postInitiativeUpdate: async (ctx, userId, [id, update]: [string, { client_key?: string; body: string; health?: string }]) => {
     return await (ctx as any).runMutation(api.initiatives.postUpdate, { id, ...update });
+  },
+  // One entry of the intent record (I5). The store settles the entry it
+  // paints (its key, who and when) and hands that op back as the action's
+  // result, so the row stores the same entry and the echo equals the draft.
+  // A call with no result painted nothing; the caller's op goes as given.
+  recordInitiativeEntry: async (ctx, userId, [id, op]: [string, Record<string, any>], result) => {
+    return await (ctx as any).runMutation(api.initiatives.record, { id, ...((result as Record<string, any> | null | undefined) ?? op) });
   },
 
   // Issue sync sources (docs/architecture/issue-sync.md S1.3, S9). Like plans
@@ -1683,6 +1776,23 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
     return result;
   },
+  // Team settings and membership (inboxStore renameTeam and the rest): each
+  // runs the teams mutation the settings pages used to call themselves.
+  renameTeam: async (ctx, _userId, [teamId, name]: [string, string]) => {
+    return await ctx.runMutation!((api as any).teams.renameTeam, { team_id: teamId as Id<"teams">, name });
+  },
+  updateTeamIcon: async (ctx, _userId, [teamId, fields]: [string, { icon?: string; icon_color?: string }]) => {
+    return await ctx.runMutation!((api as any).teams.updateTeamIcon, { team_id: teamId as Id<"teams">, icon: fields.icon, icon_color: fields.icon_color });
+  },
+  updateTeamTaskStatuses: async (ctx, _userId, [teamId, statuses]: [string, { id: string; name: string; category: string; color?: string }[]]) => {
+    return await ctx.runMutation!((api as any).teams.updateTaskStatuses, { team_id: teamId as Id<"teams">, statuses });
+  },
+  setTeamMemberRole: async (ctx, _userId, [teamId, userId, role]: [string, string, "member" | "admin"]) => {
+    return await ctx.runMutation!((api as any).teams.setMemberRole, { team_id: teamId as Id<"teams">, member_user_id: userId as Id<"users">, role });
+  },
+  removeTeamMember: async (ctx, _userId, [teamId, userId]: [string, string]) => {
+    return await ctx.runMutation!((api as any).teams.removeMember, { team_id: teamId as Id<"teams">, member_user_id: userId as Id<"users"> });
+  },
   createSavedView: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.savedViews.webCreate, opts);
   },
@@ -1691,6 +1801,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   deleteSavedView: async (ctx, userId, [id]: [string]) => {
     await (ctx as any).runMutation(api.savedViews.webDelete, { id });
+  },
+  setModEnabled: async (ctx, _userId, [id, enabled]: [string, boolean]) => {
+    await (ctx as any).runMutation((api as any).mods.webSetEnabled, { id, enabled });
+  },
+  createModObject: async (ctx, _userId, [opts]: [any]) => {
+    return await (ctx as any).runMutation((api as any).modObjects.webCreate, opts);
+  },
+  updateModObject: async (ctx, _userId, [id, patch]: [string, Record<string, unknown>]) => {
+    await (ctx as any).runMutation((api as any).modObjects.webUpdate, { id, ...patch });
   },
 
   linkEntityConversation: async (ctx, userId, [opts]: [any]) => {
@@ -1799,6 +1918,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   setTriggerInterval: async (ctx, userId, [taskId, intervalMs]: [string, number]) => {
     return await (ctx as any).runMutation(api.agentTasks.webUpdate, { task_id: taskId, interval_ms: intervalMs });
+  },
+  // The triggers page's edit form, and its undo with the prior values. A
+  // trigger that ran or ended in the meantime refuses the edit; throwing makes
+  // the refusal permanent, so the client takes its optimistic edit back.
+  editTrigger: async (ctx, userId, [taskId, fields]: [string, Record<string, unknown>]) => {
+    const ok = await (ctx as any).runMutation(api.agentTasks.webUpdate, { ...fields, task_id: taskId });
+    if (ok === false) throw new Error("This trigger can no longer be edited: it is running or finished");
+    return ok;
   },
 
   markNotificationRead: async (ctx, userId, [id]: [string]) => {
@@ -2001,6 +2128,60 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       file_path: anchor?.filePath || undefined,
       line_number: typeof anchor?.lineNumber === "number" ? anchor.lineNumber : undefined,
       resolved: !!resolved,
+    });
+  },
+
+  // Code review threads (review_comments). The server settles a whole thread
+  // from any one comment in it, so one call per gesture is enough; a stub
+  // (no server row yet) has nothing to resolve.
+  setPrShepherd: async (ctx, _userId, [prId, conversationId, enabled]: [string, string | undefined, boolean]) => {
+    return await ctx.runMutation!((api as any).prShepherd.setShepherd, { pr_id: prId, ...(conversationId ? { conversation_id: conversationId } : {}), enabled });
+  },
+  assignTaskToAgent: async (ctx, _userId, [shortId, agentType, initialMessage]: [string, string, string | undefined]) => {
+    return await ctx.runMutation!((api as any).tasks.assignToAgent, { short_id: shortId, agent_type: agentType, ...(initialMessage !== undefined ? { initial_message: initialMessage } : {}) });
+  },
+  // Project updates (the project page's Updates tab). The store paints each
+  // gesture on projectUpdates first; these run the web mutations. A post's
+  // stub is keyed by its client_key, which the row carries, so the echo
+  // supersedes it; a write against a stub not yet created waits (null).
+  postProjectUpdate: async (ctx, _userId, [projectId, update]: [string, { client_key: string; body: string; title?: string }]) => {
+    return ctx.runMutation!(api.projectUpdates.webPost, {
+      project_id: projectId as Id<"projects">,
+      body: update.body,
+      client_key: update.client_key,
+      ...(update.title ? { title: update.title } : {}),
+    });
+  },
+  commentProjectUpdate: async (ctx, _userId, [updateId, text]: [string, string]) => {
+    if (!isServerId(updateId)) throw new Error("Update not created yet");
+    return ctx.runMutation!(api.projectUpdates.webComment, { update_id: updateId as Id<"project_updates">, text });
+  },
+  editProjectUpdate: async (ctx, _userId, [updateId, body]: [string, string]) => {
+    if (!isServerId(updateId)) throw new Error("Update not created yet");
+    return ctx.runMutation!(api.projectUpdates.webEdit, { id: updateId as Id<"project_updates">, body });
+  },
+  deleteProjectUpdate: async (ctx, _userId, [updateId]: [string]) => {
+    if (!isServerId(updateId)) return null;
+    return ctx.runMutation!(api.projectUpdates.webDelete, { id: updateId as Id<"project_updates"> });
+  },
+  resolveCodeCommentThread: async (ctx, _userId, [commentIds, resolved]: [string[], boolean]) => {
+    const id = (commentIds ?? []).find((c) => isServerId(c));
+    if (!id) return;
+    return ctx.runMutation!(resolved ? api.codeComments.resolve : api.codeComments.unresolve, {
+      comment_id: id as Id<"review_comments">,
+    });
+  },
+  editCodeComment: async (ctx, _userId, [commentId, content]: [string, string]) => {
+    if (!isServerId(commentId)) return;
+    return ctx.runMutation!(api.codeComments.update, {
+      comment_id: commentId as Id<"review_comments">,
+      content,
+    });
+  },
+  deleteCodeComment: async (ctx, _userId, [commentId]: [string]) => {
+    if (!isServerId(commentId)) return;
+    return ctx.runMutation!(api.codeComments.remove, {
+      comment_id: commentId as Id<"review_comments">,
     });
   },
 
@@ -2365,12 +2546,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // arrives long after it was made (parked through an outage, replayed when
   // the tab reloads) is refused, so a room is never filmed, or a run ended,
   // by a press nobody is still making (shared recordingPressStale). Thrown,
-  // so the client reads it as final and drops the row.
-  setRoomRecording: async (ctx, _userId, [roomKey, on, pressedAt]: [string, boolean, number | undefined]) => {
+  // so the client reads it as final and drops the row. A Stop carries the
+  // run its mark showed (`runId`), so one landing late never ends a run
+  // somebody started after it was pressed.
+  setRoomRecording: async (ctx, _userId, [roomKey, on, pressedAt, runId]: [string, boolean, number | undefined, string | undefined]) => {
     if (recordingPressStale(pressedAt, Date.now())) throw new Error(recordingPressStaleWords(!!on));
     return on
       ? await ctx.runMutation!(api.callRecordings.startRecording, { room_key: roomKey })
-      : await ctx.runMutation!(api.callRecordings.stopRecording, { room_key: roomKey });
+      : await ctx.runMutation!(api.callRecordings.stopRecording, { room_key: roomKey, ...(runId ? { run_id: runId } : {}) });
   },
   // The room's answers to a guest (store admitGuestKnock / denyGuestKnock
   // drop the knock from roomKnocks, removeCallGuest drops the guest from the
@@ -2415,6 +2598,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   setCallShareVideo: async (ctx, _userId, [transcriptId, include]: [string, boolean]) => {
     return await ctx.runMutation!(api.callRecordings.setCallShareVideo, { call: transcriptId, include: !!include });
+  },
+  // A picture of the call taken off its public link (store
+  // deleteCallFrameShare drops the row first). Already gone is acknowledged.
+  deleteCallFrameShare: async (ctx, _userId, [shareId]: [string]) => {
+    return await ctx.runMutation!(api.callRecordings.deleteCallFrameShare, { share_id: shareId });
   },
   setChatSlackMember: async (
     ctx,

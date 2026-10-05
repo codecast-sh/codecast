@@ -7,6 +7,7 @@ import { deliverToAnchor, userCanAccessAnchor, userCanAdminAnchor, visibleAnchor
 import { isTeamAdmin, isTeamMember } from "./privacy";
 import { installationForTeam } from "./lib/slackOutbound";
 import { tokenHasScope } from "./lib/slackMirror";
+import { signStateWith, verifyStateWith } from "./lib/hmac";
 
 // The Slack adapter. Workspaces connect via the "Add to Slack" OAuth flow, which
 // stores a per-workspace bot token in `slack_installations` (replacing the single
@@ -102,46 +103,15 @@ export function slackAuthorizeUrl(state: string, origin?: string): string {
 // it must be tamper-proof: sign it with the app secret and check freshness on the
 // callback. Without this, a forged state could bind someone's workspace to the
 // attacker's anchor.
-async function hmacHex(secret: string, body: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, "0")).join("");
+export function signState(payload: Record<string, unknown>): Promise<string> {
+  return signStateWith(process.env.SLACK_CLIENT_SECRET || "", payload);
 }
 
-export async function signState(payload: Record<string, unknown>): Promise<string> {
-  const secret = process.env.SLACK_CLIENT_SECRET || "";
-  const body = btoa(JSON.stringify(payload));
-  return `${body}.${await hmacHex(secret, body)}`;
-}
-
-export async function verifyState(state: string): Promise<Record<string, any> | null> {
-  const dot = state.lastIndexOf(".");
-  if (dot <= 0) return null;
-  const body = state.slice(0, dot);
-  const sig = state.slice(dot + 1);
-  const secret = process.env.SLACK_CLIENT_SECRET || "";
-  const expected = await hmacHex(secret, body);
-  if (sig.length !== expected.length) return null;
-  let mismatch = 0;
-  for (let i = 0; i < sig.length; i++) mismatch |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (mismatch !== 0) return null;
-  try {
-    const payload = JSON.parse(atob(body));
-    // Require a fresh timestamp — a state with no (or non-numeric) ts would never
-    // expire, defeating the replay window. Ten minutes matches the lifetime of
-    // the code Slack hands back, so a slow consent screen does not fail the
-    // install, while the leaked-state window stays small.
-    if (typeof payload.ts !== "number" || Date.now() - payload.ts > 10 * 60 * 1000) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+/** Ten minutes matches the lifetime of the code Slack hands back, so a slow
+ *  consent screen does not fail the install, while the leaked-state window
+ *  stays small. */
+export function verifyState(state: string): Promise<Record<string, any> | null> {
+  return verifyStateWith(process.env.SLACK_CLIENT_SECRET || "", state, 10 * 60_000);
 }
 
 // ── Scope / installation resolution ─────────────────────────────────────────

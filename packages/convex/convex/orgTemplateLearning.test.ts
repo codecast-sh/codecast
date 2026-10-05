@@ -105,6 +105,38 @@ describe("the pass reads only what opted in", () => {
     expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW })).toBeNull();
     expect(await performFileLearned(ctx(db), { instance_id: INSTANCE, user_id: ME, reply: "[]", signal_keys: [], now: NOW })).toMatchObject({ read: false, filed: [] });
   });
+  // The role's own playbook (org-staffing.md S38): the rules it learned are
+  // one more signal, read once, and only behind the same opt-in.
+  test("the digest carries the rules the role taught itself, each once, and a lesson drawn from one still passes the leak check", async () => {
+    const BRIEF = "docs_brief";
+    const brief = "CMO: steady\n\n## Rules learned\n- Check the live page before calling a page shipped. Learned from: a post sat merged and unpublished for four days. (2026-09-20)\n- Ask Dana before changing the Pallet pricing copy. Learned from: the copy was changed twice in a week. (2026-09-25)";
+    const db = fixtures({ docs: [{ _id: BRIEF, doc_type: "brief", content: brief }] });
+    await db.patch(ROLE, { brief_doc_id: BRIEF });
+    expect(await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW })).toBeNull();
+    await optIn(db);
+    const digest = (await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW }))!;
+    const ruleKeys = digest.signal_keys.filter((k) => k.startsWith("rule:"));
+    expect(ruleKeys).toHaveLength(2);
+    expect(digest.request!.prompt).toContain("# Rules the role taught itself");
+    expect(digest.request!.prompt).toContain("Check the live page before calling a page shipped. It learned this from: a post sat merged and unpublished for four days");
+    // One generalizes and is filed; one carries the workspace and is refused, its text going nowhere.
+    const reply = JSON.stringify([
+      { kind: "rule", about: "charter", lesson: "The charter should tell the role to confirm a page is live before it reports the page as shipped, since a merged change is not a published one." },
+      { kind: "rule", about: "charter", lesson: "The role should ask Dana before it changes pricing copy for Pallet." },
+    ]);
+    const filed = await performFileLearned(ctx(db), { instance_id: INSTANCE, user_id: ME, reply, signal_keys: digest.signal_keys, now: NOW });
+    expect(filed.filed).toHaveLength(1);
+    expect(filed.filed[0]).toMatchObject({ kind: "rule", about: "charter" });
+    expect(filed.refused).toMatchObject({ name: 1 });
+    // The next pass does not read the same rules again; a new one is read.
+    const next = (await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW + DAY }))!;
+    expect(next.signal_keys.filter((k) => k.startsWith("rule:"))).toEqual([]);
+    await db.patch(BRIEF, { content: `${brief}\n- Run a guide's steps on a fresh account before marking it reviewed. Learned from: a guide assumed an admin seat. (2026-10-01)` });
+    const later = (await performDigest(ctx(db), { instance_id: INSTANCE, now: NOW + 2 * DAY }))!;
+    expect(later.signal_keys.filter((k) => k.startsWith("rule:"))).toHaveLength(1);
+    expect(later.request!.prompt).toContain("Run a guide's steps on a fresh account");
+    expect(later.request!.prompt).not.toContain("Check the live page before calling a page shipped");
+  });
   test("a workspace's own template of the same id is not Codecast's to learn from", async () => {
     const own = { ...template([release("2.0.0", D1, "stable")]), _id: "org_templates_own", workspace: WS };
     const db = fixtures({ org_templates: [template([release("2.0.0", D1, "stable")]), own] });

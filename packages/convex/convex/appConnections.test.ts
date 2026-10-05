@@ -229,6 +229,27 @@ describe("listConnections", () => {
     });
   });
 
+  test("with several google accounts the entry names the assistant's account, never a pending one, and Disconnect targets it", async () => {
+    const READ = "https://www.googleapis.com/auth/gmail.readonly";
+    const MODIFY = "https://www.googleapis.com/auth/gmail.modify";
+    const row = (over: Record<string, any>) => ({ scope_user_id: OWNER, granted_scopes: [READ], created_at: 1, updated_at: 1, ...over });
+    const google_installations = [
+      // Oldest first, the order the by_scope_user index hands them back in.
+      row({ _id: "gi_old", email: "old@example.com" }),
+      row({ _id: "gi_pending", email: "pending@example.com", granted_scopes: [MODIFY], pending_confirm_hash: "h", updated_at: 9 }),
+      row({ _id: "gi_full", email: "full@example.com", granted_scopes: [MODIFY], updated_at: 5 }),
+    ];
+    const apps = byId(await run(ctx(OWNER, tables({ google_installations }))));
+    expect(apps["gmail:personal"]).toMatchObject({ status: "connected", detail: "full@example.com", disconnect_id: "gi_full" });
+    // The same account googleOAuth.listConnections marks as the assistant's.
+    const { listConnections: listGoogle } = await import("./googleOAuth");
+    const listed = await (listGoogle as any)._handler(ctx(OWNER, tables({ google_installations })), {});
+    expect(listed.filter((r: any) => r.assistant).map((r: any) => r._id)).toEqual(["gi_full"]);
+    // Only a pending half-connect: not connected.
+    const halfway = byId(await run(ctx(OWNER, tables({ google_installations: [google_installations[1]] }))));
+    expect(halfway["gmail:personal"]).toEqual(notConnected("gmail", "personal"));
+  });
+
   test("team slack install reports who, when, scope — and no disconnect_id", async () => {
     const apps = byId(
       await run(ctx(OWNER, tables({ slack_installations: [slackRow()] }))),

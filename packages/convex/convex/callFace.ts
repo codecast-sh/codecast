@@ -1,29 +1,34 @@
-// An agent's voice in a call.
+// An agent's face in a call.
 //
-// A session fed live into a huddle (call_agent_feeds) gets a voice: the face
-// worker (infra/call-face-worker) joins the room as `agent:<conversationId>`
-// (shared agentFaceIdentity), runs a fast live model that hears the room and
-// sees the speaker's camera and any shared screen, and speaks through a Tavus
-// face. The session stays the agent's working half; the voice hands it real
-// work and tells the room what it finds. Prompt texts: shared
-// huddleVoiceInstructions and huddleVoiceAskHeader.
+// A session fed live into a huddle (call_agent_feeds) gets a face: the face
+// worker (infra/call-face-worker) joins the room and seats a Tavus face as
+// `agent:<conversationId>` (shared agentFaceIdentity). Two modes, one per
+// team feature:
+//
+//   agent_faces     The face says each reply the session posts to the call's
+//                   chat, word for word.
+//   agent_realtime  The worker also runs a fast live model that hears the
+//                   room, sees the speaker's camera and any shared screen,
+//                   and answers at once; the session stays the agent's
+//                   working half, handed real work through `ask`, and its
+//                   replies reach the model to tell the room in its own
+//                   words. Prompt texts: shared huddleVoiceInstructions and
+//                   huddleVoiceAskHeader.
 //
 //   join   LiveKit dispatches the worker into the room, told which session
-//          it speaks for, as which face and voice.
-//   brief  The worker asks who it is and what the session has been saying.
-//   ask    The voice hands the session a request, delivered the way a typed
-//          call-chat line is.
-//   said   What the voice said becomes the transcript's, so the record and
-//          the session both know it.
+//          it speaks for, as which face and voice, and in which mode.
 //   tell   Each reply the room's chat shows reaches the worker on the room's
-//          data channel, and the voice tells the room.
+//          data channel.
 //   leave  The face is removed from the room and the worker leaves with it.
+//   brief, ask, said (real-time only, over /calls/face): who the voice is,
+//          work it hands the session, and what it said, which becomes the
+//          transcript's so the record and the session both know it.
 //
-// The feed row is the voice's lifetime: transcripts.syncAgentFeeds joins one
+// The feed row is the face's lifetime: transcripts.syncAgentFeeds joins one
 // when it inserts a row and removes it when it deletes one. Off unless the
-// team has the agent_voices feature and FACE_WORKER_SECRET (shared with the
-// worker) is set beside the LIVEKIT_* the room needs; otherwise agents in a
-// call stay chat only.
+// team has the feature and FACE_WORKER_SECRET (shared with the worker) is set
+// beside the LIVEKIT_* the room needs; otherwise agents in a call stay chat
+// only.
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -72,9 +77,11 @@ function faceConfig(): FaceConfig | null {
   return { secret, lkUrl, lkKey, lkSecret };
 }
 
-/** Does this team's call get agent voices? */
-async function voicesOn(ctx: any, teamId: Id<"teams"> | null | undefined): Promise<boolean> {
-  return !!faceConfig() && (await teamHasFeature(ctx, teamId, "agent_voices"));
+/** How an agent shows up in this team's calls: not at all, as a face, or as
+ *  a face with a live model behind it. */
+async function faceMode(ctx: any, teamId: Id<"teams"> | null | undefined): Promise<"off" | "face" | "realtime"> {
+  if (!faceConfig() || !(await teamHasFeature(ctx, teamId, "agent_faces"))) return "off";
+  return (await teamHasFeature(ctx, teamId, "agent_realtime")) ? "realtime" : "face";
 }
 
 /** A face follows the agent's character, so it looks and sounds the same in
@@ -86,8 +93,9 @@ export function faceForAvatar(avatar: string): { face: string; voice: string } {
 
 /** From a mutation that just inserted a feed row. */
 export async function scheduleFaceJoin(ctx: any, feedId: Id<"call_agent_feeds">, teamId: Id<"teams"> | null | undefined): Promise<void> {
-  if (!(await voicesOn(ctx, teamId))) return;
-  await ctx.scheduler.runAfter(0, internal.callFace.join, { feed_id: feedId });
+  const mode = await faceMode(ctx, teamId);
+  if (mode === "off") return;
+  await ctx.scheduler.runAfter(0, internal.callFace.join, { feed_id: feedId, realtime: mode === "realtime" });
 }
 
 /** From a mutation deleting a feed row: its voice leaves with it. */
@@ -101,7 +109,7 @@ export async function scheduleFaceLeave(ctx: any, feed: Doc<"call_agent_feeds">)
 
 /** From the mirror, for the replies it just posted to the room's chat. */
 export async function scheduleFaceTell(ctx: any, feed: Doc<"call_agent_feeds">, replies: string[]): Promise<void> {
-  if (!(await voicesOn(ctx, feed.team_id))) return;
+  if ((await faceMode(ctx, feed.team_id)) === "off") return;
   const text = plainAgentLine(replies.join("\n\n")).slice(0, TELL_MAX);
   if (!text) return;
   await ctx.scheduler.runAfter(0, internal.callFace.tell, {
@@ -112,8 +120,8 @@ export async function scheduleFaceTell(ctx: any, feed: Doc<"call_agent_feeds">, 
 }
 
 /** The live feed of this session in this room, or null: every worker request
- *  is checked against it, so a voice can only reach its own session while
- *  its huddle runs. */
+ *  is checked against it, so a voice can only reach its own session, while
+ *  its huddle runs, in a team with real-time agents on. */
 async function liveFeed(ctx: any, conversationId: string, roomKey: string): Promise<Doc<"call_agent_feeds"> | null> {
   const id = ctx.db.normalizeId("conversations", conversationId);
   if (!id) return null;
@@ -121,7 +129,7 @@ async function liveFeed(ctx: any, conversationId: string, roomKey: string): Prom
     .query("call_agent_feeds")
     .withIndex("by_conversation", (q: any) => q.eq("conversation_id", id))
     .first();
-  if (!feed || feed.room_key !== roomKey || !(await voicesOn(ctx, feed.team_id))) return null;
+  if (!feed || feed.room_key !== roomKey || (await faceMode(ctx, feed.team_id)) !== "realtime") return null;
   const t = await ctx.db.get(feed.transcript_id);
   return t?.status === "live" ? feed : null;
 }
@@ -239,7 +247,7 @@ async function livekit(cfg: FaceConfig, room: string, method: string, body: unkn
 }
 
 export const join = internalAction({
-  args: { feed_id: v.id("call_agent_feeds") },
+  args: { feed_id: v.id("call_agent_feeds"), realtime: v.optional(v.boolean()) },
   handler: async (ctx, args): Promise<void> => {
     const cfg = faceConfig();
     if (!cfg) return;
@@ -248,7 +256,7 @@ export const join = internalAction({
     await livekit(cfg, feed.room_key, "AgentDispatchService/CreateDispatch", {
       room: feed.room_key,
       agentName: FACE_HOST_AGENT,
-      metadata: JSON.stringify({ conversation_id: feed.conversation_id, name: feed.name, ...faceForAvatar(feed.avatar) }),
+      metadata: JSON.stringify({ conversation_id: feed.conversation_id, name: feed.name, ...faceForAvatar(feed.avatar), realtime: args.realtime === true }),
     });
   },
 });

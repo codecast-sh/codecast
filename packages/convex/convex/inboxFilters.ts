@@ -2,7 +2,7 @@ import type { Doc } from "./_generated/dataModel";
 // Single source of truth for the "agent is actively producing" set and the
 // stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
 // importers (incl. the tests) keep working unchanged.
-import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, isSessionIdle, type WorkState } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, isSessionIdle, isUnservedSession, type WorkState } from "@codecast/shared/contracts";
 
 export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState };
 // The work-state classifier lives in @codecast/shared/contracts/inboxProjection
@@ -252,6 +252,8 @@ export interface SessionActivityInput {
   updatedAt: number;
   /** Caller computes liveness from its own source (inbox maps vs a single managed row). */
   daemonAlive: boolean;
+  /** conv.agent_type: a hosted conversation is never unresponsive for want of a daemon. */
+  agentType?: string;
   now: number;
 }
 
@@ -282,10 +284,14 @@ export function deriveSessionActivity(input: SessionActivityInput): SessionActiv
   const lastRoleIsUser = lastRoleIsUserOf(input.lastMessageRole, input.lastMessagePreview);
   const recentlyUpdated = (input.now - input.updatedAt) < AGENT_IDLE_GRACE_MS;
 
-  const isUnresponsive = input.status === "active" && !input.daemonAlive && (
-    (lastRoleIsUser && !recentlyUpdated) ||
-    (input.hasPending && !recentlyUpdated)
-  );
+  const isUnresponsive = isUnservedSession({
+    status: input.status,
+    agentType: input.agentType,
+    daemonAlive: input.daemonAlive,
+    lastRoleIsUser,
+    hasPending: input.hasPending,
+    recentlyUpdated,
+  });
 
   const isIdle = isSessionIdle({
     agentStatus: input.agentStatus,
