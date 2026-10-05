@@ -74,7 +74,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock }: 
   // comments doesn't depend on it.
   const commentsEnabled = useInboxStore((s) => s.clientState.ui?.comments_enabled ?? false);
   const myComments = useInboxStore(
-    useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId && !c.image)),
+    useShallow((s) => (s.reviewComments[conversationId] ?? []).filter((c) => c.messageId === messageId && !c.image && !c.page)),
   );
   // MODELESS: there is no review mode to enter or exit. Hovering any block always
   // offers Quote/Comment; the rail (and the content-shrink it causes) exists

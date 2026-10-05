@@ -58,7 +58,10 @@ describe("mention suggestions", () => {
       recentVisits: [{ kind: "page", key: "page:/tasks/t1", ts: 500 }],
     } as unknown as ReturnType<typeof useInboxStore.getState>;
     const result = buildMentionItems(state, { kind: "team", teamId: "team" });
-    expect(result.map((m) => m.id)).toEqual(["t1", "session1", "p1", "d1"]);
+    expect(result.map((m) => m.id)).toEqual(["t1", "session1", "p1", "d1", "worker"]);
+    expect(result[4].worker).toBe(true);
+    expect(mentionItemMatches(result[4], "")).toBe(false);
+    expect(mentionItemMatches(result[4], "worker")).toBe(true);
     expect(result[0]).toMatchObject({ label: "Live task", status: "done", priority: "high", updatedAt: 100, viewedAt: 500 });
     expect(result[1]).toMatchObject({ status: "working", agentType: "codex", model: "gpt-6", messageCount: 8 });
     expect(result[3].label).toBe("Live doc");
@@ -104,5 +107,31 @@ describe("match strength leads once the reader has typed", () => {
       [], new Map(), Infinity, "",
     );
     expect(ranked[0].id).toBe("s1");
+  });
+  test("a typed query leads with sessions, title hits anywhere, and leaves closed tasks out", () => {
+    const candidates: MentionItem[] = [
+      { id: "t-done", type: "task", label: "Desk v2: the book as home", shortId: "ct-55348", status: "done", updatedAt: 900 },
+      { id: "t-open", type: "task", label: "Desk v2: iterative polish", shortId: "ct-55353", status: "in_review", updatedAt: 800 },
+      { id: "d1", type: "doc", label: "Desk v3: from the call", updatedAt: 700 },
+      { id: "s-mid", type: "session", label: "Broker desk v3 build", updatedAt: 100 },
+      { id: "s-pre", type: "session", label: "Desk v3 Polish", updatedAt: 50 },
+    ];
+    const times = new Map([["task:t-done", 1000], ["task:t-open", 999]]);
+    const ranked = mergeMentionSuggestions(candidates.filter((m) => mentionItemMatches(m, "desk")), [], times, Infinity, "desk");
+    expect(ranked.map((m) => m.id)).toEqual(["s-mid", "s-pre", "t-open", "d1"]);
+    // A closed task is still reachable by naming its short id.
+    expect(mentionItemMatches(candidates[0], "ct-55348")).toBe(true);
+    expect(mentionItemMatches(candidates[0], "")).toBe(false);
+  });
+
+  test("worker sessions answer to their name like ⌘K, one row per title, never as bare recents", () => {
+    const workers: MentionItem[] = [
+      { id: "w1", type: "session", label: "Desk v3 Polish", worker: true, updatedAt: 300 },
+      { id: "w2", type: "session", label: "Desk v3 Polish", worker: true, updatedAt: 200 },
+      { id: "w3", type: "session", label: "Desk v3 sign-in flow", worker: true, updatedAt: 100 },
+    ];
+    const ranked = mergeMentionSuggestions(workers.filter((m) => mentionItemMatches(m, "desk v3")), [], new Map(), Infinity, "desk v3");
+    expect(ranked.map((m) => m.id)).toEqual(["w1", "w3"]);
+    expect(workers.filter((m) => mentionItemMatches(m, ""))).toEqual([]);
   });
 });

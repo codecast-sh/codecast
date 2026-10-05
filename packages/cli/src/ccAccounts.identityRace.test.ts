@@ -8,6 +8,9 @@ import {
   invalidateAccountsCache,
   profileMeta,
   readProfileIndex,
+  refreshActiveCredential,
+  repairProfileIdentities,
+  resnapshotActiveProfile,
   resnapshotIfActiveFresher,
   saveProfile,
   tokenKey,
@@ -130,5 +133,72 @@ describe("profile identity stays attached to the captured credential", () => {
       oauthAccount: { ...identities.alpha, emailAddress: identities.beta.emailAddress },
     }));
     expect(saveProfile("alpha").email).toBe("alpha@example.com");
+  });
+  // 2026-10-04: a fresh login of one account, still labelled as another in
+  // ~/.claude.json, was saved under the label's profile seconds after it
+  // appeared. That profile's meter then read the wrong account.
+  describe("a fresh login nobody has proved yet", () => {
+    const identityFetch = (byToken: Record<string, keyof typeof identities>) =>
+      spyOn(globalThis, "fetch").mockImplementation((async (_url: any, init?: any) => {
+        const token = String(init?.headers?.Authorization ?? "").replace("Bearer ", "");
+        const who = byToken[token];
+        if (!who) return new Response("{}", { status: 401 });
+        return Response.json({ account: { uuid: identities[who].accountUuid, email: identities[who].emailAddress } });
+      }) as typeof fetch);
+    const freshBetaLabelledAlpha = () => {
+      fs.writeFileSync(path.join(testHome, ".claude", ".credentials.json"), credential("beta", 3));
+      fs.writeFileSync(path.join(testHome, ".claude.json"), JSON.stringify({ oauthAccount: identities.alpha }));
+      invalidateAccountsCache();
+    };
+
+    it("keeps its proof across a refresh we make, so the re-save names its own profile", async () => {
+      // The 2026-10-04 path: the daemon refreshed an expired login labelled as
+      // another account, then re-saved it; the new token had no proof yet.
+      fs.writeFileSync(path.join(testHome, ".claude", ".credentials.json"), JSON.stringify({
+        claudeAiOauth: { accessToken: "beta-access-2", refreshToken: "beta-refresh-2", expiresAt: Date.now() - 1000 },
+      }));
+      fs.writeFileSync(path.join(testHome, ".claude.json"), JSON.stringify({ oauthAccount: identities.alpha }));
+      invalidateAccountsCache();
+      const fetchImpl = (async () => Response.json({
+        access_token: "beta-access-3", refresh_token: "beta-refresh-3", expires_in: 28800,
+      })) as unknown as typeof fetch;
+      expect((await refreshActiveCredential({ fetchImpl })).refreshed).toBe(true);
+      expect(resnapshotActiveProfile()).toBe("beta");
+      expect(readSnapshot("beta").credentials.claudeAiOauth.accessToken).toBe("beta-access-3");
+      expect(readSnapshot("alpha").credentials.claudeAiOauth.accessToken).toBe("alpha-access-1");
+    });
+
+    it("is proved before the read back names a profile for it", async () => {
+      freshBetaLabelledAlpha();
+      const spy = identityFetch({ "beta-access-3": "beta" });
+      try {
+        expect(await resnapshotIfActiveFresher()).toBe("beta");
+        expect(readSnapshot("beta").credentials.claudeAiOauth.accessToken).toBe("beta-access-3");
+        expect(readSnapshot("alpha").credentials.claudeAiOauth.accessToken).toBe("alpha-access-1");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("once misfiled, is moved by the repair into its own account's profile", async () => {
+      const misfiled = buildProfile(credential("beta", 3), identities.alpha, 2);
+      fs.writeFileSync(secretPath("alpha"), JSON.stringify(misfiled));
+      invalidateAccountsCache();
+      // beta's own saved login is dead (401); alpha's real account has none.
+      const spy = identityFetch({ "beta-access-3": "beta" });
+      try {
+        const rows = await repairProfileIdentities();
+        expect(rows.find(r => r.name === "alpha")).toMatchObject({ repair: "moved", moved_to: "beta" });
+        expect(readSnapshot("beta").credentials.claudeAiOauth.accessToken).toBe("beta-access-3");
+        expect(fs.existsSync(secretPath("alpha"))).toBe(false);
+        const index = readProfileIndex().profiles;
+        expect(index.alpha.uuid).toBe("uuid-alpha");
+        expect(index.alpha.login_expired_at).toBeNumber();
+        expect(index.beta.uuid).toBe("uuid-beta");
+        expect(index.beta.login_expired_at).toBeUndefined();
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

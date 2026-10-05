@@ -11,9 +11,11 @@
 // this one file. Ids are strings here: the shared package knows no Convex.
 
 import { autonomyChangeWords, autonomyOn } from "./roleAutonomy";
+import { intentSourceKey, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type IntentSource } from "./initiative";
 import {
   andList,
   changeLine,
+  everyWords,
   orgChangeDependencies,
   takeoverPhrase,
   type OrgChange,
@@ -25,7 +27,7 @@ import {
 
 /** Kinds the proposal vocabulary does not have: a change made at a door that
  *  is not a proposal, or the inverse of a proposal kind. */
-export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_cancel", "role_edit", "restore", "unseat", "routine_stop", "project_remove"] as const;
+export const ORG_LOG_ONLY_KINDS = ["session", "lead", "initiative_cancel", "role_edit", "restore", "unseat", "routine_stop", "routine_tune", "project_remove"] as const;
 export type OrgLogOnlyKind = (typeof ORG_LOG_ONLY_KINDS)[number];
 export type OrgLogKind = OrgChangeKind | OrgLogOnlyKind;
 
@@ -68,7 +70,9 @@ export type OrgLogFields = {
   /** An accepted upgrade of an instance, waiting for the host step (H9). Null before, and null again when withdrawn. */
   upgrade?: { instance: string; template_id: string; to: string } | null;
   standing_session?: { conversation_id: string; short_id: string } | null;
-  routine?: { agent_task_id: string; title: string; every?: string } | null;
+  /** A role's routine. A tune (org-staffing.md S38) also carries the gate and
+   *  the focus as they stood on each side, and on `after` the role's reason. */
+  routine?: { agent_task_id: string; title: string; every?: string; precheck?: string | null; focus?: string | null; why?: string } | null;
   // A project, a plan, a task.
   owner_role_id?: string | null;
   project_id?: string | null;
@@ -80,11 +84,18 @@ export type OrgLogFields = {
   /** The projects kind: what each entry of the change created or folded. */
   projects?: Array<{ op: "create"; project_id: string; title: string } | { op: "merge"; from_id: string; into_id: string }>;
   // An initiative: who drives it, the projects that carry it (ids, in order),
-  // the top level goal it feeds and the numbers it is read against.
+  // the top level goal it feeds, the numbers it is read against, and its
+  // intent record (I5), each list as the row stores it.
   owner?: OrgPartyRef | null;
   project_ids?: string[] | null;
   parent_initiative_id?: string | null;
   metrics?: Array<{ key: string; name: string; target: string }> | null;
+  why?: string | null;
+  done_when?: string | null;
+  milestones?: InitiativeMilestone[] | null;
+  questions?: InitiativeQuestion[] | null;
+  decisions?: InitiativeDecision[] | null;
+  sources?: IntentSource[] | null;
   // A session.
   parent?: OrgSessionParent;
 };
@@ -367,16 +378,51 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       return added.length ? { kind: "initiative_projects", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, projects: added.map((id) => nameOf(row, id, id)) } : null;
     }
     case "initiative_owner": return { kind: "initiative_owner", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, owner: partyName(row, row.after.owner) ?? "" };
-    case "initiative_shape": return {
-      kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
-      ...("parent_initiative_id" in row.after ? { parent: row.after.parent_initiative_id ? nameOf(row, row.after.parent_initiative_id, row.after.parent_initiative_id) : null } : {}),
-      ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
-    };
+    // The change kind places a goal, writes its words and adds to its lists.
+    // A row that did none of those (an entry edited, closed or removed, words
+    // cleared, the inverse of an add) reads through orgLogLine's own words.
+    case "initiative_shape": {
+      const { before: b, after: a } = row;
+      const milestones = addedEntries(b.milestones, a.milestones, (m) => m.key), questions = addedEntries(b.questions, a.questions, (q) => q.key), decisions = addedEntries(b.decisions, a.decisions, (d) => d.key), sources = addedEntries(b.sources, a.sources, intentSourceKey);
+      const says = "parent_initiative_id" in row.after || "metrics" in row.after || !!row.after.why || !!row.after.done_when || milestones.length + questions.length + decisions.length + sources.length > 0;
+      return !says ? null : {
+        kind: "initiative_shape", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label,
+        ...("parent_initiative_id" in row.after ? { parent: row.after.parent_initiative_id ? nameOf(row, row.after.parent_initiative_id, row.after.parent_initiative_id) : null } : {}),
+        ...("metrics" in row.after ? { metrics: (row.after.metrics ?? []).map((m) => ({ name: m.name, target: m.target })) } : {}),
+        ...(row.after.why ? { why: row.after.why } : {}),
+        ...(row.after.done_when ? { done_when: row.after.done_when } : {}),
+        ...(milestones.length ? { milestones: milestones.map((m) => ({ title: m.title, ...(m.date ? { date: m.date } : {}) })) } : {}),
+        ...(questions.length ? { questions: questions.map((q) => q.text) } : {}),
+        ...(decisions.length ? { decisions: decisions.map((d) => d.text) } : {}),
+        ...(sources.length ? { sources: sources.map((s) => s.ref ?? s.quote ?? s.kind) } : {}),
+      };
+    }
     default: return null;
   }
 }
 
-const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = { name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects", parent_initiative_id: "parent goal", metrics: "metrics" };
+/** The entries of a record list a row added: those after whose key was not there before. */
+function addedEntries<T>(before: readonly T[] | null | undefined, after: readonly T[] | null | undefined, keyOf: (e: T) => string): T[] {
+  const had = new Set((before ?? []).map(keyOf));
+  return (after ?? []).filter((e) => !had.has(keyOf(e)));
+}
+
+const EDIT_WORDS: Partial<Record<keyof OrgLogFields, string>> = {
+  name: "name", handle: "handle", avatar: "face", charter: "charter", tenure: "tenure", review_backend: "reviewer", status: "status", owner: "owner", project_ids: "projects", parent_initiative_id: "parent goal", metrics: "metrics",
+  why: "purpose", done_when: "definition of done", milestones: "milestones", questions: "open questions", decisions: "decisions", sources: "sources",
+};
+
+/** A role changed how its own check runs (S38): what moved, in the order a
+ *  person asks about it (how often, behind what gate, looking at what), then
+ *  the role's reason. Taken back, the same row reads as going back. */
+function routineTuneSentence(row: OrgLogRow): string {
+  const was = row.before.routine, now = row.after.routine;
+  const parts: string[] = [];
+  if (now?.every && now.every !== was?.every) parts.push(`${row.inverse ? "goes back to running" : "now runs"} its check ${everyWords(now.every)}${was?.every && !row.inverse ? ` instead of ${everyWords(was.every)}` : ""}`);
+  if ((now?.precheck ?? null) !== (was?.precheck ?? null)) parts.push(now?.precheck ? `runs it only when \`${now.precheck}\` passes` : "runs it with no gate");
+  if ((now?.focus ?? null) !== (was?.focus ?? null)) parts.push(now?.focus ? `looks first at: ${now.focus}` : "drops its focus");
+  return `${at(handleOf(row))} ${andList(parts) || "tuned its check"}${now?.why && !row.inverse ? `. The reason: ${now.why}` : ""}`;
+}
 
 /** The sentence of a kind the proposal vocabulary does not have. */
 function logOnlySentence(row: OrgLogRow): string {
@@ -392,6 +438,7 @@ function logOnlySentence(row: OrgLogRow): string {
     case "restore": return `bring back ${at(handleOf(row))}, with its area of work, its limits and its routines`;
     case "unseat": return `${at(handleOf(row))} gives up its standing session${row.before.standing_session ? ` ${row.before.standing_session.short_id}` : ""}; the session keeps running under its person`;
     case "routine_stop": return `${at(handleOf(row))} stops running "${row.before.routine?.title ?? ""}"`;
+    case "routine_tune": return routineTuneSentence(row);
     case "project_remove": return `remove the project ${row.subject.label}`;
   }
 }
@@ -402,6 +449,10 @@ export function orgLogLine(row: OrgLogRow): string {
   const change = orgLogRowChange(row);
   // The switch (org-staffing.md S23.1): history says what the person did.
   if (change?.kind === "trust") return `${autonomyChangeWords(autonomyOn(change.trust)).replace(/^t/, "T")} for ${at(change.handle)}`;
+  // A routine change a person accepted for a check that already ran (S38)
+  // retuned it: the routine stands on both sides, so the row reads as a tune
+  // in either direction, never as a start or a stop.
+  if ((row.kind === "routine" || row.kind === "routine_stop") && row.before.routine && row.after.routine) return capitalize(routineTuneSentence(row));
   if (change) return changeLine(change);
   // A hire and an upgrade are recorded; their way back is the host step
   // (org-staffing.md S21), so the inverse row says what the undo did do.
@@ -412,10 +463,16 @@ export function orgLogLine(row: OrgLogRow): string {
     const removed = (row.before.project_ids ?? []).filter((id) => !(row.after.project_ids ?? []).includes(id));
     return `Remove ${andList(removed.map((id) => nameOf(row, id, id))) || "the projects"} from the goal ${row.subject.label}`;
   }
+  // The change kind only adds to a goal's record; a row that edited, closed or removed an entry (or took an add back) names what it moved.
+  if (row.kind === "initiative_shape") {
+    const words = (Object.keys(row.after) as Array<keyof OrgLogFields>).map((k) => EDIT_WORDS[k]).filter(Boolean) as string[];
+    return `Change the ${andList(words) || "record"} of the goal ${row.subject.label}`;
+  }
   const line = (ORG_LOG_ONLY_KINDS as readonly string[]).includes(row.kind) ? logOnlySentence(row) : null;
   if (!line) return changeLine({ kind: row.kind } as any);
-  return line.charAt(0).toUpperCase() + line.slice(1);
+  return capitalize(line);
 }
+const capitalize = (line: string) => line.charAt(0).toUpperCase() + line.slice(1);
 
 const n = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`;
 
@@ -446,6 +503,7 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   role: "retire", retire: "restore", restore: "retire",
   adopt: "unseat", unseat: "adopt",
   routine: "routine_stop", routine_stop: "routine",
+  routine_tune: "routine_tune",
   projects: "project_remove", project_remove: "projects",
   move: "move", scope: "scope", budget: "budget", trust: "trust", role_edit: "role_edit",
   lead: "lead", session: "session",

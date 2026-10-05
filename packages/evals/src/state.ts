@@ -1,9 +1,9 @@
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { homePaths, treeRoot } from './paths';
+import { gitOrThrow } from './git';
+import { homePaths, treeRoot, writeJsonAtomic } from './paths';
 import type { SurfaceMeta } from './surface';
 
 // The cadence state: per surface, the source hash its last real run saw, the
@@ -49,10 +49,7 @@ export function readState(path = homePaths().state): EvalsState {
 }
 
 export function writeState(state: EvalsState, path = homePaths().state): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`);
-  renameSync(tmp, path);
+  writeJsonAtomic(path, state);
 }
 
 /** One rep's expected cost on a model: the last real run's average on it, or the surface's declared ceiling before any real run on that model. */
@@ -160,12 +157,6 @@ export function patchSurfaceState(id: string, patch: (s: SurfaceState) => Surfac
   writeState(state);
 }
 
-const git = (root: string, args: string[]): string => {
-  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed in ${root}: ${(r.stderr || '').trim()}`);
-  return r.stdout;
-};
-
 /**
  * Each surface's source hash at a commit (HEAD by default): one `git ls-tree`
  * for every declared path, which names the same object `git rev-parse
@@ -176,7 +167,7 @@ export function sourceHashes(metas: SurfaceMeta[], root = treeRoot(), rev = 'HEA
   const paths = [...new Set(metas.flatMap((m) => m.sources))];
   const objects = new Map<string, string>();
   if (paths.length) {
-    for (const entry of git(root, ['ls-tree', '-z', rev, '--', ...paths]).split('\0')) {
+    for (const entry of gitOrThrow(root, ['ls-tree', '-z', rev, '--', ...paths]).split('\0')) {
       const tab = entry.indexOf('\t');
       if (tab < 0) continue;
       objects.set(entry.slice(tab + 1), entry.slice(0, tab).split(' ')[2]!);
@@ -189,7 +180,7 @@ export function sourceHashes(metas: SurfaceMeta[], root = treeRoot(), rev = 'HEA
 export function dirtySurfaces(metas: SurfaceMeta[], root = treeRoot()): Set<string> {
   const paths = [...new Set(metas.flatMap((m) => m.sources))];
   if (!paths.length) return new Set();
-  const changed = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths])
+  const changed = gitOrThrow(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', ...paths])
     .split('\0')
     .filter((e) => e.length > 3)
     .map((e) => e.slice(3));
@@ -237,7 +228,7 @@ export function staleness(metas: SurfaceMeta[], state = readState(), root = tree
 
 /** Where a branch left `ref`: the commit both share, so a base that moved on is not read as the branch's change. */
 export function mergeBase(ref: string, root = treeRoot()): string {
-  return git(root, ['merge-base', ref, 'HEAD']).trim();
+  return gitOrThrow(root, ['merge-base', ref, 'HEAD']).trim();
 }
 
 /**
@@ -256,7 +247,7 @@ export function changedSince(metas: SurfaceMeta[], ref: string, root = treeRoot(
 /** HEAD of the tree, for run.json. */
 export function gitHead(root = treeRoot()): string {
   try {
-    return git(root, ['rev-parse', 'HEAD']).trim();
+    return gitOrThrow(root, ['rev-parse', 'HEAD']).trim();
   } catch {
     return 'unknown';
   }

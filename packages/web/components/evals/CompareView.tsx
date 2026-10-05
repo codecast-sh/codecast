@@ -4,27 +4,13 @@
 // Props only; ComparePage feeds it from GET /compare.
 
 import { ArrowLeftRight } from "lucide-react";
-import type { CompareResponse, RunDiffEntry, RunRow } from "@codecast/shared/contracts/evalsApi";
+import type { CompareResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
 import { evalsHref } from "./evalsPaths";
-import { EvalsLink, LockBadge, ProvenanceChips, PromptDiff, ReplyCard, ScoreBar, VerdictGlyph, score2, usd, verdictOfRow } from "./parts";
+import { EvalsLink, LockBadge, ProvenanceChips, PromptDiff, ReplyCard, ScoreBar, VerdictGlyph } from "./parts";
 import "./run.css";
-
-/** In words, what moved from a to b on one entry, and which way. */
-export function diffWords(e: RunDiffEntry): { tone: "broke" | "fixed"; before: string; after: string } {
-  if (e.kind === "gate") return { tone: e.after ? "fixed" : "broke", before: e.before ? "held" : "failed", after: e.after ? "held" : "failed" };
-  return { tone: e.after >= e.before ? "fixed" : "broke", before: score2(e.before), after: score2(e.after) };
-}
-
-/** What differs about how the two reps were made, so a reader knows what the comparison holds still. */
-export function compareFooting(a: RunRow, b: RunRow): string[] {
-  const out: string[] = [];
-  if (a.freezeId !== b.freezeId) out.push("different freezes: the replies answer different moments");
-  if (a.model !== b.model) out.push(`model ${a.model ?? "none"} against ${b.model ?? "none"}`);
-  if (a.ruler !== b.ruler) out.push("judged on different rulers");
-  if (a.promptSha !== b.promptSha) out.push("the rendered prompt differs");
-  if (a.gitHead !== b.gitHead) out.push("ran on different commits");
-  return out;
-}
+import { usd } from "./format";
+import { verdictOfRow } from "./verdictModel";
+import { diffWords, compareFooting } from "./runModel";
 
 function Side({ tag, row }: { tag: "A" | "B"; row: RunRow }) {
   return (
@@ -52,6 +38,11 @@ export function CompareView({ data }: { data: CompareResponse }) {
   const footing = compareFooting(a, b);
   return (
     <div className="ev-page ev-run" data-evals-compare>
+      <h1 className="ev-page-title">
+        <VerdictGlyph state={data.diff.length ? "mixed" : "pass"} size={14} />
+        {a.freezeName ?? a.freezeId.slice(0, 8)}
+        <span className="text-[12px] font-normal ev-quiet">two reps, side by side</span>
+      </h1>
       <div className="ev-cmp-head">
         <Side tag="A" row={a} />
         <div className="ev-cmp-mid">

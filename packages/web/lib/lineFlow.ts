@@ -18,11 +18,13 @@
 // rows to one project before buildLineFlow, and lineRollup counts every
 // project's line for the "all projects" view. A project's declared finders
 // (LP3, published onto the project row) join Sense, so a silent one shows.
+import { LINE_SIGNAL_WINDOW_MS, type LineFinderDecl, type PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { priority as linePriority, type Severity } from "@codecast/convex/convex/lib/linePriority";
 import { NO_GOAL } from "@codecast/shared/contracts/goalsBrief";
 import { DEFAULT_LINE_CARDS_CAP } from "@codecast/shared/contracts/orgCapacity";
-import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, lineRunOutcome, type LineRunEnd } from "@codecast/shared/contracts/changeCard";
 import { isLiveRun, runLiveNode, type LineRun, type LiveNode } from "./taskLine";
+import { lineForkIndex, lineRunKind, type LineRunKind } from "./line/lineStations";
 
 export const HOUR = 60 * 60 * 1000;
 export const DAY = 24 * HOUR;
@@ -92,12 +94,12 @@ export type LineDecision = {
 export type GoalRow = { short_id?: string; title: string; priority?: "p0" | "p1" | "p2" | "p3" };
 
 /** A finder a project's line profile declares (LP3). */
-export type LineFinderDecl = { id: string; source: string; kind: "any" | string[]; runs?: string };
+export type { LineFinderDecl };
 /** A project row as the line reads it: its goal fields and its published profile. */
 export type LineProject = GoalRow & {
   _id: string;
   project_path?: string;
-  line_profile?: { finders: LineFinderDecl[]; root?: string; default?: boolean; changed_at: number } | null;
+  line_profile?: PublishedLineProfile | null;
 };
 
 /** idle: nothing has reached the station yet, or nothing waits for it, which
@@ -142,6 +144,8 @@ export type BuildRow = {
   step: string | null;
   /** Where a line run sits in LINE_STEPS (0 to 4), null for any other workflow. */
   stepIndex: number | null;
+  /** The shipped line, a project's customized copy, or null for another workflow. */
+  line: LineRunKind | null;
 };
 export type WatchRow = { task: LineCauseTask; until: number; daysLeft: number };
 export type ClosedOutcome = "shipped" | "dissolved" | "resolved";
@@ -220,8 +224,8 @@ const LINE_STEP_OF: Record<string, number> = {
   verify: 3, green: 3, eval: 3, review: 3,
   card_draft: 4, card_write: 4, card: 4, decide: 4,
 };
-export function lineStepIndex(run: Pick<LineFlowRun, "workflow_name">, node: Pick<LiveNode, "id"> | null): number | null {
-  if (run.workflow_name !== "line" || !node) return null;
+export function lineStepIndex(line: LineRunKind | null, node: Pick<LiveNode, "id"> | null): number | null {
+  if (!line || !node) return null;
   return LINE_STEP_OF[node.id] ?? null;
 }
 
@@ -251,11 +255,9 @@ export function isLineCard(d: LineDecision): boolean {
 /** LE6/LE11: a card at the decide gate, the only kind admission counts. */
 export const isGateCard = (d: LineDecision) => isLineCard(d) && d.gate_node_id === CARD_GATE_NODE_ID;
 
-/** LE12: the quiet close stamps resolved_at. It closed the cause itself when
- *  closed_at matches it (the cause never shipped); a close after it is a later
+/** LE12: the quiet watch end stamps resolved_at; a close after it is a later
  *  ship of a reopened cause. */
 const resolvedQuietly = (t: LineCauseTask) => typeof t.resolved_at === "number" && t.resolved_at >= (t.closed_at ?? 0);
-const closedByQuietWatch = (t: LineCauseTask) => resolvedQuietly(t) && t.closed_at === t.resolved_at;
 
 /** The goal a cause names (LE5): an initiative ref ("in-3" or
  *  "in-3:metric"), a project ref, "none" (parked), or nothing yet. */
@@ -303,11 +305,14 @@ export function buildLineFlow<D extends LineDecision>(input: {
   runs: LineFlowRun[];
   decisions: D[];
   initiatives: GoalRow[];
-  projects: GoalRow[];
+  /** Goal chips read these; a row with an id also names its customized line. */
+  projects: Array<GoalRow & { _id?: string }>;
   now: number;
   cardsCap?: number;
   /** The selected project's declared finders: each is a Sense row, silent or not. */
   finders?: LineFinderDecl[];
+  /** When the profile declaring them last changed: a finder with nothing in the window that may be newer than the window is new, not silent. */
+  findersSince?: number;
 }): LineFlow<D> {
   const { now } = input;
   const cardsCap = input.cardsCap ?? DEFAULT_LINE_CARDS_CAP;
@@ -344,7 +349,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
     if (!seen.has(f.source)) sources.push({ source: f.source, day: 0, week: 0, spark: new Array(7).fill(0), newest: null, kinds: f.kind === "any" ? [] : f.kind, finder: f, silent: false, undeclared: false });
   }
   for (const s of sources) {
-    s.silent = !!s.finder && s.day === 0;
+    const mayBeNew = !s.newest && input.findersSince != null && now - input.findersSince < LINE_SIGNAL_WINDOW_MS;
+    s.silent = !!s.finder && s.day === 0 && !mayBeNew;
     s.undeclared = finders.length > 0 && !s.finder;
   }
   const newestAt = (s: SenseSource) => s.newest?.created_at ?? 0;
@@ -369,6 +375,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const buildItems: BuildRow[] = [];
   const buildTasks = new Set<string>();
   let otherRuns = 0;
+  const forks = lineForkIndex(input.projects.filter((p): p is GoalRow & { _id: string } => !!p._id));
   const lineRuns = input.runs.filter((r) => !!r.task_id && causeById.has(r.task_id));
   for (const run of input.runs) {
     if (!isLiveRun(run) && run.status !== "pending") continue;
@@ -379,7 +386,8 @@ export function buildLineFlow<D extends LineDecision>(input: {
     if (atGate) continue;
     const node = runLiveNode(run);
     const step = runStep(run, node);
-    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(run, node), ...runName(run, task, step) });
+    const line = lineRunKind(run, forks);
+    buildItems.push({ run, node, since: node?.started_at ?? run.created_at, task, stalled: now - (run.updated_at ?? run.created_at) > DAY, step, stepIndex: lineStepIndex(line, node), line, ...runName(run, task, step) });
   }
   buildItems.sort((a, b) => Number(a.stalled) - Number(b.stalled) || a.since - b.since);
   const fresh = buildItems.filter((b) => !b.stalled);
@@ -389,6 +397,16 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const lastEnded = lineRuns
     .filter((r) => (r.status === "completed" || r.status === "failed") && r.updated_at >= weekAgo)
     .sort((a, b) => b.updated_at - a.updated_at)[0];
+
+  // What the line did to each cause, from its runs' stations (LE12): the
+  // latest end a run reached, so a cause shipped by the line counts as shipped
+  // whatever its status says at this moment.
+  const lineEnd = new Map<string, { kind: LineRunEnd; at: number }>();
+  for (const r of lineRuns) {
+    const end = lineRunOutcome(r.node_statuses);
+    const prev = lineEnd.get(r.task_id!);
+    if (end && (!prev || end.at >= prev.at)) lineEnd.set(r.task_id!, end);
+  }
 
   // ── watching, closed ──
   const watchItems: WatchRow[] = [];
@@ -404,7 +422,7 @@ export function buildLineFlow<D extends LineDecision>(input: {
       // A watch that ended quiet is resolved (LE12): swept, it carries
       // resolved_at; not yet swept, it still holds its past watch_until.
       const resolved = resolvedQuietly(t) || typeof t.watch_until === "number";
-      const outcome: ClosedOutcome = t.status === "dropped" ? "dissolved" : resolved ? "resolved" : "shipped";
+      const outcome: ClosedOutcome = t.status === "dropped" || lineEnd.get(t._id)?.kind === "dissolved" ? "dissolved" : resolved ? "resolved" : "shipped";
       const closedAt = outcome === "resolved" ? (t.resolved_at ?? t.watch_until ?? at) : at;
       if (closedAt >= weekAgo) closedItems.push({ task: t, outcome, at: closedAt });
       continue;
@@ -448,8 +466,13 @@ export function buildLineFlow<D extends LineDecision>(input: {
   const closedState: StageState = closedItems.length > 0 ? { kind: "running", why: "this week" } : { kind: "clear", why: "nothing closed this week" };
 
   // ── throughput, this week ──
-  // A ship is a done close this week that the quiet watch close did not make.
-  const shippedThisWeek = causes.filter((t) => t.status === "done" && (t.closed_at ?? 0) >= weekAgo && !closedByQuietWatch(t));
+  // A ship is a line run's ship record this week (its watch station ran),
+  // whatever the cause's status is now: a reopened cause was still shipped.
+  const shipped = causes
+    .map((t) => ({ t, end: lineEnd.get(t._id) }))
+    .filter((x) => x.end?.kind === "shipped" && x.end.at >= weekAgo)
+    .map((x) => ({ t: x.t, at: x.end!.at }));
+  const shippedThisWeek = shipped.map((x) => x.t);
   const runTokens = new Map<string, number>();
   for (const r of input.runs) if (r.task_id) runTokens.set(r.task_id, (runTokens.get(r.task_id) ?? 0) + (r.total_tokens ?? 0));
   const tokens = shippedThisWeek.reduce((sum, t) => sum + (runTokens.get(t._id) ?? 0), 0);
@@ -460,13 +483,13 @@ export function buildLineFlow<D extends LineDecision>(input: {
     shipped: shippedThisWeek.length,
     shippedInWatch: shippedThisWeek.filter((t) => inWatch(t, now)).length,
     reopened: input.signals.filter((s) => s.reopened && s.created_at >= weekAgo).length,
-    medianToShip: median(shippedThisWeek.filter((t) => t.cause?.first_seen).map((t) => (t.closed_at ?? 0) - t.cause!.first_seen)),
+    medianToShip: median(shipped.filter((x) => x.t.cause?.first_seen).map((x) => x.at - x.t.cause!.first_seen)),
     tokensPerShip: shippedThisWeek.length && tokens ? tokens / shippedThisWeek.length : null,
     daily: {
       signalsIn: perDay(input.signals.map((s) => s.created_at), now),
       opened: perDay(causes.map((t) => t.created_at), now),
       dissolved: perDay(causes.filter((t) => t.status === "dropped").map((t) => t.closed_at), now),
-      shipped: perDay(shippedThisWeek.map((t) => t.closed_at), now),
+      shipped: perDay(shipped.map((x) => x.at), now),
       reopened: perDay(input.signals.filter((s) => s.reopened).map((s) => s.created_at), now),
     },
   };
@@ -488,6 +511,15 @@ export function buildLineFlow<D extends LineDecision>(input: {
       closed: closedItems.length,
     },
   };
+}
+
+/** A silent finder's silence in words, the same on the Line page and in line
+ *  settings: how long since its last signal, or the whole window the line
+ *  reads when it has filed nothing in it. */
+export function silentText(src: Pick<SenseSource, "newest" | "silent">, now: number): string {
+  // Nothing in the window: silent at least that long, unless the finder may be newer than it.
+  if (src.newest) return `silent ${ageShort(now - src.newest.created_at)}`;
+  return src.silent ? `silent ${ageShort(LINE_SIGNAL_WINDOW_MS)}` : "nothing filed yet";
 }
 
 /** "3d", "5h", "12m": the largest unit, for a sentence. */
@@ -616,7 +648,7 @@ export function lineRollup<D extends LineDecision>(rows: LineRows<D>, projects: 
     const project = byId.get(key);
     // A project the viewer cannot see (another workspace's) is not a line here.
     if (key !== NO_PROJECT && !project) continue;
-    const f = buildLineFlow({ ...scopeLine(rows, key), initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders });
+    const f = buildLineFlow({ ...scopeLine(rows, key), initiatives: [], projects: [], now, cardsCap, finders: project?.line_profile?.finders, findersSince: project?.line_profile?.changed_at });
     out.push({
       key,
       title: project?.title ?? "No project",

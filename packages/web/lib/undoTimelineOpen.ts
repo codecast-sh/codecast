@@ -21,16 +21,29 @@ function set(next: UndoTimelineSnapshot): void {
 }
 
 // Focus goes back where it was when the card opened, on every close (Esc,
-// the chord again, an act), not only Esc. An overlay that opened the card
-// (the palette, whose input still holds focus as it closes; a toast, whose
-// History button leaves with it) is not a place to return to, so the target
-// is the last focus outside any overlay.
-const OVERLAY = '[role="dialog"], [cmdk-root], [data-radix-popper-content-wrapper], [data-sonner-toaster]';
+// the chord again, an act, the peek fading), not only Esc. The page body
+// (nothing focused) is such a place: the card leaves focus there rather than
+// in a field that had it earlier, where the next single-key shortcut would
+// type. An overlay that opened the card (the palette, whose input still
+// holds focus as it closes; a toast, whose History button leaves with it) is
+// not a place to return to, so the target is the last focus outside any
+// overlay, or the body when focus left that for the body before.
+// Only transient layers count: a modal dialog (aria-modal, as every modal
+// here declares it for the shortcut dispatcher), the palette, a popper, the
+// toaster and this card. A surface that is role=dialog without being modal
+// (the docked composer, the Fleet drill-in) is part of the page.
+const OVERLAY =
+  '[role="dialog"][aria-modal="true"], [role="alertdialog"], [data-undo-timeline], [cmdk-root], [data-radix-popper-content-wrapper], [data-sonner-toaster]';
 let lastSteadyFocus: HTMLElement | null = null;
 let returnTo: HTMLElement | null = null;
+// Whether the card held focus since it opened. A close gives back only focus
+// the card took: a peek never takes it, so a field the user left while one
+// showed (a click on blank page, Escape blurring a search input) stays left.
+let cardTookFocus = false;
 
 const steady = (el: Element | null): el is HTMLElement =>
   !!el && el instanceof HTMLElement && el !== document.body && !el.closest(OVERLAY);
+const inOverlay = (el: Element | null): boolean => !!el && el !== document.body && !!el.closest?.(OVERLAY);
 
 // Installed by the first subscriber (UndoTimelineHost mounts with the app),
 // against whatever document is live then.
@@ -42,9 +55,30 @@ function trackFocus(): void {
     "focusin",
     (e) => {
       if (steady(e.target as Element | null)) lastSteadyFocus = e.target as HTMLElement;
+      else if (snapshot.open && (e.target as Element | null)?.closest?.("[data-undo-timeline]")) cardTookFocus = true;
     },
     true,
   );
+  // Focus left for nothing (a blur to the body, not a move to another
+  // element or a switch to another window, which keeps activeElement).
+  document.addEventListener(
+    "focusout",
+    (e) => {
+      if (!(e as FocusEvent).relatedTarget && steady(e.target as Element | null) && document.activeElement !== e.target) lastSteadyFocus = null;
+    },
+    true,
+  );
+}
+
+/** Whether a press on `target` leaves the open card (and closes it). A press
+ *  on a toast (its close button, its action) is not one: the toaster shares
+ *  the card's corner and stays above it. */
+export function pressLeavesCard(target: EventTarget | null, card: Element | null): boolean {
+  const node = target as Node | null;
+  if (!card || typeof node?.nodeType !== "number") return true;
+  if (card.contains(node)) return false;
+  const el = typeof (node as Element).closest === "function" ? (node as Element) : node.parentElement;
+  return !el?.closest("[data-sonner-toaster]");
 }
 
 const cardEl = () => (typeof document !== "undefined" ? document.querySelector("[data-undo-timeline]") : null);
@@ -52,7 +86,8 @@ const cardEl = () => (typeof document !== "undefined" ? document.querySelector("
 export function open(mode: UndoTimelineMode = "interactive"): void {
   if (!snapshot.open && typeof document !== "undefined") {
     const active = document.activeElement;
-    returnTo = steady(active) ? active : lastSteadyFocus;
+    returnTo = steady(active) ? active : inOverlay(active) ? lastSteadyFocus : null;
+    cardTookFocus = false;
   }
   set({ open: true, mode });
 }
@@ -66,8 +101,13 @@ export function close(): void {
   const active = typeof document !== "undefined" ? document.activeElement : null;
   const card = cardEl();
   const lost = !active || active === document.body || (!!card && card.contains(active));
+  const took = cardTookFocus;
+  cardTookFocus = false;
   set({ open: false, mode: snapshot.mode });
-  if (lost && target?.isConnected) target.focus({ preventScroll: true });
+  // No document (a store reset in a bun test or any non-DOM runtime): nothing holds focus.
+  if (!lost || !active || !took) return;
+  if (target?.isConnected) target.focus({ preventScroll: true });
+  else if (active !== document.body) (active as HTMLElement).blur?.();
 }
 
 /** Close when open; otherwise open in `mode`. */

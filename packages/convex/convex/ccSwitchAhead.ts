@@ -11,7 +11,7 @@ import {
   livePercent,
   type AutoSwitchProfile,
 } from "./ccAccountsShared";
-import { headroomScore, type CcUsage } from "@codecast/shared/contracts";
+import { headroomScore, limitWindows, type CcUsage } from "@codecast/shared/contracts";
 
 // Switch-ahead thresholds: the fleet moves off an account while its windows
 // still have room, before Claude Code's grace window (at 100%) and its
@@ -19,20 +19,29 @@ import { headroomScore, type CcUsage } from "@codecast/shared/contracts";
 // session. The margin covers the burn between two heartbeats of a busy fleet.
 export const SWITCH_AHEAD_SESSION_PERCENT = 95;
 export const SWITCH_AHEAD_WEEKLY_PERCENT = 97;
-// A target must have this much more room than the account it replaces, so two
-// nearly spent accounts never trade the fleet back and forth.
+// A target must have this much more room than the account it replaces, so the
+// fleet does not hop to an account it would leave again minutes later. Waived
+// once the fleet is about to run out: any account below the thresholds beats a
+// park, and the account left behind stays near its limit, so it is never a
+// target to come back to.
 export const SWITCH_AHEAD_MIN_GAIN = 10;
+export const SWITCH_AHEAD_LAST_CALL_PERCENT = 99;
 export const SWITCH_AHEAD_COOLDOWN_MS = 3 * 60 * 1000;
 
 /** The account is close enough to a limit that the fleet should leave it now:
- *  a live window at or past its threshold, or already spent. */
-export function isNearUsageLimit(usage: CcUsage | undefined | null, now: number): boolean {
+ *  a live window at or past its threshold, or already spent. `models` are the
+ *  models the fleet's sessions run: a model-scoped week ("Fable") counts only
+ *  for them (limitWindows), the same rule the park-driven switch applies. */
+export function isNearUsageLimit(
+  usage: CcUsage | undefined | null,
+  now: number,
+  models?: readonly string[],
+  floor?: { session: number; weekly: number },
+): boolean {
   if (!usage) return false;
-  if (isUsageExhausted(usage, now)) return true;
-  const at = (w: { percent: number; resets_at?: number } | undefined, limit: number) => !!w && livePercent(w, now) >= limit;
-  return at(usage.session, SWITCH_AHEAD_SESSION_PERCENT) ||
-    at(usage.weekly, SWITCH_AHEAD_WEEKLY_PERCENT) ||
-    at(usage.weekly_scoped, SWITCH_AHEAD_WEEKLY_PERCENT);
+  if (isUsageExhausted(usage, now, models)) return true;
+  const { session, weekly } = floor ?? { session: SWITCH_AHEAD_SESSION_PERCENT, weekly: SWITCH_AHEAD_WEEKLY_PERCENT };
+  return limitWindows(usage, models).some((w) => livePercent(w, now) >= (w === usage.session ? session : weekly));
 }
 
 /**
@@ -43,7 +52,10 @@ export function isNearUsageLimit(usage: CcUsage | undefined | null, now: number)
  * moved, which describes the previous account's burn. The target is the
  * account with the most room that is not itself near a limit, not tried in
  * this window without fresh evidence (the same blackout decideAutoSwitch
- * uses), and clearly better than staying.
+ * uses), and clearly better than staying. `models` are the models the fleet's
+ * running sessions use; a scoped week of any other model is ignored on both
+ * sides, so a pegged Fable week neither drives an Opus fleet away nor benches
+ * an account with room for it.
  */
 export function decideSwitchAhead(input: {
   now: number;
@@ -52,19 +64,24 @@ export function decideSwitchAhead(input: {
   profiles: AutoSwitchProfile[];
   attempts: Array<{ profile: string; at: number }>;
   lastActionAt?: number;
+  models?: readonly string[];
 }): { profile: string } | null {
-  const { now, fleetEmail, profiles } = input;
+  const { now, fleetEmail, profiles, models } = input;
   const fleet = profiles.find((p) => p.email && p.email === fleetEmail);
   const usage = fleet?.usage;
   if (!usage || (input.fleetSince !== undefined && usage.fetched_at < input.fleetSince)) return null;
-  if (!isNearUsageLimit(usage, now)) return null;
+  if (!isNearUsageLimit(usage, now, models)) return null;
   if (input.lastActionAt && now - input.lastActionAt < SWITCH_AHEAD_COOLDOWN_MS) return null;
   const fleetPercent = headroomScore(usage, now);
-  const target = fallbackProfiles(profiles, fleetEmail, now).find((p) => {
-    if (isNearUsageLimit(p.usage, now)) return false;
+  const lastCall = isNearUsageLimit(usage, now, models, {
+    session: SWITCH_AHEAD_LAST_CALL_PERCENT,
+    weekly: SWITCH_AHEAD_LAST_CALL_PERCENT,
+  });
+  const target = fallbackProfiles(profiles, fleetEmail, now, models).find((p) => {
+    if (isNearUsageLimit(p.usage, now, models)) return false;
     const tried = input.attempts.reduce((max, a) => (a.profile === p.name && a.at > max ? a.at : max), 0);
     if (tried && now - tried < AUTO_SWITCH_SESSION_WINDOW_MS && (p.usage?.fetched_at ?? 0) < tried + AUTO_SWITCH_ATTEMPT_EVIDENCE_MS) return false;
-    return headroomScore(p.usage, now) <= fleetPercent - SWITCH_AHEAD_MIN_GAIN;
+    return lastCall || headroomScore(p.usage, now) <= fleetPercent - SWITCH_AHEAD_MIN_GAIN;
   });
   return target ? { profile: target.name } : null;
 }

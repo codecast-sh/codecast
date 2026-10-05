@@ -10,15 +10,17 @@
  *   - `copy` from .env presence (high confidence)
  *   - `share` from gitignored dependency directories (high confidence)
  *   - `generate` from package.json scripts or prisma (medium confidence)
- *   - `ports` / `services` / `env` / `teardown` left empty — these vary too
- *     much per project to guess.
+ *   - `services.web` from a web framework app with a `dev` script (high
+ *     confidence: every framework below takes `--port`)
+ *   - `ports` / `env` / `teardown` left empty — these vary too much per
+ *     project to guess.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { DEFAULT_BROWSER } from "./manifest.js";
 import { SHARE_CANDIDATES, resolveSharedDirectories } from "./share.js";
-import type { WorkspaceManifest } from "./types.js";
+import type { ServiceSpec, WorkspaceManifest } from "./types.js";
 
 export type JsPackageManager = "bun" | "pnpm" | "yarn" | "npm";
 
@@ -179,12 +181,14 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
   // We don't auto-enable (could surprise users), but we record the suggestion
   // by setting `browser.enabled=true` so manifests inherit a sensible default.
   // Users can disable via manifest if undesired.
-  const browserEnabled = detectWebFramework(repoRoot);
+  const webApp = detectWebApp(repoRoot);
+  const browserEnabled = webApp !== null;
+  const devService = webApp !== null && js ? detectDevService(repoRoot, webApp, js.name) : null;
 
   return {
     setup: { copy, share, install, generate, migrate: [] },
     ports: {},
-    services: {},
+    services: devService ? { web: devService } : {},
     env: {},
     teardown: { run: [] },
     browser: { ...DEFAULT_BROWSER, enabled: browserEnabled },
@@ -194,14 +198,14 @@ export function detectProject(repoRoot: string): WorkspaceManifest {
 }
 
 /**
- * True if the repo looks like it builds something users would visit in a
- * browser (Next, Vite, Remix, SvelteKit, Astro, plain CRA, etc). Used only to
- * pick a sensible default for browser.enabled in detection.
+ * The directory (relative to the repo, "" for the root) of an app users would
+ * visit in a browser (Next, Vite, Remix, SvelteKit, Astro, plain CRA, etc), or
+ * null. Checks the root, then each package under packages/ and apps/.
  */
-function detectWebFramework(repoRoot: string): boolean {
+function detectWebApp(repoRoot: string): string | null {
   const probes = [
     "next.config.js", "next.config.ts", "next.config.mjs",
-    "vite.config.js", "vite.config.ts",
+    "vite.config.js", "vite.config.ts", "vite.config.mjs",
     "remix.config.js", "remix.config.ts",
     "astro.config.mjs", "astro.config.ts",
     "svelte.config.js",
@@ -209,21 +213,38 @@ function detectWebFramework(repoRoot: string): boolean {
     "angular.json",
     "vue.config.js",
   ];
-  for (const p of probes) {
-    if (fs.existsSync(path.join(repoRoot, p))) return true;
-  }
+  const isApp = (dir: string) => probes.some((p) => fs.existsSync(path.join(repoRoot, dir, p)));
+  if (isApp("")) return "";
   // Workspaces: check sub-packages too (codecast itself has packages/web/vite.config.ts).
-  const pkgsDir = path.join(repoRoot, "packages");
-  if (fs.existsSync(pkgsDir)) {
-    try {
-      for (const sub of fs.readdirSync(pkgsDir)) {
-        const subPath = path.join(pkgsDir, sub);
-        if (!fs.statSync(subPath).isDirectory()) continue;
-        for (const p of probes) {
-          if (fs.existsSync(path.join(subPath, p))) return true;
-        }
-      }
-    } catch { /* ignore */ }
+  for (const parent of ["packages", "apps"]) {
+    const dir = path.join(repoRoot, parent);
+    let subs: string[];
+    try { subs = fs.readdirSync(dir).sort(); } catch { continue; }
+    // A package named web/app/site/frontend is the likelier dev server when several qualify.
+    const ranked = [...subs.filter((s) => /^(web|app|site|frontend|www|client)$/.test(s)), ...subs];
+    for (const sub of ranked) {
+      try {
+        if (fs.statSync(path.join(dir, sub)).isDirectory() && isApp(path.join(parent, sub))) return path.join(parent, sub);
+      } catch { /* ignore */ }
+    }
   }
-  return false;
+  return null;
+}
+
+/**
+ * The web app's dev server as a service `cast dev` can start: its package's
+ * `dev` script, given the workspace's web port. Every framework detectWebApp
+ * knows accepts `--port`, and each package manager below forwards trailing
+ * arguments to the script (npm needs the `--`).
+ */
+function detectDevService(repoRoot: string, appDir: string, pm: JsPackageManager): ServiceSpec | null {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, appDir, "package.json"), "utf-8")) as { scripts?: Record<string, string> };
+    if (!pkg.scripts?.["dev"]) return null;
+  } catch {
+    return null;
+  }
+  const run = pm === "npm" ? "npm run dev --" : pm === "yarn" ? "yarn dev" : `${pm} run dev`;
+  const cd = appDir ? `cd ${appDir} && ` : "";
+  return { mode: "isolated", start: `${cd}${run} --port "$PORT_WEB"`, port: "web" };
 }

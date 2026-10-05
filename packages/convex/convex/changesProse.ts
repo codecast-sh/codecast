@@ -26,6 +26,8 @@ import {
   areaOf,
   cleanSubject,
   clip,
+  clipToSentence,
+  splitArea,
   fitProse,
   splitSentences,
   hash64,
@@ -35,7 +37,7 @@ import {
 } from "@codecast/shared/changes";
 import { callModel, modelCost, parseJsonBlock, type SurfaceRequest } from "./lib/anthropic";
 import { PROSE_MODEL } from "./lib/changesProseModel";
-import { teamVisibleInputs, type ChangesInputMode } from "./lib/changesAccess";
+import { teamVisibleInputs, teamVisibleMedia, type ChangesInputMode, type ChangesMedia } from "./lib/changesAccess";
 import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -65,13 +67,16 @@ export const PROSE_WALL_MS = 5 * 60_000;
 /** Story prompt inputs (spec 7.4). */
 const PROMPT_COMMITS = 12;
 const PROMPT_PATHS = 8;
-const PR_BODY_CHARS = 800;
+/** A pull request's description is often a squash merge's only account of why: room for the whole argument, not its opening. */
+const PR_BODY_CHARS = 2400;
 const PROMPT_TURNS = 8;
 const ASK_CHARS = 300;
 const DID_CHARS = 160;
 /** A risk line keeps the whole sentences that fit this. */
 const RISK_LINE_CHARS = 320;
-const BODY_SENTENCES = 3;
+/** The article a story opens to: words the prompt asks for, and the characters a reply is cut to. */
+const BODY_WORDS = 250;
+export const BODY_CHARS = 3200;
 /** A single fix or feature commit with a subject this long already reads as a headline (the skip path). */
 export const SKIP_SUBJECT_CHARS = 60;
 
@@ -116,6 +121,12 @@ export type StoryPromptSession = {
   turns?: Array<{ ask: string; did: string[] }>;
 };
 
+/** A screenshot the story may place, by ref; its URL stays out of the prompt. */
+export type StoryPromptImage = { ref: string; at: string; context: string };
+
+/** An edit to instruction text (a prompt, a skill, an agent guide) from a session the team sees in full. */
+export type StoryPromptEdit = { path: string; before: string; after: string };
+
 /** Everything the story prompt reads, as plain data: what the evals freeze and replay. */
 export type StoryPromptInput = {
   area: string;
@@ -130,6 +141,14 @@ export type StoryPromptInput = {
   prs: Array<{ number: number; title: string; body: string }>;
   sessions: StoryPromptSession[];
   risks: Array<{ code: string; evidence: string[] }>;
+  images: StoryPromptImage[];
+  /** Ref to URL for `images`: never rendered into the prompt, read by the parser to place them. */
+  image_urls: Record<string, string>;
+  edits: StoryPromptEdit[];
+  /** Pages and canvases the sessions made, by ref (page1, canvas1). */
+  embeds: Array<{ ref: string; kind: "page" | "canvas"; title: string }>;
+  /** Ref to what an `embed:` line becomes: a page URL, or a canvas's whole block. Never rendered into the prompt. */
+  embed_blocks: Record<string, string>;
 };
 
 /** The story facts the prompt is built from: a change_stories row, narrowed. */
@@ -146,6 +165,8 @@ export type GatedSession = {
   headline?: string;
   summary: string;
   turns?: Array<{ ask: string; did: string[] }>;
+  /** Only for a session the team sees in full (changesAccess.teamVisibleMedia). */
+  media?: ChangesMedia;
 };
 
 const shortSha = (s: string) => (/^[0-9a-f]{40}$/i.test(s) ? s.slice(0, 9) : s);
@@ -156,7 +177,22 @@ function pickTurns(turns: ReadonlyArray<{ ask: string; did: string[] }>): Array<
   return kept.map((t) => ({ ask: clip(t.ask, ASK_CHARS), did: t.did.map((d) => clip(d, DID_CHARS)) }));
 }
 
-/** A commit's share of a story: the whole commit, or the story's areas of it when it touched others too. */
+/**
+ * The commit's areas as the story names them: layer 0 may have split the day's
+ * dominant area into its subareas (narrowAreas), so an area the story lacks is
+ * split the same way when that names areas the story has.
+ */
+function storyAreasOf(c: ChangeCommit, storyAreas: ReadonlySet<string>): ChangeCommit {
+  let out = c;
+  for (const a of Object.keys(c.areas)) {
+    if (storyAreas.has(a)) continue;
+    const split = splitArea(out, a);
+    if (split !== out && Object.keys(split.areas).some((k) => !(k in out.areas) && storyAreas.has(k))) out = split;
+  }
+  return out;
+}
+
+/** A commit's share of a story: the whole commit, or the story's areas of it when it touched others too. Takes the commit as storyAreasOf names its areas. */
 function commitShare(c: ChangeCommit, storyAreas: ReadonlySet<string>): StoryPromptCommit {
   const areas = Object.keys(c.areas);
   const inStory = areas.filter((a) => storyAreas.has(a));
@@ -189,6 +225,7 @@ export function storyPromptInput(
   const wanted = new Set(story.commit_shas);
   const shares = commits
     .filter((c) => wanted.has(c.sha))
+    .map((raw) => storyAreasOf(raw, storyAreas))
     .map((c) => ({ c, share: commitShare(c, storyAreas) }))
     .sort((a, b) => b.share.insertions + b.share.deletions - (a.share.insertions + a.share.deletions) || a.c.timestamp - b.c.timestamp || a.c.sha.localeCompare(b.c.sha));
 
@@ -222,14 +259,46 @@ export function storyPromptInput(
     areas,
     top_paths: paths.slice(0, PROMPT_PATHS),
     release: story.release ? { surface: story.release.surface, ...(story.release.version ? { version: story.release.version } : {}), sha: shortSha(story.release.sha) } : null,
-    prs: prs.map((p) => ({ number: p.number, title: p.title, body: clip(p.body ?? "", PR_BODY_CHARS) })),
+    prs: prs.map((p) => ({ number: p.number, title: p.title, body: clipToSentence(p.body ?? "", PR_BODY_CHARS) })),
     sessions: sessions.map((s) => ({
       ...(s.headline ? { headline: s.headline } : {}),
       summary: s.summary,
       ...(s.mode === "full" && s.turns?.length ? { turns: pickTurns(s.turns) } : {}),
     })),
     risks,
+    ...storyMedia(sessions),
   };
+}
+
+const PROMPT_IMAGES = 6;
+const PROMPT_EDITS = 3;
+const PROMPT_EMBEDS = 4;
+
+/** The sessions' images, oldest first and numbered, with their URLs aside; and their instruction edits, largest first. */
+function storyMedia(sessions: readonly GatedSession[]): Pick<StoryPromptInput, "images" | "image_urls" | "edits" | "embeds" | "embed_blocks"> {
+  const full = sessions.filter((s) => s.mode === "full" && s.media);
+  const found = full.flatMap((s) => s.media!.images).sort((a, b) => a.timestamp - b.timestamp).slice(-PROMPT_IMAGES);
+  const images: StoryPromptImage[] = [];
+  const image_urls: Record<string, string> = {};
+  found.forEach((img, i) => {
+    const ref = `img${i + 1}`;
+    images.push({ ref, at: new Date(img.timestamp).toISOString().slice(0, 16).replace("T", " "), context: img.context });
+    image_urls[ref] = img.url;
+  });
+  const edits = full
+    .flatMap((s) => s.media!.edits)
+    .sort((a, b) => b.before.length + b.after.length - (a.before.length + a.after.length))
+    .slice(0, PROMPT_EDITS)
+    .map((e) => ({ path: e.path, before: e.before, after: e.after }));
+  const embeds: StoryPromptInput["embeds"] = [];
+  const embed_blocks: Record<string, string> = {};
+  const counts = { page: 0, canvas: 0 };
+  for (const a of full.flatMap((s) => s.media!.artifacts ?? []).sort((x, y) => x.timestamp - y.timestamp).slice(-PROMPT_EMBEDS)) {
+    const ref = `${a.kind}${++counts[a.kind]}`;
+    embeds.push({ ref, kind: a.kind, title: a.title || (a.kind === "page" ? "a published page" : "a canvas") });
+    embed_blocks[ref] = a.kind === "page" ? a.url : a.block;
+  }
+  return { images, image_urls, edits, embeds, embed_blocks };
 }
 
 /** The sources a story's why may name: only inputs the story actually has. */
@@ -252,7 +321,7 @@ function renderStoryInput(i: StoryPromptInput): string {
   out.push("", "Commits, largest first:");
   for (const c of i.commits) {
     out.push(`- ${c.sha} +${c.insertions} -${c.deletions} ${c.subject}`);
-    if (c.partial) out.push(`    Only its ${listed(c.partial)} ${c.partial.length === 1 ? "part belongs" : "parts belong"} to this story; the rest of the commit is other work.`);
+    if (c.partial) out.push(`    Only its ${listed(c.partial)} ${c.partial.length === 1 ? "part belongs" : "parts belong"} to this story; other stories tell the rest.`);
     if (c.body) out.push(indent(c.body));
   }
   if (i.more_commits) out.push(`- and ${i.more_commits} smaller ${i.more_commits === 1 ? "commit" : "commits"}`);
@@ -281,6 +350,23 @@ function renderStoryInput(i: StoryPromptInput): string {
     }
   }
 
+  if (i.edits.length) {
+    out.push("", "Edits the sessions made to instruction text (prompts, skills, agent guides), before and after:");
+    for (const e of i.edits) {
+      out.push(`- ${e.path}`, "    Before:", indent(e.before || "(new text)", "      "), "    After:", indent(e.after, "      "));
+    }
+  }
+
+  if (i.embeds.length) {
+    out.push("", "Pages and canvases the sessions made, by ref:");
+    for (const e of i.embeds) out.push(`- ${e.ref} (${e.kind}): ${e.title}`);
+  }
+
+  if (i.images.length) {
+    out.push("", "Screenshots from the sessions, by ref, with the words around each:");
+    for (const img of i.images) out.push(`- ${img.ref} (${img.at}): ${img.context || "(no words around it)"}`);
+  }
+
   if (i.risks.length) {
     out.push("", "Risks the page flags on this story:");
     for (const r of i.risks) out.push(`- ${r.code}${r.evidence.length ? `: ${r.evidence.join(", ")}` : ""}`);
@@ -296,16 +382,21 @@ export function storyRequest(input: StoryPromptInput): SurfaceRequest {
 
 Write the story of this work.
 
-- Be brief and direct. A teammate scans a day of these in a minute: use the fewest plain words that carry the change, and leave out file names, ids and mechanics unless they are the news.
-- Say what changed, in plain words, as it shows up for the people who use the product or work on it: what happens now that did not before. Lead with that, not with the files or the mechanics.
+- A teammate scans a day of these in a minute and opens the ones they want to understand. The headline and dek are the scan: the fewest plain words that carry the change. The body is for the reader who opened the story: say everything worth knowing about the change, densely, and nothing else.
+- Tell it at the level of the product: what a user or teammate now sees, can do, or gets that they did not before. For engineering work, what now works differently for the people building the product, still told as behavior and not as files, functions or mechanics.
+- The story is the change and its effect, not how the work was done: leave out how it was built, tested, reviewed, verified or rolled out.
 - A reason is anything that says why the change was made or what it is for: a purpose, a benefit, a problem it solves, any "to ...", "so that ..." or "making it easier to ..." clause. Give one only when an input states it, and set why_source to the input it came from: ${sources.map((s) => `"${s}"`).join(", ")}. When no input states one, set why_source to "none" and write no reason anywhere: not in the headline, the dek or the body.
-- Use only what the inputs say. Name no person or session the inputs do not name, and copy ids such as jx7c6zk, ct-1234 and #412 exactly as written.
-${riskCodes.length ? `- For each flagged risk (${riskCodes.join(", ")}), write one plain line telling a teammate what to watch, keyed by its code in risk_lines.\n` : ""}- No em dashes.
+- Use only what the inputs say, and write as someone who knows the change: never about the inputs themselves or what they leave out. Name no person or session the inputs do not name, and copy ids such as jx7c6zk, ct-1234 and #412 exactly as written.
+${riskCodes.length ? `- For each flagged risk (${riskCodes.join(", ")}), write one plain line telling a teammate what to watch, keyed by its code in risk_lines. The page shows these lines under the body, so the body leaves them out.\n` : ""}- No em dashes.
 
 Fields:
 - headline: what changed, in sentence case, short enough to read at a glance (aim for under ${HEADLINE_TARGET} characters).
 - dek: one short line, not a summary of the work (aim for under ${DEK_TARGET} characters): the stated reason when there is one, otherwise the one fact the headline most needs; "" when the headline says it all. Further detail belongs in the body.
-- body: "" unless the inputs hold facts the headline and dek leave out; then up to ${BODY_SENTENCES} sentences of those facts and nothing else.
+- body: markdown, "" when the headline and dek say it all, and never repeating them. A short article, at most about ${BODY_WORDS} words:
+  - When the work has distinct parts, give each a short "###" heading that names the part; a single change reads as plain paragraphs, with no headings.
+  - Place a screenshot where it shows the change, as ![what it shows](img1) with a ref from the list and a caption a reader can take in without the image. A screenshot earns its place by showing the product as its users see it, or a result the words cannot carry; a terminal, a log or code shows the reader nothing new. Use only listed refs.
+  - When a session made a page or a canvas that shows the work better than words can (a report, a comparison, a diagram), embed it on a line of its own as embed: page1, after a sentence saying what it shows.
+  - When the work changes how an agent behaves (an edit to a prompt, a skill or an agent guide), say what the agent now does differently, quote the instruction briefly as it read before and after, and give any measured result an input states.
 - kind: one of ${KINDS.join(", ")}.
 - importance: 1 to 5, how much a teammate needs to know this today. 5 is a change everyone will notice, 1 is housekeeping.
 - why_source: as above.
@@ -343,12 +434,35 @@ export function sentencesWithin(text: string, max: number): string {
   return out;
 }
 
+const MD_IMAGE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+
+/**
+ * A story's article as the page shows it: its markdown kept, each screenshot
+ * placed by ref swapped for the image it names, any other image dropped (a
+ * reply can only show what the server offered), and a reply that runs long
+ * cut at the last paragraph that fits.
+ */
+export function articleBody(raw: unknown, urls: Readonly<Record<string, string>>, embeds: Readonly<Record<string, string>> = {}): string {
+  if (typeof raw !== "string") return "";
+  let text = raw.replace(/\r\n?/g, "\n").replace(MD_IMAGE, (_m, alt: string, src: string) => (urls[src] ? `![${alt.trim()}](${urls[src]})` : ""));
+  text = text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  if (text.length > BODY_CHARS) {
+    const cut = text.lastIndexOf("\n\n", BODY_CHARS);
+    text = (cut > 0 ? text.slice(0, cut) : sentences(text.slice(0, BODY_CHARS), 99)).trim();
+  }
+  // Embeds go in after the cut: a canvas is a figure, not words the limit counts.
+  return text
+    .replace(/^embed:\s*([a-z]+\d+)\s*$/gm, (_m, ref: string) => (embeds[ref] ? `\n${embeds[ref]}\n` : ""))
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /**
  * The story a reply describes, held to its schema: lengths clipped, enums
  * checked. A reply that is not JSON, has no headline, or names a why source
  * the story does not have is unusable, and the deterministic text stays.
  */
-export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "sessions" | "prs" | "risks">, fallback: { kind: string; importance: number }): StoryProse | null {
+export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "sessions" | "prs" | "risks"> & Partial<Pick<StoryPromptInput, "image_urls" | "embed_blocks">>, fallback: { kind: string; importance: number }): StoryProse | null {
   const raw = parseJsonBlock(text);
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const r = raw as Record<string, unknown>;
@@ -359,7 +473,7 @@ export function parseStoryReply(text: string, input: Pick<StoryPromptInput, "ses
   const kind = KINDS.includes(str(r.kind) as ChangeKind) ? (str(r.kind) as ChangeKind) : (KINDS.includes(fallback.kind as ChangeKind) ? fallback.kind as ChangeKind : "infra");
   const n = typeof r.importance === "number" ? Math.round(r.importance) : NaN;
   const importance = n >= 1 && n <= 5 ? n : fallback.importance;
-  const body = sentences(str(r.body), BODY_SENTENCES);
+  const body = articleBody(r.body, input.image_urls ?? {}, input.embed_blocks ?? {});
   const codes = new Set(input.risks.map((x) => x.code));
   const lines = r.risk_lines && typeof r.risk_lines === "object" && !Array.isArray(r.risk_lines)
     ? Object.fromEntries(Object.entries(r.risk_lines as Record<string, unknown>)
@@ -538,8 +652,14 @@ export const spentOn = internalQuery({
   },
 });
 
-async function gatedSessions(ctx: { db: any }, teamId: Id<"teams">, ids: readonly Id<"conversations">[]): Promise<GatedSession[]> {
+async function gatedSessions(
+  ctx: { db: any; storage?: any },
+  teamId: Id<"teams">,
+  ids: readonly Id<"conversations">[],
+  mediaWindow?: { since: number; until: number },
+): Promise<GatedSession[]> {
   const gate = await teamVisibleInputs(ctx, teamId, ids);
+  const media = mediaWindow ? await teamVisibleMedia(ctx, [...gate.values()], mediaWindow) : new Map<string, ChangesMedia>();
   const out: GatedSession[] = [];
   for (const id of ids) {
     const input = gate.get(String(id));
@@ -551,10 +671,14 @@ async function gatedSessions(ctx: { db: any }, teamId: Id<"teams">, ids: readonl
       ...(input.insight.headline ? { headline: input.insight.headline } : {}),
       summary: input.insight.summary,
       ...(input.insight.turns ? { turns: input.insight.turns } : {}),
+      ...(media.has(String(id)) ? { media: media.get(String(id))! } : {}),
     });
   }
   return out;
 }
+
+/** How far around a story's commits its sessions' screenshots and edits count as its own. */
+const MEDIA_MARGIN_MS = 6 * 60 * 60 * 1000;
 
 export type StoryRead = {
   story: Doc<"change_stories">;
@@ -568,11 +692,11 @@ export const readStory = internalQuery({
   handler: async (ctx, args): Promise<StoryRead | null> => {
     const story = await ctx.db.get(args.story_id);
     if (!story || story.prose_status !== "pending") return null;
-    const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids);
+    const sessions = await gatedSessions(ctx, story.team_id, story.conversation_ids, { since: story.first_at - MEDIA_MARGIN_MS, until: story.last_at + MEDIA_MARGIN_MS });
     const prs: StoryRead["prs"] = [];
     for (const prId of story.pr_ids) {
       const pr = await ctx.db.get(prId);
-      if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: (pr.body ?? "").slice(0, PR_BODY_CHARS) });
+      if (pr && String(pr.team_id) === String(story.team_id)) prs.push({ number: pr.number, title: pr.title, body: clipToSentence(pr.body ?? "", PR_BODY_CHARS) });
     }
     return { story, sessions, prs };
   },

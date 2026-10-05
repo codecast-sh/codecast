@@ -69,6 +69,8 @@ export interface CloudHost {
   gitAccess?: HostGitAccessRecord;
   /** What a GitHub App installation token could do against the same repository, over https. */
   gitAppAccess?: HostGitAccessRecord;
+  /** When a host with no push access last had its key added to GitHub automatically (cloud/prepare.ts). */
+  gitAutoGrantAt?: number;
   /** The human turned the SSH agent bridge on (`cast hosts forward-agent`). Missing = off. */
   forwardAgent?: boolean;
   /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */

@@ -22,15 +22,18 @@ import { createDataContext, createWorkContext } from "./data";
 import { canAccessSignal, canAccessTask, computeWorkspaceKey } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { nextShortId } from "./counters";
-import { patchTask } from "./lib/taskWrite";
-import { insertTaskComment } from "./tasks";
+import { insertTaskComment, moveTaskStatus } from "./tasks";
+import { noticeCauseReopened } from "./lineNotices";
 import { DEDUP_SIMILARITY_THRESHOLD, titleSimilarity } from "./taskMining";
 import { callModel, parseJsonBlock, CHEAP_MODEL, type SurfaceRequest } from "./lib/anthropic";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { insightSignalFingerprint, SIGNAL_KINDS, type SignalKind } from "@codecast/shared/contracts/signalFingerprint";
+import { LINE_SIGNAL_WINDOW_MS, lineProfileContentKey, lineProfileUnchanged } from "@codecast/shared/contracts/lineProfile";
+import { lineFinderValidator, lineProfileFactsValidator } from "./lib/lineProfileValidator";
 import { teamVisibleConvTeam } from "./privacy";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { projectContainingPath } from "./projectPaths";
+import { ownDevice } from "./devices";
 
 export { SIGNAL_KINDS, type SignalKind };
 export type SignalAttach = "fingerprint" | "judge" | "new" | "person";
@@ -393,37 +396,24 @@ function causeDescription(signal: SignalInput): string {
 }
 
 /**
- * A watch move (LE12): the cause's status, with a history row when it moved,
- * the watch cleared, and a note saying why. Reopen and the quiet close share it.
+ * A watch move (LE12): the cause's status through the one task status path
+ * (history and the status notice), the watch cleared, and a note saying why.
+ * Reopen and the quiet close share it.
  */
-async function endWatch(ctx: any, task: Doc<"tasks">, userId: Id<"users"> | undefined, status: string, note: string, now: number) {
-  if (task.status !== status) {
-    await ctx.db.insert("task_history", {
-      task_id: task._id,
-      user_id: userId,
-      actor_type: "system" as const,
-      action: "updated",
-      field: "status",
-      old_value: task.status,
-      new_value: status,
-      created_at: now,
-    });
-  }
-  const moved = status === "open"
-    ? { status, status_id: undefined, closed_at: undefined }
-    : task.status === status ? {} : { status, status_id: undefined, closed_at: now };
+async function endWatch(ctx: any, task: Doc<"tasks">, userId: Id<"users">, status: "open" | "done" | "dropped", note: string, now: number) {
   // The quiet close stamps resolved_at so the outcome survives the cleared
   // watch (LE12, the line page's "resolved"); a reopen clears it.
   const resolved = status === "open" ? { resolved_at: undefined } : { resolved_at: now };
-  await patchTask(ctx, task, { ...moved, ...resolved, watch_until: undefined, updated_at: now });
+  await moveTaskStatus(ctx, task, status, { actorUserId: userId, now, extra: { ...resolved, watch_until: undefined } });
   await insertTaskComment(ctx, task._id, { author: "signals", comment_type: "note", text: note });
 }
 
-/** A signal during watch (LE12): the cause goes back to open, with a note. */
+/** A signal during watch (LE12): the cause goes back to open, with a note, and its people hear. */
 async function reopenCause(ctx: any, task: Doc<"tasks">, userId: Id<"users">, signal: SignalInput, now: number) {
   await endWatch(ctx, task, userId, "open",
     `Reopened during watch: ${signal.source} saw "${signal.title}" again (fingerprint ${signal.fingerprint}).${signal.evidence_url ? ` Evidence: ${signal.evidence_url}` : ""}`,
     now);
+  await noticeCauseReopened(ctx, task, signal.source);
 }
 
 const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -431,11 +421,12 @@ const isoDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
 const WATCH_SWEEP_BATCH = 100;
 
 /**
- * Close every cause whose watch ended with no new signal (LE12) as resolved.
- * A signal during watch reopens the cause and clears watch_until
- * (reopenCause), so a cause still holding a past watch_until stayed quiet.
- * The note names the quiet window: from the last thing that happened to the
- * cause (its last signal, or when it closed) to the end of the watch.
+ * End every watch that saw no new signal (LE12). A signal during watch reopens
+ * the cause and clears watch_until (reopenCause), so a cause still holding a
+ * past watch_until stayed quiet. A shipped cause is already done and stays
+ * done; one the old code left short of done is closed now. The note names the
+ * quiet window: from the last thing that happened to the cause (its last
+ * signal, or when it closed) to the end of the watch.
  */
 export async function closeQuietWatches(ctx: any, now: number): Promise<{ closed: number; more: boolean }> {
   const due: Doc<"tasks">[] = await ctx.db
@@ -446,7 +437,7 @@ export async function closeQuietWatches(ctx: any, now: number): Promise<{ closed
     const end = task.watch_until!;
     const start = Math.max(task.cause?.last_seen ?? 0, task.closed_at ?? 0) || null;
     const window = start ? `${isoDay(start)} to ${isoDay(end)}` : `the watch that ended ${isoDay(end)}`;
-    await endWatch(ctx, task, undefined, isOpenCause(task) ? "done" : task.status, `Resolved: no new signal from ${window}.`, now);
+    await endWatch(ctx, task, task.user_id, task.status === "dropped" ? "dropped" : "done", `Watch ended quiet: no new signal from ${window}.`, now);
   }
   return { closed: due.length, more: due.length === WATCH_SWEEP_BATCH };
 }
@@ -693,8 +684,6 @@ export const showForCli = query({
   },
 });
 
-/** The window the line page reads (LE13): a week of throughput plus margin. */
-export const LINE_SIGNAL_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 const LINE_SIGNAL_CAP = 1000;
 
 /**
@@ -737,46 +726,59 @@ export const webList = query({
   },
 });
 
-const finderKey = (f: { id: string; source: string; kind: "any" | string[]; fingerprint: string; runs?: string }) =>
-  [f.id, f.source, Array.isArray(f.kind) ? f.kind.join(",") : f.kind, f.fingerprint, f.runs ?? ""].join("\u0001");
-
-const finderArg = v.object({
-  id: v.string(),
-  source: v.string(),
-  kind: v.union(v.literal("any"), v.array(v.string())),
-  fingerprint: v.string(),
-  runs: v.optional(v.string()),
-});
-
 /**
- * `cast line profile --publish` (line-profile.md LP3): a repo's declared
- * finders onto the projects they file into, so /line can show each with its
- * last signal and say when it is silent. One group per project the profile
- * names; each ref resolves inside the write workspace by the rule every
- * --project flag uses. A project whose declarations did not change is not
- * written, so a publish on every run costs nothing.
+ * `cast line profile --publish` (line-profile.md LP3): a repo's resolved line
+ * profile onto the projects its finders file into, so the app shows the whole
+ * line and /line can show each finder with its last signal and say when it is
+ * silent. One group per project the profile names; each ref resolves inside
+ * the write workspace by the rule every --project flag uses. A project whose
+ * profile did not change is not written, so a publish on every run costs
+ * nothing. `profile` and `device_id` are absent from a CLI that publishes
+ * finders only.
  */
 export const publishProfile = mutation({
   args: {
     api_token: v.string(),
     ...scopeArgs,
     root: v.optional(v.string()),
-    groups: v.array(v.object({ project: v.string(), default: v.boolean(), finders: v.array(finderArg) })),
+    groups: v.array(v.object({ project: v.string(), default: v.boolean(), finders: v.array(lineFinderValidator) })),
+    profile: v.optional(lineProfileFactsValidator),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await authed(ctx, args.api_token);
     const { db } = await createWorkContext(ctx, { userId, ...scopeOf(args) });
     const out: Array<{ project: string; short_id?: string; title: string; finders: number; changed: boolean }> = [];
+    const now = Date.now();
+    // An edit from the app is routed to the device the row names, so only one
+    // of the caller's own devices may be named; anything else publishes no route.
+    const deviceId = args.device_id && (await ownDevice(ctx, userId, args.device_id)) ? args.device_id : null;
     for (const group of args.groups) {
       const project = await resolveWorkspaceProject(ctx, db.workspaceKey, group.project);
       if (!project) continue;
       // Absent fields stay absent: Convex refuses undefined inside an object.
       const finders = group.finders.map(({ runs, ...f }) => ({ ...f, source: f.source.trim().toLowerCase(), ...(runs ? { runs } : {}) }));
       const prev = project.line_profile;
-      const same = !!prev && prev.root === args.root && !!prev.default === group.default
-        && prev.finders.map(finderKey).join("\n") === finders.map(finderKey).join("\n");
+      // A group the profile does not call its default is another project its
+      // finders file into: that project gets the finders and where they are
+      // declared, never this profile's commands, caps or principles. And a
+      // project with its own profile keeps it: a neighbour's finders do not
+      // replace it.
+      if (!group.default && prev?.default && prev.root !== args.root) {
+        out.push({ project: String(project._id), short_id: project.short_id, title: project.title, finders: finders.length, changed: false });
+        continue;
+      }
+      const next = {
+        ...(group.default ? args.profile : {}),
+        finders,
+        default: group.default,
+        ...(args.root ? { root: args.root } : {}),
+        ...(deviceId ? { device_id: deviceId, publisher_user_id: String(userId) } : {}),
+      };
+      const same = lineProfileUnchanged(prev, next);
       if (!same) {
-        await ctx.db.patch(project._id, { line_profile: { finders, ...(args.root ? { root: args.root } : {}), default: group.default, changed_at: Date.now() } });
+        const contentSame = !!prev && lineProfileContentKey(prev) === lineProfileContentKey(next);
+        await ctx.db.patch(project._id, { line_profile: { ...next, changed_at: contentSame ? prev.changed_at : now, published_at: now } });
       }
       out.push({ project: String(project._id), short_id: project.short_id, title: project.title, finders: finders.length, changed: !same });
     }

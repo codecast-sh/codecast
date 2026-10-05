@@ -1,7 +1,7 @@
 "use client";
 
 import { ArrowRight, X } from "lucide-react";
-import { useInboxStore } from "../../store/inboxStore";
+import { useInboxStore, useMyUserId } from "../../store/inboxStore";
 import { getRoom } from "../../lib/calls/callManager";
 import { firstName } from "./speakers";
 
@@ -22,7 +22,7 @@ function useCallFollow(identity: string): {
   toggle: () => void;
 } {
   const following = useInboxStore((s) => s.followLeaderId === identity);
-  const me = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null) ?? getRoom()?.localParticipant.identity ?? null;
+  const me = useMyUserId() ?? getRoom()?.localParticipant.identity ?? null;
   const isSelf = me === identity;
   const followers = useInboxStore((s) => (isSelf ? s.followedBy.length : 0));
   const toggle = () => {

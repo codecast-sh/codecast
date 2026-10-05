@@ -93,7 +93,7 @@ export function useBrowserTabActions(
   const focus = () => {
     if ((!tabId && !bySession) || state.kind === "busy") return;
     setState({ kind: "busy", verb: "focusing" });
-    void focusBrowserTab(convex, tabId ?? session).then((out) => {
+    void focusBrowserTab(convex, { tabId, ...session }).then((out) => {
       if (out.ok) {
         raiseInShell(out.pid);
         return setState({ kind: "idle" });
@@ -105,14 +105,17 @@ export function useBrowserTabActions(
 
   // The transcript learns a tab is gone only when the agent's stop syncs back,
   // seconds or more after the tab closed. Asking the daemon on hover turns
-  // the pill into the reopen offer before the click instead of after it.
+  // the pill into the reopen offer before the click instead of after it, and
+  // takes the offer back when the session still drives a tab (the daemon
+  // answers for the session's current tab when the row's is gone).
   const check = () => {
-    if (!canReopen || state.kind !== "idle" || (!tabId && !bySession)) return;
+    if (!canReopen || (state.kind !== "idle" && state.kind !== "offer") || (!tabId && !bySession)) return;
     const now = Date.now();
     if (now - probedAt.current < PROBE_EVERY_MS) return;
     probedAt.current = now;
-    void probeBrowserTab(convex, tabId ?? session).then((out) => {
-      if (out.ok || (out.reason !== "tab-gone" && out.reason !== "browser-stopped")) return;
+    void probeBrowserTab(convex, { tabId, ...session }).then((out) => {
+      if (out.ok) return setState((s) => (s.kind === "offer" ? { kind: "idle" } : s));
+      if (out.reason !== "tab-gone" && out.reason !== "browser-stopped") return;
       const reason = out.reason;
       setState((s) => (s.kind === "idle" ? { kind: "offer", reason } : s));
     });

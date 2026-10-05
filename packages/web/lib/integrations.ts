@@ -10,7 +10,7 @@
 // Deliberately logo-less: a kind icon in an accent tile plus the name in strong
 // type, never a third-party logo asset.
 
-import { openExternalUrl } from "./desktop";
+import { isDesktopShell, openExternalUrl } from "./desktop";
 import { useState, type ComponentType, type CSSProperties } from "react";
 import { useAction, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -24,6 +24,7 @@ import {
 } from "@codecast/shared/contracts";
 import { formatRelative } from "./utils";
 import { useInboxStore, type IssueProvider, type TaskExternal } from "../store/inboxStore";
+import type { GoogleGrant, GoogleReturnPath } from "@codecast/convex/convex/googleOAuth";
 
 const api = _api as any;
 
@@ -91,6 +92,10 @@ export function useAppConnection(
   descriptor: AppDescriptor,
   connection: AppConnectionStatus | undefined,
   scope: AppConnectionScope = "team",
+  /** Google only: the grants to ask for beyond read access, the page the
+   *  callback lands on (googleOAuth.ts GOOGLE_RETURN_PATHS), and whether the
+   *  consent screen opens in this tab rather than a new one. */
+  google: { grants?: GoogleGrant[]; returnTo?: GoogleReturnPath; sameTab?: boolean } = {},
 ): AppConnectionActions {
   const getSlackUrl = useAction(api.slack.getInstallUrl);
   const getGoogleUrl = useAction(api.googleOAuth.getConnectUrl);
@@ -122,9 +127,10 @@ export function useAppConnection(
   const openMinted = async (
     mint: () => Promise<{ ok?: boolean; url?: string; error?: string } | null>,
     fallback: string,
+    open: (url: string) => void = openExternalUrl,
   ) => {
     const res = await mint();
-    if (res?.ok && res.url) openExternalUrl(res.url);
+    if (res?.ok && res.url) open(res.url);
     else setError(res?.error ?? fallback);
   };
 
@@ -143,8 +149,19 @@ export function useAppConnection(
 
     await attempt(async () => {
       if (descriptor.id === "gmail") {
-        // Readonly scope only on first connect; the send grant is a later ask.
-        await openMinted(() => getGoogleUrl({}), "Couldn't start the Google connection");
+        // Readonly scope only on first connect; the send grant is a later ask,
+        // unless the caller asks for its grants up front (the simple lane).
+        await openMinted(
+          () => getGoogleUrl({
+            ...(google.grants?.length ? { grant: google.grants } : {}),
+            ...(google.returnTo ? { return_to: google.returnTo } : {}),
+          }),
+          "Couldn't start the Google connection",
+          // In place on the web: a tab opened once the URL arrives is outside
+          // the tap's user activation, and phone browsers block it silently.
+          // The desktop app still hands off to the system browser.
+          google.sameTab && !isDesktopShell() ? (url) => window.location.assign(url) : openExternalUrl,
+        );
       } else if (descriptor.id === "linear" || descriptor.id === "notion") {
         // The generic connector: one flow, provider and scope in the signed state.
         await openMinted(

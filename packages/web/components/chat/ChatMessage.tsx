@@ -19,6 +19,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/
 import { useStorageImageSrc } from "../../hooks/useStorageImageUrl";
 import { ChatVoiceBubble, VoicePlayButton } from "./ChatVoiceBubble";
 import { CallTranscriptDisclosure } from "../calls/TranscriptTurns";
+import { CallVideoStretchChip } from "../calls/CallVideoStretchChip";
 import { ImageLightbox } from "../ImageGallery";
 import { ChatBlockquote } from "./ChatQuote";
 import "./chat.css";
@@ -372,6 +373,9 @@ export const ChatMessage = memo(function ChatMessage({
             <span className="ch-call-kicker">Huddle</span>
             {callTitle && <span className="ch-msg-author">{callTitle}</span>}
             {callHead?.lead && <span className="ch-call-lead">{callHead.lead}</span>}
+            {callHead?.video && message.call && (
+              <CallVideoStretchChip stretches={callHead.video} callRef={message.call.transcriptId} />
+            )}
             <a
               className="ch-msg-time"
               href={permalink ?? `#chatmsg-${message.id}`}

@@ -116,4 +116,38 @@ describe("coverage", () => {
     expect(c.projects.find((p) => p.title === "Growth")!.initiatives).toEqual(["in-3"]);
     expect(c.projects.find((p) => p.title === "Platform")!.initiatives).toEqual(["in-3", "in-5"]);
   });
+
+  // The intent record (I5): the review reads why, what done looks like, the
+  // next milestone, what is still open, which way each number moves and how
+  // many sources back the goal, so it can say what a goal still lacks.
+  test("reads a goal's record: why, done when, the next milestone, open questions, trends and sources", () => {
+    const score = (value: string, observed_at: number) => ({ value, observed_at, source: "https://x.test/board" });
+    const c = computeCoverage(base({
+      initiatives: [
+        {
+          _id: "i_rec", short_id: "in-7", title: "Reach 1k teams", status: "active", health: "on_track", project_ids: [],
+          why: "  Teams that run an agent weekly stay.  ", done_when: "A thousand teams ran an agent in one week.",
+          metrics: [{ key: "teams", name: "Weekly active teams", target: "1000" }, { key: "churn", name: "Churn", target: "under 5%" }, { key: "nps", name: "NPS", target: "50" }],
+          scoreboard: { teams: score("412", 3), churn: score("7%", 3) },
+          score_history: { teams: [score("380", 1), score("400", 2), score("412", 3)], churn: [score("6%", 1), score("7%", 3)], nps: [score("41", 1)] },
+          milestones: [{ key: "ga", title: "General availability" }, { key: "beta", title: "Private beta open", date: 20 }, { key: "alpha", title: "Alpha", date: 10, done_at: 11 }],
+          questions: [{ key: "price", text: "Do we price per seat?", at: 1 }, { key: "who", text: "Who signs?", at: 2, answer: "Ada", answered_at: 3 }],
+          sources: [{ kind: "call", ref: "cl-42:14" }, { kind: "note", quote: "a thousand teams" }],
+        },
+        { _id: "i_bare", short_id: "in-8", title: "Bare", status: "active", health: "none", project_ids: [], milestones: [{ key: "done", title: "Done", done_at: 5 }] },
+      ],
+    }));
+    const [rec, bare] = c.initiatives;
+    expect(rec).toMatchObject({
+      why: "Teams that run an agent weekly stay.", done_when: "A thousand teams ran an agent in one week.",
+      next_milestone: { title: "Private beta open", date: 20 },
+      open_questions: ["Do we price per seat?"],
+      sources: 2,
+    });
+    // A direction is read against the target's own: churn going up is away from "under 5%". One report is no trend.
+    expect(rec.trends).toEqual({ teams: "up from 380, toward the target", churn: "up from 6, away from the target" });
+    // A goal with no record says so with absences and empties, never a guess.
+    expect(bare).toMatchObject({ trends: {}, open_questions: [], sources: 0 });
+    expect([bare.why, bare.done_when, bare.next_milestone]).toEqual([undefined, undefined, undefined]);
+  });
 });

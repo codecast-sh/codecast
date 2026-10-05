@@ -2,7 +2,8 @@ import { StyleSheet, TouchableOpacity, View as RNView, Animated as RNAnimated, P
 import { Text as RNText } from '@/components/Themed';
 import { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
+import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
 import { threadStateView } from '@codecast/web/lib/threadState';
 import { gestureHandler } from '@/lib/gestureHandler';
@@ -201,6 +202,12 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
   // Tapping it zooms the image in a modal instead of opening the session
   // (the nested Pressable wins the touch over the row's TouchableOpacity).
   const showImageThumb = useInboxStore((s) => s.clientState?.ui?.inbox_image_thumbs === true);
+  // Parked on an account banner (signed out, out of usage): the same amber
+  // pill and rule as web's card. Opening the session offers the fix.
+  const reviveAt = useInboxStore((s) => s.blockedReviveRequestedAt[session._id]);
+  const blockedBadge = showsBlockedBadge((session as any).pending_api_error, !!session.has_pending, reviveAt, Date.now())
+    ? apiErrorBadge((session as any).pending_api_error_kind, session.agent_type)
+    : null;
   const [thumbZoom, setThumbZoom] = useState(false);
   // Broken preview image → drop the slot, otherwise it reserves row width.
   const [thumbBroken, setThumbBroken] = useState(false);
@@ -339,6 +346,9 @@ export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, ro
         )}
         {showAuthor && (
           <RNText style={styles.authorText}>{session.author_name}</RNText>
+        )}
+        {blockedBadge && (
+          <RNText style={styles.blockedBadge}>{blockedBadge.label}</RNText>
         )}
         {agent ? (
           <RNText style={[styles.agentBadge, { color: agentColor(session.agent_type ?? "") }]}>{agent}</RNText>
@@ -639,6 +649,17 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     fontWeight: '400',
   },
   // msgs count is sol-orange on web's inbox cards — the one loud meta value.
+  blockedBadge: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Theme.accent,
+    backgroundColor: Theme.accent + '1a',
+    borderColor: Theme.accent + '4d',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 4,
+    paddingHorizontal: 4,
+    overflow: 'hidden',
+  },
   messageCount: {
     fontSize: 11,
     color: Theme.orange,

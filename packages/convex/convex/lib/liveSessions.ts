@@ -31,6 +31,18 @@ export async function listLiveManagedSessions(
     .collect();
 }
 
+// A row a daemon process stands behind. A hosted assistant conversation's
+// status row (managed_sessions.hosted) is not one: its heartbeat proves a
+// running turn, so daemon-only reads (user-wide daemon liveness, the reaper,
+// the process monitor) skip it, while per-conversation liveness keeps it.
+// A daemon row leaves `hosted` unset, and this reads it the same way
+// conversations.buildNamedSessionMaps does through the by_user_hosted_heartbeat
+// index (`eq("hosted", undefined)`), so a row stamped `hosted: false` counts as
+// a daemon on neither path.
+export function isDaemonManagedRow(row: { hosted?: boolean }): boolean {
+  return row.hosted === undefined;
+}
+
 // Conversation ids of the user's live sessions — the shape most call sites
 // actually want (rows without a conversation_id are unlinked daemons).
 export async function liveConversationIdSet(

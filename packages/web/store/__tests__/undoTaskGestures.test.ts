@@ -123,3 +123,27 @@ describe("status labels name the team's status", () => {
     expect(labels()).toEqual(["Moved ct-1 to In Review"]);
   });
 });
+
+// A bulk edit from the context menu or the palette is named for what it
+// changed, the way a single task's edit is, so two bulk gestures on the same
+// tasks read differently in the timeline and the Undid toast.
+describe("bulk task edits name the change", () => {
+  it("status, priority, assignee and a terminal status each read as themselves", async () => {
+    const { updateTasksAsOne } = await import("../../lib/taskActions");
+    const SAM = "s".repeat(32);
+    useInboxStore.setState({ teamMembers: [{ _id: SAM, name: "Sam" }] } as any);
+    updateTasksAsOne(["ct-1", "ct-2"], { status: "in_progress" });
+    updateTasksAsOne(["ct-1", "ct-2"], { priority: "high" });
+    updateTasksAsOne(["ct-1", "ct-2"], { assignee: SAM });
+    updateTasksAsOne(["ct-1", "ct-2"], { assignee: null });
+    updateTasksAsOne(["ct-1", "ct-2"], { status: "done" });
+    expect(labels()).toEqual([
+      "Moved 2 tasks to Done",
+      "Unassigned 2 tasks",
+      "Assigned 2 tasks to Sam",
+      "Set 2 tasks to high priority",
+      "Moved 2 tasks to In Progress",
+    ]);
+    expect(s().tasks[A].status).toBe("done");
+  });
+});

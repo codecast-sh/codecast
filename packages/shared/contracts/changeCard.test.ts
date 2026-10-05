@@ -82,9 +82,9 @@ describe("assembleChangeCard", () => {
     const card = sample();
     expect(card.proof.before.map((x) => x.name)).toEqual([
       "titlePrompt.test.ts · greeting is never the title",
-      "title · opener is a greeting",
-      "title · pasted stack trace",
-      "title · long opener with a plan",
+      "Real case 1",
+      "Real case 2",
+      "Real case 3",
     ]);
     expect(card.cost.usd).toBe(1.96);
     expect(card.checks.map((c) => [c.name, c.ok])).toEqual([["Verify", true], ["Eval", true], ["Review", true]]);
@@ -158,7 +158,7 @@ describe("validateChangeCard", () => {
       "cause.task: expected a task short id (ct-N), got \"56301\"",
       "cause.first_seen: expected epoch milliseconds or null, got \"yesterday\"",
       "proof.after[1].ok: expected a boolean, got \"yes\"",
-      "proof.after: no check named \"title · opener is a greeting\"; every red check needs its after",
+      "proof.after: no check named \"Real case 1\"; every red check needs its after",
       "examples[0].after: expected a string, got 4",
       "diff.added: expected a non-negative number, got -3",
       "diff.pr: expected a url, got \"github pr\"",
@@ -286,3 +286,14 @@ describe("cardVerdictIndexes", () => {
   });
 });
 
+
+describe("headline and context", () => {
+  test("a cold-reader headline and one-sentence context validate; overlong or multi-sentence ones are refused", () => {
+    const base = JSON.parse(fs.readFileSync(path.join(DIR, "card.json"), "utf-8"));
+    expect(validateChangeCard({ ...base, headline: "Work summaries stop calling unfinished steps done", context: "Codecast writes a short summary of each agent session so a person can catch up fast." }).ok).toBe(true);
+    const long = validateChangeCard({ ...base, headline: "x".repeat(81) });
+    expect(long.ok).toBe(false);
+    const two = validateChangeCard({ ...base, context: "It is a summary. People read it." });
+    expect(two.ok ? [] : two.errors.join(" ")).toContain("context");
+  });
+});

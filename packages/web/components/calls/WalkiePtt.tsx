@@ -1,7 +1,7 @@
 // The mic button. The gesture it carries lives in hooks/useWalkie; this is only
 // what the talk toggle looks like, so the composer, a hover card and the receiver banner
 // can each dress the same press differently.
-import { useRef } from "react";
+import { useLongPress } from "../../hooks/useLongPress";
 import { Headphones, Mic, type LucideIcon } from "lucide-react";
 import {
   talkToggleProps,
@@ -15,8 +15,6 @@ import { startHuddle } from "../../lib/calls/callManager";
 import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
 import "./walkie.css";
 
-/** A long press is a right click for a finger; this is how long it takes. */
-const LONG_PRESS_MS = 500;
 
 export function WalkiePttButton({
   roomKey,
@@ -49,15 +47,14 @@ export function WalkiePttButton({
 }) {
   const ptt = usePushToTalk(roomKey, resolveChannelId);
   const ringMenu = useContextMenu<void>();
-  // A long press ends in a click, and the click would toggle the talk the
-  // press was meant to avoid — so the press marks the click as spent.
-  const longPress = useRef<{ timer: ReturnType<typeof setTimeout> | null; spent: boolean }>({ timer: null, spent: false });
-  const cancelLongPress = () => {
-    if (longPress.current.timer) clearTimeout(longPress.current.timer);
-    longPress.current.timer = null;
-  };
   const openRing = (e: { clientX: number; clientY: number; target: EventTarget | null; preventDefault(): void; stopPropagation(): void; shiftKey?: boolean }) =>
     ringMenu.open(e as React.MouseEvent, undefined, { force: true });
+  // A long press opens the ring menu; the click it ends in is spent, so it
+  // does not toggle the talk the press was meant to avoid.
+  const longPress = useLongPress((at: { clientX: number; clientY: number; target: EventTarget | null }) =>
+    openRing({ ...at, preventDefault() {}, stopPropagation() {} }),
+  );
+  const cancelLongPress = longPress.cancel;
   // What a screen reader is told lives in walkieKeyName, beside the state
   // machine it mirrors — the two answer the same question for two senses and
   // must never disagree.
@@ -112,8 +109,7 @@ export function WalkiePttButton({
       title={ptt.reason ?? (state === "idle" ? (ring ? `${idleTitle}. Right click to ring` : idleTitle) : name)}
       {...toggle}
       onClick={(e) => {
-        if (longPress.current.spent) {
-          longPress.current.spent = false;
+        if (longPress.takeSpent()) {
           e.preventDefault();
           e.stopPropagation();
           return;
@@ -125,13 +121,7 @@ export function WalkiePttButton({
         ring
           ? (e) => {
               if (e.button !== 0) return;
-              cancelLongPress();
-              const at = { clientX: e.clientX, clientY: e.clientY, target: e.target };
-              longPress.current.timer = setTimeout(() => {
-                longPress.current.timer = null;
-                longPress.current.spent = true;
-                openRing({ ...at, preventDefault() {}, stopPropagation() {} });
-              }, LONG_PRESS_MS);
+              longPress.start({ clientX: e.clientX, clientY: e.clientY, target: e.target });
             }
           : undefined
       }

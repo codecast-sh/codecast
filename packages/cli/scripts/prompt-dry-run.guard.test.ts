@@ -391,14 +391,19 @@ function harnessWorld(stream: object[]) {
   write(path.join(dir, "prompt.md"), "Reply with the word ok.");
   write(path.join(dir, "system.md"), "Answer briefly.");
   const run = (...args: string[]) => runWith({}, ...args);
+  const envWith = (extra: Record<string, string>) => ({ PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(dir, "stream.jsonl"), ...extra });
   const runWith = (extra: Record<string, string>, ...args: string[]) => {
-    const r = Bun.spawnSync(["bun", HARNESS, ...args], {
-      env: { PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: dir, CODECAST_DIR: state, FAKE_CLAUDE_REC: rec, FAKE_CLAUDE_STREAM: path.join(dir, "stream.jsonl"), ...extra },
-    });
+    const r = Bun.spawnSync(["bun", HARNESS, ...args], { env: envWith(extra) });
     return { code: r.exitCode, err: r.stderr.toString() };
   };
+  /** The same run, in flight alongside others. */
+  const runAsync = async (extra: Record<string, string>, ...args: string[]) => {
+    const p = Bun.spawn(["bun", HARNESS, ...args], { env: envWith(extra), stdout: "pipe", stderr: "pipe" });
+    const [code, err] = await Promise.all([p.exited, new Response(p.stderr).text()]);
+    return { code, err };
+  };
   const recorded = (name: string) => (fs.existsSync(path.join(rec, name)) ? fs.readFileSync(path.join(rec, name), "utf8") : null);
-  return { dir, run, runWith, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
+  return { dir, run, runWith, runAsync, recorded, runDir: path.join(dir, "run"), prompt: path.join(dir, "prompt.md"), system: path.join(dir, "system.md") };
 }
 
 const reply = (text: string, stop: string, outputTokens: number) => [
@@ -439,7 +444,7 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("stdin")).toBe("Reply with the word ok.");
     expect(h.recorded("env")).toBe("20\n1\nfake-token\n");
     expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8"))).toEqual({
-      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"),
+      model: "m-pinned", call: true, maxOutputTokens: 20, tools: [], maxTurns: 1, serve: null, guard: path.join(import.meta.dir, "prompt-dry-run-bin"), isolation: null,
     });
     const out = JSON.parse(fs.readFileSync(path.join(h.runDir, "out.json"), "utf8"));
     expect(out).toMatchObject({ result: "ok", stop_reason: "end_turn", is_error: false });
@@ -494,6 +499,45 @@ describe("prompt-dry-run.ts", () => {
     expect(h.recorded("bash")).toContain("dry run: 'cast task create Something' would write, and is refused");
     expect(fs.readFileSync(path.join(h.runDir, "calls.log"), "utf8")).toBe("task create Something\nREFUSED task create Something\n");
   }, 60_000);
+
+  // ct-56832: two agents in flight both wrote /tmp/org_inputs.json and one graded the other's world.
+  test.if(process.platform === "darwin")("two agent runs in flight cannot see each other's /tmp scratch, and each keeps its own under $TMPDIR", async () => {
+    const shared = `/tmp/dry-run-isolation-${process.pid}.json`;
+    fs.writeFileSync(shared, "planted outside");
+    try {
+      const agent = (id: string) => [
+        `echo ${id} > ${shared} && echo tmp-write-ok || echo tmp-write-refused`,
+        `cat ${shared} 2>&1 | sed 's/^/tmp-read: /'`,
+        `echo ${id} > "$TMPDIR/x.json"`,
+        "sleep 1",
+        `echo "mine: $(cat "$TMPDIR/x.json")"`,
+        `echo "claude-tmp: $CLAUDE_CODE_TMPDIR"`,
+      ].join("; ");
+      const result = [{ type: "result", result: "Done.", is_error: false, num_turns: 1, total_cost_usd: 0 }];
+      const [a, b] = [harnessWorld(result), harnessWorld(result)];
+      const runs = await Promise.all([a, b].map((h, i) => h.runAsync({ FAKE_CLAUDE_BASH: agent(`agent-${i}`) }, "--run", h.runDir, "--prompt", h.prompt, "--model", "m", "--account", "fake")));
+      expect(runs.map((r) => r.code)).toEqual([0, 0]);
+      for (const [i, h] of [a, b].entries()) {
+        const said = h.recorded("bash")!;
+        expect(said).toContain("tmp-write-refused");
+        expect(said).toContain("Operation not permitted");
+        expect(said).not.toContain("planted outside");
+        expect(said).toContain(`mine: agent-${i}`);
+        expect(said).not.toContain(`agent-${1 - i}`);
+        expect(said).toContain(`claude-tmp: ${path.join(h.runDir, "tmp")}`);
+        expect(JSON.parse(fs.readFileSync(path.join(h.runDir, "args.json"), "utf8")).isolation).toBe("sandbox-exec");
+      }
+      expect(fs.readFileSync(shared, "utf8")).toBe("planted outside");
+    } finally {
+      fs.rmSync(shared, { force: true });
+    }
+  }, 60_000);
+
+  test("--isolation-check answers whether agent scratch is private here, and runs nothing else", () => {
+    const r = Bun.spawnSync(["bun", HARNESS, "--isolation-check"], { env: { PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, HOME: os.homedir() } });
+    if (process.platform === "darwin") expect({ code: r.exitCode, out: r.stdout.toString() }).toEqual({ code: 0, out: "isolated\n" });
+    else expect(r.exitCode).toBe(3);
+  }, 30_000);
 
   test("each --then is one more turn resumed into the same session, in order, with a turn line in calls.log", () => {
     const h = harnessWorld([

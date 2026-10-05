@@ -1,3 +1,9 @@
 {
-  "sources": {}
+  "ingestKey": "cc_ing_HJxoR7q5ntQxFucMB3rgF1GFN5ZtXqDS",
+  "sources": {
+    "codecast-web": {
+      "id": "src-11",
+      "workspace": "team:k97cxdv2nqef5wfm26jvrxf6fd84a30y"
+    }
+  }
 }

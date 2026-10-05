@@ -27,6 +27,8 @@ import { useRoleScope } from "../../../hooks/useRoleScope";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { EntityIdPill } from "../../EntityIdPill";
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from "@codecast/shared/contracts/briefStanding";
+import { parsePlaybook, playbookIsEmpty, roleWakeOf, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
+import { RolePlaybook, RoleWakeLine } from "./RolePlaybook";
 import { ScopeSettings } from "./ScopeSettings";
 import { ScopeLineTab } from "./ScopeLineTab";
 import { ScopeTriggersTab } from "./ScopeTriggersTab";
@@ -210,6 +212,7 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
       </section>
 
       <ScopeOverviewTab role={role} now={p.now} narrative={p.brief?.narrative} briefLoaded={p.brief !== undefined} />
+      <RolePlaybookSections narrative={p.brief?.narrative} routine={p.brief?.role.routine ?? null} now={p.now} />
 
       {me && (
         <section data-scope-section="goals">
@@ -239,6 +242,29 @@ function RoleOverview(p: ScopePanelProps & { role: OrgRole }) {
 }
 
 const BLOCK_LABEL = "px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]";
+
+/** What the role has learned and how it wakes (org-staffing.md S38), under
+ *  the briefing: the playbook from the brief's own sections, the wake from
+ *  the role's trigger. Each only when there is something to show. */
+export function RolePlaybookSections({ narrative, routine, now }: { narrative: string | null | undefined; routine: (Parameters<typeof roleWakeOf>[0] & { wake?: RoleWake }) | null; now: number }) {
+  const playbook = useMemo(() => parsePlaybook(narrative), [narrative]);
+  return (
+    <>
+      {!playbookIsEmpty(playbook) && (
+        <section data-scope-section="playbook">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>Its playbook</h3>
+          <RolePlaybook playbook={playbook} narrative={narrative} now={now} />
+        </section>
+      )}
+      {routine && (
+        <section data-scope-section="wake">
+          <h3 className={BLOCK_LABEL} style={{ color: "var(--sol-text-dim)" }}>How it wakes</h3>
+          <RoleWakeLine wake={routine.wake ?? roleWakeOf(routine)} className="px-2.5" />
+        </section>
+      )}
+    </>
+  );
+}
 
 /** The briefing (F5.1): where each project stands and what the role is
  *  doing, in words. The only number on it is inside the activity line; the

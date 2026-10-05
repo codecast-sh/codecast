@@ -12,6 +12,7 @@ import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
+import { callFrameAtPath, referenceCallFrames } from "./callFrameRefs.js";
 export { filesForWire, type SyncFile } from "./userFiles.js";
 
 const fetchWithIngestDeadline = ((input, init) => {
@@ -808,6 +809,11 @@ export class SyncService {
   ): Promise<void> {
     type Img = { mediaType: string; data?: string; localPath?: string; storageId?: string; toolUseId?: string };
 
+    // A frame of a call the agent looked at syncs as the moment's reference,
+    // never as the picture (callFrameRefs.ts): this is the door every agent's
+    // images pass through, live and from the retry queue alike.
+    referenceCallFrames(messages as any);
+
     // Uploads run with bounded concurrency across the whole batch instead of
     // one image at a time.
     const uploads = countingSemaphore(IMAGE_UPLOAD_CONCURRENCY);
@@ -932,14 +938,25 @@ export class SyncService {
       }
       if (paths.size === 0) continue;
       const replacements = new Map<string, string>();
+      // A frame of a call is never uploaded: the link becomes the moment's
+      // reference, which renders as that frame under the call's own access
+      // rule and goes when the recording does (callFrameRefs.ts).
+      const frames = new Map<string, string>();
       for (const rawPath of paths) {
+        const frame = callFrameAtPath(rawPath);
+        if (frame) {
+          frames.set(rawPath, frame.ref);
+          continue;
+        }
         const url = await this.resolveLocalImageUrl(rawPath);
         if (url) replacements.set(rawPath, url);
       }
-      if (replacements.size === 0) continue;
+      if (replacements.size === 0 && frames.size === 0) continue;
       msg.content = msg.content.replace(
         new RegExp(LOCAL_IMAGE_LINK_RE.source, "gi"),
         (full, open: string, linkPath: string, close: string) => {
+          const ref = frames.get(linkPath);
+          if (ref) return ref;
           const url = replacements.get(linkPath);
           return url ? `${open}${url}${close}` : full;
         },
@@ -1254,6 +1271,9 @@ export class SyncService {
   }): Promise<string> {
     await this.throttle();
     await this.rescueLocalImageLinks([params]);
+    // Before the images are copied out of the message: a frame's reference
+    // lands on the message's own tool result (callFrameRefs.ts).
+    referenceCallFrames([params]);
     const imageHolder = [{
       images: params.images ? params.images.map((image) => ({ ...image })) : undefined,
     }];
@@ -1602,6 +1622,7 @@ export class SyncService {
         project_path: projectPath,
         git_root: gitRoot,
         git_remote_url: gitRemoteUrl,
+        device_id: deviceId(),
         api_token: this.apiToken,
       });
       return result as { updated: boolean } | null;
@@ -2088,7 +2109,10 @@ export class SyncService {
           api_token: this.apiToken,
         }
       );
-    } catch {}
+    } catch (err) {
+      // Unrecorded, the row stays "preparing" and the heartbeat re-issues the spawn forever.
+      throw new Error(`placement failure not recorded: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

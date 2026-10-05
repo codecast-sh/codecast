@@ -8,6 +8,7 @@ import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDecisionDraft } from "../../hooks/useDecisionDraft";
 import { chosenOptions } from "../../lib/decisionLinks";
+import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
 
 // The answer footer, per kind (docs/architecture/decisions-as-documents.md
@@ -25,7 +26,6 @@ import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeC
 // the card's own controls (ChangeCardAnswer), whatever surface renders it.
 /** `record` is a card's answer on record in words (cardOutcome's pill); other kinds show theirs on the rows. */
 type AnswerControlsProps = Parameters<typeof GenericAnswerControls>[0] & { record?: string };
-type AnswerDraft = { picked: number[]; order: number[]; values: Record<string, any>; otherText: string; otherOpen: boolean };
 export function DecisionAnswerControls(props: AnswerControlsProps) {
   const indexes = cardAnswerIndexes(props.decision);
   if (indexes) return <ChangeCardAnswer decision={props.decision} indexes={indexes} onAnswer={props.onAnswer} onDismiss={props.onDismiss} keys={props.keys} keyScope={props.keyScope} size={props.size} record={props.record} />;
@@ -57,27 +57,14 @@ function GenericAnswerControls({
   // not here: this component unmounts whenever its card folds or its page
   // changes, and a choice must never fold away with it.
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decision._id);
-  const optionCount = decision.options.length;
   const otherOpen = !!draft.otherOpen;
   const otherText = draft.otherText ?? "";
   const setOtherOpen = useCallback((open: boolean) => patchDraft({ otherOpen: open }), [patchDraft]);
   const otherRef = useRef<HTMLTextAreaElement>(null);
-  // An edited decision (cast decide edit) can drop options under a draft.
-  const picked = useMemo(() => (draft.picked ?? []).filter((n) => n < optionCount), [draft.picked, optionCount]);
-  const order = useMemo(
-    () => (draft.order?.length === optionCount ? draft.order : decision.options.map((_, i) => i)),
-    [draft.order, optionCount, decision.options],
-  );
-  const values = useMemo(() => {
-    const out: Record<string, any> = {};
-    for (const f of decision.form?.fields ?? []) out[f.key] = draft.values?.[f.key] ?? (f.type === "bool" ? false : f.type === "select" ? (f.options?.[0] ?? "") : "");
-    return out;
-  }, [decision.form, draft.values]);
+  const view = useMemo(() => answerView(decision, draft), [decision, draft]);
+  const { picked, order, values } = view;
   const setValue = useCallback((key: string, fn: (v: any) => any) => patchDraft((cur) => ({ values: { ...cur.values, [key]: fn(cur.values?.[key] ?? values[key]) } })), [patchDraft, values]);
-  const togglePick = useCallback((n: number) => patchDraft((cur) => {
-    const p = cur.picked ?? [];
-    return { picked: p.includes(n) ? p.filter((x) => x !== n) : [...p, n] };
-  }), [patchDraft]);
+  const togglePick = useCallback((n: number) => patchDraft((cur) => togglePicked(cur, n)), [patchDraft]);
   const [error, setError] = useState<string | null>(null);
 
   const answerSingle = useCallback((index: number) => onAnswer({ index }), [onAnswer]);
@@ -88,29 +75,15 @@ function GenericAnswerControls({
   }, [onAnswer, otherText]);
 
   const submit = useCallback(() => {
-    if (kind === "multi") {
-      if (picked.length === 0) return setError("Pick at least one option.");
-      onAnswer({ json: [...picked].sort((a, b) => a - b) });
-    } else if (kind === "rank") {
-      onAnswer({ json: order });
-    } else if (kind === "form") {
-      for (const f of decision.form?.fields ?? []) {
-        const v = values[f.key];
-        if (f.type !== "bool" && (v === "" || v === undefined)) return setError(`${f.label} is required.`);
-        if (f.type === "number" && Number.isNaN(Number(v))) return setError(`${f.label} must be a number.`);
-      }
-      const out: Record<string, any> = {};
-      for (const f of decision.form?.fields ?? []) out[f.key] = f.type === "number" ? Number(values[f.key]) : values[f.key];
-      onAnswer({ json: out });
-    }
-  }, [kind, picked, order, values, decision.form, onAnswer]);
+    const built = buildDecisionAnswer(decision, view);
+    if (!built) return;
+    if ("error" in built) return setError(built.error);
+    onAnswer(built.input);
+  }, [decision, view, onAnswer]);
 
   const move = useCallback((from: number, dir: -1 | 1) => {
-    const to = from + dir;
-    if (to < 0 || to >= order.length) return;
-    const next = [...order];
-    [next[from], next[to]] = [next[to], next[from]];
-    patchDraft({ order: next });
+    const next = moveInOrder(order, from, dir);
+    if (next) patchDraft({ order: next });
   }, [order, patchDraft]);
 
   // Digits answer a single; on a multi they toggle; Enter submits a multi,
@@ -158,7 +131,7 @@ function GenericAnswerControls({
   const submitBtn = (
     <button onClick={submit} className={`flex items-center gap-2 rounded border border-sol-green/40 text-sol-text transition-colors hover:bg-sol-green hover:text-sol-bg ${compact ? "px-2.5 py-1.5 text-[12px]" : "px-3 py-2 text-sm"}`}>
       {keys && <KeyCap size="xs">return</KeyCap>}
-      <span>Send this answer</span>
+      <span>{ANSWER_WORDS.send}</span>
     </button>
   );
   // The marks after a label: a lead's recommendation, the default the agent
@@ -166,7 +139,7 @@ function GenericAnswerControls({
   const tags = (i: number) => (
     <>
       {recommendation === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">recommended</span>}
-      {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>}
+      {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">{ANSWER_WORDS.proceeding}</span>}
     </>
   );
   const openOther = () => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); };
@@ -247,7 +220,7 @@ function GenericAnswerControls({
             {f.type === "bool" ? (
               <button onClick={() => setValue(f.key, (v) => !v)} className="flex items-center gap-2 text-sm text-sol-text">
                 {values[f.key] ? <CheckSquare className="w-4 h-4 text-sol-yellow" /> : <Square className="w-4 h-4 text-sol-text-dim" />}
-                <span>{values[f.key] ? "yes" : "no"}</span>
+                <span>{values[f.key] ? ANSWER_WORDS.yes : ANSWER_WORDS.no}</span>
               </button>
             ) : f.type === "select" ? (
               <select value={values[f.key]} onChange={(e) => { const v = e.target.value; setValue(f.key, () => v); }} className={input}>

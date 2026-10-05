@@ -12,11 +12,15 @@
 
 import {
   coveredSpans,
+  videoStretches,
+  describeClockSpans,
   formatCallTime,
+  isRecordingFilming,
   locateCallMoment,
   nearestRecordedMs,
   offsetIntoRecording,
   playableFiles,
+  recordingWindow,
   segmentAt,
   type CallCoveredSpan,
   type CallMomentPrefer,
@@ -76,7 +80,7 @@ export type CallVideoRun = {
 function runState(rows: CallVideoFile[]): CallVideoRun["state"] {
   const composite = rows.find((r) => r.kind === "composite");
   const lead = composite ?? rows[0];
-  if (lead && (lead.status === "starting" || lead.status === "recording")) return "live";
+  if (lead && isRecordingFilming(lead.status)) return "live";
   if (rows.some((r) => r.status === "stopping")) return "saving";
   if (rows.some((r) => r.status === "ready")) return "ready";
   return "failed";
@@ -144,9 +148,10 @@ export function shownMomentNear(files: readonly CallVideoFile[], callStartedAt: 
   if (playable.some((f) => fileSecondsAt(f, callStartedAt, callMs) !== null)) return callMs;
   let best: { ms: number; gap: number } | null = null;
   for (const f of playable) {
-    const from = callMsOf(f, callStartedAt, 0);
-    const length = (f.duration_ms ?? 0) || (f.ended_at != null && f.started_at != null ? f.ended_at - f.started_at : 0);
-    const edges = [from, ...(length > 1000 ? [from + length - 1000] : [])];
+    // Every playable file is finished, so its window never reads the clock.
+    const w = recordingWindow(f, 0);
+    if (!w) continue;
+    const edges = [w.start - callStartedAt, ...(w.end - w.start > 1000 ? [w.end - 1000 - callStartedAt] : [])];
     for (const ms of edges) {
       const gap = Math.abs(ms - callMs);
       if (gap <= slackMs && (!best || gap < best.gap)) best = { ms, gap };
@@ -162,23 +167,14 @@ export function filmedSpans(files: readonly CallVideoFile[], callStartedAt: numb
   return coveredSpans(playableFiles(files), callStartedAt, 0);
 }
 
-/** The filmed stretches as a reader sees them: the union of every span, a
- *  screen inside its room's run adding nothing, so the header can say which
- *  part of a call has video and the transcript can mark the lines in it. */
-export function videoStretches(spans: readonly CallCoveredSpan[]): Array<{ fromMs: number; toMs: number }> {
-  const out: Array<{ fromMs: number; toMs: number }> = [];
-  for (const s of [...spans].sort((a, b) => a.fromMs - b.fromMs)) {
-    const last = out[out.length - 1];
-    if (last && s.fromMs <= last.toMs) last.toMs = Math.max(last.toMs, s.toMs);
-    else out.push({ fromMs: s.fromMs, toMs: s.toMs });
-  }
-  return out;
-}
+/** The filmed stretches as a reader sees them (shared videoStretches, what
+ *  a huddle's digest names too). */
+export { videoStretches };
 
-/** The stretches in words: `2:12–6:15, 9:40–12:02`. */
-export function describeStretches(stretches: ReadonlyArray<{ fromMs: number; toMs: number }>): string {
-  return stretches.map((s) => `${formatCallTime(s.fromMs)}–${formatCallTime(s.toMs)}`).join(", ");
-}
+/** The stretches in words: `2:12-6:15, 9:40-12:02`, the shared
+ *  describeClockSpans, so a call reads the same on the page and in the
+ *  terminal. */
+export { describeClockSpans as describeStretches };
 
 /** What a page says when a line is clicked at a moment no video shows, and
  *  where the nearest video is (the shared rule the CLI's refusal offers,
@@ -253,9 +249,7 @@ export function lineSeqAt(
   callMs: number,
 ): number | null {
   const segs = turn?.segments ?? [];
-  let seq: number | null = segs[0]?.seq ?? null;
-  for (const s of segs) if (s.t0 <= callMs) seq = s.seq;
-  return seq;
+  return segs[segmentAt(segs, callMs, { holdMs: Infinity })?.index ?? 0]?.seq ?? null;
 }
 
 /** What the call page says above where the video goes, when there is

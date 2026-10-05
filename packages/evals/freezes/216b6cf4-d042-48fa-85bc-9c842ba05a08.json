@@ -1,0 +1,26 @@
+{
+  "name": "changes-story process-heavy-cleanup",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:process-heavy-cleanup"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "changes-story:process-heavy-cleanup",
+    "title": "changes-story process-heavy-cleanup"
+  },
+  "asOf": "2026-01-14T18:00:00.000Z",
+  "trigger": {
+    "type": "changes-story"
+  },
+  "meta": {
+    "surface": "changes-story",
+    "visibility": "public",
+    "snapshot": "fixtures/changes-story/process-heavy-cleanup.json"
+  },
+  "judge": "the article tells what changed for the people involved (staff notes are now separate and only staff see them, so customers no longer read internal notes in their portal; existing notes were moved out of 48 requests) and why; it leaves out how the work was done (the review page, the dry run, test runs, verification steps, file counts) and never comments on its inputs (such as the commit message being cut off)",
+  "notes": null,
+  "tags": [],
+  "id": "216b6cf4-d042-48fa-85bc-9c842ba05a08",
+  "createdAt": "2026-10-05T00:05:20.354Z"
+}

@@ -25,6 +25,7 @@ import { query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { canRevokeInstallation } from "./githubApp";
 import { activeTeamMembershipFor } from "./lib/access";
+import { assistantGoogleConnection } from "./googleOAuth";
 import {
   APP_DESCRIPTORS,
   APP_IDS,
@@ -101,11 +102,11 @@ async function connectedAt(ctx: { db: any }, id: AppId, lens: Lens): Promise<Con
   }
 
   if (id === "gmail") {
-    // Personal by design: mail belongs to a person, not a workspace.
-    const install = await ctx.db
-      .query("google_installations")
-      .withIndex("by_scope_user", (q: any) => q.eq("scope_user_id", userId))
-      .first();
+    // Personal by design: mail belongs to a person, not a workspace. The
+    // account shown, and the one Disconnect revokes, is the one the assistant
+    // works in, by the same rule as every other reader; a pending
+    // half-connect is never it.
+    const install = await assistantGoogleConnection(ctx, String(userId));
     if (!install) return null;
     return {
       id,

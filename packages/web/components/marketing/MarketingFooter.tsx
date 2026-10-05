@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { Logo } from "@/components/Logo";
 import { SITE_LINKS } from "@/lib/siteLinks";
+import { FEATURE_DEEP_DIVES, featureHref } from "@/app/(marketing)/features/catalog";
 
 export function MarketingFooter() {
   return (
     <footer className="border-t border-[#eee8d5] bg-[#fdf6e3] text-[#657b83]">
       <div className="max-w-6xl mx-auto px-6 py-12">
-        <div className="grid md:grid-cols-4 gap-8">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
           <div>
             <Link href="/" aria-label="Codecast home" className="inline-block mb-4">
               <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
@@ -26,6 +27,14 @@ export function MarketingFooter() {
               <li><Link href="/download" className="hover:text-[#073642]">Desktop App</Link></li>
               <li><a href={SITE_LINKS.appStore} target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">iOS App</a></li>
               <li><a href={SITE_LINKS.chromeExtension} target="_blank" rel="noopener noreferrer" className="hover:text-[#073642]">Chrome Extension</a></li>
+            </ul>
+          </div>
+          <div>
+            <h2 className="font-semibold text-[#002b36] mb-3 text-sm">Features</h2>
+            <ul className="space-y-2 text-sm">
+              {FEATURE_DEEP_DIVES.map((f) => (
+                <li key={f.slug}><Link href={featureHref(f.slug)} className="hover:text-[#073642]">{f.name}</Link></li>
+              ))}
             </ul>
           </div>
           <div>

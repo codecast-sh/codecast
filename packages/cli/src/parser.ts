@@ -48,6 +48,9 @@ export interface ClaudeSessionEntry {
   apiErrorStatus?: number;
   errorDetails?: string;
   apiError?: string;
+  // What a tool call produced, as Claude Code records it beside the result.
+  // Read only for the source of an image a Read returned (ImageBlock.source).
+  toolUseResult?: unknown;
   // A message the user queues with Ctrl+Enter (or that codecast's daemon injects
   // while the agent is mid-turn) is written as type:"attachment" with this shape —
   // the prompt lives in `attachment.prompt`, NOT in `message.content`. A text-only
@@ -80,6 +83,10 @@ export interface ImageBlock {
   /** Local image file emitted by the Codex app-server. Read before syncing. */
   localPath?: string;
   toolUseId?: string;
+  /** The file a Read image came from, as Claude Code records it (its size and
+   *  pixel dimensions before any downscale): how a frame of a call is known
+   *  as one when its Read is not in memory (callFrameRefs.ts). */
+  source?: { bytes: number; width?: number; height?: number };
 }
 
 export type FileBlock = SyncFile;
@@ -191,6 +198,20 @@ export function claudeBannerText(
 export type TranscriptEmission = { occurrence: number; timestampPresent: boolean; nativeTimestamp: unknown; receiptTimestamp: number; queued?: boolean; dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown } };
 export type TranscriptEmissionObserver = (message: ParsedMessage, source: TranscriptEmission) => void;
 type ClaudeEmissionObserver = (message: ParsedMessage, entry: ClaudeSessionEntry, receiptTimestamp: number, dequeue?: { timestampPresent: boolean; nativeTimestamp: unknown }) => void;
+
+/** The file behind a Read image: Claude Code writes `toolUseResult.file`
+ *  with the original's byte size and dimensions beside the (possibly
+ *  downscaled, recompressed) picture it gave the model. */
+function readImageSource(result: unknown): ImageBlock["source"] | undefined {
+  const r = result as { type?: unknown; file?: { originalSize?: unknown; dimensions?: { originalWidth?: unknown; originalHeight?: unknown } } } | null;
+  if (!r || r.type !== "image" || typeof r.file?.originalSize !== "number") return undefined;
+  const d = r.file.dimensions;
+  return {
+    bytes: r.file.originalSize,
+    ...(typeof d?.originalWidth === "number" ? { width: d.originalWidth } : {}),
+    ...(typeof d?.originalHeight === "number" ? { height: d.originalHeight } : {}),
+  };
+}
 
 export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEmissionObserver): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
@@ -336,12 +357,14 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
                 .filter((c) => c.type === "text" && c.text)
                 .map((c) => c.text as string)
                 .reduce((acc, text) => (acc === "" || acc.endsWith("\n") || text.startsWith("\n") ? acc + text : `${acc}\n${text}`), "");
+              const source = readImageSource(entry.toolUseResult);
               for (const item of contentArray) {
                 if (item.type === "image" && item.source) {
                   images.push({
                     mediaType: item.source.media_type,
                     data: item.source.data,
                     toolUseId: block.tool_use_id,
+                    ...(source ? { source } : {}),
                   });
                 }
               }
@@ -1654,6 +1677,8 @@ interface PiMessage {
   content?: string | PiContentBlock[];
   model?: string;
   stopReason?: string;
+  // assistant: tokens for this one model call. pi also prices it in `cost`.
+  usage?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; totalTokens?: number };
   // toolResult
   toolCallId?: string;
   toolName?: string;
@@ -1698,6 +1723,21 @@ function extractPiBlocks(content: string | PiContentBlock[] | undefined): {
     }
   }
   return out;
+}
+
+/** A pi assistant message's usage in the Claude shape the server rolls up.
+ *  Every pi assistant entry is one model call, so it needs no turn id. */
+function piUsageOf(m: PiMessage): ClaudeUsage | undefined {
+  const u = m.usage;
+  if (!u || typeof u !== "object") return undefined;
+  return usageOf({
+    usage: {
+      input_tokens: u.input,
+      output_tokens: u.output,
+      cache_read_input_tokens: u.cacheRead,
+      cache_creation_input_tokens: u.cacheWrite,
+    },
+  });
 }
 
 export function parsePiSessionFile(content: string): ParsedMessage[] {
@@ -1781,6 +1821,7 @@ export function parsePiSessionFile(content: string): ParsedMessage[] {
           images: images.length > 0 ? images : undefined,
           stopReason: m.stopReason,
           model,
+          usage: piUsageOf(m),
         });
       }
     } else if (m.role === "toolResult") {

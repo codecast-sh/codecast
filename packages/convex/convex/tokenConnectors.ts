@@ -434,6 +434,7 @@ export async function storeConnection(ctx: { db: any; scheduler: any }, args: St
         pending_expires_at: undefined,
         pending_replacement: undefined,
         last_error: undefined,
+        last_error_kind: undefined,
       });
       return { ok: true, id: String(existing._id) };
     }

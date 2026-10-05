@@ -57,6 +57,11 @@ describe("parseConnectorReturn", () => {
     });
   });
 
+  test("a reconnect of a confirmed account reads as done, under the connector's url name", () => {
+    expect(parseConnectorReturn("", "?google=connected")).toEqual({ kind: "success", provider: "gmail" });
+    expect(strippedUrl("/simple/connections", "?google=connected", "")).toBe("/simple/connections");
+  });
+
   test("an ordinary page open carries no callback", () => {
     expect(parseConnectorReturn("", "")).toBeNull();
     expect(parseConnectorReturn("#section=github", "?tab=apps")).toBeNull();

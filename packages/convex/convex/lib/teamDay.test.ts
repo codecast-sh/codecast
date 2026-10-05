@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "../testDb";
-import { addDays, dayBounds, normalizeTimezone, teamDayBounds, teamDayFor, teamTimezone, zonedDay } from "./teamDay";
+import { addDays, dayBounds, normalizeTimezone, teamDayBounds, teamDayFor, teamTimezone, wallClockAt, zonedDay } from "./teamDay";
 
 const HOUR = 60 * 60 * 1000;
 const iso = (t: number) => new Date(t).toISOString();
@@ -88,6 +88,15 @@ describe("DST boundaries", () => {
       prev = next;
     }
     expect(date).toBe("2027-01-01");
+  });
+});
+
+describe("wallClockAt", () => {
+  test("reads the local date, minutes and weekday, and an unknown zone as UTC", () => {
+    // 2026-11-02 08:30Z: Los Angeles is back on UTC-8 by then, so it is 00:30 Monday there.
+    expect(wallClockAt(Date.parse("2026-11-02T08:30:00Z"), "America/Los_Angeles")).toEqual({ date: "2026-11-02", minutes: 30, weekday: 1 });
+    expect(wallClockAt(Date.parse("2026-10-05T23:15:00Z"), "Asia/Tokyo")).toEqual({ date: "2026-10-06", minutes: 8 * 60 + 15, weekday: 2 });
+    expect(wallClockAt(Date.parse("2026-10-05T23:15:00Z"), "Not/AZone")).toEqual({ date: "2026-10-05", minutes: 23 * 60 + 15, weekday: 1 });
   });
 });
 

@@ -81,7 +81,7 @@ test("the single answer controls render the rows and a typed answer line, not a 
   const rows = Array.from(container.querySelectorAll("[data-option]"));
   expect(rows.length).toBe(3);
   expect(rows[0].textContent).toContain("recommended");
-  expect(rows[1].textContent).toContain("proceeding with this");
+  expect(rows[1].textContent).toContain("Proceeding with this");
   expect(container.textContent).toContain("type an answer");
   await act(() => { (rows[2] as HTMLElement).click(); });
   expect(answers).toEqual([{ index: 2 }]);

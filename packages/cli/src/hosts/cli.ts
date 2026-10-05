@@ -30,7 +30,7 @@ import {
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
-import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
+import { ACCOUNT_KEY_URL, cwdGitRoot, deployKeyUrl, githubRepo, grantAccountKey, grantDeployKey, hostAccessPath, repoOrigin, type HostAccessPath, type HostGitState } from "../cloud/hostGit.js";
 import { hostToolsDetailLines, parseHostToolsStamp, summarizeHostTools, type HostToolsReport } from "../cloud/hostTools.js";
 import { parseHostMcpOverrides } from "../cloud/hostMcpOverrides.js";
 import { deviceId } from "../remote/device.js";
@@ -421,69 +421,7 @@ export function forwardAgentRefusal(host: CloudHost): string | null {
 export const AGENT_BRIDGE_SECURITY_NOTE =
   "while the bridge is up, every key in your laptop's ssh-agent is usable by any process on the host — an agent session included. Turn it off when the work is done: cast hosts forward-agent <id> --off";
 
-export const GH_NOT_LOGGED_IN_MESSAGE = "gh is not logged in — run `gh auth login` first, or add the key by hand at the URL above";
-
-export const KEY_ALREADY_IN_USE_MESSAGE =
-  "this key is already registered on GitHub (another repo's deploy key or an account key) — remove it there, or add it as an account key at " +
-  `${ACCOUNT_KEY_URL} (broad access: every repo you can reach)`;
-
-/**
- * `gh repo deploy-key add` for the host's key, with write access, after
- * `gh auth status` says gh can act at all (its own login error names the
- * API call, not the precondition). GitHub registers a public key ONCE across
- * deploy keys and account keys, so the second repo's add fails with "key is
- * already in use" — reported as such instead of as a raw API error, with the
- * choice the human has to make.
- */
-/** Add a key to GitHub through gh from a 0600 scratch file that is removed afterwards; `argv` names the gh verb that adds it. */
-function ghAddKey(
-  gh: string,
-  pubkey: string,
-  argv: (file: string) => string[],
-): { ok: boolean; alreadyInUse?: boolean; error?: string } {
-  const auth = spawnSync(gh, ["auth", "status"], { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
-  if (auth.error) return { ok: false, error: (auth.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : auth.error.message };
-  if (auth.status !== 0) return { ok: false, error: GH_NOT_LOGGED_IN_MESSAGE };
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-deploy-key-"));
-  const file = path.join(dir, "key.pub");
-  try {
-    fs.writeFileSync(file, `${pubkey}\n`, { mode: 0o600 });
-    const r = spawnSync(gh, argv(file), { encoding: "utf-8", stdio: "pipe", timeout: 60_000, env: process.env });
-    if (r.error) return { ok: false, error: (r.error as NodeJS.ErrnoException).code === "ENOENT" ? "gh is not installed" : r.error.message };
-    if (r.status === 0) return { ok: true };
-    const err = `${r.stderr ?? ""}${r.stdout ?? ""}`;
-    if (/already in use/i.test(err)) return { ok: false, alreadyInUse: true, error: KEY_ALREADY_IN_USE_MESSAGE };
-    return { ok: false, error: err.trim().split("\n").filter(Boolean).pop() ?? `gh exited ${r.status}` };
-  } finally {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The host's key as a deploy key with write access on one repository. */
-export function grantDeployKey(
-  pubkey: string,
-  origin: string,
-  hostId: string,
-  gh = "gh",
-): { ok: boolean; alreadyInUse?: boolean; error?: string } {
-  const repo = githubRepo(origin);
-  if (!repo) return { ok: false, error: `${origin} is not a GitHub repository; add the key by hand` };
-  return ghAddKey(gh, pubkey, (file) => ["repo", "deploy-key", "add", file, "--allow-write", "--title", `codecast-${hostId}`, "-R", repo]);
-}
-
-/**
- * The host's key on the account itself: the host then reaches every
- * repository this GitHub account can, which is what a host that carries this
- * person's sessions across several repositories needs. gh needs the
- * admin:public_key scope for it (`gh auth refresh -s admin:public_key`).
- */
-export function grantAccountKey(
-  pubkey: string,
-  hostId: string,
-  gh = "gh",
-): { ok: boolean; alreadyInUse?: boolean; error?: string } {
-  return ghAddKey(gh, pubkey, (file) => ["ssh-key", "add", file, "--title", `codecast-${hostId}`, "--type", "authentication"]);
-}
+export { GH_NOT_LOGGED_IN_MESSAGE, KEY_ALREADY_IN_USE_MESSAGE, grantAccountKey, grantDeployKey } from "../cloud/hostGit.js";
 
 export interface HostMirrorStamp {
   hash: string;
@@ -998,32 +936,22 @@ export function buildHostsCommand(parent: Command): Command {
     .option("--force", "Restart even when that would end the sessions in the daemon's own tmux server")
     .action(async (id: string | undefined, o: { restart: boolean; force?: boolean }) => {
       const h = pick(id, "no linux host registered");
-      const { installLinuxCast, restartHostDaemon, hostIdleWatchdogCurrent } = await import("../browser/provisionLinux.js");
+      const { hostIdleWatchdogCurrent } = await import("../browser/provisionLinux.js");
+      const { hostCastPlatform, updateHostCast } = await import("./updateHost.js");
       console.log(`updating ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const remote = toRemoteHost(up);
-      if (up.platform === "darwin" || up.provider === "scaleway-mac") {
-        const { installMacCast } = await import("./updateMac.js");
-        const version = installMacCast(remote, (message) => console.log(fmt.muted(`  ${message}`)));
-        console.log(`${OK} ${version} is installed on ${up.id}`);
-        if (o.restart) {
-          const { macServiceLabel } = await import("./provisionMac.js");
-          remoteExec(remote, `sudo -n launchctl kickstart -k system/${macServiceLabel(remote.user)}`, 60_000);
-          console.log(`${OK} Mac service restarted`);
-        }
-        return;
-      }
+      const platform = hostCastPlatform(up);
       try {
-        const { version } = installLinuxCast(remote, (m) => console.log(fmt.muted(`  ${m}`)));
-        console.log(`${OK} cast ${version} is installed on ${h.id} and runs there`);
-        if (!o.restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
-        else {
-          const { pid } = restartHostDaemon(remote, { force: o.force });
-          console.log(`${OK} daemon restarted onto ${version} (pid ${pid})`);
-        }
+        const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force }, (m) => console.log(fmt.muted(`  ${m}`)));
+        console.log(`${OK} cast ${version} is installed on ${up.id}${platform === "linux" ? " and runs there" : ""}`);
+        if (!restart) console.log(fmt.muted("  the running daemon is untouched; `cast hosts update` without --no-restart moves it over"));
+        else if ("refused" in restart) die(restart.refused);
+        else console.log(`${OK} ${platform === "darwin" ? "Mac service restarted" : `daemon restarted onto ${version} (pid ${restart.pid})`}`);
       } catch (err) {
         die((err as Error).message);
       }
+      if (platform === "darwin") return;
       // The bundle is not the whole host: provisioning writes the idle watchdog
       // and its probe, so an update leaves them at whatever version the host was
       // last provisioned with. Compare the script itself rather than a recorded
@@ -1178,9 +1106,21 @@ export function buildHostsCommand(parent: Command): Command {
         const { readProjectRegistrations } = await import("../cloud/mirror/projectRefresh.js");
         const root = cwdGitRoot() ?? readProjectRegistrations(host).filter((p) => !p.retired).sort((a, b) => a.targetRoot.length - b.targetRoot.length)[0]?.sourceRoot;
         const { report, spec } = runHostSetup(host, { repoRoot: root, repoPath: root ? remoteRepoPath(host, root) : undefined, force: o.force });
-        if (o.json) { console.log(JSON.stringify({ host: up.id, spec, ...report }, null, 2)); return; }
+        // Simulators are driven from here, not the host script: Xcode comes from this laptop (sim/provision.ts).
+        let sims: { state?: string; steps?: string[]; error?: string } | undefined;
+        if (spec.simulators?.length && up.platform === "darwin") {
+          const { provisionSimHost, describeSimHost } = await import("../sim/provision.js");
+          try {
+            const r = provisionSimHost(host, spec.simulators, say);
+            sims = { state: describeSimHost(r.after), steps: r.steps };
+          } catch (err) {
+            sims = { error: (err as Error).message };
+          }
+        }
+        if (o.json) { console.log(JSON.stringify({ host: up.id, spec, ...report, ...(sims ? { simulators: sims } : {}) }, null, 2)); return; }
         console.log(`${report.ok ? OK : fmt.warning(icons.cross)} ${up.id}  ${describeHostSetup(report, spec)}`);
-        if (!report.ok) process.exitCode = 1;
+        if (sims) console.log(`${sims.error ? fmt.warning(icons.cross) : OK} ${up.id}  simulators: ${sims.error ?? `${sims.state}${sims.steps?.length ? ` (${sims.steps.join(", ")})` : ""}`}`);
+        if (!report.ok || sims?.error) process.exitCode = 1;
       } catch (err) {
         die((err as Error).message);
       }

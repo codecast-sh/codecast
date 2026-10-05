@@ -1,0 +1,149 @@
+{
+  "asOf": "2026-09-28T09:00:00.000Z",
+  "notes": "S38: the pace of the work changed. The area froze on 2026-09-14 for a launch on 2026-10-19; a daily check has had nothing to read for two weeks and will not for three more. The role should slow its own check within its bounds, with the reason, and save a brief that stays small.",
+  "label": {
+    "tune": "slower",
+    "playbook": {
+      "decisions": 1
+    }
+  },
+  "snapshot": {
+    "captured_at": "2026-09-28T09:00:00.000Z",
+    "fixture": {
+      "trigger": "tr-901",
+      "routine": "check",
+      "role": {
+        "handle": "docs",
+        "name": "Docs lead",
+        "reports_to": "Mara",
+        "scope": [
+          "Docs site",
+          "API reference"
+        ],
+        "charter": "Keep every public page true to what the product does today.",
+        "goals": [
+          "Every page reviewed within a month of the feature it describes",
+          "API reference generated from the schema, never by hand"
+        ]
+      }
+    },
+    "world": "fernhill",
+    "values": {
+      "role": "docs"
+    },
+    "reads": [
+      {
+        "argv": [
+          "brief",
+          "@docs",
+          "--json"
+        ],
+        "out": "{\n  \"role\": {\n    \"_id\": \"or7docsfixture\",\n    \"short_id\": \"or-7\",\n    \"name\": \"Docs lead\",\n    \"given_name\": \"Wren\",\n    \"handle\": \"docs\",\n    \"status\": \"active\",\n    \"trust\": \"direct\",\n    \"reports_to\": {\n      \"kind\": \"user\",\n      \"user_id\": \"u7mara\"\n    },\n    \"review_backend\": null,\n    \"authority\": [],\n    \"standing_short_id\": \"jx7dcs1\",\n    \"standing_conversation_id\": \"jx7dcs1fixture\",\n    \"checked_at\": 1790499600000,\n    \"routine\": {\n      \"_id\": \"tr901fixture\",\n      \"short_id\": \"tr-901\",\n      \"title\": \"Check Docs lead's area\",\n      \"status\": \"scheduled\",\n      \"run_at\": 1790672400000,\n      \"last_run_at\": 1790499600000,\n      \"interval_ms\": 86400000,\n      \"wake\": {\n        \"every_ms\": 86400000,\n        \"precheck\": null,\n        \"focus\": null,\n        \"why\": null,\n        \"tuned_at\": null\n      }\n    }\n  },\n  \"facts\": {\n    \"scope\": {\n      \"projects\": [\n        {\n          \"id\": \"pj7docs\",\n          \"title\": \"Docs site\"\n        },\n        {\n          \"id\": \"pj7api\",\n          \"title\": \"API reference\"\n        }\n      ],\n      \"plans\": [\n        {\n          \"id\": \"pl31fixture\",\n          \"short_id\": \"pl-31\",\n          \"title\": \"Reference from schema\",\n          \"project_id\": \"pj7api\"\n        }\n      ],\n      \"whole_workspace\": false\n    },\n    \"tasks\": {\n      \"total\": 26,\n      \"open\": 12,\n      \"by_status\": {\n        \"backlog\": 12,\n        \"done\": 14\n      },\n      \"by_priority\": {\n        \"medium\": 12\n      }\n    },\n    \"plans\": [\n      {\n        \"short_id\": \"pl-31\",\n        \"title\": \"Reference from schema\",\n        \"status\": \"done\",\n        \"updated_at\": 1789290000000,\n        \"progress\": {\n          \"total\": 5,\n          \"done\": 5,\n          \"in_progress\": 0\n        }\n      }\n    ],\n    \"hands\": [],\n    \"initiatives\": [],\n    \"standing\": {\n      \"short_id\": \"jx7dcs1\",\n      \"state\": \"dormant\",\n      \"state_line\": \"Docs lead for Fernhill: frozen for the v3 launch; nothing moved.\",\n      \"state_status\": \"working\",\n      \"state_at\": 1790499600000\n    },\n    \"people\": [],\n    \"changed\": [],\n    \"changed_since\": 1790499600000,\n    \"decisions\": {\n      \"open\": 0,\n      \"answered_today\": 0\n    },\n    \"usage\": {\n      \"day\": \"2026-09-28\",\n      \"wakes\": 1,\n      \"hands\": 0,\n      \"tokens\": 3900,\n      \"caps\": {\n        \"hands_per_day\": 6,\n        \"wakes_per_day\": 40,\n        \"tokens_per_day\": 400000\n      },\n      \"uncounted_sessions\": 0\n    },\n    \"generated_at\": 1790586000000\n  },\n  \"narrative\": \"Docs lead for Fernhill: frozen for the v3 launch; nothing moved.\\nStatus: working\\n\\n## Where it stands\\n- Docs site: frozen since 2026-09-14 for the v3 launch; no page has changed on any check since. (2026-09-27)\\n- API reference: frozen with the schema since 2026-09-14; nothing regenerated since. (2026-09-27)\\n\\n## North metric\\nPages unreviewed a month after their feature shipped, from the staleness report. Target 0.\\n- 2026-09-07: 5\\n- 2026-09-14: 3 (milestone: the last review before the freeze)\\n- 2026-09-21: 3\\n- 2026-09-27: 3\\n\\n## Rules learned\\n- Check a page against the running product, not against its pull request. Learned from: the plans page was approved from its diff while the live page still showed the old prices. (2026-08-30)\\n\\n## Standing decisions\\n- No docs change ships during the v3 freeze, 2026-09-14 to 2026-10-19; pages are rewritten after the launch. (Mara, 2026-09-12)\\n\\n## Open threads\\n- The v3 launch on 2026-10-19 ends the freeze and opens the rewrite queue, ct-430 to ct-441. (opened 2026-09-12, due 2026-10-19)\",\n  \"brief_doc_id\": \"doc7docsbrief\",\n  \"charter\": \"Keep every public page true to what the product does today.\",\n  \"charter_doc_id\": null\n}"
+      },
+      {
+        "argv": [
+          "sessions"
+        ],
+        "out": "Sessions \u00b7 you\nNo live sessions. The last one under @docs finished 14 days ago.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "sessions",
+          "--json"
+        ],
+        "out": "[]"
+      },
+      {
+        "argv": [
+          "decide",
+          "ls"
+        ],
+        "out": "No open decisions."
+      },
+      {
+        "argv": [
+          "trigger",
+          "ls"
+        ],
+        "out": "  tr-901   active   Check Docs lead's area  every 1d  inline\n           Reviews recent changes and pending items in the docs role's scope, then updates its brief\n           last: Nothing moved: the freeze holds until the v3 launch on 2026-10-19. Nothing needs doing.\n  tr-902   active   Docs lead: a session needs input  on session_needs_input  inline\n           Answers or routes a session under the docs role that stopped for a person"
+      },
+      {
+        "argv": [
+          "org",
+          "ls"
+        ],
+        "out": "Fernhill\n  Mara (you) \u00b7 owner\n    Docs lead @docs \u00b7 active \u00b7 12 open, none started\n    Theo (@theo) \u00b7 reports to @docs \u00b7 0 open"
+      },
+      {
+        "argv": [
+          "org",
+          "health"
+        ],
+        "out": "{\n  \"workspace\": {\n    \"name\": \"Fernhill\",\n    \"kind\": \"team\"\n  },\n  \"areas\": [\n    {\n      \"role\": \"docs\",\n      \"status\": \"quiet\",\n      \"open\": 12,\n      \"waiting\": 0,\n      \"stale\": 0\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "org",
+          "health",
+          "--json"
+        ],
+        "out": "{\n  \"workspace\": {\n    \"name\": \"Fernhill\",\n    \"kind\": \"team\"\n  },\n  \"areas\": [\n    {\n      \"role\": \"docs\",\n      \"status\": \"quiet\",\n      \"open\": 12,\n      \"waiting\": 0,\n      \"stale\": 0\n    }\n  ]\n}"
+      },
+      {
+        "argv": [
+          "feed"
+        ],
+        "out": "Recent conversations (0)\n\nNothing in the last 14 days.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "task",
+          "ls"
+        ],
+        "out": "12 tasks \u00b7 backlog\n  ct-430 to ct-441  Rewrite pages for v3 (12)  backlog \u00b7 blocked by the v3 freeze until 2026-10-19",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "plan",
+          "show",
+          "pl-31"
+        ],
+        "out": "pl-31 Reference from schema \u00b7 done \u00b7 5/5 tasks \u00b7 closed 2026-09-13"
+      },
+      {
+        "argv": [
+          "plan",
+          "status",
+          "pl-31"
+        ],
+        "out": "pl-31 Reference from schema \u00b7 done \u00b7 5/5",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "read",
+          "jx7dcs1"
+        ],
+        "out": "Docs lead (jx7dcs1) \u00b7 standing session \u00b7 dormant\n\n[201] assistant: Docs lead for Fernhill: frozen for the v3 launch; nothing moved. Brief saved; nothing needs Mara.",
+        "prefix": true
+      },
+      {
+        "argv": [
+          "decisions",
+          "list"
+        ],
+        "out": "No decisions recorded in this project."
+      },
+      {
+        "argv": [
+          "decisions"
+        ],
+        "out": "No decisions recorded in this project.",
+        "prefix": true
+      }
+    ]
+  }
+}

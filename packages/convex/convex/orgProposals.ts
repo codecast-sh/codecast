@@ -114,7 +114,7 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
  * left as written for the apply step to resolve.
  */
 async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, wsKey: string): Promise<T> {
-  if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status" && change.kind !== "initiative_projects" && change.kind !== "initiative_owner") return change;
+  if (change.kind !== "plan_status" && change.kind !== "task_status" && change.kind !== "project_status" && change.kind !== "initiative_projects" && change.kind !== "initiative_owner" && change.kind !== "initiative_shape") return change;
   const table = change.kind === "plan_status" ? "plans" : change.kind === "task_status" ? "tasks" : change.kind === "project_status" ? "projects" : "initiatives";
   const ref = (change.kind === "plan_status" ? change.plan : change.kind === "task_status" ? change.task : change.kind === "project_status" ? change.project : change.initiative).trim();
   if (!/^(pl|ct|pr|in)-\d+$/.test(ref)) return change;
@@ -391,7 +391,7 @@ async function acceptOne(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, c
   }
   let result: ApplyResult;
   try {
-    result = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt });
+    result = await applyOrgChange(ctx, userId, boundaryOf(proposal), merged, { provision, human_decision: `proposal:${String(change._id)}`, awaiting_adopt: awaitingAdopt, evidence: change.evidence });
   } catch (err) {
     throw new Error(`${proposal.short_id}#${change.seq} (${describeOrgChange(merged)}): ${err instanceof Error ? err.message : String(err)}`);
   }

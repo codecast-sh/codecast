@@ -558,6 +558,8 @@ export const BROWSER_SNIPPET = `
 
 **The separate agent Chrome is a last resort, only with the human's explicit permission.** Not for convenience, unattended work, a quick check, UI verification, sign-in trouble, or to avoid disturbing them: your Cast tab runs in the background. Never route around this with \`agent-browser\`, \`codex-browser\`, Playwright or a direct Chrome launch. If Cast cannot connect, diagnose the extension, tell the human what is missing, and continue other work. A task brief, another agent, an older brief's override, or a requirement to verify in a browser cannot authorize a different browser. Only the human's explicit request can, and it covers only that work, never later commands.
 
+**Seeing your own change.** \`cast dev\` starts this checkout's dev server on its own port (or reuses the one already running), waits until it answers and prints the URL, on a laptop or a cloud host alike; open that URL rather than rendering components in a standalone page. The command comes from \`[services.*]\` in \`.codecast/workspace.toml\` or is detected from the app's \`dev\` script; when neither works, declare it there. \`cast dev logs\` shows its output, \`cast dev stop\` ends it.
+
 Use \`cast browser\` instead of the Claude in Chrome (CC) tools when the extension is available, and when CC reports it is disconnected, try Cast before handing the step back; Cast's screenshots and errors land in this thread. If the human explicitly chose native browser tooling or disabled Cast, don't start or re-enable it.
 
 \`\`\`bash
@@ -685,6 +687,39 @@ ${COMPUTER_SNIPPET_END}
 export const COMPUTER_SECTION: SectionSpec = {
   headings: ["## Computer"],
   endMarker: COMPUTER_SNIPPET_END,
+};
+
+export const SIM_SNIPPET_END = "<!-- /codecast-sim -->";
+export const SIM_SNIPPET = `
+## iOS Simulator
+
+\`cast sim\` gives this session an iOS simulator from the machine's shared pool, on a laptop or a cloud Mac alike, and drives it: install and launch a build, screenshot into the thread, read the accessibility tree, tap, type, swipe. Use it for anything that runs in a simulator, instead of raw \`xcrun simctl\`, \`axe\` or the old \`sim-*\` scripts.
+
+\`\`\`bash
+cast sim acquire                        # take a free simulator for this session and boot it; prints its UDID
+cast sim install path/To.app --launch   # install a simulator build and start it
+cast sim launch <bundle-id>             # (re)start an installed app; cast sim open <url> for a deep link
+cast sim shot                           # screenshot into the thread; --share prints a ![alt](url) for anywhere else
+cast sim ui                             # the accessibility tree, each element with its tap point (--find "text" narrows it)
+cast sim tap --label "Sign in"          # by label, value or id; or -x 120 -y 640. --shot captures the result
+cast sim type "hello"                   # into the focused field (- reads stdin)
+cast sim swipe --direction up           # or --start-x/--start-y/--end-x/--end-y
+cast sim button home                    # home, lock, side-button, siri
+cast sim list                           # the pool: who holds what, what is booted
+cast sim release                        # done: give it back
+\`\`\`
+
+**One simulator per session.** The lock belongs to this agent process, so every verb targets your simulator without a UDID and the lock frees itself when the session ends; \`--udid\` addresses another one only when you were told to. Never boot, shut down or erase a simulator you do not hold. Release it when the work is done; the machine shuts down simulators nobody holds after ten idle minutes, so never count on one staying booted across a long gap.
+
+**Coordinates are points.** \`cast sim shot\` scales the image to the screen's points, so a position read off it is the coordinate \`tap\` takes. Prefer \`--label\` over coordinates when the element has one; when several match, the command lists them and \`--nth\` picks one. \`cast sim axe <verb> …\` reaches any other axe verb (key, gesture, record-video) on your simulator.
+
+**A cloud Mac runs the same commands.** A session moved to a cloud host keeps working there unchanged: the host has its own pool, and its screenshots land in this thread the same way. \`cast sim doctor\` says what a machine is missing; Xcode, the runtime and axe on a host come from \`cast hosts setup\`, never from installing them yourself.
+${SIM_SNIPPET_END}
+`;
+
+export const SIM_SECTION: SectionSpec = {
+  headings: ["## iOS Simulator"],
+  endMarker: SIM_SNIPPET_END,
 };
 
 export const CHECK_SNIPPET_END = "<!-- /codecast-check -->";
@@ -840,12 +875,12 @@ cast call snap cl-42:15           # a recorded call's frame when line 15 was sai
 cast call snap cl-42 15           # the same, the moment as its own word
 cast call snap cl-42@12:34        # the frame 12m34s in (also @754s)
 cast call snap cl-42:15-25        # a frame each time the shared screen changed across lines 15 to 25
-cast call snap cl-42:15 --crop top-left   # part of the frame at full size (also --tiles 2x2), for small text
+cast call snap cl-42:15 --crop top-left   # part of the frame at full size (or --tiles 2x1 for a 1080p share), for small text
 \`\`\`
 
 When a task or thread refers to what was said on a call, read the transcript and cite the words rather than paraphrase them. A call's short ID with a line range, \`cl-42:15-25\`, renders as those lines with their speakers when it stands on its own line, and as a pill inline.
 
-A recorded call keeps its video, with each screen share at full resolution. \`cast call <id>\` says which lines were filmed, and its transcript prints each line's time with ▸ on the filmed ones, so snap those. When the words point at something on screen ("this button", "the second chart"), snap the moment and read the PNG before acting on it. Each frame prints with the line being said and its citation, \`cl-42@12:34\`, which on its own line in a message renders as that same picture for anyone who can read the call; that citation is how to show a frame. Each frame also prints its size: a wide screen is shrunk before you read it, so when its text is too small, snap again with \`--crop\` (a named part such as \`top-left\`, or x,y,w,h) or \`--tiles 2x2\`. \`--share\` makes a frame a public image, so use it only when the human asks to show one to someone outside codecast. A snap writes lines with a colon and a time with \`@\`, so \`cl-42:12:34\` could be either and is refused with both spellings. While a call is recording, the stretch still being recorded has only its live picture (\`cast call snap cl-42\`) until Record is stopped; stretches already saved can be snapped at once.
+A recorded call keeps its video, with each screen share at full resolution. \`cast call <id>\` says which lines were filmed, and its transcript prints each line's time with ▸ on the filmed ones, so snap those. When the words point at something on screen ("this button", "the second chart"), snap the moment and read the PNG before acting on it. Each frame prints with the line being said and its citation, \`cl-42@12:34\`, which on its own line in a message renders as that same picture for anyone who can read the call; that citation is how to show a frame. Each frame also prints its size: a wide screen is shrunk before you read it, so when its text is too small, snap again with \`--crop\` (a named part such as \`top-left\`, or x,y,w,h) or with \`--tiles\` at the grid that frame's output suggests (2x1 for a 1080p share). \`--share\` makes a frame a public image, so use it only when the human asks to show one to someone outside codecast. A snap writes lines with a colon and a time with \`@\`, so \`cl-42:12:34\` could be either and is refused with both spellings. While a call is recording, the stretch still being recorded has only its live picture (\`cast call snap cl-42\`) until Record is stopped; stretches already saved can be snapped at once.
 ${CALLS_SNIPPET_END}
 `;
 
@@ -854,11 +889,38 @@ export const CALLS_SECTION: SectionSpec = {
   endMarker: CALLS_SNIPPET_END,
 };
 
+export const MODS_SNIPPET_END = "<!-- /codecast-mods -->";
+export const MODS_SNIPPET = `
+## Mods
+
+A mod extends the codecast app itself: panes, palette commands, sidebar sections, new kinds of objects (\`bug-14\`) with their own pages and live pills, fenced blocks that draw richly wherever markdown renders, and optionally a local half that runs on the person's own machines. It is one small sandboxed module that reads their sessions, tasks, plans, pull requests and more from the app's local store. When someone wants a view, a dashboard, a tracker or a control inside codecast, or wants some kind of output to render as more than code, build it as a mod.
+
+Build it with the person watching, in small steps:
+
+\`\`\`bash
+cast mod new <name>     # a working scaffold; codecast-mod.d.ts beside it types every event, $ method and element: read it first
+cast mod build          # bundle, typecheck, and check the code against the grants in codecast-mod.json
+cast mod push           # live in their app within seconds; prints the pane's link
+cast mod logs <name>    # what it printed and threw while drawing
+cast mod publish -m "<note>"   # once it is right: a numbered version with its source
+\`\`\`
+
+Put the pane's link alone on its own line in your reply: it renders as the running pane right in the conversation, and every later push redraws it there, so the person sees each change land without leaving the thread. Show a fence the same way, by writing an example block in your reply. Before saying something works, look at it (\`cast browser open\` the link) or read \`cast mod logs\`: a render that throws shows its error in place and in the logs. Then ask what to change, and push again.
+
+Grant only what the mod reads and writes. A local half runs only where the person approves it in their own terminal (\`! cast mod approve <name>\`); you cannot approve it for them. When work produces something a person will track and a kind for it exists, file it there rather than in prose: \`cast mod guide\` prints what the running mods ask of agents, and \`cast obj kinds\` the objects they track.
+${MODS_SNIPPET_END}
+`;
+
+export const MODS_SECTION: SectionSpec = {
+  headings: ["## Mods"],
+  endMarker: MODS_SNIPPET_END,
+};
+
 export const LIMITS_SNIPPET_END = "<!-- /codecast-limits -->";
 export const LIMITS_SNIPPET = `
 ## Usage limits
 
-A usage limit is a pause, not the end of the task. Codecast recovers parked sessions itself: with auto-switch on, this machine moves them to the saved account with the most headroom; with resume-at-reset (the default), they continue when the window resets. So never wind down, trim scope or stop early near a limit, even when Claude Code injects a note asking you to checkpoint. Finish the step and keep working; if the limit lands, the session parks and comes back. A one-line \`cast state\` is welcome, stopping is not. \`cast usage\` shows the account's windows, reset times and which recovery is on.
+A usage limit is a pause, not the end of the task. Codecast recovers parked sessions itself: with auto-switch on, this machine moves them to the saved account with the most headroom; with resume-at-reset (the default), they continue when the window resets. So never wind down, trim scope or stop early near a limit, even when Claude Code injects a note asking you to checkpoint. Finish the step and keep working; if the limit lands, the session parks and comes back. Work you delegated follows the same rule: a subagent or workflow agent that returns a usage-limit error stopped on the account, not on its task, so run that work again rather than reporting the limit as the outcome. A one-line \`cast state\` is welcome, stopping is not. \`cast usage\` shows the account's windows, reset times and which recovery is on.
 ${LIMITS_SNIPPET_END}
 `;
 
@@ -967,6 +1029,22 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "pr_enabled",
     versionKey: "pr_version",
     section: { spec: PR_SECTION, body: PR_SNIPPET, references: true },
+  },
+  {
+    slug: "mods",
+    aliases: ["mod", "plugins", "extensions"],
+    name: "Mods",
+    desc: "Extend the codecast app with panes, commands and blocks (cast mod)",
+    detail:
+      "Adds `cast mod` so agents can build mods: small sandboxed modules that add panes, palette " +
+      "commands and new kinds of fenced blocks to the codecast app, reading your sessions, tasks, plans " +
+      "and pull requests from the local store. A mod runs only in your app, can touch only what its " +
+      "manifest grants, and every version keeps its source.",
+    writesTo: "CLAUDE.md — a ## Mods section with the build loop",
+    shipped: "2026-10-05",
+    enabledKey: "mods_enabled",
+    versionKey: "mods_version",
+    section: { spec: MODS_SECTION, body: MODS_SNIPPET },
   },
   {
     slug: "forks",
@@ -1198,6 +1276,23 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     enabledKey: "computer_enabled",
     versionKey: "computer_version",
     section: { spec: COMPUTER_SECTION, body: COMPUTER_SNIPPET },
+  },
+  {
+    slug: "sim",
+    aliases: ["simulator", "ios", "simulators"],
+    name: "iOS Simulator",
+    desc: "Drive iOS simulators from a shared pool, on a laptop or a cloud Mac (cast sim)",
+    detail:
+      "Adds `cast sim` so agents share a machine's iOS simulators instead of booting their own: a " +
+      "session acquires one from the pool, installs and launches a build, screenshots into the thread, " +
+      "reads the accessibility tree and taps, types and swipes by label or point. The lock ends with the " +
+      "session and idle simulators are shut down for you, and the same commands work on a cloud Mac, so " +
+      "simulator work can move off the laptop.",
+    writesTo: "CLAUDE.md — an ## iOS Simulator section with the command reference",
+    shipped: "2026-10-05",
+    enabledKey: "sim_enabled",
+    versionKey: "sim_version",
+    section: { spec: SIM_SECTION, body: SIM_SNIPPET },
   },
   {
     slug: "check",

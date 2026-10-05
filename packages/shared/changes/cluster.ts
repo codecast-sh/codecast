@@ -24,6 +24,8 @@ import type { ChangeCommit, ChangePr, LayerZeroStory, ReleaseBurst, ShipEvent, V
 export const BATCH_AREAS = 3;
 /** An area of a batch commit is a slice of its own only with this share of the commit's file touches. */
 export const SLICE_SHARE = 0.15;
+/** Conventional types whose scoped subject names a single piece of work. */
+const ONE_WORK_TYPES = new Set(["feat", "fix", "perf", "refactor"]);
 /** A session whose commits land in this many areas is committing a tree, not pursuing one intent. */
 export const SPREAD_AREAS = 4;
 /** Commits further apart than this start a new cluster under rule (b). */
@@ -86,7 +88,11 @@ function toUnits(c: ChangeCommit, defaultBranch: string): Unit[] {
   const conv = parseConventional(c.subject);
   const scope = conv?.scope ?? null;
   const type = conv?.type ?? null;
-  if (Object.keys(c.areas).length >= BATCH_AREAS && onDefaultBranch(c, defaultBranch)) {
+  // A subject that names one scoped piece of work (`feat(portal): …`) is one
+  // story across every area it touched: split, each slice would be told as the
+  // whole feature again. A sweep or an unscoped subject splits by area.
+  const oneWork = !!scope && !!type && ONE_WORK_TYPES.has(type);
+  if (!oneWork && Object.keys(c.areas).length >= BATCH_AREAS && onDefaultBranch(c, defaultBranch)) {
     // Only an area with a real share of the commit is a slice of its own; the
     // thin ones ride with its largest slice, so a stray file never becomes a
     // second story told from the same commit message.
@@ -183,9 +189,10 @@ export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
     set.add(commitArea(c.areas, parseConventional(c.subject)?.scope ?? null));
     convAreas.set(c.conversation_id, set);
   }
+  const spread = new Set([...convAreas].filter(([, areas]) => areas.size >= SPREAD_AREAS).map(([id]) => id));
   const anchors = (u: Unit) => {
     const id = u.commit.conversation_id;
-    return !u.slice && !!id && visible.has(id) && (convAreas.get(id)?.size ?? 0) < SPREAD_AREAS ? id : null;
+    return !u.slice && !!id && visible.has(id) && !spread.has(id) ? id : null;
   };
 
   // (a) sessions, merged through shared tasks.
@@ -280,7 +287,7 @@ export function buildLayerZero(input: LayerZeroInput): LayerZeroResult {
 
   // Unlinked bulk work stands out only on a day whose other work carries a session, pull request or task.
   const linked = commits.some((c) => !!c.conversation_id || !!c.pr_id || !!c.task_ids?.length);
-  const stories = clusters.map((c) => toStory(c, input, defaultBranch, visible, { ships, linked }));
+  const stories = clusters.map((c) => toStory(c, input, defaultBranch, visible, spread, { ships, linked }));
   stories.sort((a, b) => a.first_at - b.first_at || a.story_key.localeCompare(b.story_key));
   return {
     default_branch: defaultBranch,
@@ -300,31 +307,43 @@ function commitLinks(c: ChangeCommit, visible: ReadonlyMap<string, VisibleConver
   return c.conversation_id && !visible.has(c.conversation_id) ? { task_ids: [], pr_id: null } : { task_ids: c.task_ids ?? [], pr_id: c.pr_id ?? null };
 }
 
-/** What a default-branch commit is linked to under rule (b): its pull request, else its first task, else the `(#123)` a squash merge leaves on the subject. */
-function linkKey(c: ChangeCommit, visible: ReadonlyMap<string, VisibleConversation>): string {
-  const links = commitLinks(c, visible);
-  return links.pr_id ?? links.task_ids[0] ?? /\(#(\d+)\)\s*$/.exec(c.subject)?.[1] ?? "";
+/** The pull request a squash merge (`… (#123)`) or a merge commit (`Merge pull request #123 …`) names on its subject. */
+export function prNumberOf(subject: string): number | null {
+  const n = /\(#(\d+)\)\s*$/.exec(subject)?.[1] ?? /^Merge pull request #(\d+)\b/.exec(subject)?.[1];
+  return n ? Number(n) : null;
 }
 
-function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visible: Map<string, VisibleConversation>, risk: RiskContext): LayerZeroStory {
+/** What a default-branch commit is linked to under rule (b): its pull request, else its first task, else the pull request its subject names. */
+function linkKey(c: ChangeCommit, visible: ReadonlyMap<string, VisibleConversation>): string {
+  const links = commitLinks(c, visible);
+  return links.pr_id ?? links.task_ids[0] ?? String(prNumberOf(c.subject) ?? "");
+}
+
+function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visible: Map<string, VisibleConversation>, spread: ReadonlySet<string>, risk: RiskContext): LayerZeroStory {
   const units = c.units;
   const commits = uniq(units.map((u) => u.commit));
   const whole = units.filter((u) => !u.slice);
   const onDefault = units.some((u) => onDefaultBranch(u.commit, defaultBranch));
   const branch = onDefault ? defaultBranch : units[units.length - 1].commit.branch!;
 
-  // Slices never carry their commit's session: the session that made a batch
-  // commit is not the author of each area's work (phase 2 attributes by edits).
+  // Slices never carry their commit's session, nor does any commit of a
+  // session that committed a spread of work: the session that landed it is not
+  // its author, and its account of its own day would be told as this story's.
+  // Phase 2 names the authors by their edits, the lander too when it made them.
   const convIds = uniq(whole.map((u) => u.commit.conversation_id).filter((id): id is string => !!id));
-  const conversation_ids = convIds.filter((id) => visible.has(id)).sort();
+  const conversation_ids = convIds.filter((id) => visible.has(id) && !spread.has(id)).sort();
   const conversations = conversation_ids.map((id) => visible.get(id)!);
   const links = whole.map((u) => commitLinks(u.commit, visible));
   const task_ids = uniq([...links.flatMap((l) => l.task_ids), ...conversations.flatMap((v) => v.task_ids ?? [])]).sort();
   const shas = new Set(commits.map((x) => x.sha));
+  // Like commitLinks, a private session's commit names no pull request.
+  const numbers = new Set(
+    commits.filter((x) => !x.conversation_id || visible.has(x.conversation_id)).map((x) => prNumberOf(x.subject)).filter((n): n is number => n !== null),
+  );
   const pr_ids = uniq([
     ...links.map((l) => l.pr_id).filter((id): id is string => !!id),
     ...(input.prs ?? [])
-      .filter((p) => p.shas?.some((s) => shas.has(s)) || p.conversation_ids?.some((id) => conversation_ids.includes(id)))
+      .filter((p) => p.shas?.some((s) => shas.has(s)) || (p.number !== undefined && numbers.has(p.number)) || p.conversation_ids?.some((id) => conversation_ids.includes(id)))
       .map((p) => p.id),
   ]).sort();
 
@@ -350,7 +369,7 @@ function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visib
     commit_shas: commits.map((x) => x.sha),
     whole_shas: uniq(whole.map((u) => u.commit.sha)),
     conversation_ids,
-    private_conversation_count: convIds.length - conversation_ids.length,
+    private_conversation_count: convIds.filter((id) => !visible.has(id)).length,
     task_ids,
     pr_ids,
     author_names: uniq(commits.map((x) => x.author_name)),
@@ -362,7 +381,7 @@ function toStory(c: Cluster, input: LayerZeroInput, defaultBranch: string, visib
     last_at,
     release: onDefault ? assignRelease(c.area, last_at, risk.ships) : null,
     risks: computeRisks(
-      { units: units.map((u) => ({ commit: u.commit, area: u.slice })), insertions, deletions, conversations, pr_ids, task_ids },
+      { units: units.map((u) => ({ commit: u.commit, area: u.slice })), insertions, deletions, conversations, landed: convIds.some((id) => spread.has(id)), pr_ids, task_ids },
       risk,
     ),
     kind,

@@ -58,6 +58,12 @@ const ROWS: Row[] = [
   { file: "ccAccounts.ts", name: "deleteProfileStoreAsync", kind: "function", minLines: 10, mustContain: "await execFileAsync" },
   ...["processSessionFile", "processCursorSession", "processCursorTranscriptFile", "processCodexSession", "processGeminiSession", "processOpencodeSession", "processTranscriptDeltaSession"].map(name => ({ file: D, name: `${name}Pass`, kind: "function" as const, minLines: 70, mustContain: "await readTranscriptIngest" })),
   { file: D, name: "sendHeartbeat", kind: "function", minLines: 40, mustContain: "has_tmux" },
+  // The `cast herd` mirror tick, and the herdr pane lookup message delivery uses.
+  { file: D, name: "tickHerd", kind: "function", minLines: 10, mustContain: "await syncHerd" },
+  { file: "herdMirror.ts", name: "applyHerd", kind: "function", minLines: 15, mustContain: "await openMember" },
+  { file: "herdMirror.ts", name: "openMember", kind: "function", minLines: 15, mustContain: "pane.report_metadata" },
+  { file: "herdr.ts", name: "findHerdrPaneForTty", kind: "function", minLines: 10, mustContain: "await execFileAsync" },
+  { file: "herdr.ts", name: "herdrSocketPaths", kind: "function", minLines: 8, mustContain: "fs.promises.readdir" },
   { file: "remote/device.ts", name: "stableHostnameAsync", kind: "function", minLines: 8, mustContain: "execFileAsync" },
   { file: D, name: "collectResourceSnapshot", kind: "function", minLines: 30, mustContain: "classifySharedPidSessions" },
   { file: D, name: "runHeartbeatMaintenance", kind: "function", minLines: 20, mustContain: "reconcileStatusFromTranscript" },

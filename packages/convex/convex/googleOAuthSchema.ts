@@ -6,6 +6,7 @@
 // row per (user, Google account email) — a user can connect several accounts.
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
+import { storedRefreshFailure } from "./lib/tokenRefresh";
 
 export const googleOAuthTables = {
   google_installations: defineTable({
@@ -27,6 +28,10 @@ export const googleOAuthTables = {
     refresh_lease_id: v.optional(v.string()),
     refresh_lease_until: v.optional(v.number()),
     last_error: v.optional(v.string()),
+    /** What kind of refresh failure `last_error` records (lib/tokenRefresh).
+     *  Only a revoked or unreadable grant ranks the account behind the
+     *  others (googleOAuth.rankGoogleConnections); a transient one does not. */
+    last_error_kind: v.optional(storedRefreshFailure),
     // Every scope Google reports as granted for this token (the token response's
     // `scope` field — with include_granted_scopes it is the FULL accumulated
     // set, so incremental grants replace rather than append here).

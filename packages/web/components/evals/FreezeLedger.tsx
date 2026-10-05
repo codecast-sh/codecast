@@ -8,24 +8,16 @@
 import { useLayoutEffect, useMemo, useRef } from "react";
 import type { LedgerRow, VerdictFlip } from "@codecast/shared/contracts/evalsApi";
 import { Well } from "./charts/Well";
-import { EvalsLink, LockBadge, whenLabel } from "./parts";
+import { EvalsLink, LockBadge } from "./parts";
 import { evalsHref } from "./evalsPaths";
-import type { SurfaceColumn } from "./Seismograph";
+import type { SurfaceColumn } from "./seismographModel";
+import { ledgerOrder } from "./surfaceModel";
+import { whenLabel } from "./format";
 
 const WELL = 16;
 /** A day label is about three wells wide. */
 const LABEL_EVERY = 3;
 const fmtDay = (ms: number) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-
-/**
- * The freezes that flipped between the pinned pair first (broke before
- * fixed), then most lifetime flips, then by name: the freezes that moved are
- * the ones to read, and the pinned pair's are the ones that explain it.
- */
-export function ledgerOrder(rows: readonly LedgerRow[], pairFlips: ReadonlyMap<string, VerdictFlip["direction"]> | null = null): LedgerRow[] {
-  const rank = (r: LedgerRow) => (pairFlips?.get(r.freezeId) === "broke" ? 0 : pairFlips?.has(r.freezeId) ? 1 : 2);
-  return [...rows].sort((a, b) => rank(a) - rank(b) || b.flips - a.flips || a.name.localeCompare(b.name));
-}
 
 export interface FreezeLedgerProps {
   rows: readonly LedgerRow[];

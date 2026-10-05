@@ -28,6 +28,20 @@ async function harness(args: string[], cwd: string): Promise<number> {
   return code;
 }
 
+let scratchGap: Promise<string | null> | undefined;
+/**
+ * Null when the harness gives each agent run private scratch on this machine
+ * (prompt-dry-run.ts --isolation-check, ct-56832), else why not. Without it
+ * two agent reps in flight share /tmp. Asked once per process.
+ */
+export function agentScratchGap(): Promise<string | null> {
+  return (scratchGap ??= (async () => {
+    const proc = Bun.spawn(['bun', DRY_RUN_SCRIPT, '--isolation-check'], { stdout: 'pipe', stderr: 'pipe' });
+    const [out, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+    return code === 0 ? null : (out.trim().replace(/^not isolated: /, '') || err.trim() || `the isolation check exited ${code}`);
+  })());
+}
+
 const usageOf = (out: any): CallResult['modelUsage'] => (out?.modelUsage ?? {}) as CallResult['modelUsage'];
 
 /** Each turn's usage summed per model, so a run of several turns reports what all of them spent. */

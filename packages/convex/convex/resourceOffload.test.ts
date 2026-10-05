@@ -69,6 +69,12 @@ test("stale resource evidence and duplicate selections cannot start a transfer",
 test("live children and combined destination memory prevent unsafe bulk starts", async () => {
   const { t, authed, args, conv, user, snapshot } = await setup();
   const child = await t.run(ctx => ctx.db.insert("conversations", { user_id: user, session_id: "child", parent_conversation_id: conv, is_subagent: true, agent_type: "claude_code", status: "active", is_private: true, message_count: 0, started_at: Date.now(), updated_at: Date.now() }));
+  // A child row with no process of its own (a Task subagent that ran inside the parent) moves with it.
+  expect((await authed.mutation(start, { ...args, dry_run: true })).checks[0].blockers.join()).not.toContain("unfinished subagents");
+  await t.run(async ctx => {
+    const report = (await ctx.db.query("machine_resources").collect())[0];
+    await ctx.db.patch(report._id, { snapshot: { ...snapshot, processes: [...snapshot.processes, { ...snapshot.processes[0], pid: 200, sessionId: "child" }] } });
+  });
   expect((await authed.mutation(start, { ...args, dry_run: true })).checks[0].blockers.join()).toContain("unfinished subagents");
   const second = await t.run(async ctx => {
     await ctx.db.patch(child, { status: "completed" });
@@ -84,6 +90,26 @@ test("live children and combined destination memory prevent unsafe bulk starts",
   expect(await t.run(ctx => ctx.db.query("migration_batches").collect())).toEqual([]);
 });
 
+
+test("one session that fails its checks stays with its own reason while the rest of the batch moves", async () => {
+  const { t, authed, args, conv, user, snapshot } = await setup();
+  const second = await t.run(async ctx => {
+    await ctx.db.insert("conversations", { user_id: user, session_id: "child", parent_conversation_id: conv, is_subagent: true, agent_type: "claude_code", status: "active", is_private: true, message_count: 0, started_at: Date.now(), updated_at: Date.now() });
+    const second = await ctx.db.insert("conversations", { user_id: user, session_id: "s2", owner_device_id: "mac", agent_type: "claude_code", status: "active", is_private: true, message_count: 1, started_at: Date.now(), updated_at: Date.now() });
+    const report = (await ctx.db.query("machine_resources").collect())[0];
+    await ctx.db.patch(report._id, { snapshot: { ...snapshot, processes: [...snapshot.processes, { ...snapshot.processes[0], pid: 124, sessionId: "s2" }, { ...snapshot.processes[0], pid: 125, sessionId: "child" }] } });
+    return second;
+  });
+  args.selections.push({ conversation_id: second, session_id: "s2", destination_id: "linux", attested: [] });
+  const pending = (await authed.mutation(start, { ...args, dry_run: true })).checks.map((c: any) => c.pending);
+  args.selections.forEach((s, i) => { s.attested = pending[i]; });
+  const result = await authed.mutation(start, { ...args, client_batch_id: "rb_mixed", batch_ids: [{ destination_id: "linux", batch_id: "mg-mixed123" }] });
+  expect(result.error).toBeUndefined();
+  const rows = await t.run(ctx => ctx.db.query("session_migrations").collect());
+  expect(rows.map(r => [r.session_id, r.status, r.error ?? null])).toEqual([["s2", "queued", null], ["s1", "failed", "This session has unfinished subagents"]]);
+  expect(await t.run(ctx => ctx.db.query("migration_batches").collect())).toHaveLength(1);
+  expect(await t.run(ctx => ctx.db.query("daemon_commands").collect())).toHaveLength(1);
+});
 
 test("an older runner cannot claim destination continuation before resume executes", async () => {
   const { t, authed, args } = await setup();

@@ -55,6 +55,10 @@ export const taskTypes = new Set([
   "plan_task_completed",
   "doc_updated",
   "doc_commented",
+  // The line's news about a cause (the-line-end-to-end.md LE16).
+  "card_waiting",
+  "change_shipped",
+  "cause_reopened",
 ]);
 
 export const typeLabels: Record<string, string> = {
@@ -86,6 +90,9 @@ export const typeLabels: Record<string, string> = {
   sessions_need_input: "waiting for you",
   goal_stall: "goal stalled",
   device_shared: "shared a machine",
+  card_waiting: "card waiting on you",
+  change_shipped: "change shipped",
+  cause_reopened: "cause reopened",
 };
 
 export const typeColors: Record<string, string> = {
@@ -117,6 +124,9 @@ export const typeColors: Record<string, string> = {
   sessions_need_input: "text-sol-green",
   goal_stall: "text-sol-yellow",
   device_shared: "text-sol-cyan",
+  card_waiting: "text-sol-orange",
+  change_shipped: "text-sol-green",
+  cause_reopened: "text-red-400",
 };
 
 /** Who a notification is FROM. A snapshot on the row (Slack person, anonymous

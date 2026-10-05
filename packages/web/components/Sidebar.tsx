@@ -34,6 +34,7 @@ import { readPins, isPinned, isThreadsPin, pinApp, togglePin, type SidebarPin } 
 import { useConvexSync } from "../hooks/useConvexSync";
 import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
+import { ModSidebarSections } from "./mods/ModSidebarSections";
 import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
 import { projectDotClass } from "../lib/projectColors";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -1050,6 +1051,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
             icon: <AnchorAvatar anchor={rootAgent} size={20} className="flex-shrink-0" />,
           }}
         />
+
+        <ModSidebarSections isNarrow={isNarrow} />
 
         {scope === "work" ? null : (<>
 

@@ -38,3 +38,14 @@ names are not used by derivative works.
 
 The requirement for fonts to remain under this license does not apply to any
 document created using the fonts or their derivatives.
+
+## Bricolage Grotesque
+
+Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+
+Static instances (optical size 14 at 400, 500 and 600, and optical size 96 at
+600 as the display face) of the variable font, as Google Fonts serves them.
+The assistant lane (app/(simple)) sets every word in it, as the web lane does.
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1,
+the same license as Space Mono above (https://openfontlicense.org).

@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import type { ExternalToast } from "sonner";
 
 /** Options for a toast that stays until the person closes it. No timer, and
@@ -11,14 +10,3 @@ export const persistentToast = {
   closeButton: true,
   className: "cc-toast-sticky",
 } as const satisfies ExternalToast;
-
-/** Options for a timed toast whose action only works while it shows (Undo).
- *  A hairline along its foot drains over its life and holds while the pointer
- *  rests on the stack, as sonner's timer does (components/ui/sonner.css). */
-export function countdownToast(ms: number) {
-  return {
-    duration: ms,
-    className: "cc-toast-countdown",
-    style: { "--toast-life": `${ms}ms` } as CSSProperties,
-  } as const satisfies ExternalToast;
-}
