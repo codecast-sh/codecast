@@ -114,6 +114,34 @@ describe('org-review, synthetic', () => {
     expect(writes('REFUSED briefing edit -')).toBe(false);
   });
 
+  test('a cut snapshot refuses reads past the capture without failing frozen-reads; an uncaptured org read still fails it', () => {
+    const agent = (calls: string[]): AgentResult => ({ runSubdir: '/tmp/a', said: [], turns: [[]], calls, costUsd: 0, modelUsage: { [meta.model]: { outputTokens: 1 } }, isError: false, exitCode: 0, model: meta.model, realMs: 0 });
+    const frozen = (calls: string[]) => routeGates(meta, { calls: [], agents: [agent(calls)] }).find((g) => g.id === 'frozen-reads')!;
+    const past = frozen(['SERVED org inputs --team U --json', 'UNSERVED plan show pl-350 --json', 'UNSERVED read jx7abcd']);
+    expect(past.pass).toBe(true);
+    expect(past.evidence.summary).toBe('every frozen read was served; 2 read(s) past the capture were refused');
+    const missing = frozen(['UNSERVED plan show pl-350 --json', 'UNSERVED org health --team U --json']);
+    expect(missing.pass).toBe(false);
+    expect(missing.evidence.summary).toStartWith('cast org health --team U --json was not captured');
+  });
+
+  test('a cut capture follows the records the inputs name and the local roots they read', () => {
+    const captured = [{ argv: ['org', 'inputs', '--team', 'Acme', '--json'], out: JSON.stringify({ ...WORLD, plans: [{ short_id: 'pl-77' }], git_roots: [{ git_root: '/src/acme' }, { git_root: 'git@x:acme.git' }] }) }];
+    const reads = meta.cut!.follow(captured).map((r) => `${r.argv.join(' ')}${r.prefix ? ' *' : ''}`);
+    // The whole plan list is not followed, only what the analyzer judges.
+    expect(reads).not.toContain('plan show pl-77 --json');
+    expect(reads).toEqual(['task show ct-1 --json', 'task show ct-1 *', 'task show ct-2 --json', 'task show ct-2 *', 'task show ct-3 --json', 'task show ct-3 *', 'read jx7aaaa *', 'plan show pl-1 --json', 'plan show pl-1 *']);
+    expect(meta.cut!.gitRoots(captured)).toEqual(['/src/acme']);
+  });
+
+  test('the harness note names the cut, when the snapshot has one', () => {
+    const o = { inputsText: JSON.stringify(WORLD), workspace: 'acme', served: 'acme-base1', proposalsDir: '/tmp/p', frozen: ['org', '*'] };
+    expect(buildBriefing(o).briefing).not.toContain('Git history');
+    const cut = buildBriefing({ ...o, cut: { at: '2026-09-24T01:55:15.733Z', pins: {} } }).briefing;
+    expect(cut).toContain('Git history in every repository stands at 2026-09-24T01:55:15.733Z');
+    expect(cut).toContain('Every `cast` read answers from a record');
+  });
+
   test('grading and capture refuse a dir inside the archive, and only there', () => {
     const archive = tmp('org-archive-');
     mkdirSync(join(archive, 'union', 'round-1', 's1'), { recursive: true });
@@ -225,7 +253,55 @@ describe('org-review, synthetic', () => {
 
     // The same folder regrades through `./evals grade`, which finds the freeze in its run.json.
     const regraded = run('grade', 'org-review', dir, '--json');
-    expect(JSON.parse(regraded.out).gates.map((g: { id: string }) => g.id)).toEqual(['spec-parses', 'no-wrong-close', 'no-never-name', 'no-phantom-handle', 'frozen-reads']);
+    expect(JSON.parse(regraded.out).gates.map((g: { id: string }) => g.id)).toEqual(['spec-parses', 'no-wrong-close', 'no-never-name', 'no-phantom-handle', 'own-workspace', 'frozen-reads']);
+  });
+});
+
+describe('org-review rescore', () => {
+  test('regrades no-wrong-close against the labels as they stand, so a label fixed after a run reaches its stored score', async () => {
+    const home = tmp('org-rescore-');
+    const snap = join(home, 'snapshots', 'org-review', 'acme-base1');
+    mkdirSync(snap, { recursive: true });
+    writeFileSync(join(snap, 'org-inputs.json'), JSON.stringify(WORLD));
+    writeFileSync(join(snap, 'frozen'), 'org\n');
+    writeFileSync(join(snap, 'captured.json'), JSON.stringify({ argv: [], captured_at: '2026-01-01T00:00:00.000Z', workspace: 'acme' }));
+    const labels = join(home, 'labels', 'org-review', 'acme');
+    mkdirSync(labels, { recursive: true });
+    writeFileSync(join(labels, 'grade-sets.json'), JSON.stringify(SETS));
+    const env = { ...process.env, CODECAST_EVALS_HOME: home, CODECAST_DIR: tmp('org-nocast-'), NO_COLOR: '1' };
+    const f = JSON.parse(Bun.spawnSync(['bun', INDEX, 'freeze', 'create', 'org-review@acme-base1', '--json'], { env }).stdout.toString());
+    const prev = process.env.CODECAST_EVALS_HOME;
+    process.env.CODECAST_EVALS_HOME = home;
+    try {
+      const { rescoreRun } = await import('../../commands/grade');
+      const dir = join(home, 'runs', `org-review-${f.id.slice(0, 8)}-seed1-2026-10-04T00-00-00-000Z`);
+      const sub = join(dir, 'agent1', 'agent');
+      mkdirSync(sub, { recursive: true });
+      mkdirSync(join(dir, 'proposals'), { recursive: true });
+      writeFileSync(join(sub, 'args.json'), JSON.stringify({ model: meta.model }));
+      writeFileSync(join(sub, 'exit.txt'), '0\n');
+      writeFileSync(join(sub, 'out.json'), JSON.stringify({ is_error: false, total_cost_usd: 1, modelUsage: { [meta.model]: { outputTokens: 10 } } }));
+      writeFileSync(join(sub, 'stream.jsonl'), JSON.stringify({ type: 'assistant', parent_tool_use_id: null, message: { id: 'm', model: meta.model, content: [] } }));
+      writeFileSync(join(sub, 'calls.log'), 'SERVED org inputs --team Acme --json\n');
+      writeFileSync(join(dir, 'proposals', 'op-1.json'), JSON.stringify({ title: 't', summary_md: 'closing', changes: [close('ct-1')] }));
+      writeFileSync(join(dir, 'hashes.json'), JSON.stringify({ served: 'acme-base1', workspace: 'acme' }));
+      writeFileSync(join(dir, 'run.json'), JSON.stringify({ model: meta.model, dry: false, freezeId: f.id }));
+      // Stored when ct-1 was still labelled should-close.
+      const stored = scoreOf([gate('no-wrong-close', true, 'closes 1, none the labels say must stay open')], []);
+      writeFileSync(join(dir, 'score.json'), JSON.stringify(stored));
+      const wrongClose = async () => (await rescoreRun(dir))!.after!.gates.find((g) => g.id === 'no-wrong-close')!;
+      expect((await wrongClose()).pass).toBe(true);
+      // The label is fixed after the run: ct-1 must stay open.
+      writeFileSync(join(labels, 'grade-sets.json'), JSON.stringify({ ...SETS, must_not_close: [...SETS.must_not_close, 'ct-1'], should_close: ['ct-2', 'ct-3'] }));
+      const fixed = await wrongClose();
+      expect(fixed.pass).toBe(false);
+      expect(fixed.evidence.summary).toBe('closes ct-1, which the labels say must stay open');
+      expect(JSON.parse(readFileSync(join(dir, 'score.json'), 'utf8')).gates.find((g: { id: string }) => g.id === 'no-wrong-close').pass).toBe(false);
+      expect(JSON.parse(readFileSync(join(dir, 'grade-auto.json'), 'utf8')).records.wrong_close).toEqual(['ct-1']);
+    } finally {
+      if (prev === undefined) delete process.env.CODECAST_EVALS_HOME;
+      else process.env.CODECAST_EVALS_HOME = prev;
+    }
   });
 });
 

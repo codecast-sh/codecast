@@ -6,9 +6,9 @@ import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { useGuestLinks } from "@codecast/web/hooks/useGuestLinks";
 import { useQueryNoThrow } from "@codecast/web/hooks/useQueryNoThrow";
 import { useConvexSync } from "@codecast/web/hooks/useConvexSync";
+import { admitGuest, denyGuest, guestLinkUrl, removeGuest } from "@codecast/web/lib/calls/guestDoorActions";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
-import { CODECAST_BASE_URL } from "@codecast/shared/entities";
 import { Text } from "@/components/Themed";
 // The call stage is always dark (call.tsx says why), so the light palette's
 // contrast reads are the right ones here too.
@@ -33,6 +33,11 @@ import { useAuth } from "@/lib/auth";
 // Inside, a guest's face is pressable (useGuestRemover): somebody hosting
 // from a phone can put out a guest who should not be there, and close the
 // link they came in on.
+//
+// Every answer goes through the web's own (lib/calls/guestDoorActions), with
+// an alert where the web shows a toast: only a refusal is said (an answer
+// held up by a weak signal is still on its way), and a refused removal puts
+// the guest back on this phone's faces.
 //
 // And the link itself (GuestInviteRow): the "a guest is waiting" push brings
 // the link's maker to this screen, so this screen is where they send it
@@ -66,12 +71,10 @@ export function useGuestRemover(roomKey: string | null): ((guestId: string, name
   const { canInvite } = useGuestLinks(roomKey);
   if (!roomKey || !canInvite) return null;
   return (guestId, name) => {
-    // The store's action takes them off the faces now; a refusal puts them back.
+    // Off the faces now; a refusal puts them back and says why.
     const out = (revokeLink: boolean) => {
       void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      void useInboxStore.getState().removeCallGuest(roomKey, guestId, revokeLink).catch((err: unknown) =>
-        Alert.alert("Couldn't remove them", humanizeConvexError(err, "Something went wrong")),
-      );
+      void removeGuest(roomKey, guestId, revokeLink, (message) => Alert.alert("Couldn't remove them", message));
     };
     Alert.alert(`Remove ${name} (guest)?`, "They leave the call at once. Turning off their link also stops anyone new from using it.", [
       { text: "Cancel", style: "cancel" },
@@ -105,7 +108,7 @@ export function GuestInviteRow({ roomKey }: { roomKey: string | null }) {
       // The server hands back the viewer's open link when there is one, so a
       // second press shares the same address rather than minting another.
       const link = mine ?? (await create({ room_key: roomKey }));
-      const url = `${CODECAST_BASE_URL}${link.path}`;
+      const url = guestLinkUrl(link.path);
       await Share.share({ message: `Join my call on codecast: ${url}`, url });
     } catch (err) {
       Alert.alert("Couldn't make a guest link", humanizeConvexError(err, "Something went wrong"));
@@ -199,14 +202,8 @@ export function GuestDoor({ roomKey }: { roomKey: string | null }) {
 
   const answer = (k: GuestKnock, how: "admit" | "deny" | "deny_link") => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    const store = useInboxStore.getState();
-    const run =
-      how === "admit"
-        ? store.admitGuestKnock(k.guest_id!, k.from_name)
-        : store.denyGuestKnock(k.guest_id!, how === "deny_link");
-    void run.catch((err: unknown) =>
-      Alert.alert(how === "admit" ? "Couldn't let them in" : "Couldn't turn them away", humanizeConvexError(err, "Something went wrong")),
-    );
+    if (how === "admit") void admitGuest(k.guest_id!, k.from_name, (message) => Alert.alert("Couldn't let them in", message));
+    else void denyGuest(k.guest_id!, how === "deny_link", (message) => Alert.alert("Couldn't turn them away", message));
   };
 
   return (

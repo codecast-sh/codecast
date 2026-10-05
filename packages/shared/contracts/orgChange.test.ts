@@ -132,6 +132,27 @@ describe("the sentence is rendered from the row, by the proposal page's writers"
     expect(dependentBatches({ batch: "b1", rows: [set] }, [later]).map((d) => d.batch)).toEqual(["b2"]);
   });
 
+  // The intent record (initiatives-projects-role-page.md I5): a shape row
+  // carries the words and the lists as the row stores them. What it added
+  // reads as the proposal's sentence; an entry edited, closed or removed, and
+  // the way back of an add, name the lists that moved.
+  test("a goal's record reads as what was written down, and as what changed on the way back", () => {
+    const subject = { type: "initiative" as const, id: "i1", short_id: "in-1", label: "Reach 1k teams" };
+    const beta = { key: "private_beta_open", title: "Private beta open", date: 1_800_000_000_000 };
+    const wrote = row("initiative_shape", { subject, before: { why: null, milestones: null, questions: null, sources: [{ kind: "task", ref: "ct-1" }] }, after: { why: "Teams that run an agent weekly stay.", milestones: [beta], questions: [{ key: "price", text: "Do we price per seat?", at: 5 }], sources: [{ kind: "task", ref: "ct-1" }, { kind: "call", ref: "cl-42:14", quote: "a thousand teams" }] } });
+    expect(orgLogRowChange(wrote)).toEqual({ kind: "initiative_shape", initiative: "in-1", title: "Reach 1k teams", why: "Teams that run an agent weekly stay.", milestones: [{ title: "Private beta open", date: 1_800_000_000_000 }], questions: ["Do we price per seat?"], sources: ["cl-42:14"] });
+    expect(orgLogLine(wrote)).toBe("Record on the goal Reach 1k teams: why it matters, the milestone Private beta open, an open question and where it was stated");
+    expect(orgLogLine(invertRow(wrote))).toBe("Change the purpose, milestones, open questions and sources of the goal Reach 1k teams");
+    const reached = row("initiative_shape", { subject, before: { milestones: [beta] }, after: { milestones: [{ ...beta, done_at: 9 }] } });
+    expect(orgLogRowChange(reached)).toBeNull();
+    expect(orgLogLine(reached)).toBe("Change the milestones of the goal Reach 1k teams");
+    // A row that places the goal and writes its record says both.
+    const placed = row("initiative_shape", { subject, before: { parent_initiative_id: null, decisions: null }, after: { parent_initiative_id: "i2", decisions: [{ key: "brokers", text: "Ship to brokers first", at: 5 }] }, labels: { i2: "Win the market" } });
+    expect(orgLogLine(placed)).toBe("Put the goal Reach 1k teams under Win the market, and record a decision");
+    expect(undoVerdict(reached, { milestones: [beta] })).toEqual({ apply: false, reason: "its milestones changed after this" });
+    expect(movedFields({ why: "a", done_when: null }, { why: "a", done_when: "b" })).toEqual({ before: { done_when: null }, after: { done_when: "b" } });
+  });
+
   test("a kind this build does not know still reads as a sentence", () => {
     expect(orgLogLine(row("rename" as any))).toBe('A change this version of codecast cannot show yet ("rename")');
   });

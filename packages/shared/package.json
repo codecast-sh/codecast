@@ -25,6 +25,8 @@
     "./contracts/evalsApi": "./contracts/evalsApi.ts",
     "./contracts/projectRef": "./contracts/projectRef.ts",
     "./contracts/signalFingerprint": "./contracts/signalFingerprint.ts",
+    "./contracts/lineProfile": "./contracts/lineProfile.ts",
+    "./contracts/assistant": "./contracts/assistant.ts",
     "./contracts/ingest": "./contracts/ingest.ts",
     "./contracts/replay": "./contracts/replay.ts",
     "./contracts/appConnector": "./contracts/appConnector.ts",
@@ -56,6 +58,7 @@
     "./contracts/follow": "./contracts/follow.ts",
     "./contracts/roleGoals": "./contracts/roleGoals.ts",
     "./contracts/briefStanding": "./contracts/briefStanding.ts",
+    "./contracts/rolePlaybook": "./contracts/rolePlaybook.ts",
     "./entities": "./entities/index.ts",
     "./render": "./render/index.ts",
     "./render/permissionCardStyle": "./render/permissionCardStyle.ts",
@@ -88,11 +91,15 @@
     "./search": "./search/index.ts",
     "./async": "./async/index.ts",
     "./random": "./random/index.ts",
-    "./changes": "./changes/index.ts"
+    "./changes": "./changes/index.ts",
+    "./contracts/mods": "./contracts/mods.ts",
+    "./mods/sdk": "./mods/sdk.ts",
+    "./mods/inspect": "./mods/inspect.ts"
   },
   "dependencies": {
     "css-tree": "3.2.1",
-    "@platform/analytics": "file:../../platform/packages/analytics"
+    "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/fence": "file:../../platform/packages/fence"
   },
   "devDependencies": {
     "@types/css-tree": "^2.3.11"

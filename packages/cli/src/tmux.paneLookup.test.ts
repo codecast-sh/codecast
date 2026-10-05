@@ -16,10 +16,16 @@ import { resumeShortId, resumeTmuxName, upgradedLegacyResumeTmuxName } from "./r
 const SESSION = "58f3cdd1-4027-4850-be9f-d5039fbf2055";
 const SUFFIX = `-${resumeShortId(SESSION)}`;
 
-/** One row as tmux emits it: stamp | created | name. */
-function row(name: string, sessionId = "", created: string | number = ""): string {
-  return `${sessionId}|${created}|${name}`;
+/** One row as tmux emits it: stamp | created | activity | conversation | agent | project | name. */
+function row(
+  name: string,
+  sessionId = "",
+  created: string | number = "",
+  extra: { activity?: number; conversationId?: string; agentType?: string; projectPath?: string } = {},
+): string {
+  return [sessionId, created, extra.activity ?? "", extra.conversationId ?? "", extra.agentType ?? "", extra.projectPath ?? "", name].join("|");
 }
+const UNSTAMPED = { activitySec: 0, conversationId: null, agentType: null, projectPath: null };
 function rows(...lines: string[]): string {
   return lines.join("\n") + "\n";
 }
@@ -27,7 +33,7 @@ function rows(...lines: string[]): string {
 describe("parseCodecastPaneRows", () => {
   test("reads stamp, creation time and name", () => {
     const panes = parseCodecastPaneRows(rows(row("cc-claude-nr0bqx", SESSION, 1786564893)));
-    expect(panes).toEqual([{ tmux: "cc-claude-nr0bqx", sessionId: SESSION, createdSec: 1786564893 }]);
+    expect(panes).toEqual([{ tmux: "cc-claude-nr0bqx", sessionId: SESSION, createdSec: 1786564893, ...UNSTAMPED }]);
   });
 
   test("an unstamped pane parses with a null stamp, not an empty string", () => {
@@ -43,7 +49,17 @@ describe("parseCodecastPaneRows", () => {
 
   test("a tmux too old to expand the stamp reads as no stamp, not as a session id", () => {
     const panes = parseCodecastPaneRows(rows(row("cc-resume-old-58f3cdd1", "#{@codecast_session_id}", 100)));
-    expect(panes[0]).toEqual({ tmux: "cc-resume-old-58f3cdd1", sessionId: null, createdSec: 100 });
+    expect(panes[0]).toEqual({ tmux: "cc-resume-old-58f3cdd1", sessionId: null, createdSec: 100, ...UNSTAMPED });
+  });
+
+  test("reads activity and the conversation, agent and project stamps", () => {
+    const panes = parseCodecastPaneRows(rows(row("cc-claude-nr0bqx", SESSION, 100, {
+      activity: 250, conversationId: "jx7abcdefg", agentType: "codex", projectPath: "/src/app",
+    })));
+    expect(panes[0]).toEqual({
+      tmux: "cc-claude-nr0bqx", sessionId: SESSION, createdSec: 100,
+      activitySec: 250, conversationId: "jx7abcdefg", agentType: "codex", projectPath: "/src/app",
+    });
   });
 
   test("blank lines are skipped", () => {

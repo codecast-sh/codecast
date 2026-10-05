@@ -1,10 +1,10 @@
 const { test, expect } = require("bun:test");
 const { mergeAgentDock, placeAgentDock } = require("./agentDock");
 
-test("off unless asked for, and junk is dropped", () => {
-  expect(mergeAgentDock(undefined)).toEqual({ enabled: false, edge: "right", offset: 0.28 });
-  expect(mergeAgentDock({ enabled: "yes", edge: "top", offset: 9, extra: 1 })).toEqual({ enabled: false, edge: "right", offset: 0.9 });
-  expect(mergeAgentDock({ enabled: true, edge: "left", offset: 0.5 })).toEqual({ enabled: true, edge: "left", offset: 0.5 });
+test("on unless turned off, and junk is dropped", () => {
+  expect(mergeAgentDock(undefined)).toEqual({ enabled: true, edge: "right", offset: 0.28, minimized: false });
+  expect(mergeAgentDock({ enabled: false, edge: "top", offset: 9, extra: 1 })).toEqual({ enabled: false, edge: "right", offset: 0.9, minimized: false });
+  expect(mergeAgentDock({ enabled: true, edge: "left", offset: 0.5, minimized: true })).toEqual({ enabled: true, edge: "left", offset: 0.5, minimized: true });
 });
 
 test("flush to the right edge and grows leftward", () => {

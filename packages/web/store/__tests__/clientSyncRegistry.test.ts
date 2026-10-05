@@ -227,6 +227,15 @@ describe("client sync registry", () => {
       expect((useInboxStore.getState() as any).projects.p.line_profile.finders.map((f: any) => f.source)).toEqual(["ci", "sentry"]);
     });
 
+    it("a republished line profile that moves only a nested value (a command) reaches the store", () => {
+      // The whole profile rides the row (shared/contracts/lineProfile), so an
+      // edit of commands.check alone must replace it like a finder change does.
+      const profile = (check: string) => ({ default: true, changed_at: 1, finders: [], watch_days: 7, commands: { check, prove: null, eval: null, ship: null }, sources: { "commands.check": "file" } });
+      useInboxStore.setState({ projects: { p: { _id: "p", title: "P", line_profile: profile("bun test") } } } as any);
+      useInboxStore.getState().syncTable("projects", [{ _id: "p", title: "P", line_profile: profile("cast ws check") }]);
+      expect((useInboxStore.getState() as any).projects.p.line_profile.commands.check).toBe("cast ws check");
+    });
+
     it("saved views persist as a snapshot, so a pinned view resolves on an offline boot", () => {
       // The sidebar's pinned rows render from client UI state and then look
       // the view up in this collection on click; unpersisted, that click was
@@ -236,7 +245,7 @@ describe("client sync registry", () => {
     });
 
     it("workspace-scoped tables are declared on the entry", () => {
-      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "docs", "initiatives", "issueSyncSources", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "plans", "projects", "signals", "tasks"].sort());
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "docs", "initiatives", "issueSyncSources", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "plans", "projects", "signals", "tasks"].sort());
     });
   });
 

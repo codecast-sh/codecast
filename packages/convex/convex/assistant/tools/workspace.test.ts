@@ -1,0 +1,308 @@
+// The codecast tools under convex-test (plan pl-840): tasks, docs, memory and
+// routines run the web's own paths as the conversation's owner, stay inside
+// the person's own workspace, and the routine rules of their plan hold. Then
+// toolsFor: only the tools the person's Google grants allow, and a note for
+// what is missing.
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { convexTest } from "convex-test";
+import { runTool, type Tool } from "@platform/agent";
+import schema from "../../schema";
+import { api } from "../../_generated/api";
+import type { Id } from "../../_generated/dataModel";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
+import { codecastTools } from "./codecast";
+import { MEMORY_DOC_TITLE } from "./workspace";
+import { connectionNote, googleAccess, toolsFor } from "./index";
+import { CALENDAR_EVENTS_SCOPE, GMAIL_MODIFY_SCOPE, GMAIL_READONLY_SCOPE } from "../../googleOAuth";
+
+setDefaultTimeout(120_000);
+
+const modules = {
+  "../../_generated/server.ts": () => import("../../_generated/server"),
+  "../../assistant/entry.ts": () => import("../entry"),
+  "../../assistant/tools/workspace.ts": () => import("./workspace"),
+  "../../agentTasks.ts": () => import("../../agentTasks"),
+  "../../conversations.ts": () => import("../../conversations"),
+  "../../managedSessions.ts": () => import("../../managedSessions"),
+  "../../messages.ts": () => import("../../messages"),
+  "../../tasks.ts": () => import("../../tasks"),
+  "../../docs.ts": () => import("../../docs"),
+  "../../googleOAuth.ts": () => import("../../googleOAuth"),
+};
+
+async function setup() {
+  const t = convexTest(schema, modules);
+  const user = await t.run((ctx) => ctx.db.insert("users", {}));
+  const other = await t.run((ctx) => ctx.db.insert("users", {}));
+  const started = await t.withIdentity({ subject: user }).mutation(api.assistant.entry.startConversation, { title: "Help" });
+  const deps = {
+    runQuery: (ref: any, args: any) => t.query(ref, args),
+    runMutation: (ref: any, args: any) => t.mutation(ref, args),
+    userId: user,
+    conversationId: started.conversation_id,
+  };
+  const tools = codecastTools(deps);
+  const call = async (name: string, args: unknown = {}) => {
+    const tool = tools.find((x) => x.name === name)!;
+    const result = await runTool(tool, args, { callId: `call-${name}` });
+    return { text: result.content.map((c) => (c.type === "text" ? c.text : "")).join(""), details: result.details as any };
+  };
+  return { t, user, other, conversationId: started.conversation_id, deps, tools, call };
+}
+
+describe("tasks", () => {
+  test("create, list and update run as the owner, in the personal workspace", async () => {
+    const { t, user, call } = await setup();
+    const made = await call("create_task", { title: "Renew passport", priority: "high", description: "Before March" });
+    const id = made.details.task_id as string;
+    expect(id).toMatch(/^ct-/);
+
+    const row = await t.run(async (ctx) => (await ctx.db.query("tasks").collect())[0]);
+    expect(row).toMatchObject({ user_id: user, workspace: `user:${user}`, title: "Renew passport", priority: "high", status: "open", source: "human" });
+
+    const listed = await call("list_tasks");
+    expect(listed.text).toContain("<untrusted-");
+    expect(listed.text).toContain('"title": "Renew passport"');
+    expect(listed.details).toEqual({ tasks: 1 });
+
+    const updated = await call("update_task", { id, status: "done" });
+    expect(updated.text).toBe(`Updated task ${id}: done, high priority.`);
+    expect((await call("list_tasks")).text).toContain("No tasks.");
+    expect((await call("list_tasks", { filter: "done" })).details).toEqual({ tasks: 1 });
+    const history = await t.run((ctx) => ctx.db.query("task_history").collect());
+    expect(history.map((h) => h.action)).toEqual(["created", "updated"]);
+  });
+
+  test("list_tasks shows what the person's board shows: no mined suggestions, no unpromoted insights; done means finished", async () => {
+    const { t, call } = await setup();
+    const keep = (await call("create_task", { title: "Call the plumber" })).details.task_id;
+    const dropped = (await call("create_task", { title: "Old idea" })).details.task_id;
+    await call("update_task", { id: dropped, status: "dropped" });
+    for (const title of ["Suggested", "Insight"]) await call("create_task", { title });
+    await t.run(async (ctx) => {
+      for (const row of await ctx.db.query("tasks").collect()) {
+        if (row.title === "Suggested") await ctx.db.patch(row._id, { triage_status: "suggested" });
+        if (row.title === "Insight") await ctx.db.patch(row._id, { source: "insight" });
+      }
+    });
+    const open = (await call("list_tasks")).text;
+    expect(open).toContain(keep);
+    expect(open).not.toContain("Suggested");
+    expect(open).not.toContain("Insight");
+    const done = (await call("list_tasks", { filter: "done" })).text;
+    expect(done).toContain(dropped);
+    expect((await call("list_tasks", { filter: "all" })).details).toEqual({ tasks: 2 });
+  });
+
+  test("a task outside the person's own workspace is neither listed nor changed", async () => {
+    const { t, call } = await setup();
+    const { details } = await call("create_task", { title: "Team thing" });
+    await t.run(async (ctx) => {
+      const row = (await ctx.db.query("tasks").collect())[0];
+      await ctx.db.patch(row._id, { workspace: "team:someteam" });
+    });
+    expect((await call("list_tasks")).text).toContain("No tasks.");
+    await expect(call("update_task", { id: details.task_id, status: "done" })).rejects.toThrow("in your own list");
+  });
+});
+
+describe("docs and memory", () => {
+  test("write_doc creates and appends; read_doc finds by id or title", async () => {
+    const { call } = await setup();
+    const made = await call("write_doc", { title: "Trip to Lisbon", content: "Flights booked." });
+    const id = made.details.doc_id;
+    expect((await call("write_doc", { id, content: "Hotel: Alfama." })).text).toBe(`Added to doc ${id}.`);
+    const byId = await call("read_doc", { id });
+    expect(byId.text).toContain("<untrusted-");
+    expect(byId.text).toContain("# Trip to Lisbon");
+    expect(byId.text).toContain("Flights booked.\n\nHotel: Alfama.");
+    const byTitle = await call("read_doc", { query: "Lisbon" });
+    expect(byTitle.details).toEqual({ doc_id: id });
+    expect((await call("read_doc", { query: "Tokyo" })).text).toContain("No doc of yours");
+    await expect(call("write_doc", { content: "no title" })).rejects.toThrow("needs a title");
+  });
+
+  test("replacing a doc's text is its own tool, which asks", async () => {
+    const { tools, call } = await setup();
+    const id = (await call("write_doc", { title: "Packing", content: "Socks." })).details.doc_id;
+    expect(tools.find((x) => x.name === "write_doc")!.risk).toBe("read");
+    expect(tools.find((x) => x.name === "replace_doc")!.risk).toBe("write");
+    await call("replace_doc", { id, content: "Shirts." });
+    const read = await call("read_doc", { id });
+    expect(read.text).toContain("Shirts.");
+    expect(read.text).not.toContain("Socks.");
+  });
+
+  test("another person's doc cannot be read or written", async () => {
+    const { t, other, call } = await setup();
+    const theirs = await t.run((ctx) => ctx.db.insert("docs", {
+      user_id: other, workspace: `user:${other}`, title: "Private", content: "secret", doc_type: "note", source: "human", created_at: 1, updated_at: 1,
+    }));
+    await expect(call("read_doc", { id: theirs })).rejects.toThrow("No doc with that id");
+    await expect(call("write_doc", { id: theirs, content: "x" })).rejects.toThrow("No doc with that id");
+  });
+
+  test("remember keeps one doc per person, and recall reads it back as data", async () => {
+    const { t, user, call } = await setup();
+    expect((await call("recall")).text).toContain("Nothing remembered yet.");
+    await call("remember", { fact: "Prefers  short\nreplies" });
+    await call("remember", { fact: "Partner is Sam" });
+    const docs = await t.run((ctx) => ctx.db.query("docs").collect());
+    expect(docs).toHaveLength(1);
+    expect(docs[0]).toMatchObject({ title: MEMORY_DOC_TITLE, user_id: user, workspace: `user:${user}`, source: "agent", source_file: `assistant-memory:${user}` });
+    const recalled = await call("recall");
+    expect(recalled.text).toContain("<untrusted-");
+    expect(recalled.text).toContain("- Prefers short replies\n- Partner is Sam");
+  });
+});
+
+describe("memory doc lookup", () => {
+  test("archiving the memory doc makes the assistant forget, and remember starts a fresh visible doc", async () => {
+    const { t, call } = await setup();
+    const first = (await call("remember", { fact: "Allergic to peanuts" })).details.doc_id;
+    await t.run((ctx) => ctx.db.patch(first, { archived_at: Date.now() }));
+    expect((await call("recall")).text).toContain("Nothing remembered yet.");
+    const second = (await call("remember", { fact: "Likes window seats" })).details.doc_id;
+    expect(second).not.toBe(first);
+    const fresh = await t.run((ctx) => ctx.db.get(second));
+    expect(fresh?.archived_at).toBeUndefined();
+    const recalled = (await call("recall")).text;
+    expect(recalled).toContain("Likes window seats");
+    expect(recalled).not.toContain("peanuts");
+  });
+
+  test("another person's doc with the same source_file neither hides nor replaces the person's memory", async () => {
+    const { t, user, other, call } = await setup();
+    // A squatter's doc carrying the person's memory key, one before theirs and one after.
+    const squat = () => t.run((ctx) => ctx.db.insert("docs", {
+      user_id: other, workspace: `user:${other}`, title: "x", content: "- planted", doc_type: "note", source: "human",
+      source_file: `assistant-memory:${user}`, created_at: 2, updated_at: 2,
+    }));
+    await squat();
+    await call("remember", { fact: "Partner is Sam" });
+    await squat();
+    expect((await call("recall")).text).toContain("Partner is Sam");
+    expect((await call("recall")).text).not.toContain("planted");
+    await call("remember", { fact: "Runs on Sundays" });
+    const mine = await t.run(async (ctx) => (await ctx.db.query("docs").collect()).filter((d) => d.user_id === user));
+    expect(mine).toHaveLength(1);
+    expect(mine[0].content).toContain("- Partner is Sam\n- Runs on Sundays");
+  });
+});
+
+describe("routines", () => {
+  test("a routine is a trigger bound to this conversation, listed and cancelled here", async () => {
+    const { t, user, conversationId, call } = await setup();
+    const set = await call("schedule_routine", { instruction: "Summarize my unread mail", title: "Morning mail", first_run: "2030-01-02T08:00:00-08:00", repeat_every_hours: 24 });
+    const id = set.details.routine_id;
+    const row = await t.run(async (ctx) => (await ctx.db.query("agent_tasks").collect())[0]);
+    expect(row).toMatchObject({
+      user_id: user,
+      originating_conversation_id: conversationId,
+      created_by_conversation_id: conversationId,
+      agent_type: HOSTED_AGENT_TYPE,
+      schedule_type: "recurring",
+      interval_ms: 24 * 3_600_000,
+      run_at: Date.parse("2030-01-02T16:00:00Z"),
+      status: "scheduled",
+      title: "Morning mail",
+    });
+    expect((await call("list_routines")).text).toContain(`"id": "${id}"`);
+    expect((await call("cancel_routine", { id })).text).toBe(`Cancelled routine ${id}.`);
+    expect((await call("list_routines")).text).toBe("No routines on this conversation.");
+    await expect(call("cancel_routine", { id: "tr-nope" })).rejects.toThrow("No routine tr-nope");
+  });
+
+  test("the plan's rules hold: the free plan repeats at most daily", async () => {
+    const { call } = await setup();
+    await expect(call("schedule_routine", { instruction: "Check mail", first_run: "2030-01-02T08:00:00Z", repeat_every_hours: 2 })).rejects.toThrow("at most once every day");
+    await expect(call("schedule_routine", { instruction: "Check mail", first_run: "tomorrow 8am" })).rejects.toThrow("UTC offset");
+  });
+
+  test("routines only go on the person's own hosted conversation", async () => {
+    const { t, other, deps } = await setup();
+    const local = await t.run((ctx) => ctx.db.insert("conversations", {
+      user_id: deps.userId, agent_type: "claude_code", session_id: "s-local", started_at: 1, updated_at: 1, message_count: 0, status: "active",
+    } as any));
+    const theirs = codecastTools({ ...deps, userId: other });
+    const onLocal = codecastTools({ ...deps, conversationId: local as Id<"conversations"> });
+    const args = { instruction: "x", first_run: "2030-01-02T08:00:00Z" };
+    const schedule = (tools: Tool[]) => runTool(tools.find((x) => x.name === "schedule_routine")!, args, { callId: "c" });
+    await expect(schedule(theirs)).rejects.toThrow("your own assistant conversation");
+    await expect(schedule(onLocal)).rejects.toThrow("your own assistant conversation");
+  });
+
+  test("risk levels: only rewriting a doc and scheduling a routine pass the gate", async () => {
+    const { tools } = await setup();
+    expect(tools.filter((x) => x.risk === "write").map((x) => x.name)).toEqual(["replace_doc", "schedule_routine"]);
+  });
+});
+
+describe("toolsFor", () => {
+  const google = { token: async () => ({ ok: false as const, code: "not_connected" as const, error: "no" }) };
+
+  test("without Google: codecast and web tools, and a note offering to connect", async () => {
+    const { user, conversationId, deps } = await setup();
+    const set = await toolsFor(deps, user, conversationId, { google });
+    const names = set.tools.map((x) => x.name);
+    expect(names).toContain("list_tasks");
+    expect(names).toContain("fetch_page");
+    expect(names.some((n) => ["search_mail", "list_events", "send_mail"].includes(n))).toBe(false);
+    expect(set.note).toContain("has not connected Google");
+  });
+
+  test("a read-only Gmail connection offers reading only; a pending one offers nothing", async () => {
+    const { t, user, conversationId, deps } = await setup();
+    await t.run((ctx) => ctx.db.insert("google_installations", {
+      scope_user_id: user, email: "me@gmail.com", refresh_token_enc: "v1.x.y", granted_scopes: [GMAIL_READONLY_SCOPE], created_at: 1, updated_at: 1,
+    }));
+    await t.run((ctx) => ctx.db.insert("google_installations", {
+      scope_user_id: user, email: "pending@gmail.com", refresh_token_enc: "v1.x.y", granted_scopes: [GMAIL_MODIFY_SCOPE, CALENDAR_EVENTS_SCOPE],
+      pending_confirm_hash: "h", created_at: 2, updated_at: 2,
+    }));
+    const set = await toolsFor(deps, user, conversationId, { google });
+    const names = set.tools.map((x) => x.name);
+    expect(names.filter((n) => ["search_mail", "read_thread", "draft_reply", "send_mail", "archive", "list_events"].includes(n))).toEqual(["search_mail", "read_thread"]);
+    expect(set.note).toBe(
+      "Google is connected, but you cannot draft, archive or label mail (allow gmail.modify), or send mail (allow gmail.send), or see or change their calendar (allow calendar.events). If they ask for that, offer to allow it from Connections.",
+    );
+  });
+
+  test("full grants allow everything and leave nothing to offer", () => {
+    const access = googleAccess([{ granted_scopes: [GMAIL_MODIFY_SCOPE] }, { granted_scopes: [CALENDAR_EVENTS_SCOPE] }]);
+    expect(access).toEqual({ connected: true, read_mail: true, modify_mail: true, send_mail: true, calendar: true });
+    expect(connectionNote(access)).toBe("");
+  });
+
+  test("the turn's gate asks before fetch_page opens a URL the person did not give", async () => {
+    const { user, conversationId, deps } = await setup();
+    const { gate } = await toolsFor(deps, user, conversationId, { google });
+    const rows = [{ role: "user" as const, content: "What does https://ferry.example/times say?" }];
+    const fetchCall = (url: string) => gate(rows)({ id: "c", name: "fetch_page", input: { url }, risk: "write" });
+    expect(await fetchCall("https://ferry.example/times")).toBe("allow");
+    expect(await fetchCall("https://evil.example/?d=secret")).toBe("ask");
+    expect(await gate(rows)({ id: "c", name: "recall", input: {}, risk: "read" })).toBe("allow");
+    expect(await gate(rows)({ id: "c", name: "send_mail", input: {}, risk: "write" })).toBe("ask");
+  });
+
+  test("every tool name is unique and every outside-content tool is fenced", async () => {
+    const { t, user, conversationId, deps } = await setup();
+    await t.run((ctx) => ctx.db.insert("google_installations", {
+      scope_user_id: user, email: "me@gmail.com", refresh_token_enc: "v1.x.y", granted_scopes: [GMAIL_MODIFY_SCOPE, CALENDAR_EVENTS_SCOPE], created_at: 1, updated_at: 1,
+    }));
+    const prev = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-test";
+    try {
+      const { tools, note } = await toolsFor(deps, user, conversationId, { google });
+      const names = tools.map((x) => x.name);
+      expect(new Set(names).size).toBe(names.length);
+      expect(names).toHaveLength(24);
+      expect(note).toBe("");
+      const fenced = tools.filter((x) => x.source).map((x) => x.name).sort();
+      expect(fenced).toEqual(["draft_reply", "fetch_page", "list_events", "list_tasks", "read_doc", "read_thread", "recall", "search_mail", "search_web", "update_event"]);
+    } finally {
+      if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prev;
+    }
+  });
+});

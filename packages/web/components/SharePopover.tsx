@@ -9,6 +9,9 @@ import { toast } from "sonner";
 import { SegmentedChoice, TeamShareModePicker, type SegmentedOption } from "./TeamShareModePicker";
 
 interface SharePopoverProps {
+  /** Open on mount: the page was reached by a link to its share control
+   *  (a call's `?share=open`, from the room's thread). */
+  defaultOpen?: boolean;
   isPrivate?: boolean;
   teamVisibility?: string | null;
   hasShareToken: boolean;
@@ -38,6 +41,10 @@ interface SharePopoverProps {
   /** What else the public link carries, decided per object (a call's video),
    *  shown under link access for whoever manages it. */
   linkExtra?: React.ReactNode;
+  /** Why this viewer may close the public link but not open it (a call they
+   *  were not in): the choice holds still and says who can, rather than
+   *  failing on the press. */
+  openRefusal?: string | null;
 }
 
 type VisibilityMode = "private" | "summary" | "full";
@@ -97,9 +104,11 @@ export function SharePopover({
   sharedVia,
   canManage = true,
   linkExtra,
+  openRefusal,
+  defaultOpen = false,
 }: SharePopoverProps) {
   const chatOn = useTeamFeature("chat");
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const [isUpdatingLink, setIsUpdatingLink] = useState(false);
 
   const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
@@ -109,6 +118,7 @@ export function SharePopover({
   // who can already see this. Open to anyone, it is the same page link
   // carrying the token, because an id alone grants nothing (issue #27).
   const linkAccess: LinkAccess = hasShareToken ? "anyone" : "restricted";
+  const openBlocked = linkAccess === "restricted" && !!openRefusal;
   const link = (canManage && hasShareToken && shareUrl) || pageUrl || null;
 
   const setLinkAccess = async (next: LinkAccess) => {
@@ -199,12 +209,14 @@ export function SharePopover({
                 options={LINK_ACCESS}
                 value={linkAccess}
                 onPick={setLinkAccess}
-                disabled={isUpdatingLink || (linkAccess === "anyone" && !onRevokeShareLink)}
+                disabled={isUpdatingLink || openBlocked || (linkAccess === "anyone" && !onRevokeShareLink)}
               />
               <p className="text-xs leading-snug text-sol-text-muted">
                 {linkAccess === "anyone"
                   ? "Anyone with the link can view it, no sign in needed."
-                  : "Only people who can already see it can open the link."}
+                  : openBlocked
+                    ? `Only people who can already see it can open the link. ${openRefusal}`
+                    : "Only people who can already see it can open the link."}
               </p>
               {linkExtra}
             </div>

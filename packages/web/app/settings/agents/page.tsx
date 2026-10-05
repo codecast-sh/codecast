@@ -2,7 +2,7 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useState } from "react";
 import { Pin, Shield, SlidersHorizontal } from "lucide-react";
-import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
+import { LOCAL_AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
 import { usePinnedAgentIds } from "../../../hooks/usePinnedAgents";
 import { AgentTypeIcon } from "../../../components/AgentTypeIcon";
 import { Switch } from "../../../components/ui/switch";
@@ -152,7 +152,7 @@ export default function AgentsPage() {
  *  the CLI; an unpinned one still shows on a session already running it. */
 function PinnedAgentsSection() {
   const pinned = usePinnedAgentIds();
-  const clients = Object.values(AGENT_CLIENTS);
+  const clients = Object.values(LOCAL_AGENT_CLIENTS);
   const toggle = (id: AgentClientId, on: boolean) => {
     const next = clients.map((d) => d.id).filter((x) => (x === id ? on : pinned.includes(x)));
     useInboxStore.getState().setPinnedAgents(next);

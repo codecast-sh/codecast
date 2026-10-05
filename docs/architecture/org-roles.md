@@ -1,5 +1,7 @@
 # Org roles and the org page
 
+> This is the first slice. Roles have since become standing agents (org-roles-standing.md T1 to T4): a role's seat is its standing session. The wake rail that doc describes was deleted on 2026-09-25; a role now wakes only through its triggers (`lib/orgRoutine.ts`, armed by `orgRoles.ensureRoleRoutine`) and plain messages (`pendingMessages.tellRole`), per org-staffing.md S25 to S28.
+
 The reporting structure of a workspace: people, the roles they created, the
 standing anchors, and every session, drawn as one tree and edited by
 reparenting. This document is the contract the backend and the web page are
@@ -7,11 +9,13 @@ built against. Sections are numbered so code can cite them.
 
 ## S1. What a role is in this slice
 
+![Left, the reporting tree: roles (org_roles) report to a person or a role through reports_to, sessions report to a role through conversations.org_role_id or to a person through session_owners, and every role has one standing session. Right, the three things that wake that session: a recurring trigger, the needs-input event trigger, and a plain message from tellRole or cast role wake](../diagrams/org-roles.svg)
+
 A role is a named seat in the reporting structure with a scope. In this slice
 a role has no standing session: it is a node that sessions and other roles
 report to, and the scope it owns. Standing sessions, wakes, briefs and decision
-routing come later and attach to the same row (`anchor_id` is reserved for
-that).
+routing came later and attach to the same row (`anchor_id` now points at the
+seat's `anchors` row, org-roles-standing.md T1).
 
 Every session already reports to a person through `session_owners`. This slice
 adds one optional pointer, `conversations.org_role_id`, meaning "this session
@@ -30,11 +34,13 @@ org_roles
   name            string            display, e.g. "Head of Growth"
   handle          string            unique inside the access boundary; [a-z0-9-]{2,32}
   scope           { project_ids: Id<projects>[]; plan_ids: Id<plans>[] }
-                                    empty arrays = the whole workspace
+                                    opt in: empty arrays own no work, except the
+                                    Head of People, which then covers the workspace
+                                    (org-staffing.md S26)
   reports_to      { kind: "user"; user_id: Id<users> } | { kind: "role"; role_id: Id<org_roles> }
   status          "active" | "paused" | "retired"
   charter?        string            short free text for now; becomes a doc later
-  anchor_id?      Id<anchors>       reserved: the standing session, when one is provisioned
+  anchor_id?      Id<anchors>       the standing session's anchors row, once provisioned
   created_by      Id<users>
   created_at      number
   updated_at      number
@@ -46,6 +52,10 @@ indexes
   by_short_id       [short_id]
 ```
 
+The row has since grown the standing agent's fields (`trust`, `caps`,
+`counters`, `authority`, `charter_doc_id`, `brief_doc_id`, `checked_at`,
+`reports_user_ids`, the line's fields and more); `schema.ts` is the source.
+
 No `workspace` key. Access is the anchor rule: a personal role is visible to
 its owner; a team role is visible to every member of the team; reshaping (rename,
 reparent, retire, scope edit) is allowed for the host, the personal owner, or a
@@ -53,13 +63,15 @@ team admin. Export `anchorGrants` style helpers as `roleGrants` in
 `convex/lib/orgAccess.ts` and use them from both `orgRoles.ts` and the
 session reparent path. The change log tracks the table (`makeChangeTrackedDb`
 sees it automatically once the table is in the schema); the web feeds from the
-`org.tree` query, not from a per row collection.
+`org.tree` and `org.roles` queries (S6), not from a per row collection.
 
 `conversations.org_role_id?: Id<org_roles>` with index `by_org_role
-[org_role_id]`. It is written only by the session reparent core
+[org_role_id]`. It is written by the session reparent core
 (`sessionOwnership.performReparentSession`, re-exported from `orgRoles`, the
 one place `session_owners` and `org_role_id` change together; org-staffing.md
-S11) and by `retire`; it is not in the dispatchable conversation field manifest.
+S11), by `spawn.recordHandStart` when a role starts a hand, by
+`orgRoles.stampStandingReportsTo` (a standing session carries its parent role)
+and by `retire`; it is not in the dispatchable conversation field manifest.
 
 ## S3. Query `org.tree`
 
@@ -114,7 +126,7 @@ Rules:
   scan `by_team_user_updated` per member with the cutoff; personal: the
   caller's own rows by `by_user_updated`. Cap total rows read at 3000 and set
   `truncated: true` on the response when the cap hits.
-- `work_state` comes from `classifyWorkState` exactly as `scanInboxConversations`
+- `work_state` comes from `classifyWorkStates` exactly as `scanInboxConversations`
   computes it. Do not write a second classifier: factor the per row input
   builder out of `scanInboxConversations` if it is not already a function, and
   call it.
@@ -149,11 +161,17 @@ orgRoles.create({ name, handle, team_id?, scope?, reports_to?, charter? })
    Refuses a duplicate handle in the boundary; refuses reports_to pointing at
    a role in another boundary.
 orgRoles.update({ role_id, name?, handle?, scope?, charter?, status? })
-orgRoles.reparent({ role_id, reports_to })
-   Refuses a cycle (walk up from the target through role parents, max depth 32).
-orgRoles.retire({ role_id })
-   Sets status retired and clears org_role_id on every session filed under it
-   (by_org_role), so those sessions fall back to their owner.
+orgRoles.reparent({ role_id, reports_to, note? })
+   Refuses a cycle (roleChainReaches) and a role whose scope does not fit
+   inside its new parent's. Restamps the standing session's parent and owners
+   (stampStandingReportsTo) and returns the moved role.
+orgRoles.retire({ role_id, standing_session?: "keep" | "retire" })
+   Waits for the knowledge handoff when another role inherits the area
+   (org-staffing.md S32). Then: cancels the seat's routines, clears org_role_id
+   on every session filed under it (by_org_role), re-homes those sessions to
+   the live role whose area covers them (else they stay with their owners),
+   moves child roles and open tasks up to the retired role's parent, and keeps
+   or retires the standing session.
 orgRoles.reparentSession({ conversation_id, target, note?, from_session? })
    target: { kind: "user"; user_id } | { kind: "user"; owners: string[]; mode: "set" | "add" | "remove" } | { kind: "role"; role_id }
    user target: the ownership gesture (the same core `cast own`, `cast disown` and
@@ -165,8 +183,7 @@ orgRoles.reparentSession({ conversation_id, target, note?, from_session? })
    see it) or able to reshape the target role.
    Every move that changes the reporting line tells the session once
    ("You now report to <name>. <note>", org-staffing.md S11) and returns
-   `told: { sessions, roles }`; `orgRoles.reparent` returns the same after
-   waking the role.
+   `told: { sessions, roles }`.
 ```
 
 Every mutation takes `api_token?` like the anchor mutations so the CLI can call
@@ -175,19 +192,24 @@ it. Each write bumps `updated_at`.
 ## S6. Client
 
 Registry key `orgTree`: singleton, `hydration: { phase: "deferred", merge: "fill" }`,
-feeds `["org.tree"]`, classified `shared`. The feeder is
-`hooks/useSyncOrgTree.ts` (mirror `useSyncSessionThreads.ts`). The page reads
-the store, never the query.
+feeds `["org.tree", "org.roles"]`, classified `shared`. `org.roles` returns
+roles and seats without the session scan, for surfaces that only name a role;
+a roles only push keeps the session fields of the last full tree. The feeders
+are in `hooks/useSyncOrgTree.ts` (`useSyncOrgTree` for the full tree,
+`useSyncOrgTreeFeeder` for roles only). The page reads the store, never the
+query.
 
 Actions in the store (`action()`): `reparentOrgSession`, `reparentOrgRole`,
 `createOrgRole`, `updateOrgRole`, `retireOrgRole`. Each patches the `orgTree`
 singleton optimistically (move the session between `sessions` arrays and adjust
 `counts`, or move the role's `reports_to`) and dispatches the mutation.
 
-Route `/org` (`app/org/page.tsx`), components under `components/org/`:
+Route `/org` (`app/org/page.tsx`, which renders `components/org/OrgPage.tsx`),
+components under `components/org/`:
 
-- `OrgGraph.tsx`: React Flow canvas. Node types `person`, `role`, `anchor`,
-  `session`, `cluster`. Edge type: smooth step, parent above child.
+- `OrgGraph.tsx`: React Flow canvas. Node types `person`, `role`, `session`,
+  `cluster`, `healthRole` (`ORG_NODE_TYPES`). Edge type: smooth step, parent
+  above child.
 - `orgLayout.ts`: a tidy tree layout (post order subtree widths, siblings
   spaced, parents centered over children). No new dependency.
 - `OrgNodeCards.tsx`: the five cards. Every session card carries the inbox
@@ -208,8 +230,10 @@ Route `/org` (`app/org/page.tsx`), components under `components/org/`:
   shows people expanded with their top sessions and clusters, roles expanded.
 - Palette: `/org` entry. Sidebar: entry next to Team.
 
-## S7. CLI (optional in this slice)
+## S7. CLI
 
-`cast org ls|show <or-id>|create <name> --handle <h> [--project <ref>]...
-[--reports-to @handle|user]|reparent <or-id|session> --to <target>|retire`.
-Routes under `/cli/org/*` map one to one onto S5.
+`cast org ls|show <or-id>|create <name> --handle <h> [--reports-to @handle|user]
+[--charter <text>]|reparent <or-id|session> --to <target> [--note <text>]|retire
+<role> [--standing keep|retire]|reset`. Routes under `/cli/org/*` map one to
+one onto S5. Hiring with a scope and a standing session is `cast role create`
+(`/cli/role/*`, org-roles-standing.md).

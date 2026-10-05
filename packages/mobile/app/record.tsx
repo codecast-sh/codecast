@@ -28,7 +28,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { isRecRoomKey } from '@codecast/shared/contracts';
-import { fmtClock } from '@codecast/web/components/calls/speakers';
+import { formatCallTime } from '@codecast/shared/entities';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import {
@@ -49,7 +49,7 @@ function Elapsed({ startedAt }: { startedAt: number }) {
     const t = setInterval(() => tick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, []);
-  return <RNText style={styles.clock}>{fmtClock(Date.now() - startedAt)}</RNText>;
+  return <RNText style={styles.clock}>{formatCallTime(Date.now() - startedAt)}</RNText>;
 }
 
 /** The level, driven imperatively. It moves four times a second and must never
@@ -228,7 +228,7 @@ function RecordingListItem({ row, onPress }: { row: any; onPress: () => void }) 
   const Theme = useTheme();
   const status = recordingStatusLine(row);
   const working = recordingIsWorking(row);
-  const duration = row.ended_at ? fmtClock(row.ended_at - row.started_at) : null;
+  const duration = row.ended_at ? formatCallTime(row.ended_at - row.started_at) : null;
   const actions = row.action_items?.length ?? 0;
   return (
     <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.6}>

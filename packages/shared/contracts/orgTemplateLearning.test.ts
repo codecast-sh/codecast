@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, structuralSignals, workspaceTerms } from "./orgTemplateLearning";
+import { LEARNING, canaryVerdict, draftDue, learningRequest, lessonLeaks, nextPatch, parseLessons, playbookRuleSignals, structuralSignals, workspaceTerms } from "./orgTemplateLearning";
+import { parsePlaybook } from "./rolePlaybook";
 import type { OrgTemplate } from "./orgTemplateManifest";
 
 // The learning loop's rules (org-hire.md H12): what counts as a signal, what a
@@ -109,5 +110,35 @@ describe("from lessons to a release", () => {
   test("a draft takes the next patch after the newest release", () => {
     expect(nextPatch(["2.0.0", "2.1.3", "2.1.0"])).toBe("2.1.4");
     expect(nextPatch(["1.9.9", "1.10.0"])).toBe("1.10.1");
+  });
+});
+
+// A role's playbook (org-staffing.md S38) feeds the loop: the rules it taught
+// itself are signals, each read once.
+describe("rules the role taught itself", () => {
+  const rules = parsePlaybook([
+    "## Rules learned",
+    "- Check the live page before calling a page shipped. Learned from: a post sat merged and unpublished for four days. (2026-09-20)",
+    "- Read the replies, not the reply rate. Learned from: two diagnoses made from totals were wrong. (2026-09-28)",
+    "- Short. (2026-09-29)",
+  ].join("\n")).rules;
+
+  test("newest first, keyed by what they say, and one already taught from is left out", () => {
+    const signals = playbookRuleSignals(rules);
+    expect(signals.map((r) => r.rule)).toEqual(["Read the replies, not the reply rate.", "Check the live page before calling a page shipped."]);
+    expect(signals[0].mistake).toBe("two diagnoses made from totals were wrong");
+    expect(playbookRuleSignals(rules, [signals[0].key]).map((r) => r.rule)).toEqual(["Check the live page before calling a page shipped."]);
+    // The key reads the words, so a redated or respaced line is the same rule.
+    const again = parsePlaybook("## Rules learned\n-  read the replies,  not the reply rate.  Learned from: two diagnoses made from totals were wrong (2026-10-02)").rules;
+    expect(playbookRuleSignals(again)[0].key).toBe(signals[0].key);
+    expect(playbookRuleSignals(Array.from({ length: 40 }, (_, i) => ({ text: `Rule number ${i} about the template`, mistake: null, written_at: i }))).length).toBe(LEARNING.rules);
+  });
+
+  test("the request lists them under their own heading, and a lesson may be drawn from one", () => {
+    const { system, prompt } = learningRequest(manifest, { redirects: [], signals: [], rules: playbookRuleSignals(rules) });
+    expect(prompt).toContain("# Rules the role taught itself\n\n- Read the replies, not the reply rate. It learned this from: two diagnoses made from totals were wrong");
+    expect(learningRequest(manifest, { redirects: [], signals: [] }).prompt).toContain("# Rules the role taught itself\n\n- none");
+    expect(system).toContain('"rule"');
+    expect(parseLessons([{ kind: "rule", about: "charter", lesson: "The charter should tell the role to read replies before it judges a campaign by its reply rate." }], manifest)).toHaveLength(1);
   });
 });

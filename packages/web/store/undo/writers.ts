@@ -20,6 +20,8 @@
 // table are the server's to derive (closed_at, attempt_count, progress) and
 // are never sent.
 import type { CellChange, Invocation, UndoWriter } from "@platform/engine";
+import { INITIATIVE_RECORD_LISTS } from "@codecast/shared/contracts/initiative";
+import { recordOpsBetween } from "../initiativeRecord";
 
 /** The mutation cannot unset this field once it holds a value. */
 export const NO_CLEAR = Symbol("no-clear");
@@ -90,7 +92,9 @@ const PROJECT_WIRE: WireTable = {
 const PROJECT_CLEARS = { description: "", color: "", icon: "", labels: [] } as const;
 
 // initiatives.update (fieldsPatch): null unsets every optional field, an
-// empty list unsets labels. project_ids travel through setProjects.
+// empty list unsets labels. project_ids travel through setProjects, and the
+// intent record's four lists through initiatives.record, one entry at a time
+// (recordOpsBetween), so neither is listed here.
 const INITIATIVE_WIRE: WireTable = {
   title: NO_CLEAR,
   description: null,
@@ -101,6 +105,8 @@ const INITIATIVE_WIRE: WireTable = {
   labels: [],
   parent_initiative_id: null,
   metrics: [],
+  why: null,
+  done_when: null,
 };
 
 // dispatch.updateDoc stores what it is sent; pinDoc stores a boolean;
@@ -115,6 +121,9 @@ export const UNDO_WIRE_TABLES: Record<string, WireTable> = {
   projects: PROJECT_WIRE,
   initiatives: INITIATIVE_WIRE,
   docs: { ...DOC_FIELDS_WIRE, pinned: false, parent_id: undefined, sort_order: 0 },
+  // workflows.webUpsert takes the whole graph; a row always has one, so there
+  // is no "no graph" to go back to.
+  workflows: { nodes: NO_CLEAR },
 };
 
 /**
@@ -187,6 +196,9 @@ export const UNDO_WRITERS: Record<string, UndoWriter> = {
       const wire = toWire(fields, INITIATIVE_WIRE, row);
       const out: Invocation[] = nonEmpty(wire) ? [call("updateInitiative", id, wire)] : [];
       if (Array.isArray(fields.project_ids)) out.push(call("setInitiativeProjects", id, fields.project_ids));
+      for (const list of INITIATIVE_RECORD_LISTS) {
+        if (list in fields) for (const op of recordOpsBetween(list, row?.[list], fields[list] as any[] | undefined)) out.push(call("recordInitiativeEntry", id, op));
+      }
       return out;
     },
   },
@@ -210,6 +222,16 @@ export const UNDO_WRITERS: Record<string, UndoWriter> = {
     // puts the row (and its docDetails mirror) back here.
     restoreRow: (id) => [call("restoreArchivedDoc", id)],
   },
+  // A project's customized line (saveLineWorkflow carries the whole row by
+  // slug): the prior graph goes back as one save. A fork is a create, which
+  // the policy never records, so a row always exists here.
+  workflows: {
+    fields: (_id, fields, row) => {
+      if (!row?.slug || !("nodes" in fields || "edges" in fields)) return [];
+      const prior = { ...row, ...fields };
+      return [call("saveLineWorkflow", { slug: row.slug, name: prior.name, goal: prior.goal, source: prior.source, nodes: prior.nodes, edges: prior.edges })];
+    },
+  },
   // A conversation's filing: one row per conversation, so the prior bucket
   // (or none) is one assignSessionToBucket. A filing that created the row
   // arrives here as a bucket_id cell too (the spec's spell, policies/work.ts):
@@ -231,9 +253,14 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "A local mark of decisions this viewer answered: answerDecision is never undoable, and reopenDecision's undo rides the sessionDecisions patch rail, whose echo rebuilds the mark.",
   comments:
     "Written by resolveCommentThread and editComment, whose specs carry an inverse with the prior value; adds, deletes and agent asks are never undoable.",
+  codeComments:
+    "Written by resolveCodeCommentThread and editCodeComment, whose specs carry an inverse with the prior value; posts and deleteCodeComment are never undoable.",
   sessionReads: "Read state; never undoable.",
+  mods: "Written only by setModEnabled, a setting; never undoable.",
+  modObjects:
+    "Written by createModObject, a create and never undoable, and updateModObject, whose spec carries an inverse naming the prior fields.",
   agentTasks:
-    "Owned triggers. triggerAction pause/resume and setTriggerInterval carry an inverse naming the opposite verb or prior interval; run now, cancel, reactivate and delete are never undoable.",
+    "Owned triggers. triggerAction pause/resume, setTriggerInterval and editTrigger carry an inverse naming the opposite verb, the prior interval or the prior prompt and schedule; run now, cancel, reactivate and delete are never undoable.",
   foreignTriggers: "Triggers the viewer manages but does not own; the same verbs and inverses as agentTasks.",
   agentDefinitions: "Written only by deletes, which are never undoable.",
   agentChains: "Written only by deletes, which are never undoable.",
@@ -244,6 +271,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "A per-window view of a call's files, each carrying a URL signed for one window; written only by deleteCallRecording, a delete, never undoable.",
   callRecordingCalls:
     "A per-window view of a call's recording facts; written by setCallShareVideo, a sharing change, and deleteCallRecording's local mark, a delete; neither is undoable.",
+  callFrameShares:
+    "A per-window view of the pictures of a call on public links; written only by deleteCallFrameShare, which takes a picture off its link and is never undoable.",
   roomKnocks:
     "Who is waiting at the door right now; written only by admitGuestKnock, denyGuestKnock and removeCallGuest, answers to a person at the door that are never undoable.",
   teams: "Team create, delete and membership visibility are never undoable.",

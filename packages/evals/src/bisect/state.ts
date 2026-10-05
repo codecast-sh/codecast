@@ -8,7 +8,8 @@ import { evalsHome, writeJsonAtomic } from '../paths';
 // A bisect's folder, EVALS_HOME/bisects/<id>/: plan.json (what it set out to
 // do), state.json (rewritten atomically after each step and rep), steps.jsonl
 // (one line per step, numbered by seq), log.txt (the steps and every check's
-// output, for a tail), and `stop`, which cancels it between reps. Everything
+// output, for a tail), job.log (everything the process printed, when the api
+// child started it), and `stop`, which cancels it between reps. Everything
 // a page shows is read back from these files, so a bisect started in a
 // terminal is watched the same way as one the page started.
 
@@ -20,7 +21,7 @@ export const bisectsDir = (home = evalsHome()): string => join(home, 'bisects');
 export function bisectPaths(id: string, home = evalsHome()) {
   if (!BISECT_ID_RE.test(id)) throw new Error(`${id} is not a bisect id`);
   const dir = join(bisectsDir(home), id);
-  return { dir, plan: join(dir, 'plan.json'), state: join(dir, 'state.json'), steps: join(dir, 'steps.jsonl'), log: join(dir, 'log.txt'), stop: join(dir, 'stop') };
+  return { dir, plan: join(dir, 'plan.json'), state: join(dir, 'state.json'), steps: join(dir, 'steps.jsonl'), log: join(dir, 'log.txt'), job: join(dir, 'job.log'), stop: join(dir, 'stop') };
 }
 
 /** `<surface>-<yyyymmdd>-<hhmmss>`, with a counter when that second is taken. */
@@ -41,6 +42,49 @@ const readJson = <T>(path: string): T | null => {
 };
 
 export const readBisectState = (id: string, home = evalsHome()): BisectState | null => readJson<BisectState>(bisectPaths(id, home).state);
+
+/** The state a runner goes on from: what is on disk, unless it is the api child's pending placeholder. */
+export const recordedState = (id: string, home = evalsHome()): BisectState | null => {
+  const s = readBisectState(id, home);
+  return s && !s.pending ? s : null;
+};
+
+/** A bisect's first state, from its plan: planning, nothing spent. */
+function freshState(id: string, plan: BisectPlan, now: string, tmux: string | null): BisectState {
+  return {
+    id,
+    surface: plan.surface,
+    seq: 0,
+    status: 'planning',
+    tier: 0,
+    range: { good: plan.good.batch ?? plan.good.sha, bad: plan.bad.batch ?? plan.bad.sha },
+    candidates: plan.candidates,
+    classes: plan.classes,
+    probes: [],
+    spentUsd: 0,
+    budgetUsd: plan.budgetUsd,
+    startedAt: now,
+    updatedAt: now,
+    finishedAt: null,
+    tmux,
+    answer: null,
+    plan,
+  };
+}
+
+/**
+ * The api child's placeholder (BisectState.pending), written before it
+ * launches the runner, so the page it sends the founder to reads a planning
+ * bisect at once instead of no bisect at all. Refuses an id already on disk.
+ */
+export function writePendingState(id: string, plan: BisectPlan, tmux: string | null, home = evalsHome()): BisectState {
+  const paths = bisectPaths(id, home);
+  if (existsSync(paths.state)) throw new Error(`bisect ${id} already exists`);
+  mkdirSync(paths.dir, { recursive: true });
+  const state: BisectState = { ...freshState(id, plan, new Date().toISOString(), tmux), pending: true };
+  writeJsonAtomic(paths.state, state);
+  return state;
+}
 export const readBisectPlan = (id: string, home = evalsHome()): BisectPlan | null => readJson<BisectPlan>(bisectPaths(id, home).plan);
 
 /** The steps after `since` (a seq), in order. A torn last line (mid-append) is left for the next read. */
@@ -152,27 +196,10 @@ export class Journal {
     const home = o.home ?? evalsHome();
     const paths = bisectPaths(id, home);
     mkdirSync(paths.dir, { recursive: true });
-    const now = new Date().toISOString();
-    const prior = readBisectState(id, home);
-    const state: BisectState = prior ?? {
-      id,
-      surface: plan.surface,
-      seq: 0,
-      status: 'planning',
-      tier: 0,
-      range: { good: plan.good.batch ?? plan.good.sha, bad: plan.bad.batch ?? plan.bad.sha },
-      candidates: plan.candidates,
-      classes: plan.classes,
-      probes: [],
-      spentUsd: 0,
-      budgetUsd: plan.budgetUsd,
-      startedAt: now,
-      updatedAt: now,
-      finishedAt: null,
-      tmux: o.tmux ?? null,
-      answer: null,
-      plan,
-    };
+    const placed = readBisectState(id, home);
+    // A pending placeholder is not a resume: the runner starts fresh, keeping only when the founder pressed Start.
+    const prior = placed && !placed.pending ? placed : null;
+    const state: BisectState = prior ?? freshState(id, plan, placed?.startedAt ?? new Date().toISOString(), o.tmux ?? null);
     if (prior && o.tmux) state.tmux = o.tmux;
     if (!existsSync(paths.plan)) writeJsonAtomic(paths.plan, plan);
     const j = new Journal(state, home, o.echo ?? (() => {}));

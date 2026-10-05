@@ -378,6 +378,8 @@ export type UserMessageKind =
   | { kind: 'continuation' }
   | { kind: 'poll_response' }
   | { kind: 'scheduled_task' }
+  // The prompt that seats or re-seats a standing agent (isBootstrapPrompt).
+  | { kind: 'role_brief' }
   | { kind: 'machine_move'; destination?: string; fromLabel?: string; machineChanged: boolean }
   | { kind: 'agent_switch'; toLabel: string; fromLabel?: string }
   // `variant: 'agent'` is a subagent's report to the session that launched it

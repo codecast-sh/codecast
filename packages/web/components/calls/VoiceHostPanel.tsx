@@ -21,6 +21,7 @@ import { CALL_RING_PERIOD_MS } from "@codecast/shared/contracts";
 import { acceptInvite, getCallTiles, subscribeCallTiles, takeOverCall } from "../../lib/calls/callManager";
 import { onHostExpand, publishVoiceMirror, runVoiceCommand, walkieHoldsRoom } from "../../lib/calls/walkie";
 import { callWindowReport } from "../../lib/calls/callHandoff";
+import { TOASTLESS_WINDOW_CLASS } from "../../lib/calls/sayRefusal";
 import { getScribeStatus, subscribeScribe } from "../../lib/calls/transcription";
 import {
   declareVoiceHost,
@@ -241,8 +242,8 @@ export function VoiceHostPanel({ urlRoom, params }: { urlRoom: string | null; pa
   // editor is no place for one (voiceHost.css reads the class).
   useWatchEffect(() => {
     if (view === "panel") return;
-    document.documentElement.classList.add("faces-overlay-window");
-    return () => document.documentElement.classList.remove("faces-overlay-window");
+    document.documentElement.classList.add(TOASTLESS_WINDOW_CLASS);
+    return () => document.documentElement.classList.remove(TOASTLESS_WINDOW_CLASS);
   }, [view]);
 
   useMountEffect(() => {

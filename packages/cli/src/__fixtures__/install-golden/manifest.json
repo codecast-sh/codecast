@@ -151,7 +151,7 @@
   "limits": {
     "config": {
       "limits_enabled": true,
-      "limits_version": "1"
+      "limits_version": "2"
     },
     "stdout": "* Usage limits — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,

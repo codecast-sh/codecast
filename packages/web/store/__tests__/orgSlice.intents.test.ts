@@ -273,7 +273,7 @@ describe("org intents", () => {
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const src = readFileSync(join(import.meta.dir, "..", "..", "lib", "dispatchBinding.ts"), "utf8");
-    const permanent = src.indexOf("if (isPermanentDispatchError(error)) {");
+    const permanent = src.indexOf("if (isPermanentDispatchError(error)");
     const drop = src.indexOf("dropRejectedOrgIntent(useInboxStore.getState(), action, args, error)");
     expect(permanent).toBeGreaterThan(0);
     expect(drop).toBeGreaterThan(permanent);

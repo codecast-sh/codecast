@@ -4,7 +4,8 @@ import { internal } from "./_generated/api";
 import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
-import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, ORG_AUTHORITY_KINDS, authorityWords, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf, ORG_AUTHORITY_KINDS, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
+import { WAKE_TUNE, briefBudget, briefOverBudgetMessage, msToEvery, roleWakeOf, wakeTuneRefusal, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
 import { EXECUTIVE_ASSISTANT_HANDLE, EXECUTIVE_ASSISTANT_NAME, leadScopeChange, type AssistantReach } from "@codecast/shared/contracts/orgLead";
 import { EXECUTIVE_ASSISTANT_JOB } from "@codecast/shared/contracts/executiveAssistantPrompt";
@@ -43,7 +44,7 @@ import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { DEFAULT_CAPS, capsFor, countersFor, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
-import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
+import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
 // Org roles: named seats in the reporting structure (docs/architecture/
@@ -988,11 +989,8 @@ export const setProjectLead = mutation({
 // ── Line (the-line.md L2) ────────────────────────────────────────────────────
 // A scope owns one workflow; absent means the shipped "line" template. The
 // sweep that starts it lives in orgLine.ts.
-export { DEFAULT_LINE_SLUG, LINE_SLUG_RE };
+export { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf };
 
-export function lineSlugOf(role: { line_workflow_slug?: string | null }): string {
-  return role.line_workflow_slug || DEFAULT_LINE_SLUG;
-}
 
 export function normalizeLineSlug(raw: string): string {
   const slug = raw.trim().toLowerCase().replace(/\.cast$/, "");
@@ -1936,6 +1934,11 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   }
   const content = args.content.trim();
   if (!content) throw new Error("An empty brief: pass the narrative on stdin");
+  // The role reads its brief at every wake, so its own save stays inside the
+  // budget (org-staffing.md S38): it condenses before it grows. A person's
+  // edit is not capped.
+  const budget = briefBudget(content);
+  if (isOwnSession && budget.over) throw new Error(briefOverBudgetMessage(budget));
   const now = Date.now();
   let briefDocId = role.brief_doc_id;
   if (!briefDocId) {
@@ -1946,6 +1949,92 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   }
   const mirror = await mirrorBriefState(ctx, role, content);
   return { role_id: role._id, brief_doc_id: briefDocId, ...mirror };
+}
+
+// tune — a role changes how its own check runs (org-staffing.md S38): how
+// often, behind what gate, looking at what first. It takes no trigger id: the
+// check is found from the role, so a role's session never names, lists or
+// edits any other trigger to tune itself. The cadence stays inside WAKE_TUNE;
+// outside it the refusal says to propose a routine change. One org log row
+// (routine_tune) with the reason, taken back like any other change, and one
+// revision of the trigger.
+export async function performTuneRoutine(
+  ctx: any,
+  userId: Id<"users">,
+  args: { role_id: string; every?: string; precheck?: string; focus?: string; why: string; from_session?: string },
+): Promise<{ role_id: Id<"org_roles">; handle: string; trigger: string | null; changed: string[]; wake: RoleWake; next_run_at: number | null }> {
+  const role = await requireRole(ctx, userId, args.role_id, "access");
+  if (role.status === "retired") throw new Error("That role is retired");
+  const from = await callerSession(ctx, userId, args.from_session);
+  const isOwnSession = !!from && String(from.standing_role_id ?? "") === String(role._id);
+  if (!isOwnSession && !(await userCanAdminRole(ctx, userId, role))) throw new Error("Only the role's own session or an admin of the role may tune its check");
+  const why = args.why.trim();
+  if (!why) throw new Error("Say why: --why \"<what changed about the pace of the work>\"");
+  const tooLong = (label: string, text: string | undefined, max: number) => { if ((text ?? "").trim().length > max) throw new Error(`The ${label} is ${text!.trim().length} characters; keep it under ${max}`); };
+  tooLong("reason", why, WAKE_TUNE.why_chars);
+  tooLong("focus", args.focus, WAKE_TUNE.focus_chars);
+  tooLong("precheck", args.precheck, WAKE_TUNE.precheck_chars);
+  let interval: number | undefined;
+  if (args.every !== undefined) {
+    const ms = orgEveryToMs(args.every);
+    if (!ms) throw new Error(`"${args.every}" is not a cadence like 12h, 1d or 3d`);
+    const refusal = wakeTuneRefusal(ms);
+    if (refusal) throw new Error(refusal);
+    interval = ms;
+  }
+  const routine = await roleCheckOf(ctx, role);
+  if (!routine) throw new Error(`@${role.handle} has no check running to tune`);
+  return applyRoutineTune(ctx, userId, role, routine, { every_ms: interval, precheck: args.precheck, focus: args.focus, why }, args.from_session ? { door: "cli", gesture: "command" } : { door: "settings", gesture: "save" });
+}
+
+/** The role's own check as it runs, or null: the one trigger a tune may touch. */
+export async function roleCheckOf(ctx: any, role: any): Promise<any | null> {
+  const standing = await standingConversationOf(ctx, role);
+  return standing ? await findRoleRoutine(ctx, role, standing) : null;
+}
+
+/** The write behind a tune, with no bounds of its own: the role's door checks
+ *  them (performTuneRoutine), and a routine change a person accepted for the
+ *  role's own check lands here too (orgInit.applyRoutine), so both leave the
+ *  same row and the same revision. */
+export async function applyRoutineTune(
+  ctx: any,
+  userId: Id<"users">,
+  role: any,
+  routine: any,
+  change: { every_ms?: number; precheck?: string; focus?: string; why: string },
+  head: { door: "cli" | "settings" | "proposal"; gesture: "command" | "save" | "accept_change" },
+): Promise<{ role_id: Id<"org_roles">; handle: string; trigger: string | null; changed: string[]; wake: RoleWake; next_run_at: number | null }> {
+  const before = roleWakeOf(routine);
+  const wanted: RoleWake = {
+    ...before,
+    ...(change.every_ms !== undefined ? { every_ms: change.every_ms } : {}),
+    ...(change.precheck !== undefined ? { precheck: change.precheck.trim() || null } : {}),
+    ...(change.focus !== undefined ? { focus: change.focus.trim() || null } : {}),
+  };
+  if (wanted.every_ms === before.every_ms && wanted.precheck === before.precheck && wanted.focus === before.focus) throw new Error("Nothing to change: the check already runs that way");
+  return withOrgChange(ctx, userId, { kind: "routine_tune", subject: roleSubject(role), ...head }, async () => {
+    const now = Date.now();
+    const cadenceMoved = wanted.every_ms !== before.every_ms;
+    const result = await applyTaskUpdate(ctx, routine, {
+      // A new cadence starts now; a check tuned from inside its own run takes
+      // the new interval at the arming after that run.
+      ...(cadenceMoved ? { interval_ms: wanted.every_ms!, ...(routine.status === "scheduled" ? { run_at: now + wanted.every_ms! } : {}) } : {}),
+      ...(wanted.precheck !== before.precheck ? { precheck: wanted.precheck ?? "" } : {}),
+      ...(wanted.focus !== before.focus ? { role_focus: wanted.focus ?? "" } : {}),
+      tune_why: change.why,
+    }, { userId, source: "cli" });
+    if (!result.ok) throw new Error("The check cannot be changed right now; try again when this run has ended");
+    await ctx.db.patch(routine._id, { tuned_at: now });
+    const tuned = await ctx.db.get(routine._id);
+    const logged = (w: RoleWake, extra: { why?: string } = {}) => ({ agent_task_id: String(routine._id), title: routine.title as string, ...(w.every_ms ? { every: msToEvery(w.every_ms) } : {}), precheck: w.precheck, focus: w.focus, ...extra });
+    await noteOrgChange(ctx, userId, whereOfRole(role), {
+      kind: "routine_tune", subject: roleSubject(role),
+      before: { routine: logged(before) }, after: { routine: logged(wanted, { why: change.why }) },
+      labels: await labelsOf(ctx, [String(role._id)]),
+    });
+    return { role_id: role._id, handle: role.handle, trigger: routine.short_id ?? null, changed: result.changed.filter((f) => f !== "tune_why" && f !== "run_at"), wake: roleWakeOf(tuned), next_run_at: tuned.run_at ?? null };
+  });
 }
 
 // The first line (plus the Status:/Next:/Blocked: lines) is the standing
@@ -2105,6 +2194,10 @@ export const setReports = mutation({
   handler: async (ctx, { api_token, ...args }) => performSetReports(ctx, await requireCaller(ctx, api_token), args),
 });
 
+export const tuneRoutine = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), every: v.optional(v.string()), precheck: v.optional(v.string()), focus: v.optional(v.string()), why: v.string(), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => performTuneRoutine(ctx, await requireCaller(ctx, api_token), args),
+});
 export const briefEdit = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), content: v.string(), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => performBriefEdit(ctx, await requireCaller(ctx, api_token), args),

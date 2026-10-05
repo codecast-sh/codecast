@@ -125,21 +125,24 @@ export function narrowAreas<C extends { areas: Record<string, AreaTouch>; subare
   if (!top || top[1] < all * NARROW_SHARE) return [...commits];
   const subs = new Set(commits.flatMap((c) => Object.keys(c.subareas ?? {}).filter((k) => k.startsWith(`${top[0]}/`))));
   if (subs.size < 2) return [...commits];
-  return commits.map((c) => {
-    if (!c.subareas || !c.areas[top[0]]) return c;
-    const areas: Record<string, AreaTouch> = {};
-    for (const [a, t] of Object.entries(c.areas)) if (a !== top[0]) areas[a] = t;
-    for (const [k, t] of Object.entries(c.subareas)) {
-      if (k !== top[0] && !k.startsWith(`${top[0]}/`)) continue;
-      const label = k === top[0] ? top[0] : k.slice(top[0].length + 1);
-      const into = (areas[label] ??= { touches: 0, insertions: 0, deletions: 0, generated: 0 });
-      into.touches += t.touches;
-      into.insertions += t.insertions;
-      into.deletions += t.deletions;
-      into.generated! += t.generated ?? 0;
-    }
-    return { ...c, areas };
-  });
+  return commits.map((c) => splitArea(c, top[0]));
+}
+
+/** One commit with `top` replaced by its subareas, named without the prefix, as narrowAreas splits a day's dominant area. */
+export function splitArea<C extends { areas: Record<string, AreaTouch>; subareas?: Record<string, AreaTouch> }>(c: C, top: string): C {
+  if (!c.subareas || !c.areas[top]) return c;
+  const areas: Record<string, AreaTouch> = {};
+  for (const [a, t] of Object.entries(c.areas)) if (a !== top) areas[a] = t;
+  for (const [k, t] of Object.entries(c.subareas)) {
+    if (k !== top && !k.startsWith(`${top}/`)) continue;
+    const label = k === top ? top : k.slice(top.length + 1);
+    const into = (areas[label] ??= { touches: 0, insertions: 0, deletions: 0, generated: 0 });
+    into.touches += t.touches;
+    into.insertions += t.insertions;
+    into.deletions += t.deletions;
+    into.generated! += t.generated ?? 0;
+  }
+  return { ...c, areas };
 }
 
 /** Areas ranked by files touched, then lines, then name, so ties never flip. */

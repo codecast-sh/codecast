@@ -1,5 +1,5 @@
 import { clsx, type ClassValue } from "clsx"
-import { CODECAST_BASE_URL } from "@codecast/shared/entities";
+import { CODECAST_BASE_URL, publicUrl } from "@codecast/shared/entities";
 import { twMerge } from "tailwind-merge"
 
 export function cn(...inputs: ClassValue[]) {
@@ -23,8 +23,7 @@ export function shareOrigin(): string {
 
 /** The public address of an in-app path, whatever pane the page is open in. */
 export function sharePageUrl(path: string): string {
-  if (/^https?:\/\//.test(path)) return path;
-  return `${shareOrigin()}${path.startsWith("/") ? path : `/${path}`}`;
+  return publicUrl(path);
 }
 
 export function canonicalUrl(): string {

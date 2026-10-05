@@ -16,7 +16,8 @@
 /* No toasts on the glass. The app-wide Toaster mounts in every window, but
    the float lets clicks through, and a toast here is an unreachable card
    hovering over somebody's editor. Errors this window produces surface where
-   the action lands (the main window's DM, the refusal line), not here.
+   the action lands (the main window's DM, the refusal line), or, for a press
+   made here, as a system banner (lib/calls/sayRefusal reads this class).
    Scoped to the html class the host sets, since the toaster is a sibling of
    the route's subtree, not a child. */
 .faces-overlay-window [data-sonner-toaster] {

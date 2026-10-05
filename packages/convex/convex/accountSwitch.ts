@@ -183,6 +183,45 @@ function recoveryDecision(
 // skipped" until a human clicked the button the loop exists to make
 // unnecessary (2026-09-13). Only with a recovery switched on: with both off
 // the human runs the incident by hand and keeps the opt-in checkbox.
+// Limit-parked workers routed to their parents. A worker runs inside its
+// parent's process, so no message reaches it, and a worker that hit a limit
+// has already handed the error back to its parent as its result. The parent
+// is the session that can redo the work, so it takes the worker's place in
+// the recovery: its park stamp and model are the worker's, and the continue
+// a switch sends goes to it. Without this, a fleet whose only parks are
+// workers (an orchestrator waiting on a workflow) never switched at all.
+// Fleet-store machines only: there the parent follows the switch without a
+// restart, while a legacy switch would restart it and kill its live workers.
+async function workerParks(
+  ctx: { db: any },
+  primary: Doc<"devices"> | undefined,
+  skipped: Doc<"conversations">[],
+  blocked: Doc<"conversations">[],
+): Promise<{ workers: Doc<"conversations">[]; parents: Doc<"conversations">[] }> {
+  const workers: Doc<"conversations">[] = [];
+  const parents = new Map<string, Doc<"conversations"> | null>(blocked.map((c) => [c._id, null]));
+  if (!primary?.cc_accounts?.fleet_store || !autoRecoveryEnabled(primary)) return { workers, parents: [] };
+  for (const worker of skipped) {
+    const parentId = worker.parent_conversation_id;
+    if (worker.pending_api_error_kind !== "limit" || worker.agent_type === "codex" || !parentId) continue;
+    if (!parents.has(parentId)) {
+      const parent: Doc<"conversations"> | null = await ctx.db.get(parentId);
+      parents.set(parentId, parent && !isSubagentConversation(parent) && !parent.inbox_dismissed_at
+        ? {
+            ...parent,
+            pending_api_error: true,
+            pending_api_error_kind: "limit",
+            pending_api_error_at: worker.pending_api_error_at ?? worker.updated_at,
+            model: worker.model ?? parent.model,
+          }
+        : null);
+    }
+    // A parent parked on its own already carries the recovery.
+    if (parents.get(parentId)) workers.push(worker);
+  }
+  return { workers, parents: [...parents.values()].filter((p): p is Doc<"conversations"> => !!p) };
+}
+
 async function dismissSkippedWorkersAutomatically(
   ctx: { db: any },
   primary: Doc<"devices"> | undefined,
@@ -1620,6 +1659,19 @@ export const setRecoveryMode = mutation({
 // its "wrap up this turn" note reaching every session. Scheduled by the
 // heartbeat whenever that machine reports new meters; auto recovery only, the
 // same opt-in that lets the loop switch accounts after a park.
+// The models this user's Claude sessions are running now: the ones a
+// model-scoped week ("Fable") can stop. Read from the sessions active in the
+// last half hour, which is the fleet a switch ahead moves.
+const RUNNING_MODELS_WINDOW_MS = 30 * 60 * 1000;
+async function runningClaudeModels(ctx: { db: any }, userId: Id<"users">, now: number): Promise<string[]> {
+  const recent: Doc<"conversations">[] = await ctx.db
+    .query("conversations")
+    .withIndex("by_user_updated", (q: any) => q.eq("user_id", userId).gt("updated_at", now - RUNNING_MODELS_WINDOW_MS))
+    .order("desc")
+    .take(100);
+  return [...new Set(recent.flatMap((c) => (c.agent_type !== "codex" && c.model ? [c.model] : [])))];
+}
+
 export const switchAheadCheck = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
@@ -1636,6 +1688,7 @@ export const switchAheadCheck = internalMutation({
       profiles: accounts.profiles,
       attempts: state.attempts ?? [],
       lastActionAt: state.last_action_at,
+      models: await runningClaudeModels(ctx, args.user_id, now),
     });
     if (!decision) return { acted: "stay" };
     await insertSwitchCommands(ctx, args.user_id, {
@@ -1691,7 +1744,14 @@ export const autoSwitchCheck = internalMutation({
 
     let state = primary.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
-    const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
+    const listed = await listBlockedConversations(ctx, args.user_id, false);
+    // A worker stopped on a limit is evidence about the account, and its
+    // parent is the session to recover (workerParks): the parent stands in
+    // for it below, and the worker stays blocked until the pass acts on it.
+    const { workers, parents } = await workerParks(ctx, primary, listed.skipped, listed.blocked);
+    const skipped = listed.skipped.filter((c) => !workers.includes(c));
+    const blocked = [...listed.blocked, ...parents];
+    const releaseWorkers = () => dismissSkippedWorkers(ctx, workers);
     // Before any account decision: the workers this pass will not act on leave
     // the blocked set now, whatever the pass decides about the rest.
     const dismissed = await dismissSkippedWorkersAutomatically(ctx, primary, skipped);
@@ -1946,6 +2006,9 @@ export const autoSwitchCheck = internalMutation({
     const parksOnActive = targets.filter((c) =>
       parkedOnActiveAccount(c, (c.owner_device_id && onlineById.get(c.owner_device_id)) || primary, now),
     );
+    // The models the parked sessions run: an account's model-scoped week
+    // spends only those (limitWindows).
+    const parkedModels = targets.flatMap((c) => (c.model ? [c.model] : []));
     const decision = decideAutoSwitch({
       now,
       // No resetCredit: a Codex reset credit clears a CODEX account's windows
@@ -1962,6 +2025,7 @@ export const autoSwitchCheck = internalMutation({
       // A dead login (splitAuthParks) means "continue" can't help even the
       // limit-parked sessions until the machine has a live account.
       activeDead,
+      models: parkedModels,
     });
 
     if (decision.action === "wait") {
@@ -1996,6 +2060,7 @@ export const autoSwitchCheck = internalMutation({
         ),
       });
       await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue", activeProfile));
+      await releaseWorkers();
       return {
         acted: "continue",
         conversations: claudeLimit.length,
@@ -2021,6 +2086,7 @@ export const autoSwitchCheck = internalMutation({
         await bookCodexFollowUp(),
         buildDecision("switch", targetProfile),
       );
+      await releaseWorkers();
       console.log(
         `autoSwitchCheck: switching to "${decision.profile}" for ${claudeLimit.length} limit-parked + ${authSwitch.length} auth-parked conversation(s)`,
       );
@@ -2044,7 +2110,7 @@ export const autoSwitchCheck = internalMutation({
     // human approves through the same requestAccountSwitch the manual button
     // calls, so the ask path and the manual path are one codepath.
     if (askFirst) {
-      const best = fallbackProfiles(activeProfiles, activeEmail, now)[0];
+      const best = fallbackProfiles(activeProfiles, activeEmail, now, parkedModels)[0];
       if (best) {
         const proposal = buildDecision("propose", best);
         const already =

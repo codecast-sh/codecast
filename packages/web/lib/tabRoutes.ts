@@ -3,6 +3,7 @@
 // src/routes.manifest.test.ts parses the sets below for parity with App.tsx.
 
 import { countLeaves, findLeaf, leavesOf, sanitizeLayout, setLeafPath } from "../store/stageSplit";
+import { tabSafePath, tabSafeTitle } from "./tabSafePath";
 // The single-segment routes that live inside the shell, shared with the
 // desktop hand-off gate (which may import nothing, so the list lives there).
 import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
@@ -55,6 +56,8 @@ const NON_TAB_EXACT = new Set([
   // The share cursors glass: teammates' pointers over the sharer's screen.
   // Same rule again; the tab shell would rewrite the glass window's URL.
   "/share-cursors",
+  // The agent dock: the pill and its card on the screen's edge. Same rule.
+  "/agent-dock",
 ]);
 // "/documentation" is a prefix (not exact) so the guide pages under
 // /documentation/<slug> stay outside the tab shell too.
@@ -62,7 +65,9 @@ const NON_TAB_EXACT = new Set([
 // readable, no shell. The tab shell intercepting one would rewrite that
 // window's URL and paint a blank pane. "/repo" is a different route and stays
 // tab-routable — the rule below matches "/r" and "/r/…" only.
-const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect"];
+// "/simple" and "/welcome" are the hosted assistant's own shell (SimpleShell)
+// and its front door: a whole app of their own, never a tab.
+const NON_TAB_PREFIXES = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/compare", "/a", "/r", "/slack/connect", "/simple", "/welcome"];
 
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];
@@ -132,7 +137,7 @@ export function routerNavigate(
 
 export function shellTabPath(path: string | null | undefined): string {
   if (!path || typeof path !== "string") return DEFAULT_TAB_PATH;
-  return isNonTabRoute(path) ? DEFAULT_TAB_PATH : path;
+  return isNonTabRoute(path) ? DEFAULT_TAB_PATH : tabSafePath(path);
 }
 
 /** Heal a persisted tab list in place of trust: same array back when every
@@ -142,12 +147,13 @@ export function shellTabPath(path: string | null | undefined): string {
  *  when malformed; the tab always keeps its plain path. A client that knows
  *  nothing of layouts may have rewritten `path` alone, so the focused leaf is
  *  re-synced to it here rather than trusted. */
-export function healTabPaths<T extends { path: string; layout?: unknown; focusedLeafId?: unknown }>(tabs: T[]): T[] {
+export function healTabPaths<T extends { path: string; title?: string; layout?: unknown; focusedLeafId?: unknown }>(tabs: T[]): T[] {
   let changed = false;
   const out = tabs.map((t) => {
     const path = shellTabPath(t.path);
     let next: T = t;
     if (path !== t.path) { next = { ...next, path }; changed = true; }
+    if (typeof t.title === "string" && tabSafeTitle(path, t.title) !== t.title) { next = { ...next, title: tabSafeTitle(path, t.title) }; changed = true; }
     if (t.layout !== undefined || t.focusedLeafId !== undefined) {
       const layout = sanitizeLayout(t.layout, (p) => !isNonTabRoute(p));
       if (!layout || countLeaves(layout) < 2) {

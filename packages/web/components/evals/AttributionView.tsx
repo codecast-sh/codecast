@@ -7,15 +7,17 @@
 
 import { useEffect, useState, type FormEvent, type KeyboardEvent, type MouseEvent } from "react";
 import { ChevronRight } from "lucide-react";
-import { ATTRIBUTION_CLASSES, type Attribution, type AttributionClass, type BatchStats, type Candidate, type Endpoint, type Epoch } from "@codecast/shared/contracts/evalsApi";
+import { ATTRIBUTION_CLASSES, answerFreezeIds, type Attribution, type AttributionClass, type BatchStats, type Candidate, type Endpoint, type Epoch } from "@codecast/shared/contracts/evalsApi";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { useEvalsResource } from "../../lib/evals/hooks";
 import { ExamplePair } from "../decisions/ChangeCardView";
 import { CommitMarks, CommitPanel, PatchPanel } from "./CommitPanel";
-import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph, flipFreezeHref, plural, score2, shortSha } from "./parts";
+import { ChangedPrompts, EvalsLink, FlipRunLinks, PromptDiff, SeparationMark, VerdictGlyph } from "./parts";
 import { candidateKey, endpointLabel, orderCandidates } from "./bisectModel";
 import { evalsHref } from "./evalsPaths";
 import "./bisect.css";
+import { plural, score2, shortSha } from "./format";
+import { flipFreezeHref } from "./verdictModel";
 
 const CLASS_NAMES: Record<AttributionClass, string> = { footing: "Footing", freeze: "Freeze", "live-reads": "Live reads", source: "Source", noise: "Noise" };
 
@@ -54,7 +56,8 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
     e.preventDefault();
     onSubmit({ surface: draft.surface.trim(), good: draft.good.trim(), bad: draft.bad.trim() });
   };
-  const ready = draft.surface && draft.good && draft.bad;
+  // A surface is enough; an end left empty is found from the records.
+  const ready = !!draft.surface;
   const changed = draft.surface !== value.surface || draft.good !== value.good || draft.bad !== value.bad;
   return (
     <form className="ev-card evb-ends" onSubmit={submit} data-evb-ends>
@@ -71,7 +74,7 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
       </div>
       <div className="evb-field evb-end evb-end--good">
         <label htmlFor="evb-good">Good: a batch or a sha</label>
-        <input id="evb-good" className="evb-input" list="evb-batches" value={draft.good} spellCheck={false} placeholder="2026-09-24T08:41:00.000Z" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
+        <input id="evb-good" className="evb-input" list="evb-batches" value={draft.good} spellCheck={false} placeholder="its baseline, from the records" onChange={(e) => setDraft({ ...draft, good: e.target.value })} />
         {resolved && !changed && <EndpointChips end={resolved.good} />}
       </div>
       <div className="evb-ends-arrow" aria-hidden>
@@ -85,7 +88,7 @@ export function EndpointsBar({ surfaces, batches, value, resolved, onSubmit }: {
         {resolved && !changed && <EndpointChips end={resolved.bad} />}
       </div>
       <div className="evb-ends-go">
-        <button type="submit" className="evb-btn" disabled={!ready || !changed}>
+        <button type="submit" className="ev-btn ev-btn--lg" disabled={!ready || !changed}>
           Attribute
         </button>
       </div>
@@ -208,14 +211,23 @@ export function CandidateList({ candidates, surface, now = Date.now() }: { candi
 
 const CONFIDENCES = ["pinned", "narrowed", "unattributable"] as const;
 
+const CONFIDENCE_WORDS: Record<(typeof CONFIDENCES)[number], string> = {
+  pinned: "one candidate left: the answer is that commit",
+  narrowed: "several candidates left: a bisect can search them",
+  unattributable: "no candidate can be trusted: the reason says why",
+};
+
+/** A read-only gauge, never a toggle: the reached word beside a three-bar meter, the scale in its title. */
 function Confidence({ value }: { value: (typeof CONFIDENCES)[number] }) {
+  const level = value === "pinned" ? 3 : value === "narrowed" ? 2 : 0;
   return (
-    <span className="evb-confidence" role="img" aria-label={`Confidence: ${value}`} data-evb-confidence={value}>
-      {CONFIDENCES.map((c) => (
-        <span key={c} data-on={c === value ? c : undefined}>
-          {c}
-        </span>
-      ))}
+    <span className="evb-confidence" role="img" aria-label={`Confidence: ${value}`} title={CONFIDENCES.map((c) => `${c}: ${CONFIDENCE_WORDS[c]}`).join("\n")} data-evb-confidence={value}>
+      <svg width={14} height={11} viewBox="0 0 14 11" aria-hidden>
+        {[0, 1, 2].map((i) => (
+          <rect key={i} x={i * 5} y={7 - i * 3} width={3.5} height={4 + i * 3} rx={0.8} data-on={i < level || undefined} />
+        ))}
+      </svg>
+      {value}
     </span>
   );
 }
@@ -270,9 +282,43 @@ export interface AllCommitsToggle {
 /** The answer the checklist lit, in plain words, with what backs it. */
 export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCommits }: { attribution: Attribution; now?: number; allCommits?: AllCommitsToggle }) {
   const ans = a.answer;
+  // A freeze or rubric answer can explain some of the flips and not others: those it leaves are attributed on their own.
+  const explained = answerFreezeIds(ans);
+  const unexplained = explained ? a.flipped.map((f) => f.freezeId).filter((id) => !explained.includes(id)) : [];
+  const partly = explained && unexplained.length > 0 ? ` That explains ${explained.length} of ${a.flipped.length} flipped freezes; the checklist goes on for the rest.` : "";
+  const unexplainedLinks = unexplained.length > 0 && (
+    <div className="flex flex-wrap items-center gap-2 text-[12px]" data-evb-unexplained={unexplained.length}>
+      <span className="ev-quiet">Not explained:</span>
+      {unexplained.map((id) => (
+        <EvalsLink key={id} className="evb-link" href={evalsHref.bisectNew({ surface: a.surface, good: a.good.batch ?? a.good.sha, bad: a.bad.batch ?? a.bad.sha, freeze: id })}>
+          attribute {freezeName(a, id)} on its own
+        </EvalsLink>
+      ))}
+    </div>
+  );
+  const freezeChips = (ids: readonly string[]) => (
+    <div className="ev-chips">
+      {ids.map((id) => (
+        <EvalsLink key={id} className="ev-chip" href={evalsHref.freeze(id)}>
+          {freezeName(a, id)}
+        </EvalsLink>
+      ))}
+    </div>
+  );
   return (
     <section className="ev-card evb-answer" data-evb-answer={ans.kind}>
-      {ans.kind === "footing" && (
+      {ans.kind === "footing" && ans.freezeIds?.length ? (
+        <>
+          <div className="evb-answer-line">
+            <span className="evb-answer-num">Rubric</span>
+            <span className="evb-answer-say">
+              The per-freeze rubric (a judge or label line in the freeze file) changed on {plural(ans.freezeIds.length, "freeze")} between the two ends; the frozen moment did not. Those reps were graded by a different ruler, so the search stops there.{partly}
+            </span>
+          </div>
+          {freezeChips(ans.freezeIds)}
+          {unexplainedLinks}
+        </>
+      ) : ans.kind === "footing" && (
         <>
           <div className="evb-answer-line">
             <span className="evb-answer-num">{ans.change === "model" ? "Model" : "Judge"}</span>
@@ -291,15 +337,11 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
             <span className="evb-answer-num">{ans.freezeIds.length}</span>
             <span className="evb-answer-say">
               {ans.freezeIds.length === 1 ? "freeze was" : "freezes were"} captured again between the two ends. The moment the surface answered changed, not the prompt.
+              {partly}
             </span>
           </div>
-          <div className="ev-chips">
-            {ans.freezeIds.map((id) => (
-              <EvalsLink key={id} className="ev-chip" href={evalsHref.freeze(id)}>
-                {freezeName(a, id)}
-              </EvalsLink>
-            ))}
-          </div>
+          {freezeChips(ans.freezeIds)}
+          {unexplainedLinks}
         </>
       )}
       {ans.kind === "live-reads" && (
@@ -315,6 +357,9 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
           <span className="evb-answer-num">Noise</span>
           <span className="evb-answer-say">Nothing differs between the two ends: same footing, same freezes, no live reads, same sources and the same rendered prompt.</span>
           <SeparationMark result={ans.separation} showWord size={14} />
+          <span className="ev-quiet text-[11.5px]" data-evb-weighed>
+            {a.mode === "flip" ? `on the ${plural(a.flipped.length, "flipped freeze")} only` : "on the freezes that fell most only"}
+          </span>
         </div>
       )}
       {ans.kind === "source" && ans.confidence === "empty" && (
@@ -333,7 +378,7 @@ export function AttributionAnswerCard({ attribution: a, now = Date.now(), allCom
             <div className="evb-widen">
               <span>A helper outside the declared sources may be the cause. Searching every commit in the range covers it, at the cost of more probes.</span>
               {allCommits?.onChange && (
-                <button type="button" className="evb-btn" onClick={() => allCommits.onChange!(true)} data-evb-widen>
+                <button type="button" className="ev-btn ev-btn--lg" onClick={() => allCommits.onChange!(true)} data-evb-widen>
                   Search every commit
                 </button>
               )}
@@ -440,12 +485,20 @@ export function AttributionEvidence({ attribution: a }: { attribution: Attributi
       <section className="evb-section" data-evb-prompt-diffs={a.promptDiffs.length}>
         <h2>What the model saw at each end</h2>
         {a.promptDiffs.length ? (
-          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => (
-            <div key={f} data-evb-prompt-freeze={f}>
-              <div className="evb-note">{a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}</div>
-              <ChangedPrompts pairs={a.promptDiffs.filter((d) => d.freezeId === f)} />
-            </div>
-          ))
+          [...new Set(a.promptDiffs.map((d) => d.freezeId))].map((f) => {
+            const pairs = a.promptDiffs.filter((d) => d.freezeId === f);
+            return (
+              <div key={f} data-evb-prompt-freeze={f}>
+                <div className="evb-note">
+                  {/* The freeze opened on the two reps diffed here. */}
+                  <EvalsLink className="evb-link" href={evalsHref.freeze(f, { a: pairs[0].a.runId, b: pairs[0].b.runId })}>
+                    {a.flipped.find((x) => x.freezeId === f)?.name ?? `freeze ${shortSha(f)}`}
+                  </EvalsLink>
+                </div>
+                <ChangedPrompts pairs={pairs} />
+              </div>
+            );
+          })
         ) : (
           <div className="evb-note">The two ends share no rep on the same freeze, so there is no rendered prompt to compare.</div>
         )}

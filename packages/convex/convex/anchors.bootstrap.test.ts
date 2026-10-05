@@ -4,7 +4,8 @@ import { isBootstrapPrompt } from "@codecast/shared/contracts";
 
 // A role's opening message (org-roles-standing.md T1): who it is and whom it
 // reports to, what it looks after, how it wakes, that its sessions stay out of the
-// person's inbox, and that its brief is its memory, in about 200 plain words.
+// person's inbox, that the person reads only its last message of each turn,
+// and that its brief is its memory, in under 300 plain words.
 const opening = (startsOnItsOwn: boolean) => bootstrapMessage({
   name: "Calling", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union",
   role: { handle: "calling", scopeNames: ["project Callers & Call Management"], parentName: "Head of People (@head-of-people)", parentHandle: "head-of-people", startsOnItsOwn },
@@ -24,7 +25,8 @@ describe("a role's opening message", () => {
     expect(m).toContain("`## Where it stands`");
     expect(m).toContain("a session you start under you");
     expect(opening(false)).toContain("You do not start work on your own");
-    expect(m.split(/\s+/).length).toBeLessThan(260);
+    expect(m).toContain("The person sees only your last message of each turn, so make it stand on its own");
+    expect(m.split(/\s+/).length).toBeLessThan(300);
     expect(isBootstrapPrompt(m)).toBe(true);
   });
 

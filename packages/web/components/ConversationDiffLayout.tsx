@@ -23,6 +23,7 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
+import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -176,7 +177,7 @@ export function ConversationDiffLayout({
 
   useEventListener("keydown", (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
-    const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+    const isInput = keyBelongsElsewhere(target);
 
     if (isInput) return;
 

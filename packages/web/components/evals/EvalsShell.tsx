@@ -5,6 +5,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useEvalsStore } from "../../store/evalsStore";
 import { useEvalsConnection } from "../../lib/evals/hooks";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { LocalDaemonUnreachable } from "../LocalDaemonUnreachable";
 import { EvalsNav } from "./EvalsNav";
 import type { EvalsView } from "./evalsPaths";
@@ -36,15 +37,31 @@ function IndexProgress() {
   );
 }
 
+/** The live line under a slow daemon's card: when the shell tries again on its own. */
+function RetryCountdown({ at }: { at: number }) {
+  const now = useCoarseNow(1_000);
+  const secs = Math.max(0, Math.ceil((at - now) / 1000));
+  return (
+    <span className="text-[11.5px] ev-quiet ev-tabular" role="status" data-evals-retry-in={secs}>
+      {secs > 0 ? `Trying again on its own in ${secs}s` : "Trying again..."}
+    </span>
+  );
+}
+
 export function EvalsShell({ view, children }: { view: EvalsView; children: ReactNode }) {
-  const { connection, retry } = useEvalsConnection();
+  const { connection, retry, retryAt } = useEvalsConnection();
   const reason = useEvalsStore((s) => s.unreachableReason);
   const detail = useEvalsStore((s) => s.unreachableDetail);
   const stderr = useEvalsStore((s) => s.stderr);
 
   let body: ReactNode;
   if (connection === "connected") body = children;
-  else if (connection === "no-daemon") body = <LocalDaemonUnreachable what="Evals" reason={reason} detail={detail} onRetry={retry} />;
+  else if (connection === "no-daemon")
+    body = (
+      <LocalDaemonUnreachable what="Evals" reason={reason} detail={detail} onRetry={retry}>
+        {retryAt !== null && <RetryCountdown at={retryAt} />}
+      </LocalDaemonUnreachable>
+    );
   else if (connection === "no-checkout") body = <LocalDaemonUnreachable what="Evals" reason="no-checkout" detail={detail} onRetry={retry} />;
   else if (connection === "child-crashed") body = <LocalDaemonUnreachable what="Evals" reason="child-crashed" detail={detail} stderr={stderr} onRetry={retry} />;
   else

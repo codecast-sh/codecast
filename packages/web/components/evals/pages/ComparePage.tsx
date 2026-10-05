@@ -13,9 +13,10 @@ export function ComparePage({ view }: { view: Extract<EvalsView, { view: "compar
     if (res.status === 404) {
       return <EmptyState title="One of these runs is not in the index" description={`${view.a} or ${view.b} names no run folder. Open a run and use "compare with" to pick a second rep.`} action={{ label: "Open the wall", href: evalsHref.home() }} />;
     }
+    if (res.error) return <EmptyState title="These two runs could not be read" description={res.error} />;
     return (
       <div className="ev-page text-[12px] ev-quiet" data-evals-page="compare" data-evals-loading>
-        {res.error ?? "Reading both runs..."}
+        Reading both runs...
       </div>
     );
   }

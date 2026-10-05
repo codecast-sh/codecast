@@ -17,6 +17,7 @@ export const CHANGE_VERDICTS: readonly ChangeVerdict[] = ["ship", "revise", "dro
 export const RISK_CLASSES: readonly RiskClass[] = ["low", "review", "plan"];
 export const MAX_EXAMPLES = 3;
 const MAX_SENTENCE_CHARS = 360;
+const MAX_HEADLINE_CHARS = 80;
 
 export interface CardCheck {
   name: string;
@@ -34,6 +35,10 @@ export interface CardExample {
 export interface ChangeCard {
   cause: { task: string; title: string; signals: number; first_seen: number | null; sources: string[] };
   goal: { ref: string; name: string; why: string };
+  /** The card's title in plain words, for a reader who did not follow the work. */
+  headline?: string;
+  /** One sentence on what the affected part of the product is and who sees it. */
+  context?: string;
   wrong: string;
   change: string;
   proof: { before: CardCheck[]; after: CardCheck[] };
@@ -128,6 +133,14 @@ export function validateChangeCard(input: unknown): ChangeCardValidation {
     str("goal.why", goal.why, false);
   }
 
+  if (c.headline !== undefined) {
+    str("headline", c.headline);
+    if (typeof c.headline === "string" && c.headline.length > MAX_HEADLINE_CHARS) err("headline", `${c.headline.length} characters; keep it under ${MAX_HEADLINE_CHARS}`);
+  }
+  if (c.context !== undefined) {
+    sentences("context", c.context);
+    if (typeof c.context === "string" && countSentences(c.context) > 1) err("context", "one sentence");
+  }
   sentences("wrong", c.wrong);
   sentences("change", c.change);
 
@@ -373,19 +386,26 @@ export interface CardAssemblyInput {
   proof?: ChangeCard["proof"] | null;
   diff?: { files: number; added: number; removed: number } | null;
   cost?: { tokens?: number; minutes?: number; usd?: number } | null;
+  headline?: string;
+  context?: string;
   wrong?: string;
   change?: string;
   recommend?: { verdict: ChangeVerdict; why: string } | null;
 }
 
+/** The judge's first sentence: the verdict a reader needs, before the reasoning. */
+const firstSentence = (s: string) => (s.trim().match(/^[\s\S]*?[.!?](?=\s+[A-Z"'(]|\s*$)/)?.[0] ?? s.trim());
 const firstLine = (s: string | null | undefined) => (s ?? "").split("\n").map((l) => l.trim()).find(Boolean) ?? "";
 
+/** One surface's eval result in words a cold reader follows; the statistics stay in the eval record. */
 function surfaceLine(s: EvalSurfaceResult): string {
-  if (s.skipped) return `${s.title || s.surface}: skipped, ${s.skipped}`;
-  const p = s.p !== null && s.separation !== "too-few" ? ` (p ${s.p.toFixed(3)})` : "";
-  const sep = s.separation === "too-few" ? "too few reps to separate" : s.separation === "not-separated" ? "not separated" : `separated ${s.separation}`;
-  const gates = s.gatesFailed.length ? `, gates failed: ${s.gatesFailed.join(", ")}` : "";
-  return `${s.title || s.surface}: ${sep}${p}${gates}`;
+  if (s.skipped) return `${s.title || s.surface}: not tested, ${s.skipped}`;
+  const verdict = s.separation === "better" ? "clearly better than before"
+    : s.separation === "worse" ? "clearly worse than before"
+    : s.separation === "too-few" ? "too few runs to tell"
+    : "no clear difference from before";
+  const gates = s.gatesFailed.length ? `; ${s.gatesFailed.length} required ${s.gatesFailed.length === 1 ? "test" : "tests"} failed` : "";
+  return `${s.title || s.surface}: ${verdict}${gates}`;
 }
 
 /** The check a card carries when the project's suite gates failed (reps.json gates_failed): red, naming each failing scenario, so Ship is refused like any failing check. */
@@ -398,10 +418,11 @@ export function suiteGateCheck(failed: readonly string[]): CardCheck {
 export function evalProof(result: EvalResult): ChangeCard["proof"] {
   const before: CardCheck[] = [];
   const after: CardCheck[] = [];
+  let n = 0;
   for (const s of result.surfaces) {
-    const names = new Map(s.flips.map((f) => [f.freeze, f.name]));
     for (const p of s.proven) {
-      const name = `${s.surface} · ${names.get(p.freeze) ?? p.freeze}`;
+      // A reader knows a case by its place on the card, not by its freeze ref.
+      const name = `Real case ${++n}`;
       // Read loosely: a result written before base verdicts were recorded has none, and its proven freezes were shown red.
       const basePasses = (p as { basePasses?: boolean | null }).basePasses;
       before.push({ name, ok: basePasses === true, detail: basePasses === true ? "already passes before the change" : basePasses === null ? "no verdict before the change" : "fails before the change" });
@@ -415,12 +436,12 @@ export function evalProof(result: EvalResult): ChangeCard["proof"] {
 export function evalExamples(result: EvalResult): CardExample[] {
   const flips = result.surfaces.flatMap((s) => s.flips);
   const ordered = [...flips.filter((f) => f.direction === "fixed"), ...flips.filter((f) => f.direction === "broke")];
-  return ordered.slice(0, MAX_EXAMPLES).map((f) => ({
-    input: f.input,
-    before: f.before,
-    after: f.after,
-    note: f.direction === "broke" ? `Regressed. ${f.note}` : f.note,
-  }));
+  return ordered.slice(0, MAX_EXAMPLES).map((f) => {
+    // The input arrives labelled with the freeze's ref; the reader needs only what was said.
+    const input = f.name && f.input.startsWith(`${f.name}: `) ? f.input.slice(f.name.length + 2) : f.input;
+    const note = firstSentence(f.note);
+    return { input, before: f.before, after: f.after, note: f.direction === "broke" ? `Regressed. ${note}` : note };
+  });
 }
 
 /**
@@ -441,10 +462,12 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
 
   const checks: CardCheck[] = [];
   if (evidence?.execution_status || evidence?.verification_evidence) {
+    const ok = evidence.execution_status === "done" && !reportsFailure(firstLine(evidence.verification_evidence));
+    // A pass says what passed; a failure quotes the builder's own first sentence, the reason a reader needs.
     checks.push({
       name: "Verify",
-      ok: evidence.execution_status === "done" && !reportsFailure(firstLine(evidence.verification_evidence)),
-      detail: firstLine(evidence.verification_evidence) || `handoff status ${evidence.execution_status}`,
+      ok,
+      detail: ok ? "The builder handed it over as done" : firstSentence(firstLine(evidence.verification_evidence)) || `handoff status ${evidence.execution_status}`,
     });
   }
   if (evalResult) {
@@ -462,7 +485,7 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
     checks.push({
       name: "Review",
       ok: evidence.review_verdict.verdict === "approve",
-      detail: evidence.review_verdict.note?.trim() || evidence.review_verdict.verdict,
+      detail: evidence.review_verdict.verdict === "approve" ? "An independent reviewer approved it" : firstSentence(evidence.review_verdict.note?.trim() || evidence.review_verdict.verdict),
     });
   }
 
@@ -482,6 +505,8 @@ export function assembleChangeCard(input: CardAssemblyInput): ChangeCard {
       name: task.goal_name?.trim() || (goalRef === "none" ? "" : goalRef),
       why: task.goal_why?.trim() ?? "",
     },
+    ...(input.headline?.trim() ? { headline: input.headline.trim() } : {}),
+    ...(input.context?.trim() ? { context: input.context.trim() } : {}),
     wrong: input.wrong?.trim() ?? "",
     change: input.change?.trim() ?? "",
     proof,

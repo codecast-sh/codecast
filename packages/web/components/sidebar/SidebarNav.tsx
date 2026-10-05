@@ -12,7 +12,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { FolderGit2, Globe, Radar, Waypoints, Workflow, Zap, MessageSquare, MessagesSquare, FolderKanban, Flag, Newspaper } from "lucide-react";
 import { RailHeading, NavCount, NavSection, type SectionRowSpec } from "./navPrimitives";
-import { DocsNavIcon, SessionsNavIcon, TasksNavIcon } from "./navIcons";
+import { DocsNavIcon, TasksNavIcon } from "./navIcons";
 import { TeamIcon } from "../TeamIcon";
 import { paneDragProps, railRowClass } from "../../lib/railRow";
 
@@ -348,14 +348,6 @@ export function SidebarNavView({
           standing things that set it running. */}
       <RailHeading label="Agents" isNarrow={isNarrow} />
       <div data-rail-group="agents" className="text-sm">
-        <NavSection
-          label="Sessions"
-          href="/sessions"
-          isActive={active.sessions}
-          isNarrow={isNarrow}
-          onMobileClose={onMobileClose}
-          icon={<SessionsNavIcon />}
-        />
         <NavSection
           label="Workflows"
           href="/routines"

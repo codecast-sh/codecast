@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { undoAsOne } from "../store/undoActions";
+import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 
 /**
@@ -19,14 +20,14 @@ export function labelSessions(ids: string[], bucketId: string | null) {
   const name = bucketId ? store.buckets[bucketId]?.name : null;
   const real = ids.map((id) => store.getConvexId(id) ?? id).filter((id) => isConvexId(id));
   const applied = real.length;
-  const sessions = counted(applied, "session");
-  undoAsOne(bucketId ? `Labeled ${sessions}${name ? ` ${name}` : ""}` : `Removed the label from ${sessions}`, () => {
-    for (const id of real) store.assignSessionToBucket(id, bucketId);
-  });
   if (applied === 0) {
     toast.error("Session is still being created — try again in a moment");
     return;
   }
+  const sessions = counted(applied, "session");
   const what = applied === 1 ? "" : ` ${applied} sessions`;
-  toast.success(bucketId ? `Labeled${what}${name ? ` ${name}` : ""}` : `Label removed${what ? ` from${what}` : ""}`);
+  gestureToast(bucketId ? `Labeled${what}${name ? ` ${name}` : ""}` : `Label removed${what ? ` from${what}` : ""}`, () =>
+    undoAsOne(bucketId ? `Labeled ${sessions}${name ? ` ${name}` : ""}` : `Removed the label from ${sessions}`, () => {
+      for (const id of real) store.assignSessionToBucket(id, bucketId);
+    }));
 }

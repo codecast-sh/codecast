@@ -17,6 +17,9 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useWorkflows } from "../../../hooks/useSyncWorkflows";
 import { lineOptions } from "./lineBoard";
+import { lineSlugOf } from "@codecast/shared/contracts/orgProposal";
+import { useLineForks } from "../../../hooks/useLineForks";
+import { lineSettingsHref } from "../../../lib/lineSettings";
 import { lineIntentEchoed, orgRoleReparentMakesCycle, type OrgIntent, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { SelectBox } from "../../ui/select-box";
 import { GatedScopeEditor, InlineEdit } from "../OrgScopePanel";
@@ -166,9 +169,17 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
   // intent is dropped: the tree cannot settle it on its own.
   const { data: lineRow } = useQueryNoThrow(api.orgRoles.line, { role_id: role._id });
   const { workflows } = useWorkflows();
-  const lineSlug: string = (role as any).line_workflow_slug ?? lineRow?.line_workflow_slug ?? "line";
+  const lineSlug: string = lineSlugOf({ line_workflow_slug: (role as any).line_workflow_slug ?? lineRow?.line_workflow_slug });
   const lineChoices = useMemo(() => lineOptions(workflows, lineSlug), [workflows, lineSlug]);
-  const setRoleLine = useInboxStore((s) => (s as any).setRoleLine as (roleId: string, slug: string) => void);
+  // Where "Edit this line" goes: the project whose customized copy the slug
+  // is, else the one project in the role's area; with several, the settings
+  // page asks which.
+  const forks = useLineForks();
+  const forkOf = forks.get(lineSlug) ?? null;
+  const onlyProject = role.scope.project_ids.length === 1 ? role.scope.project_ids[0] : null;
+  const lineProject = forkOf
+    ?? (onlyProject ? { _id: onlyProject, short_id: role.scope_names.projects.find((p) => p.id === onlyProject)?.short_id } : null);
+  const setRoleLine = useInboxStore((s) => s.setRoleLine);
   const dropOrgIntent = useInboxStore((s) => (s as any).dropOrgIntent as (id: string) => void);
   const orgIntents = useInboxStore((s) => ((s as any).orgIntents ?? NO_INTENTS) as OrgIntent[]);
   const echoedIds = useMemo(() => lineIntentEchoed(orgIntents, role._id, lineRow?.line_workflow_slug).map((i) => i.id).join(","), [orgIntents, role._id, lineRow?.line_workflow_slug]);
@@ -231,6 +242,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
               {lineChoices.map((o) => <option key={o.slug} value={o.slug}>{o.label}</option>)}
             </SelectBox>
           )}
+          {forkOf && (
+            <span className="text-[11.5px]" style={{ color: "var(--sol-magenta)" }} data-line-customized-note>
+              {forkOf.title ? `${forkOf.title}'s customized line` : "a customized line"}
+            </span>
+          )}
+          <Link href={lineSettingsHref({ project: lineProject, section: "stations" })} className="ml-auto text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-line-edit-link>
+            Edit this line
+          </Link>
         </div>
         {!isRoot && <MergeStepSwitch role={role} canEdit={canEdit} merge={lineRow?.merge ?? null} />}
       </Section>

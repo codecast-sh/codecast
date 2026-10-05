@@ -24,7 +24,7 @@ This creates a project in your Expo account and updates `app.json` with your `pr
 
 ### 2. Update app.json
 
-Set your own values:
+The checked-in values are Codecast's own (`owner: "ashotp"`, `com.ashotp.codecast`). A fork sets its own:
 ```json
 {
   "expo": {
@@ -53,7 +53,7 @@ Set your own values:
    - SKU: `codecast-ios-001`
    - User Access: Full Access
 4. Copy the **Apple ID** (10-digit number from app page URL)
-5. Set as `ASC_APP_ID` env var for EAS submit
+5. Put it in `eas.json` under `submit.production.ios.ascAppId`
 
 ### 4. Configure EAS Credentials
 
@@ -64,19 +64,21 @@ npx eas credentials
 
 Choose "iOS" > "production" and follow prompts to generate:
 - Distribution Certificate
-- Provisioning Profile
+- Provisioning Profiles, one for the app and one for the `CodecastWidget` target (`packages/mobile/targets/widget`, bundle id `<app bundle id>.widget`)
 
-EAS manages these automatically with your Apple Team ID.
+EAS manages these automatically with your Apple Team ID (`ios.appleTeamId` in `app.json`).
+
+Submission authenticates with an App Store Connect API key rather than an Apple ID. Create one in App Store Connect (Users and Access > Integrations, role App Manager), keep the `.p8` outside the repo, and point `submit.production.ios` in `eas.json` at it (`ascApiKeyPath`, `ascApiKeyId`, `ascApiKeyIssuerId`).
 
 ### 5. Set Environment Variables
 
-For cloud builds, set secrets via EAS:
+The app reads `EXPO_PUBLIC_CONVEX_URL`, `EXPO_PUBLIC_SENTRY_DSN`, `EXPO_PUBLIC_POSTHOG_KEY` and `EXPO_PUBLIC_POSTHOG_HOST`. `packages/mobile/.env` is gitignored, so cloud builds need them as EAS environment variables:
 ```bash
-npx eas secret:create --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --scope project
-npx eas secret:create --name APPLE_ID --value "you@example.com" --scope project
-npx eas secret:create --name ASC_APP_ID --value "1234567890" --scope project
-npx eas secret:create --name APPLE_TEAM_ID --value "XXXXXXXXXX" --scope project
+npx eas env:create production --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --visibility plaintext
+npx eas env:create preview --name EXPO_PUBLIC_CONVEX_URL --value "https://convex.yourdomain.com" --visibility plaintext
 ```
+
+`eas update` bundles on your machine, so OTA updates read the local `packages/mobile/.env` instead. Keep it set to production values.
 
 ## Build Commands
 
@@ -86,13 +88,13 @@ cd packages/mobile
 # Development build (simulator)
 bun run build:dev
 
-# Preview build (internal testing via TestFlight)
+# Preview build (internal ad hoc distribution, installed from an EAS link; not TestFlight)
 bun run build:preview
 
-# Production build
+# Production build (the one TestFlight and the App Store take)
 bun run build:prod
 
-# Submit latest build to App Store
+# Upload the latest build to App Store Connect (lands in TestFlight)
 bun run submit:ios
 
 # Build + auto-submit in one command
@@ -101,14 +103,16 @@ bun run release:ios
 
 ## Release Process
 
+Build from a clean checkout of `origin/main` (`git worktree add --detach <dir> origin/main`, then `bun install --frozen-lockfile` and copy `packages/mobile/.env`). EAS uploads uncommitted changes, so building from a shared tree can ship another session's half-finished edit.
+
 ### TestFlight (Internal Testing)
 
-1. Build preview:
+1. Build production:
    ```bash
-   bun run build:preview
+   bun run build:prod
    ```
 
-2. Submit to TestFlight:
+2. Upload it:
    ```bash
    bun run submit:ios
    ```
@@ -121,7 +125,7 @@ bun run release:ios
 ### App Store Release
 
 1. Complete App Store listing in App Store Connect:
-   - Screenshots (6.7" and 5.5" required)
+   - Screenshots (6.9" iPhone, plus 13" iPad because `supportsTablet` is on)
    - App description, keywords, support URL
    - Privacy policy URL
    - Age rating questionnaire
@@ -132,7 +136,8 @@ bun run release:ios
    bun run release:ios
    ```
 
-3. In App Store Connect:
+3. In App Store Connect (`eas submit` only uploads; the release is manual):
+   - Create the new version and add "What's New"
    - Select the build for release
    - Submit for review
 
@@ -143,15 +148,21 @@ bun run release:ios
 Push JavaScript updates without a new App Store binary:
 
 ```bash
-bun run update:preview       # TestFlight channel
-bun run update:production    # Production channel
+bun run update:preview       # preview channel (internal ad hoc builds)
+bun run update:production    # production channel (TestFlight and App Store builds)
 ```
+
+`scripts/deploy-all.sh` pushes the production OTA as part of a full deploy (`--preview` sends it to preview instead) and skips it when nothing under `packages/mobile` changed.
+
+`runtimeVersion` uses the `appVersion` policy, so an update reaches only binaries with the same `version` as the tree that published it. After a version bump, OTA updates stop reaching the older binaries.
+
+An update also runs on binaries built before any native library it uses. A native package outside the frozen baseline in `packages/mobile/lib/nativeDeps.guard.test.ts` must never be imported statically: load it through `optionalNative` (`packages/mobile/lib/optionalNative.ts`) and handle `null`. A new native package needs a new binary build (see the repo-root `CLAUDE.md`).
 
 ## Version Management
 
-EAS manages version incrementing automatically via `appVersionSource: "remote"` in eas.json.
+EAS keeps the build number remotely (`appVersionSource: "remote"` in eas.json), and the production profile's `autoIncrement` bumps it on every build. Check it with `npx eas build:version:get`.
 
-To manually set version, update `app.json`:
+The user-facing version is manual. Bump it in `app.json` for each App Store release (this also moves the OTA runtime, see above):
 ```json
 {
   "expo": {
@@ -160,8 +171,6 @@ To manually set version, update `app.json`:
 }
 ```
 
-Build numbers auto-increment per build.
-
 ## Troubleshooting
 
 ### Credentials Issues
@@ -169,8 +178,12 @@ Build numbers auto-increment per build.
 npx eas credentials --platform ios
 ```
 
+A `--non-interactive` build never creates or changes credentials. A new native target or a new entitlement fails it with "Credentials are not set up" or a profile mismatch; run one `eas build` attached to a terminal so EAS can generate the profile, and later non-interactive builds reuse it.
+
 ### Build Failures
 Check build logs at your Expo dashboard: `https://expo.dev/accounts/<your-username>/projects/codecast/builds`
+
+Every build profile in `eas.json` pins `"bun"`. Keep it equal to the local bun version: EAS otherwise installs with its own older bun, whose hoisted layout breaks `metro.config.js`.
 
 ### Stuck Submission
 ```bash

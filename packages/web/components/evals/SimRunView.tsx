@@ -5,24 +5,26 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { GitBranch, Pause, Play, Scissors } from "lucide-react";
-import type { SimFailureResult, SimJob, SimRunResponse } from "@codecast/shared/contracts/evalsApi";
+import type { SimFailureResult, SimRunResponse } from "@codecast/shared/contracts/evalsApi";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { formatShortcutParts, getShortcutsForAction, useShortcutAction, useShortcutContext, type ShortcutAction } from "../../shortcuts";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { evalsHref } from "./evalsPaths";
-import { CopyCommand, EvalsLink, VerdictGlyph, plural, shortSha, whenLabel } from "./parts";
+import { CopyCommand, EvalsLink, LogTail, StallChip, VerdictGlyph } from "./parts";
+import { isJobStalled } from "./bisectModel";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { DeliveryTimeline } from "./DeliveryTimeline";
 import { OrderStrip } from "./OrderStrip";
 import { parseOrder } from "../../store/__tests__/sim/replay";
 import { splitOrderLine } from "../../store/__tests__/sim/shrink";
 import { SimLabels } from "../../store/__tests__/sim/labels";
-import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, traceLabels } from "./simLanes";
+import { buildTimeline, failIndex, feedTone, keptIndexes, rowDiffSides, splitRowDiff, traceLabels } from "./simLanes";
 import "./sim.css";
+import { plural, shortSha, whenLabel } from "./format";
+import { PLAY_STEP_MS } from "./simModel";
+import type { JobState } from "./simJobState";
 
-/** "Play" steps the deliveries this far apart (section 6, motion). */
-export const PLAY_STEP_MS = 60;
-
-export type ShrinkState = { state: "idle" } | { state: "starting" } | { state: "running"; job: SimJob | null } | { state: "failed"; error: string };
+export type ShrinkState = JobState;
 
 export interface SimRunViewProps {
   data: SimRunResponse;
@@ -95,7 +97,7 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
       </nav>
 
       <header className="evs-head">
-        <h1>
+        <h1 className="ev-page-title">
           <VerdictGlyph state={failure ? "fail" : "pass"} size={14} />
           <span className="ev-mono">{run.scenario}</span>
         </h1>
@@ -140,11 +142,11 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
         </div>
       </header>
 
-      {failure ? <FailureCard failure={failure} data={data} /> : <div className="ev-card px-4 py-3 text-[12.5px]">Passed after {timeline.count} deliveries. Kept with --keep, so its lanes are here to read.</div>}
+      {failure ? <FailureCard failure={failure} data={data} labels={labels} /> : <div className="ev-card px-4 py-3 text-[12.5px]">Passed after {timeline.count} deliveries. Kept with --keep, so its lanes are here to read.</div>}
 
       <section className="ev-card evs-tape" data-evs-tape>
         <div className="evs-tape-bar">
-          <button type="button" className="evs-btn" onClick={togglePlay} disabled={!timeline.count} data-evs-play={playing ? "playing" : "paused"}>
+          <button type="button" className="ev-btn ev-btn--lg" onClick={togglePlay} disabled={!timeline.count} data-evs-play={playing ? "playing" : "paused"}>
             {playing ? <Pause /> : <Play />}
             {playing ? "Pause" : "Play"}
           </button>
@@ -252,9 +254,12 @@ function ActionKeys({ action }: { action: ShortcutAction }) {
   );
 }
 
-function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRunResponse }) {
+function FailureCard({ failure, data, labels }: { failure: SimFailureResult; data: SimRunResponse; labels: SimLabels }) {
   const meaning = data.invariant?.meaning ?? failure.invariant.meaning;
   const sides = rowDiffSides(failure.invariant.id, failure.window?.name, data.world);
+  const [showOmitted, setShowOmitted] = useState(false);
+  const split = failure.row ? splitRowDiff(failure.row.diff, { message: failure.message, keys: data.invariant?.keys }) : null;
+  const rows = split ? (showOmitted ? [...split.shown, ...split.omitted] : split.shown) : [];
   return (
     <section className="ev-card evs-fail" data-evs-failure={failure.invariant.id}>
       <div className="evs-fail-main">
@@ -270,7 +275,7 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
         {failure.window && (
           <span className="ev-chips">
             <span className="ev-chip" title="The window the check read">window {failure.window.name}</span>
-            <span className="ev-chip" title="Who the window is signed in as">as {failure.window.principal}</span>
+            <span className="ev-chip" title={`Who the window is signed in as (${failure.window.principal})`}>as {labels.relabel(failure.window.principal)}</span>
             <span className="ev-chip" title="The scope it held">{failure.window.scope}</span>
           </span>
         )}
@@ -282,7 +287,7 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
               <code>{failure.row.table}</code>
               <span>{failure.row.label}</span>
               <span className="flex-1" />
-              <span>{failure.row.diff.length} fields differ</span>
+              <span>{plural(split!.shown.length, "field")} {split!.shown.length === 1 ? "differs" : "differ"}</span>
             </div>
             <table className="evs-diff">
               <thead>
@@ -293,7 +298,7 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
                 </tr>
               </thead>
               <tbody>
-                {failure.row.diff.map((d) => (
+                {rows.map((d) => (
                   <tr key={d.field}>
                     <td>{d.field}</td>
                     <td className="evs-srv">{d.server}</td>
@@ -302,6 +307,11 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
                 ))}
               </tbody>
             </table>
+            {split!.omitted.length > 0 && (
+              <button type="button" className="ev-btn evs-diff-more" aria-expanded={showOmitted} onClick={() => setShowOmitted((v) => !v)} data-evs-omitted={split!.omitted.length}>
+                {showOmitted ? "Hide" : "Show"} {plural(split!.omitted.length, "field")} one side lacks and the other leaves empty
+              </button>
+            )}
           </>
         ) : (
           <div className="px-4 py-2 text-[12px] ev-quiet">The check names no row: the invariant holds over the whole window.</div>
@@ -314,21 +324,24 @@ function FailureCard({ failure, data }: { failure: SimFailureResult; data: SimRu
 function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal: boolean; shrinking: SimRunResponse["shrinking"]; shrink: ShrinkState; onShrink: () => void; recorded: number }) {
   const running = !!shrinking || shrink.state === "running" || shrink.state === "starting";
   const job = shrink.state === "running" ? shrink.job : null;
+  const now = useCoarseNow(30_000);
+  const stalled = !!job && isJobStalled(job, now);
   return (
     <div className="evs-sweep" style={{ borderTop: "1px solid var(--ev-rule)" }} data-evs-shrink={minimal ? "done" : running ? "running" : shrink.state}>
       {running ? (
         <span className="evs-job" role="status">
-          <Scissors className="w-3.5 h-3.5 ev-pulse" />
+          <Scissors className={`w-3.5 h-3.5 ${stalled ? "" : "ev-pulse"}`} />
           {shrinking
             ? `Shrinking, ${shrinking.phase === "prefix" ? "cutting the prefix" : "removing single deliveries"}: ${shrinking.attempts} attempts, shortest failing order ${shrinking.best} of ${shrinking.recorded}`
             : job
               ? job.progress.text || "Shrinking..."
               : "Starting the shrink..."}
           {job?.tmux && <code className="ev-mono">tmux {job.tmux}</code>}
+          {stalled && <StallChip since={job!.updatedAt} data-evs-stalled />}
         </span>
       ) : (
         <>
-          <button type="button" className="evs-btn evs-btn--go" onClick={onShrink} data-evs-shrink-button>
+          <button type="button" className="ev-btn ev-btn--lg ev-btn--go sol-btn-solid" onClick={onShrink} data-evs-shrink-button>
             <Scissors />
             {minimal ? "Shrink again" : "Shrink"}
           </button>
@@ -338,6 +351,7 @@ function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal
               : `Finds the shortest delivery order that still fails the same invariant on the same row. Up to 400 attempts or 10 minutes over ${recorded} deliveries.`}
           </span>
           {shrink.state === "failed" && <span className="ev-fail text-[11.5px]">{shrink.error}</span>}
+          {shrink.state === "failed" && <LogTail lines={shrink.logTail ?? []} label="What the shrink printed before it ended" data-evs-shrink-log />}
         </>
       )}
     </div>

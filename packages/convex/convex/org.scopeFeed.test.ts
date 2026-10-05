@@ -37,8 +37,9 @@ function fixtures(extra: Record<string, any[]> = {}) {
     ],
     docs: [],
     conversations: [
-      // In scope by project_path; asks a decision that names no task.
-      { _id: S1, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Growth session", short_id: "jx1", project_path: "/repo/growth", updated_at: NOW - 7 * H, created_at: 1, message_count: 3 },
+      // In scope through the task it is bound to (S35: a folder decides
+      // nothing); asks a decision that names no task.
+      { _id: S1, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Growth session", short_id: "jx1", project_path: "/repo/growth", active_task_id: T1, updated_at: NOW - 7 * H, created_at: 1, message_count: 3 },
       // Out of scope; it started the run, so it names the run's actor.
       { _id: SPAWNER, user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", title: "Growth lead standing", short_id: "jx9", project_path: "/elsewhere", updated_at: NOW - 30 * H, created_at: 1, message_count: 3 },
     ],
@@ -182,5 +183,56 @@ describe("F2 read budget", () => {
     expect(b.rows.length).toBe(40);
     expect(b.reads).toBe(a.reads);
     expect(a.reads).toBeLessThan(200);
+  });
+});
+
+// Goals in a scope (initiatives-projects-role-page.md I5). The record's
+// moments are read off the goal row, and calls from one window per team, so
+// neither grows the feed's reads with the entries on the record.
+describe("I5 goals in the feed", () => {
+  const G = "initiatives_g1";
+  const goal = (fields: Record<string, any> = {}) => ({
+    _id: G, user_id: ME, team_id: TEAM, workspace: WS, short_id: "in-1", title: "Broker launch", status: "active", project_ids: [], health: "none", created_at: 1, updated_at: NOW, ...fields,
+  });
+  const call = (i: number) => ({
+    _id: `transcripts_c${String(i).padStart(2, "0")}`, short_id: `cl-${i}`, room_key: "channel:chat_channels_1", team_id: TEAM, started_by: ME, status: "ended", started_at: NOW - (i + 1) * H, title: `Sync ${i}`, summary: "Where in-1 stands.", participants: [{ id: ME, name: "Me" }], routes: [], last_seq: 3,
+  });
+  const goalFixtures = (initiative: any, calls: any[] = []) => fixtures({
+    teams: [{ _id: TEAM, name: "Acme", features: { calls: true } }],
+    initiatives: [initiative],
+    initiative_updates: [],
+    transcripts: calls,
+  });
+  const goalScope = async (db: any) => (await resolveScope(ctxOf(db), ME as any, { scope: { project_ids: [], plan_ids: [], initiative_ids: ["in-1"] }, team_id: TEAM }))!;
+
+  test("the feed's reads do not grow with the entries on a goal's record", async () => {
+    const full = goal({
+      milestones: Array.from({ length: 12 }, (_, i) => ({ key: `m${i}`, title: `Milestone ${i}`, done_at: NOW - (i + 1) * H })),
+      questions: Array.from({ length: 20 }, (_, i) => ({ key: `q${i}`, text: `Question ${i}`, at: NOW - (i + 30) * H })),
+      decisions: Array.from({ length: 40 }, (_, i) => ({ key: `d${i}`, text: `Decision ${i}`, at: NOW - (i + 60) * H, source: { kind: "call", ref: `cl-${900 + i}` } })),
+    });
+    const feedReads = async (initiative: any) => {
+      const c = countingDb(goalFixtures(initiative, [call(1)]));
+      const resolved = await goalScope(c.db);
+      const before = c.reads();
+      const { rows } = await computeScopeFeed(ctxOf(c.db), resolved, { now: NOW, limit: 200 });
+      return { reads: c.reads() - before, rows };
+    };
+    const a = await feedReads(goal({ milestones: [{ key: "m0", title: "Milestone 0", done_at: NOW - H }] }));
+    const b = await feedReads(full);
+    expect(a.rows.filter((r) => r.kind === "goal").length).toBe(1);
+    expect(b.rows.filter((r) => r.kind === "goal").length).toBe(72);
+    expect(b.reads).toBe(a.reads);
+  });
+
+  test("calls are kept a few a page, and the cursor reaches the rest", async () => {
+    const db = goalFixtures(goal(), Array.from({ length: 11 }, (_, i) => call(i)));
+    const resolved = await goalScope(db);
+    const first = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["call"] });
+    expect(first.rows.map((r) => r.short_id)).toEqual(["cl-0", "cl-1", "cl-2", "cl-3", "cl-4", "cl-5", "cl-6", "cl-7"]);
+    expect(first.next_cursor).toBeDefined();
+    const second = await computeScopeFeed(ctxOf(db), resolved, { now: NOW, kinds: ["call"], cursor: first.next_cursor });
+    expect(second.rows.map((r) => r.short_id)).toEqual(["cl-8", "cl-9", "cl-10"]);
+    expect(second.next_cursor).toBeUndefined();
   });
 });

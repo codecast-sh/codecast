@@ -88,6 +88,8 @@ import { DocDates } from "./DocDates";
 import { TimeAgo } from "./tasks/TaskCommentStream";
 import { useRevealRef } from "../lib/revealHost";
 import { RevealOpenLink } from "./ObjectReveal";
+import { ModObjectPill } from "./mods/ModObjectPill";
+import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 
 export { SessionHoverContent };
 
@@ -770,6 +772,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
     const ref = href.slice(9);
     if (ref.startsWith("doc:")) return <EntityIdPill type="doc" id={ref.slice(4)} mention={mention} />;
     if (ref.startsWith(MESSAGE_REF_PREFIX)) return <SharedMessagePill refId={ref} />;
+    if (ref.startsWith(OBJECT_REF_PREFIX)) return <ModObjectPill shortId={ref.slice(OBJECT_REF_PREFIX.length)} />;
     const date = parseDateRef(ref);
     if (date) return <DatePill iso={date.iso} label={date.label} />;
     if (ref.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
@@ -796,6 +799,10 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // sanitizer). This is the markdown twin of the entity:// branch above.
   if (text.startsWith("doc:") && text.length > 4) {
     return <EntityIdPill type="doc" id={text.slice(4)} mention={mention} />;
+  }
+  // A mod object's text payload (`obj:bug-14`), same convention.
+  if (text.startsWith(OBJECT_REF_PREFIX) && text.length > OBJECT_REF_PREFIX.length) {
+    return <ModObjectPill shortId={text.slice(OBJECT_REF_PREFIX.length)} />;
   }
   // A message reference's text payload (`msg:<token or id>`), same convention.
   if (text.startsWith(MESSAGE_REF_PREFIX) && text.length > MESSAGE_REF_PREFIX.length) {
@@ -1216,8 +1223,7 @@ export function EntityIdPill({
     [closeNow, toggleReveal],
   );
   // A session click takes the stage instead of routing. The href is still
-  // real (cmd-click, copy link), but it will not produce a router
-  // transition, so the top progress bar must not start.
+  // real (cmd-click, copy link).
   const clickStaysHere = !!entity && isSession;
 
   // Clear any in-flight timer if the pill unmounts (e.g. on navigation).
@@ -1248,7 +1254,6 @@ export function EntityIdPill({
           ref={linkRef}
           href={href}
           onClick={handleOpen}
-          {...(clickStaysHere ? { "data-no-progress": "" } : {})}
           // While its band is open the full page is right below: no hover
           // card over it, and a stale timer never brings one back.
           onMouseEnter={revealOpen ? closeNow : openSoon}
@@ -1306,7 +1311,6 @@ export function EntityIdPill({
         <Link
           href={href}
           onClick={handleOpen}
-          {...(isSession && entity ? { "data-no-progress": "" } : {})}
           className="block p-3 no-underline cursor-pointer"
         >
           {entity ? (

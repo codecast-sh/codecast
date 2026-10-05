@@ -64,6 +64,13 @@ export function localDate(t: number, zone: string): string {
   return isoDate(wallAsUtc(t, normalizeTimezone(zone)));
 }
 
+/** The wall clock in `zone` at instant `t`: its local date, minutes past
+ *  local midnight, and weekday (0 is Sunday). An unknown zone reads as UTC. */
+export function wallClockAt(t: number, zone: string | null | undefined): { date: string; minutes: number; weekday: number } {
+  const wall = wallAsUtc(t, normalizeTimezone(zone));
+  return { date: isoDate(wall), minutes: Math.floor((((wall % DAY_MS) + DAY_MS) % DAY_MS) / 60_000), weekday: new Date(wall).getUTCDay() };
+}
+
 /** The first instant of `date` in `zone`. The offset at local midnight is the
  *  one in force a day before or a day after (zones change offset months
  *  apart), so both are tried and the earliest instant that still reads as

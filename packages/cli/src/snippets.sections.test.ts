@@ -835,7 +835,12 @@ describe("the refresh gates in index.ts", () => {
 
   // Boolean assertions with a message, not toContain(indexSource): a failing
   // toContain prints the whole 700KB "received" source, burying the finding.
-  const gateIn = (slug: string) => indexSource.includes(`snippetStale(config, "${slug}")`);
+  // The section snippets share one gate: the SECTION_SNIPPET_VERSIONS loop
+  // calls snippetStale and stampSnippet for every slug the table lists.
+  const sectionTable = indexSource.match(/const SECTION_SNIPPET_VERSIONS[^\n]*= \{([\s\S]*?)\};/)?.[1] ?? "";
+  const sharedLoop = /snippetStale\(config, slug\)/.test(indexSource) && /stampSnippet\(config, slug, getVersion\(\)\)/.test(indexSource);
+  const inSectionTable = (slug: string) => sharedLoop && new RegExp(`^\\s*${slug}:`, "m").test(sectionTable);
+  const gateIn = (slug: string) => indexSource.includes(`snippetStale(config, "${slug}")`) || inSectionTable(slug);
 
   test.each(
     SNIPPET_CATALOG.filter((s) => !UNGATED.has(s.slug)).map((s) => [s.slug] as const),
@@ -845,7 +850,7 @@ describe("the refresh gates in index.ts", () => {
       `index.ts has no snippetStale(config, "${slug}") gate — wire one (or list the slug as UNGATED here with a reason)`,
     ).toBe(true);
     expect(
-      indexSource.includes(`stampSnippet(config, "${slug}"`),
+      indexSource.includes(`stampSnippet(config, "${slug}"`) || inSectionTable(slug),
       `index.ts never stamps "${slug}" after installing it, so its gate would reinstall on every pass`,
     ).toBe(true);
   });

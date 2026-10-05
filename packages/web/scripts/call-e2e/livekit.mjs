@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 process.env.NODE_ENV ||= "production";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const CONVEX_DIR = resolve(HERE, "../../../convex");
+export const CONVEX_DIR = resolve(HERE, "../../../convex");
 const KEYS = ["LIVEKIT_URL", "LIVEKIT_API_KEY", "LIVEKIT_API_SECRET"];
 export const ENV_CACHE = join(tmpdir(), "codecast-call-e2e", "livekit.env");
 
