@@ -34,7 +34,7 @@
 
   That completes the full verification. Let me mark the task done.
 
-⏺ Bash(cd /Users/ashot/src/codecast
+⏺ Bash(cd /home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5
       cast task done ct-32970 -m "Sessions page triage: each row now shows its inbox state (needs-input/working badges, pinned
       ★, dimmed+…)
   ⎿  ok Completed ct-32970

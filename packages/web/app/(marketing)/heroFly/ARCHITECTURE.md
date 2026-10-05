@@ -308,7 +308,7 @@ All of these are local `useState` with `data-hero-live`, and none depend on real
 
 **Key files**
 
-- Existing hero: `/Users/ashot/src/codecast/packages/web/app/(marketing)/HeroFlythrough.tsx`, `/Users/ashot/src/codecast/packages/web/app/(marketing)/heroFly/{surfaces.tsx,timeline.ts,world.ts}`, `/Users/ashot/src/codecast/packages/web/app/(marketing)/heroFlythrough.spec.md`, `/Users/ashot/src/codecast/packages/web/app/(marketing)/productMocks.tsx`
-- Store: `/Users/ashot/src/codecast/packages/web/store/inboxStore.ts`
-- Seams: `/Users/ashot/src/codecast/packages/web/lib/entityDisplay.ts`, `/Users/ashot/src/codecast/packages/web/hooks/usePersonifyAll.ts`, `/Users/ashot/src/codecast/packages/web/components/ThemeProvider.tsx`, `/Users/ashot/src/codecast/packages/web/components/force-light-mode.tsx`, `/Users/ashot/src/codecast/packages/web/src/layouts/MarketingLayout.tsx`
-- Prerender and tokens: `/Users/ashot/src/codecast/packages/web/src/prerender-entry.tsx`, `/Users/ashot/src/codecast/packages/web/app/globals.css`
+- Existing hero: `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/app/(marketing)/HeroFlythrough.tsx`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/app/(marketing)/heroFly/{surfaces.tsx,timeline.ts,world.ts}`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/app/(marketing)/heroFlythrough.spec.md`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/app/(marketing)/productMocks.tsx`
+- Store: `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/store/inboxStore.ts`
+- Seams: `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/lib/entityDisplay.ts`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/hooks/usePersonifyAll.ts`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/components/ThemeProvider.tsx`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/components/force-light-mode.tsx`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/src/layouts/MarketingLayout.tsx`
+- Prerender and tokens: `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/src/prerender-entry.tsx`, `/home/ubuntu/work/codecast/.codecast/worktrees/cloud-5646a5/packages/web/app/globals.css`
