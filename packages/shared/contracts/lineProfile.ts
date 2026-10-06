@@ -28,6 +28,11 @@ export interface LineProfile {
   watch_days: number;
   commands: { check: string; prove: string | null; eval: string | null; ship: string | null };
   caps: { cards: number };
+  /**
+   * Whether Ship merges on its own (`[line.merge]`). Absent on a profile
+   * published by a CLI older than the key: read it as the default.
+   */
+  merge?: { auto: boolean; method: "squash" | "merge" | "rebase" };
   finders: LineFinder[];
 }
 
@@ -45,6 +50,8 @@ export type LineProfileFacts = Omit<LineProfile, "finders"> & {
   notes: string[];
   warnings: string[];
   file: string | null;
+  /** The repo's own line (line-map.md LX5), when it has `.codecast/line/line.cast`; absent otherwise. */
+  line?: PublishedRepoLine;
 };
 
 /**
@@ -90,6 +97,7 @@ export const LINE_PROFILE_DEFAULTS: LineProfile = {
   watch_days: 7,
   commands: { check: "cast ws check", prove: null, eval: null, ship: null },
   caps: { cards: 5 },
+  merge: { auto: false, method: "squash" },
   finders: [],
 };
 
@@ -98,6 +106,8 @@ export const LINE_SIGNAL_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
 
 export const COMMAND_KEYS = ["check", "prove", "eval", "ship"] as const;
 export const CAPS_KEYS = ["cards"] as const;
+export const MERGE_KEYS = ["auto", "method"] as const;
+export const MERGE_METHODS = ["squash", "merge", "rebase"] as const;
 
 // ── Value rules: the loader, the daemon's editor and the settings page judge a value the same way ──
 
@@ -187,9 +197,64 @@ export type LineProfileEdit =
   | { op: "set"; key: string; value: LineValue }
   | { op: "remove"; key: string }
   | { op: "set_finder"; finder: LineFinderInput }
-  | { op: "remove_finder"; id: string };
+  | { op: "remove_finder"; id: string }
+  | LineStationEdit;
 
-const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "sources", "notes", "warnings"] as const;
+// ── The repo's own line (docs/architecture/line-map.md LX5) ──
+//
+// A project's graph and station prompts live beside its profile, in
+// `.codecast/line/`: `line.cast` and one file per station prompt or script,
+// written out from the shipped line the first time a station is changed
+// (cli/src/repoLine.ts). A task-bound run in that checkout runs it ahead of
+// the role's line and the shipped one, and `cast line profile --publish`
+// copies it onto the project row so the app shows what the repo holds.
+
+export const REPO_LINE_REL_DIR = ".codecast/line";
+export const REPO_LINE_REL_PATH = ".codecast/line/line.cast";
+/**
+ * The workflow slug a run of a repo's line pushes its graph under: its own
+ * row, so it never overwrites the `line` row a role's sweep runs read.
+ */
+export const REPO_LINE_SLUG = "line-repo";
+/** A file the repo's line may hold: a plain name in REPO_LINE_REL_DIR, never a path. */
+export const REPO_LINE_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*\.(cast|md|sh|txt)$/;
+
+/** A station's editable values. null, empty text or a timeout of 0 or less removes the value. */
+export type LineStationPatch = { prompt?: string | null; script?: string | null; timeout?: number | null };
+
+/**
+ * set_station changes one station's prompt, script or timeout (seconds) in
+ * the repo's line, writing the line out from the shipped one first when the
+ * repo has none. reset_station puts one station back to the shipped line's.
+ */
+export type LineStationEdit =
+  | ({ op: "set_station"; station: string } & LineStationPatch)
+  | { op: "reset_station"; station: string };
+
+export const isLineStationEdit = (e: LineProfileEdit): e is LineStationEdit => e.op === "set_station" || e.op === "reset_station";
+
+/** A station as the published line carries it: the runner's push shape (prompt and script as text). */
+export type RepoLineNode = { id: string; label: string; shape: string; type: string; prompt?: string; script?: string; timeout?: number; [attr: string]: unknown };
+export type RepoLineEdge = { from: string; to: string; label?: string; condition?: string };
+
+/**
+ * projects.line_profile.line: the repo's line as the runner parses it. `files`
+ * names the file (repo relative) each station's prompt or script lives in;
+ * `graph_hash` is the hash a run of it records (parser.ts graphHash).
+ */
+export type PublishedRepoLine = {
+  file: string;
+  graph_hash: string;
+  name: string;
+  goal?: string;
+  stack?: string;
+  source: string;
+  nodes: RepoLineNode[];
+  edges: RepoLineEdge[];
+  files: Record<string, { prompt?: string; script?: string }>;
+};
+
+const FACT_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "sources", "notes", "warnings", "line"] as const;
 
 /** The content changed_at tracks: every fact but where it lives and who published it. */
 export function lineProfileContentKey(p: Omit<PublishedLineProfile, "changed_at"> | null | undefined): string {

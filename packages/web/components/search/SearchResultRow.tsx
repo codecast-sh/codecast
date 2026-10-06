@@ -4,6 +4,7 @@ import type { SessionSearchRow } from "../../lib/instantSessionSearch";
 import { SessionGlyph } from "../identity";
 import { formatSearchTimestamp } from "../../lib/searchTimestamp";
 import { SearchOrigin } from "./SearchOrigin";
+import { useSurface } from "../../lib/surfaces";
 
 /** One session in the top bar's search results: its face, title and counts,
  *  then up to three matched messages with the query highlighted. */
@@ -14,6 +15,18 @@ export function SearchResultRow({ session, query, selected, onClick, onContextMe
   onClick?: () => void;
   onContextMenu?: (e: MouseEvent) => void;
 }) {
+  // Hosted mode reads a hit as the words found and when: no role chip and no
+  // message count.
+  const internals = useSurface("search.internals");
+  // A request sent again (Try again) matches twice with the same words; it
+  // shows once.
+  const seen = new Set<string>();
+  const matches = session.matches.filter((m) => {
+    const key = `${m.role}\u0000${m.content.trim()}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return (
     <button
       onClick={onClick}
@@ -35,9 +48,9 @@ export function SearchResultRow({ session, query, selected, onClick, onContextMe
             {session.authorName}
           </span>
         )}
-        <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
+        {internals && <span className="text-[10px] text-sol-text-dim px-1.5 py-0.5 bg-sol-bg rounded">
           {session.messageCount} msgs
-        </span>
+        </span>}
         <span className="text-[10px] text-sol-text-dim ml-auto whitespace-nowrap">
           {formatSearchTimestamp(session.updatedAt)}
         </span>
@@ -52,13 +65,13 @@ export function SearchResultRow({ session, query, selected, onClick, onContextMe
             {highlightMatch(getSnippet(session.instantSnippet, query, 180), query)}
           </p>
         )}
-        {session.matches.slice(0, 3).map((match, matchIndex) => (
+        {matches.slice(0, 3).map((match, matchIndex) => (
           <div
             key={`${session.conversationId}-${matchIndex}`}
             className="px-2 py-1"
           >
             <div className="flex items-center gap-2 mb-0.5">
-              <span
+              {internals && <span
                 className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${
                   match.role === "user"
                     ? "bg-blue-500/20 text-blue-700 dark:text-blue-300"
@@ -66,7 +79,7 @@ export function SearchResultRow({ session, query, selected, onClick, onContextMe
                 }`}
               >
                 {match.role}
-              </span>
+              </span>}
               <span className="text-[10px] text-sol-text-dim">
                 {formatSearchTimestamp(match.timestamp)}
               </span>

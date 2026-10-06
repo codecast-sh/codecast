@@ -25,6 +25,8 @@ export type PendingMessageInsertFields = {
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
   held?: boolean;
+  // Held for the end of the agent's turn (schema pending_messages.queued).
+  queued?: boolean;
 };
 
 export class PendingMessageWriteError extends Error {
@@ -108,7 +110,8 @@ async function insertPendingMessageRow(
     client_id: fields.clientId,
     origin: fields.origin,
     human: fields.human || undefined,
-    status: fields.held ? ("held" as const) : ("pending" as const),
+    status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
+    ...(fields.queued ? { queued: true } : {}),
     created_at: fields.createdAt,
     retry_count: 0,
     ...(delivery

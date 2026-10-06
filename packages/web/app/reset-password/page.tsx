@@ -1,66 +1,15 @@
-import { useState, Suspense } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useMutation } from "convex/react";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useResetConfirm } from "../../hooks/useEmailAuth";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AppLoader } from "../../components/AppLoader";
 
 function ResetPasswordForm() {
   const searchParams = useSearchParams();
-  const [email, setEmail] = useState(searchParams.get("email") || "");
-  const [code, setCode] = useState("");
-  const [newPassword, setNewPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  const { signIn } = useAuthActions();
-  const notifyPasswordChanged = useMutation(api.emails.send.notifyPasswordChanged);
+  const email = searchParams.get("email") || "";
   const router = useRouter();
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-
-    if (newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
-      return;
-    }
-
-    if (newPassword.length < 8) {
-      setError("Password must be at least 8 characters.");
-      return;
-    }
-
-    setLoading(true);
-
-    try {
-      await signIn("password", {
-        email,
-        code,
-        newPassword,
-        flow: "reset-verification",
-      });
-      // Security notice to the account's inbox. The reset just signed us in,
-      // so the authenticated mutation targets our own address. Best-effort —
-      // never block the redirect on it.
-      notifyPasswordChanged({}).catch(() => {});
-      router.push("/login?reset=success");
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.includes("Invalid") || err.message.includes("code")) {
-          setError("Invalid or expired reset code. Please try again.");
-        } else {
-          setError("Failed to reset password. Please try again.");
-        }
-      } else {
-        setError("An unexpected error occurred.");
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
+  const { code, setCode, newPassword, setNewPassword, confirmPassword, setConfirmPassword, error, loading, submit: handleSubmit } =
+    useResetConfirm(email, () => router.push("/login?reset=success"));
 
   return (
     <main className="min-h-screen bg-gradient-to-br from-sol-bg via-sol-bg-alt to-sol-bg flex items-center justify-center px-4">
@@ -93,7 +42,7 @@ function ResetPasswordForm() {
                 autoComplete="one-time-code"
                 required
                 value={code}
-                onChange={(e) => setCode(e.target.value.toUpperCase())}
+                onChange={(e) => setCode(e.target.value)}
                 className="sol-input w-full py-3 font-mono tracking-widest text-center text-lg"
                 placeholder="XXXXXX"
                 maxLength={6}

@@ -2,11 +2,12 @@ import { createContext, useCallback, useContext } from "react";
 import { toast } from "sonner";
 import { copyToClipboard, shareOrigin } from "./utils";
 import { openForwardToChat } from "./forwardToChat";
+import { formatMessageHash } from "./messageHash";
 import type { ToolCall, ToolResult } from "../components/conversation/types";
 import { cacheLocalDateFormat } from "./localDateCache";
 
-function messageLink(conversationId: string | undefined, messageId: string) {
-  return `${shareOrigin()}/conversation/${conversationId}#msg-${messageId}`;
+export function messageLink(conversationId: string | undefined, messageId: string, block?: number) {
+  return `${shareOrigin()}/conversation/${conversationId}${formatMessageHash(messageId, block)}`;
 }
 
 export function copyMessageLink(conversationId: string | undefined, messageId: string) {

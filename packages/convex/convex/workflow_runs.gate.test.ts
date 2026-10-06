@@ -331,6 +331,18 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     expect(run.workflow_id).toBe("workflows_line");
   });
 
+  test("a task's run logs into a session born stashed and hidden; a run without a task stays in the inbox", async () => {
+    const { ctx, tables } = await seed();
+    tables.workflow_runs[0].status = "completed";
+    const bound = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-7" });
+    const log = tables.conversations.find((c) => c._id === bound.primary_conversation_id);
+    expect(log.inbox_stash_hidden).toBe(true);
+    expect(log.inbox_stashed_at).toBeGreaterThan(0);
+    const free = await (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line" });
+    const own = tables.conversations.find((c) => c._id === free.primary_conversation_id);
+    expect(own.inbox_stashed_at).toBeUndefined();
+  });
+
   test("createFromCli refuses a second run while the cause's run is live (LE1.4), and --force overrides", async () => {
     for (const status of ["pending", "running", "paused"]) {
       const { ctx, tables } = await seed();

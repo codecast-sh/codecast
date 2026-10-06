@@ -34,10 +34,9 @@ import { ClusterCard, HealthRoleCard, PersonCard, RoleCard, SessionCard, type He
 import { bandOrigin, computeOrgViewport, FIT_PAD, hiddenRoots } from "./orgViewport";
 import { useZoomLevel, type ZoomLevel } from "./orgZoom";
 import { sameParent, type OrgParentRef, type OrgTree } from "./orgTypes";
-import { changeLine, GHOST, healthFlagsByNode } from "./orgMeta";
+import { GHOST, healthFlagsByNode } from "./orgMeta";
 import type { OrgHealth, OrgProposalChange } from "./orgStaffingTypes";
 import type { GhostAnswers } from "./ProposalLedger";
-import { EditChangeForm } from "./StaffingPane";
 import { orgRoleReparentMakesCycle } from "../../store/orgSlice";
 import { ORG_FLOW_EDGE_TYPES, type FlowEdgeData, type FlowSendData } from "./OrgFlowEdges";
 import type { FlowMap, RoleFlow } from "./orgFlow";
@@ -58,8 +57,10 @@ const GOALS_READABLE_ZOOM = 0.6;
 const ORG_NODE_TYPES = { person: PersonCard, role: RoleCard, session: SessionCard, cluster: ClusterCard, healthRole: HealthRoleCard, ...GOALS_NODE_TYPES };
 const ORG_EDGE_TYPES = { ...ORG_FLOW_EDGE_TYPES, ...GOALS_EDGE_TYPES };
 
-/** Which picture the canvas draws (org-staffing.md S36): who reports to whom, or who owns what. */
-export type OrgLens = "people" | "goals";
+/** Which picture the canvas draws (org-staffing.md S36, S40): everything (the
+ *  goal outline with every person and role beside it), the goals alone, or
+ *  who reports to whom. */
+export type OrgLens = "everything" | "people" | "goals";
 const NO_LAYOUT: ReturnType<typeof layoutOrgTree> = { nodes: [], edges: [], width: 0, height: 0 };
 
 export type OrgReparentRequest = {
@@ -115,8 +116,6 @@ export type OrgGraphProps = {
   /** The proposal's pending answers by change and the write into their batch
    *  (useGhostAnswers): a ghost's Approve, Reject and Reply. Absent: read only. */
   ghostAnswers?: GhostAnswers;
-  /** The inline edit form's accept, the one direct verdict on the chart. */
-  onEditAccept?: (changeId: string, edits: Record<string, unknown>) => void;
   /** Edit on a role change opens the hire dialog prefilled (the page owns
    *  it); every other kind gets the inline form here on the canvas. */
   onEditRoleChange?: (change: OrgProposalChange) => void;
@@ -179,7 +178,9 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
       connectable: false,
       zIndex: n.id === draggingId ? 1000 : n.kind === "session" || n.kind === "cluster" ? 1 : 2,
     };
-    const common = { selected: n.id === selectedId, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
+    // The change in focus lights the card that carries it (its stub, its retire or move, one of its chips), the way a click would.
+    const carries = !!ghosts.focusChangeId && (n.kind === "person" || n.kind === "role" || n.kind === "session") && (n.ghost?.change_id === ghosts.focusChangeId || n.retire?.change_id === ghosts.focusChangeId || n.move?.change_id === ghosts.focusChangeId || !!n.chips?.some((c) => c.change_id === ghosts.focusChangeId));
+    const common = { selected: n.id === selectedId || carries, dropTarget: n.id === dropTargetId, dragging: n.id === draggingId, ...handlers, flags: flags[n.id] };
     const decor = n.kind === "person" || n.kind === "role" || n.kind === "session"
       ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
       : {};
@@ -196,7 +197,7 @@ function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, dropTar
 }
 
 function OrgGraphInner(props: OrgGraphProps) {
-  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, ghostAnswers, onEditAccept, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
+  const { tree, view, selectedId, loadingClusters, showMiniMap, onSelect, onToggleCollapse, onExpandCluster, onCollapseCluster, onReparentRequest, onNodeContextMenu, onOpenSession, resetKey, panelWidth = 0, panelHeightFraction = 0, canDrag, changes, health, viewerSession, focusChangeId = null, focusTarget = null, onFocusChange, ghostAnswers, onEditRoleChange, chrome = true, flow, lens = "people", goalsData, onOpenInPeople } = props;
   const { theme } = useTheme();
   const rf = useReactFlow();
 
@@ -220,10 +221,9 @@ function OrgGraphInner(props: OrgGraphProps) {
   // Each zoom level is laid out at its own card sizes (orgZoom), so the
   // resting chart keeps no room for what only the close card says.
   const level = useZoomLevel();
-  const focusAnswered = !!focusChangeId && !!ghostAnswers?.byChange[focusChangeId];
   const rawGoals = useMemo<GoalsLayout | null>(
-    () => (lens === "goals" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, focusChangeId, focusAnswered }, level) : null),
-    [lens, tree, goalsData, storeGoals, projects, changes, focusChangeId, focusAnswered, level],
+    () => (lens !== "people" ? layoutGoals({ tree, initiatives: goalsData?.initiatives ?? storeGoals, projects: goalsData?.projects ?? projects, changes, people: lens === "everything" ? "everyone" : "none", ghosts }, level) : null),
+    [lens, tree, goalsData, storeGoals, projects, changes, ghosts, level],
   );
   const rawLayout = useMemo(() => (rawGoals ? NO_LAYOUT : layoutOrgTree(tree, view, ghosts, level)), [rawGoals, tree, view, ghosts, level]);
   // Crossing a zoom stop swaps one layout for another. The new one is placed
@@ -269,8 +269,6 @@ function OrgGraphInner(props: OrgGraphProps) {
   const [draggingId, setDraggingId] = useState<string | null>(null);
   // The goals lens draws owner edges only for the card under the pointer or selected.
   const [hoverId, setHoverId] = useState<string | null>(null);
-  // The inline edit form for a non-role change, at the Edit click.
-  const [editing, setEditing] = useState<{ change: OrgProposalChange; at: { x: number; y: number } } | null>(null);
 
   const handlers = useMemo(() => ({ onToggleCollapse, onExpandCluster, onCollapseCluster }), [onToggleCollapse, onExpandCluster, onCollapseCluster]);
   const changeById = useMemo(() => new Map((changes ?? []).map((c) => [c._id, c])), [changes]);
@@ -278,14 +276,13 @@ function OrgGraphInner(props: OrgGraphProps) {
     focusChangeId,
     onFocusChange: (id) => onFocusChange?.(id),
     answers: ghostAnswers?.byChange,
-    // An answer closes an open edit form: the two are different verdicts on one change.
-    onAnswerChange: ghostAnswers ? (id, answer) => { setEditing(null); ghostAnswers.onAnswer(id, answer); } : undefined,
-    onEditChange: (id, at) => {
+    onAnswerChange: ghostAnswers ? (id, answer) => ghostAnswers.onAnswer(id, answer) : undefined,
+    // Edit on a role change opens the page's hire dialog; the chart has no form of its own.
+    onEditChange: (id) => {
       const c = changeById.get(id);
       if (!c) return;
       onFocusChange?.(id);
       if (c.change.kind === "role") onEditRoleChange?.(c);
-      else setEditing({ change: c, at });
     },
   }), [focusChangeId, onFocusChange, ghostAnswers, onEditRoleChange, changeById]);
   const flowNodes = useMemo(() => {
@@ -417,6 +414,15 @@ function OrgGraphInner(props: OrgGraphProps) {
   useWatchEffect(() => {
     const el = wrapRef.current;
     if (!focusNodeId || !el || !viewportReady) return;
+    // A hover from the conversation lights the node and pans only when it is off screen, so a pointer moving down a list of cards never drags the map about.
+    if (focusTarget?.ifHidden) {
+      const n = boxes.find((b) => b.id === focusNodeId);
+      const cur = rf.getViewport();
+      if (n) {
+        const left = n.x * cur.zoom + cur.x, top = n.y * cur.zoom + cur.y, right = (n.x + n.w) * cur.zoom + cur.x, bottom = (n.y + n.h) * cur.zoom + cur.y;
+        if (left >= 0 && top >= 0 && right <= el.clientWidth - panelWidth && bottom <= el.clientHeight * (1 - panelHeightFraction)) return;
+      }
+    }
     const vp = computeOrgViewport(boxes, el.clientWidth, el.clientHeight, panelWidth, focusId, { id: focusNodeId, zoom: rf.getViewport().zoom }, el.clientHeight * panelHeightFraction, readableZoom);
     if (!vp) return;
     userMoved.current = true;
@@ -430,9 +436,8 @@ function OrgGraphInner(props: OrgGraphProps) {
     if (e.key !== "Escape") return;
     const el = document.activeElement as HTMLElement | null;
     if (keyBelongsElsewhere(el)) return;
-    if (editing) { setEditing(null); return; }
     if (selectedId) onSelect(null);
-  }, editing || selectedId ? window : null);
+  }, selectedId ? window : null);
 
   const findDropTarget = useCallback((node: Node): OrgLayoutNode | null => {
     // A ghost stub has the type of a role but is a change, not a seat: a drop
@@ -560,7 +565,7 @@ function OrgGraphInner(props: OrgGraphProps) {
           zoomable
           position="bottom-right"
           nodeStrokeWidth={0}
-          nodeColor={(n) => n.type === "person" || n.type === "goal" || n.type === "company" ? "var(--sol-cyan)" : n.type === "role" || n.type === "owner" ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
+          nodeColor={(n) => n.type === "person" || n.type === "goal" || n.type === "company" ? "var(--sol-cyan)" : n.type === "role" || n.type === "owner" ? "var(--sol-violet)" : n.type === "loose" ? "transparent" : "color-mix(in srgb, var(--sol-border) 60%, transparent)"}
           maskColor="color-mix(in srgb, var(--sol-bg) 70%, transparent)"
           style={{ background: "var(--sol-bg-alt)", border: "1px solid color-mix(in srgb, var(--sol-border) 40%, transparent)", borderRadius: 10 }}
         />
@@ -568,35 +573,6 @@ function OrgGraphInner(props: OrgGraphProps) {
     </ReactFlow>
     {chrome && <EdgeCue side="left" hidden={edgeCue.left} onPan={panTo} offset={0} />}
     {chrome && <EdgeCue side="right" hidden={edgeCue.right} onPan={panTo} offset={panelWidth} />}
-    {editing && (
-      <EditChangePopover
-        change={editing.change}
-        at={editing.at}
-        wrap={wrapRef.current}
-        onCancel={() => setEditing(null)}
-        onAccept={(edits) => { setEditing(null); onEditAccept?.(editing.change._id, edits); }}
-      />
-    )}
-    </div>
-  );
-}
-
-/** The inline edit for a non-role change (org-staffing.md S5), floated next
- *  to the Edit click and kept inside the canvas. The pane's own form. */
-function EditChangePopover({ change, at, wrap, onCancel, onAccept }: { change: OrgProposalChange; at: { x: number; y: number }; wrap: HTMLDivElement | null; onCancel: () => void; onAccept: (edits: Record<string, unknown>) => void }) {
-  const W = 300;
-  const box = wrap?.getBoundingClientRect() ?? { left: 0, top: 0, width: W + 32, height: 600 };
-  const left = Math.max(8, Math.min(at.x - box.left - W / 2, box.width - W - 8));
-  const top = Math.max(8, Math.min(at.y - box.top + 12, box.height - 260));
-  return (
-    <div
-      className="absolute z-30 rounded-xl border shadow-xl org-pop-in"
-      style={{ left, top, width: W, background: "var(--sol-card)", borderColor: "color-mix(in srgb, var(--sol-violet) 45%, transparent)" }}
-      data-edit-popover={change._id}
-      onPointerDown={(e) => e.stopPropagation()}
-    >
-      <div className="px-3 pt-2.5 pb-1 text-[12px] font-medium leading-snug" style={{ color: "var(--sol-text)" }}>{changeLine(change.change)}</div>
-      <EditChangeForm change={change} onCancel={onCancel} onAccept={onAccept} />
     </div>
   );
 }
@@ -640,18 +616,24 @@ function EdgeCue({ side, hidden, onPan, offset }: { side: "left" | "right"; hidd
   );
 }
 
-/** The goals lens as React Flow nodes: nothing drags, a card carries its own ghost. */
+/** The goals outline as React Flow nodes: nothing drags, a card carries its own ghost. */
 function goalsFlowNodes(goals: GoalsLayout, selectedId: string | null, ghosts: GhostHandlers): Node[] {
   return goals.nodes.map((n) => {
-    // The card showing the focused change's action strip rises over the tight row beneath it.
-    const focused = !!ghosts.focusChangeId && (n.kind === "goal" ? !!goalFocusedChange(ghosts.focusChangeId, n.goal.ghost, n.goal.chips) : n.kind === "project" ? n.project.ghost?.kind === "initiative_projects" && !!goalFocusedChange(ghosts.focusChangeId, n.project.ghost) : false);
+    // The card carrying the change in focus is lit the way a selected one is, and rises over the tight row beneath it.
+    // A new goal's own project rows share its change: the goal is lit, not every row; a row an initiative_projects change added is lit on its own.
+    const f = ghosts.focusChangeId;
+    const focused = !!f && (n.kind === "goal" ? !!goalFocusedChange(f, n.goal.ghost, n.goal.chips)
+      : n.kind === "project" ? n.project.ghost?.kind === "initiative_projects" && !!goalFocusedChange(f, n.project.ghost)
+      : n.kind === "owner" ? n.ghost?.change_id === f || n.retire?.change_id === f || n.move?.change_id === f || !!n.chips?.some((c) => c.change_id === f)
+      : false);
     const base = { id: n.id, type: n.kind, position: { x: n.x, y: n.y }, width: n.w, height: n.h, draggable: false, selectable: true, connectable: false, zIndex: focused ? 10 : 2 };
-    const selected = n.id === selectedId;
+    const selected = n.id === selectedId || focused;
     switch (n.kind) {
-      case "company": return { ...base, data: { selected, name: n.name, goals: n.goals, projects: n.projects } };
-      case "goal": return { ...base, data: { selected, goal: n.goal, metrics: n.metrics, rows: n.rows, refs: n.refs, running: n.running, ...ghosts } };
-      case "project": return { ...base, data: { selected, project: n.project, ...ghosts } };
-      case "owner": return { ...base, data: { selected, owner: n.owner, owns: n.owns, line: n.line } };
+      case "company": return { ...base, data: { selected, name: n.name, goals: n.goals, projects: n.projects, mission: n.mission } };
+      case "loose": return { ...base, data: { selected, projects: n.projects } };
+      case "goal": return { ...base, data: { selected, goal: n.goal, metrics: n.metrics, rows: n.rows, refs: n.refs, running: n.running, mission: n.mission, root: n.root, hasChildren: n.hasChildren, ...ghosts } };
+      case "project": return { ...base, data: { selected, project: n.project, counts: n.counts, ...ghosts } };
+      case "owner": return { ...base, data: { selected, owner: n.owner, owns: n.owns, line: n.line, counts: n.counts, reportsTo: n.reportsTo, ghost: n.ghost, retire: n.retire, move: n.move, was: n.was, chips: n.chips, ...ghosts } };
     }
   });
 }
