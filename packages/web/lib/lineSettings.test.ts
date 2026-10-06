@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
-import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
+import { LINE_FIELDS, LINE_STATION_SETTINGS, LINE_SETTINGS_SECTIONS, applyLineEdits, editKey, lineSettingsHref, lineSettingsTarget, commandNote, editForField, editOutcome, lineValue, lineWriteGate } from "./lineSettings";
 
 const field = (key: string) => LINE_FIELDS.find((f) => f.key === key)!;
 
@@ -69,6 +69,16 @@ describe("applyLineEdits", () => {
     expect(lp.finders.map((f) => f.id)).toEqual(["sentry-web"]);
   });
 
+  test("a station edit paints the repo's line (LX5) and keys its state by station", () => {
+    const lp = profile();
+    const edit = { op: "set_station", station: "prove", timeout: 600 } as const;
+    applyLineEdits(lp, [edit]);
+    expect(lp.line!.nodes.find((n) => n.id === "prove")!.timeout).toBe(600);
+    expect(lp.finders.map((f) => f.id)).toEqual(["sentry-web"]);
+    expect(editKey(edit)).toBe("stations.prove");
+    expect(editKey({ op: "reset_station", station: "red" })).toBe("stations.red");
+  });
+
   test("an older row without values reads the defaults", () => {
     expect(lineValue({ finders: [], changed_at: 1 }, "commands.check")).toBe("cast ws check");
     expect(lineValue({ finders: [], changed_at: 1 }, "commands.ship")).toBeNull();
@@ -93,6 +103,7 @@ describe("editOutcome", () => {
     expect(editOutcome({ executed_at: 1, error: "/src/app/.codecast/line.toml: [line] size_budget must be a positive integer" })).toEqual({ state: "refused", message: "size_budget must be a positive integer" });
     expect(editOutcome({ executed_at: 1, error: "expired_ttl" })).toMatchObject({ state: "refused", message: expect.stringMatching(/within 5 minutes.*Nothing reached the file/) });
     expect(editOutcome({ executed_at: 1, error: "Unknown command: line_profile_edit" })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast/) });
+    expect(editOutcome({ executed_at: 1, error: 'unknown edit op "set_station" (ops: set, remove, set_finder, remove_finder)' })).toMatchObject({ state: "refused", message: expect.stringMatching(/older cast that cannot edit the line's stations/) });
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: true } }) })).toEqual({ state: "saved" });
     expect(editOutcome({ executed_at: 1, result: JSON.stringify({ changed: true, published: { ok: false, detail: "no project" } }) })).toMatchObject({ state: "saved", note: expect.stringMatching(/republish failed: no project/) });
     // A daemon that republishes after it answers: written, and the row follows.

@@ -13,6 +13,7 @@ import { permissionsSig } from "@codecast/shared/contracts/mods";
 import { useModHostVersion, useModRows } from "../../lib/mods/useMods";
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
+import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
 
 function Chip({ icon, children }: { icon: string; children: React.ReactNode }) {
   return (
@@ -144,6 +145,7 @@ export function ModsPage() {
         </div>
         {rows.length ? <span className="ml-auto font-mono text-[12px] text-sol-text-dim">cast mod new &lt;name&gt;</span> : null}
       </header>
+      <FeatureUpsell slug="mods" className="mb-5" reason="Ask an agent for a view or tool codecast does not have, and watch it get built right in the conversation." />
       {!rows.length ? <EmptyMods /> : null}
       {mine.length ? (
         <section className="grid gap-3 md:grid-cols-2">

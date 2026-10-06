@@ -5,6 +5,7 @@
 
 import { isCommandMessage, isStrippedCommand, parseBashInput, parseBashOutput, cleanContent, isSystemMessage } from "./conversationProcessor";
 import { cleanUserMessage, isBareNudge, isSpawnedTaskPrompt } from "../components/sessionMessage";
+import { isTurnInterruptionNotice } from "@codecast/shared/contracts";
 
 // A slash command ("/model opus") and `!` bash mode are the human talking to
 // their client, not to the agent. Both are stored as tag soup
@@ -25,7 +26,7 @@ function isClientCommand(raw: string): boolean {
 // source (timeline, cached user list, last-message fallback) must agree, so
 // they all go through here.
 export function stickyPromptContent(raw: string | null | undefined): string | null {
-  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw)) return null;
+  if (!raw || isSpawnedTaskPrompt(raw) || isClientCommand(raw) || isTurnInterruptionNotice(raw)) return null;
   const display = cleanUserMessage(raw);
   return display && !isBareNudge(display) ? display : null;
 }

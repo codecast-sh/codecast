@@ -9,6 +9,7 @@
 //   cast line profile [--json] [--publish]
 //   cast line set <key> <value...> | unset <key> [--no-publish] [--json]
 //   cast line finder set <id> [--source] [--kind] [--fingerprint] [--runs] [--project] | rm <id>
+//   cast line station set <id> [--prompt-file] [--script-file] [--timeout] | reset <id>
 //   cast line profile --starter --project <name> [--team <name>] [--write]
 //   cast line eval-result --reps <reps.json> --out <eval-result.json> [--json]
 import fs from "node:fs";
@@ -20,8 +21,9 @@ import { fmt } from "./colors.js";
 import { findLineProfile, formatLineProfile, LINE_PROFILE_REL_PATH, LineProfileError, loadLineProfile, starterLineProfile, type LineFinder, type ResolvedLineProfile } from "./lineProfile.js";
 import { runLineProfileEdit, type LineProfileEditReply, type PublishOutcome } from "./lineProfileEdit.js";
 import { atomicWriteFile } from "./atomicWrite.js";
+import { publishedRepoLine } from "./repoLine.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
-import { LINE_VALUE_KINDS, parseLineValue, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineProfileFacts } from "@codecast/shared/contracts/lineProfile";
+import { LINE_VALUE_KINDS, parseLineValue, splitFinderKind, type LineFinderInput, type LineProfileEdit, type LineProfileFacts, type LineStationPatch } from "@codecast/shared/contracts/lineProfile";
 
 function fail(message: string, code = 2): never {
   console.error(fmt.error(message));
@@ -87,7 +89,10 @@ export function publishGroups(r: ResolvedLineProfile): { groups: PublishGroup[];
 export function publishFacts(r: ResolvedLineProfile): LineProfileFacts {
   const { finders: _finders, ...values } = r.profile;
   const file = r.file ? (r.root ? path.relative(r.root, r.file) : r.file) : null;
-  return { ...values, sources: r.sources, notes: r.notes, warnings: r.warnings, file };
+  // The repo's own line rides along when it has one (line-map.md LX5), so the
+  // app mirrors the graph and prompts the repo holds and the version a run records.
+  const line = publishedRepoLine(r.root);
+  return { ...values, sources: r.sources, notes: r.notes, warnings: r.warnings, file, ...(line ? { line } : {}) };
 }
 
 /**
@@ -162,7 +167,11 @@ function reportEdit(reply: LineProfileEditReply, keys: string[], json?: boolean)
   const { content: _content, ...rest } = reply;
   if (json) { console.log(JSON.stringify(rest, null, 2)); return; }
   for (const key of keys) {
-    if (key.startsWith("finders.")) {
+    if (key.startsWith("stations.")) {
+      const id = key.slice("stations.".length);
+      const l = reply.line;
+      console.log(!l?.changed ? `station ${id}  unchanged` : `station ${id}  ${l.stations.includes(id) ? "changed" : "unchanged"}  line ${l.graph_hash}${l.materialized ? `  (wrote the line out to ${path.dirname(l.file)})` : ""}`);
+    } else if (key.startsWith("finders.")) {
       const id = key.slice("finders.".length);
       const f = reply.profile.finders.find((x) => x.id === id);
       console.log(f ? `finder ${f.id}  ${f.source}  ${f.kind === "any" ? "any" : f.kind.join(", ")}  ${f.fingerprint}${f.runs ? `  runs ${f.runs}` : ""}` : `finder ${id}  removed`);
@@ -170,10 +179,11 @@ function reportEdit(reply: LineProfileEditReply, keys: string[], json?: boolean)
       console.log(`${key} = ${valueText(getPath(reply.profile, key))}  (${reply.sources[key] ?? "default"})`);
     }
   }
-  if (!reply.changed) console.log(fmt.muted(`unchanged: ${reply.file}`));
-  else if (!reply.published) console.log(fmt.muted(`wrote ${reply.file}; not published`));
-  else if (reply.published.ok === true) console.log(fmt.muted(`wrote ${reply.file}; published`));
-  else console.log(fmt.warning(`wrote ${reply.file}; the publish failed: ${reply.published.detail ?? "no detail"}`));
+  const wrote = reply.line?.changed ? reply.line.file : reply.file;
+  if (!reply.changed) console.log(fmt.muted(`unchanged: ${wrote}`));
+  else if (!reply.published) console.log(fmt.muted(`wrote ${wrote}; not published`));
+  else if (reply.published.ok === true) console.log(fmt.muted(`wrote ${wrote}; published`));
+  else console.log(fmt.warning(`wrote ${wrote}; the publish failed: ${reply.published.detail ?? "no detail"}`));
   for (const w of reply.warnings) console.log(fmt.warning(w));
 }
 
@@ -239,6 +249,39 @@ export function registerLineProfileCommands(line: Command, deps: PublishDeps): v
     .option("--json", "Machine-readable output")
     .action(async (id: string, options: { publish?: boolean; json?: boolean }) => {
       await run([{ op: "remove_finder", id }], options, [`finders.${id}`]);
+    });
+
+  // The repo's own line (line-map.md LX5): one station's prompt, script or
+  // timeout, through the same checked edit as the app's, then published.
+  const station = line.command("station").description("Change one station of this repo's own line (.codecast/line/), written out from the shipped line the first time; checked before it is written, then published");
+  station
+    .command("set <id>")
+    .description("Set a station's prompt, script or timeout; only the parts given change")
+    .option("--prompt-file <path>", "The station's prompt, from a file (- reads stdin)")
+    .option("--script-file <path>", "The station's script, from a file (- reads stdin)")
+    .option("--timeout <minutes>", "How long the station may run, in minutes (0 removes the limit)")
+    .option("--no-publish", "Write the files only")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string, options: { promptFile?: string; scriptFile?: string; timeout?: string; publish?: boolean; json?: boolean }) => {
+      const readText = (p: string) => fs.readFileSync(p === "-" ? 0 : p, "utf8");
+      const edit: { op: "set_station"; station: string } & LineStationPatch = { op: "set_station", station: id };
+      if (options.promptFile !== undefined) edit.prompt = readText(options.promptFile);
+      if (options.scriptFile !== undefined) edit.script = readText(options.scriptFile);
+      if (options.timeout !== undefined) {
+        const m = Number(options.timeout);
+        if (!Number.isFinite(m) || m < 0) fail("--timeout is minutes, 0 or more");
+        edit.timeout = m > 0 ? Math.round(m * 60) : null;
+      }
+      if (Object.keys(edit).length === 2) fail("say what changes: --prompt-file, --script-file or --timeout");
+      await run([edit], options, [`stations.${id}`]);
+    });
+  station
+    .command("reset <id>")
+    .description("Put a station back to the shipped line's prompt, script and timeout")
+    .option("--no-publish", "Write the files only")
+    .option("--json", "Machine-readable output")
+    .action(async (id: string, options: { publish?: boolean; json?: boolean }) => {
+      await run([{ op: "reset_station", station: id }], options, [`stations.${id}`]);
     });
 
   line

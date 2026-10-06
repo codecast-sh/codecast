@@ -241,3 +241,13 @@ describe("deepLinkSessionId — what a desktop deep link selects in place", () =
     expect(deepLinkSessionId(`/conversation/${id}?share=tok`)).toBeNull();
   });
 });
+
+describe("pathLabel — goals, under the new address and the old one", () => {
+  it("names a goal by its in-N and the list as Goals", () => {
+    expect(pathLabel("/goals/in-7")).toBe("Goal in-7");
+    expect(pathLabel("/initiatives/in-7")).toBe("Goal in-7");
+    expect(pathLabel("/initiatives/IN-7?tab=tasks")).toBe("Goal in-7");
+    expect(pathLabel("/goals")).toBe("Goals");
+    expect(pathLabel("/initiatives")).toBe("Goals");
+  });
+});

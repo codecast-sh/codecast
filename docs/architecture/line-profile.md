@@ -52,6 +52,10 @@ ship  = "bun outreach/backend/scripts/line.ts ship --task $task_id --branch $bra
 [line.caps]
 cards = 5                            # open cards per person, across their lines
 
+[line.merge]                         # what Ship does once a pull request is green
+auto = false                         # true: Ship on a task or session merges too
+method = "squash"                    # squash | merge | rebase
+
 [[line.finders]]                     # what this project listens to (LP3)
 id = "invariants"
 source = "union.invariant"

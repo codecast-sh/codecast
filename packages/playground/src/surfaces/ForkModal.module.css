@@ -1,0 +1,16 @@
+.modal { width: 440px; max-width: 100%; }
+.body { padding: 28px; display: flex; flex-direction: column; gap: var(--s4); }
+.title { font: 400 30px/1 var(--display); }
+.lede { font: 500 15px/1.4 var(--ui); }
+.input {
+  width: 100%; background: var(--paper); border: var(--line); border-radius: var(--r-md);
+  padding: 10px 14px; font: 700 20px var(--ui);
+}
+.input:focus-visible { box-shadow: var(--focus); }
+.error { background: var(--tomato-soft); border: var(--line); border-radius: var(--r-sm); padding: 6px 12px; font: 700 13px var(--ui); }
+.actions { display: flex; gap: var(--s3); }
+@media (max-width: 767px) {
+  .body { padding: 28px 20px; min-height: 100%; }
+  .actions { margin-top: auto; }
+  .actions > * { flex: 1; }
+}

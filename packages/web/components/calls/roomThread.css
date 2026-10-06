@@ -786,3 +786,110 @@ button.rt-event-agent:hover {
     animation: none;
   }
 }
+
+/* ── Tasks pulled from the call ─────────────────────────────────────────── */
+
+.rt-tasks {
+  margin: 0 0 12px;
+  padding: 8px 10px 8px 28px;
+  border-radius: 10px;
+  border: 1px solid var(--sol-border);
+}
+.rt-tasks-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.rt-tasks-head .rt-recap-items-label {
+  margin-bottom: 0;
+}
+.rt-tasks-add,
+.rt-item-make {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--rt-secondary);
+  color: var(--sol-text-muted);
+  border-radius: 6px;
+  transition: color 120ms, background 120ms;
+}
+.rt-tasks-add {
+  padding: 2px 6px;
+}
+.rt-tasks-add:hover,
+.rt-item-make:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+.rt-tasks-empty {
+  font-size: var(--rt-secondary);
+  color: var(--sol-text-muted);
+}
+.rt-task {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--rt-body);
+  line-height: var(--rt-body-lh);
+}
+.rt-task-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--sol-text);
+}
+.rt-task-link:hover {
+  color: var(--sol-blue);
+}
+.rt-task-id {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--sol-text-muted);
+  flex-shrink: 0;
+}
+.rt-task-unlink {
+  flex-shrink: 0;
+  padding: 2px;
+  border-radius: 4px;
+  color: var(--sol-text-dim);
+  opacity: 0;
+  transition: opacity 120ms, color 120ms;
+}
+.rt-task:hover .rt-task-unlink,
+.rt-task-unlink:focus-visible {
+  opacity: 1;
+}
+.rt-task-unlink:hover {
+  color: var(--sol-red);
+}
+/* An action item's way to a task: quiet until the row is hovered; once
+   made, the task's id stays beside the item. */
+.rt-item-make {
+  margin-left: 6px;
+  padding: 0 4px;
+  vertical-align: middle;
+  opacity: 0;
+}
+.rt-recap-items li:hover .rt-item-make,
+.rt-item-make:focus-visible {
+  opacity: 1;
+}
+.rt-item-task {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  color: var(--sol-green);
+}
+@media (hover: none) {
+  .rt-item-make,
+  .rt-task-unlink {
+    opacity: 1;
+  }
+}

@@ -3,6 +3,7 @@ import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionStartupState } from "../../lib/sessionLifecycle";
+import { isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
@@ -67,6 +68,11 @@ export function AssignedPingStrip({
  *  heartbeat until its first message, so elapsed time is the fallback rather
  *  than a spinner that never ends. */
 export function CardStartupLine({ session }: { session: InboxSession }) {
+  // A hosted conversation has no machine to connect: it is getting started
+  // until its first reply, in the words its status line uses.
+  if (isHostedAgentType(session.agent_type)) {
+    return <div className="mt-0.5 text-[11px] text-sol-text-dim">Getting started…</div>;
+  }
   const startup = sessionStartupState({
     isConnected: session.is_connected,
     ageMs: Date.now() - (session.started_at || session.updated_at),
@@ -86,7 +92,7 @@ export function CardStartupLine({ session }: { session: InboxSession }) {
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
         </svg>
-        <span>Starting...</span>
+        <span>Starting…</span>
       </div>
     );
   }
@@ -161,6 +167,10 @@ export function CardStatusSignals({
   isPendingWorking: boolean;
   isRowRestarting: boolean;
 }) {
+  // A hosted row says its state in its section; its dot is the engine's work
+  // (working or thinking), never a liveness heartbeat that outlives the
+  // reply, and a send in flight is not a "pending" chip.
+  const hosted = isHostedAgentType(session.agent_type);
   return (
     <>
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
@@ -177,7 +187,7 @@ export function CardStatusSignals({
                 staleness-aware) rather than the raw is_idle flag, so a frozen
                 is_idle:false row that's really finished shows idle, not nothing. */}
             {!isWorking && !isLive && !dismissed && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Session idle" />
+              <span data-sv-idle-dot className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Idle" />
             )}
             {/* A kill+restart owns the row's signal while it runs: the re-pended
                 message and the not-yet-live status are both part of the restart,
@@ -189,13 +199,13 @@ export function CardStatusSignals({
                 restarting
               </span>
             )}
-            {isPendingWorking && !isRowRestarting && (
+            {isPendingWorking && !isRowRestarting && !hosted && (
               <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/30" title="Sent — waiting to confirm delivery">
                 <span className="w-1 h-1 rounded-full bg-sol-yellow animate-pulse" />
                 pending
               </span>
             )}
-            {(isWorking || isLive) && !isPendingWorking && !isRowRestarting && !showBlockedBadge && (
+            {(hosted ? isWorking || isPendingWorking : (isWorking || isLive) && !isPendingWorking) && !isRowRestarting && !showBlockedBadge && (
               <span className="relative flex h-2 w-2" title="Working">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sol-green opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />

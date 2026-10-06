@@ -69,7 +69,7 @@ describe("org.where", () => {
     const text = orgContextBlock(w);
     expect(text).toContain("The role that answers for this work: @seo (SEO lead), reporting to @growth → Ashot.");
     expect(text).toContain("@head-of-people Head of People · reports to Sam · looks after whatever no narrower role covers");
-    expect(text).toContain("Most things go sideways, not up.");
+    expect(text).toContain("Two kinds of instruction reach you");
   });
 
   test("a spawned worker bound to nothing sits under no role, whatever its folder, and names its lead", async () => {

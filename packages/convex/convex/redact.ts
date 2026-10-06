@@ -5,7 +5,10 @@ const API_KEY_PATTERNS = [
   /api[_-]?key[=:]\s*["']?[a-zA-Z0-9_-]{20,}["']?/gi,
   /Bearer\s+[a-zA-Z0-9._-]{20,}/g,
   /AKIA[A-Z0-9]{16}/g,
-  /(?:^|[^a-zA-Z])[a-zA-Z_]*(?:_SECRET|_TOKEN|_KEY|_PASSWORD|_CREDENTIAL|API_KEY|SECRET_KEY)[a-zA-Z_]*[=:]\s*["']?[^\s"']{8,}["']?/gi,
+  // A right hand side that is already a redaction marker (the CLI's
+  // `[redacted:known:NAME]`, or this function's own output) is not a secret:
+  // matching it would replace a labeled marker with an unlabeled one.
+  /(?:^|[^a-zA-Z])[a-zA-Z_]*(?:_SECRET|_TOKEN|_KEY|_PASSWORD|_CREDENTIAL|API_KEY|SECRET_KEY)[a-zA-Z_]*[=:]\s*["']?(?!\[redacted:|\[REDACTED)[^\s"']{8,}["']?/gi,
   /-----BEGIN\s+(?:RSA\s+)?(?:PRIVATE|PUBLIC)\s+KEY-----[\s\S]*?-----END\s+(?:RSA\s+)?(?:PRIVATE|PUBLIC)\s+KEY-----/g,
   /ghp_[a-zA-Z0-9]{36}/g,
   /gho_[a-zA-Z0-9]{36}/g,

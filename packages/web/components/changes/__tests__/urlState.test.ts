@@ -26,6 +26,7 @@ const FULL = {
   risk: true,
   q: "fix sync",
   story: "s_9f3a1c0e7b2d",
+  zoom: "weeks",
 } satisfies Required<ChangesUrl>;
 
 /** One view per field: the default view with just that field set as in FULL. */
@@ -62,7 +63,7 @@ describe("the Changes URL round trip", () => {
 
   test("the string is canonical: equal views share one link whatever order they were built in", () => {
     const a = serializeChangesUrl({ ...FULL, areas: ["web", "cli", "convex"] });
-    const b = serializeChangesUrl(read("story=s_9f3a1c0e7b2d&q=fix+sync&surface=desktop&waiting=1&risk=1&branches=all&person=jd7a1b2c3d4e5f6g7h8j9k0&area=web,cli,convex&w=2026-W40&d=2026-10-02&repo=codecast-sh/codecast"));
+    const b = serializeChangesUrl(read("zoom=weeks&story=s_9f3a1c0e7b2d&q=fix+sync&surface=desktop&waiting=1&risk=1&branches=all&person=jd7a1b2c3d4e5f6g7h8j9k0&area=web,cli,convex&w=2026-W40&d=2026-10-02&repo=codecast-sh/codecast"));
     expect(a).toBe(b);
     expect(a).toBe(serializeChangesUrl(FULL));
   });

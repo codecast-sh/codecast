@@ -438,12 +438,27 @@ describe("(e) every param-free signed-in route is a cast app surface", () => {
   });
 });
 
-describe("the simple lane's paths are routes", () => {
-  it("every LANE_PATHS entry, Stripe's return page included, has a ROUTES entry", async () => {
-    const { LANE_PATHS } = await import("../components/simple/lanePaths");
+describe("the simple lane's old addresses lead to routes", () => {
+  // A route pattern as a matcher: `:param` takes one segment, a trailing `*` the rest.
+  const matches = (path: string, href: string) =>
+    new RegExp(`^${routeHref(path).replace(/\/\*$/, "(?:/.*)?").replace(/:[^/]+/g, "[^/]+")}$`).test(href);
+  const served = (href: string) => ROUTES.some((r) => r.component !== null && matches(r.path, href)) || href.startsWith("/settings/");
+
+  it("every lane address is served by the redirect, and each redirect target by a page", async () => {
+    const { LANE_PATHS, conversationPath } = await import("../components/simple/lanePaths");
+    const { laneRedirectTarget } = await import("../lib/laneRedirect");
+    const lanePages = Object.values(LANE_PATHS).filter((p) => p !== LANE_PATHS.welcome).concat(conversationPath("jx7abc"));
+    for (const href of lanePages) {
+      expect({ href, redirected: ROUTES.some((r) => r.path === "simple/*" && matches(r.path, href)) }).toEqual({ href, redirected: true });
+      const to = laneRedirectTarget(href)!.split("?")[0];
+      expect({ href, to, served: served(to) }).toEqual({ href, to, served: true });
+    }
+    expect(served(LANE_PATHS.welcome)).toBe(true);
+  });
+
+  it("Stripe's return page opens a settings section", async () => {
     const { BILLING_RETURN } = await import("@codecast/shared/contracts/assistant");
-    const hrefs = new Set(ROUTES.map((r) => routeHref(r.path)));
-    for (const path of Object.values(LANE_PATHS)) expect(hrefs.has(path)).toBe(true);
-    expect(hrefs.has(BILLING_RETURN.path)).toBe(true);
+    const { settingsSectionForPath } = await import("../lib/settingsSections");
+    expect(settingsSectionForPath(BILLING_RETURN.path)?.section).toBe("plan");
   });
 });

@@ -6,6 +6,16 @@ import { DocDates } from "../DocDates";
 import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { getLabelColor } from "../../lib/labelColors";
+import { useHostedMode } from "../../lib/surfaces";
+import { sessionCardTitle } from "../../lib/sessionCard";
+import { stripMarkdown } from "@codecast/shared/contracts/plainText";
+
+/** A note's first words after its title, as one line. */
+function noteSnippet(content: string | undefined, title: string): string {
+  const text = stripMarkdown((content ?? "").slice(0, 600)).replace(/\s+/g, " ").trim();
+  const body = text.startsWith(title) ? text.slice(title.length).trim() : text;
+  return body.slice(0, 160);
+}
 
 export function DocRow({ doc, onStar }: {
   doc: DocItem;
@@ -18,6 +28,34 @@ export function DocRow({ doc, onStar }: {
 }) {
   const cfg = docTypeStyle(doc.doc_type);
   const title = (doc as any).display_title || doc.title || "Untitled";
+  // Hosted mode lists notes as a reader would: the title over a line of what
+  // it says and the conversation it came from, with no type dot or tag
+  // (every hosted note is a note).
+  const hosted = useHostedMode();
+  const source = useInboxStore((s) => {
+    const id = hosted ? (doc as any).conversation_id : undefined;
+    const row = id ? s.sessions[id] ?? s.conversations[id] : undefined;
+    return row ? sessionCardTitle(row as any) : null;
+  });
+  if (hosted) {
+    const snippet = noteSnippet(doc.content, title);
+    return (
+      <>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-sol-text">{title}</span>
+          {(snippet || source) && (
+            <span data-cc-note-snippet className="mt-0.5 block truncate text-[12px] text-sol-text-dim">
+              {snippet}
+              {snippet && source ? " · " : null}
+              {source ? <span className="text-sol-text-dim/80">From {source}</span> : null}
+            </span>
+          )}
+        </span>
+        {doc.pinned && <Star aria-label="Starred" className="h-3 w-3 shrink-0 fill-current text-sol-yellow" />}
+        <DocDates doc={doc} className="text-xs text-gray-500 flex-shrink-0 cq-hide-minimal" />
+      </>
+    );
+  }
 
   return (
     <>
