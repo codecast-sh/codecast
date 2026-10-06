@@ -119,7 +119,8 @@ function world() {
     mock.module("../../../hooks/useProjectLead", () => ({ useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
     const realRetire = { ...(await import("../../../lib/retireRole")) };
     mock.module("../../../lib/retireRole", () => ({ ...realRetire, retireToastText: () => "retired" }));
-    mock.module("../OrgScopePanel", () => ({ DocRow: () => null, InlineEdit: () => null }));
+    const realScopeEditors = { ...(await import("./ScopeEditors")) };
+    mock.module("./ScopeEditors", () => ({ ...realScopeEditors, DocRow: () => null, InlineEdit: () => null }));
     mock.module("../../ConversationList", () => ({ AgentIcon: ({ agentType }: any) => React.createElement("i", { "data-agent": agentType }) }));
     mock.module("../../DocumentDetailLayout", () => ({ DocumentDetailLayout: () => null }));
     mock.module("../../tools/MarkdownRenderer", () => ({ MarkdownRenderer: ({ content }: any) => React.createElement("div", null, content), MarkdownBlocks: ({ content }: any) => React.createElement("div", null, content) }));
