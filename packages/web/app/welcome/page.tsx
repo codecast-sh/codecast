@@ -1,19 +1,22 @@
 // /welcome: where someone new to codecast starts (plan pl-840 onboarding,
-// docs/architecture/hosted-assistant.md). Three screens: sign in, connect
-// mail and calendar, and the first useful thing, which starts a conversation and lands
-// in it in the simple lane. Which screen shows is onboarding.ts welcomeStep;
+// docs/architecture/hosted-assistant.md). Two steps: sign in (with its email
+// form inline, EmailStep), then the first useful thing, which starts a
+// conversation and lands in it in the main app in hosted mode. Connecting mail
+// and calendar is a side screen opened from Start, so nobody meets an outside
+// consent screen before seeing an answer. Which screen shows is onboarding.ts welcomeStep;
 // a move between screens runs as one view transition (the orb glides, the old
 // screen leaves the way the person is heading, the new one rises in order).
 //
 // Mail and calendar connect through Whisk, the family's mail app, and the
 // connect comes back here (convex/whisk.ts WHISK_RETURN_PATHS), so it always
 // mounts ConnectNotice, which says how it went. Anyone who acts here
-// (connects, skips, or starts) is moved to the simple lane
+// (connects, skips, or starts) is moved to hosted mode
 // (`client_state.ui.lane`).
+import { LogoMark } from "../../components/Logo";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { flushSync } from "react-dom";
 import { Link, useNavigate, useSearchParams } from "react-router";
-import { ArrowRight, ArrowUpRight, CalendarDays, Check, Mail, ShieldCheck } from "lucide-react";
+import { ArrowRight, CalendarDays, Check, Mail, ShieldCheck } from "lucide-react";
 import type { OAuthProviderId } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { AuthProviderButtons } from "../../components/AuthProviderButtons";
@@ -23,19 +26,22 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useInboxStore } from "../../store/inboxStore";
-import { MAIL_COMING, assistantPromise, useConnectAvailable } from "../../components/simple/assistantPromise";
+import { ASSISTANT_HEADLINE, MAIL_COMING, THINKING_DOWN, assistantPromise, useConnectAvailable, useThinkingAvailable } from "../../components/simple/assistantPromise";
 import { Composer } from "../../components/simple/Composer";
 import { ConnectNotice } from "../../components/simple/ConnectNotice";
 import { calendarAbility, disconnectNote, emailAbility } from "../../components/simple/connectionWords";
 import { LaneSync } from "../../components/simple/LaneSync";
-import { ASK_FIRST, LANE_COPY, LANE_PATHS, conversationPath, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
-import { laneOf, writeLane } from "../../components/simple/lanePref";
+import { ASK_FIRST, LANE_COPY, LANE_PATHS, firstAsks, plainConnectError, type MailAbilities } from "../../components/simple/lane";
+import { HOSTED_HOME, WELCOME_ASK_PARAM, hostedConversationPath } from "../../components/simple/lanePaths";
+import { isHostedUi, writeLane } from "../../components/simple/lanePref";
 import { Service } from "../../components/simple/Service";
-import { startConversationWith } from "../../components/simple/startConversation";
+import { startHostedConversation } from "../../lib/startHostedConversation";
 import "../../components/simple/laneLook";
 import { useLaneDocumentTitle } from "../../components/simple/useLaneTitle";
 import { useLaneMail } from "../../components/simple/useLaneMail";
-import { SKIP_PARAM, SKIP_VALUE, stepDirection, welcomeStep, welcomeTrail, type WelcomeStep } from "./onboarding";
+import { EMAIL_PARAM, EmailStep, emailMode, emailStepPath } from "./EmailStep";
+import { CONNECT_VALUE, STEP_PARAM, WELCOME_TRAIL, stepDirection, trailStep, welcomeStep, type WelcomeStep } from "./onboarding";
+import { WHISK_GLYPH, WhiskWordmark } from "../../components/simple/WhiskWordmark";
 import "../../components/simple/simple.css";
 import "./welcome.css";
 
@@ -52,7 +58,7 @@ const rise = (i: number) => ({ ["--i" as any]: i }) as CSSProperties;
 /** Moving to the lane is what arriving through /welcome means, written the
  *  first time the person acts here. */
 function joinLane() {
-  if (laneOf(useInboxStore.getState().clientState?.ui) !== "simple") writeLane("simple");
+  if (!isHostedUi(useInboxStore.getState().clientState?.ui)) writeLane("simple");
 }
 
 /** Runs a screen change as a view transition where the browser has one and
@@ -106,24 +112,26 @@ export default function Welcome() {
 
 // ── The frame every screen sits in ─────────────────────────────────────────
 
-function Frame({ step, trail, connected = false, children }: { step: WelcomeStep | null; trail: WelcomeStep[]; connected?: boolean; children: ReactNode }) {
-  const at = step ? trail.indexOf(step) : -1;
+function Frame({ step, connected = false, children }: { step: WelcomeStep | null; connected?: boolean; children: ReactNode }) {
+  const trail = WELCOME_TRAIL;
+  // The rail names every step while the page loads, with none marked yet.
+  const at = step ? trail.indexOf(trailStep(step)) : -1;
   return (
     <>
       <header className="wl-top">
-        <span className="sl-brand">
-          <span className="sl-brand-mark" aria-hidden />
-          <span>codecast</span>
+        {/* The app's own mark and name, as on codecast.sh and in the app; the
+            ring is the assistant's, on the stage below. */}
+        <span className="sl-brand wl-brand">
+          <LogoMark size={20} monochrome className="shrink-0" />
+          <span>Codecast</span>
         </span>
-        {at >= 0 ? (
-          <ol className="wl-rail" aria-label={`Step ${at + 1} of ${trail.length}: ${STEP_NAMES[trail[at]]}`}>
-            {trail.map((s, i) => (
-              <li key={s} className={i < at ? "is-done" : i === at ? "is-here" : undefined}>
-                <span className="wl-rail-name">{STEP_NAMES[s]}</span>
-              </li>
-            ))}
-          </ol>
-        ) : null}
+        <ol className="wl-rail" aria-label={at >= 0 ? `Step ${at + 1} of ${trail.length}: ${STEP_NAMES[trail[at]]}` : `${trail.length} steps`}>
+          {trail.map((s, i) => (
+            <li key={s} className={at < 0 ? undefined : i < at ? "is-done" : i === at ? "is-here" : undefined}>
+              <span className="wl-rail-name">{STEP_NAMES[s]}</span>
+            </li>
+          ))}
+        </ol>
       </header>
       <ConnectNotice success={CONNECT_WORDS.success} />
       <main className="wl-stage" data-step={step ?? "loading"}>
@@ -140,35 +148,65 @@ function Frame({ step, trail, connected = false, children }: { step: WelcomeStep
 function Orb({ step, connected = false }: { step: WelcomeStep | null; connected?: boolean }) {
   return (
     <div className="wl-orb" data-mood={step ?? "loading"} data-connected={connected ? "" : undefined} aria-hidden>
-      <span className="wl-orb-core" />
+      <span className="wl-orb-core"><LogoMark monochrome /></span>
       <span className="wl-orb-moon is-mail"><Mail size={14} strokeWidth={2.2} /></span>
       <span className="wl-orb-moon is-cal"><CalendarDays size={14} strokeWidth={2.2} /></span>
     </div>
   );
 }
 
+// ── The errand carried in from the marketing page ──────────────────────────
+
+const CARRIED_ASK_KEY = "codecast-welcome-ask";
+/** Longer than any ask the marketing page links, short enough to refuse a
+ *  pasted essay in a crafted link. */
+const CARRIED_ASK_MAX = 300;
+
+function keepCarriedAsk(ask: string | null) {
+  const text = ask?.trim();
+  if (!text || text.length > CARRIED_ASK_MAX) return;
+  try { sessionStorage.setItem(CARRIED_ASK_KEY, text); } catch {}
+}
+
+/** The errand from `?ask=` or kept across sign-in, or null. Read once, when
+ *  Start shows. */
+function takeCarriedAsk(): string | null {
+  keepCarriedAsk(new URLSearchParams(window.location.search).get(WELCOME_ASK_PARAM));
+  try { return sessionStorage.getItem(CARRIED_ASK_KEY); } catch { return null; }
+}
+
+function forgetCarriedAsk() {
+  try { sessionStorage.removeItem(CARRIED_ASK_KEY); } catch {}
+}
+
 // ── 1. Sign in ─────────────────────────────────────────────────────────────
 
 function SignedOut() {
   const { available } = useConnectAvailable();
+  const [params] = useSearchParams();
+  // A sign-in leaves the page and comes back to /welcome: the errand the
+  // person picked on the marketing page rides along in this tab's storage.
+  useMountEffect(() => { keepCarriedAsk(params.get(WELCOME_ASK_PARAM)); });
+  const email = emailMode(params.get(EMAIL_PARAM));
   return (
-    <Frame step="signin" trail={welcomeTrail(available)}>
+    <Frame step="signin">
       {/* Mail and calendar are promised only where they can be connected. */}
-      <SignIn mail={available === true} />
+      {email ? <EmailStep key={email} mode={email} /> : <SignIn mail={available === true} />}
     </Frame>
   );
 }
 
 function SignIn({ mail }: { mail: boolean }) {
   const google = useQueryNoThrow(api.auth.signInProviders, {}).data?.google === true;
-  const back = encodeURIComponent(LANE_PATHS.welcome);
-  // Google leads when the deployment has it; the other providers then sit
-  // quietly underneath. Without it, they are the way in.
+  // Ordered for someone who does not write code. Google leads when the
+  // deployment has it, with the other providers quiet underneath and email
+  // as a line. Without it Apple and email are the ways in, and GitHub, which
+  // means nothing to this reader, sits quietly last.
   const classFor = (id: OAuthProviderId) =>
-    id === "google" ? "wl-auth is-google" : google ? "wl-auth is-quiet" : "wl-auth";
+    id === "google" ? "wl-auth is-google" : google || id === "github" ? "wl-auth is-quiet" : "wl-auth";
   return (
     <section className="wl-screen" aria-labelledby="wl-signin-title">
-      <h1 id="wl-signin-title" className="sl-hello sl-rise" style={rise(1)}>An assistant for the busywork.</h1>
+      <h1 id="wl-signin-title" className="sl-hello sl-rise" style={rise(1)}>{ASSISTANT_HEADLINE}</h1>
       <p className="sl-lede sl-rise" style={rise(2)}>{assistantPromise(mail)}</p>
       <div className="sl-rise" style={rise(3)}>
         <AuthProviderButtons
@@ -177,23 +215,37 @@ function SignIn({ mail }: { mail: boolean }) {
           classFor={classFor}
           labelFor={(id, label) => (google && id !== "google" ? label : `Continue with ${label}`)}
           listClassName={google ? "wl-auth-list has-lead" : "wl-auth-list"}
-        />
+        >
+          {google ? null : (
+            <Link to={emailStepPath("signup")} className="wl-auth is-email">
+              <Mail size={19} aria-hidden />
+              Continue with email
+            </Link>
+          )}
+        </AuthProviderButtons>
       </div>
       <p className="wl-aside sl-rise" style={rise(4)}>
-        Or use your email:{" "}
-        <Link to={`/signup?return_to=${back}`}>create an account</Link>
-        {" or "}
-        <Link to={`/login?return_to=${back}`}>sign in</Link>.
+        {google ? (
+          <>
+            Or use your email: <Link to={emailStepPath("signup")}>create an account</Link>
+            {" or "}
+            <Link to={emailStepPath("signin")}>sign in</Link>.
+          </>
+        ) : (
+          <>
+            Already have an account? <Link to={emailStepPath("signin")}>Sign in with your email</Link>.
+          </>
+        )}
       </p>
     </section>
   );
 }
 
-// ── Signed in: connect, then start ─────────────────────────────────────────
+// ── Signed in: start, with connect beside it ───────────────────────────────
 
 function SignedIn() {
   const [params, setParams] = useSearchParams();
-  const skipped = params.get(SKIP_PARAM) === SKIP_VALUE;
+  const connecting = params.get(STEP_PARAM) === CONNECT_VALUE;
   const mail = useLaneMail(LANE_PATHS.welcome);
   const { available } = mail;
   const target = welcomeStep({
@@ -201,31 +253,35 @@ function SignedIn() {
     connectAvailable: available,
     connectionsKnown: mail.known,
     connected: mail.connected,
-    skipped,
+    connecting,
   });
-  const shown = useShownStep(target, mail.connected && !skipped);
-  const trail = welcomeTrail(available);
+  const shown = useShownStep(target, mail.connected);
 
   return (
-    <Frame step={shown} trail={trail} connected={mail.connected}>
+    <Frame step={shown} connected={mail.connected}>
       {shown === "connect" ? (
         <Connect
           mail={mail}
           onSkip={() => {
             joinLane();
-            setParams({ [SKIP_PARAM]: SKIP_VALUE });
+            setParams({});
           }}
         />
       ) : shown === "start" ? (
         <Start
           can={mail.connected ? mail.can : null}
-          // "Connect" goes back only for someone who skipped it here.
-          onConnect={available !== false && skipped && !mail.connected ? () => setParams({}) : null}
+          // Connect is offered only where the deployment has said it works.
+          onConnect={available === true && !mail.connected ? () => setParams({ [STEP_PARAM]: CONNECT_VALUE }) : null}
           // Where mail cannot be connected yet, say so once.
           mailComing={available === false}
         />
       ) : (
-        <p className="wl-wait" role="status">Getting things ready</p>
+        <div className="wl-skeleton" role="status">
+          <b className="sr-only">Getting things ready</b>
+          <span className="is-title" />
+          <span className="is-line" />
+          <span className="is-card" />
+        </div>
       )}
     </Frame>
   );
@@ -243,7 +299,7 @@ function Connect({ mail, onSkip }: { mail: ReturnType<typeof useLaneMail>; onSki
   return (
     <section className="wl-screen" aria-labelledby="wl-connect-title">
       <h1 id="wl-connect-title" className="sl-page-title sl-rise" style={rise(1)}>Bring in your mail and calendar</h1>
-      <p className="sl-lede sl-rise" style={rise(2)}>One step with Whisk, our mail app, and I can start on your week right away.</p>
+      <p className="sl-lede sl-rise" style={rise(2)}>One step with <WhiskWordmark />, our mail app, and I can start on your week right away.</p>
       <div className="sl-card wl-services sl-rise" style={rise(3)}>
         <Service icon={<Mail size={19} />} title={CONNECT_WORDS.email}>{emailAbility(null)}</Service>
         <Service icon={<CalendarDays size={19} />} title={CONNECT_WORDS.calendar}>{calendarAbility(null)}</Service>
@@ -273,7 +329,10 @@ function Connect({ mail, onSkip }: { mail: ReturnType<typeof useLaneMail>; onSki
                 void actions.connect();
               }}
             >
-              {CONNECT_WORDS.connect}
+              {/* Held on the way out too: a same-tab connect leaves the page
+                  once the server answers, and a press that seems to do nothing
+                  for seconds reads as broken. */}
+              {actions.busy || (opened && !error && !isDesktopShell()) ? CONNECT_WORDS.opening : <><span aria-hidden className="wl-whisk-glyph">{WHISK_GLYPH}</span>Connect with Whisk</>}
             </button>
             <button type="button" className="sl-btn is-no" onClick={onSkip}>Not now</button>
           </>
@@ -294,36 +353,51 @@ function Connect({ mail, onSkip }: { mail: ReturnType<typeof useLaneMail>; onSki
 
 function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onConnect: (() => void) | null; mailComing: boolean }) {
   const navigate = useNavigate();
-  const { lead, more } = firstAsks(can);
+  // An errand the person picked on the marketing page leads, ahead of the
+  // asks this step would offer.
+  const [carried] = useState(takeCarriedAsk);
+  const offered = firstAsks(can);
+  const lead = carried ?? offered.lead;
+  const more = carried ? [offered.lead, ...offered.more].filter((a): a is string => !!a && a !== carried).slice(0, offered.more.length) : offered.more;
   const [leaving, setLeaving] = useState<string | null>(null);
+  // Asks show only once the deployment says it can think; a no, or no
+  // answer in time, says so instead of offering asks that would only fail.
+  const thinking = useThinkingAvailable();
 
   // The conversation's code loads while the person reads, so the landing is instant.
   useMountEffect(() => {
-    void import("../../src/layouts/SimpleShell");
-    void import("../simple/c/[id]/page");
+    void import("../conversation/[id]/page");
   });
 
   const begin = (text: string) => {
     if (leaving) return;
+    forgetCarriedAsk();
     joinLane();
-    const id = startConversationWith(text);
+    const id = startHostedConversation(text);
     setLeaving(text);
-    window.setTimeout(() => navigate(conversationPath(id)), SEND_OFF_MS);
+    window.setTimeout(() => navigate(hostedConversationPath(id)), SEND_OFF_MS);
   };
 
   let i = 1;
   return (
     <section className="wl-screen" aria-labelledby="wl-start-title" data-leaving={leaving ? "" : undefined}>
       <h1 id="wl-start-title" className="sl-page-title sl-rise" style={rise(i++)}>
-        {lead ? "Let's start with your week" : "What can I take off your plate?"}
+        {carried ? "Let's start with what you picked" : lead ? "Let's start with your week" : "What can I take off your plate?"}
       </h1>
       <p className="sl-lede sl-rise" style={rise(i++)}>
-        {lead
+        {carried
+          ? "Tap it and I'll get going, or say it in your own words."
+          : lead
           ? "Here's a good first thing to ask. Tap it and I'll get going."
           : "Tap one to start, or say it in your own words."}
+        {/* What is missing is said once, in the same line, and never ahead of
+            an ask the person carried in. */}
+        {mailComing && !carried ? ` ${MAIL_COMING}` : null}
       </p>
-      {mailComing ? <p className="wl-aside wl-coming sl-rise" style={rise(i++)}>{MAIL_COMING}</p> : null}
-      {lead ? (
+      {thinking === false ? <p className="sl-callout is-sun sl-rise" role="status" style={rise(i++)}>{THINKING_DOWN}</p> : null}
+      {/* While no provider can think, the asks would only fail: the callout
+          above says so and the way into the app stays. */}
+      {thinking && lead ? (
         <button
           type="button"
           className="wl-lead sl-rise"
@@ -337,36 +411,42 @@ function Start({ can, onConnect, mailComing }: { can: MailAbilities | null; onCo
           </span>
         </button>
       ) : null}
-      <div className="wl-asks" role="list" aria-label={lead ? "Other things to ask" : "Things to ask"}>
-        {more.map((ask) => (
-          <button
-            key={ask}
-            type="button"
-            role="listitem"
-            className="wl-ask sl-rise"
-            style={rise(i++)}
-            data-sent={leaving === ask ? "" : undefined}
-            onClick={() => begin(ask)}
-          >
-            <span>{ask}</span>
-            <ArrowUpRight size={16} aria-hidden />
-          </button>
-        ))}
-      </div>
-      <div className="wl-own sl-rise" style={rise(i++)}>
-        <Composer placeholder="Or ask in your own words" onSend={begin} />
-      </div>
+      {thinking ? (
+        <div className="wl-asks" role="list" aria-label={lead ? "Other things to ask" : "Things to ask"}>
+          {more.map((ask) => (
+            <button
+              key={ask}
+              type="button"
+              role="listitem"
+              className="wl-ask sl-rise"
+              style={rise(i++)}
+              data-sent={leaving === ask ? "" : undefined}
+              onClick={() => begin(ask)}
+            >
+              <span>{ask}</span>
+              <ArrowRight size={16} aria-hidden />
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {thinking ? (
+        <div className="wl-own sl-rise" style={rise(i++)}>
+          <Composer placeholder="Or ask in your own words" onSend={begin} />
+          {onConnect ? (
+            <p className="wl-aside wl-mail-note">
+              Want me to read your mail?{" "}
+              <button type="button" className="wl-link wl-quiet" onClick={onConnect}>Connect it</button>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       <p className="wl-aside wl-foot sl-rise" style={rise(i++)}>
-        {onConnect ? (
-          <>
-            <button type="button" className="wl-link" onClick={onConnect}>Connect your mail and calendar</button>
-          </>
-        ) : null}
         <Link
-          to={LANE_PATHS.home}
+          to={HOSTED_HOME}
           onClick={() => joinLane()}
+          className="wl-go"
         >
-          Go to my assistant
+          Go to my assistant <ArrowRight size={15} aria-hidden />
         </Link>
       </p>
     </section>

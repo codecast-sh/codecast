@@ -52,6 +52,10 @@ export interface AgentDefinitionSpec {
   mode?: AgentDefinitionMode;
   /** Start in its own git worktree. */
   isolated?: boolean;
+  /** Bring an isolated worker's changes into its parent's checkout when it
+   *  finishes done (never when blocked, failed or killed). Absent = on for an
+   *  isolated definition. */
+  merge_back?: boolean;
 }
 
 export interface AgentChainStep {
@@ -162,6 +166,8 @@ export interface ResolvedAgentLaunch {
   appendSystemPrompt?: string;
   mode: AgentDefinitionMode;
   isolated: boolean;
+  /** Merge the worker's worktree into its parent's checkout on done. */
+  mergeBack: boolean;
   /** Definition facts the resolved client cannot honor, for a one line warning. */
   dropped: string[];
 }
@@ -201,6 +207,7 @@ export function resolveAgentLaunch(
     appendSystemPrompt: promptMode === "append" ? prompt : undefined,
     mode: def?.mode ?? "apply",
     isolated: def?.isolated === true,
+    mergeBack: def?.isolated === true && def?.merge_back !== false,
     dropped,
   };
 }

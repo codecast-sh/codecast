@@ -1,5 +1,7 @@
 "use client";
 import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { PageHeading } from "./PageHeading";
+import { useHostedMode, useSurface } from "../lib/surfaces";
 import { copyToClipboard } from "../lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
@@ -1145,6 +1147,8 @@ export function GenericListView<T>({
   // clearing a view's only filter is a change you must be able to save or undo,
   // and hiding the bar would take both actions away at exactly that moment.
   const filterBarShown = !!filters && (filters.defs.some(filterIsSet) || !!filters.dirtyView);
+  const hosted = useHostedMode();
+  const viewInternals = useSurface("lists.internals");
   const activeTabKey = activeTabOf(tabs, activeTab)?.key ?? null;
 
   return (
@@ -1155,7 +1159,9 @@ export function GenericListView<T>({
       <div className={`cq-container ${filterBarShown ? "" : "border-b border-sol-border/30"}`}>
         <div ref={titlebarRef} className="cq-header cq-header-pad cc-panel__head cc-panel__head--flow flex-wrap justify-between gap-x-2">
         <div className="flex items-center gap-2 min-w-0">
-          <h1 className="sr-only">{title}</h1>
+          {/* Hosted mode names the page the way Whisk does, with its count;
+              the developer header keeps the name for screen readers only. */}
+          {hosted ? <PageHeading title={title} count={tabs[0]?.count ?? undefined} /> : <h1 className="sr-only">{title}</h1>}
           {syncScope && <SyncProgressBadge scope={syncScope} />}
           {/* Wide header: segmented pill row. Once too tight for one row (≤1210px,
               see .cq-tabs-compact in globals.css): a single compact dropdown. */}
@@ -1236,13 +1242,13 @@ export function GenericListView<T>({
             extra={displayExtra}
             onCopyLink={shareUrl ? copyViewLink : undefined}
           />
-          <button
+          {viewInternals && <button
             onClick={() => openPalette("root")}
             className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
             title={`Command palette (${formatShortcutLabel('palette.toggle')})`}
           >
             <Command className="w-3 h-3" />K
-          </button>
+          </button>}
           <button
             onClick={onCreate}
             className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
@@ -1281,7 +1287,7 @@ export function GenericListView<T>({
               when the bar is narrow, so save / link / clear stay on one row
               instead of each wrapping to its own line. */}
           <div className="ml-auto flex items-center gap-0.5">
-            {shareUrl && (
+            {viewInternals && shareUrl && (
               <button
                 onClick={copyViewLink}
                 title="Copy link to this view"
@@ -1291,7 +1297,7 @@ export function GenericListView<T>({
                 <span className="cq-header-collapse">Link</span>
               </button>
             )}
-            {shareUrl && chatOn && (
+            {viewInternals && shareUrl && chatOn && (
               <button
                 onClick={() => openForwardToChat({ url: shareUrl(), label: "view" })}
                 title="Send this view to chat"
@@ -1332,7 +1338,7 @@ export function GenericListView<T>({
                 </button>
               </>
             )}
-            {filters.onSaveView && !savingView && (
+            {viewInternals && filters.onSaveView && !savingView && (
               <button
                 onClick={() => { setSavingView(true); setSaveViewName(""); }}
                 title={filters.dirtyView ? "Save these filters as a new view" : "Save current view as a shortcut"}
