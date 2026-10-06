@@ -92,7 +92,7 @@ function memoFilter(test: ChannelFilter): ChannelFilter {
 
 // Server traffic: requests, responses, timers, scheduled jobs, actor verbs.
 // Live feeds and a device's window-to-window traffic wait for the suite.
-const isServerTraffic: ChannelFilter = memoFilter((c) => !c.startsWith("live:") && !c.startsWith("repl:") && !c.startsWith("bridge:"));
+const isServerTraffic: ChannelFilter = memoFilter((c) => c.endsWith(":deliveryReceipts") || (!c.startsWith("live:") && !c.startsWith("repl:") && !c.startsWith("bridge:")));
 
 /**
  * One device's window-to-window traffic: its replication posts and gesture
@@ -200,9 +200,9 @@ export class SimServer implements SimWindowWorld {
     await this.net.drain({ horizonMs: 0, only: (c) => isServerTraffic(c) || mine(c) });
   }
 
-  /** Runs every server delivery that is ready now (never a live feed, never a device's window traffic, never the clock). */
+  /** Settles server traffic, including the 25ms durable delivery worker. */
   flush(): Promise<void> {
-    return this.net.drain({ horizonMs: 0, only: isServerTraffic });
+    return this.net.drain({ horizonMs: 25, only: isServerTraffic });
   }
 
   // -- Reading the server --
