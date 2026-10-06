@@ -109,7 +109,6 @@ const MANUAL: Record<string, { authClass: Row["authClass"]; reason: string }> = 
   "calls.mintAccessToken": { authClass: "authenticated", reason: "internal.calls.authForToken authenticates and judges room membership" },
   "transcripts.mintAsrToken": { authClass: "authenticated", reason: "internal.transcripts.authForAsr authenticates and judges room membership" },
   "chat.markThreadRead": { authClass: "authenticated", reason: "delegates to api.threads.markRead which calls requireCaller" },
-  "commits.syncAllMyRepositories": { authClass: "authenticated", reason: "internal.commits.getUserGitHubToken reads the caller's own token from ctx.auth" },
   "sessionInsights.backfillTimelines": { authClass: "authenticated", reason: "getCurrentUser; scoped to the caller's own insights" },
   "teams.syncGithubOrg": { authClass: "authenticated", reason: "getCurrentUser must equal requesting_user_id" },
 };

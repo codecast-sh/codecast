@@ -1,4 +1,5 @@
 "use client";
+import { useModeWords } from "../../lib/surfaces";
 import { useState, useCallback, useMemo } from "react";
 import { sharePageUrl } from "../../lib/utils";
 import { ShortId } from "../../components/ShortId";
@@ -41,6 +42,7 @@ import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../l
 import { buildTaskTree, isActiveTask, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
 import { applyTaskDrop, closeTaskWithGuard, setTaskParent } from "../../lib/taskActions";
 import { undoAsOne } from "../../store/undoActions";
+import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { COMPLETION_WINDOWS, completionWindow, filterTasksByCompletion, pendingTaskCompletionsSig } from "../../lib/taskCompletion";
 import {
   Plus,
@@ -573,6 +575,7 @@ export type TaskListScope = { projectIds: string[]; planIds: string[] };
 const RUNS_FEED_ARGS = { limit: 200 };
 
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
+  const modeWords = useModeWords();
   const router = useRouter();
   const params = useParams();
   const { status: urlStatus, view: viewMode, group, sort, dir, priority: priorityFilter, label: labelFilter, assignee: assigneeFilter, statuses: statusesFilter, sourceFilter, session: sessionFilter, completed: completedFilter, effectivePrefs, setParam, setTaskView, setGroup, primaryAxis, secondaryAxis, setPrimaryAxis, setSecondaryAxis, setSort, toggleSortDir, buildShareUrl } = useTaskUrlState();
@@ -1187,10 +1190,17 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   return (
     <>
     <GenericListView<TaskItem>
+          banner={
+            <FeatureUpsell
+              slug="tasks"
+              className="mx-4 mt-3"
+              reason="Let agents file and update their own tasks, so work they take on shows up on this board with its progress."
+            />
+          }
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
           getComposeRef={(t) => t.short_id}
-          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
+          title={projectId ? "Project tasks" : scope ? "Tasks in scope" : modeWords.tasksPage}
           tabs={[
             // The three answers worth a click: everything, the open work, the
             // finished work. Anything finer is the Status filter in the bar

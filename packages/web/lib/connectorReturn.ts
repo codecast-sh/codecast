@@ -29,8 +29,8 @@
 import { APP_IDS, type AppId } from "@codecast/shared/contracts";
 import { describeReturnReason } from "@codecast/shared/contracts/connectorReasons";
 
-/** `P` names the providers a page reads besides the apps: the simple lane
- *  also reads the mail connect through Whisk (WHISK_RETURN_KEY). */
+/** `P` names the providers a page reads besides the apps: /welcome and the
+ *  main shell also read the mail connect through Whisk (WHISK_RETURN_KEY). */
 export type ConnectorReturn<P extends string = AppId> =
   /** A finished authorize waiting for this session to confirm it. */
   | { kind: "confirm"; provider: AppId; installationId: string; confirmToken: string }
@@ -112,6 +112,14 @@ export function parseConnectorReturn<X extends string = never>(
   if (githubError) return { kind: "error", provider: "github", reason: describeReturnReason(githubError) };
 
   return null;
+}
+
+/** Whether the address is a return from `provider` (success or refusal),
+ *  for a reader that must not take another connector's return off the
+ *  address: it mounts only when this is true. */
+export function isReturnFrom(hash: string, search: string, provider: string): boolean {
+  const hit = parseConnectorReturn(hash, search, [provider]);
+  return !!hit && hit.kind !== "confirm" && hit.provider === provider;
 }
 
 /** The reason table lives in the shared contract so `cast integrations`

@@ -59,11 +59,14 @@ describe("FollowPill", () => {
     await r.unmount();
   });
 
-  test("followed: faces and the sentence", async () => {
+  test("followed: faces only, ringed, the names in the tooltip and the label", async () => {
     useInboxStore.setState({ followedBy: [{ user_id: "b", name: "Bob Stone" }, { user_id: "c", name: "Cy" }] } as any);
     const r = await render();
-    expect(r.container.querySelector("[data-sv-follow-pill='followed']")).not.toBeNull();
-    expect(r.container.textContent).toContain("Bob and Cy are following you");
+    const pill = r.container.querySelector("[data-sv-follow-pill='followed']") as HTMLButtonElement;
+    expect(pill.tagName).toBe("BUTTON");
+    expect(pill.textContent).not.toContain("following you");
+    expect(pill.title).toBe("Bob Stone, Cy");
+    expect(pill.getAttribute("aria-label")).toBe("Bob and Cy are following you: manage");
     await r.unmount();
   });
 });
