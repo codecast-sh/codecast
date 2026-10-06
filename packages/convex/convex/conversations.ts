@@ -3,6 +3,7 @@ import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { mutation, query, internalMutation, internalQuery, type QueryCtx, type MutationCtx } from "./functions";
 import { v } from "convex/values";
 import { enqueueStartSession, resolveOwnerDevice } from "./devices";
+import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { CLOUD_UNPARK_PATCH, parkOnCloudHost, resolveCloudDevice, supersedeCloudSpawns, unparkForMove } from "./cloudPlacement";
 import { cloudSeedArg, cloudStartFromArg, effectiveStartFrom, cloudWorkspaceValidator, findSharedCheckoutOccupant } from "./cloudPlacement";
 import { cloudPlacementFor,
@@ -9027,6 +9028,14 @@ async function enrichInboxSessionRow(
     // so the inbox card and the thread state panel can show its state without
     // reading pull_requests per card.
     pr_status: conv.pr_status ?? null,
+    // The subagent fleet (subagentFleet.ts): a worker's slot, what it counts
+    // against (the web derives its place in the queue from these), and what
+    // became of its worktree's changes.
+    subagent_slot: conv.subagent_slot ?? null,
+    subagent_slot_at: conv.subagent_slot_at ?? null,
+    subagent_slot_device: conv.subagent_slot_device ?? null,
+    subagent_caps: conv.subagent_caps ?? null,
+    merge_back: conv.merge_back ?? null,
     // Harness /loop state (see loopState.ts) — an armed self-wakeup makes this
     // session a standing machine intent, so the trigger set can row it like an
     // armed trigger. Stopped loops are a server-side tombstone only.
@@ -11956,6 +11965,10 @@ export async function performSetThreadState(
   if ((conv.org_role_id || conv.standing_role_id) && status === "blocked") {
     await ctx.scheduler?.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
   }
+  // A worker declaring done or blocked frees its fleet slot and settles its
+  // worktree (subagentFleet.ts).
+  const outcome = outcomeOfDeclaration(status);
+  if (outcome && conv.parent_conversation_id) await subagentEnded(ctx, conv, outcome);
   return { at, resurfaced };
 }
 
@@ -13723,6 +13736,7 @@ export async function killConversation(ctx: any, userId: Id<"users">, args: { co
     // so an already-hidden child whose worker came back gets torn down again
     // rather than skipped — the group comes down as one unit.
     await cascadeHideToNestedChildren(ctx, conv, { inbox_dismissed_at: Date.now() }, { forceKill: true });
+    if (!conv.persistent) await subagentEnded(ctx, conv, "killed");
   }
   return { existed: !!conv, canceled_schedules: canceledSchedules, canceled_messages: canceledMessages };
 }

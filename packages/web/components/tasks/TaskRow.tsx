@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { taskPriority } from "../../lib/taskPriority";
 import { useTaskActiveSession } from "./taskActiveSession";
+import { useSurface } from "../../lib/surfaces";
 
 // The task list row and the board card. The tasks page lays them out; every
 // write goes through the callbacks it passes (ItemRowState, onAssign), so a
@@ -83,6 +84,9 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   const priority = taskPriority(task.priority);
   const StatusIcon = status.icon;
   const PriorityIcon = priority.icon;
+  // Hosted mode draws a task as its status, title, assignee and age; the ids,
+  // origin glyphs, session links, labels and plan chips are working detail.
+  const internals = useSurface("tasks.internals");
   const [editValue, setEditValue] = useState(task.title);
 
   useWatchEffect(() => { setEditValue(task.title); }, [task.title]);
@@ -122,10 +126,10 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <StatusIcon className={`w-4 h-4 ${status.color}`} />
         )}
       </button>
-      <ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />
-      {task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
+      {internals && <ShortId id={task.short_id} className="text-xs text-sol-text-dim w-16 cq-hide-compact" />}
+      {internals && task.external && <IssueLink external={task.external} className="cq-hide-compact" />}
       <TaskDecisionChip taskId={task._id} />
-      <TaskLineChip task={task as any} />
+      {internals && <TaskLineChip task={task as any} />}
       {state.isEditing ? (
         <input
           autoFocus
@@ -198,7 +202,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           so it gets its own marker — a bot icon here would file real
           commitments in with agent bookkeeping, the confusion decision 4
           exists to remove. */}
-      {taskOrigin(task) === "meeting" ? (
+      {!internals ? null : taskOrigin(task) === "meeting" ? (
         <span
           className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
           title="Captured from a meeting"
@@ -214,7 +218,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <span className="flex-shrink-0 cq-hide-compact" title={`${task.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
         )
       )}
-      {activeSession ? (
+      {!internals ? null : activeSession ? (
         <TaskSessionBadge task={task} className="cq-hide-compact" />
       ) : task.origin_session ? (
         <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
@@ -230,7 +234,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
         </span>
       ) : null}
-      {(task as any).plan && (
+      {internals && (task as any).plan && (
         <Link
           href={`/plans/${(task as any).plan._id}`}
           onClick={(e) => e.stopPropagation()}
@@ -240,16 +244,16 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           {(task as any).plan.title}
         </Link>
       )}
-      {task.source === "insight" && (
+      {internals && task.source === "insight" && (
         <span className="text-[10px] px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact">mined</span>
       )}
-      {task.execution_status && (
+      {internals && task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
       )}
       {task.blocked_by && task.blocked_by.length > 0 && (
         <Link2 className="w-3.5 h-3.5 text-sol-red flex-shrink-0 cq-hide-compact" />
       )}
-      {task.labels && task.labels.length > 0 && (
+      {internals && task.labels && task.labels.length > 0 && (
         <LabelChips labels={task.labels} onLabelClick={onFilterLabel} className="cq-hide-compact" />
       )}
       {task.assignee_info && (() => {
@@ -283,7 +287,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
-      ) : (
+      ) : (internals || task.priority === "urgent") && (
         <button
           onClick={(e) => { e.stopPropagation(); state.onOpenPalette("priority"); }}
           className="flex-shrink-0 hover:scale-125 transition-transform cq-hide-compact"

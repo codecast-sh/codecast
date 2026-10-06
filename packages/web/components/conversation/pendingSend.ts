@@ -15,6 +15,10 @@ export const PENDING_RETRY_AFTER_MS = 20_000;
 // message gets delivered INTO, so a few slow daemon passes are not evidence of
 // a loss, and the calm "queued" line covers the wait.
 export const PENDING_IDLE_GRACE_MS = 45_000;
+/** A hosted conversation's bubble: its turn engine starts a turn within
+ *  seconds when nothing else runs, so a message still unclaimed after this
+ *  offers Try again. */
+export const PENDING_HOSTED_GRACE_MS = 30_000;
 
 // A booting / resuming / freshly-connected session legitimately takes far longer
 // than a turn to begin processing the first message, so the per-message banner

@@ -42,6 +42,7 @@ import { RoleFace } from "./org/RoleFace";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { MirrorMenuItems } from "./LocalMirror";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
+import { useSurface } from "../lib/surfaces";
 
 type Runner = { id?: string; name: string; image?: string | null };
 
@@ -126,6 +127,10 @@ export function AssignmentBadge({
   const seatUnderRole = !!seatRoleId && !!parentRole;
   const [makingRole, setMakingRole] = useState(false);
   const orgOn = useWorkspaceFeature("org");
+  // The machine lobe is a machine chip (lib/surfaces.ts): hosted mode keeps
+  // only the owner half.
+  const machineShown = useSurface("machineChips");
+  const ownChip = useSurface("conversation.ownChip");
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
   // account) — resolve it via the conversation so the lobe shows its hostname
@@ -189,6 +194,10 @@ export function AssignmentBadge({
       + `${preparing ? "\nPreparing the host — its checkout is being made now." : ""}`
     : "No machine recorded for this session.";
 
+  // In hosted mode a person's own conversation needs no ownership chip: their
+  // face beside the title said nothing and cost the title its width. The
+  // chip returns once someone else owns it too.
+  if (!ownChip && onlyStarter && isRunner) return null;
   if (!(owners.canManage ?? isOwner)) {
     return runner ? <RunnerBadge runner={runner} compact={compact} title={owners.canManage === false ? "Shared session · read-only access" : "Checking assignment permissions"} /> : null;
   }
@@ -201,10 +210,10 @@ export function AssignmentBadge({
         <button
           type="button"
           data-runner-device
-          title={`${deviceTitle} · ${ownerHover}`}
+          title={machineShown ? `${deviceTitle} · ${ownerHover}` : ownerHover}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
         >
-          {(loaded || d || owners.canManage) && (
+          {machineShown && (loaded || d || owners.canManage) && (
             <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
               {d ? (
                 <>

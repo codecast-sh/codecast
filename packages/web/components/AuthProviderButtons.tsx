@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { DEFAULT_OAUTH_PROVIDERS, useProviderSignIn, type OAuthProviderId, type ProviderButton } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -55,7 +56,11 @@ export function AuthProviderButtons({
   classFor,
   labelFor,
   listClassName = "flex flex-col gap-3",
+  children,
 }: {
+  /** More ways in, drawn in the same list after the providers (/welcome's
+   *  email button). */
+  children?: ReactNode;
   verb: "in" | "up";
   redirectTo: string;
   /** A surface with its own look (the simple lane's /welcome) styles each
@@ -116,6 +121,7 @@ export function AuthProviderButtons({
             {labelFor ? labelFor(p.id, p.label) : `Sign ${verb} with ${p.label}`}
           </button>
         ))}
+        {children}
       </div>
       {error && <p className="mt-3 text-sm text-red-400 text-center">{error}</p>}
       {desktopBrowserAuth && (

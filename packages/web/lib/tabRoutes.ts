@@ -7,8 +7,8 @@ import { tabSafePath, tabSafeTitle } from "./tabSafePath";
 // The single-segment routes that live inside the shell, shared with the
 // desktop hand-off gate (which may import nothing, so the list lives there).
 import { IN_SHELL_ROOT_SEGMENTS, isPublicProfilePath } from "./desktopHandoff";
-// The lane's roots and the prefix rule, from the import-free module the lane's
-// boot script is inlined from, so the tab shell and the lane agree on its paths.
+// The lane's roots and the prefix rule, from the import-free module /welcome's
+// boot script is inlined from, so the tab shell and the router agree on them.
 import { LANE_ROOTS, isUnderRoot } from "../components/simple/laneBoot";
 import { WHISK_RETURN_PATH } from "@codecast/convex/convex/lib/whisk";
 
@@ -69,8 +69,10 @@ export const NON_TAB_EXACT = new Set([
 // readable, no shell. The tab shell intercepting one would rewrite that
 // window's URL and paint a blank pane. "/repo" is a different route and stays
 // tab-routable — the rule below matches "/r" and "/r/…" only.
-// LANE_ROOTS are the hosted assistant's own shell (SimpleShell) and its front
-// door: a whole app of their own, never a tab.
+// LANE_ROOTS are the hosted assistant's front door (/welcome) and the retired
+// simple lane's addresses (/simple), which redirect into the main app through
+// the real router (components/LaneRedirect): a tab would intercept the click
+// and never run the redirect.
 export const NON_TAB_PREFIXES: readonly string[] = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/compare", "/a", "/r", "/slack/connect", WHISK_RETURN_PATH, ...LANE_ROOTS];
 
 export function isNonTabRoute(path: string): boolean {
