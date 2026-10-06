@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, type PaletteTargetType } from "../paletteActions";
+import { surfaceMode } from "../surfaceRules";
+import { paletteActions, paletteActionForKey, paletteDigitIndex, paletteItemScore, paletteObjectPath, paletteValue, queryAsksToCreate, type PaletteTargetType } from "../paletteActions";
 import { resolvePaletteTarget } from "../paletteTarget";
 
 const session = { _id: "session-1", user_id: "me", agent_type: "claude_code", message_count: 3, title: "Example" };
@@ -8,6 +9,12 @@ const keys = (type: PaletteTargetType, row: any = session, user = "me") => palet
 describe("command menu action coverage", () => {
   test("session operations include agent switching, forks, rename and lifecycle actions", () => {
     expect(keys("session")).toEqual(expect.arrayContaining(["agent_switch", "agent_fork", "rename", "model", "session_pin", "session_favorite", "session_stash", "session_stash_hide", "session_defer", "session_dormant", "session_kill", "copy", "copylink", "forward", "newtab"]));
+  });
+  test("a hosted assistant conversation offers no agent moves and no machine move", () => {
+    const hosted = keys("session", { ...session, agent_type: "codecast" });
+    for (const key of ["agent_switch", "agent_fork", "agent_handoff", "device"]) expect(hosted).not.toContain(key);
+    expect(hosted).toEqual(expect.arrayContaining(["rename", "session_pin", "session_favorite", "session_delete"]));
+    expect(keys("session")).toEqual(expect.arrayContaining(["agent_switch", "agent_fork", "agent_handoff", "device"]));
   });
   test("foreign and unresolved sessions expose reading and sharing only", () => {
     for (const user of ["other", ""]) {
@@ -212,6 +219,32 @@ describe("palette item ranking", () => {
     expect(paletteItemScore("Undo history undo redo history timeline", "timeline")).toBe(1);
   });
 
+  test("each query word matches on its own, and a label hit ranks above a keyword hit", () => {
+    const task = paletteValue("New task", "create todo");
+    const doc = paletteValue("New document", "create note doc write");
+    expect(paletteItemScore(task, "task new")).toBeGreaterThan(paletteItemScore("__search__ A new task list|||c1", "task new"));
+    expect(paletteItemScore(doc, "new doc")).toBeGreaterThan(0);
+    expect(paletteItemScore(paletteValue("Plan", "usage billing"), "plan")).toBeGreaterThan(paletteItemScore(paletteValue("Plans", "roadmap"), "usage"));
+    // A word only in the keywords is an ordinary match; a missing word hides the row.
+    expect(paletteItemScore(task, "todo")).toBe(1);
+    expect(paletteItemScore(task, "new routine")).toBe(0);
+    // Every real match outranks asking the assistant.
+    expect(paletteItemScore(paletteValue("New conversation", "start"), "new conversation")).toBeGreaterThan(paletteItemScore("__compose__ ask the codecast assistant hosted", "new conversation"));
+  });
+
+  test("hosted mode says conversation and leaves the fleet verbs and the id out", () => {
+    const row = { _id: "c1", agent_type: "codecast", session_id: "s1", user_id: "u1" };
+    const hosted = paletteActions("session", [row], "u1", false, surfaceMode(true, true)).map((a) => a.label);
+    expect(hosted).toContain("Rename conversation…");
+    expect(hosted).toContain("Pin conversation");
+    expect(hosted).toContain("Close conversation");
+    expect(hosted.some((l) => /session|Dormant|Defer|Stash and hide|Copy .* ID/.test(l))).toBe(false);
+    const dev = paletteActions("session", [{ ...row, agent_type: "claude_code" }], "u1", false).map((a) => a.label);
+    expect(dev).toContain("Rename session…");
+    expect(dev).toContain("Kill session");
+    expect(dev).toContain("Dormant: a machine wakes it");
+  });
+
   test("keyword rows still hide when they do not match", () => {
     expect(paletteItemScore("Files vault new note create markdown", "emdash")).toBe(0);
     expect(paletteItemScore("Files vault new note create markdown", "note")).toBe(1);
@@ -234,5 +267,12 @@ describe("palette item ranking", () => {
     // Offline: nothing to follow; chat off: no message.
     expect(paletteActions("person", [{ ...person, online: false, session: null }], "me", false).map(a => a.key)).toEqual(["person_huddle", "open", "newtab", "copylink"]);
     expect(paletteActions("person", [{ ...person, following: true }], "me", true)[0].label).toBe("Stop following");
+  });
+});
+
+describe("queryAsksToCreate", () => {
+  test("new or create, partly typed or with what to make, asks to create; other words do not", () => {
+    for (const q of ["ne", "new", "New ", "new task", "cr", "create", "create doc"]) expect(queryAsksToCreate(q)).toBe(true);
+    for (const q of ["", "n", "newsletter", "routine", "renew", "news"]) expect(queryAsksToCreate(q)).toBe(false);
   });
 });
