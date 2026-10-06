@@ -19,6 +19,7 @@ import { copyText } from "../lib/copyText";
 import { useEventListener } from "./useEventListener";
 import { useWatchEffect } from "./useWatchEffect";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useFollowSurface } from "./useFollowSurface";
 
 export function useDiffAddress({
   diffHref,
@@ -110,6 +111,25 @@ export function useDiffAddress({
       (el) => !lineId || el.id === lineId || !!el.querySelector(".cc-diff-target"),
     );
   }, [ready, here, loc.hash]);
+
+  // Follow mode (lib/follow.ts): the file and line the address names are the
+  // reader's place in the diff. A follower moves the address the way a click
+  // would; when the leader's scroll comes with it, the scroll places the page
+  // and the address only marks the lines.
+  useFollowSurface(
+    {
+      read: () => (target ? { diff: { file: target.file, line: target.anchor?.lineNumber } } : null),
+      apply: (view) => {
+        const want = view.diff;
+        if (!want || !here) return [];
+        const anchor: DiffLineAnchor | undefined = want.line ? { side: "RIGHT", lineNumber: want.line } : undefined;
+        goTo(want.file, anchor, { scroll: !view.scroll });
+        return ["diff"];
+      },
+    },
+    here,
+    [target?.file, target?.anchor?.lineNumber],
+  );
 
   const flow: DiffFlow = {
     stickyTop,

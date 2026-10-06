@@ -30,6 +30,7 @@ import { webBaseUrl } from "./slack";
 import { touchThread } from "./threadReads";
 import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";
+import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 
 const GITHUB_API_BASE = "https://api.github.com";
 // The feed row clips a long summary and expands it on click, so keep the whole
@@ -339,6 +340,8 @@ export const create = mutation({
     line_number: v.optional(v.number()),
     line_end: v.optional(v.number()),
     side: v.optional(v.string()),
+    // The commented lines' text and context (shared/comments/codeAnchor.ts).
+    anchor_lines: v.optional(codeAnchorValidator),
     content: v.string(),
     pull_request_id: v.optional(v.id("pull_requests")),
     // Any session reference: a conversation id, a session uuid, a short id.
@@ -383,6 +386,7 @@ export const create = mutation({
       args.line_number = args.line_number ?? parent.line_number;
       args.line_end = args.line_end ?? parent.line_end;
       args.side = args.side ?? parent.side;
+      args.anchor_lines = args.anchor_lines ?? parent.anchor_lines;
     }
     const pr = pullRequestId ? await ctx.db.get(pullRequestId) : null;
     if (pullRequestId && (!pr || !(await canAccessPullRequest(ctx, userId, pr)))) {
@@ -399,6 +403,7 @@ export const create = mutation({
       line_number: args.line_number,
       line_end: args.line_end,
       side: args.side,
+      anchor_lines: args.file_path ? args.anchor_lines : undefined,
       parent_id: args.parent_id,
       conversation_id: conversationId,
       task_id: args.task_id,
