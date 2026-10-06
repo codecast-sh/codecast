@@ -30,6 +30,7 @@ import { CollapsibleBody } from "../../../components/CollapsibleBody";
 import { TaskLineStory } from "../../../components/tasks/TaskLineStory";
 import { TaskLineChip } from "../../../components/tasks/StationStrip";
 import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
+import { TaskShipStation } from "../../../components/ShipControl";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
 import { toast } from "sonner";
@@ -74,6 +75,7 @@ import { closeTaskWithGuard, setTaskParent } from "../../../lib/taskActions";
 import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import { DocDates } from "../../../components/DocDates";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
+import { useFollowScroll } from "../../../hooks/useFollowSurface";
 
 const STATUS_OPTIONS = [
   { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
@@ -392,6 +394,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
   }, [data?.related_docs, data?.created_from_conversation, data?.short_id, data?.created_at, wsDocs]);
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
+  // The task's body scroller, a place a follower can follow (lib/follow.ts).
+  const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  useFollowScroll("task", bodyScrollRef);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const titleRef = useRef<HTMLInputElement>(null);
@@ -535,7 +540,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
             <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
           </div>
         )}
-        <div className="flex-1 overflow-y-auto">
+        <div ref={bodyScrollRef} className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
           {/* Card header: id + badges + watch, with actions */}
@@ -852,6 +857,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }:
 
           {/* Evidence at the station (the-line.md L6) */}
           <TaskEvidence task={data as any} />
+
+          {/* One Ship control at the review station (docs/architecture/ship.md) */}
+          <TaskShipStation task={data as any} />
 
           {/* The plan of the work: criteria, steps, estimates */}
           <ExecutionDetailsSection data={data} />

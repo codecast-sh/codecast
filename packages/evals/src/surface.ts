@@ -116,6 +116,8 @@ export interface AgentOptions {
   maxTurns?: number;
   /** Later turns, in order: each is sent into the same session once the previous one ends. */
   then?: string[];
+  /** The run's user-level CLAUDE.md (prompt-dry-run.ts --claude-md): global instructions the agent loads the way a person's session does. */
+  claudeMd?: string;
   /**
    * run.json.promptSha when the briefing wraps the prompt under test in text
    * of the run's own (org-review: the analyzer prompt without the harness

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, webContents, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences } = require("electron");
+const { app, BrowserWindow, WebContentsView, webContents, Menu, Tray, globalShortcut, ipcMain, nativeImage, shell, screen, Notification, session, powerMonitor, desktopCapturer, systemPreferences, dialog } = require("electron");
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
@@ -80,6 +80,7 @@ const {
 const { mergeAgentDock, placeAgentDock } = require("./agentDock");
 const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
+const { createDaemonSetup } = require("./daemonSetup");
 const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
 const { createEditUndo } = require("./editUndo");
 const { createBrowserPanes, defaultRegistryPath: defaultPaneRegistryPath } = require("./browserPanes");
@@ -414,6 +415,15 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  // Closing the main window hides it, the way the voice window does: the app
+  // keeps running in the dock and tray with its session warm, and the dock
+  // icon brings it straight back. Only a quit destroys it.
+  mainWindow.on("close", (e) => {
+    if (appIsQuitting) return;
+    e.preventDefault();
+    mainWindow.hide();
   });
 
   mainWindow.on("closed", () => {
@@ -1554,6 +1564,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
   const mayResize = opts.mayResize || (() => true);
   const anchor = opts.anchor || (() => "top-left");
   const getWindow = opts.getWindow;
+  const onContentSize = opts.onContentSize || (() => {});
   // Older windows speak on `set-<prefix>-<verb>` through their own preload
   // methods; a newer one reaches the same three switches through the bridge's
   // generic `call`, which lands on `app:<prefix>.<verb>` and needs no preload.
@@ -1588,6 +1599,7 @@ function registerSeeThroughIpc(prefix, resolveSender, opts = {}) {
     const width = Math.round(Number(size.width));
     const height = Math.round(Number(size.height));
     if (!(width > 0) || !(height > 0) || width > 4000 || height > 4000) return;
+    onContentSize(win);
     // The renderer measures in CSS pixels and the window is sized in device-
     // independent ones, and the two come apart the moment somebody zooms the
     // page: at 1.5x a 112px row of faces needs a 168px window, and a window
@@ -2531,8 +2543,13 @@ shellIpc.on("call-ring-answer", (e, inviteId, roomKey) => {
 // ---------------------------------------------------------------------------
 // The agent dock: a pill on the screen's edge with one dot per live agent,
 // and beside it a card for whichever one needs you (route /agent-dock). It is
-// on by default and turned off per machine (settings.json `agentDock`,
+// off by default and turned on per machine (settings.json `agentDock`,
 // agentDock.js); off, there is no window at all.
+//
+// The window shows only once the dock page reports its size. Any other page
+// that lands in it (a web build without the route falls through to the
+// public profile catch-all; a sign-in page; an error) would otherwise sit
+// pinned to the screen's edge, squeezed into the pill's strip, click-through.
 //
 // One see-through window, sized to its content through the shared
 // see-through switches (registerSeeThroughIpc, on the bridge's app channel):
@@ -2591,7 +2608,6 @@ function createAgentDockWindow() {
   win.webContents.on("did-finish-load", () => {
     if (!win.isDestroyed()) {
       win.webContents.executeJavaScript("document.documentElement.classList.add('electron-desktop')");
-      win.showInactive();
     }
   });
   win.on("closed", () => {
@@ -2616,6 +2632,9 @@ registerSeeThroughIpc("agentDock", senderIsAgentDock, {
   appChannel: true,
   anchor: () => (loadAgentDock().edge === "left" ? "top-left" : "top-right"),
   getWindow: () => agentDockWindow,
+  onContentSize: (win) => {
+    if (!win.isVisible()) win.showInactive();
+  },
 });
 
 shellIpc.handle("app:agentDock.get", () => ({ ...loadAgentDock(), supported: true }));
@@ -2697,9 +2716,9 @@ function summonAgentDock() {
   if (!loadAgentDock().enabled) return;
   if (!agentDockWindow || agentDockWindow.isDestroyed()) createAgentDockWindow();
   const win = agentDockWindow;
-  if (!win.isVisible()) win.showInactive();
   win.webContents.send("app:agentDock.summon", { at: Date.now() });
-  win.focus();
+  // Not drawn yet: the page shows itself when it reports its size.
+  if (win.isVisible()) win.focus();
 }
 
 // "Open the transcript" from the recording face: the card is not a place to
@@ -2842,15 +2861,53 @@ function setTrayMenu() {
     { label: "Chat", click: () => routeToWindow("/chat") },
     { label: "Tasks", click: () => routeToWindow("/tasks") },
     { type: "separator" },
-    { label: "Agent Dock", type: "checkbox", checked: dock.enabled, click: () => saveAgentDock({ enabled: !dock.enabled }) },
-    { label: "Minimize Agent Dock", type: "checkbox", checked: dock.minimized, enabled: dock.enabled, click: () => saveAgentDock({ minimized: !dock.minimized }) },
-    { type: "separator" },
+    // Unreleased: offered only on a machine that turned it on.
+    ...(dock.enabled
+      ? [
+          { label: "Agent Dock", type: "checkbox", checked: true, click: () => saveAgentDock({ enabled: false }) },
+          { label: "Minimize Agent Dock", type: "checkbox", checked: dock.minimized, click: () => saveAgentDock({ minimized: !dock.minimized }) },
+          { type: "separator" },
+        ]
+      : []),
     { label: "Check for Updates…", click: () => checkForDesktopUpdate({ manual: true }) },
     { label: `Version ${app.getVersion()}`, enabled: false },
     { type: "separator" },
-    { label: "Quit Codecast", click: () => app.quit() },
+    { label: "Quit Codecast", click: () => confirmQuit() },
   ]);
   tray.setContextMenu(menu);
+}
+
+// ⌘Q and the tray's Quit ask first, like Chrome's "Warn Before Quitting":
+// one stray keystroke otherwise drops every live window and call. The dock's
+// Quit, an update restart and a logout go straight through before-quit.
+function warnBeforeQuit() {
+  return loadFullSettings().warnBeforeQuit !== false;
+}
+
+let quitPromptOpen = false;
+async function confirmQuit() {
+  if (!warnBeforeQuit()) return app.quit();
+  if (quitPromptOpen) return;
+  quitPromptOpen = true;
+  try {
+    const { response, checkboxChecked } = await dialog.showMessageBox({
+      type: "question",
+      message: "Quit Codecast?",
+      detail: "Open windows and any call in progress will close.",
+      buttons: ["Quit", "Cancel"],
+      defaultId: 0,
+      cancelId: 1,
+      checkboxLabel: "Don't ask again",
+    });
+    if (response !== 0) return;
+    if (checkboxChecked) {
+      updateSettings({ warnBeforeQuit: false });
+      buildAppMenu();
+    }
+    app.quit();
+  } finally {
+    quitPromptOpen = false;
+  }
 }
 
 function buildAppMenu() {
@@ -2870,7 +2927,13 @@ function buildAppMenu() {
         { role: "hideOthers" },
         { role: "unhide" },
         { type: "separator" },
-        { role: "quit" },
+        {
+          label: "Warn Before Quitting",
+          type: "checkbox",
+          checked: warnBeforeQuit(),
+          click: (item) => updateSettings({ warnBeforeQuit: item.checked }),
+        },
+        { label: "Quit Codecast", accelerator: "CommandOrControl+Q", click: () => confirmQuit() },
       ],
     },
     {
@@ -3275,6 +3338,12 @@ shellIpc.handle("request-os-permission", (_e, kind) => osPermissions.request(Str
 // take the screen is the helper's own settings window behind a human's click.
 const computerPermissions = createComputerPermissions({});
 shellIpc.handle("get-computer-permissions", () => computerPermissions.getAll());
+
+// The CLI and daemon on this machine, set up from the app (daemonSetup.js):
+// whether they are here, and the installer run behind the person's click.
+const daemonSetup = createDaemonSetup({});
+shellIpc.handle("get-daemon-setup", () => daemonSetup.state());
+shellIpc.handle("run-daemon-setup", (_e, token) => daemonSetup.setup(token));
 shellIpc.handle("open-os-permission-settings", (_e, kind) => {
   const k = String(kind);
   return computerPermissions.owns(k) ? computerPermissions.openSettings(k) : osPermissions.openSettings(k);

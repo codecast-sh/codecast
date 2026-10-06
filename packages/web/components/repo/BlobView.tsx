@@ -22,6 +22,8 @@ import { commitPageHref } from "../../lib/repoView";
 import { useRepoFamily } from "./useRepoFamily";
 import { SessionBlameCell } from "./SessionBlame";
 import { StampTime } from "../StampTime";
+import { AnchorGutterMark } from "../comments/AnchorPlacementNote";
+import type { AnchorPlacement } from "@codecast/shared/comments";
 
 export function BlobView({
   repository,
@@ -35,6 +37,7 @@ export function BlobView({
   sessionColors,
   focusSession,
   threadsByLine,
+  threadStateByLine,
   renderThread,
   onComment,
 }: {
@@ -52,6 +55,8 @@ export function BlobView({
   /** A session in focus dims every line that is not its own. */
   focusSession?: string | null;
   threadsByLine?: ReadonlyMap<number, unknown[]>;
+  /** Where each thread's passage is now: a moved or outdated thread marks its gutter. */
+  threadStateByLine?: ReadonlyMap<number, AnchorPlacement>;
   renderThread?: (line: number, items: unknown[]) => ReactNode;
   onComment?: (line: number) => void;
 }) {
@@ -124,6 +129,7 @@ export function BlobView({
                 )}
 
                 <div className="flex items-center gap-1 shrink-0 pl-1 pr-2">
+                  <AnchorGutterMark placement={threadStateByLine?.get(number)} />
                   {onComment && (
                     <button
                       type="button"
