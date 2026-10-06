@@ -28,5 +28,15 @@ export function typingRows(present: readonly PresenceRow[]): PresenceRow[] {
  * share link guest, who is not on the roster).
  */
 export function presenceMember(row: PresenceRow, roster: readonly ChatMember[]): ChatMember {
-  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name };
+  return roster.find((m) => String(m._id) === row.user_id) ?? { _id: row.user_id, name: row.user_name, image: row.user_image };
+}
+
+/** The presence id of a session's shared composer. */
+export function composeDocId(conversationId: string): string {
+  return `compose:${conversationId}`;
+}
+
+/** A draft from someone who may not send into the session: a suggestion for those who may. */
+export function isSuggestion(row: PresenceRow): boolean {
+  return row.can_send === false;
 }
