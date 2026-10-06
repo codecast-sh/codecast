@@ -185,6 +185,7 @@ const Sessions = lazy(() => import("@/app/sessions/page"));
 const Resources = lazy(() => import("@/app/resources/page"));
 const Anchor = lazy(() => import("@/app/anchor/page"));
 const SlackConnect = lazy(() => import("@/app/slack/connect/page"));
+const WhiskReturn = lazy(() => import("@/app/connect/whisk/page"));
 // One component serves the index and every section
 // so section switches reconcile in place instead of remounting.
 const Team = lazy(() => import("@/app/team/page"));
@@ -312,6 +313,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "reset-password", component: cast(ResetPassword), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "auth/cli", component: cast(AuthCli), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "slack/connect", component: cast(SlackConnect), layout: "auth", guestOk: true, guestKind: "public" },
+  { path: "connect/whisk", component: cast(WhiskReturn), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "pages/auth", component: cast(ArtifactAuth), layout: "auth", guestOk: true, guestKind: "public" },
   { path: "join/:code", component: cast(JoinTeam), layout: "auth", guestOk: true, guestKind: "public" },
 

@@ -1,6 +1,7 @@
-// One thing Google lets the assistant do (email, calendar) as a row: an icon,
-// a name and what it means for the person. Connections shows whether each is
-// on; /welcome, before anything is connected, shows the row without a state.
+// One thing the mail connection lets the assistant do (email, calendar) as a
+// row: an icon, a name and what it means for the person. Connections shows
+// whether each is on; /welcome, before anything is connected, shows the row
+// without a state.
 import type { ReactNode } from "react";
 import { LANE_COPY } from "./lane";
 
