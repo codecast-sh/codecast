@@ -125,19 +125,30 @@ export default function DecisionScreen() {
             </TouchableOpacity>
           ) : null}
 
-          {contextMd ? <MarkdownContent text={contextMd} baseStyle={styles.context} /> : null}
-          {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
+          {/* The reasoning folds, so the answers stay in reach without scrolling. */}
+          {contextMd || (docBody && docBody !== contextMd?.trim()) ? (
+            <CollapsibleBody fadeColor={Theme.bg} height={150}>
+              {contextMd ? <MarkdownContent text={contextMd} baseStyle={styles.context} /> : null}
+              {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
+            </CollapsibleBody>
+          ) : null}
           {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageUrl(reportSlug))} /> : null}
 
           <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} />
 
-          {kind === 'single' ? (
+          {kind === 'single' && !writing ? (
+            <TouchableOpacity onPress={() => setWriting(true)} hitSlop={8}>
+              <Text style={styles.footerText}>Answer in your own words</Text>
+            </TouchableOpacity>
+          ) : null}
+          {kind === 'single' && writing ? (
             <View style={styles.other}>
               <TextInput
                 style={[styles.input, styles.otherInput]}
                 value={otherText}
                 onChangeText={(t) => patchDraft({ otherText: t })}
-                placeholder="Or answer in your own words"
+                placeholder="Your answer"
+                autoFocus
                 placeholderTextColor={Theme.inputPlaceholder}
                 multiline
               />

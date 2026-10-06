@@ -9,6 +9,7 @@ import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { taskDisplayTitle, isTriggerFailing, type TriggerRow, type TaskRow } from '@codecast/web/components/triggerTasks';
+import { useModeWords } from '@codecast/web/lib/surfaces';
 import { describeTaskCadence, fmtClock, fmtDuration, taskStateLabel } from '@codecast/web/components/triggerCadence';
 
 // The mobile TRIGGERS dock — the phone twin of GlobalSessionPanel's TriggerDock.
@@ -35,6 +36,9 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
 }) {
   const Theme = useTheme();
   const router = useRouter();
+  // Triggers are routines in hosted mode (lib/surfaces MODE_WORDS).
+  const words = useModeWords();
+  const cancelLabel = `Cancel ${words.trigger.toLowerCase()}`;
   const [expanded, setExpanded] = useState(false);
   const now = useCoarseNow(30_000);
 
@@ -58,11 +62,11 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
       { label: 'Run now', onPress: () => act(task._id, 'runNow') },
       { label: paused ? 'Resume' : 'Pause', onPress: () => act(task._id, paused ? 'resume' : 'pause') },
       {
-        label: 'Cancel trigger',
+        label: cancelLabel,
         destructive: true,
-        onPress: () => Alert.alert('Cancel this trigger?', taskDisplayTitle(task), [
+        onPress: () => Alert.alert(`Cancel this ${words.trigger.toLowerCase()}?`, taskDisplayTitle(task), [
           { text: 'Keep', style: 'cancel' },
-          { text: 'Cancel trigger', style: 'destructive', onPress: () => act(task._id, 'cancel') },
+          { text: cancelLabel, style: 'destructive', onPress: () => act(task._id, 'cancel') },
         ]),
       },
     ]);
@@ -80,7 +84,7 @@ export function TriggerDock({ rows, unreadCount, nextRunAt }: {
         <FontAwesome name={expanded ? 'chevron-up' : 'chevron-down'} size={11} color={Theme.textMuted0} />
         <FontAwesome name="clock-o" size={12} color={titleColor} style={{ marginLeft: 2 }} />
         <RNText style={[styles.headerTitle, { color: titleColor }]}>
-          Triggers ({rows.length})
+          {words.triggers} ({rows.length})
         </RNText>
         {nextIn !== undefined && (
           <RNText style={styles.headerNext} numberOfLines={1}>

@@ -115,6 +115,7 @@ import { callLineEl, seekCallMedia, showCallLine, useCallMomentLanding, type Cal
 import { RecordingMark } from "../../components/calls/RecordingMark";
 import { RecorderMic } from "../../components/calls/RecorderMic";
 import { fmtClock as fmtWhen } from "../../components/triggerCadence";
+import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 
 // A stable empty list, so a call page still loading asks no place query.
 const NO_CALLS: any[] = [];
@@ -1302,6 +1303,12 @@ export default function CallsPage() {
                       Every huddle lands in the list with its transcript, and its video when someone recorded it. Your voice notes are here too.
                     </p>
                   </div>
+                    <FeatureUpsell
+                      slug="calls"
+                      variant="inline"
+                      className="mt-5 rounded-md border text-left"
+                      reason="Let agents read these transcripts, so what was decided on a call reaches the work."
+                    />
                 </div>
               )}
             </div>

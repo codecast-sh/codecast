@@ -2359,6 +2359,80 @@ describe("reconcilePendingSendForSession — prune grace window", () => {
   });
 });
 
+describe("reconcilePendingSendForSession: an approval's answer in a hosted conversation", () => {
+  // The hosted turn consumes the answer and never writes it to the
+  // transcript, so no echo will retire its bubble.
+  const answer = () =>
+    ({ _id: "a1", _clientId: "a1", role: "user", content: 'Decision: Approve\n<cast-decision id="d1" question="Send it?"/>', timestamp: Date.now(), _isOptimistic: true, _sentBaselineTs: 100 }) as any;
+  const hosted = (over: Record<string, unknown>) => ({ agent_type: "codecast", agent_status: "idle", is_idle: false, has_pending: false, updated_at: 100, ...over }) as any;
+
+  // The decision the answer names, as the server has acknowledged it: no
+  // local lock on its status, and no longer pending.
+  const taken = { sessionDecisions: { d1: { status: "answered" } }, pending: {} };
+
+  it("settles once the row moves past the stamp it was sent at and the server holds the answer", () => {
+    const pm: Record<string, any[]> = { c1: [answer()] };
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 100 }), null, undefined, taken)).toBe(false);
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 200, has_pending: true }), null, undefined, taken)).toBe(false);
+    expect(convHasPendingSend(pm.c1)).toBe(true);
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 200 }), null, undefined, taken)).toBe(true);
+    expect(pm.c1[0]._isSettled).toBe(true);
+    expect(convHasPendingSend(pm.c1)).toBe(false);
+  });
+
+  it("does not settle on row movement alone while the answer is still this device's word", () => {
+    // A title or summary write moves the row while the answer waits in the
+    // outbox: the decision's status is still under its local lock.
+    const moved = hosted({ updated_at: 200 });
+    const locked = { sessionDecisions: { d1: { status: "answered" } }, pending: { "sessionDecisions:d1:status": { type: "field", value: "answered", ts: 150 } } };
+    const pm: Record<string, any[]> = { c1: [answer()] };
+    expect(reconcilePendingSendForSession(pm, "c1", moved, null, undefined, locked)).toBe(false);
+    expect(reconcilePendingSendForSession(pm, "c1", moved, null, undefined, { sessionDecisions: { d1: { status: "pending" } }, pending: {} })).toBe(false);
+    expect(reconcilePendingSendForSession(pm, "c1", moved, null)).toBe(false);
+    expect(pm.c1[0]._isSettled).toBeUndefined();
+  });
+
+  it("locks the decision's status under the key the settle reads", () => {
+    useInboxStore.setState({
+      sessionDecisions: { d1: { _id: "d1", conversation_id: "c1", session_id: "s", question: "Send it?", options: [{ label: "Approve" }], blocking: true, status: "pending" } } as any,
+      pending: {},
+    } as any);
+    useInboxStore.getState().answerDecision("d1", { index: 0 });
+    expect((useInboxStore.getState().pending as any)["sessionDecisions:d1:status"]?.type).toBe("field");
+    useInboxStore.setState({ sessionDecisions: {}, pending: {}, pendingMessages: {} } as any);
+  });
+
+  it("settles on the liveness overlay, which is all a finished conversation may still get", () => {
+    useInboxStore.setState({
+      sessions: { c1: { _id: "c1", agent_type: "codecast", agent_status: "working", has_pending: false, updated_at: 100 } } as any,
+      sessionDecisions: { d1: { _id: "d1", status: "answered" } } as any,
+      pending: {},
+      pendingMessages: { c1: [answer()] } as any,
+    } as any);
+    useInboxStore.getState().syncOverlay("sessions", { c1: { updated_at: 200, agent_status: "done" } });
+    expect(useInboxStore.getState().pendingMessages.c1[0]._isSettled).toBe(true);
+    useInboxStore.setState({ sessions: {}, pendingMessages: {}, sessionDecisions: {} } as any);
+  });
+
+  it("a failed answer sent again reads as on its way, then settles like any other", () => {
+    useInboxStore.setState({ pendingMessages: { c1: [{ ...answer(), _isOptimistic: undefined, _isFailed: true }] } } as any);
+    useInboxStore.getState().markOptimisticAsRetrying("c1", "a1");
+    const row = useInboxStore.getState().pendingMessages.c1[0];
+    expect(row._isFailed).toBeUndefined();
+    expect(row._isOptimistic).toBe(true);
+    const pm: Record<string, any[]> = { c1: [{ ...row }] };
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ updated_at: 200 }), null, undefined, taken)).toBe(true);
+    expect(pm.c1[0]._isSettled).toBe(true);
+    useInboxStore.setState({ pendingMessages: {} } as any);
+  });
+
+  it("waits for its echo in a conversation whose agent writes one", () => {
+    const pm: Record<string, any[]> = { c1: [answer()] };
+    expect(reconcilePendingSendForSession(pm, "c1", hosted({ agent_type: "claude_code", updated_at: 200 }), null)).toBe(false);
+    expect(pm.c1[0]._isSettled).toBeUndefined();
+  });
+});
+
 describe("session-view recording (MRU order + unread divider anchor)", () => {
   const realNow = Date.now;
   let clock = 1000;

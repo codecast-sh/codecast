@@ -46,6 +46,7 @@ import {
   dropDeadRoute,
   readUnsent,
   CATCH_UP_QUIET_MS,
+  CONTEXT_MIN_GAP_MS,
   DELIVER_RETRY_MAX,
   DELIVER_RETRY_MS,
 } from "./transcripts";
@@ -1254,6 +1255,25 @@ describe("pacing the words to a fed agent", () => {
     expect(v).toEqual({ deliver: true, lane: "context", held: false });
   });
 
+  test("context waits out the gap after the last context chunk, and a line that names the agent does not", () => {
+    const route = { context_at: 100_000 };
+    const inGap = 100_000 + CONTEXT_MIN_GAP_MS - 1;
+    expect(sessionDeliveryVerdict({ reason: "flush", now: inGap, route, pacing: ember, unsent: [seg("so the build is red", inGap - 5_000)] }))
+      .toEqual({ deliver: false, wait: "gap", at: 100_000 + CONTEXT_MIN_GAP_MS });
+    expect(sessionDeliveryVerdict({ reason: "flush", now: inGap, route, pacing: ember, unsent: [seg("Ember, is the build red?", inGap - 5_000)] }))
+      .toEqual({ deliver: true, lane: "ask", held: false });
+    const after = 100_000 + CONTEXT_MIN_GAP_MS;
+    expect(sessionDeliveryVerdict({ reason: "flush", now: after, route, pacing: ember, unsent: [seg("so the build is red", after - 5_000)] }))
+      .toEqual({ deliver: true, lane: "context", held: false });
+  });
+
+  test("the gap holds only a lull's flush: a hold's catch up and the gap's closing run deliver", () => {
+    const route = { context_at: 100_000 };
+    const now = 100_000 + 10_000;
+    expect(sessionDeliveryVerdict({ reason: "settle", now, route, pacing: ember, unsent: [seg("so the build is red", now - CATCH_UP_QUIET_MS - 1)] }).deliver).toBe(true);
+    expect(sessionDeliveryVerdict({ reason: "hold_expired", now, route, pacing: ember, unsent: [seg("so the build is red", now - CATCH_UP_QUIET_MS - 1)] }).deliver).toBe(true);
+  });
+
   test("a busy agent's context waits, with the watermark untouched", () => {
     const v = sessionDeliveryVerdict({ reason: "flush", now: 10_000, route: {}, pacing: { ...ember, busy: true }, unsent: [seg("so the build is red", 9_000)] });
     expect(v).toEqual({ deliver: false });
@@ -1495,7 +1515,11 @@ describe("delivering the words to the routes", () => {
     const again = actionCtx({ transcripts: [huddle([route()])] });
     await (deliverRoutes as any)._handler(again, { transcript_id: "t1", include_after_routes: false, reason: "flush" });
     expect(again.sends[0].client_id).toBe(c.sends[0].client_id);
-    expect(c.scheduled).toHaveLength(0);
+    // A context chunk opens a gap and books the one run that closes it.
+    expect(c.scheduled).toEqual([
+      { delay: CONTEXT_MIN_GAP_MS, name: "transcripts:deliverRoutes", args: { transcript_id: "t1", include_after_routes: false, reason: "settle" } },
+    ]);
+    expect((await c.db.get("t1" as any)).routes[0].context_at).toBeGreaterThan(0);
   });
 
   test("the call's final delivery retries with backoff, a bounded number of times", async () => {

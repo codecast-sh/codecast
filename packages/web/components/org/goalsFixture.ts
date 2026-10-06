@@ -113,7 +113,7 @@ const EVERY_PROJECT = UNION_PROJECTS.map((p) => p.title);
 const u = (id: string, seq: number, c: OrgProposalChange["change"], why: string) => change(`union-${id}`, seq, c, "proposed", "fixture-union-goals-proposal", why);
 
 export const UNION_GOALS_CHANGES: OrgProposalChange[] = [
-  u("purpose", 1, { kind: "initiative", title: PURPOSE, description: "Union is a curated relationship network that brokers high-value introductions. The business earns its fee when an introduction becomes a real transaction. Every goal below serves this.", owner: "Ashot Petrosian", projects: EVERY_PROJECT }, "Every call and the #team thread say this is what Union is for; nothing on the initiatives page does."),
+  u("purpose", 1, { kind: "initiative", title: PURPOSE, description: "Union is a curated relationship network that brokers high-value introductions. The business earns its fee when an introduction becomes a real transaction. Every goal below serves this.", owner: "Ashot Petrosian", projects: EVERY_PROJECT }, "Every call and the #team thread say this is what Union is for; nothing on the goals page does."),
   u("revenue", 2, { kind: "initiative", title: "Make revenue", description: "First on the list of core focuses; the fee paperwork for the first paying client is the work in flight.", owner: "Samvit Ramadurgam", parent: PURPOSE, projects: ["People & Deals"], metrics: [{ name: "Fees collected", target: "The first dollar" }] }, "First on the list of core focuses in the Monday call; the fee paperwork for the first paying client is in flight."),
   u("funnel", 3, { kind: "initiative", title: "Increase top of funnel", description: "Measured by the north star on the admin home page: cold emails delivered per day, about 90 today.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Infrastructure"], metrics: [{ name: "Cold emails per day", target: "10,000" }] }, "The admin home page calls cold emails per day the north star; no goal carries it."),
   u("conversion", 4, { kind: "initiative", title: "Improve funnel conversion rate", description: "The share of first-emailed people who reach a delivered introduction.", owner: "Ashot Petrosian", parent: PURPOSE, projects: ["Matching Engine & Funnel", "Callers & Call Management", "camerons ideas"], metrics: [{ name: "Email to intro rate", target: "0.20%" }, { name: "Cold email reply rate", target: "1% higher" }] }, "Three projects measure the same rate from different ends; one goal gives them a shared target."),
@@ -133,8 +133,8 @@ export const UNION_GOALS_PROPOSAL: OrgProposalRow = {
   team_id: UNION_TEAM,
   author: { kind: "role", id: HEAD, name: "Head of People", short_id: "or-35", handle: "head-of-people", avatar: "snail" },
   title: "Name the goals the work already serves",
-  summary_md: "The projects' own goals, and what the company said in its calls and threads, point at these goals; the initiatives page does not hold them yet.",
-  asks: [{ title: "7 goals to set, and 4 changes to the goals that exist", why: "The projects' own goals, and what the company said in its calls and threads, point at these goals; the initiatives page does not hold them yet.", effect: "11 changes on the initiatives page: a goal set, a project added to one, or an owner named. No work starts or stops.", seqs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] }],
+  summary_md: "The projects' own goals, and what the company said in its calls and threads, point at these goals; the goals page does not hold them yet.",
+  asks: [{ title: "7 goals to set, and 4 changes to the goals that exist", why: "The projects' own goals, and what the company said in its calls and threads, point at these goals; the goals page does not hold them yet.", effect: "11 changes on the goals page: a goal set, a project added to one, or an owner named. No work starts or stops.", seqs: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] }],
   mode: "review",
   status: "open",
   created_at: Date.UTC(2026, 9, 4, 1),
