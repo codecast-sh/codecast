@@ -42,6 +42,7 @@ it stale; `index.ts` captures, replays and gates it.
 | org-review | agent | the org analyzer over a served workspace |
 | role-wake | agent | a role's trigger frame over its served reads |
 | anchor-brief | agent | a standing session's opening, and for a fixture the turns after it |
+| guidance | agent | the codecast sections an install writes into CLAUDE.md, loaded as the run's user-level CLAUDE.md (`prompt-dry-run.ts --claude-md`); each fixture is a request, graded on the first tool the agent reaches for |
 
 Call surfaces build their request with the same exported function prod posts
 (`titleRequest`, `settleRequest`, `insightRequest` and the rest), so the prompt

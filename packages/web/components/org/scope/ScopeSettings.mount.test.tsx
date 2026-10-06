@@ -35,7 +35,8 @@ async function verify() {
   // Keep the module's other exports: mock.module is process wide in a bun run.
   const realCommentStream = { ...(await import("../../tasks/TaskCommentStream")) };
   mock.module("../../tasks/TaskCommentStream", () => ({ ...realCommentStream, Avatar: ({ name }: any) => React.createElement("span", { "data-avatar": name }) }));
-  mock.module("../OrgScopePanel", () => ({ GatedScopeEditor: () => React.createElement("div", { "data-scope-editor": true }), InlineEdit: () => null }));
+  const realScopeEditors = { ...(await import("./ScopeEditors")) };
+  mock.module("./ScopeEditors", () => ({ ...realScopeEditors, GatedScopeEditor: () => React.createElement("div", { "data-scope-editor": true }), InlineEdit: () => null }));
   mock.module("../RetireRoleConfirm", () => ({ RetireRoleConfirm: () => null }));
   mock.module("../../anchor/SlackConnect", () => ({ SlackConnect: () => null }));
   mock.module("../../ui/select-box", () => ({ SelectBox: ({ children, ...rest }: any) => React.createElement("select", rest, children) }));

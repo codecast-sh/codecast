@@ -15,7 +15,7 @@
 import { defineTable } from "convex/server";
 import { v } from "convex/values";
 import { ADDABLE_SOURCE_PROVIDERS, GROUP_KINDS, GROUP_STATUSES, SOURCE_PROVIDERS, SOURCE_STATUSES, TRANSITIONS, WATCH_DIRECTIONS, WATCH_KINDS } from "@codecast/shared/contracts/ingest";
-import { REPLAY_PROVIDERS } from "@codecast/shared/contracts/replay";
+import { REPLAY_BACKFILL_STATUSES, REPLAY_BACKFILL_WINDOWS, REPLAY_PROVIDERS } from "@codecast/shared/contracts/replay";
 
 // The literal lists derive from the shared contract, the way openTaskValidator does, so the two cannot drift.
 const literals = <T extends string>(values: readonly T[]) => v.union(...values.map((value) => v.literal(value)));
@@ -30,6 +30,25 @@ export const transitionValidator = literals(TRANSITIONS);
 export const watchKindValidator = literals(WATCH_KINDS);
 export const watchDirectionValidator = literals(WATCH_DIRECTIONS);
 export const replayProviderValidator = literals(REPLAY_PROVIDERS);
+
+/** A source's bulk import of its vendor's recordings (X5; contracts/replay.ts ReplayBackfill). */
+export const replayBackfillValidator = v.object({
+  status: literals(REPLAY_BACKFILL_STATUSES),
+  window: literals(REPLAY_BACKFILL_WINDOWS),
+  since: v.optional(v.number()),
+  until: v.number(),
+  cursor: v.optional(v.string()),
+  page_seen: v.optional(v.array(v.string())),
+  listed: v.number(),
+  imported: v.number(),
+  skipped: v.number(),
+  failed: v.number(),
+  failures_in_row: v.optional(v.number()),
+  last_error: v.optional(v.string()),
+  started_at: v.number(),
+  updated_at: v.number(),
+  finished_at: v.optional(v.number()),
+});
 
 export const ingestUserValidator = v.object({
   id: v.optional(v.string()),
@@ -134,6 +153,8 @@ export const ingestTables = {
     /** Analytics `event` items counted per name and hour, never stored (X2): lib/ingestGroups countEventNames. */
     event_names: v.optional(v.array(v.object({ name: v.string(), buckets: v.array(v.object({ hour: v.number(), count: v.number() })) }))),
     groups_open: v.optional(v.number()),
+    /** The bulk import of a PostHog or Sentry source's recordings (sources/replayBackfill.ts). Written once per page. */
+    replay_backfill: v.optional(replayBackfillValidator),
     created_at: v.number(),
     updated_at: v.number(),
   })

@@ -146,3 +146,47 @@ test("with no role on the project, the empty state points to where a role's area
   expect(empty.querySelector("a")!.getAttribute("href")).toBe("/org");
   await m.unmount();
 });
+
+// line-map.md LX5: a project whose profile a machine published keeps its line
+// in its repo; the workflow copy is not offered, and an edit is a station op
+// on the profile's edit path, painted at once.
+test("a published project edits its repo's line through the profile's edit path", async () => {
+  fork = null;
+  const sent: any[] = [];
+  const published = {
+    root: "/src/app", device_id: "dev-1", publisher_user_id: ME, default: true, finders: [], changed_at: 1, published_at: 1,
+    commands: { check: "cast ws check", prove: null, eval: null, ship: null }, sources: {}, notes: [], warnings: [], file: ".codecast/line.toml",
+  };
+  useInboxStore.setState({
+    projects: { p1: { ...project, line_profile: published } },
+    sessionCommands: {},
+    editLineProfile: (requestId: string, projectId: string, edits: unknown[]) => {
+      sent.push(edits);
+      useInboxStore.setState((s: any) => ({ sessionCommands: { ...s.sessionCommands, [requestId]: { _id: requestId, kind: "line_edit", project_id: projectId, edits, keys: (edits as any[]).map((e) => `stations.${e.station}`), requested_at: Date.now(), executed_at: null, result: null, error: null } } }));
+      return Promise.resolve({ command_id: "c1" });
+    },
+  } as any);
+  const m = await mount();
+  expect(m.host.querySelector("[data-line-stations]")!.getAttribute("data-line-home")).toBe("repo");
+  expect(headline(m.host)).toBe("This project's repo has no line of its own yet, so its runs use their role's line or the shipped one.");
+  expect(m.host.querySelector("[data-customize-line]")).toBeNull();
+
+  await act(async () => { m.host.querySelector<HTMLButtonElement>("[data-node='prove']")!.click(); });
+  const timeout = m.host.querySelector<HTMLInputElement>("[data-station-timeout]")!;
+  await act(async () => {
+    const set = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value")!.set!;
+    set.call(timeout, "10");
+    timeout.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  await act(async () => { timeout.dispatchEvent(new dom.window.FocusEvent("focusout", { bubbles: true })); });
+  expect(sent).toEqual([[{ op: "set_station", station: "prove", timeout: 600 }]]);
+  expect(calls).toHaveLength(0);
+  // Painted ahead of the machine: the station reads as changed from shipped.
+  expect(m.host.textContent).toMatch(/edited: timeout/);
+
+  // Once the republish carries the repo's line, the header names its version.
+  useInboxStore.setState({ projects: { p1: { ...project, line_profile: { ...published, published_at: 2, line: { file: ".codecast/line/line.cast", graph_hash: "abcdef0123456789", name: "line", source: "", nodes: SHIPPED_LINE.nodes, edges: SHIPPED_LINE.edges, files: {} } } } } } as any);
+  await m.render();
+  expect(headline(m.host)).toBe("This project's line lives in its repo, in .codecast/line, at version abcdef01.");
+  await m.unmount();
+});

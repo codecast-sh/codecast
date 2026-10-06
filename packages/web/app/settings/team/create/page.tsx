@@ -4,7 +4,10 @@ import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { Input } from "../../../../components/ui/input";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { Label } from "../../../../components/ui/label";
+import { Switch } from "../../../../components/ui/switch";
+import { useQueryNoThrow } from "../../../../hooks/useQueryNoThrow";
 import { TEAM_ICONS, TEAM_COLORS } from "../../../../components/TeamIcon";
 import { TeamFlowShell, type TeamFlowStep } from "../../../../components/team/TeamFlowShell";
 import { TeamCrest } from "../../../../components/team/TeamCrest";
@@ -52,6 +55,10 @@ export default function CreateTeamPage() {
   // jump back never demotes the steps the user has already seen.
   const [maxVisited, setMaxVisited] = useState(0);
   const [name, setName] = useState("");
+  // On by default for a creator with a proven work domain: teams form on day
+  // one, and this is how a coworker who signs up alone finds this one.
+  const [findable, setFindable] = useState(true);
+  const workDomain = useQueryNoThrow(api.teamDiscovery.myWorkDomain, {}).data;
   const [identity, setIdentity] = useState<TeamIdentity>(() => ({
     icon: randomPick(TEAM_ICONS),
     color: randomPick(TEAM_COLORS),
@@ -147,6 +154,7 @@ export default function CreateTeamPage() {
       name: trimmed,
       icon: identity.icon,
       icon_color: identity.color,
+      discoverable: !!workDomain?.proven && findable,
     });
     teamIdPromise.current = p;
     setStep(1);
@@ -286,6 +294,24 @@ export default function CreateTeamPage() {
           </div>
 
           <TeamIdentityPicker value={identity} onChange={setIdentity} />
+
+          {!created && workDomain?.domain && (
+            workDomain.proven ? (
+              <label className="flex items-start justify-between gap-4 rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-3">
+                <span className="min-w-0">
+                  <span className="block text-sm text-sol-text">Let @{workDomain.domain} coworkers find this team</span>
+                  <span className="block text-xs text-sol-text-muted">
+                    People who sign in with a verified @{workDomain.domain} address see the team's name and can ask to join. You approve each one.
+                  </span>
+                </span>
+                <Switch checked={findable} onCheckedChange={setFindable} aria-label={`Let @${workDomain.domain} coworkers find this team`} />
+              </label>
+            ) : (
+              <p className="text-xs text-sol-text-dim">
+                To let @{workDomain.domain} coworkers find this team, confirm your email later from Settings → Team.
+              </p>
+            )
+          )}
 
           {createError && (
             <div role="alert" className="p-3 bg-sol-red/10 border border-sol-red/20 rounded-lg">

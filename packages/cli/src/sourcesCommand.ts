@@ -23,6 +23,7 @@ import { stdinText } from "./sendBody.js";
 import { codecastJsonPath, committedIngestKey, writeCodecastJson } from "./codecastJson.js";
 import { lineProjectFor } from "./signalCommand.js";
 import { ADDABLE_SOURCE_PROVIDERS, GITHUB_CI_SOURCE_NAME, KEYED_SOURCE_PROVIDERS, SOURCE_CONFIG_FIELDS, SOURCE_PROVIDERS, SYSTEM_SOURCE_PROVIDERS, eventNameRows, type EventNameCounts, type SourceProvider } from "@codecast/shared/contracts/ingest";
+import { replayBackfillLine, type ReplayBackfill } from "@codecast/shared/contracts/replay";
 
 export interface SourceRow {
   _id: string;
@@ -44,6 +45,8 @@ export interface SourceRow {
   promote?: string[];
   fingerprint_prefix?: string;
   config?: Record<string, unknown>;
+  /** A PostHog or Sentry source's bulk import of its recordings (`cast replay import`). */
+  replay_backfill?: ReplayBackfill;
 }
 
 /** `cast sources add` flags: the shared ones, plus one per SOURCE_CONFIG_FIELDS entry, keyed by commander's name for it. */
@@ -134,6 +137,7 @@ export function formatSourceDetail(s: SourceRow, now: number = Date.now()): stri
   if (s.last_poll_at) lines.push(fmt.muted(`  last poll ${ago(s.last_poll_at, now)}`));
   if (s.promote?.length) lines.push(fmt.muted(`  promotes ${s.promote.join(", ")} to signals`));
   if (s.fingerprint_prefix) lines.push(fmt.muted(`  fingerprints as ${s.fingerprint_prefix}:<kind>:<fp>`));
+  if (s.replay_backfill) lines.push(fmt.muted(`  recordings: ${replayBackfillLine(s.replay_backfill, now)}`));
   for (const [k, v] of Object.entries(s.config ?? {})) lines.push(fmt.muted(`  ${k}: ${Array.isArray(v) ? v.join(", ") : String(v)}`));
   const events = eventNameRows(s.event_names, now);
   if (events.length) {

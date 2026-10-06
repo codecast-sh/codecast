@@ -34,7 +34,7 @@ mock.module("../../hooks/useProjectLead", () => ({ useProjectLead: () => ({ proj
 
 const { createRoot } = await import("react-dom/client");
 const { TakeoverGate } = await import("./TakeoverEdit");
-const { GatedScopeEditor } = await import("./OrgScopePanel");
+const { GatedScopeEditor } = await import("./scope/ScopeEditors");
 const { ORG_FIXTURE } = await import("./orgFixture");
 
 const WS = { kind: "team" as const, id: "fixture-team", name: "Acme" };

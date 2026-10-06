@@ -10,6 +10,8 @@ import { ownerOf } from "@codecast/shared/contracts/orgLead";
 import { matchHandle, teamRoster } from "./lib/mentionResolve";
 import { chainAssignees, roleAssigneeInfo, type AssigneeInfo } from "@codecast/shared/contracts/orgAssignee";
 import { enqueueStartSession } from "./devices";
+import { resolveCallRef } from "./transcripts";
+import { outcomeOfDeclaration, subagentEnded } from "./subagentFleet";
 import { formatTaskCommentMessage, fromConvexAgentType, inlineForeignText, toConvexAgentType } from "@codecast/shared/contracts";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import {
@@ -78,6 +80,7 @@ import {
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
+import { changeGuideInputValidator } from "./lib/changeGuideValidator";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -1192,10 +1195,23 @@ async function defaultSessionOwner(
   return role && !roleAssigneeRefusal(role, boundary) ? String(role._id) : String(userId);
 }
 
+/** A `from_call` write: the call a task was pulled from, named as prose names
+ *  it (`cl-42` or a full id) and readable by the writer. Undefined writes
+ *  nothing; "" clears the link. */
+async function resolveFromCall(ctx: any, userId: Id<"users">, ref: string | undefined): Promise<Id<"transcripts"> | null | undefined> {
+  if (ref === undefined) return undefined;
+  if (!ref.trim()) return null;
+  const call = await resolveCallRef(ctx, userId, ref);
+  if (!call) notFound(`Call not found: ${ref}`);
+  return call._id;
+}
+
 export const create = mutation({
   args: {
     api_token: v.string(),
     title: v.string(),
+    // `cast task create --from-call cl-42`: the call this task came out of.
+    from_call: v.optional(v.string()),
     client_key: v.optional(v.string()),
     // `cast task create --team <name>|personal`: an explicit workspace wins
     // over the session's team and the directory rule (writes are explicit).
@@ -1293,6 +1309,8 @@ export const create = mutation({
       if (!project_id && parent.project_id) project_id = parent.project_id;
     }
 
+    const from_call = (await resolveFromCall(ctx, auth.userId, args.from_call)) ?? undefined;
+
     // Creator enrollment is human only when a person decided the task: human
     // or meeting origin, or an explicit promotion to the human board. An
     // agent's own work task enrolls its owner as an agent act.
@@ -1337,6 +1355,7 @@ export const create = mutation({
       conversation_ids,
       created_from_conversation,
       created_from_insight: args.insight_id as any,
+      from_call,
       source: (args.source || "human") as any,
       triage_status: args.source === "insight" ? "suggested" : "active",
       confidence: args.confidence,
@@ -1987,6 +2006,8 @@ export const update = mutation({
   args: {
     api_token: v.string(),
     short_id: v.string(),
+    // `cast task update --call cl-42`: the call this task came out of; "" clears.
+    from_call: v.optional(v.string()),
     status: v.optional(v.string()),
     // Team status id refining the category; "" clears back to the default.
     status_id: v.optional(v.string()),
@@ -2023,6 +2044,8 @@ export const update = mutation({
     execution_concerns: v.optional(v.string()),
     verification_evidence: v.optional(v.string()),
     files_changed: v.optional(v.array(v.string())),
+    // `cast task handoff --guide`: the author's walkthrough, stamped here.
+    change_guide: v.optional(changeGuideInputValidator),
     estimated_minutes: v.optional(v.number()),
     // The review station's verdict (the-line.md L3), recorded with the status
     // move in this one write. by_conversation_id is the caller's session.
@@ -2068,6 +2091,8 @@ export const update = mutation({
     if (args.description !== undefined) updates.description = args.description;
     if (args.labels) updates.labels = args.labels;
     if (args.promoted !== undefined) updates.promoted = args.promoted;
+    const fromCall = await resolveFromCall(ctx, auth.userId, args.from_call);
+    if (fromCall !== undefined) updates.from_call = fromCall ?? undefined;
     const targetWorkspace = args.team_id
       ? { type: "team" as const, teamId: args.team_id }
       : task.team_id
@@ -2139,6 +2164,7 @@ export const update = mutation({
     if (args.execution_concerns !== undefined) updates.execution_concerns = args.execution_concerns;
     if (args.verification_evidence !== undefined) updates.verification_evidence = args.verification_evidence;
     if (args.files_changed) updates.files_changed = args.files_changed;
+    if (args.change_guide) updates.change_guide = { ...args.change_guide, written_at: now };
     if (args.estimated_minutes !== undefined) updates.estimated_minutes = args.estimated_minutes;
     Object.assign(updates, groundPatch(args));
     if (args.watch_days !== undefined) updates.watch_until = watchUntilFor(args.watch_days, now);
@@ -2220,6 +2246,12 @@ export const update = mutation({
             await ctx.db.patch(conv._id, { active_plan_id: task.plan_id });
           }
         }
+      }
+      // A worker closing or handing off its task ends its turn at its fleet
+      // slot (subagentFleet.ts): done merges its worktree back, blocked keeps it.
+      if (conv.parent_conversation_id) {
+        const outcome = outcomeOfDeclaration(args.execution_status === "done_with_concerns" ? "done" : args.execution_status ?? (nextStatus === "done" ? "done" : undefined));
+        if (outcome) await subagentEnded(ctx, conv, outcome);
       }
       // Clear active_task_id when task is closed
       if ((nextStatus === "done" || nextStatus === "dropped") && conv.active_task_id === task._id) {
@@ -2886,6 +2918,8 @@ async function enrichTasks(ctx: any, userId: Id<"users">, result: any[]): Promis
         }
       : null;
     t.session_count = (t.conversation_ids || []).length;
+    // The guide carries its hunks and rides the evidence read, never a list.
+    delete t.change_guide;
   }
   return result;
 }
@@ -3577,6 +3611,8 @@ const webUpdateArgs = {
   // has no session behind it, so the verdict counts as outside every role.
   review_verdict: v.optional(v.union(v.literal("approve"), v.literal("changes"), v.literal("reject"))),
   review_note: v.optional(v.string()),
+  // The call this task came out of (a call ref); "" clears.
+  from_call: v.optional(v.string()),
 };
 
 export const webUpdate = mutation({
@@ -3629,6 +3665,8 @@ export async function updateTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
     updates.short_title = undefined;
   }
   if (args.description !== undefined) updates.description = args.description;
+  const fromCall = await resolveFromCall(ctx, userId, args.from_call);
+  if (fromCall !== undefined) updates.from_call = fromCall ?? undefined;
   if (args.assignee !== undefined) {
     updates.assignee = await resolveAssigneeStr(ctx, args.assignee, userId, await assigneeScopeOf(ctx, task)) || args.assignee;
   }
@@ -4015,6 +4053,8 @@ const webCreateArgs = {
   parent: v.optional(v.string()),
   // Optimistic-create idempotency key (see schema.tasks.client_key).
   client_key: v.optional(v.string()),
+  // The call this task came out of (a call ref): the call page's create.
+  from_call: v.optional(v.string()),
 };
 
 export const webCreate = mutation({
@@ -4113,6 +4153,7 @@ export async function createTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
   const short_id = await nextShortId(ctx.db, "ct");
 
   const resolvedAssignee = await resolveAssigneeStr(ctx, args.assignee, userId, boundaryOfWorkspace(db.workspace));
+  const from_call = (await resolveFromCall(ctx, userId, args.from_call)) ?? undefined;
 
   // Category + custom-status resolution against the resolved workspace's
   // team. Also validates args.status (this path used to skip the assert and
@@ -4142,6 +4183,7 @@ export async function createTaskAs(ctx: MutationCtx, userId: Id<"users">, args: 
     priority: (args.priority || "medium") as any,
     labels: args.labels,
     assignee: resolvedAssignee,
+    from_call,
     source: "human",
     attempt_count: 0,
     retry_count: 0,
