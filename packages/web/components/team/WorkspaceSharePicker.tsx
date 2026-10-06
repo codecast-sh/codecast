@@ -14,6 +14,8 @@ import {
   type UserWorkspace,
 } from "../../hooks/useTeamWorkspaceSuggestions";
 import "./teamFlow.css";
+import { SetupThisMachine } from "../EmptyState";
+import { cliJustConnected } from "../../lib/cliConnected";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
@@ -90,6 +92,8 @@ export function WorkspaceSharePicker({
   // by short name or full path; selection is untouched, so a checked repo
   // stays checked while filtered out of view.
   const [filter, setFilter] = useState("");
+  // A machine connected from this step (or by `cast auth` just now in this tab).
+  const [connected, setConnected] = useState(() => cliJustConnected());
   const total = matched.length + other.length;
   const filterable = total > 8;
   const rootRef = useRef<HTMLDivElement>(null);
@@ -234,22 +238,14 @@ export function WorkspaceSharePicker({
       {allProjects && allProjects.length === 0 && (
         <div className="rounded-lg border border-sol-border bg-sol-bg-alt/40 px-4 py-5 space-y-3">
           <div className="text-sm text-sol-text font-medium">
-            No workspaces found yet
+            {connected ? "Waiting for your first sessions" : "Connect this machine first"}
           </div>
           <p className="text-xs text-sol-text-muted leading-relaxed">
-            Workspaces appear here once you start sessions with the
-            Codecast CLI. Install and authenticate, then your repos will
-            be available to share.
+            {connected
+              ? "Your repos appear here as soon as the daemon syncs your sessions. Run your agent in a repo, or come back to this step later from the team feed."
+              : "Your repos come from your agent sessions, so the team can only see work on a machine running codecast. One step installs it and signs this account in."}
           </p>
-          <div className="font-mono text-xs text-sol-text-muted bg-sol-bg rounded-md px-3 py-2 select-all">
-            curl -fsSL codecast.sh/install | sh
-          </div>
-          <p className="text-[11px] text-sol-text-dim">
-            After installing, run{" "}
-            <span className="font-mono text-sol-text-muted">cast auth</span>{" "}
-            to connect your account, then start a session in any git
-            repo.
-          </p>
+          {!connected && <SetupThisMachine onConnected={() => setConnected(true)} />}
         </div>
       )}
 

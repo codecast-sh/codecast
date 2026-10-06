@@ -42,6 +42,8 @@ import { changesZone, markDayDirty } from "./lib/changesDirty";
 import { teamDayBounds } from "./lib/teamDay";
 import { normalizeRepository } from "./lib/gitRefs";
 import { STORY_PROMPT_VERSION, hasEditionProse, projectCommit } from "./changes";
+import { linkedEntityIdsForConversation } from "./conversationLinks";
+import { changeGuideOutline } from "@codecast/shared/contracts/changeGuide";
 
 export const EDITION_PROMPT_VERSION = "edition-3";
 
@@ -71,6 +73,8 @@ const PROMPT_PATHS = 8;
 const PR_BODY_CHARS = 2400;
 const PROMPT_TURNS = 8;
 const ASK_CHARS = 300;
+/** The author's change guide outline, per session (ct-57527). */
+const GUIDE_CHARS = 1600;
 const DID_CHARS = 160;
 /** A risk line keeps the whole sentences that fit this. */
 const RISK_LINE_CHARS = 320;
@@ -119,6 +123,8 @@ export type StoryPromptSession = {
   summary: string;
   /** Present only for a session the team sees at `full`. */
   turns?: Array<{ ask: string; did: string[] }>;
+  /** The change guide the session wrote at handoff: its own order and reasons. */
+  guide?: string;
 };
 
 /** A screenshot the story may place, by ref; its URL stays out of the prompt. */
@@ -167,6 +173,8 @@ export type GatedSession = {
   turns?: Array<{ ask: string; did: string[] }>;
   /** Only for a session the team sees in full (changesAccess.teamVisibleMedia). */
   media?: ChangesMedia;
+  /** Outline of the change guide on a team task the session worked (sessionGuide). */
+  guide?: string;
 };
 
 const shortSha = (s: string) => (/^[0-9a-f]{40}$/i.test(s) ? s.slice(0, 9) : s);
@@ -264,6 +272,7 @@ export function storyPromptInput(
       ...(s.headline ? { headline: s.headline } : {}),
       summary: s.summary,
       ...(s.mode === "full" && s.turns?.length ? { turns: pickTurns(s.turns) } : {}),
+      ...(s.guide ? { guide: s.guide } : {}),
     })),
     risks,
     ...storyMedia(sessions),
@@ -347,6 +356,7 @@ function renderStoryInput(i: StoryPromptInput): string {
         out.push(`    Asked: ${t.ask}`);
         if (t.did.length) out.push(`    Did: ${t.did.join("; ")}`);
       }
+      if (s.guide) out.push("    The author's guide to the change, in their order:", indent(s.guide, "      "));
     }
   }
 
@@ -661,9 +671,11 @@ async function gatedSessions(
   const gate = await teamVisibleInputs(ctx, teamId, ids);
   const media = work ? await teamVisibleMedia(ctx, [...gate.values()], work) : new Map<string, ChangesMedia>();
   const out: GatedSession[] = [];
+  const guidedTasks = new Set<string>();
   for (const id of ids) {
     const input = gate.get(String(id));
     if (!input?.insight) continue;
+    const guide = await sessionGuide(ctx, teamId, id, guidedTasks);
     out.push({
       conversation_id: input.conversation_id,
       mode: input.mode,
@@ -672,9 +684,31 @@ async function gatedSessions(
       summary: input.insight.summary,
       ...(input.insight.turns ? { turns: input.insight.turns } : {}),
       ...(media.has(String(id)) ? { media: media.get(String(id))! } : {}),
+      ...(guide ? { guide } : {}),
     });
   }
   return out;
+}
+
+/**
+ * The change guide (ct-57527) on a task the session worked, as a plain
+ * outline, so the story can follow the author's own order and reasons. Only a
+ * task in the team's workspace lends its guide, and each task's guide is told
+ * once per story (`seen`).
+ */
+async function sessionGuide(ctx: { db: any }, teamId: Id<"teams">, conversationId: Id<"conversations">, seen: Set<string>): Promise<string | undefined> {
+  const conv = await ctx.db.get(conversationId);
+  const ids = new Set(await linkedEntityIdsForConversation(ctx, conversationId, "task"));
+  if (conv?.active_task_id) ids.add(String(conv.active_task_id));
+  for (const raw of [...ids].slice(0, 10)) {
+    if (seen.has(raw)) continue;
+    const id = ctx.db.normalizeId("tasks", raw);
+    const task = id ? await ctx.db.get(id) : null;
+    if (!task?.change_guide?.steps?.length || task.workspace !== `team:${teamId}`) continue;
+    seen.add(raw);
+    return clip(changeGuideOutline(task.change_guide), GUIDE_CHARS);
+  }
+  return undefined;
 }
 
 
