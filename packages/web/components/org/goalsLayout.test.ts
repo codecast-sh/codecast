@@ -5,7 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { ORG_FIXTURE } from "./orgFixture";
 import { rectsOverlap, personNodeId, roleNodeId } from "./orgLayout";
-import { COMPANY_NODE_ID, goalFarHeight, goalNodeId, goalsPlan, hasGoalChanges, layoutGoals, projectNodeId, projectRows, runningUnder, RUNNING_MAX, type GoalsNode } from "./goalsLayout";
+import { COMPANY_NODE_ID, GOALS_SIZES, goalFarHeight, goalNodeId, goalsPlan, hasGoalChanges, layoutGoals, LOOSE_NODE_ID, projectNodeId, projectRows, runningUnder, RUNNING_MAX, type GoalsNode } from "./goalsLayout";
+import { UNION_GOALS_CHANGES, UNION_GOALS_DATA, UNION_GOALS_TREE } from "./goalsFixture";
 import { GOALS_FIXTURE_CHANGES, GOALS_FIXTURE_DATA } from "./goalsFixture";
 import { proposalChangeRows } from "./proposalTree";
 
@@ -96,7 +97,7 @@ describe("the goals lens without a proposal", () => {
     expect(mid.height).toBeLessThan(close.height);
     // A far goal is its title alone; the close card adds the description, the update and the rest under the middle one.
     const g = (l: typeof far) => node(l.nodes, goalNodeId("init-org"), "goal");
-    expect(g(far).h).toBe(goalFarHeight(g(far).goal.title));
+    expect(g(far).h).toBe(goalFarHeight(g(far).goal.title, g(far).mission));
     expect(g(close).h).toBeGreaterThan(g(mid).h);
     // Same cards in the same order at every level: only the heights and what follows from them move.
     expect(far.nodes.map((n) => n.id)).toEqual(close.nodes.map((n) => n.id));
@@ -107,7 +108,7 @@ describe("the goals lens without a proposal", () => {
   test("no two cards overlap, and the owners stand clear of the outline", () => {
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
     const outlineRight = Math.max(...nodes.filter((n) => n.kind !== "owner").map((n) => n.x + n.w));
-    for (const o of nodes.filter((n) => n.kind === "owner")) expect(o.x).toBeGreaterThan(outlineRight + 100);
+    for (const o of nodes.filter((n) => n.kind === "owner")) expect(o.x).toBe(outlineRight + GOALS_SIZES.ownerGap);
   });
 });
 
@@ -178,5 +179,116 @@ describe("a proposal's goal changes as ghosts", () => {
   test("the lens a proposal opens in follows what it changes", () => {
     expect(hasGoalChanges(GOALS_FIXTURE_CHANGES)).toBe(true);
     expect(hasGoalChanges([{ ...GOALS_FIXTURE_CHANGES[0], change: { kind: "retire", handle: "growth", reason: "x" } }])).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------- the map (S40)
+
+describe("the map over the Union fixture", () => {
+  const union = (changes: readonly OrgProposalChange[] = [], people?: "owners" | "everyone" | "none") => layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, changes, people });
+
+  test("Everything puts every person and active role in the column, with their sessions by state and who a role reports to", () => {
+    const { nodes } = union([], "everyone");
+    const owners = nodes.filter((n): n is Extract<GoalsNode, { kind: "owner" }> => n.kind === "owner");
+    const ids = owners.map((o) => o.id);
+    for (const p of UNION_GOALS_TREE.people) expect(ids).toContain(`person:${p.user_id}`);
+    for (const r of UNION_GOALS_TREE.roles) expect(ids).toContain(`role:${r._id}`);
+    const quality = owners.find((o) => o.id === "role:fixture-role-agent-quality")!;
+    expect(quality.counts).toBeDefined();
+    expect(Object.values(quality.counts!).reduce((a, b) => a + b, 0)).toBe(UNION_GOALS_TREE.roles[1].sessions.length);
+    expect(quality.reportsTo).toBe("Ashot Petrosian");
+    // A fixed order, people first (me at the top) then roles by name, so the column reads the same with the proposal on and off.
+    expect(ids).toEqual(["person:fixture-user-me", "person:fixture-user-samvit", "role:fixture-role-agent-quality", "role:fixture-role-head-of-people"]);
+    expect(owners.find((o) => o.id === "person:fixture-user-samvit")!.owns).toBe(0);
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) expect(rectsOverlap(nodes[i], nodes[j])).toBe(false);
+  });
+
+  test("Goals alone draws no column; the owners column is the lens' default", () => {
+    expect(union([], "none").nodes.some((n) => n.kind === "owner")).toBe(false);
+    const owners = union().nodes.filter((n) => n.kind === "owner");
+    expect(owners.length).toBeGreaterThan(0);
+    expect(owners.length).toBeLessThan(union([], "everyone").nodes.filter((n) => n.kind === "owner").length);
+  });
+
+  test("projects no goal carries sit under one quiet header at the foot of the outline, each with its sessions", () => {
+    const { nodes, edges } = union();
+    const loose = node(nodes, LOOSE_NODE_ID, "loose");
+    const carried = new Set(UNION_GOALS_DATA.initiatives.flatMap((g) => g.project_ids));
+    const expected = UNION_GOALS_DATA.projects.filter((p) => !carried.has(p._id));
+    expect(loose.projects).toBe(expected.length);
+    const rows = nodes.filter((n) => n.kind === "project" && n.id.startsWith(`project:${LOOSE_NODE_ID}:`));
+    expect(rows.length).toBe(expected.length);
+    for (const r of rows) expect(edges.some((e) => e.kind === "spine" && e.source === LOOSE_NODE_ID && e.target === r.id)).toBe(true);
+    // Every goal row sits above the loose block.
+    expect(Math.max(...nodes.filter((n) => n.kind === "goal").map((n) => n.y + n.h))).toBeLessThan(loose.y);
+    // The Agent Quality project is under the quality role's area: its row carries that role's sessions.
+    const quality = nodes.find((n): n is Extract<GoalsNode, { kind: "project" }> => n.kind === "project" && n.project.id === "union-proj-quality")!;
+    expect(quality.counts).toBeDefined();
+  });
+
+  test("a top level goal that other goals feed is the mission; a flat list has none; a sole mission is the root and wears the company", () => {
+    expect(node(union().nodes, COMPANY_NODE_ID, "company").mission).toBe(false);
+    expect(union().nodes.some((n) => n.kind === "goal" && n.mission)).toBe(false);
+    const after = union(UNION_GOALS_CHANGES);
+    // One mission over everything: no company card; the mission is the root at the origin with the company's name and totals.
+    expect(after.nodes.some((n) => n.kind === "company")).toBe(false);
+    const missions = after.nodes.filter((n): n is Extract<GoalsNode, { kind: "goal" }> => n.kind === "goal" && n.mission);
+    expect(missions.map((m) => m.goal.title)).toEqual(["Broker high-value introductions that become real transactions"]);
+    expect(missions[0].x).toBe(0);
+    expect(missions[0].y).toBe(0);
+    // The totals are what hangs under the mission: nine goals, nine projects.
+    expect(missions[0].root).toEqual({ name: "Union", goals: 9, projects: 9 });
+    expect(missions[0].hasChildren).toBe(true);
+    expect(after.edges.some((e) => e.source === COMPANY_NODE_ID)).toBe(false);
+    // The goals under it hang one step in, and nothing overlaps.
+    for (const g of after.nodes.filter((n): n is Extract<GoalsNode, { kind: "goal" }> => n.kind === "goal" && !n.mission)) expect(g.x).toBe(30);
+    for (let i = 0; i < after.nodes.length; i++) for (let j = i + 1; j < after.nodes.length; j++) expect(rectsOverlap(after.nodes[i], after.nodes[j])).toBe(false);
+    // The kicker takes a row at every level.
+    const far = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, changes: UNION_GOALS_CHANGES }, "far");
+    const m = far.nodes.find((n): n is Extract<GoalsNode, { kind: "goal" }> => n.kind === "goal" && n.mission)!;
+    expect(m.h).toBe(goalFarHeight(m.goal.title, true));
+    expect(goalFarHeight(m.goal.title, true)).toBeGreaterThan(goalFarHeight(m.goal.title));
+  });
+
+  test("Everything keeps one column with the proposal on and off, with role changes marked on it", () => {
+    const off = union([], "everyone"), on = union(UNION_GOALS_CHANGES, "everyone");
+    const col = (l: ReturnType<typeof union>) => l.nodes.filter((n): n is Extract<GoalsNode, { kind: "owner" }> => n.kind === "owner").map((o) => o.id);
+    expect(col(on)).toEqual(col(off));
+    const owns = (l: ReturnType<typeof union>, id: string) => (l.nodes.find((n) => n.id === id) as Extract<GoalsNode, { kind: "owner" }>).owns;
+    expect(owns(off, "person:fixture-user-me")).toBe(1);
+    expect(owns(on, "person:fixture-user-me")).toBe(6);
+    // The reporting chart's ghosts ride the column: a proposed role is a stub card, a move marks its card and names where it was.
+    const { ghostsFor } = require("./orgLayout") as typeof import("./orgLayout");
+    const changes: OrgProposalChange[] = [
+      { _id: "r-new", proposal_id: "x", seq: 1, status: "proposed", rationale: "", evidence: [], change: { kind: "role", name: "Head of Brokers", handle: "brokers", scope: { projects: [], plans: [] }, reports_to: "@head-of-people" } as any },
+      { _id: "r-move", proposal_id: "x", seq: 2, status: "proposed", rationale: "", evidence: [], change: { kind: "move", handle: "agent-quality", reports_to: "@head-of-people" } as any },
+    ];
+    const ghosts = ghostsFor(UNION_GOALS_TREE, changes);
+    const withRoles = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives, projects: UNION_GOALS_DATA.projects, changes, people: "everyone", ghosts });
+    const stub = withRoles.nodes.find((n): n is Extract<GoalsNode, { kind: "owner" }> => n.kind === "owner" && n.id === "role:r-new");
+    expect(stub?.ghost?.change_id).toBe("r-new");
+    expect(withRoles.changeNode["r-new"]).toBe("role:r-new");
+    const moved = withRoles.nodes.find((n): n is Extract<GoalsNode, { kind: "owner" }> => n.kind === "owner" && n.id === "role:fixture-role-agent-quality")!;
+    expect(moved.move?.change_id).toBe("r-move");
+    expect(moved.was).toBe("Ashot Petrosian");
+    expect(moved.reportsTo).toBe("Head of People");
+    expect(withRoles.changeNode["r-move"]).toBe("role:fixture-role-agent-quality");
+    for (let i = 0; i < withRoles.nodes.length; i++) for (let j = i + 1; j < withRoles.nodes.length; j++) expect(rectsOverlap(withRoles.nodes[i], withRoles.nodes[j])).toBe(false);
+  });
+
+  test("the outline alone draws no owner edge, so nothing points at a card that is not there", () => {
+    expect(union([], "none").edges.some((e) => e.kind === "owner")).toBe(false);
+    expect(union([], "owners").edges.some((e) => e.kind === "owner")).toBe(true);
+  });
+
+  test("a moved goal keeps a faint line from where it was", () => {
+    // in-4 sat under in-2 and the proposal moves it under the purpose: the old spine fades, the new one is a ghost.
+    const before = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives.map((g) => (g._id === "union-in-4" ? { ...g, parent_initiative_id: "union-in-2" } : g)), projects: UNION_GOALS_DATA.projects, changes: UNION_GOALS_CHANGES.filter((c) => c._id !== "union-quality-shape") });
+    expect(before.edges.some((e) => e.faded && e.kind === "spine")).toBe(false);
+    const { edges } = layoutGoals({ tree: UNION_GOALS_TREE, initiatives: UNION_GOALS_DATA.initiatives.map((g) => (g._id === "union-in-4" ? { ...g, parent_initiative_id: "union-in-2" } : g)), projects: UNION_GOALS_DATA.projects, changes: UNION_GOALS_CHANGES });
+    const was = edges.find((e) => e.faded && e.kind === "spine");
+    expect(was).toBeDefined();
+    expect(was!.source).toBe(goalNodeId("union-in-2"));
+    expect(was!.target).toBe(goalNodeId("union-in-4"));
   });
 });

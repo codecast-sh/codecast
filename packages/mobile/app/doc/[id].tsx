@@ -95,37 +95,11 @@ export default function DocDetailScreen() {
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <RNText style={styles.title}>{doc.title || "Untitled"}</RNText>
 
-        <RNView style={styles.badgeRow}>
-          <RNView style={[styles.badge, { borderColor: cfg.color + "40" }]}>
-            <FontAwesome name={cfg.icon} size={12} color={cfg.color} />
-            <RNText style={[styles.badgeText, { color: cfg.color }]}>{cfg.label}</RNText>
+        {(doc.created_at || doc.pinned) && (
+          <RNView style={styles.metaRow}>
+            {doc.pinned && <FontAwesome name="star" size={11} color={Theme.accent} />}
+            {doc.created_at && <RNText style={styles.dates}>{describeDates(doc)}</RNText>}
           </RNView>
-
-          {/* The shared-token snapshot carries no source; claiming "Agent"
-              for it would be a guess, so the badge only renders when known. */}
-          {doc.source && (
-            <RNView style={[styles.badge, { borderColor: Theme.borderLight }]}>
-              <FontAwesome
-                name={doc.source === "human" ? "user" : "bolt"}
-                size={10}
-                color={doc.source === "human" ? Theme.textMuted0 : Theme.cyan}
-              />
-              <RNText style={[styles.badgeText, { color: Theme.textMuted0 }]}>
-                {doc.source === "human" ? "Human" : doc.source}
-              </RNText>
-            </RNView>
-          )}
-
-          {doc.pinned && (
-            <RNView style={[styles.badge, { borderColor: Theme.accent + "40" }]}>
-              <FontAwesome name="star" size={10} color={Theme.accent} />
-              <RNText style={[styles.badgeText, { color: Theme.accent }]}>Starred</RNText>
-            </RNView>
-          )}
-        </RNView>
-
-        {doc.created_at && (
-          <RNText style={styles.dates}>{describeDates(doc)}</RNText>
         )}
 
         {doc.labels && doc.labels.length > 0 && (
@@ -152,7 +126,6 @@ export default function DocDetailScreen() {
 
         {content ? (
           <RNView style={styles.section}>
-            <RNText style={styles.sectionLabel}>Content</RNText>
             <MarkdownContent text={content} baseStyle={styles.bodyText} />
           </RNView>
         ) : (
@@ -165,7 +138,7 @@ export default function DocDetailScreen() {
         {docDetail?.related_conversations?.length > 0 && (
           <RNView style={styles.section}>
             <RNText style={styles.sectionLabel}>
-              Related Sessions ({docDetail.related_conversations.length})
+              Sessions
             </RNText>
             {docDetail.related_conversations.map((conv: any) => (
               <TouchableOpacity
@@ -218,31 +191,16 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     lineHeight: 26,
     marginBottom: Spacing.md,
   },
-  badgeRow: {
+  metaRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
+    alignItems: "center",
+    gap: 6,
     marginBottom: Spacing.md,
   },
   dates: {
     fontSize: 11,
     color: Theme.textMuted0,
-    marginTop: -Spacing.sm,
-    marginBottom: Spacing.md,
     fontVariant: ["tabular-nums"],
-  },
-  badge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: "600",
   },
   labelRow: {
     flexDirection: "row",

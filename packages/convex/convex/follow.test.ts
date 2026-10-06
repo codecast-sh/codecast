@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { follow, followersOf, following, reportView, unfollow, viewOf } from "./follow";
+import { dropFollower, follow, followersOf, following, reportView, unfollow, viewOf } from "./follow";
 import { FOLLOW_LEASE_MS } from "@codecast/shared/contracts/follow";
 
 // Follow mode over the fake db: the lease, the write gate, and the access rule.
@@ -72,6 +72,24 @@ describe("follow lease", () => {
     expect(await h(following)(ctxFor(rows, BOB), {})).toBeNull();
   });
 
+  test("a leader drops one follower: renewals are refused, the follower learns it ended, a fresh follow revives it", async () => {
+    const rows = tables();
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN, fresh: true });
+    await h(follow)(ctxFor(rows, CY), { leader_id: ANN, fresh: true });
+    // Only the leader of that lease can drop it.
+    await h(dropFollower)(ctxFor(rows, CY), { follower_id: BOB });
+    expect((await h(followersOf)(ctxFor(rows, ANN), {})).length).toBe(2);
+    await h(dropFollower)(ctxFor(rows, ANN), { follower_id: BOB });
+    expect((await h(followersOf)(ctxFor(rows, ANN), {})).map((f: any) => f.user_id)).toEqual([CY]);
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN });
+    expect(await h(following)(ctxFor(rows, BOB), {})).toBeNull();
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toMatchObject({ ended: true });
+    expect(await h(reportView)(ctxFor(rows, ANN), { path: "/x" })).toEqual({ written: true });
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN, fresh: true });
+    expect(await h(following)(ctxFor(rows, BOB), {})).toEqual({ leader_id: ANN });
+    expect((await h(followersOf)(ctxFor(rows, ANN), {})).length).toBe(2);
+  });
+
   test("unfollow drops the lease", async () => {
     const rows = tables();
     await h(follow)(ctxFor(rows, BOB), { leader_id: ANN });
@@ -90,6 +108,21 @@ describe("leader view", () => {
     await h(reportView)(ctxFor(rows, ANN), { path: `/conversation/${SHARED}`, conversation_id: SHARED, anchor: { message_id: "m9", offset: 1.7 } });
     expect(rows.view_states.length).toBe(1);
     expect(rows.view_states[0].anchor).toEqual({ message_id: "m9", offset: 1 });
+  });
+
+  test("the in-page view is clamped on write, read back by a follower, and withheld with a private conversation", async () => {
+    const rows = tables();
+    await h(follow)(ctxFor(rows, BOB), { leader_id: ANN });
+    await h(reportView)(ctxFor(rows, ANN), {
+      path: "/docs/d1",
+      view: { panel: " diff ", diff: { file: "src/a.ts", line: 12.6 }, scroll: { key: "doc", offset: 1.4 } },
+    });
+    expect(rows.view_states[0].view).toEqual({ panel: "diff", diff: { file: "src/a.ts", line: 12 }, scroll: { key: "doc", offset: 1 } });
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toMatchObject({ view: { scroll: { key: "doc", offset: 1 } } });
+    await h(reportView)(ctxFor(rows, ANN), { path: `/conversation/${PRIVATE}`, conversation_id: PRIVATE, view: { diff: { file: "secret.ts" } } });
+    expect(await h(viewOf)(ctxFor(rows, BOB), { leader_id: ANN })).toEqual({ path: "", updated_at: rows.view_states[0].updated_at, withheld: true });
+    await h(reportView)(ctxFor(rows, ANN), { path: "/inbox", view: { scroll: { key: "", offset: 0.5 } } });
+    expect(rows.view_states[0].view).toBeUndefined();
   });
 
   test("viewOf reaches only a live follower of that leader", async () => {

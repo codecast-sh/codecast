@@ -11,14 +11,16 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { notificationHref, notificationRoute } from "../lib/notificationTypes";
 import { NotificationList } from "./notifications/NotificationList";
+import { useAssistantScope, useSurfaceMode } from "../lib/surfaces";
+import { bySessionAgent, withinScope } from "../lib/assistantScope";
 import { ArrowUpRight, Bell, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 
 /** The bell in the top bar, with the unread count on its shoulder. */
 export const NotificationBellButton = forwardRef<
   HTMLButtonElement,
-  ButtonHTMLAttributes<HTMLButtonElement> & { active: boolean; unreadCount?: number }
->(function NotificationBellButton({ active, unreadCount, ...props }, ref) {
+  ButtonHTMLAttributes<HTMLButtonElement> & { active: boolean; unreadCount?: number; /** A quiet dot instead of the count (hosted mode). */ dot?: boolean }
+>(function NotificationBellButton({ active, unreadCount, dot, ...props }, ref) {
   return (
       <TopbarButton
         ref={ref}
@@ -27,7 +29,10 @@ export const NotificationBellButton = forwardRef<
         aria-label="Notifications"
       >
         <Bell />
-        {unreadCount !== undefined && unreadCount > 0 && (
+        {unreadCount !== undefined && unreadCount > 0 && dot && (
+          <span aria-hidden className="absolute top-0.5 right-0.5 h-2 w-2 rounded-full bg-sol-orange ring-2 ring-sol-bg" />
+        )}
+        {unreadCount !== undefined && unreadCount > 0 && !dot && (
           <span className="absolute -top-0.5 -right-1 inline-flex h-3.5 min-w-[14px] items-center justify-center rounded-full bg-sol-orange px-[3px] text-[9px] font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
@@ -51,10 +56,20 @@ export function NotificationBell() {
   const markAsRead = useInboxStore((s) => s.markNotificationRead);
   const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
 
-  const sortedNotifications = useMemo(
+  // Hosted mode's Assistant scope: only news about the assistant's
+  // conversations (their replies, approvals and routines), the rest counted
+  // at the foot. Team chat, huddles and other agents wait in Everything.
+  const mode = useSurfaceMode();
+  const scope = useAssistantScope();
+  const allNotifications = useMemo(
     () => (Object.values(notifications) as any[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
     [notifications]
   );
+  const sortedNotifications = useMemo(
+    () => withinScope(allNotifications, scope.only, (n: any) => bySessionAgent(n.conversation ?? {})) as any[],
+    [allNotifications, scope.only]
+  );
+  const hiddenByScope = allNotifications.length - sortedNotifications.length;
   const unreadCount = useMemo(() => sortedNotifications.filter((n) => !n.read).length, [sortedNotifications]);
 
   useEventListener("mousedown", useCallback((event: MouseEvent) => {
@@ -111,7 +126,7 @@ export function NotificationBell() {
   return (
     <div className="relative" ref={dropdownRef}>
       <ShortcutTooltip label="Notifications">
-      <NotificationBellButton onClick={() => setIsOpen(!isOpen)} active={isOpen} unreadCount={unreadCount} />
+      <NotificationBellButton onClick={() => setIsOpen(!isOpen)} active={isOpen} unreadCount={unreadCount} dot={mode.hosted} />
       </ShortcutTooltip>
 
       {isOpen && (
@@ -122,6 +137,9 @@ export function NotificationBell() {
           onContextMenu={(e, n) => ctxMenu.open(e, n)}
           openGroups={openGroups}
           onToggleGroup={toggleGroup}
+          mode={mode}
+          hiddenByScope={scope.only ? hiddenByScope : 0}
+          onShowEverything={() => scope.setEverything(true)}
           onViewAll={() => {
             router.push('/notifications');
             setIsOpen(false);

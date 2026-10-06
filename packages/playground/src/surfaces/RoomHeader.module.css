@@ -1,0 +1,32 @@
+.head {
+  display: flex; align-items: center; gap: var(--s3); padding: 16px 18px 14px;
+  background: var(--butter); border-bottom: var(--line); flex: none;
+}
+.compact { padding: 6px 14px 12px; }
+.titleCol { flex: 1; min-width: 0; }
+.name { font: 400 24px/1.1 var(--display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 4px; font: 700 13px var(--ui); }
+.ver { font: 700 11px/1.5 var(--mono); background: var(--ink); color: var(--butter); padding: 1px 7px; border-radius: 7px; }
+.lineage { color: var(--pool); text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 2px; }
+.tools { display: flex; align-items: center; gap: var(--s2); flex: none; }
+.stack { display: inline-flex; padding: 2px; border-radius: var(--r-sm); margin-right: 4px; }
+.you { border-radius: var(--r-sm); transition: transform var(--t-press); }
+.you:hover { transform: translate(-1px, -1px) rotate(-4deg); }
+
+.people { list-style: none; display: flex; flex-direction: column; gap: var(--s2); max-height: 320px; overflow: auto; }
+.people li { display: flex; align-items: center; gap: var(--s2); font: 700 14px var(--ui); }
+.you2 { font: 600 12px var(--ui); color: var(--ink-soft); }
+.status { margin-left: auto; font: 600 12px var(--ui); color: var(--ink-soft); }
+
+.links { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.links button {
+  width: 100%; text-align: left; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px;
+  border: var(--line); border-radius: var(--r-md); background: var(--cream);
+  transition: transform var(--t-press), box-shadow var(--t-press);
+}
+.links button:hover { background: var(--butter); box-shadow: var(--pop-xs); transform: translate(-1px, -1px); }
+.links b { font: 800 13px var(--ui); }
+.links code { font: 700 11px var(--mono); color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 1023px) {
+  .name { font-size: 20px; }
+}

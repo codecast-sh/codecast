@@ -85,7 +85,7 @@ describe("stub sections", () => {
     for (const descriptor of SNIPPET_CATALOG) {
       if (!descriptor.section) continue;
       const rendered = renderSectionBody(descriptor, "stub", "1.0.0");
-      const stubbed = rendered.includes(`cast guide ${descriptor.slug}`);
+      const stubbed = rendered !== renderSectionBody(descriptor, "full", "1.0.0");
       const worthIt = stubSectionBody(descriptor).length * 3 < descriptor.section.body.length * 2;
       expect(`${descriptor.slug} stubbed: ${stubbed}`).toBe(`${descriptor.slug} stubbed: ${worthIt}`);
       expect(`${descriptor.slug} smaller: ${rendered.length <= renderSectionBody(descriptor, "full", "1.0.0").length}`)
@@ -94,11 +94,11 @@ describe("stub sections", () => {
   });
 
   test("the short sections keep their guidance", () => {
-    // `calls` and `limits` are under a kilobyte: their stub would save 30 and
-    // 220 bytes, which does not pay for a `cast guide` run.
+    // `calls` and `limits` are under a kilobyte: their stub would save too
+    // little to pay for a `cast guide` run.
     for (const slug of ["calls", "limits"]) {
-      const rendered = renderSectionBody(snippetBySlug(slug)!, "stub", "1.0.0");
-      expect(`${slug}: ${rendered.includes("cast guide")}`).toBe(`${slug}: false`);
+      const stub = renderSectionBody(snippetBySlug(slug)!, "stub", "1.0.0");
+      expect(`${slug}: ${stub === renderSectionBody(snippetBySlug(slug)!, "full", "1.0.0")}`).toBe(`${slug}: true`);
     }
   });
 

@@ -28,7 +28,7 @@ const TEXT_COLOR: Record<DotTone, string> = {
 /** A state in one glance: a filled dot and the word for it. */
 export function StatusDot({ tone, children, className }: { tone: DotTone; children?: React.ReactNode; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11px]", TEXT_COLOR[tone], className)}>
+    <span className={cn("inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px]", TEXT_COLOR[tone], className)}>
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", DOT_COLOR[tone])} />
       {children}
     </span>
@@ -44,7 +44,7 @@ export function LedgerLine({ parts, className }: { parts: Array<React.ReactNode>
   const kept = parts.filter(Boolean);
   if (kept.length === 0) return null;
   return (
-    <div className={cn("truncate font-mono text-[10.5px] leading-relaxed text-sol-text-dim", className)}>
+    <div data-cc-ledger className={cn("truncate font-mono text-[10.5px] leading-relaxed text-sol-text-dim", className)}>
       {kept.map((p, i) => (
         <span key={i}>
           {i > 0 && <span className="px-1 opacity-50">·</span>}

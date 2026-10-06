@@ -1,6 +1,7 @@
-// What the Connections screen says about mail and calendar, worded once for
-// the web lane (app/simple/connections) and the phone's (packages/mobile
-// app/(simple)): what the connection lets the assistant do, which mailboxes
+// What the mail and calendar connection says, worded once for the web's
+// Integrations row (components/integrations/WhiskCard.tsx) and the phone's
+// Settings page (packages/mobile components/hosted/MailPage.tsx): what the
+// connection lets the assistant do, which mailboxes
 // it reaches, and what a disconnect will change. Mail comes through Whisk, so
 // one connection reaches every mailbox the person keeps there.
 import type { MailAbilities } from "./lane";

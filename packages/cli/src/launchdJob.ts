@@ -65,13 +65,13 @@ ${vars}
  * (not macOS, no GUI domain over SSH, a launchctl failure); the caller falls
  * back to a detached child.
  */
-export function startLaunchdJob(job: { label: string; argv: string[]; plistPath: string; logPath: string }): boolean {
+export function startLaunchdJob(job: { label: string; argv: string[]; plistPath: string; logPath: string; env?: Record<string, string | undefined> }): boolean {
   if (process.platform !== "darwin") return false;
   const uid = process.getuid?.();
   if (uid === undefined) return false;
   const service = `gui/${uid}/${job.label}`;
   const env: Record<string, string> = { [LAUNCHD_LABEL_ENV]: job.label };
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && JOB_ENV.test(k) && !SECRET_ENV.test(k) && k !== LAUNCHD_LABEL_ENV) env[k] = v;
+  for (const [k, v] of Object.entries(job.env ?? process.env)) if (v !== undefined && (job.env || JOB_ENV.test(k) && !SECRET_ENV.test(k)) && k !== LAUNCHD_LABEL_ENV) env[k] = v;
   try {
     fs.writeFileSync(job.plistPath, launchdJobPlistXml(job.label, job.argv, env, job.logPath), { mode: 0o600 });
   } catch {
@@ -86,6 +86,15 @@ export function startLaunchdJob(job: { label: string; argv: string[]; plistPath:
   return launchctl("bootstrap", `gui/${uid}`, job.plistPath) || launchctl("kickstart", service);
 }
 
+/** Unload the job `label` without waiting. A process it started that left the job's process group keeps running. */
+export function stopLaunchdJob(label: string): void {
+  const uid = process.getuid?.();
+  if (uid === undefined) return;
+  try {
+    spawn("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], { detached: true, stdio: "ignore" }).unref();
+  } catch {}
+}
+
 /**
  * Unload this process's own launchd job, if it runs as one, so short lived
  * jobs (one per worktree and project) do not pile up in launchd. Call it on
@@ -93,9 +102,5 @@ export function startLaunchdJob(job: { label: string; argv: string[]; plistPath:
  */
 export function unloadOwnLaunchdJob(): void {
   const label = process.env[LAUNCHD_LABEL_ENV];
-  const uid = process.getuid?.();
-  if (!label || uid === undefined) return;
-  try {
-    spawn("/bin/launchctl", ["bootout", `gui/${uid}/${label}`], { detached: true, stdio: "ignore" }).unref();
-  } catch {}
+  if (label) stopLaunchdJob(label);
 }
