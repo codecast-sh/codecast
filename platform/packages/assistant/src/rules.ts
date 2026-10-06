@@ -136,8 +136,41 @@ export function plainEvery(hours: number): string {
   return count(Math.round(hours * 100) / 100, "hour");
 }
 
+/** A repeat that starts at an instant, as one line a person can check: "every
+ *  Monday at 9:00 AM, starting October 12", "every day at 8:00 AM, starting
+ *  Wednesday, October 7", or "every 6 hours, starting Wednesday, October 7 at
+ *  8:00 AM". The hour is on the person's clock, so an assumed AM or PM is
+ *  plain to see and correct; the zone is named only when theirs is unknown. */
+export function plainSchedule(at: number, hours: number, timezone: string | null | undefined, now = Date.now()): string {
+  const timeZone = normalizeTimezone(timezone);
+  const fmt = (options: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat("en-US", { ...options, timeZone }).format(at);
+  const thisYear = fmt({ year: "numeric" }) === new Intl.DateTimeFormat("en-US", { year: "numeric", timeZone }).format(now);
+  const date = (weekday: boolean) => fmt({ ...(weekday ? { weekday: "long" } : {}), month: "long", day: "numeric", ...(thisYear ? {} : { year: "numeric" }) });
+  const time = `${fmt({ hour: "numeric", minute: "2-digit" })}${timezone && timeZone === timezone ? "" : " UTC"}`;
+  if (hours % 168 === 0) {
+    const weeks = hours / 168;
+    const day = fmt({ weekday: "long" });
+    return `${weeks === 1 ? `every ${day}` : `every ${weeks} weeks on ${day}`} at ${time}, starting ${date(false)}`;
+  }
+  if (hours % 24 === 0) return `${plainEvery(hours)} at ${time}, starting ${date(true)}`;
+  return `${plainEvery(hours)}, starting ${date(true)} at ${time}`;
+}
+
 /** A field whose name says it is a repeat in hours (`repeat_every_hours`). */
 const EVERY_HOURS = /(^|_)every_hours$/;
+
+/** Fields that hold the plan the person is agreeing to, in their own words,
+ *  shown under a heading as wrapped prose rather than as an exact draft. */
+const PLAN_FIELDS: Record<string, string> = { instruction: "What I'll do" };
+
+/** Text as a quote in the reading face that still renders exactly as
+ *  written: every markdown punctuation mark is escaped, each line quoted. */
+function quoted(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `> ${line.replace(/[\\`*_{}\[\]()#+\-.!|<>~]/g, "\\$&")}`)
+    .join("\n");
+}
 
 /** The exact draft or event a call would act with, as the card shows it:
  *  short fields as lines, long text whole in a block, nothing reworded. Every
@@ -156,16 +189,22 @@ const EVERY_HOURS = /(^|_)every_hours$/;
  *  sit together after the others, whatever order the tool takes them in. */
 export function approvalContext(input: Record<string, unknown>, opts: { timezone?: string | null; now?: number; question?: string } = {}): string {
   const lines: string[] = [];
-  const when: string[] = [];
+  const instants: [string, number][] = [];
+  let every: number | undefined;
+  const plan: string[] = [];
   const blocks: string[] = [];
   for (const [key, value] of Object.entries(input ?? {})) {
     if (value === undefined || value === null || value === "") continue;
     if (typeof value === "string" && ISO_INSTANT.test(value) && !Number.isNaN(Date.parse(value))) {
-      when.push(`**${humanLabel(key)}:** ${plainInstant(Date.parse(value), opts.timezone, opts.now)}`);
+      instants.push([key, Date.parse(value)]);
       continue;
     }
     if (typeof value === "number" && value > 0 && EVERY_HOURS.test(key)) {
-      when.push(`**Repeats:** ${plainEvery(value)}`);
+      every = value;
+      continue;
+    }
+    if (typeof value === "string" && PLAN_FIELDS[key] && value.trim()) {
+      plan.push(`**${PLAN_FIELDS[key]}**\n\n${quoted(value.trim())}`);
       continue;
     }
     const shown =
@@ -178,7 +217,18 @@ export function approvalContext(input: Record<string, unknown>, opts: { timezone
     else if (typeof value === "string" && saidIn(opts.question, value)) continue;
     else lines.push(`**${humanLabel(key)}:** ${typeof value === "boolean" ? shown : literal(shown)}`);
   }
-  return [[...lines, ...when].join("  \n"), ...blocks].filter(Boolean).join("\n\n");
+  // One start and a repeat read as one schedule line; otherwise each says itself.
+  const when = every !== undefined && instants.length === 1
+    ? [`**When:** ${capitalized(plainSchedule(instants[0]![1], every, opts.timezone, opts.now))}`]
+    : [
+        ...instants.map(([key, at]) => `**${humanLabel(key)}:** ${plainInstant(at, opts.timezone, opts.now)}`),
+        ...(every !== undefined ? [`**Repeats:** ${plainEvery(every)}`] : []),
+      ];
+  return [...plan, [...lines, ...when].join("  \n"), ...blocks].filter(Boolean).join("\n\n");
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** Whether the question already shows this text whole: the exact text, three

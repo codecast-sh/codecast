@@ -14,6 +14,8 @@ import { formatModel } from "../../../lib/conversationProcessor";
 import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { DecisionAnswerFooter } from "../../DecisionAnswerFooter";
 import { describeSmallToolGroup, describeToolGroup, extractNestedActions, isAgentTool, isAskTool, isPlanModeTool, isPlanWriteToolCall, isTodoTool } from "@codecast/shared/render";
+import { hostedReceipt } from "../../../lib/hostedReceipt";
+import { stepText } from "@platform/assistant/steps";
 import { entityRoute } from "../../../lib/entityLinks";
 import { toast } from "sonner";
 import { MessageIdentityProvider } from "../../InlineDiff";
@@ -25,14 +27,14 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
 import { usePendingMessageStatus } from "../../../hooks/useSyncPendingPermissions";
-import { stripPastedContent } from "@codecast/shared/contracts";
+import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
 import { SentFileBlock, type SentFileData } from "../../tools/SentFileBlock";
 import { useImageGallery, useGalleryMessageId } from "../../ImageGallery";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS, USER_MD_COMPONENTS, USER_MD_REMARK } from "../../messageMarkdown";
 import { browserTabOf, type BrowserTabRef } from "../../castCommand";
-import { useInboxStore, isConvexId, pendingRowSendArgs, type ForkChild } from "../../../store/inboxStore";
+import { useInboxStore, isConvexId, retryPendingSend, type ForkChild } from "../../../store/inboxStore";
 import { useMessageBookmark } from "../../../hooks/useMessageBookmark";
 import { BranchSelector } from "../../BranchSelector";
 import { FileText, ListChecks, Target, Maximize2, ChevronDown, ChevronRight, ChevronUp, Split, Copy as CopyIcon, Link2, Bookmark as BookmarkIcon, Forward, SquareDashedMousePointer, X } from "lucide-react";
@@ -41,6 +43,7 @@ import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../ui/con
 import { pendingBannerState, pendingRetryClientId, pendingCancelRef, pendingMessageCanRetry, pendingMessageReachedSession, pendingMessageHoldReason, isActiveAgentStatus, isBootingAgentStatus, isAliveIdleStatus, type LiveAgentStatus } from "../../../lib/pendingBanner";
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { PendingDeliveryNote } from "../../PendingDeliveryNote";
+import { useIsHostedConversation } from "../../../hooks/useConversationAgentType";
 import { ghostRestartContextFor, deriveRestartStage } from "../../../hooks/useSessionRestart";
 import { useConversationCommands } from "../../../hooks/useSessionCommands";
 import { requestSessionRestart } from "../../../lib/sessionCommands";
@@ -61,9 +64,10 @@ import { copyMessageLink, formatFullTimestamp, formatMessagePartsForCopy, format
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import { linkifyMentions } from "../../../lib/conversationMarkdown";
 import { renderAssistantBody } from "../../../lib/renderAssistantBody";
-import { PENDING_BOOT_GRACE_MS, PENDING_IDLE_GRACE_MS, PENDING_RESUME_GRACE_MS, PENDING_RETRY_AFTER_MS } from "../pendingSend";
+import { PENDING_BOOT_GRACE_MS, PENDING_HOSTED_GRACE_MS, PENDING_IDLE_GRACE_MS, PENDING_RESUME_GRACE_MS, PENDING_RETRY_AFTER_MS } from "../pendingSend";
 import { ApiErrorCard } from "../sessionChrome";
 import { followRestoredConversation } from "../../../lib/followRestoredConversation";
+import { useSurface } from "../../../lib/surfaces";
 import type { CondensedReceipt, ImageData, MessageFeedDensity, ParsedContextBlock, ReceiptEntry, StoryBeat, TaskRecordMaps, ToolCall, ToolCallChangeSelection, ToolResult } from "../types";
 import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
 
@@ -154,6 +158,9 @@ const TOOLBAR_BTN = `${TOOLBAR_BTN_BASE} text-sol-text-dim hover:text-sol-text-s
 
 function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision }: { content: string; decision?: DecisionAnswerMessage; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
+  // A hosted conversation has no machine or process: its pending notes speak
+  // of the assistant picking the message up, not of delivery to an agent.
+  const hostedConversation = useIsHostedConversation(conversationId);
   const [isExpanded, setIsExpanded] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
   const [isTruncated, setIsTruncated] = useState(false);
@@ -224,9 +231,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
   const [idleGraceElapsed, setIdleGraceElapsed] = useState(false);
   useWatchEffect(() => {
     if (!isPending || agentActive) { setIdleGraceElapsed(false); return; }
-    const t = setTimeout(() => setIdleGraceElapsed(true), PENDING_IDLE_GRACE_MS);
+    // A hosted turn starts within seconds when nothing else runs, so its
+    // bubble offers Try again sooner.
+    const t = setTimeout(() => setIdleGraceElapsed(true), hostedConversation ? PENDING_HOSTED_GRACE_MS : PENDING_IDLE_GRACE_MS);
     return () => clearTimeout(t);
-  }, [isPending, agentActive]);
+  }, [isPending, agentActive, hostedConversation]);
   // While the session is still booting/resuming/connecting, hold off the kill &
   // restart escalation for a much longer budget (measured from when the message was
   // sent): a cold launch — and especially a resume — routinely runs past the short
@@ -263,7 +272,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     retryEligible: retryVisible && pendingMessageCanRetry(content),
     restartInFlight: retrying,
     idleGraceElapsed,
-    bootGraceElapsed,
+    // A hosted request waiting behind the person's other one is on its way,
+    // however long that takes.
+    bootGraceElapsed: hostedConversation && agentStatus === "waiting" ? false : bootGraceElapsed,
     messageReachedSession,
   });
   // Live restart progress, scoped to THIS click: the conversation feed carries the
@@ -306,25 +317,23 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     setRetryWaitingLong(false);
     try {
       const retryClientId = pendingRetryClientId(messageId);
-      if (isPending && retryClientId && isConvexId(conversationId) && content.trim()) {
-        // Replay the row's own send args (dispatched bytes + image ids): the
-        // server fingerprints this client id's args, and a rebuilt payload is
-        // refused as COMMAND_ID_REUSED instead of deduping. While an image is
-        // still uploading the upload task owns the send; a re-send now would
-        // land the message without its image.
-        const pendingRow = (useInboxStore.getState().pendingMessages[conversationId] || [])
-          .find((m) => m._clientId === messageId || m._id === messageId);
-        const send = pendingRow ? pendingRowSendArgs(pendingRow) : { content, imageIds: undefined, uploading: false };
-        if (send.uploading) {
+      if (isPending && retryClientId && content.trim()) {
+        // The replay rule lives in the store (retryPendingSend); this bubble
+        // only reports how it came out.
+        const status = await retryPendingSend(conversationId, retryClientId, content);
+        // A conversation with no server row was started again or re-created
+        // by the rule; there is no session to restart below.
+        if (!isConvexId(conversationId) && status !== "uploading" && status !== "unavailable") {
+          setRetryState("sent");
+          return;
+        }
+        if (status === "uploading") {
           setRetryState("idle");
           toast.info("Your attachment is still uploading");
           return;
         }
-        const status = await useInboxStore.getState().retryPendingMessage(conversationId, { clientId: retryClientId });
-        if (!status) throw new Error("The retry service is unavailable. Your message is still saved.");
-        if (status === "not_found") {
-          useInboxStore.getState().sendMessage(conversationId, send.content || content, send.imageIds, retryClientId);
-        } else if (status === "cancelled" || status === "delivered" || status === "injected") {
+        if (status === "unavailable") throw new Error("The retry service is unavailable. Your message is still saved.");
+        if (status === "cancelled" || status === "delivered" || status === "injected") {
           setRetryState("idle");
           toast.info(status === "cancelled" ? "This message was cancelled" : "This message has already reached the session");
           return;
@@ -434,9 +443,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
             title="Share message"
             aria-label="Share message"
           >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-            </svg>
+            <SquareDashedMousePointer className="w-4 h-4" />
           </button>
         )}
         <button
@@ -624,7 +631,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
       )}
       {isPending && !holdReason && bannerState !== "none" && (
       <PendingDeliveryNote state={bannerState} restartInFlight={retrying} conversationId={conversationId} onCancel={handleCancelPending} cancelling={cancelState !== "idle"}>
-      {bannerState === "queued" && (
+      {/* A hosted conversation says its wait once, in the composer's status line. */}
+      {bannerState === "queued" && !hostedConversation && (
         <div className="flex items-center flex-wrap gap-2 mt-2 pl-8 text-xs text-sol-text-muted" data-testid="pending-message-queued">
           <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70 animate-pulse flex-shrink-0" />
           {/* Cold launch/resume genuinely "starts up"; an alive-but-parked session
@@ -640,7 +648,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           {!retryStage && (
             <span className="text-xs text-sol-text-muted">
               {retryState === "idle"
-                ? "No confirmation from the agent yet"
+                ? (hostedConversation ? "Your assistant hasn't picked this up yet" : "No confirmation from the agent yet")
                 : agentStatus ? "Waiting for message delivery…" : "Restart requested…"}
             </span>
           )}
@@ -659,8 +667,8 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
             </svg>
             {retryState === "inflight" || retryState === "sent"
-              ? (agentStatus ? "Resending…" : "Restarting…")
-              : retryClickedAt ? "Retry again" : (agentStatus ? "Resend message" : "Retry (kill & restart)")}
+              ? (hostedConversation ? "Sending…" : agentStatus ? "Resending…" : "Restarting…")
+              : hostedConversation ? "Try again" : retryClickedAt ? "Retry again" : (agentStatus ? "Resend message" : "Retry (kill & restart)")}
           </button>
           <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
@@ -896,7 +904,7 @@ function CondensedImageThumb({ image }: { image: ImageData }) {
 // The disclosure triangle leads in both states so the open/closed change is
 // unmistakable, and the header keeps its position and size across the toggle
 // so the click target never moves under the pointer.
-const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, resultFor, conversationId, renderTool }: {
+const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expanded, onToggle, images, globalImageMap, resultFor, conversationId, renderTool, agentType }: {
   entries: ReceiptEntry[];
   expanded: boolean;
   onToggle: () => void;
@@ -905,9 +913,15 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   resultFor: (tc: ToolCall) => ToolResult | undefined;
   conversationId?: Id<"conversations">;
   renderTool: (tc: ToolCall, entry: ReceiptEntry) => React.ReactNode;
+  /** A hosted conversation's receipt says its steps in plain words (lib/hostedReceipt). */
+  agentType?: string;
 }) {
   const carriedBrowserRows = useContext(CastBrowserRowContext);
-  const { summary, counted, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
+  // A hosted conversation opens onto its steps in the assistant's words; the
+  // tools behind them show only where a conversation's internals do.
+  const internalsShown = useSurface("conversation.internals");
+  const hostedSteps = isHostedAgentType(agentType);
+  const { summary, counted, created, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const counts = new Map<string, number>();
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
@@ -932,15 +946,17 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
         if (tab?.kind === "cast") droveCastBrowser = true;
       }
     }
-    const counted = [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
+    const hosted = isHostedAgentType(agentType) ? hostedReceipt(entries.flatMap((e) => e.tools), resultFor) : null;
+    const counted = hosted?.counted ?? [...counts.entries()].map(([name, count]) => describeToolGroup(name, count)).join(" · ");
     return {
-      summary: (actions.length <= 2 && describeSmallToolGroup(actions)) || counted,
+      summary: hosted?.summary ?? ((actions.length <= 2 && describeSmallToolGroup(actions)) || counted),
+      created: hosted?.created ?? [],
       counted,
       screenshots: shots,
       browserTabs: [...tabs.values()],
       droveCastBrowser,
     };
-  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows]);
+  }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType]);
   const header = (
     <div
       data-cc-tool-receipt
@@ -975,6 +991,9 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />
       <span className="truncate tracking-tight">{expanded ? counted : summary}</span>
       {!expanded && browserTabs.map((tab) => <BrowserTabPill key={`${tab.kind}:${tab.tabId}`} tab={tab} />)}
+      {/* A to-do the assistant added, as a live pill: it opens from here
+          whichever workspace is in view (lib/hostedReceipt createdRefs). */}
+      {!expanded && created.map((ref) => <span key={ref} onClick={(e) => e.stopPropagation()}><EntityIdPill shortId={ref} compact /></span>)}
       {!expanded && droveCastBrowser && conversationId && <BrowserWatchButton conversationId={conversationId} />}
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
     </div>
@@ -984,7 +1003,16 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
     <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
       <div className="pt-0.5 pb-1">
-        {entries.map((entry) => entry.tools.map((tc) => renderTool(tc, entry)))}
+        {hostedSteps ? (
+          <ul data-cc-hosted-steps className="space-y-1 py-1">
+            {entries.flatMap((entry) => entry.tools.map((tc) => (
+              <li key={tc.id} className="text-[13px] leading-snug text-sol-text-muted">
+                <span>{stepText(tc, resultFor(tc))}</span>
+                {internalsShown ? renderTool(tc, entry) : null}
+              </li>
+            )))}
+          </ul>
+        ) : entries.map((entry) => entry.tools.map((tc) => renderTool(tc, entry)))}
       </div>
     </div>
   );
@@ -1140,6 +1168,8 @@ function AssistantBlockImpl({
   globalFileMap?: Record<string, SentFileData[]>;
 }) {
   const relativeTime = useRelativeTime();
+  // The model behind a reply is a developer fact; where the picker hides, so does this hover.
+  const modelShown = useSurface("modelPicker");
   const CONTENT_MAX_HEIGHT = 800;
 
   // Condensed feed: this message's segment tools fold into one receipt row
@@ -1367,9 +1397,7 @@ function AssistantBlockImpl({
               title="Share selected messages…"
               aria-label="Share selected messages"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
+              <SquareDashedMousePointer className="w-4 h-4" />
             </button>
           )}
           <button
@@ -1387,10 +1415,12 @@ function AssistantBlockImpl({
 
       {shouldShowHeader && (
         <div data-cc-message-who className="flex items-center gap-2 mb-2 mt-4">
-          <span className="flex items-center gap-2 cursor-default" title={model ? `Model: ${model}` : undefined}>
+          <span className="flex items-center gap-2 cursor-default" title={model && modelShown ? `Model: ${model}` : undefined}>
             <AssistantWho conversationId={conversationId} agentType={agentType} />
           </span>
-          {model && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
+          {/* The hosted assistant is the author, whatever model answered; its
+              model stays in the tooltip above for a developer. */}
+          {model && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -1484,6 +1514,7 @@ function AssistantBlockImpl({
             resultFor={resultFor}
             conversationId={conversationId}
             renderTool={(tc, entry) => renderToolBlock(tc, resultFor(tc), entry)}
+            agentType={agentType}
           />
         )}
 

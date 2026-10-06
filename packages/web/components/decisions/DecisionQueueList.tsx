@@ -1,5 +1,8 @@
 "use client";
 
+import { useAssistantConversationIds, useAssistantScope, useModeWords, useSurface } from "../../lib/surfaces";
+import { AssistantScopeSwitch, MoreInEverything } from "../AssistantScopeSwitch";
+import { PageHeading } from "../PageHeading";
 import { useCallback, useMemo, useState } from "react";
 import { ShortId } from "../ShortId";
 import Link from "next/link";
@@ -8,7 +11,7 @@ import { decisionAnswerLabel } from "@codecast/shared/contracts";
 import { ChevronDown, ChevronRight, Layers, ShieldCheck, Undo2, Terminal, ListChecks } from "lucide-react";
 import { useInboxStore, useTrackedStore, getProjectName, type SessionDecisionItem, type HandledDecisionItem } from "../../store/inboxStore";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
-import { useDecisionQueue } from "../../hooks/useDecisionQueue";
+import { useDecisionQueue, useScopedDecisionQueue } from "../../hooks/useDecisionQueue";
 import { useSyncDecisionStacks } from "../../hooks/useSyncDecisionStacks";
 import { useSyncHandledDecisions } from "../../hooks/useSyncHandledDecisions";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -44,14 +47,24 @@ export function DecisionQueueList() {
   // with pending members.
   useSyncDecisionStacks({ includeDone: true });
   useSyncHandledDecisions();
-  const pending = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
+  // Hosted mode's Assistant scope (lib/assistantScope) lists the assistant's
+  // asks alone, as the rail count does (useScopedDecisionQueue); what it
+  // leaves out is one line at the foot.
+  const scope = useAssistantScope();
+  const assistantIds = useAssistantConversationIds();
+  const inScope = useCallback((conversationId: string) => !scope.only || assistantIds.has(conversationId), [scope.only, assistantIds]);
+  const pendingAll = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: pendingWhere, sig: pendingSig });
+  const pending = useMemo(() => pendingAll.filter((d) => inScope(d.conversation_id)), [pendingAll, inScope]);
   const stacks = useInboxStore((s) => s.decisionStacks);
-  const handled = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
+  const handledAll = useCollectionRows<HandledDecisionItem>("handledDecisions", { sig: handledSig, sort: (a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0) });
+  const handled = useMemo(() => handledAll.filter((d) => inScope(d.conversation_id)), [handledAll, inScope]);
   // Overdue stacks sort first (the-line.md L10), so the grouping follows the
   // clock: a coarse tick re-sorts when a due passes.
   const now = useCoarseNow(60_000);
   const groups = useMemo(() => groupDecisions(pending, stacks, now), [pending, stacks, now]);
-  const terminal = useDecisionQueue().filter((i) => i.source !== "decide");
+  const terminal = useScopedDecisionQueue().filter((i) => i.source !== "decide");
+  const terminalAll = useDecisionQueue().filter((i) => i.source !== "decide").length;
+  const outOfScope = pendingAll.length - pending.length + terminalAll - terminal.length;
 
   // Stack creation from selected cards: tick, name, group.
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -76,11 +89,11 @@ export function DecisionQueueList() {
   // happened to its change (cardOutcome), any other decision that it was answered.
   const answered = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: answeredWhere, sig: answeredSig });
   const last = useMemo<LastClosed | null>(() => {
-    const d = answered.reduce<SessionDecisionItem | null>((m, x) => ((x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
+    const d = answered.reduce<SessionDecisionItem | null>((m, x) => (inScope(x.conversation_id) && (x.resolved_at ?? 0) > (m?.resolved_at ?? 0) ? x : m), null);
     if (!d) return null;
     const outcome = d.card ? cardOutcome(d, "you", now) : null;
     return { verdict: outcome?.verdict ?? "Answered", title: d.card?.change ?? d.question, ago: settledAgo(d.resolved_at, now), href: decisionHref(d) };
-  }, [answered, now]);
+  }, [answered, now, inScope]);
   // "Waiting on you" counts what a person must answer. Rows a lead holds
   // under a grant stay pending in the inbox (a person may still answer first)
   // but they are the lead's to clear, so they count on their own group header.
@@ -90,14 +103,20 @@ export function DecisionQueueList() {
   // fold only when nothing else is waiting), and inside it its first row, so
   // the KeyCaps show on the row the digits answer.
   const keysGroup = (groups.find((g) => g.kind !== "role") ?? groups[0])?.key;
+  // Hosted mode calls this page Approvals and leaves the queue's machinery
+  // (stacks, stepping, grouping) to developer mode.
+  const words = useModeWords();
+  const internals = useSurface("questions.internals");
 
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         <div className="flex items-center gap-3 flex-wrap mb-5">
-          <h1 className="text-lg text-sol-text">Questions</h1>
-          <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>
-          <div className="ml-auto flex items-center gap-2 text-[11px]">
+          <PageHeading title={words.questionsPage} />
+          <AssistantScopeSwitch label="Which approvals this lists" />
+          {/* A count of nothing says what the empty state below says better. */}
+          {(mine > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
+          {internals && <div className="ml-auto flex items-center gap-2 text-[11px]">
             <Link href="/decisions/stacks" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors" title="Every stack: open and done, progress, due">
               <Layers className="w-3.5 h-3.5" />stacks
             </Link>
@@ -111,7 +130,7 @@ export function DecisionQueueList() {
                 <Layers className="w-3.5 h-3.5" />{selecting ? "cancel" : "group into a stack"}
               </button>
             )}
-          </div>
+          </div>}
         </div>
 
         {selecting && (
@@ -130,11 +149,16 @@ export function DecisionQueueList() {
           </div>
         )}
 
-        {empty && <QueueEmpty last={last} />}
+        {empty && (
+          <QueueEmpty last={last} title={words.queueEmptyTitle} lede={words.queueEmptyLede}>
+            {/* An empty list's overflow belongs under its words, not at the page's foot. */}
+            {handled.length === 0 && <MoreInEverything hidden={outOfScope} centered />}
+          </QueueEmpty>
+        )}
 
         <div className="space-y-7">
           {groups.map((g) => (
-            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={g.key === keysGroup} />
+            <QueueGroup key={g.key} group={g} selecting={selecting} selected={selected} onToggle={toggle} keys={internals && g.key === keysGroup} />
           ))}
 
           {terminal.length > 0 && (
@@ -157,6 +181,7 @@ export function DecisionQueueList() {
 
           {handled.length > 0 && <HandledSection rows={handled} />}
         </div>
+        {!(empty && handled.length === 0) && <MoreInEverything hidden={outOfScope} />}
       </div>
     </div>
   );
@@ -182,6 +207,8 @@ function GroupHeader({ icon, title, count, hint, right, onToggle, open }: { icon
 
 function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDecisionItem }) {
   const [kind, id] = scopeKey.split(":");
+  // Hosted mode names the group alone, without its kind as a kicker.
+  const internals = useSurface("questions.internals");
   const st = useTrackedStore([
     (s) => kind === "project" ? (s.projects as any)?.[id]?.title : kind === "plan" ? (s.plans as any)?.[id]?.title : kind === "session" ? s.sessions[id]?.title : undefined,
   ]);
@@ -190,7 +217,7 @@ function ScopeLabel({ scopeKey, sample }: { scopeKey: string; sample?: SessionDe
   // The live session row wins; the decision's snapshot (session_title) covers a
   // device whose sessions collection does not hold the asking conversation.
   if (kind === "session") return <>{name || sample?.session_title || "a session"}</>;
-  return <>{kind} · {name || id.slice(0, 8)}</>;
+  return internals ? <>{kind} · {name || id.slice(0, 8)}</> : <>{name || kind}</>;
 }
 
 // A role's name, for the "with a lead" fold. Enrichment: the row carries
@@ -202,6 +229,7 @@ function RoleName({ roleId }: { roleId: string }) {
 
 function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: DecisionGroup; selecting: boolean; selected: Set<string>; onToggle: (id: string) => void; keys: boolean }) {
   const [open, setOpen] = useState(group.kind !== "role");
+  const internals = useSurface("questions.internals");
   const now = useCoarseNow(60_000);
   if (group.kind === "stack") {
     // Due (the-line.md L10) on the header: red once it has passed.
@@ -239,9 +267,12 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
       </section>
     );
   }
+  // Hosted mode names a group only when it gathers several asks: one card
+  // already names its conversation.
+  const named = internals || group.items.length > 1;
   return (
     <section>
-      <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />
+      {named && <GroupHeader icon={<span className="w-1.5 h-1.5 rounded-full bg-sol-yellow inline-block" />} title={<ScopeLabel scopeKey={group.scopeKey} sample={group.items[0]} />} count={group.items.length} />}
       <div className="space-y-2">
         {group.items.map((d, i) => <DecisionCompactCard key={d._id} decision={d} keys={keys && i === 0} selected={selected.has(d._id)} onToggleSelect={selecting ? () => onToggle(d._id) : undefined} />)}
       </div>

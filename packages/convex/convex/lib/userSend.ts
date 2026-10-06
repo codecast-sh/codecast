@@ -123,10 +123,11 @@ export function classifyUserSend(conversation: Doc<"conversations">, msg: SendMe
   return words === null ? null : { user_id: msg.from_user_id ?? conversation.user_id, words };
 }
 
-// Team attribution follows ROUTING: conversations are often created teamless
+// Team attribution for the per-day counters (sends here, tokens in
+// usageDaily.ts) follows ROUTING: conversations are often created teamless
 // and restamped later, so the stored team_id alone under-attributes. Fall back
 // to the owner's active team, the same rule routing uses elsewhere.
-async function resolveSendTeam(
+export async function resolveCounterTeam(
   ctx: { db: any },
   conversation: Doc<"conversations">,
 ): Promise<Id<"teams"> | undefined> {
@@ -182,7 +183,7 @@ export async function recordSendFor(
   timestamp: number,
 ): Promise<boolean> {
   if (!byPerson && isProgramLaunched(conversation)) return false;
-  await recordUserSend(ctx, { ...send, team_id: await resolveSendTeam(ctx, conversation) }, timestamp);
+  await recordUserSend(ctx, { ...send, team_id: await resolveCounterTeam(ctx, conversation) }, timestamp);
   return true;
 }
 

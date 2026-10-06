@@ -1769,12 +1769,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // client's stub id, so rewrite it with the real id in the same transaction.
   // The stub id doubles as the idempotency key: a replayed dispatch returns
   // the team the first run made instead of minting a duplicate.
-  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string }]) => {
+  dispatchCreateTeam: async (ctx, userId, [stubId, opts]: [string, { name: string; icon?: string; icon_color?: string; discoverable?: boolean }]) => {
     const teamId = await (ctx as any).runMutation(api.teams.createTeam, {
       name: opts.name,
       icon: opts.icon,
       icon_color: opts.icon_color,
       client_key: stubId,
+      ...(opts.discoverable ? { discoverable: true } : {}),
     });
     await applyPatches(ctx, userId, {
       client_state: { _: { ui: { active_team_id: teamId } } },

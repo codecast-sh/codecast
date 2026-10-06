@@ -13,10 +13,10 @@ import {
   TextInput as DefaultTextInput,
   View as DefaultView,
 } from 'react-native';
-import { forwardRef, useContext } from 'react';
+import { forwardRef } from 'react';
 
 import { Theme, useActiveScheme, useTheme } from '@/constants/Theme';
-import { FaceContext, InkContext, monoStyle, useLateFacesLoaded } from '@/constants/fonts';
+import { monoStyle, useLateFacesLoaded } from '@/constants/fonts';
 
 type ThemeProps = {
   lightColor?: string;
@@ -33,16 +33,14 @@ export function useThemeColor(
 ) {
   // Subscribes the wrapper to scheme flips; Theme itself reads live.
   const scheme = useActiveScheme();
-  const ink = useContext(InkContext);
-  return props[scheme] ?? (colorName === 'text' ? ink ?? Theme.text : Theme.bg);
+  return props[scheme] ?? (colorName === 'text' ? Theme.text : Theme.bg);
 }
 
 export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref) {
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   const late = useLateFacesLoaded();
-  const faces = useContext(FaceContext);
-  return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, faces)} />;
+  return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late)} />;
 });
 
 export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function TextInput(props, ref) {
@@ -50,13 +48,12 @@ export const TextInput = forwardRef<DefaultTextInput, TextInputProps>(function T
   const { style, lightColor, darkColor, ...otherProps } = props;
   const color = useThemeColor({ light: lightColor, dark: darkColor }, 'text');
   const late = useLateFacesLoaded();
-  const faces = useContext(FaceContext);
   return (
     <DefaultTextInput
       ref={ref}
       placeholderTextColor={Theme.inputPlaceholder}
       {...otherProps}
-      style={monoStyle([{ color }, style], late, faces)}
+      style={monoStyle([{ color }, style], late)}
     />
   );
 });
