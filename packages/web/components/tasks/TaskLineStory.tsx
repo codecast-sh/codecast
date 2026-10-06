@@ -161,7 +161,7 @@ function readinessWords(readiness: string, note?: string | null): string {
 function SignalRow({ s, now }: { s: LineSignal; now: number }) {
   const body = (
     <>
-      <span className="w-14 shrink-0 text-sol-text-dim">{s.source}</span>
+      <span className="w-20 shrink-0 truncate text-sol-text-dim" title={s.source}>{s.source}</span>
       <span className="min-w-0 truncate text-sol-text">{s.title}</span>
       {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
       <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>

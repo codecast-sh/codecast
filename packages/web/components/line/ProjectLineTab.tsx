@@ -5,20 +5,16 @@
 // same Sense derivation; its stations are the graph's, by phase, each said
 // in the words a run's path uses, with the way to edit it in line settings;
 // its versions are what each graph the line ran delivered; and its
-// expectations, when the project has them. Edits go through /line/settings,
-// which writes the repo.
-import { useEffect, useMemo, useState } from "react";
+// expectations (ExpectationsPanel), read and changed in place. Line edits go
+// through /line/settings, which writes the repo.
+import { useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowRight, ChevronRight, SlidersHorizontal } from "lucide-react";
-import type { ExpectationCitation } from "@codecast/shared/contracts/expectations";
-import { EntityIdPill } from "../EntityIdPill";
-import { chatHref } from "../../lib/chatHref";
-import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { ChevronRight, SlidersHorizontal } from "lucide-react";
 import type { PublishedLineProfile } from "@codecast/shared/contracts/lineProfile";
 import { useInboxStore } from "../../store/inboxStore";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
 import { workspaceRefOf } from "../../lib/workspaceScope";
-import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useProjectExpectations, useSyncProjectExpectations } from "../../hooks/useSyncProjectExpectations";
 import { useWorkflowBySlug } from "../../hooks/useSyncWorkflows";
 import { ageShort, buildLineFlow, isCause, scopeLine, silentText } from "../../lib/lineFlow";
 import { cn } from "../../lib/utils";
@@ -30,9 +26,8 @@ import { LinePage } from "./LinePage";
 import { LineSetup } from "./LineSetup";
 import { useLineFloor } from "./useLineFloor";
 import { ReportSection } from "./RunReport";
+import { ExpectationsPanel } from "./expectations/ExpectationsPanel";
 import "./line.css";
-
-const api = _api as any;
 
 type Project = { _id: string; short_id?: string | null; title?: string | null; workspace?: string | null; team_id?: string | null; line_profile?: PublishedLineProfile | null };
 
@@ -53,9 +48,10 @@ export function ProjectLineTab({ projectId }: { projectId: string }) {
   // A line with nothing on it has no flow to draw: it leads with what the
   // line would do here and the one step that starts it.
   const { lineRows } = useLineFloor(projectId, workspace);
-  // An enrichment: the tab reads honestly without it (useQueryNoThrow).
-  const { data: expectations } = useQueryNoThrow(api.expectations.forProject, { project_id: projectId });
-  const hasExpectations = !!expectations?.doc;
+  // Fed here as well as in the panel: whether the project has expectations
+  // decides what the tab leads with, even before the panel mounts.
+  useSyncProjectExpectations(projectId);
+  const hasExpectations = !!useProjectExpectations(projectId)?.doc;
   const versions = useVersions(lineRows, projectId);
   const empty = useMemo(() => {
     const scoped = scopeLine(lineRows, projectId);
@@ -67,7 +63,7 @@ export function ProjectLineTab({ projectId }: { projectId: string }) {
       {/* A line with nothing on it but expectations leads with them, and
           setting the line up is one action in their header. */}
       {empty && hasExpectations ? (
-        <Expectations data={expectations} setupHref={lp ? undefined : settings()} />
+        <ExpectationsPanel projectId={projectId} setupHref={lp ? undefined : settings()} scroll={false} />
       ) : empty ? (
         <LineSetup title={project?.title ?? "this project"} profiled={!!lp} href={settings()} />
       ) : (
@@ -79,7 +75,7 @@ export function ProjectLineTab({ projectId }: { projectId: string }) {
       {empty && !lp ? null : (
         <div className="grid gap-8 lg:grid-cols-2">
           <Sources projectId={projectId} workspace={workspace} lp={lp} settingsHref={settings("listens")} />
-          {!(empty && hasExpectations) && <Expectations data={expectations} />}
+          {!(empty && hasExpectations) && <ExpectationsPanel projectId={projectId} />}
         </div>
       )}
 
@@ -130,98 +126,6 @@ function Sources({ projectId, workspace, lp, settingsHref }: { projectId: string
       )}
     </ReportSection>
   );
-}
-
-type ExpectationsData = { doc?: { version: number; applied_at: number; items: Array<{ id: string; text: string; part: string; status: string; note?: string; citations: ExpectationCitation[] }> } | null; proposals?: Array<{ status: string }> } | null | undefined;
-
-/** The project's expectations (LM5): one living document, each line with the
- *  sources it came from as live references. `setupHref` puts setting up the
- *  line in the header, for a project whose expectations lead the tab. */
-function Expectations({ data, setupHref }: { data: ExpectationsData; setupHref?: string }) {
-  const doc = data?.doc;
-  const active = useMemo(() => (doc?.items ?? []).filter((e) => e.status === "active"), [doc]);
-  const parts = useMemo(() => {
-    const by = new Map<string, typeof active>();
-    for (const e of active) by.set(e.part, [...(by.get(e.part) ?? []), e]);
-    return [...by.entries()];
-  }, [active]);
-  const pending = (data?.proposals ?? []).filter((p) => p.status === "open").length;
-  // A link to one line (`#ex-<project>-<n>`, as a finding cites it) lands on
-  // it once the document has rendered.
-  useEffect(() => {
-    const id = decodeURIComponent(window.location.hash.slice(1));
-    if (id.startsWith("ex-")) document.getElementById(id)?.scrollIntoView({ block: "center" });
-  }, [doc]);
-  const aside = (
-    <span className="inline-flex items-center gap-3">
-      {doc && <span>version {doc.version} · {shortDay(doc.applied_at)}{pending ? ` · ${pending} proposed` : ""}</span>}
-      {setupHref && <Link href={setupHref} className="inline-flex items-center gap-1 text-sol-cyan hover:underline" data-line-setup-action>Set up the line<ArrowRight className="w-3 h-3" /></Link>}
-    </span>
-  );
-  return (
-    <ReportSection title="Expectations" aside={aside}>
-      <p className="-mt-1 mb-2 text-[12px] text-sol-text-dim" data-expectations-about>How the project should behave, each from the call, thread or task it came from. The judges grade what happened against these lines.</p>
-      {!doc ? (
-        <p className="text-[12.5px] text-sol-text-dim" data-expectations-empty>No expectations yet.</p>
-      ) : (
-        <div className={cn("space-y-3 pr-1", !setupHref && "max-h-[22rem] overflow-y-auto")} data-expectations>
-          {parts.map(([part, items]) => (
-            <div key={part}>
-              <div className="text-[11px] font-semibold text-sol-text-dim mb-1">{part}</div>
-              <ul className="space-y-1.5">
-                {items.map((e) => (
-                  <li key={e.id} id={e.id} className="scroll-mt-16 rounded text-[12.5px] text-sol-text leading-snug target:bg-sol-yellow/15" data-expectation={e.id}>
-                    {e.text}
-                    {/* The handle a finding cites, so a cause's "Expects" row can be matched by eye. */}
-                    <span className="ml-1.5 whitespace-nowrap font-mono text-[10.5px] text-sol-text-dim" data-expectation-id>{e.id}</span>
-                    {e.citations.length > 0 && (
-                      <span className="ml-1.5 inline-flex flex-wrap items-center gap-1 align-baseline text-[11px] text-sol-text-dim" data-expectation-sources>
-                        {e.citations.slice(0, 3).map((c, i) => <CitationRef key={`${c.kind}-${c.ref}-${i}`} c={c} />)}
-                        {e.citations.length > 3 && <span>+{e.citations.length - 3}</span>}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
-      )}
-    </ReportSection>
-  );
-}
-
-const PILL_KINDS = new Set(["call", "call_grade", "task", "decision", "session", "signal", "desk", "doc"]);
-
-/** A citation as a reference a reader can open: tasks, calls, decisions and
- *  sessions as live titled pills, a chat line as a link to its message, a
- *  commit by its repository and short sha. Never a raw id. */
-function CitationRef({ c }: { c: ExpectationCitation }) {
-  const ref = c.ref.trim();
-  const title = c.quote ? `"${c.quote}"${c.when ? `, ${c.when}` : ""}` : c.when;
-  // "#team/<message id>": the channel by name, the message by id.
-  const chat = c.kind === "chat" ? /^#?([^/\s]+)\/(\S+)$/.exec(ref) : null;
-  const channelId = useInboxStore((s) => (chat ? (Object.values(s.chatChannels ?? {}) as Array<{ _id: string; name?: string }>).find((ch) => ch.name === chat[1])?._id ?? null : null));
-  // "union-mobile@6422863a35": a commit whose repository the reference names without its owner.
-  const commit = c.kind === "commit" ? /^([^@\s]+)@([0-9a-f]{7,40})$/i.exec(ref) : null;
-  const repository = useInboxStore((s) => {
-    if (!commit || commit[1].includes("/")) return commit?.[1] ?? null;
-    const rows = [...Object.values(s.pullRequests ?? {}), ...Object.values(s.commits ?? {})] as Array<{ repository?: string }>;
-    return rows.find((r) => r.repository?.toLowerCase().endsWith(`/${commit[1].toLowerCase()}`))?.repository ?? null;
-  });
-  if (chat) {
-    const href = chatHref(channelId ?? undefined, chat[2]);
-    const body = <>#{chat[1]} thread</>;
-    return href ? <Link href={href} className="hover:text-sol-blue hover:underline" title={title} data-citation="chat">{body}</Link> : <span title={title} data-citation="chat">{body}</span>;
-  }
-  if (commit) {
-    if (repository?.includes("/")) return <span title={title} data-citation="commit"><EntityIdPill id={`${repository}@${commit[2]}`} type="commit" compact certain /></span>;
-    return <span className="font-mono" title={title ?? ref} data-citation="commit">{commit[1]}@{commit[2].slice(0, 7)}</span>;
-  }
-  if (PILL_KINDS.has(c.kind) && !/^[a-z0-9]{32}$/i.test(ref)) return <span title={title} data-citation={c.kind}><EntityIdPill shortId={ref} compact /></span>;
-  // A path or anything else, kept short: a long reference reads by its tail.
-  const words = ref.length > 40 ? `…${ref.slice(-36)}` : ref;
-  return <span title={title ?? ref} data-citation={c.kind}>{words}</span>;
 }
 
 /** The stations by phase, each said by what it does, linked to where its

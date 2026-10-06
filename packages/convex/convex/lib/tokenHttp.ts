@@ -162,6 +162,8 @@ export interface TokenHttpResult {
   content_type?: string;
   /** Sentry's pagination header. */
   link: string | null;
+  /** A non-2xx answer's Retry-After, in ms (a 429 from a rate limit). */
+  retry_after_ms?: number;
   bytes: number;
   ms: number;
   /** Set on every failure; a non-2xx answer gets `<vendor> answered <status>` for a wrapper to refine. */
@@ -221,7 +223,17 @@ export async function tokenHttp(fetchImpl: FetchLike, req: TokenHttpRequest): Pr
     bytes: bytes.length,
     ms: ms(),
     ...(res.ok ? {} : { error: `${req.vendor} answered ${res.status}` }),
+    ...(!res.ok && retryAfterMs(res.headers.get("retry-after")) !== null ? { retry_after_ms: retryAfterMs(res.headers.get("retry-after"))! } : {}),
   };
+}
+
+/** A Retry-After header (seconds, or an HTTP date) in ms from now, or null when absent or unreadable. */
+export function retryAfterMs(header: string | null, now: number = Date.now()): number | null {
+  const raw = header?.trim();
+  if (!raw) return null;
+  if (/^\d+(\.\d+)?$/.test(raw)) return Math.round(Number(raw) * 1000);
+  const at = Date.parse(raw);
+  return Number.isFinite(at) ? Math.max(0, at - now) : null;
 }
 
 /** A result's text as JSON, or undefined when it is not. */

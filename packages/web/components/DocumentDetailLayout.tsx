@@ -11,6 +11,7 @@ import { MessageReview } from "./MessageReview";
 import { MarkdownBlocks } from "./tools/MarkdownRenderer";
 import { DOC_MD_COMPONENTS } from "../lib/docMarkdownComponents";
 import { DocReviewBar } from "./DocReviewBar";
+import { useSurface } from "../lib/surfaces";
 import { SlotActions } from "./workspace/Slot";
 import { useInboxStore } from "../store/inboxStore";
 import { ArrowLeft, Edit3, MoreHorizontal, Copy, Check, MessageSquareQuote } from "lucide-react";
@@ -26,6 +27,7 @@ import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftin
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
+import { useFollowScroll } from "../hooks/useFollowSurface";
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
 // of MessageReview's measurement container, so every block is hover-quotable.
@@ -118,8 +120,13 @@ export function DocumentDetailLayout({
   const handleMentionQuery = useMentionQuery(useActiveMentionScope());
   const handleImageUpload = useImageUpload();
   const getMarkdownRef = useRef<(() => string) | null>(null);
+  // The body is the doc's one scroller: a follower reads where the leader reads.
+  const bodyScrollRef = useRef<HTMLDivElement | null>(null);
+  useFollowScroll("doc", bodyScrollRef);
   const draft = useDrafting(docId);
-  const draftingOn = !!drafting && isEditing;
+  // Hosted mode reads a note, it does not run a writing lab on it.
+  const internals = useSurface("docs.internals");
+  const draftingOn = !!drafting && isEditing && internals;
   const overflowEnabled = !!drafting?.overflow;
   const draftMenu = useDraftingMenu(draft, overflowEnabled);
 
@@ -178,14 +185,14 @@ export function DocumentDetailLayout({
           {topBarLeft}
         </div>
         <div className="flex items-center gap-1 ml-auto">
-          <button
+          {internals && <button
             onClick={handleCopyMarkdown}
             className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
             title="Copy as Markdown"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-          {initialEditable && (
+          </button>}
+          {initialEditable && internals && (
             // Editing is the default state, so the button offers the opt-in:
             // Review renders the body as quotable blocks to annotate and send
             // to the agent. While reviewing it flips to an accent-filled state
@@ -209,7 +216,7 @@ export function DocumentDetailLayout({
           {/* Shared controls in the detail's own header. Closing here is a
               navigation, so the slot's default hide is overridden — the
               affordance stays identical either way. */}
-          {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
+          {!embedded && internals && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
           {metaContent && (
             <button
               onClick={() => setShowMeta(!showMeta)}
@@ -228,7 +235,7 @@ export function DocumentDetailLayout({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto">
+      <div ref={bodyScrollRef} className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className="flex-1 flex items-start w-full">
         {draftingOn && <AlternativesPanel d={draft} />}

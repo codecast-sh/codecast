@@ -52,7 +52,7 @@ export function BatchReviewView() {
         setCurrentFileIndex(0);
       } else if (e.key === "Escape") {
         e.preventDefault();
-        router.push("/timeline");
+        router.push("/changes");
       } else if (e.key === "?") {
         e.preventDefault();
         setShowShortcuts((prev) => !prev);

@@ -3,13 +3,14 @@
 import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useOpsGroups, useOpsReplays } from "../../hooks/useSyncOps";
+import { useOpsGroups, useOpsReplays, useOpsSources } from "../../hooks/useSyncOps";
 import { relTimeShort } from "../../lib/utils";
 import { formatReplayTime } from "@codecast/shared/replay";
 import { replayPlace } from "./opsModel";
 import { opsHref } from "./opsPaths";
 import { OpsFeedEmpty, ProviderIcon, pressable, useOpsFeed } from "./parts";
-import type { OpsGroup } from "./opsTypes";
+import type { OpsGroup, OpsSource } from "./opsTypes";
+import { ReplayImportLine, hasVendorRecordings } from "./ReplayImport";
 
 export function ReplaysTab({ source }: { source: string | null }) {
   const all = useOpsReplays();
@@ -19,18 +20,25 @@ export function ReplaysTab({ source }: { source: string | null }) {
   const router = useRouter();
   const replays = useMemo(() => (source ? all.filter((r) => r.source_name === source) : all), [all, source]);
   const groupById = useMemo(() => new Map(groups.map((g) => [g._id, g])), [groups]);
+  const sources = useOpsSources();
+  const importable = useMemo(() => sources.filter((s) => hasVendorRecordings(s) && (!source || s.name === source)), [sources, source]);
 
   if (replays.length === 0) {
     return (
-      <OpsFeedEmpty feeds={[feed]} what="replays" title="No replays">
-        The SDK recorder uploads the last minute before an error, and a sampled share of sessions when its
-        replay rate is above zero. PostHog and Sentry recordings appear once read with <span className="ops-mono">cast replay show</span>.
-      </OpsFeedEmpty>
+      <>
+        <VendorImports sources={importable} />
+        <OpsFeedEmpty feeds={[feed]} what="replays" title="No replays">
+          The SDK recorder uploads the last minute before an error, and a sampled share of sessions when its
+          replay rate is above zero. PostHog and Sentry recordings appear once opened, or all at once with an import
+          (<span className="ops-mono">cast replay import --source &lt;name&gt;</span>).
+        </OpsFeedEmpty>
+      </>
     );
   }
 
   return (
     <div className="ops-pad">
+      <VendorImports sources={importable} />
       <table className="ops-table ops-table-fixed">
         <thead>
           <tr>
@@ -70,6 +78,16 @@ export function ReplaysTab({ source }: { source: string | null }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** One import line per PostHog or Sentry source: progress, and the control that starts, stops or resumes it. */
+function VendorImports({ sources }: { sources: OpsSource[] }) {
+  if (sources.length === 0) return null;
+  return (
+    <div className="ops-card ops-card-body flex flex-col gap-2 mb-3" data-ops-replay-imports>
+      {sources.map((s) => <ReplayImportLine key={s._id} source={s} showName />)}
     </div>
   );
 }

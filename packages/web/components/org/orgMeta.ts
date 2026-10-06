@@ -4,10 +4,10 @@ import type { OrgGhostStub } from "./orgLayout";
 // Presentation facts the org surfaces share: how each work state reads, and
 // how a parent reference is named. Data only; the cards render it.
 import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
-import { changeLine, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
-import type { OrgParentRef, OrgStandingState, OrgTree } from "./orgTypes";
+import type { OrgParentRef, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
 import type { OrgHealth } from "./orgStaffingTypes";
 
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
@@ -17,6 +17,18 @@ export const ORG_STATE_META: Record<WorkState, { label: string; color: string; c
   done: { label: "done", color: "var(--sol-cyan)", chip: THREAD_STATE_STATUS_META.done.chip },
   idle: { label: "idle", color: "var(--sol-text-dim)", chip: "bg-sol-bg-highlight text-sol-text-dim border-sol-border/30" },
 };
+
+/** A card's sessions in words, the states a person acts on first ("4 need
+ *  input · 2 working"), at most `max` parts; the rest is for a title. Empty
+ *  when there is nothing to say. */
+export function stateWords(counts: Partial<StateCounts>, max = 2): string[] {
+  const out: string[] = [];
+  const n = (k: WorkState) => counts[k] ?? 0;
+  if (n("needs_input")) out.push(`${n("needs_input")} need${n("needs_input") === 1 ? "s" : ""} input`);
+  if (n("working")) out.push(`${n("working")} working`);
+  for (const k of ["dormant", "done", "idle"] as const) if (out.length < max && n(k)) out.push(`${n(k)} ${ORG_STATE_META[k].label}`);
+  return out.slice(0, max);
+}
 
 /** The word on the button and the tab that open the staffing pane, said as
  *  what they open: the proposal waiting on the person when one is open,
@@ -78,6 +90,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
   role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
+  charter_edit: { label: "Charter edits", describe: "Changes a passage of a role's charter, or adds or removes a line, leaving the rest as it is." },
   move: { label: "Reporting changes", describe: "Moves a role under a different person or role, and can change what it looks after." },
   scope: { label: "Area changes", describe: "Adds or removes the projects and plans a role looks after." },
   budget: { label: "Daily limit changes", describe: "Raises or lowers how much a role may do in one day." },
@@ -115,48 +128,16 @@ export { changeLine } from "@codecast/shared/contracts/orgProposal";
 /** The words for limits and cadences are the shared contract's, so a derived
  *  ask (server or page) and a row line say them the same way. */
 export { capsWords, everyWords } from "@codecast/shared/contracts/orgProposal";
-import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-
-const at = (h: string) => `@${h.replace(/^@/, "")}`;
-const compact = (n: number) => n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${Math.round(n / 1_000)}k` : String(n);
-const refs = (xs: string[] | undefined, sign: string) => (xs ?? []).map((x) => `${sign}${x}`).join(" ");
-/** Caps always read in one order, whatever order the proposal wrote them. */
-const CAP_ORDER = ["hands_per_day", "wakes_per_day", "tokens_per_day"] as const;
-
-/**
- * The delta alone, for the chip on a card (org-staffing.md S5: "+ project X",
- * "tokens 800k", "starts work on its own"). The card already names the role the
- * chip sits on, so the verb and the handle are left out; the full sentence
- * (changeLine) is the chip's title.
- */
-export function chipLine(change: OrgChange): string {
-  switch (change.kind) {
-    case "role": return at(change.handle);
-    case "projects": return change.changes.map((x) => x.op === "create" ? `+ ${x.title}` : `${x.from} into ${x.into}`).join(", ");
-    case "move": return [change.reports_to ? `under ${change.reports_to}` : "", refs(change.scope_add, "+"), refs(change.scope_remove, "\u2212")].filter(Boolean).join(" ") || "move";
-    case "retire": return "retire";
-    case "scope": return [refs(change.add, "+ "), refs(change.remove, "\u2212 ")].filter(Boolean).join(" ");
-    case "budget": return CAP_ORDER.filter((k) => change.caps[k] !== undefined).map((k) => `${k.replace("_per_day", "")} ${compact(change.caps[k] as number)}`).join(" \u00b7 ");
-    case "trust": return autonomyOn(change.trust) ? "starts work on its own" : "stops starting work on its own";
-    case "routine": return `every ${change.every} \u00b7 ${change.title}`;
-    case "project_meta": return [change.project, change.priority, change.owner ? `owner ${at(change.owner)}` : ""].filter(Boolean).join(" \u00b7 ");
-    case "adopt": return `adopt ${change.conversation}`;
-    case "file": return `${change.plan} under ${change.project}`;
-    case "authority": return change.authority.map((g) => g.kind).join(" \u00b7 ");
-    case "hire": return `${change.template} ${change.version}`;
-    case "upgrade": return `to ${change.to}`;
-    case "initiative": return `+ ${change.title}`;
-    case "initiative_projects": return refs(change.projects, "+ ");
-    case "initiative_owner": return `owner ${change.owner.startsWith("@") ? at(change.owner) : change.owner}`;
-    case "initiative_shape": return [change.parent === undefined ? "" : change.parent ? `under ${change.parent}` : "top level", change.metrics === undefined ? "" : change.metrics.length ? change.metrics.map((m) => `${m.name} ${m.target}`).join(" \u00b7 ") : "no metric"].filter(Boolean).join(" \u00b7 ");
-    default: return changeLine(change);
-  }
-}
+/** The delta alone, for the chip on a card (org-staffing.md S5). The writer
+ *  lives with the rest of a change's words (orgChangeWords); the chart keeps
+ *  reading it from here. */
+export { chipLine } from "@codecast/shared/contracts/orgChangeWords";
 
 /** The one word a change's action strip leads with, so "Accept" names what
  *  it accepts on a card carrying several changes. */
 export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   projects: "projects",
+  charter_edit: "charter",
   file: "filing",
   role: "role",
   move: "move",

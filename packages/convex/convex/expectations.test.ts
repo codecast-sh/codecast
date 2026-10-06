@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { hashToken } from "./apiTokens";
-import { brief, forProject, lines, propose, resolve, retract, show } from "./expectations";
+import { brief, forProject, lines, personEditCore, propose, resolve, resolveProposalCore, retract, show } from "./expectations";
 import { settleExpectationCard } from "./lib/expectationsApply";
 
 const INDEXES = schemaIndexes(schema);
@@ -256,3 +256,62 @@ describe("a session's proposal that needs a person", () => {
     expect((await run(show, ctx, scope())).doc.items[0].status).toBe("retired");
   });
 });
+
+describe("a person's edits from the web (line-map.md LX3, LX5)", () => {
+  const seed = async (ctx: any) => run(propose, ctx, { ...scope(), summary: "Seed", ops: [{ op: "add", part: "Calls", text: "A call card's facts are true.", citations: [QUOTED] }] });
+
+  test("a line in a person's own words applies, cited as them; the project's person retires at once", async () => {
+    const ctx = await makeCtx();
+    await seed(ctx);
+    const added = await personEditCore(ctx, MATE as any, "projects_calls", { op: "add", part: "Calls", text: "Callbacks happen only when the contact asked for one." });
+    expect(added).toMatchObject({ status: "applied", version: 2, auto: true });
+    const s = await run(show, ctx, scope());
+    expect(s.doc.items[1]).toMatchObject({ id: "ex-callers-call-2", status: "active", citations: [{ kind: "person", ref: MATE, quote: "Callbacks happen only when the contact asked for one." }] });
+    expect(s.doc.summary).toBe("Cam added: Callbacks happen only when the contact asked for one.");
+    const retired = await personEditCore(ctx, OWNER as any, "projects_calls", { op: "retire", id: "ex-callers-call-1", reason: "We show estimates now" });
+    expect(retired).toMatchObject({ status: "applied", version: 3, auto: false });
+    expect((await run(show, ctx, scope())).doc).toMatchObject({ how: "person", items: [{ status: "retired", retired_reason: "We show estimates now" }, { status: "active" }] });
+  });
+
+  test("a teammate's retirement and a line too thin to stand on its words wait for the project's person", async () => {
+    const ctx = await makeCtx();
+    await seed(ctx);
+    expect(await personEditCore(ctx, MATE as any, "projects_calls", { op: "retire", id: "ex-callers-call-1", reason: "We show estimates now" })).toMatchObject({ status: "open" });
+    expect(await personEditCore(ctx, MATE as any, "projects_calls", { op: "add", part: "Calls", text: "Be nice." })).toMatchObject({ status: "open" });
+    const tab = await run(forProject, await makeCtxSharing(ctx, MATE), { project_id: "projects_calls" });
+    expect(tab.you_answer).toBe(false);
+    expect(tab.proposals.filter((p: any) => p.status === "open").map((p: any) => p.ops[0].op)).toEqual(["add", "retire"]);
+    expect((await run(forProject, await makeCtxSharing(ctx, OWNER), { project_id: "projects_calls" })).you_answer).toBe(true);
+  });
+
+  test("a CLI proposal citing a person never applies on that citation alone", async () => {
+    const ctx = await makeCtx();
+    const out = await run(propose, ctx, { ...scope(), summary: "One", ops: [{ op: "add", part: "Calls", text: "Callbacks happen only when the contact asked for one.", citations: [{ kind: "person", ref: OWNER, quote: "Callbacks happen only when the contact asked for one.", when: "2026-10-06" }] }] });
+    expect(out.status).toBe("open");
+  });
+
+  test("outside the project, nothing is written", async () => {
+    const ctx = await makeCtx();
+    await expect(personEditCore(ctx, OUTSIDER as any, "projects_calls", { op: "add", part: "Calls", text: "Callbacks happen only when the contact asked for one." })).rejects.toThrow(/not found/);
+    await expect(personEditCore(ctx, OWNER as any, "projects_calls", { op: "edit", id: "ex-callers-call-1" } as any)).rejects.toThrow(/adds a line or retires/);
+  });
+
+  test("Apply on the panel answers the proposal's card, the same decision the queue holds", async () => {
+    const ctx = await makeCtx();
+    await ctx.db.insert("conversations", { user_id: OWNER, session_id: "sess-routine", team_id: TEAM, is_private: false, title: "Expectations for Callers", message_count: 3, created_at: 1, updated_at: 1 });
+    await seed(ctx);
+    await run(propose, ctx, { ...scope(), conversation_id: "sess-routine", summary: "Retire", ops: [{ op: "retire", id: "ex-callers-call-1", reason: "ruled out", citations: [QUOTED] }] });
+    const out = await resolveProposalCore(ctx, OWNER as any, "xp-2", "apply", { settled: true });
+    expect(out).toEqual({ short_id: "xp-2", status: "applied", version: 2 });
+    const card = (await ctx.db.query("session_decisions").collect()).find((d: any) => !d.short_id?.match(/^sd-9[56]$/));
+    expect(card).toMatchObject({ status: "answered", answer_index: 0 });
+    // The queue answered first: the panel's dispatch that follows finds it settled.
+    expect(await resolveProposalCore(ctx, OWNER as any, "xp-2", "apply", { settled: true })).toMatchObject({ status: "applied", version: 2 });
+    await expect(resolveProposalCore(ctx, OWNER as any, "xp-2", "drop", { settled: true })).rejects.toThrow(/already applied/);
+  });
+});
+
+/** The same tables, read as another signed-in person. */
+async function makeCtxSharing(ctx: any, user: string) {
+  return { ...ctx, auth: { async getUserIdentity() { return { subject: user }; } } };
+}

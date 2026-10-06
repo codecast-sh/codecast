@@ -1603,3 +1603,62 @@ A limit is never a row or a number on a card (S23.2): it rides with its role's c
 **Order of shipping.** The fields are optional, so Convex goes first and an older web ignores them. A change ref on a client older than the renderer is the proposal's pill followed by plain text.
 
 Left out on purpose: an Undo on a decided card (the stamp carries the batch for it).
+
+## S40. The map: one picture of the company
+
+Written 2026-10-06. The founder asked why goals, projects and the org chart
+were separate pictures: "a single view with everything on it; we can filter
+it down to just one or the other". The chart's two lenses (S36) are now one
+map with three filters and one overlay. The word a person reads is goal; the
+top one, a goal that other goals feed, is the mission.
+
+**One component.** `OrgMap` (`components/org/OrgMap.tsx`) draws the map
+and keeps nothing but its own selection: the page that mounts it (the org
+screen, beside the Head of People's conversation; the chart pane
+`/org?view=chart`) passes the tree, the goals, the open proposal with its
+changes, the filter, whether the proposal is overlaid, and the change a card
+in the conversation is pointing at. It is read only: nothing on the map
+decides a change; answers happen on the cards in the conversation.
+
+**The spine is Mission → Goals → Projects** (`goalsLayout`). A sole mission
+is the outline's root and wears the company's name and totals; several top
+level goals, or none with goals under them, keep the company card over them.
+Every goal wears its owner's face; a project row its lead's. The projects no
+goal carries sit under one quiet header at the foot ("6 projects under no
+goal"), because they are real work and what a goals proposal is there to
+place. A goal with goals under it names no project ("9 projects through the
+goals below"); a goal whose carried project is drawn elsewhere says "also X".
+
+**Sessions are counts and words, never a wall of cards.** A project row
+carries the sessions of the roles whose area holds it; a column card its
+own. Each says the state a person acts on first ("4 need input · 2
+working", `stateWords`), with the bar for the proportion and the whole tally
+on hover. On the People filter the reporting chart draws no session stacks
+(`view.sessionCards: false`); the cards say the same words.
+
+| Filter | What it draws |
+|---|---|
+| Everything (default) | The outline, and beside it every person and active role in a fixed order (people, me first; roles by name): face, owns N, "under X" for a role, sessions in words. The order does not depend on the proposal, so the column reads the same with the overlay on and off |
+| Goals | The outline alone |
+| People | Who reports to whom: `layoutOrgTree` with the counts on the cards |
+
+**As proposed** overlays the open proposal on whichever filter is on, in the
+quiet violet mark every proposal wears: goal changes through `goalsPlan`
+(S36), role changes through `ghostsFor` on the column cards (a proposed role
+is a stub card, a retire hatches, a move says "under X" and "was under Y", a
+scope or charter change is a quiet line). A moved goal keeps a faint line
+from where it was. It is on whenever a proposal is open; `proposed=0` in the
+pane's address turns it off. Semantic zoom (S37) is unchanged: the mission
+kicker, the words and the column rows are booked at every level.
+
+**A card in the conversation points at the map.** Hovering or focusing a
+proposal card passes its change as `highlightChangeId`: the node that
+carries it lights with the selection ring and its owner edge, and the map
+pans only when the node is off screen, so a pointer moving down a list of
+cards never drags the map about. A link in the thread (`?focus=N`) lights
+and pans always. Whichever happened last wins.
+
+**What this retires.** The chart pane's lens toggle and its reply box at
+the foot (answers live in the conversation), the action strip on goal and
+project cards, and the owners column that pulled each owner down level with
+the first thing it owned.

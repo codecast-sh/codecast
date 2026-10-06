@@ -8,6 +8,7 @@
 
 import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEvents";
 import { checkLabel } from "@codecast/shared/contracts";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 import {
   diffLineKey,
   normalizeDiffSide,
@@ -155,6 +156,8 @@ export type CodeCommentRow = {
   line_number?: number;
   line_end?: number;
   side?: string;
+  /** The commented lines' text and context (shared/comments/codeAnchor.ts). */
+  anchor_lines?: CodeAnchorText;
   resolved?: boolean;
   resolved_at?: number;
   parent_id?: string;
@@ -169,6 +172,10 @@ export type CodeCommentRow = {
   /** The GitHub review this comment was submitted in, when it was. */
   github_review_id?: number;
   updated_at?: number;
+  /** The session the note was handed to, and the agent reply that answers it
+   *  (convex lib/reviewAnswered). */
+  sent_to_conversation_id?: string;
+  answered_message_id?: string;
 };
 
 /** The reader's own notes waiting in an unsubmitted review. */

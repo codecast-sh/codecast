@@ -10,12 +10,14 @@
 // its own, applying a proposal to a set of lines, and the renderings the CLI,
 // a judge and a card read. Server: convex/expectations.ts.
 
-export const CITATION_KINDS = ["call", "chat", "session", "task", "decision", "commit", "file", "doc", "desk", "call_grade", "signal", "other"] as const;
+// "person": a person's own words, typed where the expectations are read
+// (the Line tab, the map's panel); its ref is their user id.
+export const CITATION_KINDS = ["call", "chat", "session", "task", "decision", "commit", "file", "doc", "desk", "call_grade", "signal", "person", "other"] as const;
 export type CitationKind = (typeof CITATION_KINDS)[number];
 
 export type ExpectationCitation = {
   kind: CitationKind;
-  /** Where to find it, one word: cl-96:58, ct-50164, sd-346, #team/<message id>, repo@sha, a path. */
+  /** Where to find it, one word: cl-96:58, ct-50164, sd-346, #team/<message id>, repo@sha, a path, a person's user id. */
   ref: string;
   /** The words behind the line, verbatim. */
   quote?: string;
@@ -61,6 +63,8 @@ export type ExpectationsVersion = {
   project: { id: string; title: string };
   version: number;
   prefix: string;
+  /** The number the next added line takes (ex-<prefix>-<next_n>). */
+  next_n?: number;
   items: Expectation[];
   applied_at: number;
   applied_by?: string;
@@ -128,11 +132,12 @@ export const isQuotedAndDated = (c: ExpectationCitation): boolean => (c.quote?.l
 /**
  * The kinds whose quote can be a person's own words, checked against the
  * record: a line a person typed in team chat, a decision a person answered, a
- * person speaking on a call. Every other kind (a task note, a commit, a
+ * person speaking on a call, or a line a signed-in person typed on the web
+ * (the server holds that one only for the person who sent it). Every other kind (a task note, a commit, a
  * session) can carry an agent's account of what shipped, so it never lets a
  * line in without a person.
  */
-export const PERSON_SOURCE_KINDS: readonly CitationKind[] = ["call", "chat", "decision"];
+export const PERSON_SOURCE_KINDS: readonly CitationKind[] = ["call", "chat", "decision", "person"];
 
 // Words that carry no claim: a line and a quote that share only these say nothing about each other.
 const FILLER = new Set("about after again against also always another anything because been before being between both cannot could does done each even every everything from going have here into itself just know like made make makes more most must need needs never okay only onto other over really same shall should some something still such sure than that their them then there these they thing things think this those under unless until very want wants were what when where which while will with would yeah your".split(" "));
@@ -181,6 +186,31 @@ export function groundingCandidates(op: AddOp): ExpectationCitation[] {
  */
 export function autoApplies(ops: ExpectationOp[], personSaid: (c: ExpectationCitation) => boolean): boolean {
   return ops.length > 0 && ops.every((op) => op.op === "add" && groundingCandidates(op).some(personSaid));
+}
+
+/**
+ * What a signed-in person changes by hand where the expectations are read
+ * (line-map.md LX3, LX5): a line in their own words, or a retirement with the
+ * reason. Either becomes a proposal like any other.
+ */
+export type PersonEdit = { op: "add"; text: string; part: string } | { op: "retire"; id: string; reason: string };
+
+/** The op a person's edit becomes: their own words are its source, cited as them on the day they typed them. */
+export function personOp(edit: PersonEdit, userId: string, now: number): ExpectationOp {
+  const when = new Date(now).toISOString().slice(0, 10);
+  const words = edit.op === "add" ? edit.text : edit.reason;
+  return normalizeOp({ ...edit, citations: [{ kind: "person", ref: userId, quote: words, when }] });
+}
+
+/**
+ * Whether a person's edit lands as they make it (LM5): the project's person
+ * decides every change, so theirs applies; anyone else's applies on the rule
+ * above (a line in their own words that the words stand behind), and the rest
+ * waits for the project's person. The web paints from this and the server
+ * applies by it, so both say the same thing.
+ */
+export function personEditApplies(op: ExpectationOp, isProjectPerson: boolean): boolean {
+  return isProjectPerson || autoApplies([op], (c) => c.kind === "person");
 }
 
 /** A quote's words, for checking that a record holds them: lowercase words only; an ellipsis splits it into pieces that must each appear. */

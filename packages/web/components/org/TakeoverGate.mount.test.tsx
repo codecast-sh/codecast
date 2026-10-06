@@ -27,14 +27,16 @@ let answer: unknown[] | undefined = [null];
 const asked: any[] = [];
 mock.module("../../hooks/useQueryNoThrow", () => ({ useQueryNoThrow: (_q: unknown, args: any) => { if (args !== "skip") asked.push(args); return { data: args === "skip" ? undefined : answer }; } }));
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
-mock.module("../../hooks/useWorkspaceCollection", () => ({ useWorkspaceCollection: (key: string) => key === "projects" ? [{ _id: "p-growth", title: "Growth", status: "active" }, { _id: "p-billing", title: "Billing", status: "active" }] : [] }));
+// Keep the module's other exports: the scope editor's graph reaches useActiveWorkspaceKey.
+const realWorkspace = { ...(await import("../../hooks/useWorkspaceCollection")) };
+mock.module("../../hooks/useWorkspaceCollection", () => ({ ...realWorkspace, useWorkspaceCollection: (key: string) => key === "projects" ? [{ _id: "p-growth", title: "Growth", status: "active" }, { _id: "p-billing", title: "Billing", status: "active" }] : [] }));
 // The chip on each scope row reads the store; it is not under test here.
 mock.module("../charter/ProjectLeadChip", () => ({ ProjectLeadChip: () => null, ProjectLeadMark: () => null, HireLeadDialog: () => null }));
 mock.module("../../hooks/useProjectLead", () => ({ useProjectLead: () => ({ project: undefined, roles: null, lead: { kind: "none" }, otherWorkspace: false }) }));
 
 const { createRoot } = await import("react-dom/client");
 const { TakeoverGate } = await import("./TakeoverEdit");
-const { GatedScopeEditor } = await import("./OrgScopePanel");
+const { GatedScopeEditor } = await import("./scope/ScopeEditors");
 const { ORG_FIXTURE } = await import("./orgFixture");
 
 const WS = { kind: "team" as const, id: "fixture-team", name: "Acme" };

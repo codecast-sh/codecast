@@ -169,17 +169,43 @@ export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttr
 
 /**
  * Send. Tinted cyan when the send is carried entirely by attached quotes, to
- * match their tray; the bare box uses a small square button.
+ * match their tray; the bare box uses a small square button. With a `label`
+ * ("Send and apply 3", from batchSendWords) the button is a violet pill that
+ * says what the send does; the bare box ignores it.
  */
 export function ComposerSendButton({
   canSubmit,
   bare = false,
   quotesOnly = false,
+  title,
+  label,
 }: {
   canSubmit: boolean;
   bare?: boolean;
   quotesOnly?: boolean;
+  /** Why Send is held, as its tooltip. */
+  title?: string;
+  /** The words on the button when the send applies answers. */
+  label?: string;
 }) {
+  if (label && !bare) {
+    return (
+      <button
+        type="submit"
+        disabled={!canSubmit}
+        className={`h-8 rounded-full px-3 text-[12.5px] font-semibold whitespace-nowrap inline-flex items-center gap-1.5 transition-opacity bg-[var(--sol-violet)] text-[var(--sol-bg)] ${canSubmit ? "hover:opacity-90" : "opacity-[0.45] cursor-not-allowed"}`}
+        aria-label={label}
+        title={title}
+        data-cc-send=""
+        data-cc-send-label={label}
+      >
+        {label}
+        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </button>
+    );
+  }
   const className = bare
     ? `w-6 h-6 rounded-md transition-colors flex items-center justify-center ${
         !canSubmit ? "text-sol-text-dim/30 cursor-not-allowed" : "text-sol-cyan hover:bg-sol-cyan/10"
@@ -196,6 +222,9 @@ export function ComposerSendButton({
       type="submit"
       disabled={!canSubmit}
       className={className}
+      aria-label="Send"
+      title={title}
+      data-cc-send={bare ? undefined : ""}
     >
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 19V5M5 12l7-7 7 7" />

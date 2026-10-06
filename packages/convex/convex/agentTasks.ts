@@ -25,12 +25,14 @@ import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/co
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, type RoleEventSpec } from "./lib/orgRoutine";
 import { roleServedInitiatives } from "./lib/roleInitiatives";
 import { metricLine } from "@codecast/shared/contracts/initiative";
-import { earliestUsageResetAt, listOnlineDevices } from "./ccAccountsShared";
+import { listOnlineDevices, parkedAccountResetAt, recoveryModeOf } from "./ccAccountsShared";
 import { performSetThreadState } from "./conversations";
 import { createDataContext } from "./data";
 import { triggerSourceName } from "./ingest";
 import { armedTriggers } from "./lib/triggerMatch";
 import { hostedHomeStamp, hostedOwnerRefusal, hostedRoutineRefusal, type HostedRoutine } from "./assistant/routines";
+import { startHostedConversationFor } from "./assistant/start";
+import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
 
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000; // 10 min
@@ -389,8 +391,21 @@ async function parkRunAtLimit(
   runConv: Doc<"conversations">,
   now: number,
 ): Promise<void> {
-  const { primary } = await listOnlineDevices(ctx, task.user_id, now);
-  const resetAt = earliestUsageResetAt(primary?.cc_accounts?.profiles ?? [], now);
+  const { online, primary } = await listOnlineDevices(ctx, task.user_id, now);
+  // The account the run used: the row's pin, else the fleet account of the
+  // device that ran it (the primary when the owner is not online). Its own
+  // pegged window names the wait, and a booked recovery check is a floor:
+  // the earliest reset across every account woke runs on a rolled 5h session
+  // inside a still-spent week.
+  const owner = (runConv.owner_device_id && online.find((d) => d.device_id === runConv.owner_device_id)) || primary;
+  const resetAt = parkedAccountResetAt(
+    owner && {
+      cc_accounts: owner.cc_accounts,
+      cc_auto_switch_state: recoveryModeOf(owner) === "off" ? undefined : owner.cc_auto_switch_state,
+    },
+    runConv,
+    now,
+  );
   const runAt = (resetAt ?? now + LIMIT_PARK_FALLBACK_MS) + LIMIT_PARK_GRACE_MS;
   const when = new Date(runAt).toISOString();
   await patchTask(ctx, task, {
@@ -2202,10 +2217,21 @@ export const webCreate = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    return await insertTask(ctx, userId, {
-      ...args,
-      title: args.title?.trim() || args.prompt.slice(0, 60),
-    });
+    const title = args.title?.trim() || args.prompt.slice(0, 60);
+    // A routine for the hosted assistant fires into a hosted conversation
+    // (cloudTriggerConversation), never a daemon, so the routines page's form
+    // starts that conversation as the routine's home. One transaction: a
+    // routine the plan refuses leaves no empty conversation behind.
+    if (isHostedAgentType(args.agent_type)) {
+      const home = await startHostedConversationFor(ctx, userId, { title: title.slice(0, HOSTED_TITLE_MAX_CHARS) });
+      return await insertTask(ctx, userId, {
+        ...args,
+        title,
+        project_path: undefined,
+        originating_conversation_id: home.conversation_id,
+      });
+    }
+    return await insertTask(ctx, userId, { ...args, title });
   },
 });
 

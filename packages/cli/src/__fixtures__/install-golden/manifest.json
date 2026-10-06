@@ -20,9 +20,18 @@
   "pr": {
     "config": {
       "pr_enabled": true,
-      "pr_version": "1"
+      "pr_version": "2"
     },
     "stdout": "* Pull requests — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
+  "mods": {
+    "config": {
+      "mods_enabled": true,
+      "mods_version": "1"
+    },
+    "stdout": "* Mods — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
@@ -38,7 +47,7 @@
   "tasks": {
     "config": {
       "work_enabled": true,
-      "work_version": "11"
+      "work_version": "12"
     },
     "stdout": "* Tasks & Plans — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -67,7 +76,7 @@
   "visual": {
     "config": {
       "visual_enabled": true,
-      "visual_version": "7"
+      "visual_version": "8"
     },
     "stdout": "* Visual Canvas — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -76,7 +85,7 @@
   "publish": {
     "config": {
       "publish_enabled": true,
-      "publish_version": "4"
+      "publish_version": "5"
     },
     "stdout": "* Publish — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -130,6 +139,15 @@
     "wroteClaudeMd": true,
     "otherFiles": {}
   },
+  "sim": {
+    "config": {
+      "sim_enabled": true,
+      "sim_version": "1"
+    },
+    "stdout": "* iOS Simulator — installed in ~/.claude/CLAUDE.md\n",
+    "wroteClaudeMd": true,
+    "otherFiles": {}
+  },
   "check": {
     "config": {
       "check_enabled": true,
@@ -160,7 +178,7 @@
   "orchestration": {
     "config": {
       "orch_enabled": true,
-      "orch_version": "11"
+      "orch_version": "12"
     },
     "stdout": "* Orchestration — updated in ~/.claude/skills/, ~/.claude/agents/, and ~/.claude/settings.json (hooks)\n",
     "wroteClaudeMd": false,
@@ -177,7 +195,7 @@
   "skills": {
     "config": {
       "skills_enabled": true,
-      "skills_version": "1"
+      "skills_version": "2"
     },
     "stdout": "* Skills — installed in ~/.claude/skills/cast-*/SKILL.md\n",
     "wroteClaudeMd": false,
@@ -186,20 +204,21 @@
       ".claude/skills/cast-bakeoff/SKILL.md": "239dea95d76a77ba",
       ".claude/skills/cast-conflicts/SKILL.md": "4a63a90a825ac77c",
       ".claude/skills/cast-eod/SKILL.md": "6af05f0d09b5b709",
-      ".claude/skills/cast-from-call/SKILL.md": "5da5a05929cb06a2",
+      ".claude/skills/cast-from-call/SKILL.md": "c6a14a0dad51e599",
       ".claude/skills/cast-handoff/SKILL.md": "88b146158c6bff9b",
       ".claude/skills/cast-learn/SKILL.md": "abad9d0bbef66b20",
-      ".claude/skills/cast-lessons/SKILL.md": "dee8b38b3d559b76",
+      ".claude/skills/cast-lessons/SKILL.md": "9d09301cf409c23f",
       ".claude/skills/cast-loop/SKILL.md": "45281d9e9adc4bd3",
+      ".claude/skills/cast-mod/SKILL.md": "6e347374735882ec",
       ".claude/skills/cast-morning/SKILL.md": "90faab6e129bae46",
-      ".claude/skills/cast-org/SKILL.md": "ee83aa3a7cd486cb",
-      ".claude/skills/cast-pass/SKILL.md": "a2f0deecd382bf8d",
+      ".claude/skills/cast-org/SKILL.md": "7b61ebffcc66bf51",
+      ".claude/skills/cast-pass/SKILL.md": "a6ec982a7448d340",
       ".claude/skills/cast-pickup/SKILL.md": "2d52de61a84e9eda",
       ".claude/skills/cast-plan/SKILL.md": "a830b8850214b8aa",
       ".claude/skills/cast-rethink/SKILL.md": "4a911ffb2d682a85",
       ".claude/skills/cast-review/SKILL.md": "cd57a6e1b6ccde85",
       ".claude/skills/cast-second-opinion/SKILL.md": "6712e76233059c8f",
-      ".claude/skills/cast-ship/SKILL.md": "e7c3443217252acb",
+      ".claude/skills/cast-ship/SKILL.md": "ebee449e8220cbba",
       ".claude/skills/cast-standup/SKILL.md": "63b9d144fe22eb8f",
       ".claude/skills/cast-triage/SKILL.md": "26cf440cf55b47d1",
       ".claude/skills/cast-verify/SKILL.md": "e03ca536c88c7af9",

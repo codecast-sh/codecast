@@ -18,8 +18,14 @@
 // contain no digit and don't start with an alnum value), keeping message_uuid
 // dedup / re-sync stable.
 //
+// Shape is not enough for a secret with no recognizable form, so the last step
+// replaces exact occurrences of this machine's real secret values
+// (knownValueRedaction.ts; empty, and a no-op, outside the daemon).
+//
 // TODO: expose a per-project opt-out flag once config plumbing exists. On by
 // default for now.
+
+import { redactKnownValues } from "./knownValueRedaction.js";
 
 type SecretPattern = { re: RegExp; marker: string };
 
@@ -147,7 +153,7 @@ export function redactSecrets(text: string): string {
     re.lastIndex = 0;
     result = result.replace(re, marker);
   }
-  return redactLabeled(result);
+  return redactKnownValues(redactLabeled(result));
 }
 
 /** True if `text` contains at least one high-confidence secret. */
