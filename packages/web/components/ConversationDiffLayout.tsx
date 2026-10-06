@@ -11,12 +11,14 @@ import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { FileDiffLayout } from "./FileDiffLayout";
-import { foldReadyFiles } from "../lib/conversationDiffFiles";
+import { foldReadyFiles, lastPromptAt } from "../lib/conversationDiffFiles";
 import type { FileChangeEntry } from "../store/diffViewerStore";
-import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId } from "../store/inboxStore";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useFileChangeBodies } from "../hooks/useFileChangeBodies";
-import { selectFoldInputs } from "@codecast/shared/diff";
+import { DIFF_BASES, diffBaseStart, selectRangeFoldInputs, type DiffBase } from "@codecast/shared/diff";
+import { SegmentedToggle } from "./SegmentedToggle";
+import { isSeen, toggleSeenFile } from "../lib/diffSeenMarks";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { getRelativePath } from "@codecast/shared/render";
 import { shareTokenArg } from "../lib/shareTokenScope";
@@ -24,6 +26,8 @@ import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useSurface } from "../lib/surfaces";
+import { useFollowSurface } from "../hooks/useFollowSurface";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
@@ -124,9 +128,12 @@ export function ConversationDiffLayout({
   foldWorkingTurns,
   openAtTop,
   composerPlaceholder,
-  hideDiff,
+  hideDiff: hideDiffProp,
 }: ConversationDiffLayoutProps) {
   devRenderCount("ConversationDiffLayout");
+  // Hosted mode has no diff panel (lib/surfaces.ts).
+  const diffShown = useSurface("diff");
+  const hideDiff = hideDiffProp || !diffShown;
   const heightClass = "h-full";
   const [isMobile, setIsMobile] = useState(false);
   const layoutPref = useInboxStore(s => s.clientState.layouts?.conversation_diff ?? DEFAULT_DIFF_LAYOUT);
@@ -167,6 +174,36 @@ export function ConversationDiffLayout({
     setChanges(conversation?._id ?? null, mergeFileChanges<FileChangeEntry>(serverFileChanges ?? [], clientChanges));
   }, [conversation?._id, conversation?.messages, serverFileChanges, setChanges]);
 
+  // Follow mode (lib/follow.ts): the side panel beside the transcript is part
+  // of a person's place, "diff" while it is open and "none" while it is not,
+  // and so is the change the diff is folded up to (the diff's base), which
+  // decides which files the pane holds. The state is global, so a copy kept
+  // mounted in a background tab reads and writes the same answer. The file
+  // and line are the pane's own (FileDiffLayout), applied after this.
+  const selectedChangeIndex = useDiffViewerStore((s) => s.selectedChangeIndex);
+  useFollowSurface(
+    {
+      read: () => ({
+        panel: diffPanelOpen ? "diff" : "none",
+        diff: diffPanelOpen ? { file: "", base: selectedChangeIndex === null ? "all" : `change:${selectedChangeIndex}` } : undefined,
+      }),
+      apply: (view) => {
+        const dv = useDiffViewerStore.getState();
+        const base = view.diff?.base;
+        if (base === "all" && dv.selectedChangeIndex !== null) dv.clearSelection();
+        else if (base?.startsWith("change:")) {
+          const index = Number(base.slice(7));
+          if (Number.isInteger(index) && index >= 0 && index < dv.changes.length && index !== dv.selectedChangeIndex) dv.selectChange(index);
+        }
+        if (view.panel !== "diff" && view.panel !== "none") return [];
+        dv.setDiffPanelOpen(view.panel === "diff");
+        return ["panel"];
+      },
+    },
+    !hideDiff,
+    [diffPanelOpen, selectedChangeIndex],
+  );
+
   useMountEffect(() => {
     setIsMobile(window.innerWidth < MOBILE_BREAKPOINT);
   });
@@ -179,7 +216,7 @@ export function ConversationDiffLayout({
     const target = e.target as HTMLElement;
     const isInput = keyBelongsElsewhere(target);
 
-    if (isInput) return;
+    if (isInput || !diffShown) return;
 
     switch (e.key) {
       case "[":
@@ -215,14 +252,14 @@ export function ConversationDiffLayout({
   // Element props handed to the memoized ConversationView must keep identity
   // across this component's own re-renders, or the memo never holds.
   const combinedHeaderExtra = useMemo(() => {
-    const changesOverlay = changes.length > 0 && !diffPanelOpen ? <ChangesBar changes={changes} /> : null;
+    const changesOverlay = changes.length > 0 && !diffPanelOpen && !hideDiff ? <ChangesBar changes={changes} /> : null;
     return changesOverlay ? (
       <>
         {headerExtra}
         {changesOverlay}
       </>
     ) : headerExtra;
-  }, [changes, diffPanelOpen, headerExtra]);
+  }, [changes, diffPanelOpen, hideDiff, headerExtra]);
 
   const conversationViewProps = {
     ref: conversationRef,
@@ -285,7 +322,7 @@ export function ConversationDiffLayout({
             <ConversationView {...conversationViewProps} />
           </TabsContent>
           <TabsContent value="diff" className="flex-1 overflow-auto m-0">
-            <DiffPane conversationId={conversation?._id} gitRoot={conversation?.git_root} />
+            <DiffPane conversation={conversation} />
           </TabsContent>
         </Tabs>
       </div>
@@ -330,7 +367,7 @@ export function ConversationDiffLayout({
             </div>
             {/* Diff Content */}
             <div className="flex-1 h-full min-w-0">
-              <DiffPane conversationId={conversation?._id} gitRoot={conversation?.git_root} />
+              <DiffPane conversation={conversation} />
             </div>
           </div>
         </Panel>
@@ -340,17 +377,73 @@ export function ConversationDiffLayout({
   );
 }
 
-function DiffPane({ conversationId, gitRoot }: { conversationId?: string; gitRoot?: string | null }) {
-  const { selectedChangeIndex, changes, selectedFile, bodies, missingBodies } = useDiffViewerStore();
+// The base switch: where the diff starts. Labels stay one word so the control
+// fits a narrow pane; the tooltip says what each one means here.
+const BASE_LABELS: Record<DiffBase, { label: string; title: string }> = {
+  session: { label: "Session", title: "Every change this session made" },
+  branch: { label: "Branch", title: "Since the branch left the default branch, as far as this session's commits show" },
+  commit: { label: "Commit", title: "Changes since the session's last commit" },
+  turn: { label: "Turn", title: "Changes since your last message" },
+};
+const BASE_UNAVAILABLE: Partial<Record<DiffBase, string>> = {
+  commit: "This session has not committed yet",
+  turn: "No message of yours is loaded here",
+};
+const BASE_EMPTY: Record<DiffBase, string> = {
+  session: "No changes yet",
+  branch: "Nothing changed since the branch base",
+  commit: "Nothing changed since the last commit",
+  turn: "Nothing changed since your last message",
+};
 
-  // The changes the fold reads at this position, then their text, then the
-  // tree. Files whose text is still on its way join the tree as it lands.
-  const foldInputs = useMemo(() => selectFoldInputs(changes, selectedChangeIndex), [changes, selectedChangeIndex]);
-  useFileChangeBodies(conversationId, foldInputs);
+function DiffPane({ conversation }: { conversation?: ConversationData }) {
+  const conversationId = conversation?._id;
+  const gitRoot = conversation?.git_root;
+  const { selectedChangeIndex, rangeStart, rangeEnd, changes, selectedFile, bodies, missingBodies, setDiffBase } = useDiffViewerStore();
+  const ui = useTrackedStore([
+    (s) => (conversationId ? s.clientState.ui?.diff_base?.[conversationId] : undefined),
+    (s) => (conversationId ? s.clientState.ui?.diff_seen_files?.[conversationId] : undefined),
+  ]).clientState.ui;
+  const chosenBase: DiffBase = (conversationId && ui?.diff_base?.[conversationId]) || "session";
+  const seenMarks = conversationId ? ui?.diff_seen_files?.[conversationId] : undefined;
+
+  // Where each base starts in this session's changes. A base that names
+  // nothing here (no commit yet) shows disabled, and a remembered choice that
+  // names nothing falls back to the whole session.
+  const turnStartedAt = useMemo(() => lastPromptAt(conversation?.messages), [conversation?.messages]);
+  const starts = useMemo(
+    () => Object.fromEntries(DIFF_BASES.map((b) => [b, diffBaseStart(changes, b, { turnStartedAt, branch: conversation?.git_branch })])) as Record<DiffBase, number | null>,
+    [changes, turnStartedAt, conversation?.git_branch],
+  );
+  const base: DiffBase = starts[chosenBase] === null ? "session" : chosenBase;
+
+  // A range picked on the timeline wins over the base; otherwise the base to
+  // the selected change (or the end). The changes the fold reads on each side
+  // of the boundary, then their text, then the tree. Files whose text is
+  // still on its way join the tree as it lands.
+  const from = rangeStart ?? starts[base] ?? 0;
+  const to = rangeStart !== null ? rangeEnd : selectedChangeIndex;
+  const foldInputs = useMemo(() => selectRangeFoldInputs(changes, from, to), [changes, from, to]);
+  const needed = useMemo(() => [...new Set([...foldInputs.base, ...foldInputs.head])], [foldInputs]);
+  useFileChangeBodies(conversationId, needed);
   const { files: diffFiles, pending: pendingFiles } = useMemo(
     () => foldReadyFiles(foldInputs, bodies, missingBodies),
     [foldInputs, bodies, missingBodies],
   );
+
+  // Viewed marks: live only while the file's text is the one marked.
+  const hashByPath = useMemo(() => new Map(diffFiles.map((f) => [f.filename, f.contentHash])), [diffFiles]);
+  const fileMarks = useMemo(() => (path: string) => {
+    const hash = hashByPath.get(path);
+    return hash && isSeen(seenMarks, path, hash) ? { viewed: true } : undefined;
+  }, [hashByPath, seenMarks]);
+  const onToggleViewed = useMemo(() => {
+    if (!conversationId) return undefined;
+    return (path: string) => {
+      const hash = hashByPath.get(path);
+      if (hash) toggleSeenFile(conversationId, path, hash);
+    };
+  }, [conversationId, hashByPath]);
 
   // Line comments in the panel share anchors with the transcript's inline diffs:
   // the same conversation + getRelativePath(file) identity, so a durable thread
@@ -363,6 +456,22 @@ function DiffPane({ conversationId, gitRoot }: { conversationId?: string; gitRoo
       filePath: getRelativePath(filename),
     });
   }, [conversationId]);
+
+  const baseSwitch = conversationId ? (
+    <div className="shrink-0">
+    <SegmentedToggle
+      size="sm"
+      value={rangeStart !== null ? "" : base}
+      onChange={(key) => setDiffBase(conversationId, key as DiffBase)}
+      items={DIFF_BASES.map((b) => ({
+        key: b,
+        label: BASE_LABELS[b].label,
+        title: starts[b] === null ? BASE_UNAVAILABLE[b] : BASE_LABELS[b].title,
+        disabled: starts[b] === null,
+      }))}
+    />
+    </div>
+  ) : null;
 
   if (changes.length === 0) {
     return (
@@ -390,9 +499,14 @@ function DiffPane({ conversationId, gitRoot }: { conversationId?: string; gitRoo
     );
   }
 
-  const positionLabel = (selectedChangeIndex !== null
-    ? `Up to change ${selectedChangeIndex + 1} of ${changes.length}`
-    : `All ${changes.length} changes`)
+  const lastShown = to ?? changes.length - 1;
+  const positionLabel = (rangeStart !== null
+    ? `Changes ${rangeStart + 1} to ${lastShown + 1} of ${changes.length}`
+    : from > 0
+      ? `Changes ${Math.min(from + 1, changes.length)} to ${lastShown + 1} of ${changes.length}`
+      : selectedChangeIndex !== null
+        ? `Up to change ${selectedChangeIndex + 1} of ${changes.length}`
+        : `All ${changes.length} changes`)
     + (pendingFiles > 0 ? ` · loading ${pendingFiles} ${pendingFiles === 1 ? "file" : "files"}` : "");
 
   // A changed file's name (tree row or header) opens the same menu as a file
@@ -410,6 +524,10 @@ function DiffPane({ conversationId, gitRoot }: { conversationId?: string; gitRoo
       <FileDiffLayout
         files={diffFiles}
         commentContextFor={commentContextFor}
+        headerExtra={baseSwitch}
+        emptyState={<p>{rangeStart !== null ? "Nothing changed in the selected range" : BASE_EMPTY[base]}</p>}
+        fileMarks={fileMarks}
+        onToggleViewed={onToggleViewed}
         focusFile={selectedFile}
         sidebarHeader={
           <div className="px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30">

@@ -65,6 +65,9 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
   }, [onClose, zoom.reset]), document);
   return createPortal(
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Image preview"
       ref={zoom.surfaceRef}
       className="fixed inset-0 z-[10001] flex items-center justify-center overflow-hidden"
       style={{ backgroundColor: "rgba(0,0,0,0.92)" }}

@@ -1,3 +1,7 @@
+// `cast ship run`: the One Ship control from a terminal (docs/architecture/ship.md).
+// It calls the same server action as the web's Ship buttons, so the plan it
+// prints is the popover's, and the ship session it starts is the same kind.
+//
 // `cast ship mark`: say that a surface just shipped.
 //
 // GitHub sees tags and pushes but never a deploy, so a surface that goes out
@@ -14,7 +18,8 @@ import type { Command } from "commander";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { gitTry } from "./gitPlane.js";
-import { readLocalGitContext } from "./prCommand.js";
+import { locate, readLocalGitContext } from "./prCommand.js";
+import type { ShipPlan } from "@codecast/shared/contracts/shipPlan";
 import { loadWorkspaceRoster, matchTeam, unknownTeamMessage } from "./resolveWorkspace.js";
 import { c } from "./colors.js";
 
@@ -44,8 +49,59 @@ export function markBody(options: MarkOptions, local: LocalCheckout): { reposito
   return { repository, surface: options.surface, sha, ...(options.version ? { version: options.version } : {}) };
 }
 
+/** The plan as the popover says it: what, where, then each step. */
+export function formatShipPlan(plan: ShipPlan): string {
+  const out = [`Ship ${plan.label}`];
+  if (plan.branch) out.push(`  ${plan.branch} -> ${plan.base}${plan.newBranch ? " (new branch)" : ""}`);
+  out.push(...plan.steps.map((step, i) => `  ${i + 1}. ${step}`));
+  out.push(`  ${plan.merge.why}`);
+  if (plan.blocked) out.push(`  blocked: ${plan.blocked}`);
+  return out.join("\n");
+}
+
+export type RunOptions = { task?: string; session?: string; pr?: string | boolean; repo?: string; dryRun?: boolean; json?: boolean };
+
 export function registerShipCommand(program: Command, deps: PublishDeps & { checkout?: () => Promise<LocalCheckout> }): void {
   const ship = program.command("ship").description(commandGroup("ship").description);
+
+  ship.command("run")
+    .description("Ship a change: run the checks, open or shepherd its pull request, merge only from a PR or when the line profile says merge.auto")
+    .option("--task <ct-N>", "The task whose change ships")
+    .option("--session <id>", "The session whose diff ships")
+    .option("--pr [ref]", "The pull request to ship (this checkout's branch when no ref); Ship on a PR merges once green")
+    .option("--repo <owner/name>", "Repository to resolve --pr in")
+    .option("--dry-run", "Print the plan without starting it")
+    .option("--json", "Machine-readable output")
+    .action(async (options: RunOptions) => {
+      const named = [options.task, options.session, options.pr].filter((x) => x !== undefined);
+      if (named.length !== 1) {
+        console.error("Name one thing to ship: --task ct-N, --session <id>, or --pr [ref].");
+        process.exit(1);
+      }
+      const pr_locator = options.pr !== undefined
+        ? await locate(deps, typeof options.pr === "string" ? options.pr : undefined, { repo: options.repo })
+        : undefined;
+      const result = await apiPost(deps, "/cli/ship/run", {
+        task: options.task,
+        session: options.session,
+        pr_locator,
+        requester_session: deps.detectCurrentSessionId() ?? undefined,
+        dry_run: options.dryRun || undefined,
+      });
+      if (result?.error) {
+        console.error(result.error);
+        process.exit(1);
+      }
+      if (options.json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+      }
+      console.log(formatShipPlan(result.plan));
+      if (options.dryRun) return;
+      console.log(result.answered_card
+        ? `${c.green}✓${c.reset} Answered Ship on the change card; the line's ship station lands it`
+        : `${c.green}✓${c.reset} Ship session ${result.short_id} started (cast read ${result.short_id})`);
+    });
 
   ship.command("mark")
     .description("Record that a surface just shipped this commit (a deploy marker on the repository's team)")
