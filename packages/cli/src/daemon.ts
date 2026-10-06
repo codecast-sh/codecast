@@ -2,7 +2,7 @@
 import { transcriptContainsDelivery } from "./tmuxDeliveryTranscript.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
-import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
+import { pendingMessageFinished, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CLAUDE_EFFORT_LEVELS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_GLOBAL, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isRecoveryContinueClientId, isMachineDeliveredMessage, isUsageLimitDialog, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, pairDeliveryAcks } from "@codecast/shared/contracts";
 import { mapLimit } from "@codecast/shared/async";
@@ -31,7 +31,7 @@ import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { countingSemaphore } from "./semaphore.js";
 import { AccountLifecycleGate } from "./accountLifecycleGate.js";
 import { applyPolicyInPlace, codexResumeParams, persistedPolicyFor, recoverCodexTurn, registerPolicyPersistenceHandlers, settledCodexRecord, type PersistedCodexThread } from "./codexTurnRecovery.js";
-import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
+import { descendantRows, findOtherDaemonRows, killProcessTree, liveTmuxServerPid, parseProcessTable, restoreTmuxServerSocket, snapshotProcessTableAsync, staleTmuxServerKillPlan, type ProcRow } from "./processTable.js";
 import {
   DEFAULT_HIBERNATE_IDLE_MS,
   DEFAULT_MAX_LIVE_SESSIONS,
@@ -46,6 +46,7 @@ import {
 import { openTaskStart } from "./backgroundTaskStart.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
 import { HibernationWorkScan } from "./hibernationWork.js";
+import { REVIVABLE_STATUSES, REVIVE_MAX_PER_PASS, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { daemonSupportedOnPlatform, WINDOWS_DAEMON_UNSUPPORTED_MESSAGE, wslDistroName } from "./windowsSupport.js";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
 import { SessionWatcher, type SessionEvent } from "./sessionWatcher.js";
@@ -63,13 +64,18 @@ import {
   writeDeviceAccountStamp,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
-import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, type RemoteHost } from "./remote/session-move.js";
+import { copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush } from "./remote/agentAuth.js";
-import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost } from "./browser/cloudHost.js";
+import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
-  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv, nextBridgeBackoff,
-  bridgeAddressStale, shouldRunBridge, type BridgeBackoff,
+  AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocketEnv,
+  bridgeAddressStale, shouldRunBridge,
 } from "./cloud/agentBridge.js";
+import { HeldConnections } from "./cloud/heldConnection.js";
+import {
+  REACH_MOUNTED_LINE, REACH_TICK_MS, reachHostRefusal, reachLaptopArgs, reachRefusal, reachRemoveArgs, writeReachStatus,
+  type ReachFolder, type ReachState, type ReachStatus,
+} from "./cloud/reach.js";
 import { worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
@@ -170,6 +176,7 @@ import {
   buildDaemonPlistXml,
   buildWatchdogShellScript,
   daemonPlistNeedsUpgrade,
+  daemonPlistRunsLegacyCommand,
   daemonLauncherMatchesCommand,
   daemonTickStale,
   watchdogKillVerdict,
@@ -267,7 +274,7 @@ import {
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, transcriptScopeRefusal, watchDirFilter, watchFilter } from "./syncScope.js";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
 import { TaskScheduler, triggerRunTaskId } from "./taskScheduler.js";
-import { hasTmux, isTmuxSessionMissingError, listCodecastPanesAsync } from "./tmux.js";
+import { hasTmux, isTmuxSessionMissingError, listCodecastPanesAsync, startsTmuxServer, startTmuxGuarded, startTmuxGuardedSync } from "./tmux.js";
 import { HERD_SESSION, findHerdrPaneForTty, herdrRequest, herdrSocketPath } from "./herdr.js";
 import { herdViewerAlive } from "./herdViewer.js";
 import { HerdTitles, herdMembers, serverTitles, syncHerdStatus } from "./herdMirror.js";
@@ -283,9 +290,12 @@ import {
   PASTE_START,
   clientAcceptsBracketedPaste,
   deliverTextIntoPane,
+  deliveryTimeoutMsFor,
   typedNewlineKey,
   pasteAndSubmitText,
   prepareInjectedContent,
+  tmuxLiteralArg,
+  stripComposerChrome,
 } from "./tmuxPaste.js";
 import { LaunchPromptCarriedError, launchPromptFragment, pickLaunchPrompt, transcriptHasUserPrompt } from "./launchPrompt.js";
 import { formatFeedResults } from "./formatter.js";
@@ -328,7 +338,8 @@ import { buildStableContext, ensureStableHookForLaunch, recordStableContext, typ
 import { atomicWriteFile } from "./atomicWrite.js";
 import { configDirTarget, fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
 import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
-import { collectMachineResources } from "./systemResources.js";
+import { collectMachineResources, processesStartedOutside } from "./systemResources.js";
+import { tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import {
   fetchExport,
   generateClaudeCodeJsonl,
@@ -371,7 +382,7 @@ import { CloudAgentHoldError, CloudAgentRegistry, CloudAgentUnsentError, cloudAg
 import { CLOUD_MIRROR_LOCAL_GIT_FIELDS, cloudMirrorRepoFacts } from "./cloudAgents/poll.js";
 import { conventionSeed, resolveLocalProjectPath, resolveLocalRepoPath, resolveResumeCwd, isResumableCwd, pickProjectPath, claudeProjectDirName, chooseSessionTranscript, type TranscriptCandidate } from "./projectPathResolver.js";
 import { blankCodexRecoveryParams, buildLaunchArgs, getConfiguredAgentArgs, getDefaultParamFlags, getPermissionFlags, codexPermissionsFromArgs, launchBinary } from "./launchCommand.js";
-import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, StableLaunchPrefs } from "@codecast/shared/contracts";
+import type { AgentClientId, AgentDefinitionSpec, CloudSessionSource, AgentPaneReadiness, AgentStatus, DeviceSnippetSettings, LivenessVerdict, MachineSettingValues, OpenTaskReport, PaneTerminalModes, ResourceProcess, StableLaunchPrefs } from "@codecast/shared/contracts";
 import { planGatedSnippets } from "./gatedSnippets";
 import { readThreadStateStamp } from "./threadStateStamp.js";
 import { type Config, getAgentArgs, isCloudMirrorEnabled, isOpencodeServerEnabled, opencodeServerPort } from "./config/types.js";
@@ -438,25 +449,75 @@ const execAsync = (cmd: string, opts?: any): Promise<{ stdout: string; stderr: s
 scrubAgentEnv(process.env);
 
 const SAFE_ENV = { ...process.env, PATH: ENRICHED_PATH };
+// Sessions the daemon creates are its own, never the work of the agent whose
+// shell happened to start the daemon: tmux copies session ids from the
+// creating client (ensureTmuxCarriesSessionIds), so the daemon sends none.
+const TMUX_ENV = withoutSessionIds(SAFE_ENV);
 
 // tmux clients can wedge in a busy loop when their server dies mid-protocol,
 // and a wedged client ignores SIGTERM — leaving 100%-CPU zombies that survive
 // Node's exec timeout. Default to SIGKILL so a timeout actually reaps the process.
 function tmuxExecSync(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): string {
-  return execFileSync("tmux", args, {
+  const exec = (argv: string[]) => execFileSync("tmux", argv, {
     timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
     killSignal: (opts?.killSignal ?? "SIGKILL") as any,
     encoding: "utf-8",
-    env: { ...SAFE_ENV, ...opts?.env },
+    env: { ...TMUX_ENV, ...opts?.env },
   }).toString();
+  return startsTmuxServer(args) ? startTmuxGuardedSync(args, exec) : exec(args);
 }
 
+/**
+ * Type a launch command into a fresh pane's shell and press Enter. A shell
+ * still starting keeps typed input in the terminal's line buffer, which holds
+ * 1024 bytes on macOS: a longer launch line lost its tail and its Enter, and
+ * the agent never started (a zsh login on the Mac host, 2026-10-05). So a long
+ * command goes into a private script the shell sources, and only that short
+ * line is typed. The script removes itself first; the shell keeps it open.
+ */
+async function typeIntoPane(target: string, command: string): Promise<void> {
+  let line = command;
+  if (Buffer.byteLength(command) > PANE_TYPED_LINE_MAX) {
+    const dir = path.join(CONFIG_DIR, "launch-scripts");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `${randomUUID()}.sh`);
+    fs.writeFileSync(file, `rm -f ${shq(file)}\n${command}\n`, { mode: 0o600 });
+    line = `. ${shq(file)}`;
+  }
+  await tmuxExec(["send-keys", "-t", target, "-l", tmuxLiteralArg(line)]);
+  await tmuxExec(["send-keys", "-t", target, "Enter"]);
+}
+const PANE_TYPED_LINE_MAX = 512;
+
 async function tmuxExec(args: string[], opts?: { timeout?: number; killSignal?: string; env?: Record<string, string | undefined> }): Promise<{ stdout: string; stderr: string }> {
-  return _execFileAsync("tmux", args, {
+  const exec = (argv: string[]) => _execFileAsync("tmux", argv, {
     timeout: opts?.timeout ?? EXEC_TIMEOUT_MS,
     killSignal: (opts?.killSignal ?? "SIGKILL") as any,
-    env: { ...SAFE_ENV, ...opts?.env },
+    env: { ...TMUX_ENV, ...opts?.env },
   });
+  return startsTmuxServer(args) ? startTmuxGuarded(args, exec) : exec(args);
+}
+
+
+// Each tmux server learns once to copy the session id from the client that
+// creates a session, so work an agent starts in a pane is attributed to it.
+let tmuxEnvServerPid: number | undefined;
+async function ensureTmuxCarriesSessionIds(): Promise<void> {
+  let pid: number;
+  try {
+    pid = Number((await tmuxExec(["display-message", "-p", "#{pid}"], { timeout: 3000 })).stdout.trim());
+  } catch {
+    return; // no server running
+  }
+  if (!pid || pid === tmuxEnvServerPid) return;
+  try {
+    const updates = tmuxSessionEnvUpdates((await tmuxExec(["show-options", "-gv", "update-environment"], { timeout: 3000 })).stdout);
+    for (const args of updates) await tmuxExec(args, { timeout: 3000 });
+    if (updates.length) log(`[RESOURCES] tmux server ${pid}: update-environment now copies ${updates.map((a) => a[3]).join(" ")}, so work an agent starts in a tmux session is attributed to it`);
+    tmuxEnvServerPid = pid;
+  } catch (err) {
+    log(`[RESOURCES] could not set tmux update-environment: ${String(err)}`, "debug");
+  }
 }
 
 async function getTmuxSessionOption(sessionName: string, optionName: string): Promise<string | null> {
@@ -1673,6 +1734,17 @@ const SAFE_STATUS_SESSION_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,127}$/;
 export function isSafeStatusSessionId(sessionId: string): boolean {
   return SAFE_STATUS_SESSION_ID.test(sessionId);
 }
+// The last status the hook wrote for a session, read from its file. Unlike
+// lastSentAgentStatus it survives a daemon restart.
+export function agentStatusOnDisk(sessionId: string, dir = AGENT_STATUS_DIR): AgentStatus | undefined {
+  if (!isSafeStatusSessionId(sessionId)) return undefined;
+  try {
+    const status = JSON.parse(fs.readFileSync(path.join(dir, `${sessionId}.json`), "utf8"))?.status;
+    return typeof status === "string" ? status as AgentStatus : undefined;
+  } catch {
+    return undefined;
+  }
+}
 // Every write of an agent status file rides this one chain. Two statuses for a
 // session (a PostToolUse then a Stop) must land in that order, and two writes
 // racing on one path can also leave bytes the boot replay cannot parse. One
@@ -1766,7 +1838,7 @@ const compactionRedeliveryBypass = new Set<string>(); // messageIds that should 
 // during one BOTH the mark and the JSONL echo ack stall past the TTL (2026-07-13 storm:
 // 'gogo' processed 7x, ct-38507). The hard cap is the last-resort redelivery deadline when
 // confirmation never arrives.
-const messagesInFlight = new Map<string, { ts: number; conversationId: string }>();
+const messagesInFlight = new Map<string, { ts: number; conversationId: string; ttlMs?: number }>();
 // `pasted` flips once the paste was SEEN in the composer and submitted: only
 // such an entry is vouched to the server (collectPastedInjectedIds, the
 // paste_verified stamp). A pre-paste entry exists solely for dedup.
@@ -1782,7 +1854,11 @@ export function latestInjectionTsFor(conversationId: string): number | null {
   }
   return latest;
 }
+// The floor; an entry carries its own ttl once its delivery budget is known
+// (deliveryTimeoutMsFor plus IN_FLIGHT_GRACE_MS), since a typed payload runs
+// well past the base budget.
 const IN_FLIGHT_HARD_TTL_MS = 240_000; // > DELIVERY_TIMEOUT_MS (180s)
+const IN_FLIGHT_GRACE_MS = 60_000;
 const INJECTION_DEDUP_TTL_MS = 60_000;
 const UNCONFIRMED_INJECTION_DEDUP_MAX_MS = 30 * 60_000;
 
@@ -3679,28 +3755,24 @@ let mirrorProcess: ReturnType<typeof startMirrorProcess> | undefined;
 // registry is re-read every tick (a `--off` closes the bridge within a
 // minute); the host is probed, never woken; a host that refuses forwarding
 // (exit 3) is left alone until the toggle changes; other exits back off
-// exponentially to five minutes (nextBridgeBackoff) so a broken bridge
+// exponentially to five minutes (cloud/heldConnection.ts) so a broken bridge
 // cannot keep a box awake; a bridge whose host changed address (a reboot)
 // is closed so the next tick reopens it at the new one.
 const AGENT_BRIDGE_CLOSE_GRACE_MS = 5_000;
-interface AgentBridge { child: ChildProcess; address: string; startedAt: number }
-const agentBridges = new Map<string, AgentBridge>();
-const agentBridgeBackoff = new Map<string, BridgeBackoff>();
-const agentBridgeRefused = new Set<string>();
-let agentBridgeNoAgentLogged = false;
-let agentBridgesInFlight = false;
-
-function closeAgentBridge(hostId: string, why: string): void {
-  const b = agentBridges.get(hostId);
-  if (!b) return;
-  agentBridges.delete(hostId);
-  log(`[AGENT-BRIDGE] closing the bridge to ${hostId} (${why})`);
+const agentBridges = new HeldConnections({
+  tag: "[AGENT-BRIDGE]",
+  log: (m, level) => log(m, level),
+  refusal: (code) => code === AGENT_BRIDGE_REFUSED_EXIT ? "the host refused agent forwarding (sshd AllowAgentForwarding?) — not retried until forward-agent is toggled" : null,
   // EOF on stdin makes the remote `cat` exit and the symlink go; the kill is
   // the backstop for a connection that no longer delivers it.
-  try { b.child.stdin?.end(); } catch { /* already gone */ }
-  const timer = setTimeout(() => { try { b.child.kill(); } catch { /* exited */ } }, AGENT_BRIDGE_CLOSE_GRACE_MS);
-  b.child.once("exit", () => clearTimeout(timer));
-}
+  stop: (child) => {
+    try { child.stdin?.end(); } catch { /* already gone */ }
+    const timer = setTimeout(() => { try { child.kill(); } catch { /* exited */ } }, AGENT_BRIDGE_CLOSE_GRACE_MS);
+    child.once("exit", () => clearTimeout(timer));
+  },
+});
+let agentBridgeNoAgentLogged = false;
+let agentBridgesInFlight = false;
 
 async function maintainAgentBridges(): Promise<void> {
   if (isRemoteDevice() || agentBridgesInFlight) return;
@@ -3708,51 +3780,141 @@ async function maintainAgentBridges(): Promise<void> {
   try {
     const hosts = readHosts();
     // Bridges to hosts that are no longer on, or no longer registered.
-    for (const [hostId, b] of agentBridges) {
+    for (const [hostId, b] of [...agentBridges.entries()]) {
       const h = hosts.find((x) => x.id === hostId);
-      if (!h || h.forwardAgent !== true) { closeAgentBridge(hostId, h ? "forward-agent is off" : "host was removed"); agentBridgeRefused.delete(hostId); }
-      else if (h.address && bridgeAddressStale(h, b.address, toRemoteHost(h).address)) closeAgentBridge(hostId, `its address changed ${b.address} -> ${h.address}`);
+      if (!h || h.forwardAgent !== true) { agentBridges.close(hostId, h ? "forward-agent is off" : "host was removed"); agentBridges.forget(hostId); }
+      else if (h.address && bridgeAddressStale(h, b.address, toRemoteHost(h).address)) agentBridges.close(hostId, `its address changed ${b.address} -> ${h.address}`);
     }
     for (const h of hosts) {
-      if (h.forwardAgent !== true) { agentBridgeRefused.delete(h.id); agentBridgeBackoff.delete(h.id); continue; }
-      if (!h.address || agentBridges.has(h.id) || agentBridgeRefused.has(h.id)) continue;
+      if (h.forwardAgent !== true) { agentBridges.forget(h.id); continue; }
+      if (!h.address || !agentBridges.canOpen(h.id)) continue;
       const laptopAgent = process.env.SSH_AUTH_SOCK;
       if (!laptopAgent) {
         if (!agentBridgeNoAgentLogged) { log(`[AGENT-BRIDGE] forward-agent is on for ${h.id} but this daemon has no SSH_AUTH_SOCK — nothing to forward`); agentBridgeNoAgentLogged = true; }
         continue;
       }
-      const backoff = agentBridgeBackoff.get(h.id);
-      if (backoff && Date.now() < backoff.notBefore) continue;
       const remote = await reachableRemoteHost(h, { toRemoteHost, sshReachable });
       if (!shouldRunBridge(h, remote !== null, laptopAgent) || !remote) continue;
       const child = spawn("ssh", agentBridgeArgs(remote), { stdio: ["pipe", "ignore", "pipe"], env: process.env });
-      const bridge: AgentBridge = { child, address: remote.address, startedAt: Date.now() };
-      agentBridges.set(h.id, bridge);
-      let stderr = "";
-      child.stderr?.on("data", (d: Buffer) => { stderr = (stderr + d.toString()).slice(-2000); });
-      child.on("error", (err) => log(`[AGENT-BRIDGE] bridge to ${h.id} could not start: ${err.message}`, "warn"));
-      child.on("exit", (code, signal) => {
-        const mine = agentBridges.get(h.id) === bridge;
-        if (mine) agentBridges.delete(h.id);
-        if (code === AGENT_BRIDGE_REFUSED_EXIT) {
-          agentBridgeRefused.add(h.id);
-          log(`[AGENT-BRIDGE] host ${h.id} refused agent forwarding (sshd AllowAgentForwarding?) — not retried until forward-agent is toggled`, "warn");
-          return;
-        }
-        if (!mine) return; // closed on purpose
-        // The count is only reset by a bridge that lived (nextBridgeBackoff),
-        // never at spawn: a reset there made every failure the first one.
-        const next = nextBridgeBackoff(agentBridgeBackoff.get(h.id), Date.now() - bridge.startedAt);
-        agentBridgeBackoff.set(h.id, next);
-        const wait = next.notBefore - Date.now();
-        log(`[AGENT-BRIDGE] bridge to ${h.id} exited (${signal ?? `exit ${code}`})${stderr.trim() ? `: ${stderr.trim().split("\n").pop()}` : ""} — retrying in ${Math.round(wait / 1000)}s (failure ${next.failures})`);
-      });
+      agentBridges.hold(h.id, `bridge to ${h.id}`, remote.address, child);
       log(`[AGENT-BRIDGE] bridge to ${h.id} (${h.address}) is up — this laptop's ssh-agent is usable there until forward-agent --off`);
     }
   } catch (err) {
     log(`[AGENT-BRIDGE] maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     agentBridgesInFlight = false;
+  }
+}
+
+// Reached folders (cloud/reach.ts): for every folder the human approved for a
+// host with `cast hosts reach`, hold ONE ssh connection that serves it to the
+// host's sshfs from a sandboxed sftp-server here, so the host reads and edits
+// this laptop's files in place. Same rules as the bridge: the host is probed,
+// never woken; a refusal (no sshfs, a mountpoint holding files) waits for the
+// human to act; other exits back off. The connection key carries everything
+// whose change must remount (the approval's time, read-only, the watchdog
+// version a provision bumps), so re-approving or provisioning retries at once.
+// State lands in reach-status.json for `cast hosts reach`.
+const REACH_CLOSE_GRACE_MS = 3_000;
+const reaches = new HeldConnections({
+  tag: "[REACH]",
+  log: (m, level) => log(m, level),
+  refusal: (code, key) => { const [hostId, folder] = key.split("\0"); return reachRefusal(code, hostId!, folder!); },
+  // The laptop script leads its own process group: sftp-server, ssh and the
+  // fifo's shell end together, and the host's sshfs reads EOF and unmounts.
+  stop: (child) => {
+    const pid = child.pid;
+    if (!pid) return;
+    try { process.kill(-pid, "SIGTERM"); } catch { /* gone */ }
+    const timer = setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch { /* gone */ } }, REACH_CLOSE_GRACE_MS);
+    child.once("exit", () => clearTimeout(timer));
+  },
+  firstWaitMs: REACH_TICK_MS,
+  onExit: (key, info) => {
+    const [hostId, folder] = key.split("\0");
+    if (info.closedOnPurpose) {
+      // Turned off (not re-approved in another mode): take the mountpoint and
+      // its "comes back" note off the host, now that sshfs has let go of it.
+      const host = readHosts().find((h) => h.id === hostId);
+      if (host?.address && !host.reach?.some((f) => f.path === folder)) {
+        spawn("ssh", reachRemoveArgs(toRemoteHost(host), folder!), { stdio: "ignore", env: process.env })
+          .on("error", (err) => log(`[REACH] could not clear ${folder} on ${hostId}: ${err.message}`));
+      }
+      return;
+    }
+    setReachState(hostId!, folder!, info.refused ? "refused" : "waiting", info.refused ?? (info.stderr.trim().split("\n").filter((l) => !l.includes(REACH_MOUNTED_LINE)).pop() || undefined));
+    flushReachStatus();
+  },
+});
+const reachStatusNow: ReachStatus = { updatedAt: 0, hosts: {} };
+let reachInFlight = false;
+
+function setReachState(hostId: string, folder: string, state: ReachState, detail?: string): void {
+  const host = reachStatusNow.hosts[hostId] ??= {};
+  const cur = host[folder];
+  if (cur && cur.state === state && cur.detail === detail) return;
+  host[folder] = { state, ...(detail ? { detail } : {}), since: cur?.state === state ? cur.since : Date.now() };
+}
+
+function flushReachStatus(): void {
+  reachStatusNow.updatedAt = Date.now();
+  try { writeReachStatus(reachStatusNow); } catch (err) { log(`[REACH] status write failed: ${err instanceof Error ? err.message : String(err)}`); }
+}
+
+async function maintainReach(): Promise<void> {
+  if (isRemoteDevice() || reachInFlight || process.platform !== "darwin") return;
+  reachInFlight = true;
+  try {
+    const hosts = readHosts();
+    const wanted = new Map<string, { host: CloudHost; folder: ReachFolder }>();
+    for (const host of hosts) for (const folder of host.reach ?? []) {
+      wanted.set([host.id, folder.path, folder.addedAt, folder.readOnly ? "ro" : "rw", host.watchdogVersion ?? 0].join("\0"), { host, folder });
+    }
+    for (const [key, c] of [...reaches.entries()]) {
+      const w = wanted.get(key);
+      if (!w) { reaches.close(key, "no longer approved"); reaches.forget(key); continue; }
+      if (w.host.address && bridgeAddressStale(w.host, c.address, toRemoteHost(w.host).address)) reaches.close(key, `its address changed ${c.address} -> ${w.host.address}`);
+    }
+    // The status lists exactly what is approved now.
+    for (const hostId of Object.keys(reachStatusNow.hosts)) {
+      const keep = hosts.find((h) => h.id === hostId)?.reach?.map((f) => f.path) ?? [];
+      for (const folder of Object.keys(reachStatusNow.hosts[hostId]!)) if (!keep.includes(folder)) delete reachStatusNow.hosts[hostId]![folder];
+      if (!keep.length) delete reachStatusNow.hosts[hostId];
+    }
+    if (!wanted.size) { flushReachStatus(); return; }
+    const laptopName = await stableHostnameAsync().catch(() => "the laptop");
+    const reachable = new Map<string, RemoteHost | null>();
+    for (const [key, { host, folder }] of wanted) {
+      if (reaches.get(key)) continue;
+      const refused = reaches.refusedReason(key);
+      if (refused) { setReachState(host.id, folder.path, "refused", refused); continue; }
+      const hostRefusal = reachHostRefusal(host);
+      if (hostRefusal) { setReachState(host.id, folder.path, "refused", hostRefusal); continue; }
+      let real: string;
+      try { real = fs.realpathSync(folder.path); } catch { setReachState(host.id, folder.path, "missing"); continue; }
+      if (!reaches.canOpen(key)) {
+        const until = reaches.backoffUntil(key);
+        setReachState(host.id, folder.path, "waiting", until ? `next try in ${Math.max(1, Math.round((until - Date.now()) / 1000))}s` : undefined);
+        continue;
+      }
+      if (!reachable.has(host.id)) reachable.set(host.id, host.address ? await reachableRemoteHost(host, { toRemoteHost, sshReachable }) : null);
+      const remote = reachable.get(host.id);
+      if (!remote) { setReachState(host.id, folder.path, "unreachable"); continue; }
+      const child = spawn("bash", reachLaptopArgs(remote, folder, real, laptopName), { detached: true, stdio: ["ignore", "ignore", "pipe"], env: process.env });
+      reaches.hold(key, `reach of ${folder.path} on ${host.id}`, remote.address, child);
+      setReachState(host.id, folder.path, "connecting");
+      child.stderr?.on("data", (d: Buffer) => {
+        if (!d.toString().includes(REACH_MOUNTED_LINE) || reaches.get(key)?.child !== child) return;
+        setReachState(host.id, folder.path, "mounted");
+        flushReachStatus();
+        log(`[REACH] ${folder.path} is mounted on ${host.id}${folder.readOnly ? " (read-only)" : ""}`);
+      });
+    }
+    flushReachStatus();
+  } catch (err) {
+    log(`[REACH] maintenance failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    reachInFlight = false;
   }
 }
 
@@ -5980,8 +6142,7 @@ async function executeRemoteCommand(
 
         try {
           tmuxExecSync(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", projectPath], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          await typeIntoPane(tmuxSession, cmdText);
           result = JSON.stringify({ tmux_session: tmuxSession, workflow_run_id: workflowRunId });
           log(`[REMOTE] Started workflow run ${workflowRunId} in tmux: ${tmuxSession}`);
         } catch (spawnErr) {
@@ -6349,7 +6510,7 @@ async function executeRemoteCommand(
         if (agentType === "codex" && activeCodexAppServer) {
           try {
             const sandbox = codexPermissions.sandbox;
-            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs);
+            const builtContext = await buildCodexStableContext(config, cwd, stablePrefs, conversationId || undefined);
             const resp = await startCodexThreadThenRecordStableContext(
               () => activeCodexAppServer.threadStart({
                 cwd,
@@ -6450,8 +6611,7 @@ async function executeRemoteCommand(
               transcript: path.join(process.env.HOME || "", ".claude", "projects", claudeProjectDirName(cwd), `${assignedClaudeSessionId}.jsonl`),
             });
           }
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", cmdText], { timeout: 5000 });
-          tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+          await typeIntoPane(tmuxSession, cmdText);
           const resultObj: Record<string, any> = { tmux_session: tmuxSession, agent_type: agentType, project_path: cwd };
           if (worktreeResult) {
             resultObj.worktree_name = worktreeResult.worktreeName;
@@ -7813,8 +7973,7 @@ async function executeRemoteCommand(
                 markClaudeSessionLive(tmuxSession, blankAccount.account);
               }
               await stampCodexPaneAccount(blankAgentType, tmuxSession, conversationId);
-              tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-              tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+              await typeIntoPane(tmuxSession, blankCmdText);
               startedSessionTmux.set(conversationId, {
                 tmuxSession,
                 projectPath: cwd,
@@ -8226,9 +8385,13 @@ async function executeRemoteCommand(
         }
         const hadPane = resumeSessionCache.has(sessionId) || startedSessionTmux.has(conversationId);
         log(`[MIGRATE] quiescing ${sessionId.slice(0, 8)} (${mode}${status ? `, status ${status}` : ""})`);
+        // Named now, stopped at release: a move that fails after this point
+        // restarts the agent here, and a background render must survive that.
+        const outside = await sessionProcessesOutsideTree(sessionId).catch(() => [] as ResourceProcess[]);
+        const outsideTmux = await tmuxSessionsCreatedBy(sessionId);
         await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
         await clearConversationDeliveryAndResumeState(conversationId, sessionId, "quiesce_session").catch(() => {});
-        result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null });
+        result = JSON.stringify({ quiesced: true, mode, had_pane: hadPane, status: status ?? null, outside: [...outsideTmux.map((name) => ({ name: `tmux session ${name}` })), ...outside.map((p) => ({ pid: p.pid, name: p.name, via: p.detached }))] });
         break;
       }
       case "release_session": {
@@ -8259,8 +8422,9 @@ async function executeRemoteCommand(
         } catch { /* fall through and release */ }
         log(`[RELEASE] releasing ${conversationId.slice(0, 12)} — ownership moved to another device`);
         await stopLocalSessionBackends(conversationId, sessionId).catch(() => {});
+        const stopped = sessionId ? await stopSessionProcessesOutsideTree(sessionId) : [];
         await clearConversationDeliveryAndResumeState(conversationId, sessionId, "release_session").catch(() => {});
-        result = JSON.stringify({ released: true });
+        result = JSON.stringify({ released: true, stopped: stopped.map((p) => ({ pid: p.pid, name: p.name, via: p.detached })) });
         break;
       }
       case "apply_snippet": {
@@ -8471,6 +8635,7 @@ export async function buildCodexStableContext(
   config: Config | null,
   cwd?: string,
   prefs?: StableLaunchPrefs,
+  session?: string,
 ): Promise<BuiltStableContext | undefined> {
   let mode: "team" | "solo" | null;
   if (prefs?.stable_mode === "off") mode = null;
@@ -8482,6 +8647,7 @@ export async function buildCodexStableContext(
     global: !!config?.stable_global,
     exclude: prefs?.stable_exclude ?? [],
     cwd,
+    session,
   });
 }
 
@@ -8502,7 +8668,7 @@ export async function writeGrokStableRulesFile(
   key: string,
   conversationId?: string,
 ): Promise<string | undefined> {
-  const built = await buildCodexStableContext(config, cwd, prefs);
+  const built = await buildCodexStableContext(config, cwd, prefs, conversationId);
   if (!built) return undefined;
   const dir = path.join(CONFIG_DIR, "stable-rules");
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -12591,6 +12757,11 @@ async function matchStartedStub(client: AgentClientId, sessionId: string, projec
   if (startedSessionTmux.size === 0) return null;
   const entries = Array.from(startedSessionTmux.entries()).filter(([, entry]) => entry.agentType === client);
   if (entries.length === 0) return null;
+  const assigned = matchStartedConversation(entries, { sessionId });
+  if (assigned) {
+    log(`Matched ${client} session ${sessionId.slice(0, 8)} to conversation ${assigned.slice(0, 12)} via assigned session id`);
+    return { conversationId: assigned };
+  }
   const proc = await findSessionProcess(sessionId, client).catch(() => null);
   let tmuxSessionName: string | null = null;
   if (proc) {
@@ -12603,7 +12774,7 @@ async function matchStartedStub(client: AgentClientId, sessionId: string, projec
       }
     }
   }
-  const conversationId = matchStartedConversation(entries, { tmuxSessionName, projectPath: proc ? null : projectPath });
+  const conversationId = matchStartedConversation(entries, { sessionId: client === "claude" ? sessionId : undefined, tmuxSessionName, projectPath: proc ? null : projectPath });
   if (!conversationId) return null;
   log(`Matched ${client} session ${sessionId.slice(0, 8)} to conversation ${conversationId.slice(0, 12)} via ${tmuxSessionName ? `tmux ${tmuxSessionName}` : "projectPath fallback"}`);
   return { conversationId };
@@ -14706,12 +14877,13 @@ function tmuxComposerRegion(pane: string): string | null {
   return pane.slice(glyphAt + 1).split(/^\s*[╰└╚]?[─═]{3,}.*$/m, 1)[0];
 }
 
+// Both checks read the whole capture: the caller sizes it to the payload. A
+// fixed window shorter than a long draft lost the prompt line above it, read
+// the unsent message as gone, and acked it as delivered (jx76c85, 2026-10-05).
 export function tmuxPromptStillHasInput(paneContent: string, input: string): boolean {
   const normalizedInput = normalizePromptText(input);
   if (!normalizedInput) return false;
-  const lines = paneContent.split("\n");
-  const recent = lines.slice(-80).join("\n");
-  const fromPrompt = tmuxComposerRegion(recent);
+  const fromPrompt = tmuxComposerRegion(paneContent);
   if (fromPrompt === null) return false;
   return normalizePromptText(fromPrompt).includes(normalizedInput);
 }
@@ -14724,8 +14896,7 @@ export function tmuxPromptStillHasInput(paneContent: string, input: string): boo
 // treat it exactly like visible stuck input (press Enter), not as a
 // stranger's draft to avoid stomping.
 export function tmuxPromptShowsPastePlaceholder(paneContent: string, expectedLines?: number | null): boolean {
-  const recent = paneContent.split("\n").slice(-80).join("\n");
-  const composer = tmuxComposerRegion(recent);
+  const composer = tmuxComposerRegion(paneContent);
   if (composer === null) return false;
   const chip = /\[[^\]\n]*pasted[^\]\n]*\]/i.exec(composer);
   return chip !== null && !pasteChipContradicts(chip[0], expectedLines);
@@ -14843,7 +15014,26 @@ export function extractTmuxLiveRegion(paneContent: string): string {
   for (let i = 0; i < tail.length; i++) {
     if (isSep(tail[i])) sepIdx.push(i);
   }
-  if (sepIdx.length >= 2) {
+  // A composer box taller than the tail leaves only its bottom rule in it: a
+  // long typed draft renders in full, where a paste collapses to one chip line.
+  // The pane then read "unknown" with no ❯ in view, and every later message
+  // held until a person pressed Enter (jx76rqh, 2026-10-05). When nothing under
+  // that lone rule is a dialog and the nearest rule above it opens onto the
+  // composer caret, the box runs from there.
+  let rows = tail;
+  let boxTop = sepIdx.length >= 2 ? sepIdx[sepIdx.length - 2] : -1;
+  if (sepIdx.length === 1) {
+    const below = tail.slice(sepIdx[0] + 1);
+    if (!below.some((line) => /[❯›]/.test(line) || isMenuFooterRow(line))) {
+      const bottom = lines.length - tail.length + sepIdx[0];
+      for (let i = bottom - 1; i >= 0; i--) {
+        if (!isSep(lines[i])) continue;
+        if (COMPOSER_CARET_ROW.test(lines[i + 1] ?? "")) { rows = lines; boxTop = i; }
+        break;
+      }
+    }
+  }
+  if (boxTop >= 0) {
     // Input box: take the box body AND everything below the box (the footer).
     // The footer is where Claude Code renders "esc to interrupt" while it is
     // generating — and the input box (❯) stays visible the whole time for
@@ -14852,7 +15042,7 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // it; the queued text never submitted, never acked, and retried forever.
     // Nothing but the live footer renders below the box, so this can't pull in
     // scrollback (the reason the region is narrowed in the first place).
-    const top = sepIdx[sepIdx.length - 2];
+    const top = boxTop;
     // Claude Code v2.1.270 stopped printing "esc to interrupt" in that footer.
     // The running turn's only marker is now its own status line, rendered
     // above the box ("✶ Perambulating… (50s · ↓ 161 tokens)"). Carry that line
@@ -14863,10 +15053,10 @@ export function extractTmuxLiveRegion(paneContent: string): string {
     // (2026-09-29, jx74ek4). It cannot be scrollback: the finished form reads
     // differently, and everything above the newest ⏺ is left out.
     let status: string[] = [];
-    for (let i = top - 1; i >= 0 && !/^⏺/.test(tail[i]); i--) {
-      if (CLAUDE_TURN_STATUS_LINE.test(tail[i])) { status = [tail[i]]; break; }
+    for (let i = top - 1; i >= 0 && !/^⏺/.test(rows[i]); i--) {
+      if (CLAUDE_TURN_STATUS_LINE.test(rows[i])) { status = [rows[i]]; break; }
     }
-    return [...status, ...tail.slice(top + 1)].join("\n");
+    return [...status, ...rows.slice(top + 1)].join("\n");
   }
   if (sepIdx.length === 1) {
     // Modal or busy indicator: one separator, content lives below it.
@@ -16849,6 +17039,15 @@ class InputBlockedError extends Error {
   }
 }
 
+// An error the delivery layer must see as is: a pane holding for a human, a
+// write it must reconcile before writing again, or a write cap that is spent.
+// No fallback (a resume, a repair, a second pane) may swallow one of these and
+// write the message somewhere else.
+function isDeliveryVerdict(err: unknown): boolean {
+  if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
+  return /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED|INJECT_EXHAUSTED):/.test(err instanceof Error ? err.message : String(err));
+}
+
 // Is this "menu" the message being delivered, sitting in the composer? Typed
 // text renders in the composer as itself, so a message that is a numbered list
 // scrolls to "❯ 1. …" over its "2. …" rows: exactly a dialog with its cursor on
@@ -17544,8 +17743,6 @@ export async function tmuxComposerDraft(
 // composer holds as real text only matches once the frame is out of the way
 // (ct-49607). Both sides go through this, so a payload containing box glyphs
 // still compares against itself.
-const stripComposerChrome = (s: string) => s.replace(/[\s\u2500-\u257f]+/g, "");
-
 // The first 40 non-whitespace chars the composer must show at the prompt, or
 // null when the payload cannot be watched for.
 export function tmuxWatchablePrefix(payload: string): string | null {
@@ -17736,7 +17933,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
   try {
     return await withTmuxLock(target, () => injectViaTmuxInner(target, content, agentType, opts));
   } catch (error) {
-    if (!opts?.delivery || error instanceof InputBlockedError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(error instanceof Error ? error.message : String(error))) throw error;
+    if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
     throw new TmuxDeliveryUncertainError(String(error));
   }
 }
@@ -17966,7 +18163,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!settled || !/paste has not appeared intact|^AGENT_STDIN_NOT_READY: composer never showed/.test(message)) throw error;
-        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript; writing it again`);
+        // The write after this one is counted and capped by journal.begin
+        // (TMUX_PASTE_WRITE_CAP): a payload that reaches the agent and comes
+        // back changed must not be typed forever.
+        log(`Receipt for ${opts!.delivery!.messageId} in ${target} settled without its payload reaching the prompt or the transcript after ${delivery.journal.writesOf(opts!.delivery!.messageId)} write(s); writing it again`);
         delivery.journal.release(opts!.delivery!.messageId);
         prior = null;
         pasteAt = Date.now();
@@ -18690,17 +18890,40 @@ function findSessionJsonlPath(sessionId: string): string | null {
   return findSessionFile(sessionId)?.path ?? null;
 }
 
-type WorkflowTranscriptIndex = { home: string; builtAt: number; paths: Map<string, string> };
+type WorkflowTranscriptIndex = { home: string; startedAt: number; builtAt: number; paths: Map<string, string> };
 let workflowTranscriptIndex: WorkflowTranscriptIndex | null = null;
 let workflowTranscriptRefresh: { home: string; promise: Promise<WorkflowTranscriptIndex> } | null = null;
+
+// An id the index does not hold normally costs a fresh walk, because a workflow
+// agent may have been born since. An ordinary transcript older than the walk
+// rules that out: a workflow agent's id is new with its workflow transcript,
+// and an ordinary transcript under that id only ever appears later (a mistaken
+// standalone resume). So an id whose ordinary transcript predates a complete
+// walk that found no workflow origin for it has none. Without this every
+// resume of an ordinary session re-walked ~/.claude/projects, 12 minutes a walk
+// at load 900 on 2026-10-06, with the whole fleet's revives queued behind it.
+function ordinaryTranscriptPredates(index: WorkflowTranscriptIndex, sessionId: string): boolean {
+  if (index.paths.has(sessionId)) return false;
+  // Read off the session-file index as it stands: this check must never start a walk of its own.
+  const file = sessionFileIndexHome === index.home ? sessionFileIndex?.get(sessionId) : undefined;
+  if (!file || file.agentType !== "claude" || isWorkflowAgentTranscriptPath(file.path)) return false;
+  try {
+    const born = fs.statSync(file.path).birthtimeMs;
+    return born > 0 && born < index.startedAt;
+  } catch {
+    return false;
+  }
+}
 
 export async function workflowAgentTranscriptPathFor(sessionId: string): Promise<string | null> {
   const home = process.env.HOME || "";
   if (workflowTranscriptIndex?.home === home && workflowTranscriptIndex.paths.has(sessionId) && Date.now() - workflowTranscriptIndex.builtAt <= SESSION_FILE_INDEX_MISS_REBUILD_MS) {
     return workflowTranscriptIndex.paths.get(sessionId)!;
   }
+  if (workflowTranscriptIndex?.home === home && ordinaryTranscriptPredates(workflowTranscriptIndex, sessionId)) return null;
   if (!workflowTranscriptRefresh || workflowTranscriptRefresh.home !== home) {
     workflowTranscriptRefresh = { home, promise: (async () => {
+      const startedAt = Date.now();
       const store = sessionFileIndexStores(home).find(store => store.agentType === "claude")!;
       const paths = new Map<string, string>();
       await walkEntryBatches(store.root, { ...store.walk, requireComplete: true }, files => {
@@ -18709,7 +18932,7 @@ export async function workflowAgentTranscriptPathFor(sessionId: string): Promise
           if (id && isWorkflowAgentTranscriptPath(file.path) && !paths.has(id)) paths.set(id, file.path);
         }
       });
-      return { home, builtAt: Date.now(), paths };
+      return { home, startedAt, builtAt: Date.now(), paths };
     })() };
   }
   const refresh = workflowTranscriptRefresh;
@@ -19481,6 +19704,72 @@ function teardownConversationBackendsLive(
  * teardownConversationBackendsLive alone does NOT reap — leaving it alive after a
  * move is exactly the split-brain where the local machine keeps answering.
  */
+// What a session started outside its agent's tree (tmux panes it created,
+// jobs it backgrounded) and is still running. The agent's own tree stops with
+// the agent; these do not, so a move stops them explicitly.
+async function sessionProcessesOutsideTree(sessionId: string): Promise<ResourceProcess[]> {
+  const snapshot = await captureProcessSnapshot();
+  const live = new Map<string, number>();
+  for (const [id, info] of sessionProcessCache) live.set(id, info.pid);
+  return processesStartedOutside(snapshot, live, sessionId);
+}
+
+// The tmux sessions the agent created: tmux copied its id into their
+// environment (ensureTmuxCarriesSessionIds). A pane's shell is often a system
+// binary whose environment cannot be read, so the session itself is closed.
+async function tmuxSessionsCreatedBy(sessionId: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = (await tmuxExec(["list-sessions", "-F", "#{session_name}"], { timeout: 3000 })).stdout.split("\n").filter(Boolean);
+  } catch {
+    return [];
+  }
+  const out: string[] = [];
+  let hosts: Set<number> | undefined;
+  for (const name of names) {
+    try {
+      if (!tmuxEnvNamesSession((await tmuxExec(["show-environment", "-t", name], { timeout: 3000 })).stdout, sessionId)) continue;
+      // Another live agent running in one of its panes keeps the session open.
+      hosts ??= await livePaneHosts(sessionId);
+      const panes = (await tmuxExec(["list-panes", "-s", "-t", name, "-F", "#{pane_pid}"], { timeout: 3000 })).stdout.split("\n").map(Number).filter(Boolean);
+      if (panes.some((pid) => hosts!.has(pid))) { log(`[MIGRATE] left tmux session ${name} open: another live session runs in it`); continue; }
+      out.push(name);
+    } catch { /* gone meanwhile */ }
+  }
+  return out;
+}
+
+// Every ancestor of every other live agent: a pane whose pid is among them hosts that agent.
+async function livePaneHosts(exceptSessionId: string): Promise<Set<number>> {
+  const snapshot = await captureProcessSnapshot().catch(() => new Map<number, { ppid: number }>());
+  const out = new Set<number>();
+  for (const [id, info] of sessionProcessCache) {
+    if (id === exceptSessionId) continue;
+    for (let pid: number | undefined = info.pid, n = 0; pid && pid > 1 && n < 64; pid = snapshot.get(pid)?.ppid, n++) out.add(pid);
+  }
+  return out;
+}
+
+// Stop them. Rows come from one table read and every pid must still run the
+// program the attribution named, so a recycled pid is never signalled.
+async function stopSessionProcessesOutsideTree(sessionId: string): Promise<ResourceProcess[]> {
+  const procs = await sessionProcessesOutsideTree(sessionId).catch(() => [] as ResourceProcess[]);
+  const tmuxSessions = await tmuxSessionsCreatedBy(sessionId);
+  for (const name of tmuxSessions) await tmuxExec(["kill-session", "-t", name], { timeout: 3000 }).catch(() => {});
+  if (tmuxSessions.length) log(`[MIGRATE] closed tmux session(s) ${shortId(sessionId)} created: ${tmuxSessions.join(", ")}`);
+  if (procs.length === 0) return [];
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const rows = (await snapshotProcessTableAsync({ timeout: 10_000 })).filter((r) => {
+    const p = byPid.get(r.pid);
+    return p && r.command.includes(p.name.slice(0, 15));
+  });
+  const depth = (r: ProcRow) => { let d = 0; for (let c = byPid.get(r.ppid); c && d < 64; c = byPid.get(c.ppid)) d++; return d; };
+  rows.sort((a, b) => depth(b) - depth(a));
+  const { terminated, killed } = await killProcessTree(rows);
+  log(`[MIGRATE] stopped ${terminated + killed} of ${procs.length} process(es) ${shortId(sessionId)} started outside its tree: ${procs.slice(0, 6).map((p) => `${p.name} (${p.pid}, ${p.detached})`).join(", ")}${procs.length > 6 ? ", ..." : ""}`);
+  return procs.filter((p) => rows.some((r) => r.pid === p.pid));
+}
+
 async function stopLocalSessionBackends(conversationId: string, sessionId: string | undefined): Promise<void> {
   await teardownConversationBackendsLive(conversationId, { interruptActiveTurn: true }).catch(() => {});
   if (!sessionId) return;
@@ -21719,7 +22008,11 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       ? await syncServiceRef.getConversationLifecycle(convId, sessionId).catch(() => null)
       : null;
     const eligibility = reapPaneEligibility(cand.kind, lifecycle, {
-      agentStatus: lastSentAgentStatus.get(sessionId),
+      // The in-memory status is empty after every daemon restart until the
+      // session speaks again, and one waiting on a long workflow says nothing
+      // for hours: fdf643a3 was reaped 2.7 minutes after a restart on
+      // 2026-10-05, mid-workflow. Its status file still said "waiting".
+      agentStatus: lastSentAgentStatus.get(sessionId) ?? agentStatusOnDisk(sessionId),
       openBackgroundWork: hasOpenBackgroundWork(sessionId),
       pendingMessages: !!lifecycle?.hasPendingMessages,
       deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
@@ -23353,6 +23646,7 @@ async function collectResourceSnapshot(): Promise<void> {
 }
 
 async function collectResourceSnapshotNow(): Promise<void> {
+  await ensureTmuxCarriesSessionIds();
 
   // Sessions whose cached pid is borrowed rather than owned (a Codex subagent
   // thread shares its parent's process): they must not be credited with a subtree
@@ -24125,7 +24419,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       const fastLive = await resolveLiveTmuxTarget(conversationId, sessionId, agentTypeHint, resumeTmuxName(agentTypeHint, sessionId));
       if (await reuseLiveSession(fastLive, agentTypeHint)) return true;
     } catch (err) {
-      if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+      if (isDeliveryVerdict(err)) throw err;
       logDelivery(`Live-session fast probe failed for ${sessionId.slice(0, 8)}, continuing with full resume: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -24496,8 +24790,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
     // plain-argv exec contract holds).
     const releaseSpawn = await accountLifecycleGate.acquireResume(agentType);
     try {
-      await tmuxExec(["send-keys", "-t", tmuxSession, "-l", `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`]);
-      await tmuxExec(["send-keys", "-t", tmuxSession, "Enter"]);
+      await typeIntoPane(tmuxSession, `${resumeAccountPrefix}${resumeKeyPrefix}${disclaimPrefix()}${resumeEnvPrefix} ${resumeCmd}`);
       if (agentType === "claude") {
         await new Promise(resolve => setTimeout(resolve, CLAUDE_SPAWN_CREDENTIAL_GRACE_MS));
       }
@@ -24602,7 +24895,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             break;
           }
       } catch (err) {
-        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
       }
     }
     if (!ready) {
@@ -24650,7 +24943,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           }
         }
       } catch (err) {
-        if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
       }
     }
 
@@ -24664,7 +24957,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     return true;
   } catch (err) {
-    if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(String(err instanceof Error ? err.message : err))) throw err;
+    if (isDeliveryVerdict(err)) throw err;
     logDelivery(`Auto-resume EXCEPTION ${agentType} ${shortId}: ${err instanceof Error ? err.message : String(err)}`);
     return false;
   }
@@ -24895,7 +25188,7 @@ async function repairAndResumeSession(
           return true;
         }
       } catch (err) {
-        if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(err instanceof Error ? err.message : String(err))) throw err;
+        if (isDeliveryVerdict(err)) throw err;
         log(`Convex regeneration failed for ${sessionId.slice(0, 8)}: ${err instanceof Error ? err.message : String(err)}`);
       }
 
@@ -25092,7 +25385,7 @@ async function recoverBlankCodexForDelivery(
   if (unavailable()) return false;
   const params = blankCodexRecoveryParams(data, projectPath, resolveCodexPermissionDefaults(config));
   if (!params) return false;
-  const builtContext = await buildCodexStableContext(config, projectPath!, {});
+  const builtContext = await buildCodexStableContext(config, projectPath!, {}, conversationId);
   if (unavailable()) return false;
   const response = await startCodexThreadThenRecordStableContext(
     () => server!.threadStart({ ...params, ...(builtContext ? { developerInstructions: builtContext.text } : {}) }),
@@ -25224,8 +25517,7 @@ async function startFreshSessionForDelivery(
     await setTmuxSessionOption(tmuxSession, "@codecast_project_path", projectPath).catch(() => {});
     if (blankAccount.account) await setTmuxSessionOption(tmuxSession, "@codecast_cc_account", blankAccount.account).catch(() => {});
     markClaudeSessionLive(tmuxSession, blankAccount.account);
-    tmuxExecSync(["send-keys", "-t", tmuxSession, "-l", blankCmdText], { timeout: 5000 });
-    tmuxExecSync(["send-keys", "-t", tmuxSession, "Enter"], { timeout: 5000 });
+    await typeIntoPane(tmuxSession, blankCmdText);
     const entry: StartedSessionInfo = {
       tmuxSession,
       projectPath,
@@ -25746,9 +26038,7 @@ async function deliverMessageIntoSession(
         // still-booting pane. Falling through would start a SECOND instance
         // beside it (the incident's duplicated-backend shape) — rethrow so the
         // delivery layer retries into the same pane after backoff instead.
-        if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
-          throw err;
-        }
+        if (isDeliveryVerdict(err)) throw err;
         log(`Started session tmux ${entry.tmuxSession} not reachable, falling through: ${msg}`);
         // Only clear if session is old (>60s). Fresh sessions may just need more startup time.
         if (Date.now() - entry.startedAt > 60_000) {
@@ -25884,9 +26174,7 @@ async function deliverMessageIntoSession(
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
       // parallel instance beside it — rethrow and let the retry re-enter this
       // same pane after backoff.
-      if (msg.startsWith("AGENT_STDIN_NOT_READY") || msg.startsWith("INJECT_UNVERIFIED")) {
-        throw err;
-      }
+      if (isDeliveryVerdict(err)) throw err;
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
       if (noteUnresolvablePane(sessionId, msg)) {
         if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
@@ -26477,9 +26765,12 @@ export function buildLaunchdPlistReloadCommand(uid: number, plistPath: string): 
 // source of the repeated macOS "codecast can run in the background" notifications
 // (see supervision.ts). The existing ProgramArguments are preserved verbatim
 // inside the launcher, so compiled and from-source installs both keep their exact
-// command. Ends with a detached bootout+bootstrap that restarts us under the new
-// definition; after that the plist contains /bin/sh and this never fires again.
-function migrateDaemonPlistToStableLauncher(): void {
+// command. A launcher-form plist that predates a definition change (ProcessType)
+// keeps its launcher and only has the plist rewritten. Either way it ends with a
+// detached bootout+bootstrap that restarts us under the new definition, after
+// which the plist is current and this never fires again. The bootout leaves the
+// tmux server and every pane running: tmux is in its own session.
+function migrateDaemonPlist(): void {
   const home = process.env.HOME;
   if (!home || !process.getuid) return;
   try {
@@ -26492,20 +26783,23 @@ function migrateDaemonPlistToStableLauncher(): void {
     }
     if (!daemonPlistNeedsUpgrade(content)) return;
 
-    const args = extractPlistProgramArguments(content);
-    // Only migrate a command we can vouch for — an absolute-path executable that
-    // exists. A launcher exec'ing a broken command would crash-loop under KeepAlive.
-    if (args.length === 0 || !args[0].startsWith("/") || !fs.existsSync(args[0])) {
-      log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
+    const launcherPath = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
+    if (daemonPlistRunsLegacyCommand(content)) {
+      const args = extractPlistProgramArguments(content);
+      // Only migrate a command we can vouch for — an absolute-path executable that
+      // exists. A launcher exec'ing a broken command would crash-loop under KeepAlive.
+      if (args.length === 0 || !args[0].startsWith("/") || !fs.existsSync(args[0])) {
+        log(`Daemon plist migration skipped: unrecognized ProgramArguments (${JSON.stringify(args)})`);
+        return;
+      }
+      fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand: args.map(shellEscapeForSh).join(" ") }), { mode: 0o755 });
+    } else if (!fs.existsSync(launcherPath)) {
+      log(`Daemon plist migration skipped: launcher ${launcherPath} is missing`);
       return;
     }
-
-    const launcherPath = path.join(CONFIG_DIR, DAEMON_LAUNCHER_FILENAME);
-    const daemonCommand = args.map(shellEscapeForSh).join(" ");
-    fs.writeFileSync(launcherPath, buildDaemonLauncherScript({ daemonCommand }), { mode: 0o755 });
     fs.writeFileSync(plistPath, buildDaemonPlistXml({ scriptPath: launcherPath, configDir: CONFIG_DIR }), { mode: 0o644 });
 
-    logLifecycle("plist_stable_identity_migration", `rewrote ${plistPath} to /bin/sh launcher, reloading job`);
+    logLifecycle("plist_migration", `rewrote ${plistPath} to the current definition, reloading job`);
     persistLogQueue(); // the bootout below kills us before exit handlers run
     spawn("sh", ["-c", buildLaunchdPlistReloadCommand(process.getuid(), plistPath)], {
       detached: true,
@@ -26538,7 +26832,7 @@ export async function ensureWatchdogSupervised(force = false): Promise<void> {
   watchdogEnsureInFlight = true;
   try {
     if (!(await isManagedByLaunchdAsync())) return;
-    migrateDaemonPlistToStableLauncher();
+    migrateDaemonPlist();
     const uid = process.getuid();
     const domain = `gui/${uid}`;
     const label = "sh.codecast.watchdog";
@@ -26956,13 +27250,28 @@ async function sweepOrphanDaemons(): Promise<void> {
  * another account's server, and no kill of a server whose tree holds this
  * daemon.
  */
-async function sweepStaleTmuxServers(): Promise<void> {
+async function sweepStaleTmuxServers(restored = false): Promise<void> {
   try {
     const procs = await snapshotProcessTableAsync({ timeout: 15_000 });
     const livePid = await liveTmuxServerPid();
-    const { kill: stale, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
+    const { kill: stale, restore, selfHosted, refused } = staleTmuxServerKillPlan(procs, livePid, process.getuid?.());
     if (refused) {
       log(`[TMUX-SWEEP] WARNING: ${refused} — skipping the sweep`);
+      return;
+    }
+    for (const server of restore) {
+      // Asked once per sweep: a server that will not retake the socket is left
+      // running beside the live one rather than killed with its agents.
+      if (restored) {
+        log(`[TMUX-SWEEP] WARNING: tmux server pid ${server.pid} holds ${server.agents} agent(s) and is still not the live one (pid ${livePid}); leaving both up`);
+        return;
+      }
+      log(`[TMUX-SWEEP] WARNING: tmux server pid ${server.pid} holding ${server.agents} agent(s) lost the default socket to pid ${livePid}; handing the socket back`);
+      if (await restoreTmuxServerSocket(server.pid)) {
+        log(`[TMUX-SWEEP] tmux server pid ${server.pid} is live again`);
+        return sweepStaleTmuxServers(true);
+      }
+      log(`[TMUX-SWEEP] WARNING: tmux server pid ${server.pid} did not retake the socket; leaving both up`);
       return;
     }
     for (const server of selfHosted) {
@@ -28133,6 +28442,57 @@ export function staleSessionVerdictFromProbe(
   );
 }
 
+const REVIVE_LEDGER_FILE = process.env.NODE_ENV === "test"
+  ? path.join(process.env.TMPDIR || "/tmp", "codecast-test-revives.json")
+  : path.join(CONFIG_DIR, "revives.json");
+
+// One revive attempt for a session the watchdog found dead mid-work: queue the
+// revive message (delivery resumes the session), or say why not. "deferred"
+// means try again next pass: this pass hit its cap, or the queue write failed.
+async function reviveMidWorkSession(
+  syncService: SyncService,
+  sessionId: string,
+  convId: string,
+  status: string | undefined,
+  ageMs: number,
+  now: number,
+  revivesThisPass: number,
+): Promise<"revived" | "deferred" | "declined"> {
+  const lifecycle = await syncService.getConversationLifecycle(convId, sessionId).catch(() => null);
+  const transcript = findReapTranscript(sessionId, now);
+  let tail = "";
+  try { if (transcript) tail = readFileTailSync(transcript.path); } catch {}
+  if (transcript) ageMs = Math.min(ageMs, now - await lastSignOfLifeMs(transcript.path));
+  const prior = priorRevives(REVIVE_LEDGER_FILE, sessionId);
+  const decision = midWorkReviveDecision({
+    status,
+    ageMs,
+    lifecycle,
+    interruptedByUser: !!tail && transcriptTailEndsInterrupted(tail),
+    limitParked: !!tail && jsonlTailEndsWithLimitBanner(tail),
+    priorRevives: prior,
+    now,
+  });
+  const tag = `${status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process)`;
+  if (!decision.revive) {
+    log(`Watchdog: not reviving ${tag}: ${decision.reason}`);
+    return "declined";
+  }
+  if (revivesThisPass >= REVIVE_MAX_PER_PASS) {
+    log(`Watchdog: revive of ${tag} deferred to the next pass (${REVIVE_MAX_PER_PASS} this pass)`);
+    return "deferred";
+  }
+  try {
+    await syncService.enqueueUserMessage(convId, REVIVE_MESSAGE, reviveClientId(convId, now));
+  } catch (err) {
+    log(`Watchdog: revive of ${tag} failed to queue (${err instanceof Error ? err.message : String(err)}); retrying next pass`);
+    return "deferred";
+  }
+  recordRevive(REVIVE_LEDGER_FILE, sessionId, now);
+  log(`Watchdog: ${tag} died mid-work; revived (${prior.length + 1} in the budget window)`);
+  return "revived";
+}
+
 function startWatchdog(
   deps: WatchdogDependencies
 ): NodeJS.Timeout {
@@ -28201,6 +28561,7 @@ function startWatchdog(
     try {
       const IDLE_STALE_MS = 10 * 60 * 1000;
       const ACTIVE_STALE_MS = 30 * 60 * 1000;
+      let revivesThisPass = 0;
       for (const { sessionId, filePath, data } of await readAgentStatusFiles()) {
         try {
           if (!data?.ts) continue;
@@ -28233,6 +28594,17 @@ function startWatchdog(
             .then((info) => !ownedByAnotherDevice(info))
             .catch(() => false);
           if (!authorizesTeardown(confineToOwningDevice(verdict, ownership))) continue;
+          // A process that died mid-work is brought back rather than closed
+          // (midWorkRevive.ts). Deferred revives keep the status file, so the
+          // next pass finds them again.
+          if (REVIVABLE_STATUSES.has(data.status ?? "")) {
+            const outcome = await reviveMidWorkSession(deps.syncService, sessionId, convId, data.status, ageMs, now, revivesThisPass);
+            if (outcome === "revived") revivesThisPass++;
+            if (outcome !== "declined") {
+              if (outcome === "revived") await fs.promises.unlink(filePath).catch(() => {});
+              continue;
+            }
+          }
           log(`Watchdog: stale ${data.status} session ${sessionId.slice(0, 8)} (${Math.round(ageMs / 60000)}min, no live process), marking completed`);
           deps.syncService.markSessionCompleted(convId).catch(logConvexFailure);
           sendAgentStatus(deps.syncService, convId, sessionId, "stopped");
@@ -28665,6 +29037,9 @@ async function main(): Promise<void> {
   // And any tmux server generation the live one has orphaned, which holds panes
   // and agents nothing can reach. Same shape: off the loop, off the boot path.
   void sweepStaleTmuxServers();
+  // Build the workflow-origin index off the delivery path: the first resume
+  // after a restart otherwise waits out the whole walk.
+  void workflowAgentTranscriptPathFor("").catch(() => {});
 
   // Hand back whatever the previous daemon on this machine claimed and never
   // finished, so a resume or a kill it was holding is offered to us now instead
@@ -28742,6 +29117,8 @@ async function main(): Promise<void> {
   // The opt-in SSH agent bridge (cloud/agentBridge.ts), on the same tick.
   setTimeout(() => { maintainAgentBridges().catch(() => {}); }, 66_000);
   setInterval(() => { maintainAgentBridges().catch(() => {}); }, AGENT_BRIDGE_TICK_MS);
+  setTimeout(() => { maintainReach().catch(() => {}); }, 20_000);
+  setInterval(() => { maintainReach().catch(() => {}); }, REACH_TICK_MS);
   // The local halves of codecast mods (mods/localRunner.ts): each in its own
   // Worker, and only at a version a person approved on this machine.
   void import("./mods/localRunner.js").then(({ startLocalMods }) => startLocalMods({
@@ -29831,9 +30208,11 @@ async function main(): Promise<void> {
       // enforced here because the hook has no builtin that reads a file size
       // and must not spawn a process per event (ct-49531).
       await sweepStatusSpools(AGENT_STATUS_DIR).catch(() => {});
-      const cutoff = Date.now() - 60 * 60 * 1000;
+      const now = Date.now();
+      const ttlMs = 60 * 60 * 1000;
       for (const f of await readAgentStatusFiles()) {
-        if (f.mtimeMs >= cutoff) continue;
+        // An unfinished turn's file is the watchdog's to settle (midWorkRevive.ts).
+        if (!statusFileExpired(f.data?.status, f.mtimeMs, now, ttlMs)) continue;
         await fs.promises.unlink(f.filePath).catch(() => {});
         lastHookStatus.delete(f.sessionId);
         awaitingAskUserQuestion.delete(f.sessionId);
@@ -29842,7 +30221,7 @@ async function main(): Promise<void> {
         keystrokeInference.cancel(f.sessionId);
         bypassPermissionsCleaned.delete(f.sessionId);
       }
-      await sweepStatusLineStamps(cutoff);
+      await sweepStatusLineStamps(now - ttlMs);
     })().catch(() => {});
   }, 30 * 60 * 1000);
 
@@ -30496,8 +30875,7 @@ async function main(): Promise<void> {
                 await setTmuxSessionOption(tmuxSession, name, value);
               },
               async launchLiteral({ tmuxSession, command }) {
-                await tmuxExec(["send-keys", "-l", "-t", `${tmuxSession}:0.0`, command]);
-                await tmuxExec(["send-keys", "-t", `${tmuxSession}:0.0`, "Enter"]);
+                await typeIntoPane(`${tmuxSession}:0.0`, command);
               },
               async listCandidates({ expectedTmuxSession }) {
                 let names: string[];
@@ -30807,11 +31185,12 @@ async function main(): Promise<void> {
         const inFlight = messagesInFlight.get(msg._id);
         if (inFlight !== undefined) {
           const age = Date.now() - inFlight.ts;
-          if (age < IN_FLIGHT_HARD_TTL_MS) {
+          const ttlMs = inFlight.ttlMs ?? IN_FLIGHT_HARD_TTL_MS;
+          if (age < ttlMs) {
             logDelivery(`Skipping msg=${msg._id.slice(0, 8)} - already in flight (age=${Math.round(age / 1000)}s)`);
             continue;
           }
-          logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${IN_FLIGHT_HARD_TTL_MS / 1000}s TTL, retrying`);
+          logDelivery(`Reclaiming msg=${msg._id.slice(0, 8)} - in-flight ${Math.round(age / 1000)}s exceeds ${ttlMs / 1000}s TTL, retrying`);
           messagesInFlight.delete(msg._id);
         }
         messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id });
@@ -30878,22 +31257,51 @@ async function main(): Promise<void> {
         }
 
         let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+        // The budget scales with the payload: a typed message runs minutes past
+        // the base. The in-flight entry outlives the budget by a grace, and on a
+        // timeout it is held until the attempt itself settles, so a retry never
+        // writes over a live attempt (five copies of one trigger prompt, 2026-10-05).
+        let timedOut = false;
+        let attempt: Promise<boolean> | undefined;
+        const releaseInFlight = () => {
+          messagesInFlight.delete(msg._id);
+          conversationDeliveryActive.delete(msg.conversation_id);
+        };
+        // The timeout already scheduled a retry, and the attempt went on to mark
+        // the row "injected" before it gave up: nothing would re-pend it, and the
+        // session sat until the server's stale-injected sweep (20 minutes for
+        // five revived sessions on 2026-10-06). A late success needs nothing.
+        const settleLateAttempt = (outcome: unknown) => {
+          releaseInFlight();
+          if (outcome === true) {
+            logDelivery(`LATE SUCCESS: msg=${msg._id.slice(0, 8)} delivered after its attempt timed out`);
+            return;
+          }
+          injectedMessageTs.delete(msg._id);
+          if (outcome instanceof PendingDeliveryHeldError) return;
+          logDelivery(`LATE FAILURE: msg=${msg._id.slice(0, 8)} timed-out attempt ended ${outcome === false ? "undelivered" : `with ${outcome instanceof Error ? outcome.message : String(outcome)}`}; re-pending`);
+          scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, messageContent);
+        };
         try {
           const rawAgent = typeof msg.conversation_agent_type === "string" ? msg.conversation_agent_type : undefined;
+          const agentType = rawAgent ? fromConvexAgentType(rawAgent) : undefined;
+          const timeoutMs = deliveryTimeoutMsFor(messageContent, agentType, DELIVERY_TIMEOUT_MS);
+          messagesInFlight.set(msg._id, { ts: Date.now(), conversationId: msg.conversation_id, ttlMs: timeoutMs + IN_FLIGHT_GRACE_MS });
+          attempt = deliverMessage(
+            msg.conversation_id,
+            messageContent,
+            conversationCache,
+            syncService,
+            msg._id,
+            titleCache,
+            agentType,
+          );
           const delivered = await Promise.race([
-            deliverMessage(
-              msg.conversation_id,
-              messageContent,
-              conversationCache,
-              syncService,
-              msg._id,
-              titleCache,
-              rawAgent ? fromConvexAgentType(rawAgent) : undefined,
-            ),
+            attempt,
             new Promise<never>((_, reject) => {
               timeoutHandle = setTimeout(
-                () => reject(new Error(`deliverMessage timed out after ${DELIVERY_TIMEOUT_MS / 1000}s`)),
-                DELIVERY_TIMEOUT_MS,
+                () => { timedOut = true; reject(new Error(`deliverMessage timed out after ${timeoutMs / 1000}s`)); },
+                timeoutMs,
               );
             }),
           ]);
@@ -30985,6 +31393,22 @@ async function main(): Promise<void> {
             // own pace.
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${err.holdReason}: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, err.holdReason, err.recheckMs);
+          } else if (err instanceof TmuxDeliveryExhaustedError) {
+            // The pane took this payload TMUX_PASTE_WRITE_CAP times and the
+            // transcript never echoed it exactly. The agent most likely ran it
+            // each time (a client that rewrites what it echoes), so a further
+            // write is harm, not recovery. Terminal on the server (cancelled
+            // never re-pends), and said in the conversation itself, where the
+            // person reading the session sees it.
+            logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} ${errMsg}`);
+            syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
+            syncService.addMessage({
+              conversationId: msg.conversation_id,
+              role: "system",
+              subtype: "delivery_failed",
+              timestamp: Date.now(),
+              content: `A message to this session was written into its terminal ${err.writes} times and its transcript never echoed it exactly, so delivery stopped and the message was cancelled. The agent may have taken it each time. Message: ${messageContent.slice(0, 200).replace(/\s+/g, " ")}${messageContent.length > 200 ? "…" : ""}`,
+            }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);
             scheduleMessageRetry(msg._id, msg.retry_count ?? 0, msg.conversation_id, msg.content, "waiting for terminal input confirmation");
@@ -31000,8 +31424,10 @@ async function main(): Promise<void> {
           }
         } finally {
           if (timeoutHandle) clearTimeout(timeoutHandle);
-          messagesInFlight.delete(msg._id);
-          conversationDeliveryActive.delete(msg.conversation_id);
+          // A timed-out attempt is still running in the pane: keep its slot
+          // until it settles (the entry's ttl reclaims one that never does).
+          if (timedOut && attempt) attempt.then(settleLateAttempt, settleLateAttempt);
+          else releaseInFlight();
         }
       }
     } else {
@@ -31305,6 +31731,7 @@ async function main(): Promise<void> {
     closeDaemonWorkers();
     stopEvalsBridge();
     void mirrorProcess?.stop().catch((err) => log(`[MIRROR] stop failed: ${err instanceof Error ? err.message : String(err)}`));
+    for (const [key] of [...reaches.entries()]) reaches.close(key, "daemon shutting down");
     appServerShuttingDown = true;
     clearInterval(appServerRecoveryTimer);
     skipRespawn = true;

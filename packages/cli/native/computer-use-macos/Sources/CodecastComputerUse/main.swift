@@ -5,6 +5,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import ImageIO
+import Vision
 
 // The codecast computer helper. One signed app with a fixed identity asks for
 // Accessibility and Screen Recording, so the human grants them once and every
@@ -122,16 +123,34 @@ struct AppDescriptor {
 final class ElementRecord {
     let index: Int
     let element: AXUIElement
-    let localFrame: CGRect?
+    /// Refreshed when a cached snapshot is reused, so a click that falls back
+    /// to the mouse lands where the element is now.
+    var localFrame: CGRect?
     let actions: [String]
     let signature: String
+    /// Takes a press and has no name: words read off the pixels inside its
+    /// frame become its label.
+    let unnamedPressable: Bool
+    /// Set for words read off the pixels with no element behind them. `element`
+    /// is then the window, and an action on the index goes to the point.
+    let visibleText: String?
 
-    init(index: Int, element: AXUIElement, localFrame: CGRect?, actions: [String], signature: String) {
+    init(
+        index: Int,
+        element: AXUIElement,
+        localFrame: CGRect?,
+        actions: [String],
+        signature: String,
+        unnamedPressable: Bool = false,
+        visibleText: String? = nil
+    ) {
         self.index = index
         self.element = element
         self.localFrame = localFrame
         self.actions = actions
         self.signature = signature
+        self.unnamedPressable = unnamedPressable
+        self.visibleText = visibleText
     }
 }
 
@@ -149,6 +168,13 @@ struct Snapshot {
     let elements: [Int: ElementRecord]
     let truncated: Bool
     let maxDepthReached: Bool
+    /// The app's notification count when the walk began, nil when the app
+    /// cannot be observed. A count that has not moved since is the proof that
+    /// this snapshot still describes the window.
+    let eventMark: Int?
+    /// The pixels were read for this tree, so the next one must read them too
+    /// or the indexes that name visible text stop resolving.
+    let readPixels: Bool
 
     /// A cached snapshot exists to prove element identity. Holding megabytes of
     /// base64 in a process that lives for minutes is how a helper grows.
@@ -166,7 +192,9 @@ struct Snapshot {
             screenshotStatus: .skipped,
             elements: elements,
             truncated: truncated,
-            maxDepthReached: maxDepthReached
+            maxDepthReached: maxDepthReached,
+            eventMark: eventMark,
+            readPixels: readPixels
         )
     }
 }

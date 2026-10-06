@@ -21,7 +21,6 @@ export type SettingsSectionId =
   | "integrations"
   | "agents"
   | "agent-library"
-  | "agent-features"
   | "harness"
   | "daemon"
   | "provider-keys"
@@ -47,7 +46,6 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/integrations/github-app": "integrations",
   "/settings/agents": "agents",
   "/settings/agent-library": "agent-library",
-  "/settings/agent-features": "agent-features",
   "/settings/harness": "harness",
   "/settings/daemon": "daemon",
   "/settings/provider-keys": "provider-keys",
@@ -57,6 +55,14 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/migrate": "migrate",
   "/settings/desktop": "desktop",
   "/settings/apps": "apps",
+};
+
+/**
+ * Settings sections that grew into pages of their own. Their old URLs (and the
+ * settings nav entry) lead to the page.
+ */
+export const SETTINGS_PAGES_MOVED: Record<string, string> = {
+  "/settings/agent-features": "/agent-features",
 };
 
 export interface SettingsPathHit {

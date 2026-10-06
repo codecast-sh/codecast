@@ -4196,6 +4196,8 @@ cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api a
 // publisher. Reads are one equality against the caller's workspace key or the
 // value "codecast"; writes carry the rules the CLI applies locally.
 cliRoute("/cli/org/template/publish", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.publish, body));
+cliRoute("/cli/org/template/yank", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.yank, body));
+cliRoute("/cli/org/template/retire", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.retire, body));
 cliRoute("/cli/org/template/catalog", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.catalog, body));
 cliRoute("/cli/org/template/get", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.get, body));
 cliRoute("/cli/org/template/release", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.release, body));

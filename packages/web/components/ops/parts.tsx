@@ -5,9 +5,10 @@ import Link from "next/link";
 import { createContext, useContext, type ComponentType, type CSSProperties, type KeyboardEvent, type ReactNode } from "react";
 import type { SyncCollectionResult } from "../../hooks/useSyncCollection";
 import { Bug, ChartLine, CircleDot, Film, Gauge, Plug, ScrollText, ShieldCheck, Webhook, Workflow, type LucideIcon } from "lucide-react";
-import type { GroupKind, GroupStatus, SourceProvider } from "@codecast/shared/contracts/ingest";
+import type { GroupKind, GroupStatus, SourceProvider, SourceStatus } from "@codecast/shared/contracts/ingest";
 import { accentSoft, accentVar, type ExternalEventAccent } from "../../lib/externalEvents";
 import { APP_LOOK } from "../../lib/integrations";
+import { formatRelative } from "../../lib/utils";
 import type { OpsSource } from "./opsTypes";
 
 export const KIND_LOOK: Record<GroupKind, { icon: LucideIcon; accent: ExternalEventAccent; label: string }> = {
@@ -54,6 +55,24 @@ const PROVIDER_ICON: Record<SourceProvider, { icon: Icon; accent: string }> = {
   sdk: { icon: CircleDot, accent: "var(--sol-blue)" },
   http: { icon: Webhook, accent: "var(--sol-text-muted)" },
 };
+
+export const SOURCE_PROVIDER_LABEL: Record<SourceProvider, string> = { sdk: "SDK", http: "HTTP", app: "App", sentry: "Sentry", posthog: "PostHog", github: "GitHub" };
+
+/** A source's health as one word and its ink, for every surface that names a source. */
+export const SOURCE_STATE: Record<SourceStatus, { label: string; ink: string }> = {
+  active: { label: "Active", ink: "text-sol-green" },
+  paused: { label: "Paused", ink: "text-sol-text-dim" },
+  error: { label: "Error", ink: "text-sol-red" },
+};
+
+/** What a source has done lately, as one line of facts: last event, today's count, open issues. */
+export function sourceFacts(source: Pick<OpsSource, "last_event_at" | "events_today" | "groups_open">): string[] {
+  return [
+    source.last_event_at ? `last event ${formatRelative(source.last_event_at)}` : "no events yet",
+    source.events_today ? `${source.events_today} today` : null,
+    source.groups_open ? `${source.groups_open} open ${source.groups_open === 1 ? "issue" : "issues"}` : null,
+  ].filter((f): f is string => !!f);
+}
 
 export function ProviderIcon({ provider, className = "w-3 h-3" }: { provider: SourceProvider; className?: string }) {
   const look = PROVIDER_ICON[provider] ?? { icon: ChartLine, accent: "var(--sol-text-muted)" };

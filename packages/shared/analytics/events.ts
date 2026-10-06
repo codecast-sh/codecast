@@ -34,6 +34,12 @@ export const CODECAST_EVENTS = defineCatalog({
   },
   desktop_download_clicked: { location: LOCATION },
   ios_app_clicked: { location: LOCATION },
+  // The desktop app setting up the CLI and daemon itself, behind one click.
+  desktop_setup_started: { location: LOCATION },
+  desktop_setup_finished: {
+    ok: { type: "boolean" },
+    error: { type: "string", values: ["invalid_token", "unsupported_platform", "installer_failed", "threw"], optional: true },
+  },
   // The landing page tour film: a start, and each jump to a chapter.
   landing_tour_started: { chapter: COUNT },
   landing_tour_chapter: { chapter: COUNT, from: { type: "string", values: ["chapter_list", "section_link"] } },

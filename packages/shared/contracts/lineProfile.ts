@@ -122,6 +122,39 @@ export function splitFinderKind(raw: string): "any" | string[] {
   return t.split(/\s+or\s+|[\s,]+/i).map((x) => x.trim()).filter(Boolean);
 }
 
+/** How each editable key's value is written: a line of text, a whole number, or a list of strings. */
+export type LineValueKind = "text" | "int" | "list";
+
+/** Every key an edit may set or remove under [line], with the kind of value it takes. */
+export const LINE_VALUE_KINDS: Readonly<Record<string, LineValueKind>> = {
+  team: "text",
+  project: "text",
+  principles: "list",
+  prompting: "text",
+  size_budget: "int",
+  watch_days: "int",
+  ...Object.fromEntries(COMMAND_KEYS.map((k) => [`commands.${k}`, "text"])),
+  ...Object.fromEntries(CAPS_KEYS.map((k) => [`caps.${k}`, "int"])),
+};
+
+/**
+ * A value as a person types it, read for `key`: a count is a whole number,
+ * a list splits on commas and newlines, text is trimmed and holds no control
+ * character. The settings page and `cast line set` both read values here.
+ */
+export function parseLineValue(key: string, text: string): { value: LineValue } | { error: string } {
+  const kind = LINE_VALUE_KINDS[key];
+  if (!kind) return { error: `unknown key "${key}" (known: ${Object.keys(LINE_VALUE_KINDS).join(", ")})` };
+  const trimmed = text.trim();
+  if (kind === "int") {
+    const n = /^\d+$/.test(trimmed) ? Number(trimmed) : NaN;
+    return isLineCount(n) ? { value: n } : { error: "A whole number, 1 or more" };
+  }
+  if (kind === "list") return { value: trimmed.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean) };
+  if (hasLineControlChars(trimmed)) return { error: "Control characters cannot go in the file" };
+  return { value: trimmed };
+}
+
 /** What a default means for the line, one line each (a station that passes with a note). */
 export function lineProfileNotes(profile: Pick<LineProfile, "commands" | "project">): string[] {
   const notes: string[] = [];

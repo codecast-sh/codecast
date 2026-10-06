@@ -1825,7 +1825,15 @@ export default defineSchema({
       manifest: v.any(), // this release's validated manifest; an instance reads its pinned one
       published_at: v.number(),
       published_by: v.id("users"),
+      // What it changes against the release before it (orgTemplateRelease.classifyRelease),
+      // written at publish; older rows have none and get it computed on read.
+      class: v.optional(v.union(v.literal("content"), v.literal("structure"), v.literal("authority"))),
+      changes: v.optional(v.any()),
+      // Withdrawn by its publisher: never offered to a hire or an update; instances on it are offered the fallback.
+      yanked: v.optional(v.object({ reason: v.string(), at: v.number(), by: v.id("users") })),
     })),
+    // Hidden from every catalog by its publisher; its instances keep running.
+    retired: v.optional(v.object({ at: v.number(), by: v.id("users"), reason: v.optional(v.string()) })),
     // The latest release's validated manifest (orgTemplateManifest.OrgTemplate),
     // so the hire form renders inputs, authority and setup without the folder.
     manifest: v.any(),
@@ -2640,6 +2648,10 @@ export default defineSchema({
     // terminalize only a row that carries this stamp (a pre-paste mark acked by
     // an unrelated working report lost a cast send on 2026-09-08).
     paste_verified_at: v.optional(v.number()),
+    // When the stuck-message healer re-pended this row for a session with no
+    // live process, so the daemon would resume it. Set once: a row is revived
+    // that way at most one time (see planDeadSessionRevive).
+    dead_session_revived_at: v.optional(v.number()),
     // Present only after a conversation crosses the fenced-execution gate.
     // Legacy columns remain as a UI/backward-compatible projection, but legacy
     // daemon endpoints reject these rows. Convex assigns all four values in the
@@ -4584,6 +4596,47 @@ export default defineSchema({
   // viewers redeem it once here and checkConversationAccess honors the row
   // only while its stored token still matches the conversation's current one,
   // so rotating or revoking the token cuts every past redeemer off.
+  // Append only record of every act that creates or changes authority: a
+  // permission answered, a share link minted/revoked/redeemed, a conversation's
+  // visibility moved, an org role's trust/caps/authority set, a proposal
+  // accepted, a team membership added/removed/re-roled. The row is written
+  // inside the same mutation as the change (lib/authorityEvents.ts is the one
+  // writer; authorityEvents.guard.test.ts keeps it so), so the change cannot
+  // commit without its audit row. `workspace` is ACCESS (computeWorkspaceKey),
+  // `team_id` is ROUTING only. Never a raw token: share links are stored as a
+  // sha256 hash.
+  authority_events: defineTable({
+    kind: v.union(
+      v.literal("permission_answered"),
+      v.literal("share_link_minted"),
+      v.literal("share_link_revoked"),
+      v.literal("share_link_redeemed"),
+      v.literal("conversation_visibility_changed"),
+      v.literal("org_role_trust_changed"),
+      v.literal("org_role_caps_changed"),
+      v.literal("org_role_authority_changed"),
+      v.literal("org_proposal_accepted"),
+      v.literal("team_member_added"),
+      v.literal("team_member_removed"),
+      v.literal("team_member_role_changed"),
+      v.literal("team_member_visibility_changed"),
+    ),
+    actor_user_id: v.id("users"),
+    actor_conversation_id: v.optional(v.id("conversations")),
+    conversation_id: v.optional(v.id("conversations")),
+    team_id: v.optional(v.id("teams")),
+    target_user_id: v.optional(v.id("users")),
+    role_id: v.optional(v.string()),
+    share_table: v.optional(v.string()),
+    share_token_hash: v.optional(v.string()),
+    detail: v.object({ before: v.optional(v.any()), after: v.optional(v.any()) }),
+    workspace: v.string(),
+    created_at: v.number(),
+  })
+    .index("by_workspace_created", ["workspace", "created_at"])
+    .index("by_actor_created", ["actor_user_id", "created_at"])
+    .index("by_conversation_created", ["conversation_id", "created_at"]),
+
   share_redemptions: defineTable({
     conversation_id: v.id("conversations"),
     user_id: v.id("users"),

@@ -73,6 +73,8 @@ export interface CloudHost {
   gitAutoGrantAt?: number;
   /** The human turned the SSH agent bridge on (`cast hosts forward-agent`). Missing = off. */
   forwardAgent?: boolean;
+  /** Laptop folders the human approved for this host (`cast hosts reach`), mounted there at the same path while both are up (cloud/reach.ts). */
+  reach?: import("../cloud/reach.js").ReachFolder[];
   /** The idle watchdog version `cast hosts provision` last installed (provisionLinux.ts). */
   watchdogVersion?: number;
   /** Refuse cookie carries into this host's browser (a host shared with

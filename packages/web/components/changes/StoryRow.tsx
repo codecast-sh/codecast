@@ -23,7 +23,7 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
     <Accordion.Item
       value={key}
       {...attrs}
-      className="chg-story chg-row group relative rounded-md py-1 pl-3 pr-1.5"
+      className="chg-story chg-row group relative rounded-md py-1 pl-3 pr-1.5 data-[state=open]:my-3 data-[state=open]:rounded-xl data-[state=open]:border data-[state=open]:border-sol-border/30 data-[state=open]:bg-sol-bg-alt/35 data-[state=open]:py-4 data-[state=open]:pl-4 data-[state=open]:pr-5"
       onClick={() => ctx.pick(key)}
     >
       <Accordion.Header asChild>
@@ -31,7 +31,7 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
           <Accordion.Trigger data-story-trigger className="flex w-full min-w-0 flex-col text-left outline-none">
             <span className="flex w-full min-w-0 items-baseline gap-2">
               <KindGlyph kind={story.kind} />
-              <span className="chg-ui line-clamp-3 min-w-0 flex-1 text-[14px] font-medium leading-[1.4] text-sol-text/90 [overflow-wrap:anywhere]">
+              <span className="chg-ui line-clamp-3 min-w-0 flex-1 text-[14px] font-medium leading-[1.4] text-sol-text/90 [overflow-wrap:anywhere] group-data-[state=open]:text-[21px] group-data-[state=open]:font-bold group-data-[state=open]:leading-[1.25] group-data-[state=open]:tracking-tight group-data-[state=open]:text-sol-text">
                 <FadeText text={story.headline} />
               </span>
               {waiting && <span className="shrink-0 font-mono text-[10px] text-sol-text/45">waiting</span>}
@@ -47,14 +47,14 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
               </span>
             </span>
             {(pending || story.dek) && (
-              <span className="chg-ui line-clamp-1 block pl-5 text-[13px] font-normal leading-[1.55] text-sol-text/60 [overflow-wrap:anywhere] group-data-[state=open]:line-clamp-none">
+              <span className="chg-ui line-clamp-1 block pl-5 text-[13px] font-normal leading-[1.55] text-sol-text/60 [overflow-wrap:anywhere] group-data-[state=open]:mt-1.5 group-data-[state=open]:line-clamp-none group-data-[state=open]:text-[14.5px] group-data-[state=open]:text-sol-text/70">
                 {pending ? <span className="chg-pending-bar" role="img" aria-label="Notes pending" /> : <FadeText text={story.dek} />}
               </span>
             )}
           </Accordion.Trigger>
         </div>
       </Accordion.Header>
-      <Accordion.Content className="chg-drawer pl-5">
+      <Accordion.Content className="chg-drawer pl-5 group-data-[state=open]:mt-4">
         <EvidenceDrawer story={story} />
       </Accordion.Content>
     </Accordion.Item>

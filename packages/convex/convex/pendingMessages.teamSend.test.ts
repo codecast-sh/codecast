@@ -8,6 +8,8 @@ import {
   healAndNotifyStuckMessages,
   planCrossUserNotify,
   CROSS_USER_NOTIFY_DEADLINE_MS,
+  DEAD_SESSION_REVIVE_WINDOW_MS,
+  planDeadSessionRevive,
 } from "./pendingMessages";
 
 // ── In-memory Convex-ish DB ──────────────────────────────────────────────────
@@ -473,13 +475,43 @@ describe("settled recipient recovery end to end", () => {
     expect(msg).toMatchObject({ status: "injected", retry_count: 6 });
   });
 
-  test("a dormant recipient without a live daemon stays pending recovery", async () => {
+  // jx71gjy: a send to a reaped session was marked injected, the resumed process died before
+  // the text was submitted, and nothing resumed the session again for a day.
+  test("a recent message stranded on a session with no live process is re-pended once", async () => {
     const now = Date.now();
     const { ctx, db, tables } = world({ bobLive: false, now });
-    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "Preserve this" });
-    await db.patch(tables.pending_messages[0]._id, { status: "injected", created_at: now - 600_000 });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "here is the card" });
+    const msg = tables.pending_messages[0];
+    await db.patch(msg._id, { status: "injected", created_at: now - 600_000, retry_count: 2 });
     await db.patch("msBob", { agent_status: "dormant" });
-    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 1 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 1, waiting: 0 });
+    expect(await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).toEqual([expect.objectContaining({ _id: msg._id })]);
+    expect(await db.get(msg._id)).toMatchObject({ status: "pending", retry_count: 0, dead_session_revived_at: now });
+    expect((await db.get("convBob"))?.has_pending_messages).toBe(true);
+
+    // The resumed session failed again: the row waits for readiness like any other.
+    await db.patch(msg._id, { status: "injected" });
+    expect(await healAndNotifyStuckMessages(ctx as any, now + 600_000)).toMatchObject({ revived: 0, waiting: 1 });
+  });
+
+  test("an old or exhausted message on a session with no live process keeps waiting", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ bobLive: false, now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "old" });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "spent" });
+    await db.patch(tables.pending_messages[0]._id, { status: "injected", created_at: now - DEAD_SESSION_REVIVE_WINDOW_MS });
+    await db.patch(tables.pending_messages[1]._id, { status: "undeliverable", created_at: now - 600_000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0, waiting: 2 });
+  });
+
+  test("planDeadSessionRevive", () => {
+    const now = 1_000_000_000_000;
+    const row = { status: "injected", content: "hi", created_at: now - 600_000 };
+    expect(planDeadSessionRevive(row, now)).toBe(true);
+    expect(planDeadSessionRevive({ ...row, status: "failed" }, now)).toBe(true);
+    expect(planDeadSessionRevive({ ...row, created_at: now - 60_000 }, now)).toBe(false);
+    expect(planDeadSessionRevive({ ...row, dead_session_revived_at: now - 1 }, now)).toBe(false);
+    expect(planDeadSessionRevive({ ...row, status: "pending" }, now)).toBe(false);
   });
 });
 

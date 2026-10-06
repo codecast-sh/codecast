@@ -238,6 +238,10 @@ export async function checkDoctorTmuxServers(
   const plan = staleTmuxServerKillPlan(procs, await io.liveTmuxServerPid(), io.uid(), io.selfPid);
   if (plan.refused) return { ok: false, warn: true, skip: true, detail: `tmux reap skipped: ${plan.refused}` };
   const stale = plan.kill;
+  if (plan.restore.length) {
+    const fleet = plan.restore[0];
+    return { ok: false, warn: true, detail: `tmux server pid ${fleet.pid} holds ${fleet.agents} agent(s) but lost the default socket — the daemon hands it back within the hour, or run \`kill -USR1 ${fleet.pid}\`` };
+  }
   const spared = plan.selfHosted.length ? `; skipped self-hosting server(s) ${plan.selfHosted.map(s => s.pid).join(", ")}` : "";
   if (stale.length === 0) return { ok: !spared, warn: !!spared, skip: !!spared, detail: `no safely reapable stale servers${spared}` };
   const trees = stale.reduce((n, s) => n + s.tree.length, 0);

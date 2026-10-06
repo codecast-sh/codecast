@@ -16,6 +16,7 @@
     "@convex-dev/prosemirror-sync": "^0.2.3",
     "@platform/agent": "file:../../platform/packages/agent",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/auth": "file:../../platform/packages/auth",
     "@platform/billing": "file:../../platform/packages/billing",
     "@platform/crypto": "file:../../platform/packages/crypto",

@@ -2,7 +2,8 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu } from "lucide-react";
+  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight } from "lucide-react";
+import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
@@ -21,7 +22,6 @@ import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
 import AgentLibraryPanel from "../../app/settings/agent-library/page";
-import AgentFeaturesPanel from "../../app/settings/agent-features/page";
 import HarnessPanel from "../../app/settings/harness/page";
 import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
@@ -43,7 +43,6 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "integrations": IntegrationsPanel,
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
-  "agent-features": AgentFeaturesPanel,
   "harness": HarnessPanel,
   "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
@@ -66,7 +65,11 @@ interface SectionDef {
   desktopOnly?: boolean;
 }
 
-const GROUPS: { label: string; sections: SectionDef[] }[] = [
+/** A nav entry for a surface that outgrew settings: it leaves for its page. */
+type LinkDef = Omit<SectionDef, "id"> & { id?: undefined; href: string };
+type NavDef = SectionDef | LinkDef;
+
+const GROUPS: { label: string; sections: NavDef[] }[] = [
   {
     label: "Account",
     sections: [
@@ -89,7 +92,7 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
   {
     label: "Machines",
     sections: [
-      { id: "agent-features", label: "Agent Features", icon: Blocks, desc: "Capabilities your agents pick up per device", keywords: "snippets skills capabilities device" },
+      { href: "/agent-features", label: "Agent Features", icon: Blocks, desc: "What codecast teaches your agents, per device", keywords: "snippets skills capabilities device memory messaging tasks triggers browser" },
       { id: "harness", label: "Harness", icon: Unplug, desc: "Codecast's hooks, and every change it made to your agent setup", keywords: "hooks claude.md agents.md settings.json statusline changes history harness automatic" },
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
@@ -104,12 +107,13 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
   },
 ];
 
-const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections);
+const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections).filter((d): d is SectionDef => !!d.id);
 
 export function SettingsModal() {
   useDesktopSettings();
   const s = useTrackedStore([(s) => s.settingsModalSection]);
   const isDesktop = useIsDesktop();
+  const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
 
@@ -193,6 +197,11 @@ export function SettingsModal() {
     })).filter((g) => g.sections.length > 0);
   }, [q, isDesktop]);
   const firstMatch = visibleGroups[0]?.sections[0];
+  const go = (d: NavDef) => {
+    if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
+    close();
+    router.push(d.href);
+  };
 
   if (!section) return null;
 
@@ -230,7 +239,7 @@ export function SettingsModal() {
                     e.stopPropagation();
                     setQuery("");
                   } else if (e.key === "Enter" && firstMatch) {
-                    useInboxStore.getState().openSettingsModal(firstMatch.id);
+                    go(firstMatch);
                     setQuery("");
                   }
                 }}
@@ -251,8 +260,8 @@ export function SettingsModal() {
                   const isActive = d.id === active.id;
                   return (
                     <button
-                      key={d.id}
-                      onClick={() => useInboxStore.getState().openSettingsModal(d.id)}
+                      key={d.id ?? d.href}
+                      onClick={() => go(d)}
                       title={d.label}
                       aria-label={d.label}
                       className={`w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${
@@ -263,6 +272,7 @@ export function SettingsModal() {
                     >
                       <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "" : "text-sol-text-dim"}`} />
                       <span className="hidden sm:inline truncate">{d.label}</span>
+                      {!d.id && <ArrowUpRight className="ml-auto hidden h-3.5 w-3.5 shrink-0 text-sol-text-dim sm:block" />}
                     </button>
                   );
                 })}
