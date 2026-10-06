@@ -3,7 +3,7 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { editionRequest, PROSE_MODEL, skipHeadline, storyPromptInput, storyRequest } from '../../../convex/convex/changesProse';
+import { BODY_CHARS, editionRequest, PROSE_MODEL, skipHeadline, storyPromptInput, storyRequest } from '../../../convex/convex/changesProse';
 import { loadSurface, surfaceMeta } from '../registry';
 import type { CallResult, ReplayResult, SurfaceImpl, SurfaceRequest } from '../surface';
 import { captureFromFile, idsIn } from './changesCommon';
@@ -64,8 +64,8 @@ describe('registration', () => {
 });
 
 describe('changes-story fixtures', () => {
-  test('the five cases the spec names are here', () => {
-    expect(stories.map((c) => c.kase).sort()).toEqual(['batch-commit', 'commit-only-no-why', 'hidden-member', 'private-session-withheld']);
+  test('the cases the spec names are here', () => {
+    expect(stories.map((c) => c.kase).sort()).toEqual(['agent-prompt-and-screens', 'batch-commit', 'canvas-embed', 'commit-only-no-why', 'hidden-member', 'one-fix-with-risk', 'private-session-withheld', 'process-heavy-cleanup', 'release-thin-parts', 'social-cards-media']);
     expect(editions.map((c) => c.kase)).toContain('branch-flood');
   });
 
@@ -106,7 +106,7 @@ describe('changes-story gates', () => {
 
   test('a good reply passes every gate and the why-source check', async () => {
     const r = await replayWith(story, batch.snapshot, storyReply(), batch.label);
-    expect(r.gates).toEqual({ parse: true, lengths: true, 'no-em-dash': true, 'no-leak': true });
+    expect(r.gates).toEqual({ parse: true, lengths: true, 'no-em-dash': true, images: true, 'no-leak': true });
     expect(r.checks.find((x) => x.id === 'why-source')?.score).toBe(1);
     expect(r.out.reply).toContain('Headline: Failed webhook deliveries now retry');
   });
@@ -122,8 +122,8 @@ describe('changes-story gates', () => {
     expect(r.gates.parse).toBe(false);
   });
 
-  test('a headline over 90 characters, a long dek or a fourth sentence fails lengths', async () => {
-    for (const o of [{ headline: 'x'.repeat(91) }, { dek: 'y'.repeat(161) }, { body: 'One. Two. Three. Four.' }]) {
+  test('a headline over 90 characters, a long dek or a body past its limit fails lengths', async () => {
+    for (const o of [{ headline: 'x'.repeat(91) }, { dek: 'y'.repeat(161) }, { body: 'z'.repeat(BODY_CHARS + 1) }]) {
       const r = await replayWith(story, batch.snapshot, storyReply(o), batch.label);
       expect(r.gates.parse).toBe(true);
       expect(r.gates.lengths).toBe(false);
