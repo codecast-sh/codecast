@@ -2,14 +2,17 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu } from "lucide-react";
+  Search, Volume2, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge } from "lucide-react";
+import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useEventListener } from "../../hooks/useEventListener";
+import { MODE_WORDS, useSurfaceMode, type DevSurface } from "../../lib/surfaces";
 import { useIsDesktop } from "../../lib/desktop";
 import { ErrorBoundary } from "../ErrorBoundary";
 import type { SettingsSectionId } from "../../lib/settingsSections";
 import { useDesktopSettings } from "../../hooks/useDesktopSettings";
+import { LANE_SWITCH, writeLane } from "../simple/lanePref";
 
 import ProfilePanel from "../../app/settings/profile/page";
 import AccountsPanel from "../../app/settings/accounts/page";
@@ -21,7 +24,6 @@ import SyncPanel from "../../app/settings/sync/page";
 import IntegrationsPanel from "../../app/settings/integrations/page";
 import AgentsPanel from "../../app/settings/agents/page";
 import AgentLibraryPanel from "../../app/settings/agent-library/page";
-import AgentFeaturesPanel from "../../app/settings/agent-features/page";
 import HarnessPanel from "../../app/settings/harness/page";
 import DaemonPanel from "../../app/settings/daemon/page";
 import ProviderKeysPanel from "../../app/settings/provider-keys/page";
@@ -31,10 +33,12 @@ import DevicesPanel from "../../app/settings/devices/page";
 import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 import AppsPanel from "../../app/settings/apps/page";
+import PlanPanel from "../../app/settings/plan/page";
 
 const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "general": ProfilePanel,
   "accounts": AccountsPanel,
+  "plan": PlanPanel,
   "notifications": NotificationsPanel,
   "sounds": SoundsPanel,
   "calls": CallsPanel,
@@ -43,7 +47,6 @@ const PANELS: Record<SettingsSectionId, React.ComponentType> = {
   "integrations": IntegrationsPanel,
   "agents": AgentsPanel,
   "agent-library": AgentLibraryPanel,
-  "agent-features": AgentFeaturesPanel,
   "harness": HarnessPanel,
   "daemon": DaemonPanel,
   "provider-keys": ProviderKeysPanel,
@@ -61,16 +64,24 @@ interface SectionDef {
   icon: LucideIcon;
   /** One line under the header title — what lives in this section. */
   desc: string;
+  /** The line in hosted mode, where it differs. */
+  hostedDesc?: string;
   /** Extra words the nav search matches beyond the label. */
   keywords: string;
   desktopOnly?: boolean;
 }
 
-const GROUPS: { label: string; sections: SectionDef[] }[] = [
+/** A nav entry for a surface that outgrew settings: it leaves for its page. */
+type LinkDef = Omit<SectionDef, "id"> & { id?: undefined; href: string };
+type NavDef = SectionDef | LinkDef;
+
+/** A group a developer-only surface owns (lib/surfaces.ts) shows only where it does. */
+const GROUPS: { label: string; sections: NavDef[]; surface?: DevSurface }[] = [
   {
     label: "Account",
     sections: [
       { id: "general", label: "General", icon: User, desc: "Your profile and how the app looks and behaves", keywords: "profile preferences appearance theme bio timezone username public simple view badges" },
+      { id: "plan", label: "Plan", icon: CircleGauge, desc: "Your assistant's plan, this month's use and extra credit", keywords: "billing usage allowance meter credit top up topup subscription stripe card payment invoice receipts upgrade wallet" },
       { id: "notifications", label: "Notifications", icon: Bell, desc: "What reaches you, and on which device", keywords: "push email digest mentions mute presence away" },
       { id: "sounds", label: "Sounds", icon: Volume2, desc: "What this machine says out loud, and how loudly", keywords: "audio volume mute chime cue walkie chat ring quiet" },
       { id: "calls", label: "Calls", icon: Video, desc: "How a call starts for you: camera, mic, devices, walkie, meetings", keywords: "camera microphone mic mute devices walkie huddle meeting record join always on recording light hands free press" },
@@ -83,13 +94,14 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
     sections: [
       { id: "team", label: "Team", icon: Users, desc: "Members, identity and the features your team runs", keywords: "members invite roles icon org statuses" },
       { id: "sync", label: "Sync & Privacy", icon: RefreshCw, desc: "Which projects sync, and who can see them", keywords: "projects sharing visibility private workspace directories" },
-      { id: "integrations", label: "Integrations", icon: Plug, desc: "Chrome extension, Slack, GitHub, Linear, Google, Notion, and the product sources Ops reads", keywords: "chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
+      { id: "integrations", label: "Integrations", icon: Plug, desc: MODE_WORDS.developer.integrationsLede, hostedDesc: MODE_WORDS.hosted.integrationsLede, keywords: "whisk mail email calendar assistant chrome browser extension web store pair slack github linear google gmail notion connect oauth install repositories issues sync apps sentry posthog sdk ingest key product sources ops" },
     ],
   },
   {
     label: "Machines",
+    surface: "settings.machines",
     sections: [
-      { id: "agent-features", label: "Agent Features", icon: Blocks, desc: "Capabilities your agents pick up per device", keywords: "snippets skills capabilities device" },
+      { href: "/agent-features", label: "Agent Features", icon: Blocks, desc: "What codecast teaches your agents, per device", keywords: "snippets skills capabilities device memory messaging tasks triggers browser" },
       { id: "harness", label: "Harness", icon: Unplug, desc: "Codecast's hooks, and every change it made to your agent setup", keywords: "hooks claude.md agents.md settings.json statusline changes history harness automatic" },
       { id: "provider-keys", label: "Provider Keys", icon: KeyRound, desc: "Model provider credentials per device", keywords: "api key anthropic openai secret" },
       { id: "cli", label: "CLI", icon: Terminal, desc: "Install the cast CLI, sign a machine in and pair Chrome", keywords: "install token terminal shell chrome browser extension web store pair" },
@@ -104,12 +116,15 @@ const GROUPS: { label: string; sections: SectionDef[] }[] = [
   },
 ];
 
-const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections);
+const ALL_SECTIONS = GROUPS.flatMap((g) => g.sections).filter((d): d is SectionDef => !!d.id);
 
 export function SettingsModal() {
   useDesktopSettings();
   const s = useTrackedStore([(s) => s.settingsModalSection]);
   const isDesktop = useIsDesktop();
+  const { shows, words } = useSurfaceMode();
+  const hosted = words === MODE_WORDS.hosted;
+  const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
 
@@ -183,7 +198,10 @@ export function SettingsModal() {
   // answers for a 14-section surface.
   const q = query.trim().toLowerCase();
   const visibleGroups = useMemo(() => {
-    return GROUPS.map((group) => ({
+    // Hosted mode keeps the Machines group out of the sheet even for an
+    // account that runs a machine: one "Developer settings" row at the foot
+    // (DeveloperSettingsRow) switches to developer mode, which brings it back.
+    return GROUPS.filter((group) => !group.surface || (!hosted && shows(group.surface))).map((group) => ({
       label: group.label,
       sections: group.sections.filter((d) => {
         if (d.desktopOnly && !isDesktop) return false;
@@ -191,8 +209,13 @@ export function SettingsModal() {
         return `${d.label} ${d.desc} ${d.keywords} ${group.label}`.toLowerCase().includes(q);
       }),
     })).filter((g) => g.sections.length > 0);
-  }, [q, isDesktop]);
+  }, [q, isDesktop, shows, hosted]);
   const firstMatch = visibleGroups[0]?.sections[0];
+  const go = (d: NavDef) => {
+    if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
+    close();
+    router.push(d.href);
+  };
 
   if (!section) return null;
 
@@ -230,7 +253,7 @@ export function SettingsModal() {
                     e.stopPropagation();
                     setQuery("");
                   } else if (e.key === "Enter" && firstMatch) {
-                    useInboxStore.getState().openSettingsModal(firstMatch.id);
+                    go(firstMatch);
                     setQuery("");
                   }
                 }}
@@ -251,8 +274,8 @@ export function SettingsModal() {
                   const isActive = d.id === active.id;
                   return (
                     <button
-                      key={d.id}
-                      onClick={() => useInboxStore.getState().openSettingsModal(d.id)}
+                      key={d.id ?? d.href}
+                      onClick={() => go(d)}
                       title={d.label}
                       aria-label={d.label}
                       className={`w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${
@@ -263,11 +286,13 @@ export function SettingsModal() {
                     >
                       <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "" : "text-sol-text-dim"}`} />
                       <span className="hidden sm:inline truncate">{d.label}</span>
+                      {!d.id && <ArrowUpRight className="ml-auto hidden h-3.5 w-3.5 shrink-0 text-sol-text-dim sm:block" />}
                     </button>
                   );
                 })}
               </div>
             ))}
+            {hosted && !q && <DeveloperSettingsRow />}
             {q && visibleGroups.length === 0 && (
               <p className="hidden sm:block px-3 pt-3 text-xs text-sol-text-dim">
                 Nothing matches &ldquo;{query}&rdquo;
@@ -279,8 +304,8 @@ export function SettingsModal() {
         <div className="flex-1 min-w-0 flex flex-col">
           <header className="flex items-center justify-between gap-4 pl-6 pr-3 py-3 border-b border-sol-border">
             <div className="min-w-0">
-              <h2 className="text-base font-semibold text-sol-text leading-tight">{active.label}</h2>
-              <p className="truncate text-xs text-sol-text-muted">{active.desc}</p>
+              <h2 data-cc-sheet-title className="text-base font-semibold text-sol-text leading-tight">{active.label}</h2>
+              <p className="truncate text-xs text-sol-text-muted">{(hosted && active.hostedDesc) || active.desc}</p>
             </div>
             <button
               onClick={close}
@@ -300,3 +325,22 @@ export function SettingsModal() {
     </div>
   );
 }
+
+/** Hosted mode's one way to the developer settings: it turns developer mode
+ *  on (the lane preference), and the Machines group returns in place. */
+function DeveloperSettingsRow() {
+  return (
+    <div className="mt-2 border-t border-sol-border/50 pt-2">
+      <button
+        type="button"
+        onClick={() => writeLane("full")}
+        title={LANE_SWITCH.off}
+        className="w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-1.5 rounded-md text-[13px] text-sol-text-dim transition-colors text-left hover:text-sol-text hover:bg-sol-bg-highlight/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+      >
+        <Terminal className="w-4 h-4 flex-shrink-0" />
+        <span className="hidden sm:inline truncate">Developer settings</span>
+      </button>
+    </div>
+  );
+}
+

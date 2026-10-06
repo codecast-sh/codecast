@@ -1,9 +1,11 @@
 "use client";
 
+import { useHostedMode, useModeWords } from "../../lib/surfaces";
 import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
 import { ArrowDown, ArrowUp, Check, Square, CheckSquare } from "lucide-react";
 import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { approvalButtonLabel } from "@codecast/shared/contracts/assistant";
 import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useDecisionDraft } from "../../hooks/useDecisionDraft";
@@ -57,6 +59,7 @@ function GenericAnswerControls({
   // not here: this component unmounts whenever its card folds or its page
   // changes, and a choice must never fold away with it.
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decision._id);
+  const hosted = useHostedMode();
   const otherOpen = !!draft.otherOpen;
   const otherText = draft.otherText ?? "";
   const setOtherOpen = useCallback((open: boolean) => patchDraft({ otherOpen: open }), [patchDraft]);
@@ -144,20 +147,24 @@ function GenericAnswerControls({
   );
   const openOther = () => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); };
 
+  const words = useModeWords();
   const dismissBtn = onDismiss && (
-    <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
-      {keys && <KeyCap size="xs">x</KeyCap>}<span>dismiss</span>
+    <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title={words.dismissAskTip}>
+      {keys && <KeyCap size="xs">x</KeyCap>}<span>{words.dismissAsk}</span>
     </button>
   );
 
   const body = useMemo(() => {
     if (kind === "single") {
-      // The recommended option (else the first) reads as the primary row.
-      const primary = recommendation ?? 0;
+      // The recommended option (else the first) reads as the primary row. In
+      // hosted mode nothing reads as chosen before the person picks: a
+      // recommendation is a tag, and a filled first row looked answered.
+      const primary = hosted ? -1 : recommendation ?? 0;
       return (
         <div className="space-y-2">
           <DecisionOptionList
-            options={decision.options}
+            // Hosted mode answers an approval the way a person would: Yes, Not now.
+            options={hosted ? decision.options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : decision.options}
             keys={keys}
             compact={compact}
             onPick={answerSingle}
@@ -235,7 +242,7 @@ function GenericAnswerControls({
       </div>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, compact, answerSingle, move, submit, togglePick, setValue]);
+  }, [kind, decision.options, decision.form, decision.default_option, decision.blocking, picked, order, values, keys, recommendation, hosted, compact, answerSingle, move, submit, togglePick, setValue]);
 
   return (
     <div>

@@ -72,6 +72,7 @@ function definitionFromFlags(name: string, options: Record<string, unknown>, pro
   if (options.apply) def.mode = "apply";
   if (options.isolated) def.isolated = true;
   if (options.noIsolated) def.isolated = false;
+  if (options.mergeBack !== undefined) def.merge_back = options.mergeBack === true;
   if (options.replacePrompt) def.prompt_mode = "replace";
   if (options.appendPrompt) def.prompt_mode = "append";
   if (prompt) def.system_prompt = prompt;
@@ -80,7 +81,7 @@ function definitionFromFlags(name: string, options: Record<string, unknown>, pro
 
 function printDefinitionRow(d: any): void {
   const facts = [d.agent ?? "caller", d.model, d.effort].filter(Boolean).join(" · ");
-  const badges = [d.mode === "propose" ? "read-only" : "", d.isolated ? "worktree" : ""].filter(Boolean).join(" ");
+  const badges = [d.mode === "propose" ? "read-only" : "", d.isolated ? (d.merge_back === false ? "worktree" : "worktree, merge back") : ""].filter(Boolean).join(" ");
   console.log(`  ${c.cyan}${d.name}${c.reset}  ${c.dim}${facts}${badges ? `  [${badges}]` : ""}${c.reset}`);
   if (d.description) console.log(`    ${d.description}`);
 }
@@ -114,6 +115,8 @@ const DEFINITION_FLAGS = (cmd: Command) =>
     .option("--apply", "Can act (the default)")
     .option("--isolated", "Start in its own git worktree")
     .option("--no-isolated", "Do not start in a worktree")
+    .option("--merge-back", "Bring an isolated worker's changes into its parent's checkout when it finishes done (default for isolated)")
+    .option("--no-merge-back", "Leave an isolated worker's changes in its worktree")
     .option("--replace-prompt", "The prompt replaces the client's system prompt")
     .option("--append-prompt", "The prompt is appended to the client's system prompt (the default)")
     .option("--team <name|id>", "Team workspace to write into (default: personal)");
@@ -211,6 +214,7 @@ export function registerAgentCommand(program: Command, deps: GroupDeps): void {
       prompt_mode: existing.prompt_mode,
       mode: existing.mode,
       isolated: existing.isolated,
+      merge_back: existing.merge_back,
     };
     const def = definitionFromFlags(name, options, promptFrom(parts), base);
     const row = await upsertDefinition(deps, def, undefined, existing._id);

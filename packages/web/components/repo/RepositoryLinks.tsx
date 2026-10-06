@@ -1,6 +1,7 @@
 import { useMemo, type SyntheticEvent } from "react";
 import Link from "next/link";
-import { FolderGit2, GitBranch, ExternalLink } from "lucide-react";
+import { FolderGit2, GitBranch, ExternalLink, FolderDown } from "lucide-react";
+import { copyText } from "../../lib/copyText";
 import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncTaskExternalEvents, useSyncPlanExternalEvents, useSyncProjectExternalEvents } from "../../hooks/useSyncExternalEvents";
@@ -20,7 +21,13 @@ type GitStateSession = {
   git_behind?: number | null;
   git_dirty?: boolean | null;
   pr_status?: { repository?: string } | null;
+  short_id?: string | null;
 };
+
+/** The command that recreates a session's working tree, uncommitted work included, in a new worktree. */
+export function pickupCommand(shortId: string): string {
+  return `cast ws acquire pickup-${shortId} --from ${shortId}`;
+}
 
 const promptPart = "inline-flex items-center gap-1 px-1.5 py-0.5 hover:bg-sol-cyan/15 focus-visible:outline focus-visible:outline-sol-cyan";
 
@@ -56,6 +63,7 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
   const ahead = detail ? session.git_ahead ?? 0 : 0;
   const behind = detail ? session.git_behind ?? 0 : 0;
   const dirty = detail && !!session.git_dirty;
+  const pickup = dirty && session.short_id ? pickupCommand(session.short_id) : null;
   return (
     <span
       className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-[10px] text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
@@ -79,6 +87,13 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
           {ahead > 0 && <span>↑{ahead}</span>}
           {behind > 0 && <span>↓{behind}</span>}
         </Link>
+      )}
+      {pickup && (
+        <button type="button" onClick={(e) => { stop(e); void copyText(pickup, "Copied: run it in your checkout"); }} onKeyDown={stop}
+          aria-label="Pick up this tree" title={`Pick up this tree: copies ${pickup}`}
+          className={`${promptPart} cq-sq1 text-sol-text-muted`}>
+          <FolderDown className="w-3 h-3 shrink-0" />
+        </button>
       )}
     </span>
   );
