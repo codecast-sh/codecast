@@ -99,6 +99,10 @@ export type ClientDismissed = {
   // the auto-redirect from then on (synced per-user across browsers).
   prefer_browser_links?: boolean;
   setup_prompt?: number;
+  // "Your coworkers' team is on codecast" (TeamDomainBanner): a week's snooze.
+  team_domain?: number;
+  // Admin's "let coworkers find this team" card in the team feed: 30-day snooze.
+  team_findable_nudge?: number;
   cli_offline?: number;
   tmux_missing?: number;
   team_sharing_prompt?: number;

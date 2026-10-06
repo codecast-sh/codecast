@@ -50,6 +50,10 @@ export const PREFERENCE_MAP: Record<string, string> = {
   card_waiting: "task_activity",
   change_shipped: "task_activity",
   cause_reopened: "task_activity",
+  // Someone asking into your team (yours to decide), and being let into one:
+  // both addressed to one person by name, the same class as a mention.
+  team_join_request: "mention",
+  team_join_approved: "mention",
 };
 
 function isNotificationEnabled(

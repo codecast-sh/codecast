@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Team calls are read with cast calls / cast call.",
+  "label": {
+    "want": [
+      "cast\\s+calls?\\b"
+    ],
+    "avoid": [
+      "^(Grep|Glob):",
+      "^Bash: (grep|rg|find)\\b",
+      "^WebSearch:"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "What did we agree on in yesterday's team call about pricing?"
+  }
+}

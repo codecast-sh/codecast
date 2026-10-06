@@ -19,7 +19,7 @@ import { shouldShowSession } from "../lib/sessionFilters";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { useNeedsInputCount } from "../hooks/useNeedsInputCount";
-import { useDecisionQueue } from "../hooks/useDecisionQueue";
+import { useScopedDecisionQueue } from "../hooks/useDecisionQueue";
 import { waitingOnPerson } from "../lib/decisionQueue";
 import { chatUnreadTotals, useChatRail, useChatMembers, supersededChannelId } from "../hooks/useChatSync";
 import { useOpenDm } from "../hooks/useOpenDm";
@@ -47,7 +47,9 @@ import { AppPopOutButton } from "./desktop/AppPopOutButton";
 import type { DesktopApp } from "../lib/desktopApps";
 import { WorkbenchSection } from "./WorkbenchSection";
 import { RailHeading, SectionRow, NavCount, NeedsInputCount, InboxNavRow, type SectionRowSpec } from "./sidebar/navPrimitives";
+import { ShellUsageMeter } from "./plan/UsageMeter";
 import { ChatNavSectionView, FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView } from "./sidebar/SidebarNav";
+import { Surface, useModeWords, useSurface, useSurfaceMode } from "../lib/surfaces";
 import { paneDragProps, railRowTone } from "../lib/railRow";
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
@@ -125,9 +127,13 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // prompt. Counting only decisions hid this row at zero while the queue still
   // had work — removing the only way in. One hook defines "pending" for both.
   // Minus the rows a lead holds under a grant: those are the lead's to clear.
-  const pending = waitingOnPerson(useDecisionQueue()).length;
-  if (pending === 0) return null;
-  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
+  // In hosted mode's Assistant scope, only the assistant's asks count, as the
+  // page lists them (useScopedDecisionQueue).
+  const pending = waitingOnPerson(useScopedDecisionQueue()).length;
+  const words = useModeWords();
+  const onlyWhenWaiting = useSurface("rail.questionsOnlyWhenWaiting");
+  if (pending === 0 && onlyWhenWaiting) return null;
+  return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} label={words.questionsPage} tip={words.questionsTip} />;
 });
 
 // The Threads inbox's row: every conversation you are in, across chat, session
@@ -462,8 +468,18 @@ function PinnedRail({
   // Unpin), every other pin a menu with just Unpin.
   const channelMenu = useChannelMenu();
   const pinMenu = useContextMenu<SidebarPin>();
+  // Hosted mode works in the person's own workspace: a pinned saved view
+  // shows only while it is theirs (no team on it), so a team's views never
+  // lead the rail there.
+  const hosted = useHostedMode();
+  const viewRows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
+  const personalView = (pin: SidebarPin) => {
+    const v = viewRows.find((r: any) => String(r?._id) === pin.id);
+    return !!v && !v.team_id;
+  };
   const visiblePins = (chatOn ? pins : pins.filter((p) => isThreadsPin(p) || p.kind !== "channel"))
-    .filter((p) => !scope || pinApp(p) === scope);
+    .filter((p) => !scope || pinApp(p) === scope)
+    .filter((p) => !hosted || isThreadsPin(p) || p.kind === "project" || p.kind === "channel" || personalView(p));
   if (visiblePins.length === 0) return null;
 
   // The icon already names the kind (a hash IS the channel marker), so the
@@ -549,8 +565,7 @@ function PinnedRail({
           channelMenu.open(e, { channelId: id, notifyLevel: live?.notifyLevel ?? "mentions" }),
       };
     }
-    const rows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
-    const v = rows.find((r: any) => String(r?._id) === pin.id);
+    const v = viewRows.find((r: any) => String(r?._id) === pin.id);
     return {
       ...base,
       name: v?.name ?? pin.label,
@@ -600,6 +615,8 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   // The workspace's agent is its root role (org-staffing.md S22): the rail
   // shows it by its name and face, and the entry opens its page.
   const rootAgent = useRootAgent();
+  // Hosted mode's rows and words (lib/surfaces.ts).
+  const surfaceMode = useSurfaceMode();
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -613,7 +630,7 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
   const isTasks = pathname === "/tasks" || pathname?.startsWith("/tasks/");
-  const isInitiatives = pathname === "/initiatives" || pathname?.startsWith("/initiatives/");
+  const isInitiatives = pathname === "/goals" || pathname?.startsWith("/goals/");
   const isProjects = pathname === "/projects" || pathname?.startsWith("/projects/");
   const isPlans = pathname === "/plans" || pathname?.startsWith("/plans/");
   const isDocs = pathname === "/docs" || pathname?.startsWith("/docs/");
@@ -954,18 +971,30 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       .map(v => v.path);
   }, [filteredConversations]);
 
+  const pinnedRail = (
+    <PinnedRail
+      onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
+      applyView={applyView}
+      activeViewIds={[activeTaskViewId, activeDocViewId]}
+      scope={scope}
+    />
+  );
+
   const sidebarContent = (
     <>
       <div className="flex-1 flex flex-col min-h-0">
-        {!isNarrow && (
-          <PinnedRail
-            onNavigate={(href) => { router.push(href); onMobileClose?.(); }}
-            applyView={applyView}
-            activeViewIds={[activeTaskViewId, activeDocViewId]}
-            scope={scope}
-          />
+        {/* Hosted mode opens with its name, as Whisk's rail does. */}
+        {!isNarrow && surfaceMode.hosted && (
+          <div data-cc-rail-wordmark className="flex items-center gap-2 px-4 pb-3">
+            <LogoMark size={18} monochrome className="shrink-0" />
+            <span>Codecast</span>
+          </div>
         )}
+        {/* Pins lead the developer rail; hosted mode's leads with the inbox and
+            keeps its pins after Work. */}
+        {!isNarrow && !surfaceMode.hosted && pinnedRail}
         <SidebarNavView
+          mode={surfaceMode}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -1052,7 +1081,11 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
           }}
         />
 
-        <ModSidebarSections isNarrow={isNarrow} />
+        {!isNarrow && surfaceMode.hosted && <div className="mt-4">{pinnedRail}</div>}
+
+        <Surface name="mods.sidebar">
+          <ModSidebarSections isNarrow={isNarrow} />
+        </Surface>
 
         {scope === "work" ? null : (<>
 
@@ -1220,7 +1253,10 @@ export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, 
       <div data-sidebar-scroll className="flex-1 overflow-y-auto scrollbar-auto pt-3 sm:pt-4">
         {sidebarContent}
       </div>
-      {offerNativeApp && nativeApp && !isNarrow && (
+      {/* Hosted mode's quiet usage meter: the month so far, opening Plan. */}
+      {!isNarrow && <ShellUsageMeter />}
+      {/* Hosted mode offers the apps from the account menu, not under the meter. */}
+      {offerNativeApp && nativeApp && !isNarrow && !surfaceMode.hosted && (
         <a
           href={NATIVE_APP_LINKS[nativeApp]}
           target={nativeApp === "ios" ? "_blank" : undefined}

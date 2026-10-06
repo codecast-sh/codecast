@@ -21,6 +21,7 @@ import { ArrowUpRight } from "lucide-react";
 import { fmtClock, fmtDuration } from "./triggerCadence";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { useInboxStore } from "../store/inboxStore";
+import { useModeWords, useSurface } from "../lib/surfaces";
 
 
 // agentTasks.webListRuns payload. `_id` is the conversation a run lives in
@@ -84,10 +85,14 @@ const DOT_RESTING = "bg-[color-mix(in_srgb,var(--sol-orange)_55%,var(--sol-card)
 // open. Two lines of information the user actually needs: what the gate said,
 // and what the gate was.
 function SkippedRunRow({ run, num, now }: { run: TriggerRun; num: number; now: number }) {
+  const words = useModeWords();
+  // The gate's command and output are a developer's to read; hosted mode
+  // says only that there was nothing new.
+  const internals = useSurface("triggers.internals");
   return (
     <ShortcutTooltip
-      label={run.precheck_command ? `${run.source ? `${run.source} precheck` : "precheck"}: ${run.precheck_command}` : "skipped by the precheck"}
-      hint={run.precheck_output || undefined}
+      label={!internals ? words.skippedRun : run.precheck_command ? `${run.source ? `${run.source} precheck` : "precheck"}: ${run.precheck_command}` : "skipped by the precheck"}
+      hint={internals ? run.precheck_output || undefined : undefined}
     >
       <div
         data-testid="trigger-run-skipped"
@@ -105,7 +110,7 @@ function SkippedRunRow({ run, num, now }: { run: TriggerRun; num: number; now: n
           </span>
         </ShortcutTooltip>
         <span className="shrink-0 px-1 rounded border border-sol-border bg-sol-bg-alt/60 text-[9px] text-sol-text-dim">
-          skipped
+          {words.skippedRun}
         </span>
         <span className="truncate min-w-0 text-sol-text-dim">{run.title}</span>
       </div>

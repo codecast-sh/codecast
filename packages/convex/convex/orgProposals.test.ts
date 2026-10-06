@@ -155,7 +155,7 @@ describe("orgProposals.decide", () => {
     const routine = (await db.query("agent_tasks").collect())[0];
     expect(routine).toMatchObject({ target_conversation_id: S_GROWTH, originating_conversation_id: S_GROWTH, schedule_type: "recurring", interval_ms: 7 * 86_400_000, prompt: "Run cast org review", status: "scheduled", user_id: ME });
     expect(routine.run_at).toBeGreaterThan(Date.now() + 6 * 86_400_000);
-    expect(await decide(6)).toMatchObject({ status: "applied", note: 'project "Growth": goal, success metrics, p1, owner @growth' });
+    expect(await decide(6)).toMatchObject({ status: "applied", note: 'project "Growth": goal, success metrics +1, p1, owner @growth' });
     expect(await db.get(P as any)).toMatchObject({ goal: "Bring users in", priority: "p1", owner_role_id: GROWTH, success_metrics: ["100 signups"] });
     expect(await decide(7)).toMatchObject({ status: "applied", note: "@growth: now reports to Mate" });
     expect((await db.get(GROWTH as any)).reports_to).toEqual({ kind: "user", user_id: MATE });
@@ -669,7 +669,8 @@ describe("orgProposals review regressions", () => {
     const { ACCEPT_ALL_CHUNK } = await import("./orgProposals");
     const n = ACCEPT_ALL_CHUNK + 3;
     const db = fixtures({ tasks: Array.from({ length: n }, (_, i) => ({ ...blocked(i), execution_status: undefined })) });
-    const changes = [change({ kind: "retire", handle: "nobody" }), ...Array.from({ length: n }, (_, i) => change({ kind: "task_status", task: `ct-b${i}`, status: "open", reason: "never worked" }))];
+    // A record proposal holds records only; the row that fails is a task the workspace does not have.
+    const changes = [change({ kind: "task_status", task: "ct-nobody", status: "open", reason: "never worked" }), ...Array.from({ length: n }, (_, i) => change({ kind: "task_status", task: `ct-b${i}`, status: "open", reason: "never worked" }))];
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec(changes) });
     const scheduled: any[] = [];
     const ctx = { ...ctxOf(db), scheduler: { runAfter: async (_d: number, _f: unknown, args: any) => { scheduled.push(args); } } };
@@ -678,7 +679,7 @@ describe("orgProposals review regressions", () => {
     expect(first.remaining).toBe(n + 1 - ACCEPT_ALL_CHUNK);
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0].tried).toHaveLength(ACCEPT_ALL_CHUNK);
-    // The continuation: the same act, no human gate, the rest applied, the failed retire left alone.
+    // The continuation: the same act, no human gate, the rest applied, the failed row left alone.
     const second = await performAcceptAll(ctxOf(db), ME as any, { proposal: r.short_id, provision: false, tried: scheduled[0].tried, continuation: true, log_head: scheduled[0].log_head });
     const batches = await db.query("org_change_batches").collect();
     expect(batches).toHaveLength(1);
@@ -687,9 +688,9 @@ describe("orgProposals review regressions", () => {
     expect(second.results.length + first.results.length).toBe(n + 1);
     const rows = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes;
     expect(rows.filter((c: any) => c.status === "applied")).toHaveLength(n);
-    const retire = rows.find((c: any) => c.line === "retire @nobody");
-    expect(retire.status).toBe("failed");
-    expect(retire.applied_note).toContain("No live role @nobody");
+    const missing = rows.find((c: any) => c.line === "mark task ct-nobody open");
+    expect(missing.status).toBe("failed");
+    expect(missing.applied_note).toContain('No task "ct-nobody"');
   });
 
   test("closing a task clears a hand's blocked report, so a closed row never reads as a live stall", async () => {
@@ -1171,15 +1172,13 @@ describe("goal changes in a proposal", () => {
       change({ kind: "initiative", title: "Grow trades", description: "Trades grow month over month without paid spend.", projects: ["pr-1"], owner: "@growth" }, "Growth's own goal says so."),
       change({ kind: "initiative_projects", initiative: "in-2", projects: ["Growth"] }),
       change({ kind: "initiative_owner", initiative: "in-2", owner: "Me" }),
-      change({ kind: "task_status", task: "ct-1", status: "done", reason: "landed", title: "t" }),
     ]) });
     // The initiative's title travels with the two changes to it (a reader's store may not hold the row).
-    expect(r.changes.map((c: any) => c.change.title ?? null)).toEqual(["Grow trades", "Win the private network", "Win the private network", "t"]);
+    expect(r.changes.map((c: any) => c.change.title ?? null)).toEqual(["Grow trades", "Win the private network", "Win the private network"]);
     expect((await readProposal(ctxOf(db), ME as any, r.short_id)).asks.map((a: any) => [a.title, a.seqs])).toEqual([
-      ["Bring 1 record up to date", [4]],
       ["1 goal to set, and 2 changes to the goals that exist", [1, 2, 3]],
     ]);
-    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 1, verdict: "accept", provision: false });
+    const out = await performDecideAsk(ctxOf(db), ME as any, { proposal: r.short_id, ask: 0, verdict: "accept", provision: false });
     expect(out.results.map((x: any) => x.status)).toEqual(["applied", "applied", "applied"]);
     const made = db._tables.initiatives.find((i: any) => i.title === "Grow trades");
     expect(made).toMatchObject({ status: "proposed", workspace: WS, project_ids: [P], owner: { kind: "role", role_id: GROWTH } });

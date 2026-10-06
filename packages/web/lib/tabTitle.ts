@@ -1,11 +1,14 @@
 import type { AppTab } from "../store/inboxStore";
-import { pathLabel, inboxTabSessionId } from "./pathLabel";
+import { isHostedAgentType } from "@codecast/shared/contracts";
+import { conversationTitle } from "./conversationTitle";
+import { pathLabel, inboxTabSessionId, modePathLabel } from "./pathLabel";
 import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId } from "./entityLinks";
 import { vaultNoteTitle } from "./vault/noteTitle";
 import { channelDisplayName } from "./chatViews";
 import { filterByWorkspace, inWorkspace, type WorkspaceKey } from "./workspaceScope";
 import { dmOtherIds } from "@codecast/shared/chat";
+import { currentPagePath } from "./renamedPages";
 
 // Tab title derivation, kept out of TabBar.tsx so that module exports only
 // components: a helper export next to a component breaks React Fast Refresh
@@ -45,15 +48,17 @@ export function tabSessionId(tab: Pick<AppTab, "sessionId" | "path">): string | 
  *  a session's does (initiatives-projects-role-page.md I1); its `in-N` stands
  *  in until then (pathLabel). */
 export function initiativeTabTitle(path: string, initiatives: Record<string, { short_id?: string; title?: string; workspace?: string; team_id?: string }> | undefined, workspaceKey: WorkspaceKey | null | undefined): string | null {
-  const ref = path.split("?")[0].split("/")[2];
-  if (!initiatives || !path.startsWith("/initiatives/") || !ref) return null;
+  const current = currentPagePath(path);
+  const ref = current.split("?")[0].split("/")[2];
+  if (!initiatives || !current.startsWith("/goals/") || !ref) return null;
   const row = initiatives[ref] ?? filterByWorkspace(Object.values(initiatives), workspaceKey).find((r) => r?.short_id === ref.toLowerCase());
   return row && inWorkspace(row, workspaceKey) ? row.title || null : null;
 }
 
 /** The records a tab can be titled by, read by key only (never a scan, so
- *  the window title can derive on every store tick). */
-export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any> };
+ *  the window title can derive on every store tick), and the client state
+ *  whose mode names a page whose name is a mode word (modePathLabel). */
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; clientState?: { ui?: { lane?: string } } };
 
 /** A task, project or run tab reads its record's name once the store holds
  *  the row: the task's title, the project's title, and a run as its cause
@@ -76,6 +81,9 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   const sid = tabSessionId(tab);
   if (sid && sessions[sid]) {
     const s = sessions[sid];
+    // A hosted conversation is named by what the person asked until its
+    // title arrives, never by an id.
+    if (isHostedAgentType(s.agent_type)) return conversationTitle(s);
     // Untitled: the 7-char short handle (what every cast link and command
     // uses), never a slice of the agent's UUID.
     return s.title || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
@@ -95,7 +103,9 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
   // was stamped at the address it opened with, and the pane has navigated
   // since. pathLabel reads the live path (and any title a backend learned).
   if (isBrowserRoutePath(tab.path)) return pathLabel(tab.path);
-  return storedTitle(tab) ?? pathLabel(tab.path);
+  // A page named by a mode word reads the mode now: its stored title was
+  // stamped in whichever mode opened it.
+  return modePathLabel(tab.path, records?.clientState?.ui) ?? storedTitle(tab) ?? pathLabel(tab.path);
 }
 
 // A stored title with a query string in it is a raw path that leaked in

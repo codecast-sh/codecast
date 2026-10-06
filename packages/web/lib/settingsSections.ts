@@ -13,6 +13,7 @@
 export type SettingsSectionId =
   | "general"
   | "accounts"
+  | "plan"
   | "notifications"
   | "sounds"
   | "calls"
@@ -21,7 +22,6 @@ export type SettingsSectionId =
   | "integrations"
   | "agents"
   | "agent-library"
-  | "agent-features"
   | "harness"
   | "daemon"
   | "provider-keys"
@@ -38,6 +38,7 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings": DEFAULT_SETTINGS_SECTION,
   "/settings/profile": "general",
   "/settings/accounts": "accounts",
+  "/settings/plan": "plan",
   "/settings/notifications": "notifications",
   "/settings/sounds": "sounds",
   "/settings/calls": "calls",
@@ -47,7 +48,6 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/integrations/github-app": "integrations",
   "/settings/agents": "agents",
   "/settings/agent-library": "agent-library",
-  "/settings/agent-features": "agent-features",
   "/settings/harness": "harness",
   "/settings/daemon": "daemon",
   "/settings/provider-keys": "provider-keys",
@@ -58,6 +58,20 @@ const PATH_TO_SECTION: Record<string, SettingsSectionId> = {
   "/settings/desktop": "desktop",
   "/settings/apps": "apps",
 };
+
+/**
+ * Settings sections that grew into pages of their own. Their old URLs (and the
+ * settings nav entry) lead to the page.
+ */
+export const SETTINGS_PAGES_MOVED: Record<string, string> = {
+  "/settings/agent-features": "/agent-features",
+};
+
+/** The address that opens a section: its own /settings/<id> URL. A hard load
+ *  or an in-app push to it opens the modal on that section. */
+export function settingsPathFor(section: SettingsSectionId): string {
+  return Object.keys(PATH_TO_SECTION).find((path) => PATH_TO_SECTION[path] === section && path !== "/settings") ?? "/settings";
+}
 
 export interface SettingsPathHit {
   section: SettingsSectionId;
