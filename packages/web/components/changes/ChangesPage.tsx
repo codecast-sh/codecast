@@ -10,9 +10,9 @@
 // line per day, and a week's summary sits where the timeline enters the
 // week. Filters, the work in progress and what is live stay in the header.
 import * as Accordion from "@radix-ui/react-accordion";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { isoWeekOf, weekMonday } from "@codecast/shared/changes";
+import { isoWeekOf, weekDates, weekMonday } from "@codecast/shared/changes";
 import { normalizeRepository } from "@codecast/shared/contracts";
 import { localDate, normalizeTimezone } from "@codecast/convex/convex/lib/teamDay";
 import {
@@ -45,9 +45,11 @@ import { plural } from "./format";
 import { NoMatch } from "./StoryParts";
 import { StoryRow } from "./StoryRow";
 import { StoryCtx, createFocusStore, type StoryContext } from "./storyContext";
-import { buildTimeline, finishedWeeks, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
+import { pickMedia, type PickedMedia } from "./storyMedia";
+import { SummaryMedia } from "./SummaryMedia";
+import { buildTimeline, dayZoom, groupWeeks, weekFolds, weekTop, type TimelineDay, type TimelineWeek } from "./timelineModel";
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
-import { changesHref, clearFilters, hasFilters, useChangesUrlState } from "./useChangesUrlState";
+import { changesHref, clearFilters, hasFilters, useChangesUrlState, type Zoom } from "./useChangesUrlState";
 
 const releaseName = (r: { surface: string; version?: string; sha: string }) => `${r.surface} ${r.version ?? r.sha.slice(0, 7)}`;
 
@@ -86,23 +88,79 @@ function SmallChanges({ stories }: { stories: readonly Story[] }) {
   );
 }
 
-function DaySection({ day, today }: { day: TimelineDay; today: string }) {
+/** The stories a summary leads with: the edition's picks, else the heaviest. */
+const leadStories = (day: TimelineDay) => [...day.stories, ...day.small];
+
+/** The day's sentence and its few sentences of story, under the date. */
+function DayHead({ day, meta }: { day: TimelineDay; meta: string }) {
+  return (
+    <>
+      {day.summary && <p className="chg-ui text-[17px] font-bold leading-[1.35] tracking-tight text-sol-text [overflow-wrap:anywhere]">{day.summary}</p>}
+      {day.standfirst && <p className="chg-ui mt-2 max-w-[44rem] text-[14px] leading-[1.65] text-sol-text/75 [overflow-wrap:anywhere]">{day.standfirst}</p>}
+      <p className={`font-mono text-[11px] tabular-nums text-sol-text/45 ${day.summary ? "mt-2" : ""}`}>{meta}</p>
+    </>
+  );
+}
+
+function ZoomIn({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="mt-3 rounded px-2 py-1 -ml-2 font-mono text-[11px] text-sol-text/50 hover:bg-sol-bg-alt/60 hover:text-sol-text"
+    >
+      {children}
+    </button>
+  );
+}
+
+/**
+ * One day. At "changes" every story is a row that opens in place; at "days"
+ * the day is told whole: its sentence, its story in a few sentences, its
+ * screenshots and pages, and the stories most worth opening.
+ */
+function DaySection({ day, today, zoom, onOpen, onZoomIn }: {
+  day: TimelineDay;
+  today: string;
+  zoom: Zoom;
+  onOpen: (key: string) => void;
+  onZoomIn: () => void;
+}) {
   const label = day.date === today ? "Today" : changesDayLabel(day.date);
   const count = day.stories.length + day.small.length;
   const meta = [
     count < day.total ? `${count} of ${day.total} changes` : plural(count, "change"),
     ...day.releases.map((r) => `${releaseName(r)} shipped`),
   ].join(" · ");
+  const media = useMemo(() => (zoom === "changes" ? [] : pickMedia(leadStories(day), 4)), [day, zoom]);
+  const top = day.stories.slice(0, 3);
   return (
     <section className="chg-day grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label ?? day.date}>
-      <h2 className="sticky top-3 self-start pt-0.5 font-mono text-[12px] tabular-nums text-sol-text/55">{label}</h2>
+      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] tabular-nums text-sol-text/55">{label}</h2>
       <div className="min-w-0">
-        {day.summary && <p className="chg-ui text-[16px] font-semibold leading-[1.4] text-sol-text [overflow-wrap:anywhere]">{day.summary}</p>}
-        <p className={`font-mono text-[11px] tabular-nums text-sol-text/45 ${day.summary ? "mt-1" : ""}`}>{meta}</p>
-        <div className="-mx-3 mt-3">
-          {day.stories.map((s) => <StoryRow key={s.story_key} story={s} />)}
-          <SmallChanges stories={day.small} />
-        </div>
+        <DayHead day={day} meta={meta} />
+        {zoom === "changes" ? (
+          <div className="-mx-3 mt-3">
+            {day.stories.map((s) => <StoryRow key={s.story_key} story={s} />)}
+            <SmallChanges stories={day.small} />
+          </div>
+        ) : (
+          <>
+            <SummaryMedia media={media} onOpen={onOpen} />
+            {top.length > 0 && (
+              <ul className="mt-4 space-y-1.5">
+                {top.map((s) => (
+                  <li key={s.story_key}>
+                    <button type="button" onClick={() => onOpen(s.story_key)} className="chg-ui text-left text-[13.5px] font-medium leading-[1.45] text-sol-text/80 underline-offset-2 hover:text-sol-text hover:underline">
+                      {s.headline}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <ZoomIn onClick={onZoomIn}>every change of the day ({count}) →</ZoomIn>
+          </>
+        )}
       </div>
     </section>
   );
@@ -110,28 +168,38 @@ function DaySection({ day, today }: { day: TimelineDay; today: string }) {
 
 /**
  * A week told whole: its headline, a few sentences on what shipped and what
- * it adds up to, and the stories most worth opening. The latest finished week
- * opens the page; earlier ones sit where the timeline enters them.
+ * it adds up to, and the stories most worth opening. Folded, it stands for its
+ * days and carries their screenshots and pages; unfolded, it heads them.
  */
-function WeekSummary({ week, label, byKey, onOpen }: { week: TimelineWeek; label: string; byKey: ReadonlyMap<string, Story>; onOpen: (key: string) => void }) {
+function WeekSummary({ week, label, byKey, onOpen, media, days, onZoomIn }: {
+  week: TimelineWeek;
+  label: string;
+  byKey: ReadonlyMap<string, Story>;
+  onOpen: (key: string) => void;
+  media?: PickedMedia[];
+  days?: number;
+  onZoomIn?: () => void;
+}) {
   const top = weekTop(week, byKey);
   return (
     <section className="chg-week grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label}>
-      <h2 className="self-start pt-0.5 font-mono text-[12px] text-sol-text/55">{label}</h2>
-      <div className="min-w-0 rounded-lg bg-sol-bg-alt/50 px-5 py-4">
-        <p className="chg-ui text-[16px] font-semibold leading-[1.4] text-sol-text [overflow-wrap:anywhere]">{week.headline}</p>
-        {week.summary && <p className="chg-ui mt-2 max-w-[46rem] text-[14px] leading-[1.65] text-sol-text/80 [overflow-wrap:anywhere]">{week.summary}</p>}
+      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] text-sol-text/55">{label}</h2>
+      <div className={`min-w-0 ${media ? "" : "rounded-lg bg-sol-bg-alt/50 px-5 py-4"}`}>
+        <p className={`chg-ui font-bold leading-[1.3] tracking-tight text-sol-text [overflow-wrap:anywhere] ${media ? "text-[20px]" : "text-[16px]"}`}>{week.headline}</p>
+        {week.summary && <p className="chg-ui mt-2 max-w-[44rem] text-[14px] leading-[1.65] text-sol-text/75 [overflow-wrap:anywhere]">{week.summary}</p>}
+        {media && <SummaryMedia media={media} onOpen={onOpen} />}
         {top.length > 0 && (
-          <ul className="mt-3 space-y-1">
+          <ul className="mt-4 space-y-1.5">
             {top.map((s) => (
               <li key={s.story_key}>
-                <button type="button" onClick={() => onOpen(s.story_key)} className="chg-ui text-left text-[13px] leading-[1.5] text-sol-text/70 underline-offset-2 hover:text-sol-text hover:underline">
+                <button type="button" onClick={() => onOpen(s.story_key)} className="chg-ui text-left text-[13.5px] font-medium leading-[1.45] text-sol-text/75 underline-offset-2 hover:text-sol-text hover:underline">
                   {s.headline}
                 </button>
               </li>
             ))}
           </ul>
         )}
+        {onZoomIn && days ? <ZoomIn onClick={onZoomIn}>the week day by day ({plural(days, "day")}) →</ZoomIn> : null}
       </div>
     </section>
   );
@@ -223,11 +291,11 @@ export function ChangesPage() {
   const personName = useMemo(() => nameOfPerson(people, fallbackName), [people, fallbackName]);
 
   const viewUrl = useMemo(() => ({ ...url, story: undefined }), [changesHref({ ...url, story: undefined })]); // eslint-disable-line react-hooks/exhaustive-deps
-  const latestWeek = useMemo(() => finishedWeeks(weeks, today)[0] ?? null, [weeks, today]);
   const items = useMemo(
-    () => buildTimeline({ stories, editions, weeks, url: viewUrl, person, today, skipWeek: hasFilters(viewUrl) ? undefined : latestWeek?.week }),
-    [stories, editions, weeks, viewUrl, person, today, latestWeek],
+    () => buildTimeline({ stories, editions, weeks, url: viewUrl, person, today }),
+    [stories, editions, weeks, viewUrl, person, today],
   );
+  const groups = useMemo(() => groupWeeks(items), [items]);
   const shown = useMemo(() => items.flatMap((i) => (i.kind === "day" ? [...i.stories, ...i.small] : [])), [items]);
   const byKey = useMemo(() => new Map(shown.map((s) => [s.story_key, s])), [shown]);
 
@@ -348,6 +416,11 @@ export function ChangesPage() {
     setUrl({ story: key });
   }, [setUrl]);
 
+  // Days and weeks the reader opened one level closer than the zoom puts them.
+  const [zoomedIn, setZoomedIn] = useState<ReadonlySet<string>>(() => new Set());
+  useWatchEffect(() => setZoomedIn(new Set()), [url.zoom]);
+  const zoomIn = useCallback((period: string) => setZoomedIn((z) => new Set(z).add(period)), []);
+
   const more = useReach(() => setChunks((c) => (c < MAX_CHUNKS ? c + 1 : c)));
   const cold = !feed.ready && stories.length === 0 && editions.length === 0;
   const filtering = hasFilters(url);
@@ -381,12 +454,35 @@ export function ChangesPage() {
             )
           ) : (
             <Accordion.Root type="single" collapsible value={url.story ?? ""} onValueChange={(v) => setUrl({ story: v || undefined })} className="mt-4">
-              {latestWeek && !filtering && <WeekSummary week={latestWeek} label={latestWeek.week === isoWeekOf(shiftDay(today, -7)) ? "Last week" : weekLabel(latestWeek.week)} byKey={byKey} onOpen={openStory} />}
-              {items.map((item) =>
-                item.kind === "week"
-                  ? <WeekSummary key={`w-${item.week}`} week={item} label={weekLabel(item.week)} byKey={byKey} onOpen={openStory} />
-                  : <DaySection key={item.date} day={item} today={today} />,
-              )}
+              {groups.map((g) => {
+                const label = g.week === isoWeekOf(today) ? "This week" : g.week === isoWeekOf(shiftDay(today, -7)) ? "Last week" : weekLabel(g.week);
+                const holdsOpen = (d: TimelineDay) => !!url.story && [...d.stories, ...d.small].some((s) => s.story_key === url.story);
+                if (g.notes && !zoomedIn.has(g.week) && !g.days.some(holdsOpen) && weekFolds(g, today, url.zoom)) {
+                  const dates = new Set(weekDates(g.week) ?? []);
+                  const lead = [...weekTop(g.notes, byKey), ...g.days.flatMap(leadStories)].filter((s, i, all) => dates.has(s.date) && all.indexOf(s) === i);
+                  return (
+                    <WeekSummary
+                      key={`w-${g.week}`}
+                      week={g.notes}
+                      label={label}
+                      byKey={byKey}
+                      onOpen={openStory}
+                      media={pickMedia(lead, 5)}
+                      days={g.days.length}
+                      onZoomIn={() => zoomIn(g.week)}
+                    />
+                  );
+                }
+                return (
+                  <Fragment key={`w-${g.week}`}>
+                    {g.notes && <WeekSummary week={g.notes} label={label} byKey={byKey} onOpen={openStory} />}
+                    {g.days.map((d) => {
+                      const level = zoomedIn.has(d.date) || holdsOpen(d) ? "changes" : dayZoom(d.date, today, url.zoom);
+                      return <DaySection key={d.date} day={d} today={today} zoom={level === "weeks" ? "days" : level} onOpen={openStory} onZoomIn={() => zoomIn(d.date)} />;
+                    })}
+                  </Fragment>
+                );
+              })}
             </Accordion.Root>
           )}
           {!cold && (

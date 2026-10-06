@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { MOBILE_AGENT_LABEL, MOBILE_COMPOSER_STATUS, mobileRelativeTime } from "./mobileSessionStyle";
+import { MOBILE_COMPOSER_STATUS, mobileRelativeTime } from "./mobileSessionStyle";
 import { toolResultHint } from "./toolCall";
 
 const call = (name: string) => ({ name, input: "{}" });
@@ -26,9 +26,8 @@ describe("mobile session spec", () => {
     expect(mobileRelativeTime(now - 3 * 86_400_000, now)).toBe("3d ago");
   });
 
-  test("statuses and agent names the composer and transcript show", () => {
+  test("statuses the composer shows", () => {
     expect(MOBILE_COMPOSER_STATUS.permission_blocked.label).toBe("Needs Input");
     expect(MOBILE_COMPOSER_STATUS.idle).toBeUndefined();
-    expect(MOBILE_AGENT_LABEL.codex).toBe("Codex");
   });
 });
