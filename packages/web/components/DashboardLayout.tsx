@@ -66,6 +66,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader } from "./AppLoader";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, bucketProjectPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, filterInboxScope, isSub } from "../store/inboxStore";
+import { newConversationAgentType, type DefaultAgentState } from "../lib/defaultAgent";
 import { agentFleetCounts } from "../lib/liveness";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { pathOnMyMachines } from "../lib/machinePicker";
@@ -772,8 +773,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // (the null-state ProjectSwitcher lets the user pick before sending).
   const handleNewFullSession = useCallback(() => {
     const { path, gitRoot, agentType: rawAgent } = resolveNewSessionContext();
-    const agentType = (rawAgent || "claude_code") as "claude_code" | "codex" | "cursor" | "gemini";
     const store = useInboxStore.getState();
+    // The selected conversation's agent carries over; the default
+    // (lib/defaultAgent) fills in, the hosted assistant in hosted mode.
+    const agentType = newConversationAgentType(store as unknown as DefaultAgentState, rawAgent);
     const { stubId } = store.beginOptimisticSession({
       agentType,
       projectPath: path,

@@ -35,6 +35,7 @@
     "@novnc/novnc": "1.7.0",
     "@observablehq/plot": "^0.6.17",
     "@platform/analytics": "file:../../platform/packages/analytics",
+    "@platform/assistant": "file:../../platform/packages/assistant",
     "@platform/auth": "file:../../platform/packages/auth",
     "@platform/design": "file:../../platform/packages/design",
     "@platform/engine": "file:../../platform/packages/engine",

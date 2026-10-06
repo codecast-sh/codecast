@@ -1,11 +1,11 @@
-// The hosted assistant's mail tools (plan pl-840): search and read threads,
+// A hosted assistant's mail tools: search and read threads,
 // write replies in the person's voice, summarize, save drafts, send, archive
 // and label. The tools are written against a Mailbox, the few thread-level
 // verbs a mail engine offers, so what the assistant can do, how it shows mail
-// and which calls ask the person first live here. whisk.ts is the Mailbox:
-// codecast reaches mail only through Whisk (docs/architecture/hosted-
-// assistant.md, "Mail and calendar go through Whisk"), and every thread the
-// tools show carries its link to open it there.
+// and which calls ask the person first live here. whiskEngine.ts is the
+// Mailbox: the family's apps reach mail only through Whisk (codecast's
+// docs/architecture/hosted-assistant.md, "Mail and calendar go through
+// Whisk"), and every thread the tools show carries its link to open it there.
 //
 // Reads, summaries, replies in the person's voice and drafts are risk "read":
 // none changes anything anyone else sees. Sending, archiving and labelling
@@ -14,7 +14,8 @@
 // Mail is outside content. Every tool whose result carries text from a
 // message declares source "mail", so the harness fences it as data.
 import { defineTool, Type, UNTRUSTED_MAX_CHARS, untrustedBody, type Tool } from "@platform/agent";
-import type { MailAbilities } from "../../lib/whisk";
+import type { MailAbilities } from "./whisk";
+import { NEVER, WHOLE_TOOL, type AllowScopes } from "./rules";
 
 /** The most threads one search returns. */
 export const SEARCH_MAX_THREADS = 25;
@@ -148,6 +149,17 @@ export function deliveredAddress(address: string, form: "header" | "bare" = "hea
   return (form === "header" ? ONE_ADDRESS : BARE_ADDRESS).test(line) ? bareAddress(line) : null;
 }
 
+/** Email addresses from tool arguments as the tool delivers them
+ *  (deliveredAddress), lowercased, unique and sorted, joined into one rule
+ *  match. Empty when there are none; null when any entry is not exactly one
+ *  address, so the call is asked rather than matched on a misread. */
+export function ruleAddresses(form: "header" | "bare", ...lists: unknown[]): string | null {
+  const raw = lists.flatMap((list) => (Array.isArray(list) ? list : typeof list === "string" ? [list] : []));
+  const addresses = raw.map((item) => deliveredAddress(String(item), form));
+  if (addresses.some((a) => a === null)) return null;
+  return [...new Set(addresses as string[])].sort().join(", ");
+}
+
 /** One recipient as a name and an address, checked to be exactly one address. */
 export function recipient(address: string): { name?: string; email: string } {
   const line = oneLine(address);
@@ -209,7 +221,9 @@ const describeEnvelope = (m: ReplyEnvelope) =>
   `To: ${m.to.join(", ")}${m.cc?.length ? `\nCc: ${m.cc.join(", ")}` : ""}\nSubject: ${m.subject}`;
 
 /** A stable key from the model's call id, so a call that lands twice (a
- *  crash after the engine accepted it) is one message, draft or event. */
+ *  crash after the engine accepted it) is one message, draft or event. The
+ *  salt is codecast's, where the tools began; it stays fixed, since a key
+ *  that changed under a call in flight would send it twice. */
 export async function callKey(callId: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`codecast-assistant:${callId}`));
   return `cc${[...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 40)}`;
@@ -481,3 +495,16 @@ export function mailTools(mailbox: Mailbox, can: Pick<MailAbilities, "read_mail"
     ...(can.send_mail ? [sendMailTool(mailbox)] : []),
   ];
 }
+
+/** How an Always allow narrows for each mail tool (rules.ts): a send covers
+ *  exactly the people it goes to; drafts, archiving and labels stay in the
+ *  person's own mailbox, so one rule covers the tool. */
+export const MAIL_SCOPES: AllowScopes = {
+  send_mail: (input) => {
+    const to = ruleAddresses("header", input.to, input.cc);
+    return to ? { kind: "match", match: to, covers: `Send email to ${to}` } : NEVER;
+  },
+  create_draft: () => WHOLE_TOOL,
+  archive: () => WHOLE_TOOL,
+  label: () => WHOLE_TOOL,
+};

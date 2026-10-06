@@ -1,13 +1,281 @@
-/* The call video's one clock (CallVideoPlayer, THE CLOCK).
- *
- * The browser's controls count from the file's own start (Record was pressed
- * minutes into the call), while the toolbar under the picture says where in
- * the CALL it is, in the clock every transcript line and `cl-42@12:34`
- * reference uses. Two readouts that disagree for the same picture is one too
- * many, so the browser's time readouts are hidden and the toolbar's is the
- * clock. Its play, scrub, volume and fullscreen stay. (Chromium and WebKit
- * name these parts; Firefox draws its own controls and keeps its readout.) */
-.call-video::-webkit-media-controls-current-time-display,
-.call-video::-webkit-media-controls-time-remaining-display {
-  display: none;
+/* The call video's controls (CallVideoControls), in the look of the cast
+ * player on published pages: a shade at the foot of the picture, an accent
+ * scrubber that thickens under the pointer, frosted menus, and controls that
+ * step aside while the film plays and the pointer rests. */
+
+.call-video-box:fullscreen {
+  max-height: none;
+  aspect-ratio: auto;
+  height: 100%;
+}
+
+.call-controls {
+  --cc-accent: var(--sol-violet);
+  --cc-panel: rgba(14, 16, 22, 0.78);
+}
+.call-controls:not([data-shown]) {
+  cursor: none;
+}
+
+.call-controls-shade {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 42%;
+  max-height: 140px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0.18) 62%, transparent);
+  pointer-events: none;
+  transition: opacity 0.35s ease;
+}
+
+.call-controls-bar {
+  position: absolute;
+  inset: auto 0 0 0;
+  padding: 0 10px 6px;
+  color: #fff;
+  transition: opacity 0.35s ease, transform 0.35s ease;
+}
+.call-controls:not([data-shown]) .call-controls-bar,
+.call-controls:not([data-shown]) .call-controls-shade {
+  opacity: 0;
+  pointer-events: none;
+}
+.call-controls:not([data-shown]) .call-controls-bar {
+  transform: translateY(6px);
+}
+.call-controls:not([data-started]) .call-controls-shade {
+  opacity: 0.55;
+}
+
+.call-controls-big {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  margin: -32px 0 0 -32px;
+  display: grid;
+  place-items: center;
+  border-radius: 9999px;
+  color: #fff;
+  background: var(--cc-panel);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4), inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  transition: transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.35), background 0.2s ease;
+}
+
+/* The track: a tall hit area around a thin rail. */
+.call-controls-track {
+  position: relative;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  touch-action: none;
+}
+.call-controls-rail {
+  position: relative;
+  flex: 1;
+  height: 3px;
+  border-radius: 9999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.22);
+  transition: height 0.15s ease;
+}
+.call-controls-track[data-drag] .call-controls-rail {
+  height: 5px;
+}
+.call-controls-buf,
+.call-controls-fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+}
+.call-controls-buf {
+  background: rgba(255, 255, 255, 0.22);
+}
+.call-controls-fill {
+  background: var(--cc-accent);
+}
+.call-controls-knob {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 9999px;
+  background: #fff;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--cc-accent) 55%, transparent), 0 2px 6px rgba(0, 0, 0, 0.4);
+  transform: scale(0);
+  transition: transform 0.15s ease;
+  pointer-events: none;
+}
+.call-controls-track[data-drag] .call-controls-knob {
+  transform: scale(1);
+}
+.call-controls-tip {
+  position: absolute;
+  bottom: 22px;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  background: var(--cc-panel);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.call-controls-ic {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  color: rgba(255, 255, 255, 0.92);
+  transition: background 0.15s ease, transform 0.12s ease, color 0.15s ease;
+}
+.call-controls-ic:active {
+  transform: scale(0.92);
+}
+.call-controls-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.08);
+  transition: background 0.15s ease;
+}
+.call-controls-chip[data-on] {
+  color: color-mix(in srgb, var(--cc-accent) 70%, #fff);
+  background: color-mix(in srgb, var(--cc-accent) 22%, transparent);
+}
+.call-controls-ic:focus-visible,
+.call-controls-chip:focus-visible,
+.call-controls-big:focus-visible {
+  outline: 2px solid var(--cc-accent);
+  outline-offset: 1px;
+}
+
+/* Volume: a slim slider that opens beside the speaker under the pointer. */
+.call-controls-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 0;
+  height: 3px;
+  margin: 0;
+  opacity: 0;
+  border-radius: 9999px;
+  background: linear-gradient(to right, #fff calc(var(--v) * 100%), rgba(255, 255, 255, 0.25) calc(var(--v) * 100%));
+  cursor: pointer;
+  transition: width 0.2s ease, opacity 0.2s ease, margin 0.2s ease;
+}
+.call-controls-vol:hover .call-controls-range,
+.call-controls-range:focus-visible {
+  width: 64px;
+  opacity: 1;
+  margin: 0 6px 0 2px;
+}
+.call-controls-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 9999px;
+  background: #fff;
+}
+.call-controls-range::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border: 0;
+  border-radius: 9999px;
+  background: #fff;
+}
+@media (pointer: coarse) {
+  .call-controls-range {
+    display: none;
+  }
+}
+
+.call-controls-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  min-width: 120px;
+  max-height: 150px;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--cc-panel);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(255, 255, 255, 0.09);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  transform-origin: bottom right;
+  animation: call-controls-pop 0.16s ease-out;
+}
+.call-controls-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  font-variant-numeric: tabular-nums;
+}
+.call-controls-menu-item[aria-checked="true"] {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.08);
+}
+@keyframes call-controls-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+
+/* A tap leaves :hover stuck on a touch screen, so hover looks apply only where a pointer hovers. */
+@media (hover: hover) {
+  .call-controls-track:hover .call-controls-rail {
+    height: 5px;
+  }
+  .call-controls-track:hover .call-controls-knob {
+    transform: scale(1);
+  }
+  .call-controls-ic:hover,
+  .call-controls-chip:hover {
+    background: rgba(255, 255, 255, 0.14);
+    color: #fff;
+  }
+  .call-controls-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+  }
+  .call-controls-big:hover {
+    transform: scale(1.06);
+    background: var(--cc-accent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .call-controls *,
+  .call-controls-shade,
+  .call-controls-bar {
+    transition: none !important;
+    animation: none !important;
+  }
 }

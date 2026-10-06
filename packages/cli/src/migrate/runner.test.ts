@@ -41,7 +41,7 @@ function world(opts: {
   rows?: RunnerRow[];
   begin?: Record<string, BeginResult>;
   statuses?: string[];
-  quiesceResults?: Array<{ quiesced: boolean; reason?: string; had_pane?: boolean } | { error: string }>;
+  quiesceResults?: Array<{ quiesced: boolean; reason?: string; had_pane?: boolean; outside?: Array<{ pid: number; name: string; via?: string }> } | { error: string }>;
   resumeError?: string | null;
   resumeNeverExecutes?: boolean;
   transferError?: string;
@@ -99,9 +99,9 @@ function world(opts: {
       if (opts.transferError) throw new Error(opts.transferError);
       return { destinationPath: `/Users/me/src/repo/.codecast/worktrees/${f.worktree_name}`, sourcePath: f.project_path!, verification: "pulled" };
     },
-    notice: () => "you moved",
+    notice: (_f, _t, stopped) => { calls.push(["noticeFacts", stopped]); return "you moved"; },
   };
-  const kinds = () => calls.filter((c) => c[0] !== "log" && c[0] !== "sleep" && c[0] !== "commandStatus").map((c) => c[0]);
+  const kinds = () => calls.filter((c) => c[0] !== "log" && c[0] !== "sleep" && c[0] !== "commandStatus" && c[0] !== "noticeFacts").map((c) => c[0]);
   return { io, batch, calls, kinds, clock: () => now };
 }
 
@@ -120,6 +120,13 @@ describe("migrateRow — a session to the cloud", () => {
     }]);
     expect(w.calls.find((c) => c[0] === "confirm")).toEqual(["confirm", "m1", true, "running on Linux box"]);
     expect(w.calls.some((c) => c[0] === "fail")).toBe(false);
+  });
+
+  test("what the source's quiesce names outside the agent's tree reaches the destination's notice", async () => {
+    const outside = [{ pid: 7, name: "ffmpeg", via: "background" }, { pid: 8, name: "bun", via: "tmux" }];
+    const w = world({ statuses: ["idle"], quiesceResults: [{ quiesced: true, had_pane: true, outside }] });
+    expect((await migrateRow(w.io, w.batch, row(), new SharedTreeLedger())).outcome).toBe("done");
+    expect(w.calls.find((c) => c[0] === "noticeFacts")).toEqual(["noticeFacts", outside]);
   });
 
   test("siblings from one folder: the first pushes, the second skips the tree and verifies against the first one's snapshot", async () => {
