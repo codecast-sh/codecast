@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { Id } from "./_generated/dataModel";
 import { canAccessConversation } from "./lib/access";
-import { FOLLOW_LEASE_MS } from "@codecast/shared/contracts/follow";
+import { FOLLOW_LEASE_MS, clampFollowView } from "@codecast/shared/contracts/follow";
+import { followViewValidator } from "./lib/followView";
 
 // Follow mode: one person mirrors another's view until they stop.
 //
@@ -70,6 +71,7 @@ export const reportView = mutation({
     path: v.string(),
     conversation_id: v.optional(v.id("conversations")),
     anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+    view: v.optional(followViewValidator),
   },
   handler: async (ctx, args) => {
     const me = await requireAuth(ctx);
@@ -80,6 +82,7 @@ export const reportView = mutation({
       path: args.path.slice(0, 512),
       conversation_id: args.conversation_id,
       anchor: args.anchor ? { message_id: args.anchor.message_id.slice(0, 128), offset: Math.min(1, Math.max(0, args.anchor.offset)) } : undefined,
+      view: clampFollowView(args.view),
       updated_at: now,
     };
     const existing = await ctx.db.query("view_states").withIndex("by_user", (q: any) => q.eq("user_id", me)).first();
@@ -132,6 +135,7 @@ export const viewOf = query({
       path: v.string(),
       conversation_id: v.optional(v.id("conversations")),
       anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
+      view: v.optional(followViewValidator),
       updated_at: v.number(),
       withheld: v.boolean(),
     }),
@@ -147,6 +151,6 @@ export const viewOf = query({
       const ok = !!conversation && (await canAccessConversation(ctx, me, conversation as any));
       if (!ok) return { path: "", updated_at: state.updated_at, withheld: true };
     }
-    return { path: state.path, conversation_id: state.conversation_id, anchor: state.anchor, updated_at: state.updated_at, withheld: false };
+    return { path: state.path, conversation_id: state.conversation_id, anchor: state.anchor, view: state.view, updated_at: state.updated_at, withheld: false };
   },
 });

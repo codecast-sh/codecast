@@ -1,4 +1,5 @@
 import type { SendDayRow } from "./userSend";
+import type { UsageDayRow } from "./usageDaily";
 
 // One credited slice of session activity, normalized across the three sources
 // (live conversations, team_activity_events, session_insights). `hours` is the
@@ -17,16 +18,19 @@ export type ActivityInterval = { start: number; end: number; hours: number; msgs
 // — hour-of-day only means something in the viewer's local clock. (One offset
 // is applied to the whole range, so cells across a DST switch can shift by an
 // hour.) Returns only per-cell aggregates — nothing identifying leaks.
-export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number, sendDays?: SendDayRow[]) {
+export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinutes: number, sendDays?: SendDayRow[], usageDays?: UsageDayRow[]) {
   const HOUR = 3600000;
   const tzShift = tzOffsetMinutes * 60000;
-  const rows: Record<string, { hours: number[]; msgs: number[]; sends: number[]; words: number[]; sessions: number[]; day_sessions: number }> = {};
+  type Row = { hours: number[]; msgs: number[]; sends: number[]; words: number[]; tokens: number[]; spend: number[]; sessions: number[]; day_sessions: number };
+  const rows: Record<string, Row> = {};
   const rowFor = (date: string) =>
     (rows[date] ||= {
       hours: new Array(24).fill(0),
       msgs: new Array(24).fill(0),
       sends: new Array(24).fill(0),
       words: new Array(24).fill(0),
+      tokens: new Array(24).fill(0),
+      spend: new Array(24).fill(0),
       sessions: new Array(24).fill(0),
       day_sessions: 0,
     });
@@ -60,19 +64,26 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
     }
   }
 
-  // Sends are stored as (UTC day × UTC hour) counters; re-project each bucket
-  // into the viewer's local clock via a mid-bucket pseudo timestamp. Whole-hour
-  // offsets map exactly; :30 offsets land in the nearer cell.
-  for (const day of sendDays ?? []) {
+  // The day counters (sends, words, tokens, spend) are stored as (UTC day ×
+  // UTC hour) buckets; re-project each bucket into the viewer's local clock
+  // via a mid-bucket pseudo timestamp. Whole-hour offsets map exactly; :30
+  // offsets land in the nearer cell.
+  const project = (dayStart: number, utcHours: number[] | undefined, field: "sends" | "words" | "tokens" | "spend") => {
     for (let h = 0; h < 24; h++) {
-      const n = day.hours[h] || 0;
+      const n = utcHours?.[h] || 0;
       if (!n) continue;
-      const local = day.day_start + h * HOUR + HOUR / 2 - tzShift;
+      const local = dayStart + h * HOUR + HOUR / 2 - tzShift;
       const d = new Date(Math.floor(local / HOUR) * HOUR);
-      const row = rowFor(d.toISOString().split("T")[0]);
-      row.sends[d.getUTCHours()] += n;
-      row.words[d.getUTCHours()] += day.word_hours?.[h] || 0;
+      rowFor(d.toISOString().split("T")[0])[field][d.getUTCHours()] += n;
     }
+  };
+  for (const day of sendDays ?? []) {
+    project(day.day_start, day.hours, "sends");
+    project(day.day_start, day.word_hours, "words");
+  }
+  for (const day of usageDays ?? []) {
+    project(day.day_start, day.token_hours, "tokens");
+    project(day.day_start, day.spend_hours, "spend");
   }
 
   return Object.entries(rows)
@@ -82,6 +93,8 @@ export function bucketPunchcardRows(intervals: ActivityInterval[], tzOffsetMinut
       msgs: r.msgs.map((m) => Math.round(m)),
       sends: r.sends,
       words: r.words,
+      tokens: r.tokens,
+      spend: r.spend.map((v) => Math.round(v * 100) / 100),
       sessions: r.sessions,
       day_sessions: r.day_sessions,
     }))
