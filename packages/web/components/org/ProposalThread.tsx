@@ -70,7 +70,10 @@ export function ProposalThread(props: ProposalThreadProps) {
   const paused = thread.role?.status === "paused";
   // orgProposals.say carries text only. A picture is never dropped in
   // silence: with no words the send is refused and says why; with words the
-  // words go and the line says the picture did not.
+  // words go and the line says the picture did not. `content` is the whole
+  // body the composer built: the pending batch (answers to the proposal's
+  // cards, quotes) already taken and leading, then what was typed (S39). A
+  // bare Enter over a non-empty batch arrives with words, so it sends.
   const aboutChangeSeq = about?.kind === "change" ? about.change.seq : null;
   const aboutAskIndex = about?.kind === "ask" ? about.ask.index : null;
   const onSendOverride = useCallback(async (content: string, images?: Array<{ storageId?: string }>) => {

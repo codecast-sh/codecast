@@ -23,8 +23,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { repPassed } from "../packages/evals/src/adapters/replay";
-import { majorityOf } from "../packages/evals/src/evalResult";
+import { majorityOf, repPassed } from "../packages/evals/src/adapters/replay";
 
 const EVALS = path.resolve(import.meta.dir, "..", "evals");
 const DEFAULT_PROVE_REPS = 5;

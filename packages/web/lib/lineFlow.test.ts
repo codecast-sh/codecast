@@ -47,6 +47,10 @@ describe("goalChip", () => {
     expect(goalChip("none", initiatives, projects)).toMatchObject({ kind: "parked", priority: null });
     expect(goalChip(undefined, initiatives, projects)).toMatchObject({ kind: "ungrounded", priority: null });
   });
+  it("never prints a ref it cannot name", () => {
+    expect(goalChip("sd7dqnq9hny1dtzy83as2av4z18c9z2z", initiatives, projects)).toMatchObject({ kind: "unknown", label: "a project in another workspace" });
+    expect(goalChip("in-99", initiatives, projects)).toMatchObject({ kind: "unknown", label: "a goal outside this workspace" });
+  });
 });
 
 describe("buildLineFlow", () => {

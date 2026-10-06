@@ -4,8 +4,9 @@
 // accepted one (solid), a retire hatch, chips carrying the delta with a
 // focused change's action row, a warning chip for a handle nothing answers
 // to, an adopt "this session" stub with its second line, and the health dots
-// (blocker filled, warn a ring, info none). Clicks on Accept, Edit, Skip and
-// a chip reach the handlers.
+// (blocker filled, warn a ring, info none). Approve, Reject and Reply on a
+// strip write the change's answer (nothing decides on a click), Edit and a
+// chip reach the handlers, and an answered ghost reads its state in words.
 // Run: bun components/org/OrgGhosts.mount.test.tsx
 import { test } from "bun:test";
 import assert from "node:assert/strict";
@@ -54,7 +55,9 @@ async function verifyGhostCards() {
   const handlers = {
     focusChangeId: "c-routine",
     onFocusChange: (id: string) => calls.push(`focus:${id}`),
-    onDecideChange: (id: string, v: string) => calls.push(`decide:${id}:${v}`),
+    // The batch as the chart reads it: the routine's card is already answered with words, the rest wait.
+    answers: { "c-routine": { verdict: "reject", text: "too soon" }, "c-retire": { verdict: "approve" } },
+    onAnswerChange: (id: string, a: { verdict: string; text?: string } | null) => calls.push(`answer:${id}:${a ? a.verdict + (a.text ? `:${a.text}` : "") : "none"}`),
     onEditChange: (id: string) => calls.push(`edit:${id}`),
   };
   const card = (Comp: any, n: any, extra: any = {}) => React.createElement(Comp as any, {
@@ -82,7 +85,10 @@ async function verifyGhostCards() {
   assert.equal(ghostRole.querySelector("[data-ghost-tag='proposed']") !== null, true, "proposed tag on the ghost role");
   assert.equal(ghostRole.querySelector("[data-ghost-actions='c-role']") !== null, true, "action row on the ghost role");
   assert.equal(ghostRole.querySelector("[data-ghost-word]")?.getAttribute("data-ghost-word"), "role");
-  assert.equal(ghostRole.querySelector("button[aria-label='Accept role']") !== null, true, "Accept names the change");
+  // The ledger's answers, nothing else: Approve, Reject, Reply, then Edit; no Accept or Skip.
+  assert.deepEqual(Array.from(ghostRole.querySelectorAll("[data-ghost-actions='c-role'] button")).map((b) => b.textContent?.trim()), ["Approve", "Reject", "Reply", "Edit"]);
+  assert.equal(ghostRole.querySelector("[data-ghost-actions='c-role']")?.getAttribute("data-ghost-answer"), null, "nothing answered yet");
+  assert.equal(ghostRole.querySelector("[data-ghost-answered]"), null);
   assert.equal((ghostRole.firstElementChild as HTMLElement).style.transform, "", "no drop halo on a stub");
   assert.ok(ghostRole.textContent?.includes("@platform") && ghostRole.textContent?.includes("Head of Platform"));
   assert.ok(ghostRole.textContent?.includes("Platform"), "scope chip");
@@ -99,7 +105,7 @@ async function verifyGhostCards() {
   // An accepted stub is solid: its word instead of buttons.
   const solid = q("[data-card='solid-role']")!;
   assert.ok(solid.querySelector("[data-ghost-actions='c-role-acc']")?.textContent?.includes("accepted"));
-  assert.equal(solid.querySelectorAll("button[aria-label^='Accept']").length, 0);
+  assert.equal(solid.querySelectorAll("[data-ghost-actions='c-role-acc'] button").length, 0);
   // Retire hatch + chips on growth; the focused chip shows its action row.
   const growth = q("[data-card='growth']")!;
   assert.ok(growth.querySelector("[data-ghost-retire='c-retire']"), "retire hatch");
@@ -111,6 +117,12 @@ async function verifyGhostCards() {
   assert.ok(growth.querySelector("[data-ghost-actions='c-routine']"), "the focused chip's action row");
   assert.equal(growth.querySelector("[data-ghost-actions='c-routine'] [data-ghost-word]")?.getAttribute("data-ghost-word"), "trigger");
   assert.ok(growth.querySelector("[data-ghost-chip='c-routine']")?.getAttribute("aria-pressed") === "true");
+  // The routine's card was rejected with words: its strip holds Reject pressed and says so under it, as the card does.
+  const routineStrip = growth.querySelector("[data-ghost-actions='c-routine']") as HTMLElement;
+  assert.equal(routineStrip.getAttribute("data-ghost-answer"), "reject");
+  assert.equal(routineStrip.querySelector("[data-subject-reject]")?.getAttribute("aria-pressed"), "true");
+  assert.equal(routineStrip.querySelector("[data-subject-approve]")?.getAttribute("aria-pressed"), "false");
+  assert.equal(routineStrip.querySelector("[data-ghost-answered]")?.textContent, "Rejected: too soon");
   // A chip carries the delta, not the sentence; the sentence is its title.
   assert.equal(growth.querySelector("[data-ghost-chip='c-routine']")?.textContent?.trim(), "every 7d · Weekly review");
   assert.ok(growth.querySelector("[data-ghost-chip='c-routine']")?.getAttribute("title")?.startsWith("@growth runs"));
@@ -141,12 +153,36 @@ async function verifyGhostCards() {
   assert.equal(adopt.querySelector("[data-adopt-line]")?.textContent?.trim(), "becomes @growth's standing session");
   assert.equal(adopt.querySelector("[data-ghost-word]")?.getAttribute("data-ghost-word"), "adopt");
 
-  // Clicks reach the handlers.
-  await act(async () => { (ghostRole.querySelector("button[aria-label='Accept role']") as HTMLElement).click(); });
+  // Approve and Reject write the answer (nothing decides); pressing the
+  // verdict that stands withdraws it; Edit and a chip reach their handlers.
+  const roleStrip = ghostRole.querySelector("[data-ghost-actions='c-role']") as HTMLElement;
+  await act(async () => { (roleStrip.querySelector("[data-subject-approve]") as HTMLElement).click(); });
   await act(async () => { (growth.querySelector("[data-ghost-actions='c-routine'] button[aria-label='Edit trigger']") as HTMLElement).click(); });
-  await act(async () => { (ghostRole.querySelector("button[aria-label='Skip role']") as HTMLElement).click(); });
+  await act(async () => { (roleStrip.querySelector("[data-subject-reject]") as HTMLElement).click(); });
+  await act(async () => { (routineStrip.querySelector("[data-subject-reject]") as HTMLElement).click(); });
   await act(async () => { (growth.querySelector("[data-ghost-chip='c-routine']") as HTMLElement).click(); });
-  assert.deepEqual(calls, ["decide:c-role:accept", "edit:c-routine", "decide:c-role:skip", "focus:c-routine"]);
+  assert.deepEqual(calls, ["answer:c-role:approve", "edit:c-routine", "answer:c-role:reject", "answer:c-routine:none", "focus:c-routine"]);
+  // Reject opened the ledger's field under the strip (as on the card); what
+  // is typed writes through to the batch; Reply closes and reopens it.
+  const field = roleStrip.querySelector("[data-ghost-reply] textarea") as HTMLTextAreaElement;
+  assert.ok(field, "the reply field opens under the strip");
+  assert.equal(roleStrip.querySelector("[data-ghost-answered]"), null, "the words are in the field while it is open");
+  // Typing: the value through the native setter, then the input event React listens for.
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, "value")!.set!.call(field, "who takes its work?");
+    field.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  assert.equal(calls.at(-1), "answer:c-role:note:who takes its work?");
+  await act(async () => { (roleStrip.querySelector("[data-subject-reply]") as HTMLElement).click(); });
+  assert.equal(roleStrip.querySelector("[data-ghost-reply]"), null, "Reply closes the field");
+  await act(async () => { (roleStrip.querySelector("[data-subject-reply]") as HTMLElement).click(); });
+  assert.ok(roleStrip.querySelector("[data-ghost-reply] textarea"), "and opens it again");
+  // An approved ghost (the retire, in focus) reads "Approved, on your next message".
+  await act(async () => { root.render(React.createElement(ReactFlowProvider, null, React.createElement("div", { "data-card": "growth2", key: "growth2" }, card(RoleCard, node(roleNodeId("fixture-role-growth")), { focusChangeId: "c-retire" })))); });
+  const retireStrip = document.querySelector("[data-card='growth2'] [data-ghost-actions='c-retire']") as HTMLElement;
+  assert.ok(retireStrip, "the retire's strip on the focused change");
+  assert.equal(retireStrip.querySelector("[data-subject-approve]")?.getAttribute("aria-pressed"), "true");
+  assert.equal(retireStrip.querySelector("[data-ghost-answered]")?.textContent, "Approved, on your next message");
 
   await act(async () => { root.unmount(); });
   console.log("OrgGhosts mount: ok");

@@ -81,6 +81,21 @@ follow what the team actually says. A judge reads the expectations version it
 graded against, so a finding can always be traced to the expectation and the
 words behind it.
 
+The document is versioned rows in `project_expectations` (one per version,
+never rewritten), changed only by proposals in `expectation_proposals`
+(`xp-N`): additions, edits and retirements, each citing its sources (kind,
+ref, quote, when). Lines carry stable ids, `ex-<project>-<n>`, active or
+retired. A proposal applies on its own when it only adds lines and each line
+quotes, with its date, words the record shows a person said: a chat line they
+typed, a decision they answered, what they said on a call (the server checks
+the quote against that record). Any other change waits for the project's
+person, as a card in their queue whose Apply lands it. `cast expectations show|propose|apply|drop`
+is the CLI; `/cli/expectations/brief` is what a judge reads (the active lines
+with ids under the version to cite). The line template's
+`expectations-daily` routine is the proposer; its cursor is the newest window
+a proposal recorded, and a proposal an operator retracts (one that should never
+have run) records none. Shapes and the parser: `shared/contracts/expectations.ts`.
+
 ## LM6. Changing the line
 
 The line's definition is its profile, its graph and its station prompts. It

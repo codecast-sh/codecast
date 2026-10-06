@@ -8,18 +8,18 @@ import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
-import { useWorkspaceArgs, workspaceStamp } from "./useWorkspaceArgs";
+import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
 
 const api = _api as any;
 
 export type RunsFeedArgs = { task_id?: string; plan_id?: string; status?: string; limit?: number };
 
-/** Feeder: the workspace's runs, newest first, into `workflowRuns`. */
-export function useSyncRuns(args: RunsFeedArgs = {}, enabled = true) {
-  const ws = useWorkspaceArgs();
-  const stamp = workspaceStamp(ws);
-  const teamId = "team_id" in stamp ? stamp.team_id : undefined;
+/** Feeder: a workspace's runs, newest first, into `workflowRuns`: the active
+ *  workspace's unless `workspace` names another (a stored access key). */
+export function useSyncRuns(args: RunsFeedArgs = {}, enabled = true, workspace?: string | null) {
+  const { args: ws } = useFeederWorkspace(workspace);
+  const teamId = ws === "skip" ? undefined : ws.team_id;
   const queryArgs = useMemo(
     () => (ws === "skip" || !enabled ? "skip" : { ...(teamId ? { team_id: teamId } : {}), ...args }),
     // args is a plain object literal at most call sites; key it by value.
@@ -47,17 +47,26 @@ export type LineRun = {
   gate_decision_id?: string;
   gate_decision_short_id?: string;
   gate_decision_status?: string;
+  /** The last gate's answer, in the option's words (workflow_runs.enrichRun). */
+  gate_answer?: string;
+  /** The cost the run's card records, in dollars. */
+  card_cost_usd?: number;
   gate_node_id?: string;
+  gate_choices?: Array<{ key: string; label: string; target: string }>;
+  gate_response?: string;
+  /** LE14: the content hash of the graph the run executed. */
+  graph_hash?: string;
+  merge?: { sha: string; branch: string; into: string; at: number; pr_url?: string };
   primary_conversation_id?: string;
   primary_session_id?: string;
   fail_reason?: string;
-  node_statuses?: Array<{ node_id: string; status: string; result_preview?: string; session?: any }>;
+  node_statuses?: Array<{ node_id: string; status: string; outcome?: string; label?: string; session_id?: string; started_at?: number; completed_at?: number; result_preview?: string; session?: any }>;
   created_at: number;
   updated_at: number;
 };
 
 const lineRunSig = (r: LineRun) =>
-  `${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}`;
+  `${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_cost_usd ?? ""}`;
 const newestFirst = (a: LineRun, b: LineRun) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0);
 
 /** A run belongs to the active workspace by its stored access key (L8). A
@@ -69,9 +78,11 @@ export function runInWorkspace(run: { workspace?: string }, key: string | null):
   return key.startsWith("user:");
 }
 
-/** Reader: the active workspace's runs from the store, newest first. */
-export function useWorkspaceRuns(): LineRun[] {
-  const key = useActiveWorkspaceKey();
+/** Reader: a workspace's runs from the store, newest first: the active
+ *  workspace's unless `workspace` names another. */
+export function useWorkspaceRuns(workspace?: string | null): LineRun[] {
+  const active = useActiveWorkspaceKey();
+  const key = workspace || active;
   const where = useMemo(() => (r: LineRun) => runInWorkspace(r, key), [key]);
   return useCollectionRows<LineRun>("workflowRuns", { where, sig: lineRunSig, sort: newestFirst });
 }

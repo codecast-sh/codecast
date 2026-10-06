@@ -327,10 +327,10 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
               </span>
             </ShortcutTooltip>
           )}
-          {role && canEdit && (
+          {role && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Pause or retire this role" data-scope-actions>
+                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Role actions: pin to header, pause or retire" data-scope-actions>
                   <MoreHorizontal className="w-4 h-4" />
                 </button>
               </DropdownMenuTrigger>
@@ -339,6 +339,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
                   {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
                   <span>{pinned ? "Unpin from header" : "Pin to header"}</span>
                 </DropdownMenuItem>
+                {canEdit && (<>
                 <DropdownMenuItem onSelect={() => update({ status: paused ? "active" : "paused" })} data-scope-action="pause">
                   {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
                   <span>{paused ? "Resume role" : "Pause role"}</span>
@@ -347,6 +348,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
                   <Archive className="w-3.5 h-3.5" />
                   <span>Retire role…</span>
                 </DropdownMenuItem>
+                </>)}
               </DropdownMenuContent>
             </DropdownMenu>
           )}
