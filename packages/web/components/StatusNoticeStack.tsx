@@ -21,7 +21,9 @@ export function StatusNoticeStack() {
   if (notices.size === 0) return null;
   return (
     <div
-      className="pointer-events-none fixed bottom-4 left-4 z-40 flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"
+      // Above the shell's columns (the sidebar paints its own layer), so a
+      // notice is never cut by the rail it sits over.
+      className="pointer-events-none fixed bottom-4 left-4 z-[60] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"
       aria-live="polite"
     >
       {[...notices].map(([id, n]) => (

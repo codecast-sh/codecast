@@ -64,7 +64,7 @@ describe("every window reaches its undo history or records none", () => {
 });
 
 // The main window has route shells of its own (src/App.tsx layout routes):
-// the dashboard, settings, the simple lane, the marketing pages. Each shell is
+// the dashboard, settings, the marketing pages. Each shell is
 // a different place to stand, and a shell with no ⌘Z and no card strands what
 // it records just as an auxiliary window does.
 describe("every route shell in the main window reaches its undo history or records none", () => {
@@ -82,7 +82,7 @@ describe("every route shell in the main window reaches its undo history or recor
   }
 
   it("finds the layout shells", () => {
-    expect([...shells]).toEqual(expect.arrayContaining(["DashboardShell", "SimpleShell", "TransparentWindowLayout", "SettingsLayout", "MarketingLayout"]));
+    expect([...shells]).toEqual(expect.arrayContaining(["DashboardShell", "TransparentWindowLayout", "SettingsLayout", "MarketingLayout"]));
   });
 
   for (const name of [...shells].sort()) {

@@ -10,7 +10,14 @@
 // with the line each runs. Every write is saveLineWorkflow,
 // removeLineWorkflow or setRoleLine: the store paints it at once and the
 // server echo settles it.
-import { useEffect, useMemo, useRef, useState, type Ref } from "react";
+//
+// A project whose line profile a machine has published (it names the root
+// and the device) keeps its line in its repo instead (line-map.md LX5): the
+// stations come from `.codecast/line/` as published, a station edit travels
+// the profile's edit path to that machine (useLineStationEdits), and the
+// first one writes the shipped line out into the repo. The workflow copy
+// above is only for a project no machine has published.
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -22,10 +29,13 @@ import { KeyCap } from "../../KeyboardShortcutsHelp";
 import { isMac } from "../../../shortcuts";
 import { lineOptions } from "../../org/scope/lineBoard";
 import { LineChip } from "../CustomizedLineChip";
+import { EditStatus } from "./LineValueRow";
+import { useLineStationEdits } from "./useLineStationEdits";
+import { REPO_LINE_REL_DIR } from "@codecast/shared/contracts/lineProfile";
 import { SHIPPED_LINE } from "../../../lib/line/shippedLine.generated";
 import {
   editStation, forkShippedLine, isEditableStation, lineForkSlug, resetAllStations, resetStation,
-  rolesOnProject, stationDiffs, stationText, type LineNode, type LineWorkflow, type StationPatch,
+  rolesOnProject, stationDiffs, stationText, type LineNode, type LineWorkflow, type ShippedLine, type StationPatch,
 } from "../../../lib/line/lineStations";
 
 type ProjectLike = { _id: string; short_id?: string | null; title?: string | null };
@@ -47,8 +57,12 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const removeFork = useInboxStore((s) => s.removeLineWorkflow);
   const setRoleLine = useInboxStore((s) => s.setRoleLine);
   const slug = useMemo(() => lineForkSlug(project ?? { _id: projectId }), [project, projectId]);
+  // The repo is the line's home once a machine has published its profile (LX5).
+  const repo = useLineStationEdits(projectId);
+  const inRepo = !!repo.published?.root && !!repo.published?.device_id;
   // undefined while the server has not said; null once it said there is none.
-  const fork = useWorkflowBySlug(slug);
+  const forkRow = useWorkflowBySlug(slug);
+  const fork = inRepo ? null : forkRow;
   const customized = !!fork;
 
   // The sweep runs a role's slug from its host's own workflows (orgLine.ts),
@@ -58,9 +72,10 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const hostedHere = (r: RoleRow) => !!me && String(r.host_user_id) === me;
   const onFork = customized ? rows.filter((r) => r.slug === slug && hostedHere(r.role)) : [];
 
-  const nodes = (fork?.nodes ?? SHIPPED_LINE.nodes) as LineNode[];
-  const edges = fork?.edges ?? SHIPPED_LINE.edges;
-  const diffs = useMemo(() => (fork ? stationDiffs(fork.nodes ?? [], SHIPPED_LINE) : {}), [fork]);
+  const nodes = (inRepo ? repo.nodes : fork?.nodes ?? SHIPPED_LINE.nodes) as LineNode[];
+  const edges = inRepo ? repo.edges : fork?.edges ?? SHIPPED_LINE.edges;
+  const forkDiffs = useMemo(() => (fork ? stationDiffs(fork.nodes ?? [], SHIPPED_LINE) : {}), [fork]);
+  const diffs = inRepo ? repo.diffs : forkDiffs;
   const marked = useMemo(() => new Set(Object.keys(diffs)), [diffs]);
   const changedCount = marked.size;
 
@@ -77,9 +92,9 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   const write = (next: Pick<LineWorkflow, "nodes"> & Partial<Pick<LineWorkflow, "edges">>) => {
     if (fork) save({ ...asWorkflow(fork), ...next });
   };
-  const patchStation = (id: string, patch: StationPatch) => fork && write({ nodes: editStation(fork.nodes, id, patch) });
-  const resetOne = (id: string) => fork && write({ nodes: resetStation(fork.nodes, id, SHIPPED_LINE) });
-  const resetAll = () => write(resetAllStations(SHIPPED_LINE));
+  const patchStation = (id: string, patch: StationPatch) => (inRepo ? repo.setStation(id, patch) : fork && write({ nodes: editStation(fork.nodes, id, patch) }));
+  const resetOne = (id: string) => (inRepo ? repo.resetStation(id) : fork && write({ nodes: resetStation(fork.nodes, id, SHIPPED_LINE) }));
+  const resetAll = () => (inRepo ? repo.resetAll() : write(resetAllStations(SHIPPED_LINE)));
   // Roles on the copy go back to the shipped line first, so none is left
   // naming a workflow that is gone.
   const stopCustomizing = () => {
@@ -88,6 +103,44 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
   };
 
   const copy = <code style={{ color: "var(--sol-violet)" }}>{slug}</code>;
+  if (inRepo) {
+    return (
+      <div className="space-y-3" data-line-stations data-line-home="repo">
+        <RepoLineHeader repo={repo} changedCount={changedCount} onResetAll={resetAll} />
+        <div className="rounded-md overflow-hidden" style={{ height: 240, border: "1px solid var(--sol-border)" }}>
+          <WorkflowGraphView
+            nodes={nodes as WFNode[]}
+            edges={edges}
+            selectedNodeId={selectedId}
+            onNodeSelect={(n) => setSelectedId(n?.id ?? null)}
+            markedNodeIds={marked}
+            fitPadding={0.08}
+            fitLayers={5}
+            fitAround={focusStation ?? undefined}
+            minimap={false}
+          />
+        </div>
+        {selected && (
+          <StationPanel
+            key={selected.id}
+            ref={panel}
+            arrived={arrived}
+            node={selected}
+            line={repo.source.kind === "repo" ? repo.source.line : SHIPPED_LINE}
+            editable={repo.writable}
+            runsIt
+            changed={diffs[selected.id] ?? []}
+            onPatch={(patch) => patchStation(selected.id, patch)}
+            onReset={() => resetOne(selected.id)}
+            onClose={() => setSelectedId(null)}
+            status={<EditStatus s={repo.stateOf(selected.id)} device={repo.gate.device ?? "the machine"} now={repo.now} onDismiss={() => repo.clear(selected.id)} />}
+            pending={isTravelling(repo.stateOf(selected.id))}
+          />
+        )}
+        <RunsThisLine rows={rows} forkSlug={null} hostedHere={hostedHere} setRoleLine={setRoleLine} repoLine />
+      </div>
+    );
+  }
   return (
     <div className="space-y-3" data-line-stations>
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -159,7 +212,38 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
 
 // ---------------------------------------------------------------- one station
 
-function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, onReset, onClose }: {
+// ---------------------------------------------------------------- the repo's line
+
+const isTravelling = (s: { state: string } | undefined) => s?.state === "sending" || s?.state === "waiting" || s?.state === "publishing";
+
+/** What the repo holds, in one sentence, and the way back to shipped. */
+function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<typeof useLineStationEdits>; changedCount: number; onResetAll: () => void }) {
+  const dir = <code style={{ color: "var(--sol-violet)" }}>{REPO_LINE_REL_DIR}</code>;
+  const own = repo.source.kind === "repo";
+  return (
+    <div className="flex items-start justify-between gap-3 flex-wrap">
+      <div className="min-w-0 max-w-[64ch]">
+        <div className="text-[13px]" style={{ color: "var(--sol-text)" }} data-line-stations-headline>
+          {own
+            ? <>This project's line lives in its repo, in {dir}{repo.version ? <>, at version <code data-line-version style={{ color: "var(--sol-text-muted)" }}>{repo.version.slice(0, 8)}</code></> : null}.</>
+            : <>This project's repo has no line of its own yet, so its runs use their role's line or the shipped one.</>}
+        </div>
+        <div className="text-[11.5px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
+          {!repo.gate.writable
+            ? repo.gate.reason
+            : own
+              ? `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it. An edit is written to the repo on ${repo.gate.device} and checked before it lands; each run records the version it ran.`
+              : `Click a station to read it. Editing one writes the line into the repo, in ${REPO_LINE_REL_DIR}, on ${repo.gate.device}; runs in that checkout use it from then on.`}
+        </div>
+      </div>
+      {own && repo.writable && changedCount > 0 && (
+        <button type="button" className="lset-ghost shrink-0" onClick={onResetAll} data-reset-all>Reset all to shipped</button>
+      )}
+    </div>
+  );
+}
+
+function StationPanel({ ref, arrived, node, line = SHIPPED_LINE, editable, runsIt, changed, onPatch, onReset, onClose, status, pending }: {
   ref?: Ref<HTMLDivElement>;
   /** A link in named this station: the panel flashes once (settings.css). */
   arrived?: boolean;
@@ -171,8 +255,14 @@ function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, 
   onPatch: (patch: StationPatch) => void;
   onReset: () => void;
   onClose: () => void;
+  /** The line the station's files are named from: the repo's when it has one. */
+  line?: Pick<ShippedLine, "files">;
+  /** The edit's journey to the repo, said in place of the copy's save note. */
+  status?: ReactNode;
+  /** An edit of this station is still travelling: the editor follows the painted text without a "saved" note. */
+  pending?: boolean;
 }) {
-  const body = stationText(node, SHIPPED_LINE);
+  const body = stationText(node, line as ShippedLine);
   const field = body.kind;
   const canEdit = editable && isEditableStation(node);
   const [draft, setDraft] = useState(body.text);
@@ -237,6 +327,8 @@ function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, 
           <div className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
             {dirty
               ? <>Saves when you leave the field, or on {saveKeys}. <KeyCap size="xs">Esc</KeyCap> puts it back.</>
+              : status !== undefined
+                ? <>{status}{!pending && <>Edit the {field}; it saves when you leave the field, or on {saveKeys}</>}</>
               : savedAt
                 ? <span key={savedAt} className="lset-status" data-state={runsIt ? "saved" : "warn"} role="status">
                     {runsIt ? `Saved. A run of the customized line started after this reads the new ${field}.` : "Saved to the copy. No role runs it yet, so no run reads it."}
@@ -286,8 +378,10 @@ function StationPanel({ ref, arrived, node, editable, runsIt, changed, onPatch, 
 
 // ---------------------------------------------------------------- who runs it
 
-function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine }: {
+function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine, repoLine }: {
   rows: Array<{ role: RoleRow; slug: string }>;
+  /** The project keeps its line in its repo: a task-bound run in its checkout runs that, whatever line the role names. */
+  repoLine?: boolean;
   forkSlug: string | null;
   hostedHere: (r: RoleRow) => boolean;
   setRoleLine: (roleId: string, slug: string) => void;
@@ -298,6 +392,9 @@ function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine }: {
   return (
     <div data-runs-this-line>
       <div className="lset-label mb-1">Roles that run this project's line</div>
+      {repoLine && rows.length > 0 && (
+        <p className="lset-empty" data-runs-repo-line>A run for a task in this project's checkout uses the repo's line when it has one, whichever line the role names below.</p>
+      )}
       {rows.length === 0 ? (
         <p className="lset-empty" data-runs-this-line-empty>
           No role looks after this project yet, so nothing starts the line on its own. A role takes the project into its area on its page in <Link href="/org" className="underline underline-offset-2">the org</Link>.

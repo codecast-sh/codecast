@@ -186,6 +186,20 @@ describe("signals.ingest", () => {
     expect(shown.signal).toMatchObject({ short_id: first.short_id, task_short_id: shortId, attach: "new" });
     expect(shown.cause.signal_count).toBe(1);
   });
+
+  test("the web feed carries the fingerprint, the evidence link and the head of the detail (line-map.md LX7)", async () => {
+    const { add, t, userId } = await setup();
+    const quote = "> Book a time here: http://localhost:3000/book";
+    await add({ fingerprint: "union:cluster:c-1", title: "Booking link points at localhost", detail_md: `**Sent a localhost link**\n\n${quote}`, evidence_url: "https://admin.example/agent-watch?cluster=c-1&finding=f-1" });
+    await add({ fingerprint: "err-2", title: "Long body", detail_md: "x".repeat(5000) });
+    const rows = await t.withIdentity({ subject: `${userId}|s` }).query(api.signals.webList, {});
+    const cluster = rows.find((r: any) => r.fingerprint === "union:cluster:c-1")!;
+    expect(cluster).toMatchObject({ evidence_url: "https://admin.example/agent-watch?cluster=c-1&finding=f-1" });
+    expect(cluster.detail_md).toContain(quote);
+    const long = rows.find((r: any) => r.fingerprint === "err-2")!;
+    expect(long.detail_md!.length).toBeLessThan(1300);
+    expect(long.detail_md).toEndWith("…");
+  });
 });
 
 describe("signals in a project (line-profile.md LP1)", () => {

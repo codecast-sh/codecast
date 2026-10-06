@@ -694,10 +694,23 @@ export const showForCli = query({
 });
 
 const LINE_SIGNAL_CAP = 1000;
+/**
+ * How much of a signal's detail the feed carries: the finder's opening words
+ * and its quote, which the trace's first step shows (line-map.md LX7). The
+ * whole detail stays on the row and behind its evidence link; a thousand full
+ * bodies would make every new signal re-push megabytes.
+ */
+const LINE_SIGNAL_DETAIL_FEED_MAX = 1200;
+
+const feedDetail = (detail: string | undefined): string | undefined => {
+  const head = clip(detail, LINE_SIGNAL_DETAIL_FEED_MAX);
+  return head && head.length < (detail?.trim().length ?? 0) ? `${head.trimEnd()}…` : head;
+};
 
 /**
  * The line page's feed (LE13): the active workspace's signals of the last two
- * weeks, newest first, without their bodies. Causes are tasks and ride the
+ * weeks, newest first, with the head of each detail (LX7) and its fingerprint
+ * so a trace can follow a source to its cause. Causes are tasks and ride the
  * tasks collection; the page joins the two in the store. A complete set for
  * its window, so the client syncs it as a snapshot.
  */
@@ -723,6 +736,8 @@ export const webList = query({
       kind: row.kind,
       title: row.title,
       subject: row.subject,
+      fingerprint: row.fingerprint,
+      detail_md: feedDetail(row.detail_md),
       evidence_url: row.evidence_url,
       goal_hint: row.goal_hint,
       observed_at: row.observed_at,

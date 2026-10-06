@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { SHIPPED_LINE } from "../shippedLine.generated";
 import {
-  editStation, forkShippedLine, lineForkIndex, lineForkSlug, lineRunKind, resetAllStations, resetStation, rolesOnProject, stationDiffs, stationText,
+  editStation, forkShippedLine, lineForkIndex, lineForkSlug, lineRunKind, paintStationEdits, resetAllStationEdits, resetAllStations, resetStation, rolesOnProject, stationDiffs, stationText,
 } from "../lineStations";
 
 const project = { _id: "k17abc", short_id: "pj-mfx3ab", title: "Codecast" };
@@ -108,5 +108,27 @@ describe("which line a run ran", () => {
     expect(lineRunKind({ workflow_slug: "line-up-the-ducks", workflow_name: "line" }, forks)).toBeNull();
     expect(lineRunKind({ workflow_slug: "feature", workflow_name: "feature" }, forks)).toBeNull();
     expect(lineRunKind({}, forks)).toBeNull();
+  });
+});
+
+describe("the repo's line (line-map.md LX5)", () => {
+  test("a run of a repo's line reads as one", () => {
+    expect(lineRunKind({ workflow_slug: "line-repo", workflow_name: "line" }, new Map())).toEqual({ kind: "repo" });
+  });
+
+  test("the first station edit paints the shipped line written out, with the station changed", () => {
+    const painted = paintStationEdits(null, [{ op: "set_station", station: "prove", prompt: "Reproduce it.", timeout: 600 }], SHIPPED_LINE)!;
+    expect(painted.file).toBe(".codecast/line/line.cast");
+    expect(painted.files.prove).toEqual({ prompt: ".codecast/line/prove.md" });
+    expect(painted.nodes.find((n) => n.id === "prove")).toMatchObject({ prompt: "Reproduce it.", timeout: 600 });
+    expect(stationDiffs(painted.nodes, SHIPPED_LINE)).toEqual({ prove: ["prompt", "timeout"] });
+  });
+
+  test("reset paints a station back to shipped, and reset all names every station that differs", () => {
+    const edited = paintStationEdits(null, [{ op: "set_station", station: "prove", prompt: "x" }, { op: "set_station", station: "verify", timeout: 5 }], SHIPPED_LINE)!;
+    expect(resetAllStationEdits(edited.nodes, SHIPPED_LINE)).toEqual([{ op: "reset_station", station: "prove" }, { op: "reset_station", station: "verify" }]);
+    const back = paintStationEdits(edited, [{ op: "reset_station", station: "prove" }], SHIPPED_LINE)!;
+    expect(Object.keys(stationDiffs(back.nodes, SHIPPED_LINE))).toEqual(["verify"]);
+    expect(paintStationEdits(edited, [], SHIPPED_LINE)).toBe(edited);
   });
 });

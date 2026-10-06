@@ -13,7 +13,7 @@ import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { clearedThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
 import { resolveOwnerDeviceView } from "./devices";
 import {
@@ -31,6 +31,8 @@ import { isConversationSafetyBlocked, type ConversationSafetyState } from "./con
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { countersFor } from "./lib/orgCaps";
 import { liveRolesByHandle } from "./lib/orgAccess";
+import { byQueueOrder, isWaitingInQueue, queueAtBefore, queueOrder } from "./lib/sessionQueue";
+import { formatJointMessage, jointPartsOf, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 
 export {
   MESSAGES_VIEW_CONTRACT_ID,
@@ -386,6 +388,9 @@ export async function enqueuePendingMessage(
     // caused, such as a role's own escalation divider, so the role is not
     // woken to read what it just wrote.
     hold?: boolean;
+    // The composer's "Queue for later": held for the end of the agent's
+    // turn in the session's shared queue (schema pending_messages.queued).
+    queue?: boolean;
     // Why a hosted conversation wakes for this row, when the caller knows
     // better than the origin says (an answered approval). Ignored for every
     // other conversation.
@@ -435,6 +440,19 @@ export async function enqueuePendingMessage(
     }
   }
 
+  if (fields.queue) {
+    return await insertEnqueuedPendingMessage(ctx, {
+      conversationId: conversation._id,
+      fromUserId,
+      ownerUserId: conversation.user_id,
+      content: fields.content,
+      clientId: fields.client_id,
+      human: fields.human,
+      createdAt: Date.now(),
+      queued: true,
+    });
+  }
+
   if (fields.hold || (fields.defer && !conversation.standing_role_id)) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
@@ -477,10 +495,11 @@ export async function enqueuePendingMessage(
     delivery: fenced ?? undefined,
   });
 
-  // Deferred notes ride this turn (see `defer`).
+  // Deferred notes ride this turn (see `defer`). Rows queued for the end of
+  // the turn wait for it (releaseQueuedForUser), whoever sends meanwhile.
   const deferred: any[] = await ctx.db.query("pending_messages")
     .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversation._id).eq("status", "held")).collect();
-  for (const row of deferred) await ctx.db.patch(row._id, { status: "pending" });
+  for (const row of deferred) if (!row.queued) await ctx.db.patch(row._id, { status: "pending" });
 
   // Work for a cloud host that is asleep: ask a local daemon to boot it.
   if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
@@ -912,7 +931,7 @@ export async function performSessionSend(
     content: args.raw
       ? body
       : args.direct
-      ? formatUserMessage(senderName ?? "a teammate", body)
+      ? (await jointTurnVouched(ctx, target._id, senderName, body) ? body : formatUserMessage(senderName ?? "a teammate", body))
       : formatSessionMessage(fromShortId, body, { name: fromName }),
     image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
@@ -942,6 +961,26 @@ export async function performSessionSend(
     target_live: targetLive,
     auto_owned: autoOwned,
   };
+}
+
+/**
+ * A direct send may carry a joint turn ("send together"): the sender's words
+ * and the live drafts of others in the session's composer, each part named.
+ * The wrapper is the attribution, so it goes out as written only when every
+ * part someone else is named on matches that person's draft in the shared
+ * composer right now; otherwise the whole body is the sender's, wrapped in
+ * their name like any direct send.
+ */
+async function jointTurnVouched(ctx: { db: any }, conversationId: Id<"conversations">, senderName: string | undefined, body: string): Promise<boolean> {
+  const parts = parseJointMessage(body);
+  if (!parts) return false;
+  const drafts = await ctx.db
+    .query("doc_presence")
+    .withIndex("by_doc", (q: any) => q.eq("doc_id", `compose:${conversationId}`))
+    .collect();
+  const fresh = drafts.filter((p: any) => p.updated_at > Date.now() - 30_000);
+  return parts.every((part) => part.from === senderName
+    || fresh.some((p: any) => p.user_name === part.from && (p.draft_text ?? "").trim() === part.body));
 }
 
 export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCost>): string {
@@ -1124,6 +1163,97 @@ export async function cancelPendingMessageForUser(
   const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
   return updated ? "cancelled" : message.status;
 }
+
+/**
+ * Move a waiting message in its session's queue: directly before `beforeId`,
+ * or to the end when it is null. Anyone who may send into the session may
+ * reorder its queue; only waiting rows move, and nothing jumps ahead of a
+ * message the session is already taking.
+ */
+export async function reorderQueuedForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ref: { messageId: string; beforeId: string | null },
+): Promise<string> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return "not_found";
+  if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Only people who can send into this session can reorder its queue");
+  const rows = (await ctx.db.query("pending_messages")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
+    .collect())
+    .filter((m: any) => SHOWN_PENDING_STATUSES.has(m.status) || (m.status === "held" && m.queued))
+    .sort(byQueueOrder);
+  const moving = rows.find((m: any) => String(m._id) === ref.messageId);
+  if (!moving || !isWaitingInQueue(moving)) return "not_waiting";
+  const at = queueAtBefore(rows.filter((m: any) => m !== moving), ref.beforeId);
+  if (at === null) return "not_waiting";
+  await ctx.db.patch(moving._id, { queue_at: at });
+  return "moved";
+}
+
+/**
+ * Fold two waiting messages into one turn whose parts name each author
+ * (shared/contracts/jointMessage). The earlier row keeps its place and takes
+ * the joint text and both rows' images; the later one is cancelled with
+ * merged_into pointing at it.
+ */
+export async function mergeQueuedForUser(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  ref: { messageId: string; intoId: string },
+): Promise<string> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return "not_found";
+  if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Only people who can send into this session can merge its queue");
+  const pair = [await ctx.db.get(ref.messageId as Id<"pending_messages">), await ctx.db.get(ref.intoId as Id<"pending_messages">)];
+  if (pair.some((m: any) => !m || String(m.conversation_id) !== String(conversationId) || !isWaitingInQueue(m)) || ref.messageId === ref.intoId) return "not_waiting";
+  const [keep, absorb] = [...pair].sort(byQueueOrder) as any[];
+  const nameOf = async (m: any) => {
+    const u: any = await ctx.db.get(m.from_user_id);
+    return u?.name || u?.github_username || u?.email?.split("@")[0] || "Someone";
+  };
+  const parts = [
+    ...jointPartsOf(keep.content, await nameOf(keep)),
+    ...jointPartsOf(absorb.content, await nameOf(absorb)),
+  ];
+  const images = [keep, absorb].flatMap((m: any) => m.image_storage_ids ?? (m.image_storage_id ? [m.image_storage_id] : []));
+  await ctx.db.patch(keep._id, {
+    content: formatJointMessage(parts),
+    ...(images.length ? { image_storage_ids: images, image_storage_id: undefined } : {}),
+  });
+  await ctx.db.patch(absorb._id, { status: "cancelled" as const, merged_into: keep._id });
+  return "merged";
+}
+
+/** Release the session's queue now, for anyone who may send into it (releaseQueuedRows). */
+export async function releaseQueuedForUser(ctx: { db: any }, userId: Id<"users">, conversationId: Id<"conversations">): Promise<number> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || !(await canSendProductMessage(ctx, userId, conversation))) return 0;
+  const released = await releaseQueuedRows(ctx, conversationId);
+  if (released) {
+    if (!isConversationSafetyBlocked(conversation)) await requestRemoteWake(ctx, conversation);
+    await wakeHostedConversation(ctx, conversation, "message");
+  }
+  return released;
+}
+
+export const reorderQueued = mutation({
+  args: { conversation_id: v.id("conversations"), message_id: v.string(), before_id: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return await reorderQueuedForUser(ctx, userId, args.conversation_id, { messageId: args.message_id, beforeId: args.before_id });
+  },
+});
+
+export const mergeQueued = mutation({
+  args: { conversation_id: v.id("conversations"), message_id: v.string(), into_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await requireUser(ctx);
+    return await mergeQueuedForUser(ctx, userId, args.conversation_id, { messageId: args.message_id, intoId: args.into_id });
+  },
+});
 
 export const retryMessage = mutation({
   args: {
@@ -1460,9 +1590,9 @@ export async function collectDeliverableForOwner(
 // old, on 2026-10-05), and claiming those on every push was 44 mutations a
 // second, a tenth of all backend time (ct-56547). The next row arrives the
 // moment the head leaves "pending", the same reactive turn as before.
-export function headOfEachQueue<T extends { conversation_id: unknown; created_at?: number; _creationTime?: number }>(rows: T[]): T[] {
+export function headOfEachQueue<T extends { conversation_id: unknown; created_at?: number; queue_at?: number; _creationTime?: number }>(rows: T[]): T[] {
   const head = new Map<string, T>();
-  const at = (r: T) => r.created_at ?? r._creationTime ?? 0;
+  const at = (r: T) => queueOrder(r);
   for (const row of rows) {
     const key = String(row.conversation_id);
     const held = head.get(key);
@@ -1523,6 +1653,11 @@ export const getConversationPendingMessage = query({
     const visible = msgs.filter(
       (m) => isOwner || m.from_user_id.toString() === authUserId.toString()
     );
+    // The queue is everyone's: anyone who can read the session sees every
+    // message waiting to go into it, whoever sent it, with their face. Each
+    // is about to land in the transcript they already read, and a shared
+    // session's people steer it together (reorder, merge).
+    const sharedQueue = isOwner || (!!conversation && (await checkConversationAccess(ctx, authUserId, conversation)) !== "denied");
     // The oldest undelivered message, whatever its current status. Every
     // delivery attempt flips a row to "injected" and a hold flips it back, so
     // preferring "pending" hopped the card between queued messages on each
@@ -1531,20 +1666,34 @@ export const getConversationPendingMessage = query({
     // viewer whose transcript tail lags the server (minutes under load) keeps
     // a delivered message on screen until its echo arrives, instead of
     // watching it vanish; a cancelled row tells the viewer to drop it.
-    // `inflight` lists EVERY undelivered row, oldest first: each one is a
-    // message the person sent that the transcript does not hold yet, and each
-    // must render. A session that stays down queues several; showing only the
-    // oldest hid the rest for 33 hours on 2026-09-30.
-    const shown = (m: (typeof visible)[number]) => ({ message_id: m._id, client_id: m.client_id, created_at: m.created_at, retry_count: m.retry_count, status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason });
-    const inflight = visible
-      .filter((m) => SHOWN_PENDING_STATUSES.has(m.status))
-      .sort((a, b) => a.created_at - b.created_at);
-    const msg = inflight[0]
+    // `inflight` lists EVERY undelivered row in queue order: each one is a
+    // message the transcript does not hold yet, and each must render. A
+    // session that stays down queues several; showing only the oldest hid
+    // the rest for 33 hours on 2026-09-30.
+    const authors = new Map<string, { name: string; image?: string }>();
+    for (const m of msgs) {
+      const key = m.from_user_id.toString();
+      if (authors.has(key)) continue;
+      const u: any = await ctx.db.get(m.from_user_id);
+      authors.set(key, { name: u?.name || u?.github_username || u?.email?.split("@")[0] || "Someone", image: u?.image || u?.github_avatar_url || undefined });
+    }
+    const shown = (m: (typeof msgs)[number]) => ({
+      message_id: m._id, client_id: m.client_id, created_at: m.created_at, queue_at: m.queue_at, retry_count: m.retry_count,
+      status: m.status as string, content: m.content, hold_reason: m.delivery_disposition_reason,
+      delivery_status: m.delivery_status, queued: m.queued,
+      from_user_id: m.from_user_id, from_name: authors.get(m.from_user_id.toString())?.name, from_image: authors.get(m.from_user_id.toString())?.image,
+    });
+    const inflight = (sharedQueue ? msgs : visible)
+      .filter((m) => SHOWN_PENDING_STATUSES.has(m.status) || (m.status === "held" && m.queued))
+      .sort(byQueueOrder);
+    const msg = inflight.find((m) => visible.includes(m))
       ?? visible
         .filter((m) => TERMINAL_STATUSES.has(m.status as PendingStatus))
         .sort((a, b) => b.created_at - a.created_at)[0]
       ?? null;
-    if (!msg) return null;
+    // Others' queued messages with none of the viewer's own: the queue alone,
+    // with no primary row for the viewer's delivery tracker to act on.
+    if (!msg) return inflight.length ? { inflight: inflight.map(shown) } : null;
     return { ...shown(msg), inflight: inflight.map(shown) };
   },
 });

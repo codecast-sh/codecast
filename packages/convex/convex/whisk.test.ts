@@ -8,7 +8,7 @@ import { anyApi } from "convex/server";
 import { allModules as modules } from "./testModules.testkit";
 import schema from "./schema";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
-import { openWhiskToken, whiskConnectUrl } from "./whisk";
+import { openWhiskToken, whiskAccessFor, whiskConnectUrl } from "./whisk";
 import { WHISK_PROVIDER } from "./lib/whisk";
 
 setDefaultTimeout(120_000);
@@ -19,6 +19,7 @@ const ENV = {
   WHISK_APP_SECRET_CODECAST: SECRET,
   WHISK_CONVEX_URL: "https://fox.convex.cloud",
   SITE_URL: "https://codecast.sh",
+  WHISK_CONNECT_OPEN: "1",
 };
 
 type Seen = { url: string; body: any };
@@ -88,6 +89,23 @@ describe("connect", () => {
     );
   });
 
+  test("a connect started on a dev server or a subdomain comes back to it; any other origin comes back to the site", async () => {
+    const { me, as } = await setup();
+    const returnOf = async (origin: string) =>
+      new URL((await as(me).action(whisk.getConnectUrl, { origin })).url).searchParams.get("return");
+    expect(await returnOf("http://localhost:3200")).toBe("http://localhost:3200/connect/whisk");
+    expect(await returnOf("https://staging.codecast.sh")).toBe("https://staging.codecast.sh/connect/whisk");
+    expect(await returnOf("https://evil.example")).toBe("https://codecast.sh/connect/whisk");
+    expect(await returnOf("http://codecast.sh.evil.example")).toBe("https://codecast.sh/connect/whisk");
+  });
+
+  test("Connect stays hidden until Whisk serves its side of the connect", async () => {
+    const { t } = await setup();
+    expect(await t.query(whisk.connectAvailable, {})).toBe(true);
+    delete process.env.WHISK_CONNECT_OPEN;
+    expect(await t.query(whisk.connectAvailable, {})).toBe(false);
+  });
+
   test("signed out, an unknown landing page, or no Whisk settings: no URL", async () => {
     const { t, me, as } = await setup();
     expect(await t.action(whisk.getConnectUrl, {})).toEqual({ ok: false, error: "signed_out" });
@@ -128,7 +146,7 @@ describe("connect", () => {
   test("a forged, expired or missing state, a decline, or a refused code each say why and store nothing", async () => {
     const { t, me, as } = await setup();
     const forged = await signStateWith("not-the-secret", { user_id: me, ts: Date.now(), return_to: "/welcome" });
-    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/simple/connections" });
+    expect(await as(me).action(whisk.finishConnect, { state: forged, code: "c" })).toMatchObject({ ok: false, reason: "bad_state", return_to: "/settings/integrations" });
     const stale = await stateFor(me, "/welcome", Date.now() - 31 * 60_000);
     expect(await as(me).action(whisk.finishConnect, { state: stale, code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });
     expect(await as(me).action(whisk.finishConnect, { code: "c" })).toMatchObject({ ok: false, reason: "bad_state" });
@@ -149,6 +167,25 @@ describe("connect", () => {
     expect(all).toHaveLength(1);
     expect(await openWhiskToken(all[0].access_token_enc, SECRET)).toBe("second");
     expect(seen.filter((s) => s.body?.path === "connect:disconnect").map((s) => s.body.args.token)).toEqual(["first"]);
+  });
+});
+
+describe("a connection Whisk stops accepting", () => {
+  test("a refused token is remembered: the view offers Reconnect, turns stop calling, and a reconnect clears it", async () => {
+    const { t, me, as } = await setup();
+    exchange = granted("revoked-there");
+    await as(me).action(whisk.finishConnect, { state: await stateFor(me), code: "a" });
+    const ctx = { runQuery: (ref: any, args: any) => t.query(ref, args), runMutation: (ref: any, args: any) => t.mutation(ref, args) };
+    const refused = (async () => new Response(JSON.stringify({ status: "error", errorMessage: "Uncaught Error: Unauthorized: unknown token\n  at handler" }))) as unknown as typeof fetch;
+    const access = await whiskAccessFor(ctx, me as any, refused);
+    expect(access.state).toBe("connected");
+    if (access.state !== "connected") return;
+    await expect(access.call("query", "mail:list", {})).rejects.toThrow("Whisk no longer accepts this connection");
+    expect(await as(me).query(whisk.connection, {})).toMatchObject({ connected: true, needs_reconnect: true });
+    expect((await whiskAccessFor(ctx, me as any, refused)).state).toBe("reconnect");
+    exchange = granted("fresh");
+    await as(me).action(whisk.finishConnect, { state: await stateFor(me), code: "b" });
+    expect((await as(me).query(whisk.connection, {})).needs_reconnect).toBeUndefined();
   });
 });
 

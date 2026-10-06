@@ -20,7 +20,7 @@ import { CHANGE_KIND_WORD, GHOST, ORG_STATE_META, SEVERITY_META, standingLineOf 
 import { RoleFace } from "./RoleFace";
 import { useZoomLevel } from "./orgZoom";
 import { GhostTag } from "./ghostChrome";
-import { CHIP_STATUS, ghostFrameStyle } from "./orgMeta";
+import { CHIP_STATUS, ghostFrameStyle, stateWords } from "./orgMeta";
 import { RoleHoverCard, SessionIdentityLine, SessionMark } from "../identity";
 import type { OrgStandingState } from "./orgTypes";
 import type { HealthFlag, OrgChangeStatus } from "./orgStaffingTypes";
@@ -373,22 +373,35 @@ export type PersonNodeData = CardData & { person: OrgPerson; collapsed: boolean;
  *  what in the whole set needs a human or is live. The state words come from
  *  ORG_STATE_META so this card, the anchor card, the panel chip and the inbox
  *  never name one state two ways. Nothing when everything is drawn. */
-export function OverflowTally({ overflow, counts }: { overflow: number; counts: StateCounts }) {
-  if (overflow <= 0) return null;
-  const parts: { text: string; color?: string }[] = [{ text: `+${overflow}` }];
-  for (const k of ["needs_input", "working"] as const) {
-    if ((counts[k] ?? 0) > 0) parts.push({ text: `${counts[k]} ${ORG_STATE_META[k].label}`, color: ORG_STATE_META[k].color });
-  }
+/** The full tally for a title: every state with its count. */
+export const countsTitle = (counts: StateCounts) => ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0).map((k) => `${counts[k]} ${ORG_STATE_META[k].label}`).join(" · ") || "no sessions";
+
+/** A card's sessions in words (orgMeta.stateWords): the states a person acts
+ *  on first, each in its colour, the whole tally on hover. Dots alone say
+ *  nothing to a person who has not learned the colours. */
+export function StateWords({ counts, max = 2, lead, className }: { counts: StateCounts; max?: number; /** A first part before the words ("+3", for what a stack does not draw). */ lead?: string; className?: string }) {
+  const words = stateWords(counts, max);
+  if (!lead && words.length === 0) return null;
+  const color = (w: string) => (w.includes("need") ? ORG_STATE_META.needs_input.color : w.endsWith("working") ? ORG_STATE_META.working.color : undefined);
   return (
-    <span className="inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }}>
-      {parts.map((p, i) => (
-        <span key={p.text} className="inline-flex items-center gap-1">
+    <span className={cn("inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap", className)} style={{ color: "var(--sol-text-dim)" }} title={countsTitle(counts)} data-state-words>
+      {[...(lead ? [lead] : []), ...words].map((w, i) => (
+        <span key={w} className="inline-flex items-center gap-1">
           {i > 0 && <span aria-hidden>·</span>}
-          <span style={{ color: p.color }}>{p.text}</span>
+          <span style={{ color: color(w) }}>{w}</span>
         </span>
       ))}
     </span>
   );
+}
+
+export function OverflowTally({ overflow, counts }: { overflow: number; counts: StateCounts }) {
+  if (overflow <= 0) return null;
+  // "+N" counts what the stack under the card does not draw; when nothing is
+  // drawn under it (collapsed, the map) the meta line already says how many,
+  // so the words alone carry the states a person acts on.
+  const total = ORG_STATE_ORDER.reduce((n, k) => n + (counts[k] ?? 0), 0);
+  return <StateWords counts={counts} lead={overflow < total ? `+${overflow}` : undefined} />;
 }
 
 

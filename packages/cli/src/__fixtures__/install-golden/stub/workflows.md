@@ -1,9 +1,14 @@
 
 ## Workflows
 
-Execution graphs with approval gates (cast workflow). Adds `cast workflow` for running .cast files — directed graphs in DOT syntax where each node is an agent session, a shell command, or a human approval gate. Workflows only run when you explicitly invoke them.
+Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions, shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
 
-Run `cast guide workflows` for the commands and flags. The guide ships inside the binary you run, so it always matches the `cast` that will execute them.
+```bash
+cast workflow run flow.cast --task ct-N     # or --plan pl-N
+cast workflow list | runs | push
+```
+
+`cast guide workflows` shows the graph syntax and the line commands.
 <!-- cast @VERSION@ -->
 <!-- /codecast-workflows -->
 

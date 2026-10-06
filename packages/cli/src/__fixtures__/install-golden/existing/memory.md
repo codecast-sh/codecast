@@ -38,44 +38,19 @@ block by "everything to end of file" destroys this paragraph.
 
 ## Memory
 
-You are one session among many, and past conversations hold the decisions, patterns and prior work you need. Search them liberally, in parallel for several topics: when starting a task, when debugging, and when the user refers to earlier work. Filters narrow a search to the sessions behind a piece of work, so "which sessions touched this file" and "which session made this commit or PR" are one query. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a `Codecast-Session` trailer, so `git log` and `cast blame` lead from code back to the conversation that wrote it.
+You are one session among many. Past conversations hold the decisions, patterns and prior work you need, so search them before you rebuild context: when starting a task, when debugging, and whenever the user refers to earlier work. Run several searches in parallel for different angles. When the question is what happened or what was decided before, search sessions first; your harness's own memory notes supplement that record and never replace it. To learn what one session concluded, including this one, ask it instead of paging through it: the answer cites its lines and flags anything reversed later. Agent commits carry a `Codecast-Session` trailer, so `git log` and `cast blame` lead from code back to the conversation that wrote it.
 
 ```bash
-# Search & browse (default scope: the team for this directory)
-cast search "auth"                # --mine | -m samvit | -g (all teams) | -s 7d
-cast search "file:src/auth.ts"    # filters: file: commit:<sha> pr:<n|owner/repo#n> label: author: repo: after:7d before:; other words search within
-cast feed                         # team feed: --mine, -m <name>, --state needs-input, --label api
-cast read <id> 15:25              # messages 15-25; --full shows tool payloads (REQUIRED to see a StructuredOutput return)
-cast read '<share-url>#msg-<id>'  # a window around a linked message (-c N for its size)
-cast read <id> --ask "<question>"  # an answer from one session with line citations and later reversals; no id = this session
-cast link [id] [line]             # deep link to any object (session+line → message, ct-/pl-, --type doc); no args = this session
-
-# Sessions: which (ids, --label, --state, --team, -m) × what (state | --messages) × live (-w)
-cast sessions                     # state snapshot, most actionable first
-cast sessions -w [--json]         # one line per work-state change; JSON: {"event":"new"|"transition"|"gone","id","from","to",…}
-cast sessions <id> [<id>…] -w     # watch a set (ids also narrow the snapshot); --label fleet -w watches a label
-cast sessions --state needs-input # one state; with -w, new/gone fire as sessions enter/leave it
-cast sessions --labels            # my labels + counts in this project (--by-label groups, -g all projects)
-cast sessions [<id>] --messages -w  # follow messages across my live sessions, or in one
-
-# Labels: personal filing, at most one per session; filter with --label on sessions/feed/search
-cast label set api [<id>]         # file a session (default: this one); creates the label if new
-cast label ls | clear <id> | rename api backend | rm api   # rm leaves its sessions unlabeled
-
-# Analysis
-cast diff <id>                    # files changed, commits, tools used (--today aggregates today)
-cast summary <id>                 # goal, approach, outcome, files
-cast blame <file>                 # git blame whose author column is the session that wrote each line
-cast context "implement auth"     # find relevant prior sessions
-cast ask "how does X work"        # query across sessions
-
-# Handoff & tracking
-cast handoff                      # context transfer doc
-cast handoff --to codex           # continue in a new session on another agent (or --model opus); links both, pins this one done
-cast bookmark <id> <msg> --name x # shareable link
+cast search "auth"                 # filters: file:<path> commit:<sha> pr:<n> label: author: after:7d; --mine, -g all teams
+cast read <id> --ask "<question>"  # one session's answer with line citations; no id = this session
+cast read <id> 15:25               # messages 15 to 25 (--full shows tool payloads)
+cast context "implement auth"      # prior sessions relevant to a task
+cast feed                          # what the team is doing now
+cast sessions <id>… -w --json      # watch sessions' work state
+cast diff <id> | summary <id> | blame <file>
 cast decisions list | add "title" --reason "why"
 ```
 
-States: `needs-input` (a human acts), `working`, `dormant` (waiting on an automatic wake), `done` (delivered), `idle` (unused); watch JSON spells it `needs_input`. Common options: --mine, -m <name>, --label <name>, -g (all teams), -s/-e (time range), -p (page), -n (limit).
+States: `needs-input` (a human acts), `working`, `dormant` (waiting on an automatic wake), `done` (delivered), `idle` (unused). `cast guide memory` has the full command reference.
 <!-- cast @VERSION@ -->
 <!-- /codecast-memory -->

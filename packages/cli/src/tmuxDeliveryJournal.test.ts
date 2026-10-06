@@ -40,7 +40,9 @@ test("server acknowledgment releases a receipt after the process died before ver
 test("a replaced pane allows an unsubmitted write only after the old pane is definitively gone", async () => {
   const store = open();
   store.begin(identity, generation, "continue");
-  const exec = async (args: string[]) => {
+  const exec = async (argv: string[]) => {
+    // The old pane is looked up on the socket it lived on (pane ids are per server).
+    const args = argv[0] === "-S" ? (expect(argv[1]).toBe("/socket"), argv.slice(2)) : argv;
     if (args[0] === "list-panes") return { stdout: "%2\n" };
     if (args[3] === "%1") throw new Error("can't find pane: %1");
     return { stdout: "100|/socket|%2|201|301" };
@@ -53,7 +55,8 @@ test("a replaced pane allows an unsubmitted write only after the old pane is def
 test("an unreadable old pane and a submit with unknown outcome never authorize replay", async () => {
   const store = open();
   store.begin(identity, generation, "continue");
-  const exec = async (args: string[]) => {
+  const exec = async (argv: string[]) => {
+    const args = argv[0] === "-S" ? (expect(argv[1]).toBe("/socket"), argv.slice(2)) : argv;
     if (args[0] === "list-panes") return { stdout: "%1\n%2\n" };
     if (args[3] === "%1") throw new Error("timeout");
     return { stdout: "100|/socket|%2|201|301" };
@@ -62,6 +65,23 @@ test("an unreadable old pane and a submit with unknown outcome never authorize r
   store.advance(identity.messageId, "submit");
   const prepared = await prepareTmuxDelivery("new", identity, exec, async () => false, store);
   expect(() => store.begin(identity, prepared.generation, "continue")).toThrow("not been reconciled");
+});
+
+// A session that moved to a tmux server of its own left its old pane on the
+// shared one: the old pane is looked up there, and a server that has since
+// gone means the pane went with it.
+test("a pane on a server that is gone counts as gone when the session moved servers", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  const exec = async (argv: string[]) => {
+    if (argv[0] === "-S") {
+      expect(argv[1]).toBe("/socket");
+      throw Object.assign(new Error("no server"), { code: 1, stderr: "no server running on /socket\n" });
+    }
+    return { stdout: "900|/own-socket|%0|901|902" };
+  };
+  const resolved = await prepareTmuxDelivery("new", identity, exec, async () => false, store);
+  expect(resolved.prior).toBeNull();
 });
 
 test("corrupt durable state fails closed", () => {

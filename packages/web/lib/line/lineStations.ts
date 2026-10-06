@@ -5,6 +5,7 @@
 // graph's shape stays the shipped one, so "reset" always has a station to
 // read back from. Pure, so the fork, diff and reset rules test without React.
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, lineSlugOf } from "@codecast/shared/contracts/orgProposal";
+import { REPO_LINE_REL_DIR, REPO_LINE_REL_PATH, REPO_LINE_SLUG, type LineStationEdit, type PublishedRepoLine } from "@codecast/shared/contracts/lineProfile";
 
 export type LineNode = {
   id: string;
@@ -69,7 +70,7 @@ export function lineForkIndex<P extends ProjectRef>(projects: Iterable<P>): Map<
   return out;
 }
 
-export type LineRunKind<P extends ProjectRef = ProjectRef> = { kind: "shipped" } | { kind: "customized"; project: P };
+export type LineRunKind<P extends ProjectRef = ProjectRef> = { kind: "shipped" } | { kind: "customized"; project: P } | { kind: "repo" };
 
 /** Which line a run ran: the shipped line, a project's customized copy (its
  *  workflow slug is that project's fork slug), or neither. A fork keeps the
@@ -81,6 +82,8 @@ export function lineRunKind<P extends ProjectRef>(
   const slug = run.workflow_slug || null;
   const project = slug ? forks.get(slug) : undefined;
   if (project) return { kind: "customized", project };
+  // A run of a repo's own line (line-map.md LX5) pushes under its own slug.
+  if (slug === REPO_LINE_SLUG) return { kind: "repo" };
   if (slug === DEFAULT_LINE_SLUG || (!slug && run.workflow_name === DEFAULT_LINE_SLUG)) return { kind: "shipped" };
   return null;
 }
@@ -179,4 +182,42 @@ export function rolesOnProject<R extends ScopedRole>(roles: R[], projectId: stri
   return roles
     .filter((r) => r.status !== "retired" && r.scope.project_ids.includes(projectId))
     .map((role) => ({ role, slug: lineSlugOf(role) }));
+}
+
+// ---------------------------------------------------------------- the repo's line (LX5)
+
+/**
+ * The repo's line with station edits laid over it, the way the daemon will
+ * write them, so a station shows its new text before the republish arrives.
+ * A repo with no line yet starts from the shipped one, as the first edit's
+ * write does. Returns the same object when there is nothing to lay over.
+ */
+export function paintStationEdits(line: PublishedRepoLine | null | undefined, edits: LineStationEdit[], shipped: ShippedLine): PublishedRepoLine | null | undefined {
+  if (edits.length === 0) return line;
+  let nodes = (line ?? shipped).nodes as LineNode[];
+  for (const e of edits) {
+    if (e.op === "reset_station") nodes = resetStation(nodes, e.station, shipped);
+    else {
+      const { op: _op, station, ...patch } = e;
+      nodes = editStation(nodes, station, patch);
+    }
+  }
+  return { ...(line ?? materializedShape(shipped)), nodes };
+}
+
+/** The shipped line as the repo holds it once written out: the same stations, files under the repo's line directory. */
+function materializedShape(shipped: ShippedLine): PublishedRepoLine {
+  const local = (f?: string) => (f ? `${REPO_LINE_REL_DIR}/${f.replace(/^line\//, "")}` : undefined);
+  const files: PublishedRepoLine["files"] = {};
+  for (const [id, f] of Object.entries(shipped.files)) {
+    const prompt = local(f.prompt);
+    const script = local(f.script);
+    files[id] = { ...(prompt ? { prompt } : {}), ...(script ? { script } : {}) };
+  }
+  return { file: REPO_LINE_REL_PATH, graph_hash: "", name: shipped.name, ...(shipped.goal ? { goal: shipped.goal } : {}), ...(shipped.stack ? { stack: shipped.stack } : {}), source: shipped.source, nodes: cloneNodes(shipped.nodes), edges: cloneEdges(shipped.edges), files };
+}
+
+/** The station edits that put every station that differs back to shipped. */
+export function resetAllStationEdits(nodes: LineNode[], shipped: ShippedLine): LineStationEdit[] {
+  return Object.keys(stationDiffs(nodes, shipped)).filter((id) => shipped.nodes.some((n) => n.id === id)).map((station) => ({ op: "reset_station", station }));
 }
