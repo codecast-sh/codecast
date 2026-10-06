@@ -10,10 +10,22 @@ import {
   presenceLabel,
   presenceLine,
   teammateWhereabouts,
+  localTimeLine,
 } from "./memberPresence";
 import type { InboxSession } from "../../store/inboxStore";
 
 const NOW = 1_700_000_000_000;
+
+it("keeps teammate clocks correct across timestamps and invalid zones", () => {
+  const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const zone = localZone === "Asia/Tokyo" ? "Europe/Berlin" : "Asia/Tokyo";
+  for (const now of [0, NOW, NOW + 3600000]) {
+    expect(localTimeLine(zone, now)).toBe(new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit", timeZone: zone }).format(now));
+  }
+  expect(localTimeLine(localZone, NOW)).toBe("");
+  expect(localTimeLine(undefined, NOW)).toBe("");
+  expect(localTimeLine("invalid/timezone", NOW)).toBe("");
+});
 const ctx = (over: Partial<Parameters<typeof presenceActivityLine>[1]> = {}) => ({ now: NOW, ...over });
 const fleet = (over: Partial<ReturnType<typeof memberFleetSummary>> = {}) => ({
   working: 0,

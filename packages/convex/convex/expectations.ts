@@ -6,7 +6,8 @@
 // - `brief`: the active lines as compact text under the version to cite, the
 //   route a judge calls.
 // - `propose`: store a proposal. One that only adds lines a person said, each
-//   with the quote the record holds, applies on its own; anything else waits
+//   with the quote the record holds and about what that quote says, applies
+//   on its own; anything else waits
 //   for the project's person, as a card in their queue when an agent session
 //   proposed it.
 // - `resolve`: a person applies or drops a proposal (the CLI, the web). The
@@ -33,14 +34,13 @@ import { EXPECTATION_CARD_OPTIONS, latestExpectations, performApply } from "./li
 import {
   applyOps,
   autoApplies,
+  groundingCandidates,
   holdsQuote,
-  isQuotedAndDated,
   LIMITS,
   normalizeOp,
   opErrors,
   renderExpectations,
   renderProposal,
-  PERSON_SOURCE_KINDS,
   type ExpectationCitation,
   type ExpectationOp,
   type ExpectationsVersion,
@@ -236,7 +236,7 @@ async function citationsPersonSaid(ctx: Ctx, project: Doc<"projects">, ops: Expe
   const said = new Set<ExpectationCitation>();
   for (const op of ops) {
     if (op.op !== "add") continue;
-    for (const c of op.citations) if (isQuotedAndDated(c) && PERSON_SOURCE_KINDS.includes(c.kind) && (await personSaid(ctx, project, c))) said.add(c);
+    for (const c of groundingCandidates(op)) if (await personSaid(ctx, project, c)) said.add(c);
   }
   return said;
 }

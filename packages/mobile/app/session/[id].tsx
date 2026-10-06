@@ -61,14 +61,14 @@ import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
-import { MOBILE_AGENT_LABEL, MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
+import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
   toolSummary,
@@ -482,8 +482,7 @@ function formatModel(model?: string): string {
 }
 
 function formatAgentType(agentType?: string): string {
-  if (!agentType) return 'Unknown';
-  return MOBILE_AGENT_LABEL[agentType] ?? agentType.charAt(0).toUpperCase() + agentType.slice(1);
+  return agentType ? agentDisplayName(agentType) : 'Unknown';
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -2411,7 +2410,7 @@ function SystemMessage({ message }: { message: Message }) {
 }
 
 function assistantLabel(agentType?: string): string {
-  return (agentType && MOBILE_AGENT_LABEL[agentType]) || 'Claude';
+  return agentDisplayName(agentType);
 }
 
 function formatTokenCount(n: number): string {

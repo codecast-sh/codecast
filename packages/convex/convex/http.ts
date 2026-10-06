@@ -4096,6 +4096,9 @@ cliRoute("/cli/org/tree", async (ctx, body) => {
 });
 // Where the calling session sits (`cast org where`, the session-start org context).
 cliRoute("/cli/org/where", async (ctx, body) => ctx.runQuery((api as any).orgWhere.where, body));
+// The project's promoted corrections and decisions (shared/contracts/projectMemory),
+// injected at session start and read by `cast memory list`.
+cliRoute("/cli/memory", async (ctx, body) => ctx.runQuery((api as any).projectMemory.list, body));
 cliRoute("/cli/org/sessions-under", async (ctx, body) => {
   return await ctx.runQuery(api.org.sessionsUnder, body);
 });
@@ -4196,6 +4199,8 @@ cliRoute("/cli/org/proposal/revise", async (ctx, body) => ctx.runMutation((api a
 // publisher. Reads are one equality against the caller's workspace key or the
 // value "codecast"; writes carry the rules the CLI applies locally.
 cliRoute("/cli/org/template/publish", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.publish, body));
+cliRoute("/cli/org/template/yank", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.yank, body));
+cliRoute("/cli/org/template/retire", async (ctx, body) => ctx.runMutation((api as any).orgTemplates.retire, body));
 cliRoute("/cli/org/template/catalog", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.catalog, body));
 cliRoute("/cli/org/template/get", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.get, body));
 cliRoute("/cli/org/template/release", async (ctx, body) => ctx.runQuery((api as any).orgTemplates.release, body));
@@ -4446,6 +4451,9 @@ cliRoute("/cli/review/edit", async (ctx, body) => {
 });
 cliRoute("/cli/review/rm", async (ctx, body) => {
   return await ctx.runMutation(api.codeComments.remove, body);
+});
+cliRoute("/cli/review/disposition", async (ctx, body) => {
+  return await ctx.runMutation(api.reviewNotes.setDisposition, body);
 });
 
 // ── Integrations (cast integrations …) ──

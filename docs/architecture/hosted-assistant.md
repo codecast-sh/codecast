@@ -18,6 +18,102 @@ default Convex runtime, which is the only one our self-hosted deployment uses.
 Machines come back later for work that genuinely needs one (a browser, a
 shell): the personal computer, a separate phase.
 
+## Revised 2026-10-05: hosted mode inside codecast, and a platform core
+
+The founder's direction, which supersedes the separate lane described under
+"The simple lane" below:
+
+1. **A platform core.** Everything Averil and codecast can reasonably share
+   lives in `@platform`: the harness (`agent`), billing, design tokens
+   (`design`), and a new `assistant` package with the storage-free parts of
+   the assistant: plan types, wallet arithmetic, approval-rule matching, the
+   system prompt builder, and the Whisk mail and calendar tools and web tools
+   over an injected transport. Codecast's Convex code keeps only storage and
+   wiring. Averil adopts the core on its own schedule.
+2. **No separate shell.** Codecast itself gains a hosted, minimal mode: the
+   same power dashboard (inbox, conversations, tasks, docs, routines,
+   questions, pages, teams) for general-purpose work, with our inference as
+   the default and developer-only surfaces hidden. It is the existing Minimal
+   style and Simple view taken further, not a different product. The
+   `/simple` routes redirect into the main app and the lane's duplicated
+   components (its own transcript, conversation row, shell) are retired;
+   the parts worth keeping (step wording, plan page, connections copy,
+   onboarding) move into the main app.
+3. **Packaged end to end, and funnelled.** Codecast.sh routes a
+   non-developer from the marketing page through `/welcome` (sign in, connect
+   mail and calendar through Whisk, first useful result) into the main app
+   in hosted mode. A signed-in person with no machine is offered the hosted
+   assistant instead of only "install the CLI".
+
+### The mode
+
+- One preference, `client_state.ui.lane` (already exists; one home): `"simple"`
+  means hosted mode, anything else the developer default. `/welcome` sets
+  it; settings and the command palette switch it.
+- One central registry of developer-only surfaces (`lib/surfaces.ts` or
+  similar, one `useSurface(name)` hook) consulted by every gated place:
+  sidebar rows (changes, projects, repo, files, line, ops, windows), shell
+  banners (setup prompt, CLI offline, tmux missing, device setup, resource
+  pressure), the terminal dock and split, diff layouts, PR, worktree and git
+  chips, machine chips, model and effort pickers, the settings "Machines"
+  group, and the install-CLI empty state. No scattered `if (lane)` checks.
+- Hosted mode implies the Minimal style and Simple view, condensed
+  transcript density, and general-purpose words where the developer words
+  would confuse ("conversation", not "session"; "assistant", not "agent").
+- The hosted assistant is a pickable agent everywhere (a picker list that
+  includes it, separate from the daemon's local-only registry), allowed as a
+  pin, and the default agent in hosted mode through a default-agent
+  preference that replaces today's hard-coded `"claude_code"` defaults.
+  When the agent is hosted, compose skips device, cloud placement, project
+  and model pickers.
+- Plan and usage become a Settings section in the Account group, with a
+  quiet usage meter in the shell; mail and calendar through Whisk become a
+  row on the Integrations page; approvals are the existing questions page
+  and inline decision cards; routines are the existing triggers.
+- Mobile follows the same mode in its existing tabs rather than a separate
+  route group.
+
+### The fold (built 2026-10-06)
+
+The web lane is retired; hosted mode is the main app.
+
+- **Plan and usage.** Settings > Plan (`app/settings/plan/page.tsx`, section
+  `plan` in `lib/settingsSections.ts`) is built from the lane's plan rules
+  and hooks (`usePlanFigures`, `useBilling`, `useBillingReturn`).
+  `BILLING_RETURN.path` is `/settings/plan`, so Stripe returns open the modal
+  on Plan with `?billing=` carried over. In hosted mode the sidebar's foot
+  shows a quiet meter (`components/plan/UsageMeter.tsx ShellUsageMeter`,
+  reading `usePlanMeter`; its wallet feeder runs only in the sync host window).
+- **Mail and calendar.** Integrations leads with an "Assistant" section
+  holding the "Mail and calendar (Whisk)" row
+  (`components/integrations/WhiskCard.tsx`, on `useLaneMail`).
+  `WHISK_RETURN_PATHS[0]` is `/settings/integrations`; `/welcome` and
+  `/inbox` stay, and `/simple/connections` stays for the phone lane.
+- **Transcript.** The step wording moved to `@platform/assistant/steps`
+  (`stepText`, `visibleSteps`, `stepCount`). A step says how it came out
+  (`stepOutcome`: done, pending, declined, not run, failed), read through
+  `@platform/agent/outcome`'s `toolResultOutcome`, which is built from the
+  same builders the run writes its refusals with, so rewording one keeps the
+  receipts right. A hosted conversation's condensed receipt says its steps
+  in those words (`lib/hostedReceipt.ts`, wired in `CondensedToolsGroup`).
+  Approvals are the existing decision cards, and their question is the
+  step's own words (`stepAsk`: "Update a note?"), so the card and the receipt
+  name an action one way. A hosted conversation never shows machine status:
+  no Disconnected pill (`sessionDisconnected`), no "Session idle" line and no
+  unresponsive banner (`sessionLooksAbandoned`).
+- **Plan wording.** Dollars are only money the person pays (plan prices, the
+  top-up buttons). Work is a share of their month (`lane.ts monthShare`):
+  the meter, the ledger, extra credit, history, and a top-up's note ("About
+  half a month on Plus"). A plan's allowance reads as a multiple of Free's.
+- **Routes.** `/simple/*` is one redirect route (`components/LaneRedirect.tsx`,
+  rule in `lib/laneRedirect.ts`): home to `/inbox`, a conversation to
+  `/conversation/:id`, approvals to `/questions`, routines to `/triggers`,
+  connections and plan to their settings sections, query and fragment kept.
+  `/simple` stays a NON_TAB prefix so the router, not a tab, runs it.
+  `/welcome` lands on the main app's pages.
+- **Still separate:** the phone's `app/(simple)` route group, which reads
+  the shared lane model (`lane.ts`, `useLane.ts`, `billing.ts`, ...).
+
 ## Mail and calendar go through Whisk
 
 Decided 2026-10-05, built the same day. Codecast never holds Gmail or
@@ -290,17 +386,26 @@ On a deployment that cannot reach Whisk (`whiskConfigured()` is false) no
 mail or calendar tool is offered and the note says they are not available
 there, rather than offering a connect flow that cannot work.
 
+The mail, calendar and web tools, the Whisk transport, the approval rules,
+the system prompt and the wallet arithmetic live in `@platform/assistant`
+(`~/src/platform/packages/assistant`, its README maps the modules); the file
+names below are its `src/`. Codecast keeps storage and wiring:
+`tools/web.ts` binds the web tools to `lib/publicFetch` and `lib/anthropic`,
+`tools/index.ts` joins every tool's Always allow narrowing into
+`ALLOW_SCOPES`, `turns.ts` binds `withRules` and `systemPrompt` to it, and
+`lib/wallet.ts` binds `walletRules` to `PLAN_CATALOG`.
+
 - **Mail and calendar seam.** The mail tools (`mail.ts`) are written against
   a `Mailbox` and the calendar tools (`calendar.ts`) against a `Calendar`:
   the few thread and event verbs any engine offers. The tool definitions,
   their wording, their risk and the gate rules live there and do not depend
-  on the engine. `whisk.ts` (`whiskMailbox`, `whiskCalendar`) is the engine:
+  on the engine. `whiskEngine.ts` (`whiskMailbox`, `whiskCalendar`) is the engine:
   each verb is a Whisk function the `whisk` CLI calls (`search:runFullSearch`,
   `sync:threadsByIds`, `sync:threadMessages`, `sync:listLabels`,
   `sync:getAccount`, `calendar/read:listCalendars`, `calendar/read:listEvents`,
   `ai/actions:draftReply`, `ai/actions:summarizeThread`, and `dispatch:dispatch`
   with `saveDraft`, `sendMessage`, `applyThreadOps`, `createEvent`,
-  `updateEvent`). Tests use `whisk.testkit.ts fakeWhisk`.
+  `updateEvent`). Tests use `fakeWhisk` (`@platform/assistant/testkit`).
 - **Mail** (`mail.ts` over Whisk): what a connection allows is
   `whiskAbilities(scopes)`, the rule the Connections screen shows too.
   `search_mail`, `read_thread` and `summarize_thread` need `mail.read`;
@@ -476,6 +581,8 @@ customer.subscription.created, updated and deleted, invoice.paid,
 charge.refunded and charge.dispute.created.
 
 ## The simple lane
+
+Superseded on 2026-10-05 by "Revised 2026-10-05" above: the lane folds into codecast's own shell as hosted mode. Kept for the history of what was built.
 
 A person in the simple lane never sees a repo, a terminal, a device, a model
 picker or the word "session". Same store, same data, different shell.

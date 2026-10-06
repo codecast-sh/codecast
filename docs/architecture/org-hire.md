@@ -795,3 +795,58 @@ proposal) and, once accepted, the button that runs it on the machine. Manual:
   reads; status, due, the canary verdict over time; rollout and the bind that
   lands it), the bind-from-record and lesson verbs in `cli/src/orgTemplate.test.ts`,
   and the switch, lessons and Update in the two web mount tests.
+
+## As built (2026-10-06): release classes, the release note, yank and retire
+
+Design: "How a hired role changes after it is hired" (codecast.sh/a/zpzDVh1idtlC).
+Every change on a stable instance waits for a person's click (sd-424); nothing
+here applies an update by itself.
+
+- **The rules** in `shared/contracts/orgTemplateRelease.ts`. `classifyRelease
+  (prev, next)` diffs two manifests: **authority** (caps, authority entries, a
+  routine's mode, the line, the role's name or handle), **structure** (routines
+  added, removed or re-cadenced; inputs, setup, evidence, ledgers, scoreboard;
+  any other manifest field) or **content** (the manifest is the same but for its
+  version: only files changed). `changes` is the Update card's locked shape
+  (`routines_added`, `routines_recadenced: {id, from, to}`, `inputs_added`,
+  `setup_added`, `*_changed`, and `authority_changed` in a person's words, e.g.
+  "Daily token limit: 200,000 to 400,000", "New permission: Paid search").
+  `bumpRefusal` needs patch, minor or major for the three classes and names the
+  change that forced the class. `updateOffer`, `jumpBetween` (forward: the
+  releases in between merged, widest class; a rollback: the direct diff),
+  `changelogBetween` (`## <version>` sections, newest first, each from the
+  newest changelog that has it), `updateNames`, `releaseNote`.
+- **Publish** (`performPublish`) stores `class` and `changes` on each release
+  against the release just below it by version (the first release is
+  structure) and refuses an undersized bump. `dry_run` answers the same and
+  writes nothing (`cast org template publish --dry-run`, no snapshot upload).
+  The CLI prints each folder's class. Releases stored before this get their
+  class computed on read (`withClasses`), in the catalog and in instance status.
+- **The role hears a release move.** A bind that moves an instance to another
+  release sends its standing session one message (the bind note's `tellRole`
+  path, sent even when the role ran the bind itself): versions, class, what
+  moved, the changelog in between, and what a person must do (activate a new
+  paused routine, resume a re-cadenced one, a new human setup step, a new input
+  or secret, an authority change) or that nothing is needed.
+- **Yank and retire**, the publisher's acts (the check publish makes):
+  `cast org template yank <template> <version> --reason ...` and `cast org
+  template retire <template> [--reason] [--undo]`, each with `--codecast`,
+  `--team` or `--personal`. A yanked release (`releases[].yanked: {reason, at,
+  by}`) leaves the catalog, cannot be hired, accepted as an upgrade or
+  republished, and `latest` falls back to the newest release left; an instance
+  already on it keeps binding where it is and is offered the fallback under any
+  policy, with `update_rollback: {reason}`. A retired template
+  (`org_templates.retired`) is in no catalog and cannot be newly hired or
+  published to; its instances keep reading their pinned release
+  (`visibleTemplate` prefers the row that holds an instance's pin, else skips a
+  retired row, so a workspace that retires its own copy hires Codecast's again).
+- **`instanceForRole`** adds `releases_behind` (newer non-yanked, non-draft
+  releases), `update_class`, `update_changes`, `update_changelogs: [{version,
+  text}]` (newest first), `update_rollback`, `update_names` (routine id to
+  `{title, every}`, setup id and input key to title or label, from the offered
+  release, the instance's own for removed items) beside `update_available`
+  and `update_digest`; instance status adds `release: {version, status, class,
+  yanked}`.
+- **Tests**: `shared/contracts/orgTemplateRelease.test.ts`, the release block
+  of `convex/orgTemplates.test.ts`, and publish/yank/retire in
+  `cli/src/orgTemplate.test.ts`.

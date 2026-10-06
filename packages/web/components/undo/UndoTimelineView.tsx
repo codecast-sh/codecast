@@ -399,9 +399,11 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
       data-undo-flash={flashing ? "" : undefined}
       className={cn(
         "group relative mx-1 px-2 py-1.5 rounded-lg cursor-default border border-transparent transition-colors duration-300",
+        // The row's fill, named once so the overlaid action button can match it.
+        "[--undo-row-bg:var(--sol-bg)] bg-[var(--undo-row-bg)]",
         flashing
-          ? "bg-sol-yellow/[0.12] border-sol-yellow/40"
-          : "data-[selected=true]:bg-sol-cyan/[0.09] data-[selected=true]:border-sol-cyan/25",
+          ? "[--undo-row-bg:color-mix(in_srgb,var(--sol-yellow)_12%,var(--sol-bg))] border-sol-yellow/40"
+          : "data-[selected=true]:[--undo-row-bg:color-mix(in_srgb,var(--sol-cyan)_9%,var(--sol-bg))] data-[selected=true]:border-sol-cyan/25",
       )}
     >
       <div className="relative pl-[30px]">
@@ -417,7 +419,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
           </span>
           <span className="ml-auto flex-shrink-0 text-[10.5px] text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
         </div>
-        <div className="flex items-center gap-2 min-h-[18px]">
+        <div className="relative flex items-center gap-2 min-h-[18px]">
           {foldInline && <HistoryFold open={foldOpen} onClick={onFold} tabIndex={-1} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
           {showTitle && (
             // Line 2 is where it happened, and the object is the first word of
@@ -448,10 +450,14 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
               onClick={(e) => { e.stopPropagation(); onAct(); }}
               tabIndex={-1}
               className={cn(
-                // Out of flow until hover or selection, so the detail gets the full line.
-                "ml-auto flex-shrink-0 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
+                // Laid over the line's end on the row's own fill (a short fade
+                // into the text before it), so showing it moves nothing.
+                "absolute right-0 top-1/2 -translate-y-1/2 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
+                "bg-[var(--undo-row-bg)] before:absolute before:right-full before:inset-y-0 before:w-5 before:pointer-events-none before:bg-[linear-gradient(to_left,var(--undo-row-bg),transparent)]",
                 peek ? "group-hover:inline-flex" : "group-hover:inline-flex group-data-[selected=true]:inline-flex",
-                row.act?.kind === "org" ? "text-sol-violet hover:bg-sol-violet/10" : "text-sol-cyan hover:bg-sol-cyan/10",
+                row.act?.kind === "org"
+                  ? "text-sol-violet hover:bg-[color-mix(in_srgb,var(--sol-violet)_10%,var(--undo-row-bg))]"
+                  : "text-sol-cyan hover:bg-[color-mix(in_srgb,var(--sol-cyan)_10%,var(--undo-row-bg))]",
               )}
               data-undo-act={row.act?.kind}
             >

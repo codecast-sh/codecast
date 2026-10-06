@@ -323,15 +323,23 @@ export function findStaleTmuxServers(procs: ProcRow[], livePid: number | null, o
  * own generation went stale. The whole tree goes with the server, so dropping
  * one pid from the list is not enough: the parent shell dies and takes this
  * process with it. Reported separately so the sweep can say what it spared.
+ *
+ * A stale server holding MORE agents than the live one is the fleet, not the
+ * leftover: one `tmux new-session` against an overloaded server replaces the
+ * socket and leaves every working agent on the unreachable side (87 of them on
+ * 2026-10-06, all killed by this sweep). It goes to `restore`: the caller
+ * signals it to retake the socket (restoreTmuxServerSocket), which makes the
+ * newcomer the stale one, and the plan is asked again.
  */
 export function staleTmuxServerKillPlan(
   procs: ProcRow[],
   livePid: number | null,
   ownerUid?: number,
   selfPid: number = process.pid,
-): { kill: StaleTmuxServer[]; selfHosted: StaleTmuxServer[]; refused: "tmux-unreachable" | "owner-unknown" | null } {
-  if (!Number.isInteger(livePid) || livePid! <= 1) return { kill: [], selfHosted: [], refused: "tmux-unreachable" };
-  if (!Number.isInteger(ownerUid) || ownerUid! < 0) return { kill: [], selfHosted: [], refused: "owner-unknown" };
+): { kill: StaleTmuxServer[]; restore: StaleTmuxServer[]; selfHosted: StaleTmuxServer[]; refused: "tmux-unreachable" | "owner-unknown" | null } {
+  if (!Number.isInteger(livePid) || livePid! <= 1) return { kill: [], restore: [], selfHosted: [], refused: "tmux-unreachable" };
+  if (!Number.isInteger(ownerUid) || ownerUid! < 0) return { kill: [], restore: [], selfHosted: [], refused: "owner-unknown" };
+  const liveAgents = descendantRows(procs, livePid!).filter((p) => isAgentCommand(p.command)).length;
   const kill: StaleTmuxServer[] = [];
   const selfHosted: StaleTmuxServer[] = [];
   for (const server of findStaleTmuxServers(procs, livePid, ownerUid)) {
@@ -341,7 +349,31 @@ export function staleTmuxServerKillPlan(
     if (server.ambiguous || server.pid === selfPid || server.tree.some((p) => p.pid === selfPid)) selfHosted.push(server);
     else kill.push(server);
   }
-  return { kill, selfHosted, refused: null };
+  // One socket, one winner: the largest generation that outnumbers the live one.
+  const fleet = kill.reduce<StaleTmuxServer | null>((best, s) => (s.agents > (best?.agents ?? liveAgents) ? s : best), null);
+  return fleet
+    ? { kill: [], restore: [fleet], selfHosted, refused: null }
+    : { kill, restore: [], selfHosted, refused: null };
+}
+
+/**
+ * Hand the default socket back to an orphaned server. tmux recreates its
+ * socket on SIGUSR1, which unlinks whatever sits at the path now, so the server
+ * that replaced it becomes the unreachable one. True once tmux answers from
+ * `pid` again.
+ */
+export async function restoreTmuxServerSocket(pid: number, waitMs = 10_000): Promise<boolean> {
+  try {
+    process.kill(pid, "SIGUSR1");
+  } catch {
+    return false;
+  }
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    if ((await liveTmuxServerPid()) === pid) return true;
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 /** The pid of the tmux server behind the default socket, or null when tmux is

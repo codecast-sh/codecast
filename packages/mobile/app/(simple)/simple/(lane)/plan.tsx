@@ -1,4 +1,4 @@
-// The plan on the phone (web app/simple/plan/page.tsx): this month's usage as
+// The plan on the phone (web app/settings/plan/page.tsx): this month's usage as
 // a meter, the plans, and the ways to get more. The figures are the web's
 // (usePlanFigures), and checkout is the web's (useBilling); a Stripe page
 // opens in the browser and returns to the web plan page, and the meter here
@@ -11,7 +11,7 @@ import Svg, { Defs, Pattern, Rect } from 'react-native-svg';
 import { Text } from '@/components/Themed';
 import { openLink, openWebPage } from '@/lib/links';
 import { PLANS } from '@codecast/shared/contracts/assistant';
-import { LANE_COPY, TOPUP_AMOUNTS_USD, conversationPath, conversationTitle, dollars, meterLegend, planCard, planPoints, planPrice, topupLabel, usageHeadline, workedTimes } from '@codecast/web/components/simple/lane';
+import { LANE_COPY, TOPUP_AMOUNTS_USD, conversationPath, conversationTitle, meterLegend, monthShare, planCard, planPoints, planPrice, topupLabel, usageHeadline, workedTimes } from '@codecast/web/components/simple/lane';
 import { useBilling } from '@codecast/web/components/simple/billing';
 import { planDay, usePlanFigures } from '@codecast/web/components/simple/usePlanFigures';
 import { supportMailto } from '@codecast/web/lib/siteLinks';
@@ -44,7 +44,7 @@ function HeldStripes({ width, color }: { width: number; color: string }) {
 export default function SimplePlan() {
   const { c, s } = useLaneTheme();
   const planFigures = usePlanFigures();
-  const { wallet, known, figures, fill, full, names, resets, lines, history } = planFigures;
+  const { wallet, known, plan, figures, fill, full, names, resets, lines, history } = planFigures;
   const billing = useBilling(openPage);
 
   return (
@@ -89,7 +89,7 @@ export default function SimplePlan() {
         {billing.known && !billing.available ? (
           <Callout icon={<Feather name="info" size={17} color={c.soft} />} style={{ marginBottom: 12 }}>
             {WORDS.cardClosed.before}
-            <Text style={{ color: c.ink2, textDecorationLine: 'underline' }} onPress={() => void openLink(supportMailto(WORDS.cardClosedSubject))} accessibilityRole="link">
+            <Text style={{ color: c.ink2, textDecorationLine: 'underline' }} onPress={() => void openLink(supportMailto(WORDS.cardClosed.subject))} accessibilityRole="link">
               {WORDS.cardClosed.link}
             </Text>
             {WORDS.cardClosed.after}
@@ -164,8 +164,8 @@ export default function SimplePlan() {
                     opacity: disabled ? 0.45 : 1,
                   })}
                 >
-                  <Text style={{ fontSize: 15, fontWeight: '600', color: c.ink }}>{topupLabel(usd).label}</Text>
-                  <Text style={{ fontSize: 12, color: c.soft }}>{topupLabel(usd).note}</Text>
+                  <Text style={{ fontSize: 15, fontWeight: '600', color: c.ink }}>{topupLabel(usd, plan).label}</Text>
+                  <Text style={{ fontSize: 12, color: c.soft }}>{topupLabel(usd, plan).note}</Text>
                 </Pressable>
               );
             })}
@@ -190,7 +190,7 @@ export default function SimplePlan() {
                     <Text style={s.rowTitle} numberOfLines={1}>{title}</Text>
                     <Text style={s.rowSub}>{workedTimes(line.turns)}</Text>
                   </View>
-                  <Text style={s.rowAside}>{dollars(line.cost_usd)}</Text>
+                  <Text style={s.rowAside}>{monthShare(line.cost_usd, figures.cap_usd)}</Text>
                 </LaneRow>
               );
             })}

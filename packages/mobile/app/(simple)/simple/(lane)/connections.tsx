@@ -1,4 +1,4 @@
-// Connections on the phone (web app/simple/connections/page.tsx): the
+// Connections on the phone (web components/integrations/WhiskCard.tsx): the
 // person's mail and calendar, connected through Whisk, what each part lets
 // the assistant do, and connect, disconnect or open Whisk. Whisk's approval
 // comes back to codecast in the browser that started it, where the signed-in

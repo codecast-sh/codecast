@@ -10,6 +10,7 @@
 // off clears the token, killing every copy; turning it back on takes a new
 // one, so an old link never comes back to life.
 import { v } from "convex/values";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { internalQuery, query } from "./functions";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
@@ -50,9 +51,19 @@ export async function claimShareToken(
   // which any free UUID may be) starts with the transcript alone and video is
   // always a fresh choice.
   const dropVideo = table === "transcripts" ? { share_video_token: undefined, share_video_through: undefined } : {};
+  const audit = async (kind: "share_link_minted" | "share_link_revoked", shareToken: string) => {
+    if (!by) throw new Error("A share link change needs the person who made it");
+    await recordAuthorityEvent(ctx, {
+      kind, actor_user_id: by, share_table: table, share_token: shareToken,
+      conversation: table === "conversations" ? (row as any) : null,
+      ...(table !== "conversations" && (row as any).team_id ? { team_id: (row as any).team_id } : {}),
+      detail: { before: { on: !!row.share_token }, after: { on: kind === "share_link_minted", table, row_id: row._id } },
+    });
+  };
   if (token === null) {
     if (row.share_token) {
       await ctx.db.patch(row._id, { share_token: undefined, ...dropVideo } as any);
+      await audit("share_link_revoked", row.share_token);
       await restampCallRuns(ctx, table, row, by && { by, event: "link_off" });
     }
     return;
@@ -64,6 +75,7 @@ export async function claimShareToken(
     .first();
   if (taken) throw new Error("Invalid share token");
   await ctx.db.patch(row._id, { share_token: token, ...dropVideo } as any);
+  await audit("share_link_minted", token);
   await restampCallRuns(ctx, table, row, by && { by, event: "link_on" });
 }
 

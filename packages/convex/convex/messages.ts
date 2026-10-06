@@ -1,4 +1,5 @@
 import { isHostedAgentType, stripPastedContent } from "@codecast/shared/contracts";
+import { claimShareToken } from "./publicShare";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { countersFor } from "./lib/orgCaps";
 import { calibrationSlot } from "./usageCalibration";
@@ -2620,7 +2621,7 @@ export const generateMessageShareLink = mutation({
       if (conversation.share_token) {
         includeConversationLink = true;
       } else if (isOwner) {
-        await ctx.db.patch(conversation._id, { share_token: generateShareToken() });
+        await claimShareToken(ctx, "conversations", conversation, generateShareToken(), authUserId);
         includeConversationLink = true;
       } else {
         throw new Error("Only the conversation owner can make the full conversation public");

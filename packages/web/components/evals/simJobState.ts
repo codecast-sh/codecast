@@ -4,6 +4,7 @@
 // kind, and both paths go through jobState so they read the same.
 
 import type { SimJob } from "@codecast/shared/contracts/evalsApi";
+import { quietTooLong } from "@platform/evals/client";
 
 export type JobState = { state: "idle" } | { state: "starting" } | { state: "running"; job: SimJob | null } | { state: "done"; job: SimJob } | { state: "failed"; error: string; logTail?: readonly string[] };
 
@@ -18,3 +19,6 @@ export function jobState(job: SimJob): JobState {
 export const shownJobState = (local: JobState, last: SimJob | null | undefined): JobState => (local.state !== "idle" || !last ? local : jobState(last));
 
 export const jobLive = (s: JobState): boolean => s.state === "starting" || s.state === "running";
+
+/** A running shrink or sweep with no new step for the stall window reads "stalled?", by the bisect's own rule. */
+export const isJobStalled = (job: Pick<SimJob, "status" | "updatedAt">, now: number) => job.status === "running" && quietTooLong(job.updatedAt, now);

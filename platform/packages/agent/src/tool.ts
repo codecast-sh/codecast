@@ -1,5 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ImageContent, Static, TextContent, TSchema } from "@mariozechner/pi-ai";
+import { stoppedText } from "./outcome";
 import { untrusted, type UntrustedSource } from "./untrusted";
 
 /**
@@ -81,10 +82,6 @@ export interface Tool<P extends TSchema = TSchema> {
   run(args: Static<P>, ctx: ToolContext): ToolOutput | Promise<ToolOutput>;
 }
 
-/** What the model gets for a call the run did not start because it was cancelled or passed its deadline. */
-export function stoppedText(name: string): string {
-  return `${name} did not run: the run stopped before it could.`;
-}
 
 /** Declares a tool. The identity function, there so `args` is typed from `parameters`. */
 export function defineTool<P extends TSchema>(tool: Tool<P>): Tool<P> {

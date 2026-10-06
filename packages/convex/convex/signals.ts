@@ -62,6 +62,10 @@ const signalArgs = {
   subject: v.optional(v.string()),
   goal_hint: v.optional(v.string()),
   observed_at: v.optional(v.number()),
+  // The role whose run introduced the defect (the fix-loop finder, szz:<sha>):
+  // by id from a server path, by handle from `cast signal add --role`.
+  role_id: v.optional(v.id("org_roles")),
+  role_handle: v.optional(v.string()),
 };
 
 // Where the signal is filed: the workspace the caller named, else the calling
@@ -87,6 +91,8 @@ type SignalInput = {
   subject?: string;
   goal_hint?: string;
   observed_at?: number;
+  role_id?: Id<"org_roles">;
+  role_handle?: string;
 };
 
 export type CauseCandidate = {
@@ -122,6 +128,8 @@ export function normalizeSignal(input: SignalInput): SignalInput {
     subject: clip(input.subject, SHORT_MAX),
     goal_hint: clip(input.goal_hint, SHORT_MAX),
     observed_at: input.observed_at,
+    role_id: input.role_id,
+    role_handle: clip(input.role_handle, SHORT_MAX),
   };
   for (const key of Object.keys(out) as (keyof SignalInput)[]) if (out[key] === undefined) delete out[key];
   return out;
@@ -383,6 +391,7 @@ export async function commitSignal(ctx: any, db: WorkDb, userId: Id<"users">, si
     project_id: projectId ?? task?.project_id,
     attach,
     reopened: reopened || undefined,
+    role_id: signal.role_id ?? (await roleIdByHandle(ctx, signal.role_handle)),
   });
   return { signal_id: signalId, short_id: shortId, task_id: taskId, task_short_id: taskShortId, attach, reopened, signal_count: signalCount };
 }
@@ -785,3 +794,11 @@ export const publishProfile = mutation({
     return { projects: out };
   },
 });
+
+/** The role a finder named by handle, or nothing: a wrong handle never blocks a signal. */
+async function roleIdByHandle(ctx: { db: any }, handle: string | undefined): Promise<Id<"org_roles"> | undefined> {
+  if (!handle) return undefined;
+  const want = handle.replace(/^@/, "").toLowerCase();
+  const roles: any[] = await ctx.db.query("org_roles").collect();
+  return roles.find((r) => (r.handle ?? "").toLowerCase() === want)?._id;
+}

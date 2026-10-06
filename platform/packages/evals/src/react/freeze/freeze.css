@@ -1,0 +1,292 @@
+/* The Freeze group: the freeze page (FreezeView), two runs side by side
+   (CompareView), and the surface page's assay plate, compare drawer and epoch
+   sheet (FreezeLedger, ComparePanel, EpochDiffSheet). Every rule here is one
+   only this group's views use; the seismograph marks the rep strip borrows
+   (.ev-sf-seis, -pin, -passmark, -median, -axis, -xlabel, -ylabel) stay with
+   the Surface group. Colour and type only through the --ev-* tokens. */
+
+/* ── The freeze page ─────────────────────────────────────────────────────── */
+
+.ev-fz { display: flex; flex-direction: column; gap: 16px; }
+.ev-fz-header { display: flex; flex-direction: column; gap: 8px; }
+.ev-fz-titlerow { display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 8px; }
+.ev-fz-meta { display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 4px; font-size: 12px; }
+.ev-fz-subject { color: var(--ev-text-secondary); }
+.ev-fz-criteria { display: inline-flex; align-items: center; gap: 4px; padding: 0; font: inherit; font-size: 12px; background: transparent; border: 0; cursor: pointer; }
+.ev-fz-criteria:hover { text-decoration-line: underline; }
+.ev-fz-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
+.ev-chip.ev-fz-attribute { height: 28px; padding: 0 10px; color: var(--ev-text); }
+.ev-fz-icon-sm { width: 12px; height: 12px; flex-shrink: 0; }
+
+/* Wide: the moment on the left (2fr), the reps on the right (3fr). Narrow: the reps first. */
+.ev-fz-layout[data-ev-layout="wide"] { display: grid; gap: 20px; align-items: start; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+.ev-fz-layout[data-ev-layout="narrow"] { display: flex; flex-direction: column; gap: 20px; }
+.ev-fz-layout[data-ev-layout="narrow"] > .ev-fz-pane--left { order: 1; }
+.ev-fz-pane, .ev-fz-stripbox { min-width: 0; }
+.ev-fz-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Small print beside a heading. */
+.ev-fz-aside { font-size: 11px; font-weight: 400; }
+.ev-fz-nowrap { white-space: nowrap; }
+.ev-fz-wrap { flex-wrap: wrap; }
+.ev-fz-empty { margin: 0; font-size: 12.5px; }
+
+/* The label a person gave. */
+.ev-fz-label { display: flex; flex-direction: column; gap: 8px; padding: 12px 16px; }
+.ev-fz-verdict { display: flex; align-items: baseline; gap: 8px; }
+.ev-fz-verdict-word { font-size: 22px; line-height: 1; font-weight: 500; }
+.ev-fz-verdict-key { font-size: 11.5px; }
+.ev-fz-field { display: grid; grid-template-columns: 64px 1fr; column-gap: 12px; font-size: 12.5px; }
+.ev-fz-field-key { padding-top: 1px; font-size: 11px; }
+.ev-fz-prose { white-space: pre-wrap; overflow-wrap: break-word; }
+.ev-fz-pre { margin: 0; font-size: 12px; white-space: pre-wrap; }
+
+/* The frozen moment: every line, the cut, and what follows dimmed. */
+.ev-fz-moment { overflow: hidden; }
+.ev-fz-moment-head { padding: 10px 16px; border-bottom: 1px solid var(--ev-rule); }
+.ev-fz-moment-none { margin: 0; padding: 16px; font-size: 12.5px; }
+.ev-fz-moment-list { margin: 0; padding: 0; list-style: none; }
+.ev-fz-line { display: grid; grid-template-columns: 26px 1fr; column-gap: 12px; padding: 8px 16px; font-size: 12.5px; line-height: 1.55; }
+.ev-fz-line[data-ev-moment-line="after"] { opacity: 0.48; }
+.ev-fz-line-n { padding-top: 3px; font-size: 10.5px; text-align: right; }
+.ev-fz-line-body { min-width: 0; }
+.ev-fz-line-meta { display: flex; align-items: baseline; gap: 8px; font-size: 11px; }
+.ev-fz-line-from { font-weight: 600; color: var(--ev-text-muted); }
+.ev-fz-line[data-direction="in"] .ev-fz-line-from { color: var(--ev-text); }
+/* A person's line reads plain; an agent's sits on a rule; a system line is mono and dim. */
+.ev-fz-line-text { white-space: pre-wrap; overflow-wrap: break-word; color: var(--ev-text-secondary); border-left: 2px solid var(--ev-rule); padding-left: 8px; }
+.ev-fz-line[data-direction="in"] .ev-fz-line-text { color: inherit; border-left: 0; padding-left: 0; }
+.ev-fz-line[data-direction="system"] .ev-fz-line-text { font-size: 11.5px; color: var(--ev-text-dim); border-left: 0; padding-left: 0; }
+.ev-fz-cut { display: flex; align-items: center; gap: 8px; padding: 6px 16px; }
+.ev-fz-cut-perf {
+  flex: 1 1 0%;
+  height: 6px;
+  background-image: radial-gradient(circle, var(--ev-text-dim) 1.1px, transparent 1.4px);
+  background-size: 7px 6px;
+  background-repeat: repeat-x;
+  background-position: left center;
+  opacity: 0.7;
+}
+.ev-fz-cut-word { font-size: 11px; font-weight: 600; color: var(--ev-text); }
+
+/* The rep strip, its legend and the A and B marks. */
+.ev-fz-strip { overflow: hidden; }
+.ev-fz-strip-svg { display: block; }
+.ev-fz-strip-empty { padding: 24px 16px; font-size: 12.5px; }
+.ev-fz-ring { fill: none; stroke: var(--ev-text); stroke-width: 1.3; }
+.ev-fz-ring-letter { font-size: 10px; font-weight: 700; fill: var(--ev-text); }
+.ev-fz-legend { display: flex; flex-wrap: wrap; align-items: center; column-gap: 16px; row-gap: 4px; font-size: 11.5px; }
+.ev-fz-key { display: inline-flex; align-items: center; gap: 6px; }
+
+/* The pair: its story, the pairing toggle, the two cards and the prompt between them. */
+.ev-fz-pairbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding-top: 4px; }
+.ev-fz-cards { display: flex; flex-direction: column; gap: 8px; }
+.ev-fz-gap { height: 4px; }
+.ev-fz-card-wait { padding: 20px 16px; font-size: 12.5px; }
+.ev-fz-cardhead { display: inline-flex; align-items: center; gap: 8px; }
+.ev-fz-cardhead-meta { font-size: 12px; font-weight: 400; }
+.ev-fz-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  min-width: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--ev-bg);
+  background: var(--ev-text);
+}
+.ev-fz-slot[data-ev-slot="prod"] { background: var(--ev-text-muted); }
+
+/* A prompt change is a new epoch, not a verdict: neutral, no pass or fail colour. */
+.ev-fz-prompt-same { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; }
+.ev-fz-prompt { overflow: hidden; border: 1px solid var(--ev-border); border-radius: 8px; background: var(--ev-bg-alt); }
+.ev-fz-prompt-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; font: inherit; color: inherit; text-align: left; background: transparent; border: 0; cursor: pointer; }
+.ev-fz-prompt-title { font-size: 13px; font-weight: 600; color: var(--ev-text); }
+.ev-fz-prompt-body { display: flex; flex-direction: column; gap: 8px; padding: 0 12px 12px; }
+
+/* ── Two runs side by side ───────────────────────────────────────────────── */
+
+.ev-cmp-head { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 12px; align-items: stretch; }
+.ev-cmp-side { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.ev-cmp-side header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ev-cmp-tag { font: 600 11px var(--ev-font-mono); width: 18px; height: 18px; display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; border: 1px solid var(--ev-rule); color: var(--ev-text); flex-shrink: 0; }
+.ev-cmp-mid { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 6px; }
+.ev-diffrow { display: grid; grid-template-columns: 70px minmax(120px, 1fr) 90px 22px 90px; gap: 10px; align-items: center; padding: 8px 14px; border-top: 1px solid var(--ev-rule); font-size: 12.5px; }
+.ev-diffrow:first-child { border-top: 0; }
+.ev-diffrow-kind { font-size: 11px; color: var(--ev-text-dim); }
+.ev-arrow { color: var(--ev-text-dim); text-align: center; }
+.ev-broke { color: var(--ev-magenta); }
+.ev-fixed { color: var(--ev-cyan); }
+.ev-cmp-sub { font-size: 12px; font-weight: 400; }
+.ev-cmp-sub--sm { font-size: 11.5px; }
+.ev-cmp-right { text-align: right; }
+.ev-cmp-prompts { display: flex; flex-direction: column; gap: 12px; }
+
+/* ── The assay plate ────────────────────────────────────────────────────── */
+
+.ev-sf-ledger {
+  overflow-x: auto;
+  border: 1px solid var(--ev-rule);
+  border-radius: 10px;
+  background: var(--ev-card);
+  padding: 8px 10px 10px;
+}
+.ev-sf-plate { border-collapse: separate; border-spacing: 0; }
+.ev-sf-plate th, .ev-sf-plate td { padding: 0; text-align: center; vertical-align: middle; }
+.ev-sf-plate td { width: calc(var(--ev-well) + 6px); height: calc(var(--ev-well) + 8px); }
+.ev-sf-plate td > *, .ev-sf-plate td svg { margin: 0 auto; }
+.ev-sf-plate thead th { height: 26px; }
+.ev-sf-plate-col button {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  height: 26px;
+  padding: 0 0 5px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.ev-sf-plate-day {
+  position: absolute;
+  left: 2px;
+  bottom: 5px;
+  font-size: 10px;
+  color: var(--ev-text-dim);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.ev-sf-plate-tick { width: 1px; height: 4px; background: var(--ev-border); }
+.ev-sf-plate-pin { font: 700 10px var(--ev-font-mono); color: var(--ev-cyan); }
+.ev-sf-plate-name {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 190px;
+  max-width: 240px;
+  padding-right: 12px !important;
+  text-align: left !important;
+  background: var(--ev-card);
+}
+tbody .ev-sf-plate-name { display: flex; align-items: center; gap: 6px; height: calc(var(--ev-well) + 8px); }
+.ev-sf-plate-link { display: inline-flex; min-width: 0; font: 12px var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
+.ev-sf-plate-link:hover { text-decoration: underline; text-underline-offset: 2px; }
+.ev-sf-plate-flips { padding-left: 12px !important; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ev-text-dim); text-align: right !important; }
+.ev-sf-well-link { display: inline-flex; border-radius: 50%; }
+.ev-sf-well-link:focus-visible { outline: 2px solid var(--ev-cyan); outline-offset: 1px; }
+
+/* ── The plate's states ──────────────────────────────────────────────────── */
+
+/* A pinned column and the column under the pointer. */
+.ev-sf-plate .ev-sf-plate-pinned { background: color-mix(in srgb, var(--ev-cyan) 11%, transparent); }
+.ev-sf-plate .ev-sf-plate-hovered { background: color-mix(in srgb, var(--ev-text) 6%, transparent); }
+.ev-sf-plate .ev-sf-plate-pinned.ev-sf-plate-hovered { background: color-mix(in srgb, var(--ev-cyan) 17%, transparent); }
+.ev-sf-plate-flips.ev-sf-plate-flips--some { color: var(--ev-text); font-weight: 600; }
+/* A freeze that flipped between the pinned pair. The name cell is sticky, so the tint mixes into the card colour rather than into transparency. */
+.ev-sf-plate tr[data-ev-pair-flip="broke"] > th { background: color-mix(in srgb, var(--ev-magenta) 7%, var(--ev-card)); }
+.ev-sf-plate tr[data-ev-pair-flip="fixed"] > th { background: color-mix(in srgb, var(--ev-cyan) 7%, var(--ev-card)); }
+/* A freeze that flipped between the pinned pair: a mark before its name, and its row first. */
+.ev-sf-pairflip { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
+
+/* ── Compare drawer ─────────────────────────────────────────────────────── */
+
+.ev-sf-compare {
+  position: sticky;
+  top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: calc(100cqh - 24px);
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+  padding: 14px 16px 16px;
+  animation: ev-fade-in 200ms ease-out both;
+}
+.ev-sf-compare-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ev-sf-compare-head > .ev-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-sf-compare-actions { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+.ev-sf-compare-actions .ev-btn { white-space: nowrap; }
+.ev-sf-sets { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.ev-sf-set { min-width: 0; padding: 10px 12px; border: 1px solid var(--ev-rule); border-radius: 7px; background: var(--ev-bg); }
+.ev-sf-set-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ev-text-muted); }
+.ev-sf-pinmark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  font: 700 9.5px var(--ev-font-mono);
+  color: var(--ev-cyan);
+  border: 1px solid color-mix(in srgb, var(--ev-cyan) 55%, transparent);
+  border-radius: 3px;
+}
+.ev-sf-set-num { margin: 8px 0 6px; font-size: 28px; line-height: 1; font-weight: 500; letter-spacing: -0.02em; }
+.ev-sf-set-facts { display: grid; grid-template-columns: auto 1fr; gap: 1px 10px; margin: 0; font-size: 11.5px; }
+.ev-sf-set-facts dt { color: var(--ev-text-dim); }
+.ev-sf-set-facts dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; color: var(--ev-text); }
+.ev-sf-set-foot { margin-top: 6px; font: 10.5px var(--ev-font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ev-sf-verdict { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; padding: 9px 12px; border-radius: 7px; background: var(--ev-bg-alt); font-size: 13px; }
+.ev-sf-verdict [data-ev-separation] span { font-size: 13px !important; font-weight: 600; }
+.ev-sf-section { display: flex; flex-direction: column; gap: 8px; }
+.ev-sf-section h4 { margin: 0; }
+.ev-sf-gates { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 12px; }
+.ev-sf-gates li { display: flex; align-items: center; gap: 8px; }
+.ev-sf-gate-words .ev-sf-pinmark { width: 13px; height: 13px; font-size: 8.5px; vertical-align: 1px; }
+.ev-sf-examples { display: flex; flex-direction: column; gap: 14px; }
+.ev-sf-example-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
+.ev-sf-example-head > span:first-child { font-weight: 600; }
+.ev-sf-example-name { font-family: var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
+.ev-sf-example-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+.ev-sf-select {
+  margin-left: auto;
+  height: 24px;
+  max-width: 180px;
+  padding: 0 6px;
+  font: 11.5px var(--ev-font-mono);
+  color: var(--ev-text);
+  background: var(--ev-bg);
+  border: 1px solid var(--ev-rule);
+  border-radius: 5px;
+}
+
+/* The close buttons of the drawer and the sheet. */
+.ev-sf-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 5px; background: none; color: var(--ev-text-dim); cursor: pointer; }
+.ev-sf-iconbtn:hover { color: var(--ev-text); background: var(--ev-bg-highlight); }
+/* The flipped freezes' before and after pairs, under a hairline. */
+.ev-cmp-examples { margin: 0.4rem 0 0.55rem; padding-top: 1rem; border-top: 1px solid color-mix(in srgb, var(--ev-border) 70%, transparent); }
+
+/* ── Epoch sheet (portaled out of the area; tokens.css declares the tokens on the root too) ─ */
+
+.ev-sf-sheet {
+  width: min(880px, 92vw) !important;
+  max-width: none !important;
+  padding: 0 !important;
+  display: flex;
+  flex-direction: column;
+  color: var(--ev-text);
+  background: var(--ev-bg) !important;
+  border-color: var(--ev-rule) !important;
+  font-family: var(--ev-font-ui);
+}
+.ev-sf-sheet-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 22px 14px; border-bottom: 1px solid var(--ev-rule); }
+.ev-sf-sheet-title { display: flex; align-items: center; gap: 10px; font-size: 16px !important; font-weight: 600; color: var(--ev-text) !important; }
+.ev-sf-sheet-sub { margin-top: 6px; font-size: 12.5px !important; color: var(--ev-text-muted) !important; }
+.ev-sf-epoch-chip { padding: 1px 7px; font: 600 12px var(--ev-font-mono); color: var(--ev-text); border: 1px solid var(--ev-rule); border-radius: 4px; background: var(--ev-card); }
+.ev-sf-sheet-body { flex: 1; overflow-y: auto; padding: 16px 22px 28px; display: flex; flex-direction: column; gap: 22px; }
+.ev-sf-sheet-freeze { display: flex; flex-direction: column; gap: 8px; }
+.ev-sf-sheet-freeze + .ev-sf-sheet-freeze { margin-top: 10px; }
+.ev-sf-sheet-freeze-name { font: 600 12.5px var(--ev-font-mono); color: var(--ev-text); font-variant-ligatures: none; }
+.ev-sf-commits { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.ev-sf-commits li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; }
+.ev-sf-commit-subject { color: var(--ev-text); }
+.ev-fz-sheet-heading { min-width: 0; }
+.ev-fz-sheet-keys { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ── The rep strip's labels ──────────────────────────────────────────────── */
+
+/* Haloed, so a dot near the pass mark or an A or B ring never hides its letter. */
+.ev-sf-ylabel--halo { paint-order: stroke; stroke: var(--ev-card); stroke-width: 3px; stroke-linejoin: round; }

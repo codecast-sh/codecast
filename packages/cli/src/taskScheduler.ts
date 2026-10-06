@@ -250,7 +250,11 @@ export class TaskScheduler {
     this.log = (msg, level) => log(`[TaskSched] ${msg}`, level);
   }
 
-  start(): void {
+  /** Adopt the runs a previous daemon left and begin polling. `pollDelayMs`
+   * holds the first poll back (a cautious boot, bootPacing.ts) while adoption
+   * and its lease renewal still happen now: a run's lease is five minutes, and
+   * a delayed renewal would hand the run to reclaimStaleTasks. */
+  start(opts: { pollDelayMs?: number } = {}): void {
     this.log(`Started with daemon_id=${this.daemonId.slice(0, 8)}, polling every ${POLL_INTERVAL_MS / 1000}s`);
     // The first heartbeat renews the lease and settles a run whose pane ended
     // while no daemon was watching.
@@ -260,8 +264,17 @@ export class TaskScheduler {
     }
     this.adoptable = [];
     this.saveRuns();
-    this.poll();
-    this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    const beginPolling = () => {
+      if (this.stopped) return;
+      this.poll();
+      this.pollTimer = setInterval(() => this.poll(), POLL_INTERVAL_MS);
+    };
+    if (opts.pollDelayMs && opts.pollDelayMs > 0) {
+      this.log(`First poll held ${Math.round(opts.pollDelayMs / 1000)}s (boot pacing)`);
+      setTimeout(beginPolling, opts.pollDelayMs);
+    } else {
+      beginPolling();
+    }
   }
 
   stop(): void {

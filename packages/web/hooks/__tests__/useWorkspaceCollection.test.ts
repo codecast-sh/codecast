@@ -55,6 +55,17 @@ describe("useWorkspaceCollection wake signature", () => {
 // rule on the client, from the collection's registry entry, so every list
 // reader inherits it and an archived doc never comes back into a list.
 describe("rows the list channels would not deliver", () => {
+  it("preserves workspace isolation, own keys, canonical ids and order", async () => {
+    const { workspaceRows } = await import("../useWorkspaceCollection");
+    const a = row("a", "open", 1);
+    const b = row("b", "done", 2);
+    const coll = Object.assign(Object.create({ inherited: row("inherited", "open", 1) }), {
+      a, alias: a, foreign: { ...row("foreign", "open", 1), workspace: "team:other" }, b,
+    });
+    expect(workspaceRows("tasks", coll, KEY)).toEqual([a, b]);
+    expect(workspaceRows("tasks", coll, null)).toEqual([]);
+  });
+
   it("an archived doc leaves the docs enumeration and its wake signature", async () => {
     const { workspaceRows } = await import("../useWorkspaceCollection");
     const live = { _id: "d1", workspace: KEY, title: "kept", updated_at: 1 };

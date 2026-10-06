@@ -8,9 +8,16 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { AppLoader } from "../../../components/AppLoader";
 import { buildDesktopDeepLink } from "../../../lib/desktop";
 import { oauthProviderButton } from "@platform/auth/web";
+import { useLocalAuth } from "../../../lib/localAuth";
+import { markCliConnected } from "../../../lib/cliConnected";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
+  // /login sends a visitor holding a stored token straight back here, so
+  // leaving for /login while that token is still being validated ping-pongs
+  // between the two pages. Wait instead: a rejected token is cleared from
+  // storage, which flips this to false and the redirect below runs once.
+  const localAuthed = useLocalAuth();
   const currentUser = useQuery(
     api.users.getCurrentUser,
     isAuthenticated ? {} : "skip"
@@ -41,6 +48,14 @@ function CliAuthContent() {
   // and works only from that machine. Absent (an older CLI, the desktop sign
   // in, whose token is consumed by the exchange anyway), the token is unbound.
   const deviceIdParam = searchParams.get("device_id");
+
+  // The person's next stop is the terminal's setup questions, then their
+  // sessions. Land this tab in the inbox, where those sessions appear as the
+  // daemon syncs them, instead of leaving it on a page that says to close it.
+  const handOffToInbox = () => {
+    markCliConnected();
+    setTimeout(() => router.replace("/inbox"), 1500);
+  };
 
   const deliverAuth = async () => {
     setStatus("sending");
@@ -104,6 +119,7 @@ function CliAuthContent() {
           return;
         }
         setStatus("success");
+        handOffToInbox();
         return;
       }
     }
@@ -116,6 +132,7 @@ function CliAuthContent() {
       });
       setViaRelay(true);
       setStatus("success");
+      if (!isDesktopMode) handOffToInbox();
     } catch (relayErr) {
       console.error("Auth relay deposit error:", relayErr);
       setStatus("error");
@@ -147,6 +164,9 @@ function CliAuthContent() {
       if (oauthStarted.current) {
         return; // OAuth redirect in flight
       }
+      if (localAuthed) {
+        return;
+      }
       // Most people running `cast auth` already have an account — send them to
       // sign-in (which links to sign-up), not the other way around. /login
       // preserves return_to and bounces back here once the session exists.
@@ -167,7 +187,7 @@ function CliAuthContent() {
     // Both modes wait for the explicit Authorize click below — an emailed
     // link must not be able to connect a stranger's device just by being
     // opened in a signed-in browser.
-  }, [isAuthenticated, isLoading, currentUser, nonce, port, device, provider, router, signIn]);
+  }, [isAuthenticated, isLoading, localAuthed, currentUser, nonce, port, device, provider, router, signIn]);
 
   if (isLoading || !isAuthenticated) {
     return (
@@ -338,9 +358,7 @@ function CliAuthContent() {
                 Device: {deviceName}
               </p>
               <p className="text-sol-text-muted text-sm">
-                {viaRelay
-                  ? "You can close this window. If cast auth already stopped waiting, re-run it and sign in again."
-                  : "You can close this window and return to your terminal."}
+                Taking you to your inbox. Finish setup in your terminal, and your sessions appear there as they sync.
               </p>
             </>
           )}

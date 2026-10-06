@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
+import { heldKeysFor } from "./lib/accessKeys";
 import type { Doc, Id } from "./_generated/dataModel";
 
 export const create = mutation({
@@ -61,6 +62,7 @@ export async function insertDecision(
     tags?: string[];
     project_path?: string;
     session_id?: string;
+    source?: "automatic";
   },
   sourceConv: Doc<"conversations"> | null,
 ): Promise<Id<"decisions"> | null> {
@@ -84,9 +86,51 @@ export async function insertDecision(
     conversation_id: sourceConv?._id,
     message_index: fields.message_index,
     tags: fields.tags,
+    source: fields.source,
     created_at: now,
     updated_at: now,
   });
+}
+
+/**
+ * The decisions a viewer can read: every row whose stored `workspace` key is
+ * one the viewer holds (their personal key and each team they belong to), so
+ * a team's decisions are shared among its members. Access reads `workspace`
+ * only; `team_id` is routing. A search walks the title index and keeps the
+ * rows the viewer may read, so it agrees with the list.
+ */
+export async function listDecisionsForViewer(
+  ctx: { db: any },
+  userId: Id<"users">,
+  opts: { project_path?: string; search?: string; limit: number; offset: number },
+): Promise<Doc<"decisions">[]> {
+  const held = await heldKeysFor(ctx, userId);
+  const want = opts.limit + opts.offset;
+  let rows: Doc<"decisions">[];
+  if (opts.search) {
+    const found: Doc<"decisions">[] = await ctx.db
+      .query("decisions")
+      .withSearchIndex("search_decisions_v2", (q: any) =>
+        opts.project_path ? q.search("title", opts.search!).eq("project_path", opts.project_path) : q.search("title", opts.search!),
+      )
+      .take(Math.min(want * 4, 200));
+    rows = found.filter((d) => d.workspace && held.has(d.workspace));
+  } else {
+    const perKey = await Promise.all(
+      [...held].map((key) =>
+        ctx.db
+          .query("decisions")
+          .withIndex("by_workspace", (q: any) => q.eq("workspace", key))
+          .order("desc")
+          .take(want) as Promise<Doc<"decisions">[]>,
+      ),
+    );
+    rows = perKey
+      .flat()
+      .filter((d) => !opts.project_path || d.project_path === opts.project_path)
+      .sort((a, b) => b.created_at - a.created_at);
+  }
+  return rows.slice(opts.offset, opts.offset + opts.limit);
 }
 
 export const list = mutation({
@@ -107,32 +151,12 @@ export const list = mutation({
     const limit = args.limit ?? 20;
     const offset = args.offset ?? 0;
 
-    let decisions;
-    if (args.search) {
-      const searchResults = await ctx.db
-        .query("decisions")
-        .withSearchIndex("search_decisions_v2", (q) =>
-          q.search("title", args.search!).eq("user_id", result.userId)
-        )
-        .take(limit + offset);
-      decisions = searchResults.slice(offset, offset + limit);
-    } else if (args.project_path) {
-      decisions = await ctx.db
-        .query("decisions")
-        .withIndex("by_user_project", (q) =>
-          q.eq("user_id", result.userId).eq("project_path", args.project_path!)
-        )
-        .order("desc")
-        .take(limit + offset);
-      decisions = decisions.slice(offset);
-    } else {
-      decisions = await ctx.db
-        .query("decisions")
-        .withIndex("by_user_id", (q) => q.eq("user_id", result.userId))
-        .order("desc")
-        .take(limit + offset);
-      decisions = decisions.slice(offset);
-    }
+    let decisions = await listDecisionsForViewer(ctx, result.userId, {
+      project_path: args.project_path,
+      search: args.search,
+      limit,
+      offset,
+    });
 
     if (args.tags && args.tags.length > 0) {
       decisions = decisions.filter((d) =>
@@ -149,6 +173,7 @@ export const list = mutation({
       session_id: d.session_id,
       message_index: d.message_index,
       project_path: d.project_path,
+      source: d.source,
       created_at: new Date(d.created_at).toISOString(),
     }));
 

@@ -6,7 +6,7 @@
 import { useCallback, useRef, useState } from "react";
 import type { ChangesResponse } from "@codecast/shared/contracts/evalsApi";
 import { useEvalsChanges, useEvalsClient, useEvalsResource } from "../../../lib/evals/hooks";
-import type { EvalsView } from "../evalsPaths";
+import type { EvalsView } from "@platform/evals/client";
 import { useEvalsHost } from "../host";
 import { SimCatalogView, type SweepState } from "../SimCatalogView";
 import { jobLive, jobState, shownJobState } from "../simJobState";

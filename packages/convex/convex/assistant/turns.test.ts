@@ -246,7 +246,7 @@ describe("approvals", () => {
       pending_call: { tool_call_id: "call_send", tool: "send_mail", args: draft },
     });
     expect(s.decisions).toHaveLength(1);
-    expect(s.decisions[0]).toMatchObject({ question: "Send an email?", blocking: true, status: "pending", asked_user_ids: [user] });
+    expect(s.decisions[0]).toMatchObject({ question: "Send an email to Dana?", blocking: true, status: "pending", asked_user_ids: [user] });
     expect(s.decisions[0].options.map((o) => o.label)).toEqual([APPROVE, ALWAYS_ALLOW, DECLINE]);
     expect(s.decisions[0].context_md).toContain("dana@example.com");
     expect(s.decisions[0].context_md).toContain("Thursday at noon works for me.");

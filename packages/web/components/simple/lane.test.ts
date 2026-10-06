@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { PLANS } from "@codecast/shared/contracts/assistant";
 import { disconnectNote, mailboxLine } from "./connectionWords";
 import { formatDecisionAnswer } from "@codecast/shared/contracts";
-import { mailTools } from "@codecast/convex/convex/assistant/tools/mail";
-import { calendarTools } from "@codecast/convex/convex/assistant/tools/calendar";
+import { calendarTools, mailTools } from "@platform/assistant";
 import { codecastTools } from "@codecast/convex/convex/assistant/tools/codecast";
 import { searchWebTool, webTools, WEB_SEARCH_TOOL } from "@codecast/convex/convex/assistant/tools/web";
 import {
@@ -16,17 +15,17 @@ import {
   planCard,
   topupLabel,
   workedTimes,
+  ledgerLines,
+  meterShort,
+  monthShare,
   LANE_PATHS,
   LANE_SECTIONS,
   laneSurfaceLabel,
   conversationPath,
-  STEPS_SHOWN,
   conversationSubline,
   draftIsLong,
-  visibleSteps,
   approvalAsk,
   accountLine,
-  mailSearch,
   answerTone,
   buildTranscript,
   conversationTitle,
@@ -39,7 +38,6 @@ import {
   isLaneRoutine,
   laneOf,
   meterFill,
-  personName,
   planPoints,
   planPrice,
   routineSchedule,
@@ -112,25 +110,11 @@ describe("approvals", () => {
   });
 });
 
+// The step wording itself is tested in @platform/assistant (steps.test.ts);
+// this checks it covers every tool codecast's assistant offers.
 describe("tool steps", () => {
-  it("reads common tools as plain lines", () => {
-    expect(stepText({ name: "send_email", input: { to: "dana@example.com", body: "hi" } })).toBe("Sent an email to Dana");
-    expect(stepText({ name: "draft_reply", input: JSON.stringify({ to: "Dana Ruiz <dana@x.org>" }) })).toBe("Drafted a reply to Dana Ruiz");
-    expect(stepText({ name: "search_mail", input: { q: "newer_than:7d" } }, { content: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] })).toBe("Read 12 emails from the past week");
-    expect(stepText({ name: "read_calendar", input: {} })).toBe("Checked your calendar");
-    expect(stepText({ name: "create_event", input: { title: "Dinner with Sam" } })).toBe('Added "Dinner with Sam" to your calendar');
-    expect(stepText({ name: "web_search", input: { query: "flights to Lisbon" } })).toBe('Searched the web for "flights to Lisbon"');
-    expect(stepText({ name: "web_fetch", input: { url: "https://www.example.com/a" } })).toBe("Read a page on example.com");
-  });
-
-  it("prefers the sentence a tool wrote for itself", () => {
-    expect(stepText({ name: "search_mail" }, { summary: "Read 12 emails from this week" })).toBe("Read 12 emails from this week");
-  });
-
-  it("never says a tool's name, even for one nobody has phrased", () => {
-    expect(stepText({ name: "frobnicateWidgets" })).toBe("Did a step");
-    expect(stepText({})).toBe("Did a step");
-  });
+  /** A step that came back fine. */
+  const DONE = { content: "ok" };
 
   it("phrases every tool the hosted assistant has", () => {
     // Factories only build their definitions here; no call runs.
@@ -143,28 +127,22 @@ describe("tool steps", () => {
     ].map((t) => t.name).concat(WEB_SEARCH_TOOL.name);
     expect(names.length).toBeGreaterThan(20);
     for (const name of names) {
-      const line = stepText({ name });
+      const line = stepText({ name }, DONE);
       expect({ name, line }).toEqual({ name, line: expect.not.stringMatching(/^Used |^Did a step$|go-ahead/) });
     }
-    expect(stepText({ name: "list_tasks" })).toBe("Checked your to-dos");
-    expect(stepText({ name: "update_task" })).toBe("Updated a to-do");
-    expect(stepText({ name: "archive" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "label" })).toBe("Tidied your inbox");
-    expect(stepText({ name: "cancel_routine" })).toBe("Stopped a routine");
-    expect(stepText({ name: "list_routines" })).toBe("Checked your routines");
-    expect(stepText({ name: "replace_doc" })).toBe("Updated a note");
-    expect(stepText({ name: "read_doc" })).toBe("Read a note");
-    expect(stepText({ name: "recall" })).toBe("Remembered what you told me");
-    expect(stepText({ name: "ask_user" })).toBe("Asked for your go-ahead");
-    expect(stepText({ name: "suggest_reply" })).toBe("Wrote a reply in your voice");
-    expect(stepText({ name: "summarize_thread" })).toBe("Summed up an email");
-    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } })).toBe("Drafted a reply to Dana");
-  });
-
-  it("names people from addresses", () => {
-    expect(personName("sam.lee@x.org")).toBe("Sam");
-    expect(personName(["a@x.org", "b@x.org", "c@x.org"])).toBe("A and 2 others");
-    expect(personName("")).toBeNull();
+    expect(stepText({ name: "list_tasks" }, DONE)).toBe("Checked your to-dos");
+    expect(stepText({ name: "update_task" }, DONE)).toBe("Updated a to-do");
+    expect(stepText({ name: "archive" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "label" }, DONE)).toBe("Tidied your inbox");
+    expect(stepText({ name: "cancel_routine" }, DONE)).toBe("Stopped a routine");
+    expect(stepText({ name: "list_routines" }, DONE)).toBe("Checked your routines");
+    expect(stepText({ name: "replace_doc" }, DONE)).toBe("Updated a note");
+    expect(stepText({ name: "read_doc" }, DONE)).toBe("Read a note");
+    expect(stepText({ name: "recall" }, DONE)).toBe("Remembered what you told me");
+    expect(stepText({ name: "ask_user" }, DONE)).toBe("Asked for your go-ahead");
+    expect(stepText({ name: "suggest_reply" }, DONE)).toBe("Wrote a reply in your voice");
+    expect(stepText({ name: "summarize_thread" }, DONE)).toBe("Summed up an email");
+    expect(stepText({ name: "draft_reply", input: { to: "Dana <dana@x.com>" } }, DONE)).toBe("Drafted a reply to Dana");
   });
 });
 
@@ -184,15 +162,15 @@ describe("transcript", () => {
     const steps = items[1] as Extract<(typeof items)[number], { kind: "steps" }>;
     expect(steps.steps.map((s) => [s.text, s.state])).toEqual([
       ["Read 2 unread emails", "done"],
-      ["Drafted a reply to Dana", "failed"],
+      ["Couldn't draft a reply to Dana", "failed"],
     ]);
     expect((items[3] as any).text).toBe("You said: Approve");
     expect((items[4] as any).steps[0].state).toBe("running");
   });
 
-  it("settles an unanswered step once the turn is over", () => {
+  it("says an unanswered step waits on the person once the turn is over", () => {
     const items = buildTranscript(msgs, false);
-    expect((items[4] as any).steps[0].state).toBe("done");
+    expect((items[4] as any).steps[0]).toMatchObject({ state: "waiting", text: "Waiting for your go-ahead to send an email to Dana" });
   });
 
   it("shows an unsent message as pending", () => {
@@ -281,6 +259,8 @@ describe("usage", () => {
     }
     expect(planPrice(PLANS.free)).toBe("$0 a month");
     expect(planPrice(PLANS.plus)).toBe("$20 a month");
+    expect(planPoints(PLANS.free)[0]).toBe("A starter allowance of work each month");
+    expect(planPoints(PLANS.plus)[0]).toBe("6 times the Free allowance each month");
     expect(planPoints(PLANS.free)[1]).toBe("3 routines, at most every day");
     // The global hourly floor shows on every plan, so the card promises what the server allows.
     expect(planPoints(PLANS.plus)[1]).toBe("25 routines, at most every hour");
@@ -354,30 +334,17 @@ describe("billing return", () => {
 
 describe("plan history", () => {
   it("signs each line by which way it moved extra credit", () => {
-    expect(accountLine({ kind: "topup", amount_usd: 15 })).toEqual({ text: "Extra credit you bought", amount: "+$15.00" });
-    expect(accountLine({ kind: "grant", amount_usd: 5 })).toEqual({ text: "Extra credit from us", amount: "+$5.00" });
-    expect(accountLine({ kind: "refund", amount_usd: 6 })).toEqual({ text: "Refunded extra credit taken back", amount: "-$6.00" });
-    expect(accountLine({ kind: "repay", amount_usd: 2.5 })).toEqual({ text: "Paid back what was owed", amount: "$2.50" });
+    // Work is a share of the person's month (Plus: $12 of work), never dollars.
+    expect(accountLine({ kind: "topup", amount_usd: 15 }, 12)).toEqual({ text: "Extra credit you bought", amount: "+a month" });
+    expect(accountLine({ kind: "grant", amount_usd: 6 }, 12)).toEqual({ text: "Extra credit from us", amount: "+half a month" });
+    expect(accountLine({ kind: "refund", amount_usd: 3 }, 12)).toEqual({ text: "Refunded extra credit taken back", amount: "-a quarter of a month" });
+    expect(accountLine({ kind: "repay", amount_usd: 1.2 }, 12)).toEqual({ text: "Paid back what was owed", amount: "10% of a month" });
   });
 
   it("says what a new month forgave, and leaves out a refund that took nothing", () => {
-    expect(accountLine({ kind: "period_reset", amount_usd: 1.2 })).toEqual({ text: "A new month started", amount: null, detail: "$1.20 used the month before" });
-    expect(accountLine({ kind: "period_reset", amount_usd: 0 })).toEqual({ text: "A new month started", amount: null });
-    expect(accountLine({ kind: "refund", amount_usd: 0 })).toBeNull();
-  });
-});
-
-describe("mail searches", () => {
-  it("reads Gmail's search syntax as plain words", () => {
-    expect(mailSearch("from:dana is:unread newer_than:7d")).toEqual({ unread: true, scope: " from Dana from the past week" });
-    expect(mailSearch('from:"Dana Ruiz <dana@ruiz.studio>" subject:"kitchen plans"')).toEqual({ unread: false, scope: ' from Dana Ruiz about "kitchen plans"' });
-    expect(mailSearch("invoice newer_than:3d -label:spam")).toEqual({ unread: false, scope: ' matching "invoice" from the past 3 days' });
-    expect(mailSearch("has:attachment in:inbox")).toEqual({ unread: false, scope: "" });
-  });
-
-  it("says a search with no count by what it looked for", () => {
-    expect(stepText({ name: "search_mail", input: { query: "from:sam@x.org" } })).toBe("Looked for emails from Sam");
-    expect(stepText({ name: "search_mail", input: {} })).toBe("Looked through your email");
+    expect(accountLine({ kind: "period_reset", amount_usd: 1.2 }, 2)).toEqual({ text: "A new month started", amount: null, detail: "60% of the month before used" });
+    expect(accountLine({ kind: "period_reset", amount_usd: 0 }, 2)).toEqual({ text: "A new month started", amount: null });
+    expect(accountLine({ kind: "refund", amount_usd: 0 }, 2)).toBeNull();
   });
 });
 
@@ -396,15 +363,6 @@ describe("shared list and fold rules", () => {
     expect(draftIsLong("x".repeat(421))).toBe(true);
     expect(draftIsLong(Array(10).fill("a").join("\n"))).toBe(true);
     expect(draftIsLong(Array(9).fill("a").join("\n"))).toBe(false);
-  });
-
-  it("never folds away a single step", () => {
-    const steps = (n: number) => Array.from({ length: n }, (_, i) => i);
-    expect(visibleSteps(steps(STEPS_SHOWN + 1), false)).toEqual({ shown: steps(STEPS_SHOWN + 1), more: 0 });
-    const folded = visibleSteps(steps(9), false);
-    expect(folded.shown).toEqual(steps(STEPS_SHOWN - 1));
-    expect(folded.more).toBe(9 - (STEPS_SHOWN - 1));
-    expect(visibleSteps(steps(9), true)).toEqual({ shown: steps(9), more: 0 });
   });
 
   it("lists every lane surface once, home first", () => {
@@ -446,18 +404,34 @@ describe("page rules shared by the web and the phone", () => {
     expect(planCard("free", { ...figures, known: false }, { known: true, plans: ["plus"] })).toEqual({ current: false, offer: null });
   });
 
+  it("lists where the month went costliest first, with the rest under 1% folded", () => {
+    const lines = [{ id: "a", cost_usd: 0.03 }, { id: "b", cost_usd: 0.001 }, { id: "c", cost_usd: 0.2 }, { id: "d", cost_usd: 0 }, { id: "e", cost_usd: 0.005 }];
+    // On Free ($2 of work), 1% is two cents.
+    const { shown, small } = ledgerLines(lines, 2);
+    expect(shown.map((l) => l.id)).toEqual(["c", "a"]);
+    expect(small).toBe(3);
+    expect(LANE_COPY.plan.smallLines(1)).toBe("1 other conversation, each under 1% of a month");
+    expect(ledgerLines([], 2)).toEqual({ shown: [], small: 0 });
+  });
+
   it("says top-ups, turns and the meter in plain words", () => {
-    expect(topupLabel(10).label).toBe("Add $10");
-    expect(topupLabel(10).note).toMatch(/of extra work$/);
+    // A top-up's note is what it buys on the person's plan, never a second dollar figure.
+    expect(topupLabel(10, PLANS.plus)).toEqual({ label: "Add $10", note: "About half a month on Plus" });
+    expect(topupLabel(25, PLANS.plus).note).toBe("About a month on Plus");
+    expect(topupLabel(10, PLANS.free).note).toBe("About 3 months on Free");
     expect(workedTimes(1)).toBe("Worked on it once");
     expect(workedTimes(3)).toBe("Worked on it 3 times");
     const legend = meterLegend({ used_usd: 1, cap_usd: 5, reserved_usd: 0.5, topup_usd: -2 }, "October 21");
     expect(legend.map((l) => `${l.strong ?? ""}${l.rest}`)).toEqual([
-      "$1.00 of $5.00 used",
-      "$0.50 set aside for work in progress",
-      "$2.00 owed for refunded extra credit, taken from next month's allowance first",
+      "Some is set aside for work still running",
+      "Refunded extra credit you'd already used (about 40% of a month) comes out of next month first",
       "Starts fresh October 21",
     ]);
+    expect(meterLegend({ used_usd: 0, cap_usd: 12, reserved_usd: 0, topup_usd: 6 }, null).map((l) => l.rest)).toEqual(["Extra credit for about half a month more"]);
+    expect(meterShort({ used_usd: 3, cap_usd: 12, reserved_usd: 0, topup_usd: 0 })).toBe("25% used this month");
+    expect(meterShort({ used_usd: 0, cap_usd: 12, reserved_usd: 0, topup_usd: 0 })).toBe("Nothing used this month");
+    expect(monthShare(0.001, 12)).toBe("under 1% of a month");
+    expect(monthShare(18, 12)).toBe("1.5 months");
   });
 
   it("a disconnect question stands alone on the mail row", () => {

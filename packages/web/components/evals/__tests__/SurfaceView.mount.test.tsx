@@ -42,11 +42,7 @@ const { useEvalsStore } = await import("../../../store/evalsStore");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { surfaceFixture } = await import("../__fixtures__/surface");
 const { SurfaceView } = await import("../SurfaceView");
-const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair } = await import("../surfaceModel");
-const { surfaceColumns } = await import("../seismographModel");
-const { ledgerOrder } = await import("../surfaceModel");
-const { niceCeil, axisUsd } = await import("../charts/scale");
-const { separationTitle } = await import("../verdictModel");
+const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair, surfaceColumns, ledgerOrder, niceCeil, axisUsd, separationTitle } = await import("@platform/evals/client");
 const { SurfacePage } = await import("../pages/SurfacePage");
 type SurfaceViewProps = import("../SurfaceView").SurfaceViewProps;
 

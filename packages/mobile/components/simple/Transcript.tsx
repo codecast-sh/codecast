@@ -54,7 +54,6 @@ function StepList({ steps }: { steps: Step[] }) {
           <StepMark state={s.state} />
           <Text style={{ fontSize: 14.5, lineHeight: 20, color: s.state === 'failed' ? c.faint : s.state === 'running' ? c.ink2 : c.soft }}>
             {s.text}
-            {s.state === 'failed' ? <Text style={{ fontSize: 13, color: c.danger }}>{WORDS.failed}</Text> : null}
           </Text>
         </View>
       ))}

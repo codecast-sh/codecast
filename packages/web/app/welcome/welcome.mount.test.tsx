@@ -1,5 +1,5 @@
 // /welcome mounted on the real store: each screen shows for the facts that
-// call for it, "Not now" moves on and puts the person in the simple lane, and
+// call for it, "Not now" moves on and puts the person in hosted mode, and
 // tapping the first ask starts a hosted conversation with it and lands in it.
 // The promise follows what the deployment can connect, the first ask waits
 // for what the grant allows, and a failed read never strands the page.
@@ -174,7 +174,7 @@ describe("/welcome", () => {
     await settle(() => text().includes(ASKS.week));
     await act(async () => { (container().querySelector(".wl-lead") as HTMLButtonElement).click(); });
     await settle(() => !!container().querySelector("[data-landed]"));
-    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/simple/c/");
+    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/conversation/");
     await settle(() => starts.length > 0);
     expect(starts[0]).toMatchObject({ agent_type: "codecast", first_message: ASKS.week });
   });

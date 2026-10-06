@@ -1,17 +1,20 @@
-// The seam between the Evals views and the app they render in. A view reads
-// the app through `useEvalsHost()` and nothing else: where a link goes, how a
-// key is bound and drawn, what a tooltip or a sheet is, how a time reads, and
-// what the area shows while it cannot reach its data. The views then carry no
-// import of the app's own, which is what lets them move to @platform/evals
-// (docs/architecture/evals-converge.md) and render in another product.
+// Codecast's host for the shared Evals views (@platform/evals/react): how a
+// link moves the pane, how a key is bound and drawn, what a tooltip, a sheet
+// or a before and after pair is, how a time reads, what the area shows while
+// the daemon is out of reach, and codecast's own parts of a page (the run
+// anatomy, the analyzer grade, the Multiplayer sim, the routes only codecast
+// serves). The contract these slots fill is platform's (react/host.ts).
 //
-// The first half is the contract (it moves with the views); the second is
-// codecast's host. The slots that hold a component are typed by codecast's
-// own components for now, so a view switches to a slot without changing a prop.
+// `CodecastEvalsProvider` is the area's mount: platform's provider over the
+// evals store, so the answers live in the store's memory-only cache and a
+// failure that means the area cannot answer moves the store's connection.
 
-import { createContext, useCallback, useContext, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { FolderOpen, RotateCcw } from "lucide-react";
 import type { RunResponse } from "@codecast/shared/contracts/evalsApi";
+import { runCommands } from "@platform/evals/client";
+import { EvalsProvider, TextPane, VerdictGlyph, type EvalsHost, type EvalsHostInput, type ExamplePairExample } from "@platform/evals/react";
 import { toast } from "sonner";
 import { SESSION_TRAILER_KEY, splitSessionTrailer } from "@codecast/shared/blame";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -19,12 +22,13 @@ import { landOn } from "../../hooks/useDiffAddress";
 import { useTabActive, useTabVisible } from "../../hooks/usePagePresence";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatDuration, formatFullTimestamp, formatRelativeTime } from "../../lib/conversationFormat";
-import { useEvalsConnection } from "../../lib/evals/hooks";
+import { useEvalsClient, useEvalsConnection, useEvalsResource } from "../../lib/evals/hooks";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { parseUnifiedDiffSections } from "../../lib/unifiedDiffParser";
 import { copyToClipboard } from "../../lib/utils";
 import { formatShortcutParts, getShortcutsForAction, hasOpenModal, isEditableTarget, useShortcuts, type ShortcutAction } from "../../shortcuts";
-import { useEvalsStore } from "../../store/evalsStore";
+import { evalsResourceCache, onEvalsFailure, useEvalsStore } from "../../store/evalsStore";
+import { codecastEvalsPaths, evalsHref } from "./evalsPaths";
 import { HoverTip, useContainerWidth } from "../ActivityHeatmap";
 import { ExamplePair } from "../decisions/ChangeCardView";
 import { DiffView } from "../DiffView";
@@ -36,135 +40,7 @@ import { useRepoLocation } from "../repo/useRepoFamily";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetTitle } from "../ui/sheet";
 import { useCodecastRunPanels } from "./runPanels";
-
-// ── The contract ────────────────────────────────────────────────────────────
-
-/** One key a page answers: the key it asks for, what it does, and the handler (false declines, so the key falls through). */
-export interface EvalsShortcut {
-  keys: string;
-  label: string;
-  run(): boolean | void;
-}
-
-export interface EvalsHost {
-  /** Where the area is mounted: "/evals". */
-  basePath: string;
-  /** Moves the pane the page sits in. A hook, because both routers are (a split sibling stays put). */
-  useNavigate(): (href: string, opts?: { replace?: boolean }) => void;
-  useSearchParams(): URLSearchParams;
-  /** The address's fragment, "#guard" or "". */
-  useHash(): string;
-  /**
-   * Each time `target` changes to a value: scrolls a root until `find`'s
-   * element sits `margin` below its top, and holds it there while the page
-   * settles (its content may still be arriving). A null target lands nowhere.
-   */
-  useLandOn(target: string | null, getRoot: () => HTMLElement | null | undefined, find: (root: HTMLElement, target: string) => HTMLElement | null | undefined, margin: number): void;
-  /** Binds a page's keys by action id while `enabled`. A host with a key registry binds the id; a plain one binds `keys`. */
-  useShortcuts(map: Record<string, EvalsShortcut>, enabled?: boolean): void;
-  /** The caps to draw for an action: the host's binding of the id, else `keys`. */
-  keyParts(action: string, keys: string): string[];
-  /** True while a key press belongs to a field or an open dialog, so a page's own key listener stands down. */
-  keysBusy(target: EventTarget | null): boolean;
-  ui: {
-    KeyCap: typeof KeyCap;
-    HoverTip: typeof HoverTip;
-    Sheet: { Root: typeof Sheet; Content: typeof SheetContent; Title: typeof SheetTitle; Description: typeof SheetDescription; Close: typeof SheetClose };
-    SegmentedToggle: typeof SegmentedToggle;
-    ExamplePair: typeof ExamplePair;
-    EmptyState: ComponentType<{ title: string; description: string; action?: { label: string; href: string } }>;
-    DiffView: typeof DiffView;
-    /** The session that wrote a commit, as the host names a session. */
-    SessionPill: ComponentType<{ id: string }>;
-  };
-  format: {
-    /** A span between two times: "4m", "1h 12m". */
-    duration(startMs: number, endMs?: number): string;
-    /** How long ago, bare: "3m", "2d" (the caller adds "ago"). */
-    timeAgo(at: number, now?: number): string;
-    /** How long ago, in words: "3 minutes ago". */
-    relativeTime(at: number, now?: number): string;
-    fullTimestamp(at: number): string;
-  };
-  /** A clock that ticks every `granularityMs`, shared by everything on that tick. */
-  useNow(granularityMs: number): number;
-  /** Whether this pane is on screen: live polling pauses when it is not. */
-  useVisible(): boolean;
-  /** Whether this pane is the one the keys belong to. */
-  useActive(): boolean;
-  useContainerWidth: typeof useContainerWidth;
-  /** Puts text on the clipboard and says so. */
-  copy(text: string, label?: string): Promise<void>;
-  /**
-   * Whether the area can reach its data. `state` is what the shell stamps on
-   * itself; `screen` replaces the view while the data is out of reach (null
-   * once connected).
-   */
-  useConnection(): { state: string; screen: ReactNode | null };
-  parseUnifiedDiff?: typeof parseUnifiedDiffSections;
-  /**
-   * How the host reads the session that wrote a commit, from the session
-   * trailer git hands over (`CommitRef.session`, the raw value). Without it a
-   * commit names no session and its message shows whole.
-   */
-  commitSession?: {
-    /** The session id a trailer value names, or null for anything the host does not take as one. */
-    id(trailer: string): string | null;
-    /** A commit message with the host's session trailer lines taken out, since the pill already shows them. */
-    strip(message: string): string;
-  };
-  /**
-   * A host's own tabs under a run, after Verdict and Moment: codecast's run
-   * anatomy (calls, agent, guard, files), another product's own panels. A hook,
-   * so a panel keeps its state (an open file) while the reader moves between
-   * tabs; it is called once per render of the run, whichever tab is open.
-   */
-  useRunPanels?(run: RunResponse, ctx: RunPanelContext): RunPanel[];
-}
-
-/** One tab a host adds under a run. */
-export interface RunPanel {
-  /** The tab's id, which is also its address (`#guard`). */
-  id: string;
-  label: string;
-  /** A number beside the label. */
-  count?: number;
-  /** A dot on the tab, and the words that say why it is there. Null or absent draws none. */
-  flag?: string | null;
-  /** The tab's content, drawn while it is open. */
-  body: ReactNode;
-}
-
-/** What the run page knows that a host's panels read. */
-export interface RunPanelContext {
-  /** The run the prompt files diff against: the same freeze in the previous prompt epoch, or why there is none. */
-  previousEpoch: { id: string | null; why: string };
-}
-
-const EvalsHostContext = createContext<EvalsHost | null>(null);
-
-export function EvalsHostProvider({ host, children }: { host: EvalsHost; children: ReactNode }) {
-  return <EvalsHostContext.Provider value={host}>{children}</EvalsHostContext.Provider>;
-}
-
-/** The app the view renders in. Outside a provider (a view mounted alone in a test) it is codecast's. */
-export function useEvalsHost(): EvalsHost {
-  return useContext(EvalsHostContext) ?? codecastEvalsHost;
-}
-
-/** The one copy behaviour every Evals copy control shares: the host's clipboard and notice, and a check mark for a moment. */
-export function useCopy(text: string): [copied: boolean, copy: () => Promise<void>] {
-  const host = useEvalsHost();
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    await host.copy(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1400);
-  };
-  return [copied, copy];
-}
-
-// ── Codecast's host ─────────────────────────────────────────────────────────
+import { SimFoot, simMoved } from "./wallSim";
 
 /** The live line under a slow daemon's card: when the shell tries again on its own. */
 function RetryCountdown({ at }: { at: number }) {
@@ -205,21 +81,37 @@ function useCodecastConnection(): { state: string; screen: ReactNode | null } {
 /**
  * A change card's before and after pair. It sizes its columns by the nearest
  * `cc` container (changeCard.css: the two stack below 640px), which the change
- * card it was made for draws around it; here the host draws that container.
+ * card it was made for draws around it; here the host draws that container,
+ * unless the view keeps the pair side by side.
  */
-function ContainedExamplePair(props: Parameters<typeof ExamplePair>[0]) {
+function ContainedExamplePair({ ex, stack = true }: { ex: ExamplePairExample; stack?: boolean }) {
+  if (!stack) return <ExamplePair ex={ex} />;
   return (
     <div style={{ containerType: "inline-size", containerName: "cc" }}>
-      <ExamplePair {...props} />
+      <ExamplePair ex={ex} />
     </div>
+  );
+}
+
+/** The analyzer's own grade of an org-review rep, at the foot of its Verdict tab. */
+function AnalyzerGrade({ run }: { run: RunResponse }) {
+  if (!run.extra) return null;
+  return (
+    <section className="ev-section" data-ev-extra>
+      <h2 className="ev-title">
+        <VerdictGlyph state="unscored" /> Analyzer grade
+      </h2>
+      {run.extra.gradeAuto !== undefined && <TextPane name="grade-auto.json" text={JSON.stringify(run.extra.gradeAuto, null, 2)} open />}
+      {run.extra.hashes !== undefined && <TextPane name="hashes.json" text={JSON.stringify(run.extra.hashes, null, 2)} />}
+    </section>
   );
 }
 
 /** The registry's first binding of an action id (shortcuts/registry.ts), which names the context it fires in. */
 const bindingOf = (action: string) => getShortcutsForAction(action as ShortcutAction)[0];
 
-export const codecastEvalsHost: EvalsHost = {
-  basePath: "/evals",
+export const codecastEvalsHost = {
+  basePath: codecastEvalsPaths.basePath,
   useNavigate() {
     const router = useRouter();
     return useCallback((href: string, opts?: { replace?: boolean }) => (opts?.replace ? router.replace(href, { scroll: false }) : router.push(href)), [router]);
@@ -276,6 +168,27 @@ export const codecastEvalsHost: EvalsHost = {
     toast.success("Copied");
   },
   useConnection: useCodecastConnection,
+  navSections: [{ key: "sim", label: "Multiplayer sim", href: evalsHref.sim() }],
+  useSearchIndex: (q) => useEvalsResource("GET /search", q ? { query: { q } } : null).data,
+  useRunFile(runId, path) {
+    const file = useEvalsResource("GET /run/:id/file", runId ? { params: { id: runId }, query: { path } } : null);
+    return { text: file.data?.text ?? null, loading: !!runId && file.loading };
+  },
+  usePatch(sha) {
+    const res = useEvalsResource("GET /patch/:sha", { params: { sha } });
+    return { data: res.data, loading: res.loading, error: res.error };
+  },
+  useBisectActions() {
+    const { call } = useEvalsClient();
+    return useMemo(
+      () => ({
+        plan: (body) => call("POST /bisect/plan", { body }),
+        start: (body) => call("POST /bisect", { body }),
+        stop: (id) => call("POST /bisect/:id/stop", { params: { id } }),
+      }),
+      [call],
+    );
+  },
   parseUnifiedDiff: parseUnifiedDiffSections,
   // Read the way blame reads it: the value is the session link as written, and anything but a full conversation id names nothing.
   commitSession: {
@@ -283,4 +196,30 @@ export const codecastEvalsHost: EvalsHost = {
     strip: (message) => splitSessionTrailer(message).message,
   },
   useRunPanels: useCodecastRunPanels,
-};
+  run: {
+    commands(row, evalsHome) {
+      const c = runCommands(row, evalsHome);
+      return [
+        { text: c.path, what: "the run folder path", label: "path", icon: <FolderOpen /> },
+        { text: c.replay, what: "the replay command", label: "replay", icon: <RotateCcw /> },
+        { text: c.rescore, what: "the rescore command", label: "rescore" },
+      ];
+    },
+    VerdictFoot: AnalyzerGrade,
+  },
+  wall: { moved: simMoved, movedKinds: ["Multiplayer sim failure"], Foot: SimFoot },
+} satisfies EvalsHost;
+
+/**
+ * The shared views' provider over the evals store: answers are kept in the
+ * store's cache, requests go out only while the store is connected (a crash
+ * stops the loads), and a failed call moves the store's connection.
+ */
+export function CodecastEvalsProvider({ host = codecastEvalsHost, children }: { host?: EvalsHostInput; children: ReactNode }) {
+  const transport = useEvalsStore((s) => (s.connection === "connected" ? s.transport : null));
+  return (
+    <EvalsProvider transport={transport} cache={evalsResourceCache} host={host} onFailure={onEvalsFailure}>
+      {children}
+    </EvalsProvider>
+  );
+}

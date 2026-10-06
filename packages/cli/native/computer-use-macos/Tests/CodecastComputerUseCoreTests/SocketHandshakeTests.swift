@@ -105,7 +105,7 @@ final class SocketHandshakeTests: XCTestCase {
         XCTAssertEqual(windows["moveResize"] as? Bool, false)
         XCTAssertEqual(actions["drag"] as? Bool, true)
         XCTAssertEqual(actions["setValue"] as? Bool, true)
-        XCTAssertEqual(observation["ocr"] as? Bool, false)
+        XCTAssertEqual(observation["ocr"] as? Bool, true)
         XCTAssertEqual(observation["annotatedScreenshot"] as? Bool, false)
         XCTAssertEqual(observation["screenshot"] as? Bool, true)
     }

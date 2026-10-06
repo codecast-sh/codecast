@@ -88,6 +88,12 @@
   padding: 0 6px 12px;
 }
 
+/* Pinned is a handful of rows: it always shows whole and the other lists give up the room. */
+.ch-rail-list-pinned {
+  flex: none;
+  overflow: visible;
+}
+
 .ch-chan {
   display: flex;
   align-items: center;
