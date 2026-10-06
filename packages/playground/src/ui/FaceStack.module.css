@@ -1,0 +1,11 @@
+.stack { display: inline-flex; align-items: center; }
+.slot { display: inline-flex; margin-left: calc(var(--size) / -3); border-radius: 35%; }
+.slot:first-child { margin-left: 0; }
+.slot > span { box-shadow: var(--pop-xs); }
+.stack[data-hop] .slot { animation: face-hop var(--t-arrive) var(--squish) both; }
+@keyframes face-hop { 40% { transform: translateY(-4px); } }
+.more {
+  margin-left: calc(var(--size) / -4); height: var(--size); min-width: var(--size); padding: 0 7px;
+  display: inline-grid; place-items: center; border: var(--line); border-radius: var(--r-sm);
+  background: var(--ink); color: var(--butter); font: 800 13px var(--ui); box-shadow: var(--pop-xs);
+}
