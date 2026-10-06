@@ -75,8 +75,8 @@ const DID_CHARS = 160;
 /** A risk line keeps the whole sentences that fit this. */
 const RISK_LINE_CHARS = 320;
 /** The article a story opens to: words the prompt asks for, and the characters a reply is cut to. */
-const BODY_WORDS = 250;
-export const BODY_CHARS = 3200;
+const BODY_WORDS = 400;
+export const BODY_CHARS = 5000;
 /** A single fix or feature commit with a subject this long already reads as a headline (the skip path). */
 export const SKIP_SUBJECT_CHARS = 60;
 
@@ -392,8 +392,8 @@ ${riskCodes.length ? `- For each flagged risk (${riskCodes.join(", ")}), write o
 Fields:
 - headline: what changed, in sentence case, short enough to read at a glance (aim for under ${HEADLINE_TARGET} characters).
 - dek: one short line, not a summary of the work (aim for under ${DEK_TARGET} characters): the stated reason when there is one, otherwise the one fact the headline most needs; "" when the headline says it all. Further detail belongs in the body.
-- body: markdown, "" when the headline and dek say it all, and never repeating them. A short article, at most about ${BODY_WORDS} words:
-  - When the work has distinct parts, give each a short "###" heading that names the part; a single change reads as plain paragraphs, with no headings.
+- body: markdown, "" when the headline and dek say it all, and never repeating them. An article, at most about ${BODY_WORDS} words, that a reader can scan:
+  - Open with a lead paragraph that says what changed, and why when an input says so. Then give each part of the change its own section under a "###" heading that names it, with "####" subheadings when a part has distinct pieces. A heading names its part, never a generic label such as "What changed" or "Why".
   - Place a screenshot where it shows the change, as ![what it shows](img1) with a ref from the list and a caption a reader can take in without the image. A screenshot earns its place by showing the product as its users see it, or a result the words cannot carry; a terminal, a log or code shows the reader nothing new. Use only listed refs.
   - When a session made a page or a canvas that shows the work better than words can (a report, a comparison, a diagram), embed it on a line of its own as embed: page1, after a sentence saying what it shows.
   - When the work changes how an agent behaves (an edit to a prompt, a skill or an agent guide), say what the agent now does differently, quote the instruction briefly as it read before and after, and give any measured result an input states.

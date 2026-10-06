@@ -1,7 +1,8 @@
 import { useMemo } from "react";
-import { pinnedAgentIds, pinnedLaunchOptions, type AgentClientId, type AgentLaunchOption } from "@codecast/shared/contracts";
+import { pinnedAgentIds, pinnedLaunchOptions, pinnedPickerOptions, type AgentClientId, type AgentLaunchOption, type AgentPickerOption, type ConvexAgentType } from "@codecast/shared/contracts";
 // Relative, not "@/": mobile reaches this file and its "@/" is a different tree.
 import { useInboxStore } from "../store/inboxStore";
+import { defaultAgentType, type DefaultAgentState } from "../lib/defaultAgent";
 
 /** The viewer's own pin list (users.pinned_agents), or null when they never
  *  set one. A joined string keeps the subscription quiet across user pushes. */
@@ -26,4 +27,16 @@ export function usePinnedAgentIds(): AgentClientId[] {
 export function usePinnedLaunchOptions(keep?: AgentClientId | null): AgentLaunchOption[] {
   const key = usePinKey();
   return useMemo(() => pinnedLaunchOptions(splitPins(key), keep), [key, keep]);
+}
+
+/** A new-conversation picker's agent row (local and hosted): the pinned
+ *  agents plus `keep`, the agent already chosen. */
+export function usePinnedPickerOptions(keep?: AgentClientId | null): AgentPickerOption[] {
+  const key = usePinKey();
+  return useMemo(() => pinnedPickerOptions(splitPins(key), keep), [key, keep]);
+}
+
+/** The viewer's default agent (lib/defaultAgent), live. */
+export function useDefaultAgentType(): ConvexAgentType {
+  return useInboxStore((s) => defaultAgentType(s as unknown as DefaultAgentState));
 }

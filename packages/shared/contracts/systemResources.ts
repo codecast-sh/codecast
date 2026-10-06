@@ -11,14 +11,12 @@ export interface ResourceProcess {
   rss: number;
   sessionId?: string;
   sharedSessionIds?: string[];
-  /** Started by `sessionId` but outside its agent's process tree (backgrounded,
-   *  nohup, reparented): attributed through its inherited environment. It keeps
-   *  running here when the session moves. */
-  detached?: boolean;
+  /** Started by `sessionId` outside its agent's process tree, found through its
+   *  inherited environment: in a tmux pane the agent created, or a job it
+   *  backgrounded (`&`, nohup) that was reparented. Stopped with the session
+   *  when the session moves, like the tree. */
+  detached?: "tmux" | "background" | true;
 }
-
-/** A process in the session's own tree: it stops or moves with the session's agent. */
-export const movesWithSession = (p: ResourceProcess, sessionId: string) => p.sessionId === sessionId && !p.detached;
 
 export interface ResourcePoint {
   at: number;

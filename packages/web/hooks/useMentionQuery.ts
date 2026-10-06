@@ -2,7 +2,7 @@ import { useCallback, useMemo } from "react";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MentionItem } from "../lib/mentionItem";
-import { memberHandle } from "@codecast/shared/chat";
+import { matchHandle, memberHandle } from "@codecast/shared/chat";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { useInboxStore, convBucketMap, isConvexId } from "../store/inboxStore";
 import type { BucketItem, BucketAssignmentItem } from "../store/inboxStore";
@@ -200,6 +200,17 @@ export function mentionItemMatches(m: MentionItem, query: string): boolean {
   );
 }
 
+/** What a chat composer's @ may offer beyond the shared match: chat names
+ *  people by handle and has no labels. A bare @ belongs to the room (its
+ *  people, its roles, what the thread already cites); once anything is typed,
+ *  sessions compete by title like every other mention surface, so a session
+ *  is reachable by name and not only by its short id. */
+export function chatMentionOffers(m: MentionItem, query: string): boolean {
+  if (m.type === "label" || (m.type === "person" && !m.handle)) return false;
+  if (m.type === "session" && !m.contextAt && !query.trim()) return false;
+  return true;
+}
+
 export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, scope: MentionScope): MentionItem[] {
   const idx = s.mentionIndex || { tasks: {}, docs: {}, plans: {} };
   const merged = (windowRows: Record<string, any>, storeRows: Record<string, any>) => {
@@ -220,10 +231,12 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
       };
     }),
     // People in the team's Slack workspace with no codecast account. One
-    // already matched to a teammate is that teammate's own entry above.
+    // already matched to a teammate is that teammate's own entry above, and so
+    // is one whose handle a teammate answers to: the send resolves the roster
+    // first and reaches Slack only when no teammate matches.
     ...(scope.kind === "team"
       ? Object.values(s.chatSlackPeople || {})
-        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle)
+        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle && !matchHandle(s.teamMembers || [], p.handle))
         .map((p) => ({
           id: `slack:${p.slack_user_id}`, type: "person", label: p.name,
           sublabel: `@${p.handle}`, image: p.avatar_url ?? undefined,

@@ -2639,6 +2639,10 @@ export default defineSchema({
     // terminalize only a row that carries this stamp (a pre-paste mark acked by
     // an unrelated working report lost a cast send on 2026-09-08).
     paste_verified_at: v.optional(v.number()),
+    // When the stuck-message healer re-pended this row for a session with no
+    // live process, so the daemon would resume it. Set once: a row is revived
+    // that way at most one time (see planDeadSessionRevive).
+    dead_session_revived_at: v.optional(v.number()),
     // Present only after a conversation crosses the fenced-execution gate.
     // Legacy columns remain as a UI/backward-compatible projection, but legacy
     // daemon endpoints reject these rows. Convex assigns all four values in the
