@@ -13,6 +13,12 @@ import { composerPresenceEnabled, typingRows, presenceMember } from "../lib/comp
 import { useInboxStore } from "../store/inboxStore";
 import { isConvexId } from "../lib/entityLinks";
 import { PresenceFacepile } from "./PresenceFacepile";
+import { SharedQueue } from "./conversation/SharedQueue";
+import { KeyCap } from "./KeyCap";
+import { isMac } from "../shortcuts";
+import { useJointComposer } from "../hooks/useJointComposer";
+import { armJointSend, composeJointTurn } from "../lib/jointSend";
+import type { JointCandidate } from "../lib/jointSend";
 import { TypingIndicator } from "./chat/TypingIndicator";
 import { rosterIdentity } from "../hooks/useTeamRoster";
 import type { ChatMember } from "../lib/chatViews";
@@ -31,9 +37,13 @@ function useComposerPresence(
   draftText: string,
   opts: { enabled: boolean; forceBroadcast: boolean }
 ): PresenceRow[] {
+  // Where I am reading this transcript rides the same row, so the others can
+  // draw my face in their scroll gutter (ReadingMarks).
+  const anchor = useInboxStore((s) => (s.viewAnchor?.conversationId === conversationId ? s.viewAnchor : null));
   return useDocPresence({
     docId: `compose:${conversationId}`,
     draftText,
+    anchor: anchor ? { message_id: anchor.messageId, offset: anchor.offset } : null,
     enabled: opts.enabled,
     forceBroadcast: opts.forceBroadcast,
   });
@@ -49,7 +59,31 @@ function useComposerPresence(
 //
 // The container keeps its place in the layout and animates its height, so a
 // line arriving never shoves the composer and a line leaving never snaps it.
-export function CollabPresenceBar({ present, showHere, boxed = false }: { present: PresenceRow[]; showHere: boolean; boxed?: boolean }) {
+// The one action that folds my draft and theirs into one turn.
+function SendTogether({ candidates, mineEmpty, onSend }: { candidates: JointCandidate[]; mineEmpty: boolean; onSend: () => void }) {
+  const first = candidates[0]?.from.split(/[\s@]/)[0] || "their";
+  const label = mineEmpty
+    ? candidates.length > 1 ? "Send their drafts" : `Send ${first}'s draft`
+    : candidates.length > 1 ? "Send all together" : `Send with ${first}'s`;
+  return (
+    <button
+      type="button"
+      data-sv-send-together
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onSend}
+      title="One turn, each part under its author's name"
+      className="ml-auto shrink-0 inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan text-[11px] font-medium not-italic hover:bg-sol-cyan/20 transition-colors"
+    >
+      {label}
+      <span className="inline-flex items-center gap-0.5">
+        {isMac ? <><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">⌥</KeyCap></> : <><KeyCap size="xs">Ctrl</KeyCap><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">Alt</KeyCap></>}
+        <KeyCap size="xs">↵</KeyCap>
+      </span>
+    </button>
+  );
+}
+
+export function CollabPresenceBar({ present, showHere, boxed = false, joint }: { present: PresenceRow[]; showHere: boolean; boxed?: boolean; joint?: { candidates: JointCandidate[]; mineEmpty: boolean; onSend: () => void } }) {
   const roster = useInboxStore((s) => rosterIdentity(s.teamMembers)) as ChatMember[];
   const typing = typingRows(present);
   const writer = typing[0];
@@ -68,6 +102,7 @@ export function CollabPresenceBar({ present, showHere, boxed = false }: { presen
               <>
                 <TypingIndicator members={typing.map((p) => presenceMember(p, roster))} />
                 <span className="italic truncate text-sol-text-dim min-w-0" title={writer.draft_text}>{writer.draft_text}</span>
+                {joint && joint.candidates.length > 0 && <SendTogether {...joint} />}
               </>
             ) : (
               <>
@@ -92,18 +127,34 @@ export function CollabPresenceBar({ present, showHere, boxed = false }: { presen
 export const OwnerComposerPresence = memo(function OwnerComposerPresence({
   conversationId,
   showHere = false,
+  onPopulate,
 }: {
   conversationId: string;
   showHere?: boolean;
+  /** Replace the owner's composer text (a claim took words out of it). */
+  onPopulate?: (text: string) => void;
 }) {
   const draft = useInboxStore((s) => s.drafts[conversationId]?.draft_message ?? "") as string;
+  const me = useInboxStore((s) => personName(s.currentUser));
   const present = useComposerPresence(conversationId, draft, { enabled: true, forceBroadcast: false });
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { candidates } = useJointComposer({ conversationId, present, me, draft, applyDraft: (rest) => onPopulate?.(rest) });
+  // The composer's own submit sends it (lib/jointSend): arm, then submit the form.
+  const sendTogether = () => {
+    if (!armJointSend(conversationId)) return;
+    rootRef.current?.closest("[data-sv-composer]")?.querySelector("form")?.requestSubmit();
+  };
   return (
-    <div className="mx-auto conv-col px-2 sm:px-4">
-      <CollabPresenceBar present={present} showHere={showHere} boxed />
+    <div ref={rootRef} className="mx-auto conv-col px-2 sm:px-4">
+      <CollabPresenceBar present={present} showHere={showHere} boxed joint={{ candidates, mineEmpty: !draft.trim(), onSend: sendTogether }} />
     </div>
   );
 });
+
+/** How a person's name reads on a joint turn: the same rule the server's direct send uses. */
+function personName(user: any): string {
+  return user?.name || user?.github_username || user?.email?.split("@")[0] || "Someone";
+}
 
 // ── Collaboration composer ───────────────────────────────────────────────────
 // Shown to a signed-in viewer of a conversation they don't own. Reading is free;
@@ -167,6 +218,8 @@ export const CollabComposer = memo(function CollabComposer({
     enabled: isAuthenticated,
     forceBroadcast: true,
   });
+  const me = useInboxStore((s) => personName(s.currentUser));
+  const { candidates, claimSent } = useJointComposer({ conversationId: conversation._id.toString(), present, me, draft: message, applyDraft: setMessage });
 
   async function handleRequest() {
     if (busy) return;
@@ -175,14 +228,17 @@ export const CollabComposer = memo(function CollabComposer({
     finally { setBusy(false); }
   }
 
-  async function handleSend() {
-    const body = message.trim();
+  async function handleSend(together = false) {
+    // Together: one turn, my words and the others' live drafts each under
+    // their author's name; the server checks each part against its draft.
+    const body = together ? composeJointTurn(me, message.trim(), candidates) : message.trim();
     if (!body || busy) return;
     setBusy(true);
     try {
       // direct: a person typed this, not a session — the agent sees
       // <user-message from="Name">, never an unknown-session relay.
       const res = await sendToSession({ to: convId, body, direct: true });
+      if (together) claimSent(candidates);
       setMessage("");
       setSentHint(res?.target_live === false
         ? "Sent — their session looks offline, they'll get it when back"
@@ -195,6 +251,11 @@ export const CollabComposer = memo(function CollabComposer({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    if (e.key === "Enter" && e.altKey && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey) && canSend && candidates.length > 0) {
+      e.preventDefault();
+      handleSend(true);
+      return;
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       if (canSend) handleSend();
@@ -239,7 +300,8 @@ export const CollabComposer = memo(function CollabComposer({
 
   return (
     <div className="bg-sol-bg">
-      <CollabPresenceBar present={present} showHere={!!conversation.share_token} />
+      {isConvexId(conversation._id.toString()) && <SharedQueue conversationId={conversation._id.toString()} canSteerQueue={canSend} />}
+      <CollabPresenceBar present={present} showHere={!!conversation.share_token} joint={canSend ? { candidates, mineEmpty: !message.trim(), onSend: () => handleSend(true) } : undefined} />
       <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
         <span className="shrink-0">{strip.icon}</span>
         <span className="truncate">{strip.text}</span>

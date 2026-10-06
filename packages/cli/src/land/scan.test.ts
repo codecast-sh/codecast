@@ -90,8 +90,8 @@ test("parseRawDiff drops nested worktrees and node_modules symlinks", () => {
 test("parseRawDiff reads blobs, status and paths with spaces", () => {
   const out = `:100644 100644 ${"a".repeat(40)} ${"b".repeat(40)} M\tsrc/a b.ts\n:000000 100644 ${"0".repeat(40)} ${"c".repeat(40)} A\tnew.ts\n`;
   expect(parseRawDiff(out)).toEqual([
-    { src: "a".repeat(40), dst: "b".repeat(40), status: "M", path: "src/a b.ts" },
-    { src: "0".repeat(40), dst: "c".repeat(40), status: "A", path: "new.ts" },
+    { src: "a".repeat(40), dst: "b".repeat(40), status: "M", path: "src/a b.ts", mode: "100644" },
+    { src: "0".repeat(40), dst: "c".repeat(40), status: "A", path: "new.ts", mode: "100644" },
   ]);
 });
 

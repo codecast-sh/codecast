@@ -20,6 +20,7 @@ import { getUserOrToken } from "./lib/auth";
 import { isTeamMember } from "./lib/access";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
 import { teamVisibleInputs, teamVisibleRecentInsights, type TeamVisibleInput } from "./lib/changesAccess";
+import { sessionImages } from "./lib/sessionMedia";
 import { addDays, localDate, teamTimezone } from "./lib/teamDay";
 import { normalizeRepository, prUrl } from "./lib/gitRefs";
 import { accessibleCommits } from "./commits";
@@ -50,6 +51,9 @@ const WAITING_SCAN = 400;
 const WORKS_INSIGHT_WINDOW_MS = 48 * 60 * 60 * 1000;
 const WORKS_INSIGHT_SCAN = 100;
 const WORKS_PER_GROUP = 8;
+// A session in progress shows its latest screenshots from the last day.
+const WORKS_SHOTS = 3;
+const WORKS_SHOTS_WINDOW_MS = DAY_MS;
 const WORKS_PR_EVENT_WINDOW_MS = 14 * DAY_MS;
 const WORKS_PR_EVENT_SCAN = 300;
 const WORKS_PR_READS = 10;
@@ -314,6 +318,8 @@ export type WorksRow =
       headline: string;
       outcome_type: "blocked" | "progress";
       at: number;
+      /** The session's latest screenshots, for a session the team sees in full. */
+      shots?: string[];
     }
   | {
       _id: string;
@@ -432,6 +438,7 @@ export const inTheWorks = query({
       if (repository && (await inputRepository(ctx, input)) !== repository) continue;
       if (kind === "building" && (await hasLanded(ctx, teamId, input.conversation_id))) continue;
       counts[kind] += 1;
+      const shots = input.mode === "full" ? (await sessionImages(ctx, input.conversation_id, { since: now - WORKS_SHOTS_WINDOW_MS, max: WORKS_SHOTS })).map((i) => i.url) : [];
       out.push({
         _id: `${kind}:${input.conversation_id}`,
         team_id: teamId,
@@ -441,6 +448,7 @@ export const inTheWorks = query({
         headline: input.insight.headline || input.insight.summary.slice(0, 160),
         outcome_type: outcome,
         at: input.insight.generated_at,
+        ...(shots.length ? { shots } : {}),
       });
     }
 

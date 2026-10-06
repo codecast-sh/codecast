@@ -16,10 +16,11 @@ import {
   type CodeCommentRow,
 } from "../lib/prView";
 import { diffLineKey, type DiffLineAnchor } from "../lib/patchParser";
+import type { CodeAnchorText } from "@codecast/shared/comments";
 
 const api = _api as any;
 
-export type ComposingLine = { file: string; anchor: DiffLineAnchor };
+export type ComposingLine = { file: string; anchor: DiffLineAnchor; anchorLines?: CodeAnchorText };
 
 export type LineComments = {
   /** file to anchor key (`diffLineKey`: side and line) to the thread there, with
@@ -27,7 +28,9 @@ export type LineComments = {
    *  draws a row for it. */
   threadsByFile: Map<string, Map<string, CodeCommentRow[]>>;
   composing: ComposingLine | null;
-  openComposer: (file: string, anchor: DiffLineAnchor) => void;
+  /** `anchorLines`: the text under the anchor, stored with a new thread so it
+   *  can be found again after the code moves (shared/comments/codeAnchor.ts). */
+  openComposer: (file: string, anchor: DiffLineAnchor, anchorLines?: CodeAnchorText) => void;
   closeComposer: () => void;
   post: (fields: Record<string, unknown>) => Promise<void>;
   setThreadResolved: (thread: CodeCommentRow[], resolved: boolean) => void;
@@ -71,7 +74,13 @@ export function useLineComments({
   }, [comments, composing]);
 
   const post = useCallback(
-    async (fields: Record<string, unknown>) => {
+    async (rawFields: Record<string, unknown>) => {
+      // A new thread on the line the composer opened on keeps that line's
+      // text; a reply inherits its root's on the server.
+      const fields = !rawFields.parent_id && composing?.anchorLines && rawFields.file_path === composing.file
+        && rawFields.line_number === composing.anchor.lineNumber
+        ? { anchor_lines: composing.anchorLines, ...rawFields }
+        : rawFields;
       const clientId = newCommentClientId();
       // Render it now; the server row carrying this client_id supersedes the
       // stub when the feed echoes it back (the collection's altKey).
@@ -99,13 +108,16 @@ export function useLineComments({
         ...fields,
       });
     },
-    [createComment, repository, ref, conversationId, mirror, user?._id],
+    [createComment, repository, ref, conversationId, mirror, user?._id, composing],
   );
 
   return {
     threadsByFile,
     composing,
-    openComposer: useCallback((file: string, anchor: DiffLineAnchor) => setComposing({ file, anchor }), []),
+    openComposer: useCallback(
+      (file: string, anchor: DiffLineAnchor, anchorLines?: CodeAnchorText) => setComposing({ file, anchor, anchorLines }),
+      [],
+    ),
     closeComposer: useCallback(() => setComposing(null), []),
     post,
     setThreadResolved: setCodeThreadResolved,

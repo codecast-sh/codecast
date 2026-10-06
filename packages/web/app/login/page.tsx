@@ -1,6 +1,5 @@
-import { useState, Suspense } from "react";
+import { Suspense } from "react";
 import Link from "next/link";
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useConvexAuth } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Logo } from "../../components/Logo";
@@ -9,15 +8,9 @@ import { AuthProviderButtons } from "../../components/AuthProviderButtons";
 import { EmailVerificationForm } from "../../components/EmailVerificationForm";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
+import { useEmailAuth } from "../../hooks/useEmailAuth";
 
 function LoginForm() {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [pendingVerification, setPendingVerification] = useState(false);
-
-  const { signIn } = useAuthActions();
   const { isAuthenticated, isLoading } = useConvexAuth();
   // Local-first: an already-signed-in visitor (token in storage) bounces to
   // the app immediately — no waiting on the server handshake, which offline
@@ -28,6 +21,7 @@ function LoginForm() {
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
   const redirectTo = returnTo || "/inbox";
+  const { email, setEmail, password, setPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signIn", redirectTo);
 
   useWatchEffect(() => {
     if (localAuthed || (!isLoading && isAuthenticated)) {
@@ -41,46 +35,9 @@ function LoginForm() {
     );
   }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError("");
-
-    try {
-      const result = await signIn("password", { email, password, flow: "signIn" });
-      if (result && result.signingIn === false) {
-        // The account's email is not verified yet (verification enabled after
-        // it was created) — a code was emailed; collect it to finish sign-in.
-        setPendingVerification(true);
-        setLoading(false);
-        return;
-      }
-      window.location.href = redirectTo;
-    } catch (err) {
-      if (err instanceof Error) {
-        if (err.message.includes("Invalid") || err.message.includes("credentials")) {
-          setError("Invalid email or password. Please try again.");
-        } else if (err.message.includes("not found")) {
-          setError("No account found with this email.");
-        } else {
-          setError("Sign in failed. Please try again.");
-        }
-      } else {
-        setError("An unexpected error occurred.");
-      }
-      setLoading(false);
-    }
-  };
-
   if (pendingVerification) {
     return (
-      <EmailVerificationForm
-        email={email}
-        onVerified={() => {
-          window.location.href = redirectTo;
-        }}
-        onBack={() => setPendingVerification(false)}
-      />
+      <EmailVerificationForm email={email} onVerified={verified} onBack={startOver} />
     );
   }
 

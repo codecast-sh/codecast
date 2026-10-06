@@ -1,0 +1,64 @@
+{
+ "date": "2026-10-06 baseline",
+ "days": 30,
+ "user": "kd700q4pr2m98a3nghfesw4vxx7wkn6z",
+ "messages": 6525,
+ "sessions_created": 10914,
+ "messages_per_new_session": 0.598,
+ "by_relation": {
+  "peer": 3036,
+  "huddle-feed": 1116,
+  "parent->worker": 1029,
+  "worker->parent": 875,
+  "role": 223,
+  "sibling": 214,
+  "unresolved": 30,
+  "descendant": 2
+ },
+ "huddle": {
+  "chunks": 1116,
+  "named": 23,
+  "unnamed": 1093,
+  "noise_pct": 72.7
+ },
+ "hubs": {
+  "recipients_with_5plus_senders": 62,
+  "their_share_pct": 52.4,
+  "top": []
+ },
+ "exact_duplicates": 8,
+ "labelled": {
+  "agent_to_agent": 264,
+  "huddle": 55
+ },
+ "agent_to_agent": {
+  "noise_pct": 7.2,
+  "changed_pct": 50.4,
+  "readable_pct": 24.2,
+  "readable_idle_pct": 21.6,
+  "urgent_pct": 29.5,
+  "kinds": {
+   "result": 59,
+   "coordination": 50,
+   "task": 40,
+   "finding": 38,
+   "redirect": 33,
+   "progress": 21,
+   "answer": 20,
+   "other": 2,
+   "ack": 1
+  },
+  "directing": 142,
+  "directing_from_outside_line": 90,
+  "outside_line_kinds": {
+   "coordination": 30,
+   "task": 22,
+   "result": 12,
+   "redirect": 12,
+   "finding": 10,
+   "answer": 4
+  },
+  "outside_line_followed_pct": 64.4,
+  "worker_to_parent_readable_pct": 52.5
+ }
+}

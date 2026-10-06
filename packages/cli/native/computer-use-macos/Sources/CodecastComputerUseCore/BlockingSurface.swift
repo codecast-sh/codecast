@@ -22,6 +22,14 @@ public enum BlockingSurface {
         "Only this \(noun) is listed: it covers \"\(SnapshotRenderHeuristics.sanitize(windowTitle))\", which does not respond until the \(noun) closes."
     }
 
+    /// The refusal when a sheet opened after the agent's last read. The tree
+    /// is the one just read, so its indexes are the ones to act on next.
+    public static func openedSince(noun: String, index: Int, tree: String) -> String {
+        let body = tree.components(separatedBy: "\n").drop { !$0.isEmpty }.dropFirst().filter { !$0.isEmpty }
+        return "a \(noun) opened after your last read and covers the window, so element \(index) does not respond until it closes. The window now:\n" +
+            body.joined(separator: "\n")
+    }
+
     public static func blockedNote(dialogTitle: String, windowId: Int) -> String {
         "Blocked: the dialog \"\(SnapshotRenderHeuristics.sanitize(dialogTitle))\" is modal, and this window does not respond until it closes. Target it with --window-id \(windowId)."
     }

@@ -435,6 +435,21 @@ export function EscalationDivider({ escalation, conversationShortId, timestamp }
   );
 }
 
+// The watchdog's revive of a session whose process died mid-work: a rule
+// saying what happened, with the note the agent was given behind a click.
+export function ReviveDivider({ content, timestamp }: { content: string; timestamp: number }) {
+  return (
+    <SwitchDivider
+      testId="mid-work-revive"
+      caption="restarted after the agent process exited"
+      content="Codecast sent the agent:"
+      extra={content}
+      timestamp={timestamp}
+      lead={<RefreshCw className="w-3 h-3" strokeWidth={2.2} />}
+    />
+  );
+}
+
 export function MachineMoveDivider({
   content, destination, fromLabel, machineChanged, extra, timestamp,
 }: {
