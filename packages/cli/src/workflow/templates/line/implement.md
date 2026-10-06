@@ -17,6 +17,8 @@ Keep to the approved plan and to about $line.size_budget changed lines; if the w
 
 Write the code, run the project's check command and the failing check, commit on this branch, and push it. Then end your turn with a structured handoff, never a bare summary:
 
-  cast task handoff $task_id --status done --evidence - --files a,b [--pr <url>]
+  cast task handoff $task_id --status done --evidence - --guide - --files a,b [--pr <url>]
+
+Stdin holds the evidence, a line containing only ---, then the change guide: the reviewer's tour of your change in the order that explains it best, one heading per step with its file:start-end on the heading line and why that piece exists under it. The hunks are captured for you.
 
 Use --status blocked or needs_context if you cannot finish, and say why in the evidence.

@@ -45,6 +45,22 @@ export type UserWorkspace = {
   share_since?: number | null;
 };
 
+/**
+ * The one repo a member most plausibly works in with this team and has not
+ * shared yet: the most teammates in it, then the most of the member's own
+ * sessions. Null when teammates share nothing the member also works in.
+ */
+export function pickShareSuggestion(
+  suggestions: SuggestedWorkspace[] | undefined,
+  teamId: Id<"teams"> | string | null,
+): SuggestedWorkspace | null {
+  const open = (suggestions ?? []).filter(
+    (s) => s.matched_member_count > 0 && s.session_count > 0 && !isScratchWorkspace(s.path) && String(s.current_team_id ?? "") !== String(teamId ?? ""),
+  );
+  open.sort((a, b) => b.matched_member_count - a.matched_member_count || b.session_count - a.session_count);
+  return open[0] ?? null;
+}
+
 /** True when the workspace already flows to this team. */
 export function isMappedToTeam(ws: UserWorkspace, teamId: Id<"teams"> | null): boolean {
   return !!teamId && ws.team_id?.toString() === teamId.toString() && ws.auto_share;

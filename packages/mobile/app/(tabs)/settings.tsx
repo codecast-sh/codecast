@@ -15,6 +15,10 @@ import {
   themeLabelOf,
 } from '@/components/settings/SettingsPages';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { useSurface } from '@codecast/web/lib/surfaces';
+import { LANE_COPY, meterShort } from '@codecast/web/components/simple/lane';
+import { usePlanMeter } from '@codecast/web/components/simple/usePlanFigures';
+import { useLaneMailAbilities } from '@codecast/web/components/simple/useLaneMail';
 
 // The settings home is a short list of rows; each opens its own screen
 // (app/settings/[section].tsx), so every switch is one tap deeper and the
@@ -29,6 +33,11 @@ export default function SettingsScreen() {
   const storeTheme = useInboxStore((s) => s.clientState?.ui?.theme);
   const status = currentStatusOf(currentUser);
   const online = devices.filter((d) => d.online).length;
+  // Hosted mode keeps the Machines rows (the agent accounts a machine runs
+  // on, the devices) only for an account that runs one.
+  const machines = useSurface('settings.machines');
+  const meter = usePlanMeter();
+  const mail = useLaneMailAbilities();
   // The route is cast for the same reason the inbox's pushes are: expo's
   // typed-route union only regenerates when Metro runs.
   const open = (section: string) => router.push(`/settings/${section}` as never);
@@ -56,20 +65,39 @@ export default function SettingsScreen() {
         </TouchableOpacity>
       </SettingsGroup>
 
+      {/* The hosted assistant: its plan and month, and mail and calendar through Whisk. */}
+      <SettingsGroup title="Assistant">
+        <NavRow
+          icon="tachometer"
+          label="Plan"
+          description={meter.known ? meterShort(meter.figures) : undefined}
+          detail={meter.known ? meter.plan.label : undefined}
+          onPress={() => open('plan')}
+        />
+        <NavRow
+          icon="envelope-o"
+          label={LANE_COPY.connections.mail}
+          detail={mail.known ? (mail.connected ? LANE_COPY.connections.on : LANE_COPY.connections.off) : undefined}
+          onPress={() => open('mail')}
+        />
+      </SettingsGroup>
+
       <SettingsGroup>
-        <NavRow icon="key" label="Accounts" onPress={() => router.push('/accounts' as never)} />
+        {machines ? <NavRow icon="key" label="Accounts" onPress={() => router.push('/accounts' as never)} /> : null}
         <NavRow
           icon="bell-o"
           label="Notifications"
           detail={currentUser?.notifications_enabled ? 'On' : 'Off'}
           onPress={() => open('notifications')}
         />
-        <NavRow
-          icon="laptop"
-          label="Devices"
-          detail={devices.length ? `${online} online` : undefined}
-          onPress={() => open('devices')}
-        />
+        {machines ? (
+          <NavRow
+            icon="laptop"
+            label="Devices"
+            detail={devices.length ? `${online} online` : undefined}
+            onPress={() => open('devices')}
+          />
+        ) : null}
         <NavRow icon="adjust" label="Appearance" detail={themeLabelOf(storeTheme).label} onPress={() => open('appearance')} />
         <NavRow
           icon="lock"

@@ -1,0 +1,18 @@
+{
+  "asOf": "2026-10-06T12:00:00.000Z",
+  "notes": "Line notes held and sent as one review through cast pr.",
+  "label": {
+    "want": [
+      "cast\\s+pr\\s+(comment|review|notes|show|threads)\\b"
+    ],
+    "avoid": [
+      "gh pr review",
+      "gh api[^\\n]*(comments|reviews)",
+      "gh pr comment"
+    ]
+  },
+  "snapshot": {
+    "captured_at": "2026-10-06T12:00:00.000Z",
+    "request": "Review PR 123 in codecast-sh/codecast and leave your notes on specific lines as one review."
+  }
+}

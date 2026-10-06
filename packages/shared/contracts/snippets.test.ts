@@ -99,9 +99,10 @@ describe("delegated worker guidance", () => {
   });
 
   it("keeps worker briefs and labeled launches out of the inbox", () => {
-    expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - <<'EOF'");
-    expect(FORKS_SNIPPET).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
-    expect(FORKS_SNIPPET).toContain("A label or a task/plan binding does not nest it");
+    expect(FORKS_SNIPPET).toContain("cast spawn --subagent -- - - <<'EOF'");
+    const guide = guideText(snippetBySlug("forks")!);
+    expect(guide).toContain('cast spawn --subagent --label rollout "<task>" "<task>"');
+    expect(guide).toContain("A label or a task/plan binding does not nest it");
     expect(FORKS_SNIPPET).not.toContain("Use it to hand off self-contained work — a parallel audit");
   });
 });
