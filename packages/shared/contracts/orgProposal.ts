@@ -1810,7 +1810,7 @@ export function orgRecordGroups(changes: ReadonlyArray<{ seq: number; change: Or
 
 /** "2 plans done, 11 tasks done and 3 tasks reopened": the group's one line, in the words the card uses for each act. */
 export const RECORD_ACT_WORDS: Record<OrgRecordAct, string> = { done: "done", dropped: "dropped", abandoned: "abandoned", reopened: "reopened", backlog: "to the backlog", paused: "paused" };
-export function recordGroupTotalsLine(g: Pick<OrgRecordGroup, "totals">): string {
+export function recordGroupTotalsLine(g: { totals: readonly OrgRecordTotal[] }): string {
   return andList(g.totals.map((t) => `${t.count} ${t.noun}${t.count === 1 ? "" : "s"} ${RECORD_ACT_WORDS[t.act]}`));
 }
 

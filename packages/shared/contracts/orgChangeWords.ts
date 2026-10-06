@@ -413,7 +413,7 @@ const RECORD_ACTS = Object.keys(RECORD_ACT_WORDS) as OrgRecordAct[];
  *  acts summed across nouns, most first, ties in the acts' own order:
  *  "44 done, 15 reopened, 3 abandoned, 1 dropped and 1 to the backlog". */
 export function recordTotalsWords(totals: readonly OrgRecordTotal[], opts: { nouns?: boolean } = {}): string {
-  if (opts.nouns !== false) return recordGroupTotalsLine({ totals });
+  if (opts.nouns !== false) return recordGroupTotalsLine({ totals: [...totals] });
   const byAct = new Map<OrgRecordAct, number>();
   for (const t of totals) byAct.set(t.act, (byAct.get(t.act) ?? 0) + t.count);
   return andList([...byAct].sort((x, y) => y[1] - x[1] || RECORD_ACTS.indexOf(x[0]) - RECORD_ACTS.indexOf(y[0])).map(([act, k]) => `${k} ${RECORD_ACT_WORDS[act]}`));

@@ -233,7 +233,7 @@ export const CollabComposer = memo(function CollabComposer({
     finally { setBusy(false); }
   }
 
-  async function handleSend(together = false) {
+  async function handleSend(together = false, queue = false) {
     // Together: one turn, my words and the others' live drafts each under
     // their author's name; the server checks each part against its draft.
     const body = together ? composeJointTurn(me, message.trim(), candidates) : message.trim();
@@ -242,10 +242,10 @@ export const CollabComposer = memo(function CollabComposer({
     try {
       // direct: a person typed this, not a session — the agent sees
       // <user-message from="Name">, never an unknown-session relay.
-      const res = await sendToSession({ to: convId, body, direct: true });
+      const res = await sendToSession({ to: convId, body, direct: true, ...(queue ? { queue: true } : {}) });
       if (together) claimSent(candidates);
       setMessage("");
-      setSentHint(res?.target_live === false
+      setSentHint(queue ? "Queued for when this turn ends" : res?.target_live === false
         ? "Sent — their session looks offline, they'll get it when back"
         : "Sent into the live session");
       setTimeout(() => setSentHint(null), 4000);
@@ -259,6 +259,12 @@ export const CollabComposer = memo(function CollabComposer({
     if (e.key === "Enter" && e.altKey && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey) && canSend && candidates.length > 0) {
       e.preventDefault();
       handleSend(true);
+      return;
+    }
+    // ⌘↵ queues for the end of the agent's turn, in the shared queue.
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && canSend) {
+      e.preventDefault();
+      handleSend(false, true);
       return;
     }
     if (e.key === "Enter" && !e.shiftKey) {
