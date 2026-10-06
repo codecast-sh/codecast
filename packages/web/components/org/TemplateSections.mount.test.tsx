@@ -149,7 +149,7 @@ async function verifyTemplateSections() {
   assert.match(body, /Nothing is left open\. A skipped step can be reopened\./);
   // An accepted update: the same button runs the host step, moving the instance to the release.
   body = await rerender({ pending_upgrade: { to: "2.1.0", digest: "f".repeat(64) }, secrets: [] });
-  assert.match(body, /Update available: 2\.1\.0 \(accepted; its machine moves it on the next host step\)/);
+  assert.match(body, /Update available: 2\.1\.0accepted; its machine moves it on the next host step/);
   assert.equal(document.querySelector("[data-template-update-propose]"), null);
   assert.equal(run().textContent, "Move to 2.1.0 on MacBook");
   assert.match(document.querySelector('[data-host-purpose="update"] details')!.textContent!, /cast org template bind acme-growth --to 2\.1\.0/);
@@ -174,6 +174,36 @@ async function verifyTemplateSections() {
   await type('textarea[name="secret:accounts.ads"]', "x");
   assert.match(document.body.textContent!, /too old to receive a secret/);
   assert.equal(run().disabled, true);
+  // The Update card (sd-424) leads with the class. Structure: each change by its title, new routines arrive paused; earlier changelogs fold.
+  const changes = { routines_added: ["seo-daily"], routines_removed: [], routines_recadenced: [{ id: "cmo-weekly", from: "7d", to: "1d" }], inputs_added: [], inputs_removed: [], setup_added: ["search-console-2"], setup_removed: [], evidence_changed: [], ledgers_changed: [], scoreboard_changed: [], authority_changed: [] };
+  const changelogs = [{ version: "2.2.0", text: "Adds a daily SEO pass." }, { version: "2.1.0", text: "Names the owning account." }];
+  body = await rerender({ update_available: "2.2.0", update_class: "structure", update_changes: changes, update_changelogs: changelogs, releases_behind: 2, update_names: { routines: { "seo-daily": { title: "SEO daily", every: "1d" } }, setup: { "search-console-2": "Verify the second domain" } } });
+  assert.equal(document.querySelector("[data-template-behind]")!.textContent, " · 2 releases behind");
+  assert.equal(document.querySelector("[data-update-heading]")!.textContent, "Changes what the role does");
+  assert.deepEqual([...document.querySelectorAll("[data-update-changes] li")].map((li) => li.textContent), ["New routine: SEO daily (every 1d)", "CMO weekly runs every 1d instead of every 7d", "New setup step: Verify the second domain"]);
+  assert.match(document.querySelector("[data-update-note]")!.textContent!, /arrives paused and needs Activate/);
+  assert.equal(document.querySelector("[data-template-changelog-earlier]")!.getAttribute("data-template-changelog-earlier"), "1");
+  assert.equal(document.querySelector("details[data-template-changelog-earlier]")!.hasAttribute("open"), false);
+  assert.equal(buttons("Update").length, 1);
+  // Content: wording only, one click.
+  body = await rerender({ update_class: "content", update_changes: changes, update_changelogs: changelogs.slice(1) });
+  assert.equal(document.querySelector("[data-update-heading]")!.textContent, "Wording only");
+  assert.equal(document.querySelector("[data-update-changes]"), null);
+  assert.equal(document.querySelector("[data-template-behind]"), null, "current: no drift line");
+  // Authority: never an Update; a separate permission request follows.
+  body = await rerender({ update_class: "authority", update_changes: { ...changes, authority_changed: ["caps.tokens_per_day 200000 -> 400000"] }, releases_behind: 1 });
+  assert.match(body, /Changes what the role may do/);
+  assert.match(body, /caps\.tokens_per_day 200000 -> 400000/);
+  assert.match(body, /A separate permission request follows/);
+  assert.match(body, /1 release behind/);
+  assert.equal(document.querySelector("[data-template-update-propose]"), null);
+  // A withdrawn release: the reason leads, and Roll back posts the same upgrade proposal to the fallback.
+  body = await rerender({ update_available: "1.9.0", update_digest: "e".repeat(64), update_class: "structure", update_changes: { ...changes, routines_added: [], routines_recadenced: [], setup_added: [] }, update_rollback: { reason: "it posted twice a day" }, update_changelogs: [{ version: "2.0.0", text: "Doubled posting." }] });
+  assert.match(body, /Roll back to 1\.9\.0/);
+  assert.match(body, /This release was withdrawn: it posted twice a day/);
+  await act(async () => buttons("Roll back")[0]!.click());
+  assert.deepEqual(proposed.at(-1).changes, [{ kind: "upgrade", instance: "acme-growth", template: "growth", to: "1.9.0", digest: "e".repeat(64) }]);
+  assert.match(proposed.at(-1).title, /^Roll back acme-growth to CMO 1\.9\.0/);
   await act(async () => root2.unmount());
   closeDomWindow(dom);
   console.log("template sections mount: passed");

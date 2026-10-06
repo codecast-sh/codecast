@@ -79,11 +79,6 @@ public enum SnapshotLimits {
 }
 
 public enum SnapshotRenderHeuristics {
-    public static func supportsAttribute(_ attribute: String, advertisedAttributes: Set<String>?) -> Bool {
-        guard let advertisedAttributes else { return true }
-        return advertisedAttributes.contains(attribute)
-    }
-
     public static func displayName(_ node: SnapshotRenderNode) -> String? {
         if let title = clean(node.title) {
             return title

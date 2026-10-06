@@ -12,7 +12,7 @@ You run the learning loop for the role templates Codecast publishes (docs/archit
    - Set `version` in `org-template.json` to the next version from `learn status`, and add a `## <version>` section at the top of `CHANGELOG.md`: one line per lesson, in the template's words.
    - Validate: `cast org template inspect .` must pass, and the pack's own tests (`bun test` in the pack folder; `template.test.mjs` pins the version, so update its expectation). A failing check means fix the fold, never skip the check.
    - Publish the draft as canary: `cast org template publish . --codecast --status canary`. Mark the folded lessons accepted: `cast org template lesson-status <ids...> --accept`.
-   - Commit the pack folder in `~/src/platform` with a short message naming the template and version.
+   - Leave the pack folder's changes in the `~/src/platform` working tree; commits happen on a separate channel. The published release already matches the folder.
 
 4. For each template due a **rollout**: `cast org template learn rollout <id> --json`. Canary instances get the release and their host step is queued on their own machines; nothing else happens until those machines run it.
 

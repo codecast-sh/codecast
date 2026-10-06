@@ -24,7 +24,7 @@ import { TASK_PRIORITIES, TASK_STATUS_CATEGORIES } from "@codecast/shared/tasks"
 import { internal } from "../../_generated/api";
 import type { Id } from "../../_generated/dataModel";
 import { MEMORY_DOC_TITLE, TASK_LIST_FILTERS } from "./workspace";
-import { instant } from "./calendar";
+import { instant, NEVER, WHOLE_TOOL, type AllowScopes } from "@platform/assistant";
 
 /** The sourced codecast tools whose results hold only text the person
  *  approved: the memory doc, which grows through remember's gate or an
@@ -33,6 +33,17 @@ import { instant } from "./calendar";
  *  can hold text others wrote (a synced issue, a pasted email) or that the
  *  assistant wrote without asking while mail was in front of it. */
 export const PERSON_APPROVED_TOOLS: ReadonlySet<string> = new Set(["recall", "list_routines"]);
+
+/** How an Always allow narrows for each codecast tool (@platform/assistant
+ *  rules). A routine's prompt comes back later as the person's own words, and
+ *  docs keep no old versions, so both always ask; appending to a doc and
+ *  recall stay in the person's own workspace, so one rule covers the tool. */
+export const CODECAST_SCOPES: AllowScopes = {
+  schedule_routine: () => NEVER,
+  write_doc: () => WHOLE_TOOL,
+  replace_doc: () => NEVER,
+  recall: () => WHOLE_TOOL,
+};
 
 /** What the codecast tools need from the turn action. */
 export interface CodecastDeps {

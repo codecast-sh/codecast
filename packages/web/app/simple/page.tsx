@@ -11,7 +11,7 @@ import { ConversationRow } from "../../components/simple/ConversationRow";
 import { HOME_APPROVALS, LANE_COPY, LANE_PATHS, conversationPath, greeting, homeBands, homeIdeas, homeView, routineLastRun, routineSchedule, runsToday } from "../../components/simple/lane";
 import { useLaneData, useLaneRoutines } from "../../components/simple/useLane";
 import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
-import { useStartConversation } from "../../components/simple/startConversation";
+import { useStartHostedConversation } from "../../lib/startHostedConversation";
 import { taskDisplayTitle } from "../../components/triggerTasks";
 
 export default function SimpleHome() {
@@ -21,7 +21,7 @@ export default function SimpleHome() {
   const { routines } = useLaneRoutines(laneIds);
   const bands = useMemo(() => homeBands(conversations, approvalCounts, now), [conversations, approvalCounts, now]);
   const today = useMemo(() => routines.filter((r) => runsToday(r, now)), [routines, now]);
-  const start = useStartConversation();
+  const start = useStartHostedConversation();
   const mail = useLaneMailAbilities();
   const navigate = useNavigate();
   const [seed, setSeed] = useState<{ text: string; at: number } | null>(null);

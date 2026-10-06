@@ -1,4 +1,5 @@
 import { execSync, execFileSync, spawnSync, execFileAsync, TOOL_PATH, installCommandFor, installHintFor } from "./proc.js";
+import { snapshotProcessTable, snapshotProcessTableAsync, tmuxServerRows, type ProcRow } from "./processTable.js";
 
 const ENRICHED_PATH = TOOL_PATH;
 
@@ -13,6 +14,82 @@ let _hasTmux: boolean | null = null;
 let _hasTmuxCheckedAt = 0;
 const HAS_TMUX_RECHECK_MS = 60_000;
 
+// ── Starting a session never replaces a live server ──────────────────────────
+// A tmux client whose command may start the server (new-session, start-server)
+// answers a refused connect by unlinking the socket and starting a NEW server.
+// A server too loaded to accept reads exactly like a dead one, so at load 970
+// on 2026-10-06 one `new-session` replaced the socket of the server holding 87
+// working agents; they became unreachable and the stale-generation sweep then
+// killed them all. So every such command runs with -N (never start) first, and
+// starts a server only when none can be holding the socket.
+const TMUX_SERVER_STARTERS = new Set(["new-session", "new", "start-server", "start"]);
+export function startsTmuxServer(args: string[]): boolean {
+  return TMUX_SERVER_STARTERS.has(args[0] ?? "");
+}
+
+export class TmuxServerBusyError extends Error {
+  constructor() {
+    super("TMUX_SERVER_BUSY: the tmux server is not accepting connections; not starting another over it");
+    this.name = "TmuxServerBusyError";
+  }
+}
+
+/** What a failed `-N` attempt says: no socket file ("absent"), a socket nobody
+ *  accepts on ("refused"), a tmux older than -N ("unsupported"), or a failure
+ *  of the command itself ("other"). */
+export function tmuxNoStartFailure(stderr: string): "absent" | "refused" | "unsupported" | "other" {
+  if (/error connecting to .+ \(No such file or directory\)|no server running on /i.test(stderr)) return "absent";
+  if (/error connecting to .+ \(Connection refused\)/i.test(stderr)) return "refused";
+  if (/(unknown|illegal|invalid) option|^usage: tmux/im.test(stderr)) return "unsupported";
+  return "other";
+}
+
+/** Whether a refused socket still has its server. Only the default socket can
+ *  be read off the process table; a private one (TMUX_TMPDIR) keeps the plain
+ *  start. An empty table is a ps that failed, which is no proof of absence. */
+export function refusedTmuxServerIsLive(procs: ProcRow[], env: Record<string, string | undefined> = process.env): boolean {
+  if (env.TMUX_TMPDIR) return false;
+  return procs.length === 0 || tmuxServerRows(procs, process.getuid?.()).length > 0;
+}
+
+const stderrOf = (err: unknown): string => {
+  const stderr = (err as { stderr?: unknown } | null)?.stderr;
+  return typeof stderr === "string" ? stderr : Buffer.isBuffer(stderr) ? stderr.toString("utf-8") : "";
+};
+
+/** Run a server-starting tmux command through `run`, which throws with
+ *  `.stderr` on failure. Throws TmuxServerBusyError instead of replacing a
+ *  live server's socket. */
+export function startTmuxGuardedSync<T>(
+  args: string[],
+  run: (args: string[]) => T,
+  serverIsLive: () => boolean = () => refusedTmuxServerIsLive(snapshotProcessTable()),
+): T {
+  try {
+    return run(["-N", ...args]);
+  } catch (err) {
+    const failure = tmuxNoStartFailure(stderrOf(err));
+    if (failure === "other") throw err;
+    if (failure === "refused" && serverIsLive()) throw new TmuxServerBusyError();
+    return run(args);
+  }
+}
+
+export async function startTmuxGuarded<T>(
+  args: string[],
+  run: (args: string[]) => Promise<T>,
+  serverIsLive: () => Promise<boolean> = async () => refusedTmuxServerIsLive(await snapshotProcessTableAsync()),
+): Promise<T> {
+  try {
+    return await run(["-N", ...args]);
+  } catch (err) {
+    const failure = tmuxNoStartFailure(stderrOf(err));
+    if (failure === "other") throw err;
+    if (failure === "refused" && await serverIsLive()) throw new TmuxServerBusyError();
+    return run(args);
+  }
+}
+
 // A tmux client whose server dies mid-protocol wedges in a 100% CPU loop and
 // ignores SIGTERM, so a Node `execSync` without a timeout leaves a zombie that
 // outlives the parent process (and a default-SIGTERM timeout never reaps it).
@@ -20,13 +97,17 @@ const HAS_TMUX_RECHECK_MS = 60_000;
 export const DEFAULT_TMUX_TIMEOUT_MS = 5000;
 export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding?: "utf-8"; stdio?: "ignore" | ["ignore", "pipe", "ignore"] }): string {
   const stdio = opts?.stdio ?? (opts?.encoding ? ["ignore", "pipe", "ignore"] as const : "ignore");
-  const result = execFileSync("tmux", args, {
+  const exec = (argv: string[], io: unknown) => execFileSync("tmux", argv, {
     timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
     killSignal: "SIGKILL",
     encoding: opts?.encoding,
-    stdio: stdio as any,
+    stdio: io as any,
     env: { ...process.env, PATH: ENRICHED_PATH },
   });
+  // The guard reads the refusal off stderr, so a starter always pipes it.
+  const result = startsTmuxServer(args)
+    ? startTmuxGuardedSync(args, (argv) => exec(argv, ["ignore", "pipe", "pipe"]))
+    : exec(args, stdio);
   return typeof result === "string" ? result : "";
 }
 
@@ -38,18 +119,37 @@ export function tmuxExecSync(args: string[], opts?: { timeout?: number; encoding
 // which every caller here already treats as "dead / not-ready / empty", the
 // safe fallback. Route ALL raw spawnSync("tmux", …) reads through this.
 export function tmuxRun(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): { status: number | null; stdout: string; stderr: string } {
-  const r = spawnSync("tmux", args, {
-    timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
-    killSignal: "SIGKILL",
-    encoding: "utf-8",
-    stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, PATH: ENRICHED_PATH, ...opts?.env },
-  });
-  return {
-    status: r.status,
-    stdout: typeof r.stdout === "string" ? r.stdout : "",
-    stderr: typeof r.stderr === "string" ? r.stderr : "",
+  const run = (argv: string[]) => {
+    const r = spawnSync("tmux", argv, {
+      timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,
+      killSignal: "SIGKILL",
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+      env: { ...process.env, PATH: ENRICHED_PATH, ...opts?.env },
+    });
+    return {
+      status: r.status,
+      stdout: typeof r.stdout === "string" ? r.stdout : "",
+      stderr: typeof r.stderr === "string" ? r.stderr : "",
+    };
   };
+  if (!startsTmuxServer(args)) return run(args);
+  try {
+    return startTmuxGuardedSync(args, (argv) => throwOnFailure(run(argv)));
+  } catch (err) {
+    return failedRunResult(err);
+  }
+}
+
+// The guard speaks the throwing dialect; tmuxRun and tmuxRunAsync never throw.
+// A failed result is thrown as itself and handed back unchanged.
+function throwOnFailure<T extends { status: number | null }>(result: T): T {
+  if (result.status !== 0) throw result;
+  return result;
+}
+function failedRunResult(err: unknown): TmuxRunResult {
+  if (err && typeof err === "object" && "status" in err && "stdout" in err) return err as TmuxRunResult;
+  return { status: 1, stdout: "", stderr: err instanceof Error ? err.message : String(err) };
 }
 
 export type TmuxRunResult = { status: number | null; stdout: string; stderr: string; code?: string; signal?: string | null; killed?: boolean };
@@ -68,6 +168,15 @@ export function isTmuxSessionMissingError(error: unknown): boolean {
 // null on a timeout kill. Node hands a non zero exit back as an error whose
 // `code` is the exit status; a kill carries a signal and no numeric code.
 export async function tmuxRunAsync(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): Promise<TmuxRunResult> {
+  if (!startsTmuxServer(args)) return tmuxRunAsyncRaw(args, opts);
+  try {
+    return await startTmuxGuarded(args, async (argv) => throwOnFailure(await tmuxRunAsyncRaw(argv, opts)));
+  } catch (err) {
+    return failedRunResult(err);
+  }
+}
+
+async function tmuxRunAsyncRaw(args: string[], opts?: { timeout?: number; env?: Record<string, string | undefined> }): Promise<TmuxRunResult> {
   try {
     const { stdout, stderr } = await execFileAsync("tmux", args, {
       timeout: opts?.timeout ?? DEFAULT_TMUX_TIMEOUT_MS,

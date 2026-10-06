@@ -97,7 +97,7 @@ describe("isHandoffEligiblePath", () => {
     // The same single segments the tab shell owns stay app routes.
     expect(isHandoffEligiblePath("/tasks")).toBe(true);
     expect(isHandoffEligiblePath("/repo")).toBe(true);
-    expect(isHandoffEligiblePath("/timeline")).toBe(true);
+    expect(isHandoffEligiblePath("/changes")).toBe(true);
   });
 
   test("blocks the marketing site — the root is the landing page, not an app route", () => {

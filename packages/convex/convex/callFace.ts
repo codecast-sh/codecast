@@ -254,10 +254,12 @@ async function livekit(cfg: FaceConfig, room: string, method: string, body: unkn
 
 type FaceFeed = { room_key: string; conversation_id: string; name: string; avatar: string };
 
-/** A dispatch that has not finished: none of its jobs ended yet. */
-function dispatchAlive(d: { state?: { jobs?: { state?: { status?: string } }[] } }): boolean {
+/** A dispatch that has not finished: none of its jobs ended yet. LiveKit
+ *  names a job's status as a word or, with defaults left out, not at all. */
+function dispatchAlive(d: { state?: { jobs?: { state?: { status?: string | number } }[] } }): boolean {
   const jobs = d.state?.jobs ?? [];
-  return jobs.length === 0 || jobs.some((j) => !j.state?.status || j.state.status === "JS_PENDING" || j.state.status === "JS_RUNNING");
+  const live = (status: string | number | undefined) => !status || status === "JS_PENDING" || status === "JS_RUNNING" || status === 1;
+  return jobs.length === 0 || jobs.some((j) => live(j.state?.status));
 }
 
 /** Send the worker in for this session's face, unless a dispatch for it is
@@ -265,8 +267,10 @@ function dispatchAlive(d: { state?: { jobs?: { state?: { status?: string } }[] }
  *  came) is cleared so a new one can go. True when it dispatched. */
 export async function dispatchFace(cfg: FaceConfig, feed: FaceFeed, realtime: boolean): Promise<boolean> {
   const listed = await livekit(cfg, feed.room_key, "AgentDispatchService/ListDispatch", { room: feed.room_key }, [404]);
-  for (const d of listed?.agentDispatches ?? []) {
-    if (d.agentName !== FACE_HOST_AGENT) continue;
+  // LiveKit answers in snake_case; the camelCase reading keeps a server that
+  // answers in protobuf's other JSON spelling from going unseen.
+  for (const d of listed?.agent_dispatches ?? listed?.agentDispatches ?? []) {
+    if ((d.agent_name ?? d.agentName) !== FACE_HOST_AGENT) continue;
     let meta: { conversation_id?: string } = {};
     try {
       meta = JSON.parse(d.metadata || "{}");
@@ -349,11 +353,26 @@ export const tell = internalAction({
   },
 });
 
+/** Is this session fed live into this room right now? */
+export const fedNow = internalQuery({
+  args: { room_key: v.string(), conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const feed = await ctx.db
+      .query("call_agent_feeds")
+      .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    return !!feed && feed.room_key === args.room_key;
+  },
+});
+
 export const leave = internalAction({
   args: { room_key: v.string(), conversation_id: v.id("conversations") },
-  handler: async (_ctx, args): Promise<void> => {
+  handler: async (ctx, args): Promise<void> => {
     const cfg = faceConfig();
     if (!cfg) return;
+    // A room is reused call after call: a leave for the last call's feed that
+    // runs after the next call fed the session again must not take its face.
+    if (await ctx.runQuery(internal.callFace.fedNow, args)) return;
     // A face already gone (or never seated) is the outcome we wanted.
     await livekit(cfg, args.room_key, "RoomService/RemoveParticipant", {
       room: args.room_key,

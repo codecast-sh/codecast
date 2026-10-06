@@ -134,18 +134,53 @@ export const isQuotedAndDated = (c: ExpectationCitation): boolean => (c.quote?.l
  */
 export const PERSON_SOURCE_KINDS: readonly CitationKind[] = ["call", "chat", "decision"];
 
+// Words that carry no claim: a line and a quote that share only these say nothing about each other.
+const FILLER = new Set("about after again against also always another anything because been before being between both cannot could does done each even every everything from going have here into itself just know like made make makes more most must need needs never okay only onto other over really same shall should some something still such sure than that their them then there these they thing things think this those under unless until very want wants were what when where which while will with would yeah your".split(" "));
+
+/** The words of a sentence that carry its claim: four letters or more, no filler. */
+function claimWords(s: string): string[] {
+  return [...new Set(s.toLowerCase().split(/[^a-z]+/).filter((w) => w.length >= 4 && !FILLER.has(w)))];
+}
+
+/** Two forms of one word (track, tracked; bounce, bouncing): the shorter, less its last letter, opens the longer. */
+function sameWord(a: string, b: string): boolean {
+  const [short, long] = a.length <= b.length ? [a, b] : [b, a];
+  return long.startsWith(short.slice(0, Math.max(4, short.length - 1)));
+}
+
+/** How many claim words a line must share with a quote before the quote can stand behind it. */
+export const SHARED_WORDS_NEEDED = 2;
+
+/**
+ * Whether a line is about what its quote says: they share at least two claim
+ * words. This is a floor, not proof. It stops a line from riding in on an
+ * unrelated quote ("No, leave it" behind a rule about bounces), and it cannot
+ * tell a faithful line from one that reuses the quote's words to say something
+ * else; a line that fails it goes to the project's person, who reads both.
+ */
+export function followsFromQuote(text: string, quote: string): boolean {
+  const said = claimWords(quote);
+  return claimWords(text).filter((w) => said.some((q) => sameWord(w, q))).length >= SHARED_WORDS_NEEDED;
+}
+
+/** The sources of an addition that could let it in without a person: quoted, dated, a kind a person speaks in, and about what the line says. */
+export function groundingCandidates(op: AddOp): ExpectationCitation[] {
+  return op.citations.filter((c) => isQuotedAndDated(c) && PERSON_SOURCE_KINDS.includes(c.kind) && followsFromQuote(op.text, c.quote!));
+}
+
 /**
  * A proposal applies without a person (LM5) when it only adds lines and each
- * line carries a quoted, dated source the record shows a person said
+ * line carries a quoted, dated source that the record shows a person said
  * (`personSaid`, checked by the server against the chat line, the decision or
- * the call segment the citation names). It changes no line anyone graded
- * against, and every word it adds is a person's. A line added already retired
- * is history (a rule the team has moved past), so it adds on the same terms.
+ * the call segment the citation names) and that the line is about
+ * (`followsFromQuote`). It changes no line anyone graded against, and every
+ * line it adds stands on a person's words. A line added already retired is
+ * history (a rule the team has moved past), so it adds on the same terms.
  * Anything that edits or retires a line, or adds one whose words cannot be
  * traced to a person, waits for the project's person.
  */
 export function autoApplies(ops: ExpectationOp[], personSaid: (c: ExpectationCitation) => boolean): boolean {
-  return ops.length > 0 && ops.every((op) => op.op === "add" && op.citations.some((c) => isQuotedAndDated(c) && PERSON_SOURCE_KINDS.includes(c.kind) && personSaid(c)));
+  return ops.length > 0 && ops.every((op) => op.op === "add" && groundingCandidates(op).some(personSaid));
 }
 
 /** A quote's words, for checking that a record holds them: lowercase words only; an ellipsis splits it into pieces that must each appear. */

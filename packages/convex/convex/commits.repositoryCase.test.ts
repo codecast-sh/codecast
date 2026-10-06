@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { commitFilesState, getCommitsByRepository, getUserActiveRepositories } from "./commits";
+import { commitFilesState, getCommitsByRepository, getActiveRepositoriesForUser } from "./commits";
 
 const sha = "b".repeat(40);
 function context(seed: Record<string, any[]> = {}) {
@@ -28,7 +28,7 @@ describe("commit repository case", () => {
   });
 
   test("a checkout remote with capitals names the canonical repository", async () => {
-    const repos = await (getUserActiveRepositories as any)._handler(context(), {});
+    const repos = await (getActiveRepositoriesForUser as any)._handler(context(), { user_id: "u1" });
     expect(repos).toEqual(["codecast-sh/codecast"]);
   });
 });
