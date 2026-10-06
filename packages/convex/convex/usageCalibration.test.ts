@@ -10,6 +10,7 @@ import {
   windowReadingsOf,
 } from "./usageCalibration";
 import { rollUpUsage } from "./messages";
+import { makeFakeDb } from "./testDb";
 import {
   isCalibrated,
   reloadCostTokens,
@@ -24,7 +25,7 @@ describe("the slot the numerator is counted in", () => {
   test("a slot is twenty minutes, and rollUpUsage stamps the one it billed in", async () => {
     const conv: any = { _id: "c1" };
     const patch: Record<string, unknown> = {};
-    await rollUpUsage({ db: {} }, conv, [
+    await rollUpUsage({ db: makeFakeDb({}) }, conv, [
       { usage: { input_tokens: 100, output_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200 }, api_message_id: "a", inserted: true },
     ], patch, NOW);
     const totals = patch.usage_totals as any;
@@ -36,13 +37,13 @@ describe("the slot the numerator is counted in", () => {
   test("a second turn in the same slot adds; the first turn of a new slot starts over", async () => {
     const conv: any = { _id: "c1", usage_totals: { input: 0, output: 0, cache_read: 0, cache_write: 0, updated_at: NOW, slot: calibrationSlot(NOW), slot_weighted: 500 } };
     const same: Record<string, unknown> = {};
-    await rollUpUsage({ db: {} }, conv, [
+    await rollUpUsage({ db: makeFakeDb({}) }, conv, [
       { usage: { input_tokens: 100, output_tokens: 0 }, api_message_id: "b", inserted: true },
     ], same, NOW + 60_000);
     expect((same.usage_totals as any).slot_weighted).toBe(600);
 
     const later: Record<string, unknown> = {};
-    await rollUpUsage({ db: {} }, conv, [
+    await rollUpUsage({ db: makeFakeDb({}) }, conv, [
       { usage: { input_tokens: 100, output_tokens: 0 }, api_message_id: "c", inserted: true },
     ], later, NOW + CALIBRATION_SLOT_MS);
     expect((later.usage_totals as any).slot).toBe(calibrationSlot(NOW) + 1);

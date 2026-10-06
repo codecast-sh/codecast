@@ -294,7 +294,7 @@ export const createTeam = mutation({
  * rides the change log), their first team pointer if they have none, and the
  * team activity line. Idempotent.
  */
-async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
+export async function addTeamMember(ctx: any, userId: Id<"users">, team: Doc<"teams">, how: string, actor: Id<"users"> = userId): Promise<void> {
   const existingMembership = await ctx.db
     .query("team_memberships")
     .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", team._id))

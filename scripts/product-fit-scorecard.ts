@@ -11,6 +11,7 @@
 //
 // Queries stay small on purpose (raw rows for the cohort, joined here): a
 // HogQL self-join over events hits PostHog's execution cap.
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ const COHORTS_START = "2026-08-09T12:00:00Z";
 const KEPT_AFTER_DAYS = 10;
 const KEPT_MIN_DAYS = 3;
 const MATURE_DAYS = 14;
-const INTERNAL = /@(almostcandid\.com|codecast\.sh)$/;
+const INTERNAL = /@(almostcandid\.com|codecast\.sh|example\.com|test\.com)$/;
 
 const key = readFileSync(join(homedir(), ".config/posthog/key"), "utf8").trim();
 
@@ -120,6 +121,38 @@ const loops = (
   )
 ).length;
 
+// Teams (decision sd-432, teams first): read from prod Convex, since team
+// membership never reaches PostHog. A team counts as live when 2+ of its
+// people were active (app open, send or daemon) in the last 7 days.
+function convexRows(args: string[]): any[] {
+  const out = execFileSync("npx", ["convex", ...args], {
+    cwd: join(import.meta.dir, "../packages/convex"),
+    env: { ...process.env, CONVEX_DEPLOYMENT: "" },
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  const at = out.indexOf("[");
+  return JSON.parse(out.slice(at, out.lastIndexOf("]") + 1));
+}
+const teamRows = convexRows(["data", "teams", "--limit", "5000", "--format", "jsonArray"]);
+const memberRows = convexRows(["data", "team_memberships", "--limit", "20000", "--format", "jsonArray"]);
+const userRows = convexRows(["run", "users:listUsers", "{}"]);
+const userById = new Map(userRows.map((u) => [u._id, u]));
+const lastSeen = (u: any) => Math.max(u.last_heartbeat ?? 0, u.last_message_sent_at ?? 0, u.daemon_last_seen ?? 0);
+const teams = teamRows
+  .map((t) => {
+    const people = memberRows
+      .filter((m) => m.team_id === t._id)
+      .map((m) => ({ user: userById.get(m.user_id), joined: m.joined_at ?? m._creationTime }))
+      .filter((p) => p.user?.email && !p.user.is_bot && !INTERNAL.test(p.user.email))
+      .sort((a, b) => a.joined - b.joined);
+    const active = people.filter((p) => now - lastSeen(p.user) < 7 * DAY).length;
+    return { name: String(t.name).slice(0, 32), members: people.length, active_7d: active, days_to_second: people.length > 1 ? Math.round(((people[1].joined - people[0].joined) / DAY) * 10) / 10 : null };
+  })
+  .filter((t) => t.members > 0)
+  .sort((a, b) => b.active_7d - a.active_7d || b.members - a.members);
+const liveTeams = teams.filter((t) => t.active_7d >= 2);
+
 const mature = weeks.filter((w) => w.mature);
 const sum = (k: "synced" | "saw_product_24h" | "kept") => mature.reduce((n, w) => n + (w[k] ?? 0), 0);
 const out = {
@@ -127,6 +160,7 @@ const out = {
   last_7_days: { landing_visitors: visitors, install_intent: intent, cli_authed: authed, auth_redirect_loops: loops },
   mature_cohorts: { synced: sum("synced"), saw_product_24h: sum("saw_product_24h"), kept: sum("kept") },
   weeks,
+  teams: { live: liveTeams.length, list: teams.filter((t) => t.members > 1) },
 };
 
 if (process.argv.includes("--json")) {
@@ -135,6 +169,9 @@ if (process.argv.includes("--json")) {
   console.log(`Product-fit scorecard, ${out.as_of.slice(0, 10)}`);
   console.log(`Last 7 days: ${visitors} landing visitors, ${intent} install intent, ${authed} signed a CLI in, ${loops} sign-in redirect loops`);
   console.log(`Mature cohorts: ${out.mature_cohorts.synced} synced, ${out.mature_cohorts.saw_product_24h} opened the inbox or a session within 24h, ${out.mature_cohorts.kept} kept\n`);
+  console.log(`Teams with 2+ people active in 7 days: ${liveTeams.length}`);
+  for (const t of out.teams.list) console.log(`  ${t.name.padEnd(32)} ${t.active_7d}/${t.members} active, second member after ${t.days_to_second ?? "-"} days`);
+  console.log("");
   console.log("week of     synced  saw product 24h  joined team 3d  kept (3+ days after day 10)");
   for (const w of weeks) {
     console.log(`${w.week}  ${String(w.synced).padStart(6)}  ${String(w.saw_product_24h).padStart(15)}  ${String(w.joined_team_3d).padStart(14)}  ${w.kept === null ? "too young" : w.kept}`);
