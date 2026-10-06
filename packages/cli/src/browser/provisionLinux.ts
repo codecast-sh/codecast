@@ -53,9 +53,11 @@ const MEDIAMTX_VERSION = "v1.20.1";
  * provision` (watchdogVersion). Version 2 subtracts a live SSH agent bridge
  * (cloud/agentBridge.ts) from the inbound-ssh count, so the bridge cannot
  * keep the box awake and billing forever; `cast hosts forward-agent` refuses
- * to enable the bridge on a host provisioned before it.
+ * to enable the bridge on a host provisioned before it. Version 3 subtracts
+ * each reached folder's connection the same way (cloud/reach.ts) and comes
+ * with sshfs installed; `cast hosts reach` refuses a host below it.
  */
-export const IDLE_WATCHDOG_VERSION = 2;
+export const IDLE_WATCHDOG_VERSION = 3;
 
 /**
  * Everything that can be done with root and apt, in one shot. Idempotent:
@@ -75,13 +77,23 @@ NEED=""
 # The rest after the fonts are cast computer's: AT-SPI and its GObject bindings
 # read an app's tree, libatk-adaptor bridges GTK3 apps onto the accessibility
 # bus, python3-xlib finds windows and takes screenshots, and xdotool and xclip
-# carry keyboard input and paste.
+# carry keyboard input and paste. sshfs mounts the laptop folders the human
+# approved with cast hosts reach.
 for p in xvfb ffmpeg tmux git rsync curl jq fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji \
-  at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xdotool xclip; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
+  at-spi2-core libatk-adaptor python3-gi gir1.2-atspi-2.0 python3-xlib xdotool xclip sshfs; do dpkg -s "$p" >/dev/null 2>&1 || NEED="$NEED $p"; done
 if [ -n "$NEED" ]; then sudo apt-get update -qq && sudo apt-get install -y -qq $NEED; fi
 if ! command -v google-chrome >/dev/null 2>&1; then
   wget -qO /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   sudo apt-get install -y -qq /tmp/chrome.deb && rm /tmp/chrome.deb
+fi
+
+# sshd drops a client that stopped answering within a minute. Without it a
+# laptop that went to sleep mid-connection leaves its session, and a reached
+# folder's sshfs with it, alive for TCP's two hours, and every read of the
+# folder hangs that long instead of failing.
+if [ ! -f /etc/ssh/sshd_config.d/cast-alive.conf ]; then
+  printf 'ClientAliveInterval 15\nClientAliveCountMax 4\n' | sudo tee /etc/ssh/sshd_config.d/cast-alive.conf >/dev/null
+  sudo systemctl reload ssh 2>/dev/null || sudo systemctl reload sshd 2>/dev/null || true
 fi
 
 echo "[2/6] swap"
@@ -204,7 +216,9 @@ sudo tee /usr/local/bin/cast-idle-check >/dev/null <<'IDLE'
 #     forever. Each bridge runs one sleeper with argv0 exactly
 #     "cast-agent-bridge" (exec -a), and pgrep's anchored match counts only
 #     those — the bash wrapper sshd runs also has the literal in its cmdline
-#     and must not be counted, or a real session could read as idle.
+#     and must not be counted, or a real session could read as idle. A
+#     reached laptop folder (cast hosts reach) is the same: one connection
+#     per folder, whose sshfs runs as "cast-reach :<path> <mountpoint> ...".
 #   - the encoder running (someone is literally watching the screen)
 #   - the codecast daemon's activity stamp is fresh: it touches
 #     ~/.codecast/host-active when a message is delivered, a transcript grows
@@ -223,7 +237,9 @@ active=0
 conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
 bridges=$(pgrep -c -f '^cast-agent-bridge$' 2>/dev/null)
 [ -n "$bridges" ] || bridges=0
-[ $(( conns - bridges )) -gt 0 ] && active=1
+reaches=$(pgrep -c -f '^cast-reach :' 2>/dev/null)
+[ -n "$reaches" ] || reaches=0
+[ $(( conns - bridges - reaches )) -gt 0 ] && active=1
 pgrep -f 'x11grab' >/dev/null 2>&1 && active=1
 if ! timeout 15s python3 /usr/local/lib/codecast/idle-probe.py /home/ubuntu > /run/cast-idle-work.json; then
   active=1
@@ -638,13 +654,18 @@ export interface ProvisionReport {
  */
 export async function provisionLinuxHost(
   host: RemoteHost,
-  opts: { idleStopMinutes: number; skipDaemon?: boolean; gitIdentity?: string },
+  opts: {
+    idleStopMinutes: number; skipDaemon?: boolean; gitIdentity?: string;
+    /** Called once the base stack (packages, idle watchdog) is on the host, whatever a later step does. */
+    onBaseInstalled?: () => void;
+  },
   onProgress: (m: string) => void = () => {},
 ): Promise<ProvisionReport> {
   if (host.user !== "ubuntu") throw new Error("Linux provisioning requires an Ubuntu image and the ubuntu SSH user");
   onProgress("base stack: packages, display, stream, idle watchdog…");
   const base = runScript(host, baseProvisionScript(opts.idleStopMinutes), 600_000);
   if (!base.includes("PROVISION-BASE-OK")) throw new Error(`base provisioning did not complete:\n${base.slice(-800)}`);
+  opts.onBaseInstalled?.();
 
   onProgress("installing bun runtime…");
   remoteExec(

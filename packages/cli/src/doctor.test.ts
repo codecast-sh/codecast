@@ -256,7 +256,7 @@ describe("doctor tmux reap safety", () => {
     const killed: ProcRow[][] = [];
     const cleanup: string[] = [];
     await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
-      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 claude"),
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n101 100 501 claude\n200 1 501 tmux new-session\n201 200 501 claude"),
       liveTmuxServerPid: async () => 100,
       uid: () => 501,
       selfPid: 999,
@@ -264,6 +264,23 @@ describe("doctor tmux reap safety", () => {
     });
     expect(killed.map(rows => rows.map(r => r.pid))).toEqual([[201, 200]]);
     expect(cleanup).toEqual(["reaped stale tmux server(s) 200"]);
+  });
+
+  test("never reaps the generation holding more agents than the live server", async () => {
+    const { checkDoctorTmuxServers } = await import("./doctor.js");
+    const { parseProcessTable } = await import("./processTable.js");
+    const killed: ProcRow[][] = [];
+    const cleanup: string[] = [];
+    const result = await checkDoctorTmuxServers({ reapTmux: true }, cleanup, {
+      snapshotProcessTable: () => parseProcessTable("100 1 501 tmux new-session\n200 1 501 tmux new-session\n201 200 501 claude"),
+      liveTmuxServerPid: async () => 100,
+      uid: () => 501,
+      selfPid: 999,
+      killProcessTree: (async pids => { killed.push(pids); return { terminated: pids.length, killed: 0 }; }) as typeof killProcessTree,
+    });
+    expect(killed).toEqual([]);
+    expect(cleanup).toEqual([]);
+    expect(result.detail).toContain("pid 200 holds 1 agent(s) but lost the default socket");
   });
 });
 

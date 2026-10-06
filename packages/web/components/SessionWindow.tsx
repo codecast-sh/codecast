@@ -9,7 +9,7 @@ import { useTrackedStore, isSessionEffectivelyIdle, getSessionRenderKey } from "
 const SessionPage = lazy(() =>
   import("../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
 );
-import { cleanTitle } from "../lib/conversationProcessor";
+import { sessionCardTitle } from "../lib/sessionCard";
 import { SessionGlyph } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
 import { Minus, Square, X, Maximize2 } from "lucide-react";
@@ -29,7 +29,7 @@ export const SessionWindow = memo(function SessionWindow({ win, isFocused }: Ses
   const session = s.sessions[win.sessionId];
   const isIdle = session ? isSessionEffectivelyIdle(session) : true;
   const renderKey = getSessionRenderKey(session);
-  const title = cleanTitle(session?.title || "New Session");
+  const title = session ? sessionCardTitle(session) : "New Session";
 
   const handleMouseDown = useCallback(() => {
     bringToFront(win.id);

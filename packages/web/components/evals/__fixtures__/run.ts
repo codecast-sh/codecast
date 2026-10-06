@@ -28,14 +28,11 @@ export interface RunFixture {
   compare: CompareResponse;
 }
 
-export function runFixture(now = Date.parse("2026-10-03T12:00:00.000Z")): RunFixture {
+export async function runFixture(now = Date.parse("2026-10-03T12:00:00.000Z")): Promise<RunFixture> {
   const world = evalsFixtureWorld({ now });
-  const one = (row: RunRow | undefined, what: string): RunFixtureCase => {
+  const one = async (row: RunRow | undefined, what: string): Promise<RunFixtureCase> => {
     if (!row) throw new Error(`the fixture world has no ${what}`);
-    return {
-      run: world.answer("GET /run/:id", { id: row.id }, {}) as RunResponse,
-      freeze: world.answer("GET /freeze/:id", { id: row.freezeId }, {}) as FreezeResponse,
-    };
+    return { run: await world.answer("GET /run/:id", { id: row.id }), freeze: await world.answer("GET /freeze/:id", { id: row.freezeId }) };
   };
   const rows = world.rows;
   const newest = (xs: RunRow[]) => [...xs].sort((a, b) => b.stamp.localeCompare(a.stamp))[0];
@@ -44,12 +41,12 @@ export function runFixture(now = Date.parse("2026-10-03T12:00:00.000Z")): RunFix
   const lastPass = newest(broken.filter((r) => r.status === "pass" && !r.gatesFailed.length));
   const firstFailAfter = [...broken].sort((a, b) => a.stamp.localeCompare(b.stamp)).find((r) => r.status === "fail" && lastPass && r.stamp > lastPass.stamp);
   return {
-    call: one(newest(settle.filter((r) => r.status === "pass" && r.freezeName === "waiting-on-review")), "settle pass"),
-    gate: one(newest(rows.filter((r) => r.gatesFailed.includes("no-leak") && r.surface !== "org-review")), "gate failure"),
-    agent: one(newest(rows.filter((r) => r.surface === "role-wake" && r.liveReads > 0 && r.guard.live > 0 && r.status !== "crash")), "role-wake rep with live reads"),
-    crash: one(newest(rows.filter((r) => r.status === "crash")), "crash"),
-    dry: one(newest(rows.filter((r) => r.status === "dry")), "dry render"),
-    org: one(newest(rows.filter((r) => r.surface === "org-review" && r.status !== "crash" && r.status !== "dry")), "org-review rep"),
-    compare: world.answer("GET /compare", {}, { a: lastPass?.id ?? "", b: firstFailAfter?.id ?? "" }) as CompareResponse,
+    call: await one(newest(settle.filter((r) => r.status === "pass" && r.freezeName === "waiting-on-review")), "settle pass"),
+    gate: await one(newest(rows.filter((r) => r.gatesFailed.includes("no-leak") && r.surface !== "org-review")), "gate failure"),
+    agent: await one(newest(rows.filter((r) => r.surface === "role-wake" && r.liveReads > 0 && r.guard.live > 0 && r.status !== "crash")), "role-wake rep with live reads"),
+    crash: await one(newest(rows.filter((r) => r.status === "crash")), "crash"),
+    dry: await one(newest(rows.filter((r) => r.status === "dry")), "dry render"),
+    org: await one(newest(rows.filter((r) => r.surface === "org-review" && r.status !== "crash" && r.status !== "dry")), "org-review rep"),
+    compare: await world.answer("GET /compare", {}, { a: lastPass?.id ?? "", b: firstFailAfter?.id ?? "" }),
   };
 }

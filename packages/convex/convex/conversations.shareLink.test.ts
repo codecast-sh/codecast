@@ -12,6 +12,8 @@ function ctxFor(rows: Record<string, unknown>[]) {
       normalizeId: (_table: string, id: string) => (byId.has(id) ? id : null),
       async get(id: string) { return byId.get(id) ?? null; },
       async patch(id: string, patch: Record<string, unknown>) { byId.set(id, { ...byId.get(id), ...patch }); },
+      // The audit row every share link change writes (lib/authorityEvents.ts).
+      async insert(table: string, row: Record<string, unknown>) { const id = `${table}_${byId.size}`; byId.set(id, { _id: id, ...row }); return id; },
       query(_table: string) {
         let token: unknown;
         const q = { eq: (_f: string, v: unknown) => ((token = v), q) };

@@ -24,7 +24,7 @@ From `packages/web`:
 | `bun run sim visibilityFlip --seed 174182 --order="<channels>"` | replay one delivery order, pasted from a report |
 | `bun run sim --help` | every flag |
 
-The runner (`scripts/sim.ts`) only turns flags into environment variables and spawns `bun test store/__tests__/sim/ --isolate`, or with a filter `bun test store/__tests__/sim/sim.test.ts --isolate`. The variables are the source of truth, so `SIM_SCENARIO=visibilityFlip bun test store/__tests__/sim/sim.test.ts --isolate` does the same thing:
+The runner (`packages/web/scripts/sim.ts`) only turns flags into environment variables and spawns `bun test store/__tests__/sim/ --isolate`, or with a filter `bun test store/__tests__/sim/sim.test.ts --isolate`. The variables are the source of truth, so `SIM_SCENARIO=visibilityFlip bun test store/__tests__/sim/sim.test.ts --isolate` does the same thing:
 
 | Variable | Flag | Meaning |
 |---|---|---|
@@ -41,7 +41,7 @@ Put the filter before `--trace`: a bare word after `--trace` is read as its labe
 
 A filtered run takes about 15 seconds on a loaded laptop, most of it importing the store and convex once; the whole sim (every scenario and self-test) about 80 seconds.
 
-Typecheck the harness with `cast check sim` (its tsconfig adds bun types and covers the legacy sims and `scripts/sim.ts`). The convex half is in `cast check convex`.
+Typecheck the harness with `cast check sim` (its tsconfig adds bun types and covers the legacy sims and `packages/web/scripts/sim.ts`). The convex half is in `cast check convex`.
 
 ## Layers
 

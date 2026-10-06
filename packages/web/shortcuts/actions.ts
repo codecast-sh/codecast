@@ -19,6 +19,8 @@ import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
+import { isHostedMode, surfaceShownNow } from "../lib/surfaces";
+import { writeLane } from "../components/simple/lanePref";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
 // the row the user sees highlighted. The fleet board's drill-in overlay wins
@@ -223,6 +225,11 @@ export function useGlobalShortcutActions() {
     s.setToursPanelOpen(!s.toursPanelOpen);
   }, []));
 
+  // Assistant mode on or off (client_state.ui.lane), from the palette.
+  useShortcutAction('ui.toggleLane', useCallback(() => {
+    writeLane(isHostedMode(useInboxStore.getState()) ? 'full' : 'simple');
+  }, []));
+
   useShortcutAction('ui.openSettings', useCallback(() => {
     const s = useInboxStore.getState();
     if (s.settingsModalSection) s.closeSettingsModal();
@@ -271,6 +278,7 @@ export function useGlobalShortcutActions() {
   }, []));
 
   useShortcutAction('terminal.toggle', useCallback(() => {
+    if (!surfaceShownNow("terminal")) return;
     const store = useInboxStore.getState();
     store.setDockOpen(store.workspace.dock.pane == null);
   }, []));

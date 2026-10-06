@@ -31,6 +31,11 @@ A room is a string key and never a stored row, so every client derives the same 
 
 A seat is a lease. A client in a room sends a heartbeat every 15 seconds, and every reader ignores a seat older than 45 seconds, so a closed laptop leaves the room without a cleanup step. A person joins muted, and unmuting is the deliberate act. An occupied room admits any member of its team, the way a meeting room with people in it admits whoever walks up. A channel room is the exception and keeps the channel's own membership. A huddle that wants privacy locks the room. A teammate can knock at a locked room, and anyone inside admits them by ringing them in. A person from outside the team comes in only as a guest, on a link, and only when somebody inside lets them in (see Guests below). The server checks these rules in every call mutation and when it mints a media token, because the media server trusts that token.
 
+```figure
+SeatLeaseFigure
+A seat lives on its heartbeat. Close the laptop and the seat stops counting 45 seconds after its last beat.
+```
+
 Presence comes from two facts about a person's machine: how recently the app checked in, and how recently somebody touched the keyboard or mouse. A person reads as active when the app checked in within 150 seconds and there was input within 3 minutes. The states are active, idle, away and offline. A person can declare busy or away, and a declaration wins over what the machine reports. The people wall draws the whole team at once and sizes each face by how present the person is. Click a face and three labeled actions appear under it: Talk, Ring and Message.
 
 ## Guests
@@ -53,9 +58,16 @@ An admission lasts for one huddle. When the last teammate leaves, the guests are
 
 Attribution is structural and never inferred. One client in the room is the scribe. It holds every audio track in the room, which is its own microphone plus each remote track, and it streams each track to speech recognition on its own connection. A track belongs to one participant, so each segment is stamped with that participant. The server stores the segments and mints the short lived recognition credentials.
 
+```figure
+ScribeFigure
+Three people, three tracks, three recognizer connections. The speaker on a line is the owner of the track it came from.
+```
+
 Every huddle transcribes unless somebody inside says otherwise. A client starts a run when it joined on purpose and the room has two or more people, and the server decides which client is the scribe. If the scribe's seat lapses, another client adopts the same run, and the old one lets go so no word lands twice.
 
 Transcription is a switch the room owns. It is a field on the room's state row, and anyone seated may flip it either way. It has to live on the room: a flag held by one client would be overruled by the next client that looked. Turning it off ends the run wherever it lives, and the digest of what was already said still posts.
+
+![A channel with a live huddle being transcribed](/documentation/shots/team-chat.webp "The #eng huddle on the right: three faces and a transcribing chip. Alex has added the session Retry failed webhooks, so it hears the room, and Sarah's line arrives under her name at 0:02.")
 
 ## Video and frames
 
@@ -91,6 +103,11 @@ Every finished huddle that has any words leaves a digest where it was held, and 
 |------|--------------|
 | A channel or a DM | A chat message from the scribe with the title, the length, the speakers, the summary and the action items. A reader can open the transcript under it. The write is keyed on the transcript, so a retry cannot post a second one |
 | A session room | The session's agent wakes with a `<huddle-summary>` message that holds the digest and the command `cast call <id> --transcript`. The words themselves stay on the server, so a long huddle does not arrive as thousands of tokens the agent did not ask for |
+
+```figure
+DigestFigure
+Where a finished huddle's digest goes: into the room's chat, or into the session's agent as one message. Under 40 words it is the words themselves.
+```
 
 A huddle of fewer than 40 words gets no generated summary, and its digest is the words themselves. When the summary cannot be generated, the call is marked `failed`, and the transcript is still readable. Huddle digests do not cross the [Slack mirror](/documentation/team-chat).
 

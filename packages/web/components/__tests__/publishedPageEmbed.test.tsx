@@ -126,11 +126,11 @@ describe("ClaudeArtifactEmbed publish suggestion", () => {
   test("offered when no machine has Publish on; silent when one does, or before the roster loads", async () => {
     try {
       seed(null);
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+      expect((await mount()).querySelector('a[href="/agent-features"]')).toBeNull();
       seed({ memory: true });
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeTruthy();
+      expect((await mount()).querySelector('a[href="/agent-features"]')).toBeTruthy();
       seed({ publish: true });
-      expect((await mount()).querySelector('a[href="/settings/agent-features"]')).toBeNull();
+      expect((await mount()).querySelector('a[href="/agent-features"]')).toBeNull();
     } finally {
       seed(null);
     }

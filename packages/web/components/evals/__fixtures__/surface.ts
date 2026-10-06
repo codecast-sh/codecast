@@ -17,14 +17,14 @@ export interface SurfaceFixture {
   epoch: EpochResponse;
 }
 
-export function surfaceFixture(opts: { surface?: string; now?: number; query?: Record<string, string> } = {}): SurfaceFixture {
+export async function surfaceFixture(opts: { surface?: string; now?: number; query?: Record<string, string> } = {}): Promise<SurfaceFixture> {
   const world = evalsFixtureWorld({ now: opts.now ?? SURFACE_NOW });
   const id = opts.surface ?? "settle";
-  const data = world.answer("GET /surface/:id", { id }, opts.query ?? {}) as SurfaceResponse;
+  const data = await world.answer("GET /surface/:id", { id }, opts.query ?? {});
   const graded = data.batches.filter((b) => !b.dry);
   const pair: [string, string] = [graded[graded.length - 2].batch, graded[graded.length - 1].batch];
-  const batches = world.answer("GET /batches", {}, { surface: id, a: pair[0], b: pair[1] }) as BatchesResponse;
+  const batches = await world.answer("GET /batches", {}, { surface: id, a: pair[0], b: pair[1] });
   const newest = Math.max(...data.epochs.map((e) => e.n));
-  const epoch = world.answer("GET /epoch", {}, { surface: id, n: String(newest) }) as EpochResponse;
+  const epoch = await world.answer("GET /epoch", {}, { surface: id, n: String(newest) });
   return { data, pair, batches, epoch };
 }

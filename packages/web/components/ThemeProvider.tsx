@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, ReactNode, useCallback } from "react";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, resolveVisualStyle } from "../store/inboxStore";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
@@ -54,7 +54,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  const shownStyle: VisualStyle = lock ? "classic" : visualStyle;
+  // Hosted mode is always Minimal (resolveVisualStyle); the stored pick is
+  // left alone, so leaving hosted mode restores it.
+  const lane = useInboxStore((s) => s.clientState.ui?.lane);
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle, lane });
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {

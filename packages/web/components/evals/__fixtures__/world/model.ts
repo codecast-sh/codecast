@@ -1,14 +1,12 @@
 // Part of the fixture world (../world.ts), which every caller imports. The
 // world's model: its deterministic helpers, the cast of surfaces and batches,
-// and the views derived from the rows (stats, flips, verdicts, epochs, the
-// ledger). Nothing here is real data.
+// and the state the sources (./sources.ts) read. What the pages show of it
+// (stats, flips, verdicts, epochs, the ledger, attribution) is computed by
+// @platform/evals/query, as it is over real records. Nothing here is real data.
 
-import type { BatchStats, BatchVerdict, BisectState, BisectStep, CommitRef, Epoch, EvalRoute, FlipsResult, Footing, FootingMarker, LedgerRow, RunRow, SeparationResult, SimCatalogResponse, SimRunResponse, SimSessionSummary, StalenessWord, VerdictFlip } from "@codecast/shared/contracts/evalsApi";
-// The engine's own night-by-night test, so a pooled verdict's p here is the one verdict.ts would print.
-import { separateNights } from "@platform/evals/analysis";
-
-/** A route the world has no answer for (an unknown id): the transport turns it into a 404. */
-export class EvalsFixtureMiss extends Error {}
+import type { BisectState, BisectStep, CommitRef, EvalRoute, RunRow, SimCatalogResponse, SimRunResponse, SimSessionSummary, StalenessWord } from "@codecast/shared/contracts/evalsApi";
+import { makeVerdict, statusPassRule } from "@platform/evals/analysis";
+import { NotFound, type HandlerPolicy } from "@platform/evals/query";
 
 export const DAY = 86_400_000;
 export const PASS_MARK = 0.7;
@@ -16,6 +14,11 @@ const CALL_MODEL = "claude-haiku-4-5-20251001";
 const STRONG_MODEL = "claude-sonnet-5-5";
 const OPUS_MODEL = "claude-opus-5-5";
 export const JUDGE_MODEL = "claude-sonnet-5-5";
+
+/** The world's verdict policy, which is codecast's: a rep passes by its status at the pass mark, and is judged on the ruler its row names. */
+export const fixturePolicy: HandlerPolicy = { passed: statusPassRule(PASS_MARK), ruler: (r) => r.ruler ?? null };
+/** The engine's verdict bound to that policy, for what the world works out while it is built (which batches a bisect starts on). */
+export const fixtureVerdict = makeVerdict(fixturePolicy);
 
 // ── Deterministic helpers ───────────────────────────────────────────────────
 
@@ -40,40 +43,12 @@ export const stampOf = (ms: number) => iso(ms).replace(/[:.]/g, "-");
 export const clamp01 = (v: number) => Math.max(0, Math.min(1, v));
 export const round = (v: number, d = 3) => Math.round(v * 10 ** d) / 10 ** d;
 export const sum = (xs: number[]) => xs.reduce((s, v) => s + v, 0);
-function median(xs: number[]): number | null {
-  if (!xs.length) return null;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
-const mean = (xs: number[]) => (xs.length ? sum(xs) / xs.length : null);
-
-/** One-sided Mann-Whitney on b against a, normal approximation; too few under 5 a side. */
-export function fixtureSeparate(a: number[], b: number[]): SeparationResult {
-  if (a.length < 5 || b.length < 5) return { kind: "too-few" };
-  let u = 0;
-  for (const x of b) for (const y of a) u += x > y ? 1 : x === y ? 0.5 : 0;
-  const mu = (a.length * b.length) / 2;
-  const sigma = Math.sqrt((a.length * b.length * (a.length + b.length + 1)) / 12);
-  const z = (u - mu) / sigma;
-  const tail = (x: number) => 0.5 * erfc(x / Math.SQRT2);
-  const pWorse = tail(-z);
-  const pBetter = tail(z);
-  if (pWorse <= 0.05) return { kind: "worse", p: round(pWorse, 4) };
-  if (pBetter <= 0.05) return { kind: "better", p: round(pBetter, 4) };
-  return { kind: "not-separated", p: round(Math.min(pWorse, pBetter), 4) };
-}
-function erfc(x: number): number {
-  const t = 1 / (1 + 0.5 * Math.abs(x));
-  const y = t * Math.exp(-x * x - 1.26551223 + t * (1.00002368 + t * (0.37409196 + t * (0.09678418 + t * (-0.18628806 + t * (0.27886807 + t * (-1.13520398 + t * (1.48851587 + t * (-0.82215223 + t * 0.17087277)))))))));
-  return x >= 0 ? y : 2 - y;
-}
 
 // ── The cast ────────────────────────────────────────────────────────────────
 
 type Story = "regression" | "model-change" | "judge-change" | "live-reads" | "freeze-recapture" | "improving" | "steady";
 
-interface SurfaceDef {
+export interface SurfaceDef {
   id: string;
   title: string;
   route: EvalRoute;
@@ -132,7 +107,7 @@ export const SUBJECTS = [
 export const RECENT_SUBJECTS = [
   "evals: judge prompt cites the label",
   "settle: read the asked question verbatim",
-  "web: sidebar wake signature",
+  "call summary: quote the owner in each item",
   "evals: models table pins sonnet 4.6",
   "settle: done needs verified tests",
   "anchor brief: lead with the blocker",
@@ -156,7 +131,6 @@ export interface Batch {
   ruler: string;
   gitHead: string;
   dry: boolean;
-  landing: boolean;
 }
 
 export interface FixtureState {
@@ -164,10 +138,12 @@ export interface FixtureState {
   defs: SurfaceDef[];
   freezes: Map<string, { id: string; name: string; surface: string; visibility: "public" | "private"; base: number; index: number }>;
   batches: Map<string, Batch[]>;
-  /** Each surface's epoch starts as batch indexes, resolved against its batch list. */
-  epochStarts: Map<string, number[]>;
+  /** Every rep, newest first, as the run index hands them. The same array for the world's whole life: the handler keeps its answers per array. */
   rows: RunRow[];
   byId: Map<string, RunRow>;
+  /** Which of its surface's prompt epochs each rep rendered: what its promptSha hashes and its prompt files say. */
+  promptEpochs: Map<string, number>;
+  /** Oldest first, one line of history: the off-main commit sits where its main-line twin does. */
   commits: CommitRef[];
   bisects: BisectState[];
   /** The bisects playing a run in progress: they read as writing now, whatever the world's clock (see liveBisect). */
@@ -177,191 +153,14 @@ export interface FixtureState {
   sim: { catalog: SimCatalogResponse; sessions: SimSessionSummary[]; runs: Map<string, SimRunResponse> };
 }
 
-// ── Derived views ───────────────────────────────────────────────────────────
-
-export const rowsOf = (st: FixtureState, surface: string) => st.rows.filter((r) => r.surface === surface);
 export const rowsIn = (st: FixtureState, batch: Batch) => st.rows.filter((r) => r.surface === batch.surface && r.batch === batch.name);
-export const scoredOf = (rows: RunRow[]) => rows.filter((r) => r.score !== null && (r.status === "pass" || r.status === "fail"));
-export const footingOf = (b: Batch): Footing => ({ model: b.model, ruler: b.ruler });
 export const sameFooting = (a: Batch, b: Batch) => a.model === b.model && a.ruler === b.ruler;
 
 export function surfaceDef(st: FixtureState, id: string): SurfaceDef {
   const def = st.defs.find((d) => d.id === id);
-  if (!def) throw new EvalsFixtureMiss(`no surface ${id}`);
+  if (!def) throw new NotFound(`no surface ${id}`);
   return def;
 }
-export function batchOf(st: FixtureState, surface: string, name: string): Batch {
-  const b = st.batches.get(surface)?.find((x) => x.name === name);
-  if (!b) throw new EvalsFixtureMiss(`no batch ${name} on ${surface}`);
-  return b;
-}
 
-export function batchStats(st: FixtureState, b: Batch): BatchStats {
-  const rows = rowsIn(st, b);
-  const scored = scoredOf(rows);
-  const scores = scored.map((r) => r.score as number);
-  const passed = scored.filter((r) => r.status === "pass").length;
-  const live = rows.filter((r) => r.liveReads > 0);
-  return {
-    batch: b.name,
-    reps: scored.length,
-    passed,
-    median: median(scores),
-    mean: mean(scores),
-    costUsd: round(sum(rows.map((r) => r.costUsd)), 4),
-    batchAt: iso(b.at),
-    cadence: b.cadence,
-    passRate: scored.length ? round(passed / scored.length) : null,
-    min: scores.length ? Math.min(...scores) : null,
-    max: scores.length ? Math.max(...scores) : null,
-    crashes: rows.filter((r) => r.status === "crash").length,
-    judgeCostUsd: round(sum(rows.map((r) => r.judgeCostUsd)), 4),
-    liveReads: { reps: live.length, reads: sum(live.map((r) => r.liveReads)) },
-    dry: rows.every((r) => r.status === "dry"),
-    dirtyReps: rows.filter((r) => r.dirty).length,
-    freezes: new Set(rows.map((r) => r.freezeId)).size,
-    footing: footingOf(b),
-    gitHeads: [...new Set(rows.map((r) => r.gitHead).filter((x): x is string => !!x))],
-  };
-}
-
-function majorityOf(rows: RunRow[]): boolean | null {
-  const scored = scoredOf(rows);
-  if (!scored.length) return null;
-  return scored.filter((r) => r.status === "pass").length * 2 > scored.length;
-}
-
-export function flipsOf(st: FixtureState, a: Batch, b: Batch): VerdictFlip[] {
-  const out: VerdictFlip[] = [];
-  const ra = rowsIn(st, a);
-  const rb = rowsIn(st, b);
-  for (const f of st.freezes.values()) {
-    if (f.surface !== a.surface) continue;
-    const fa = ra.filter((r) => r.freezeId === f.id);
-    const fb = rb.filter((r) => r.freezeId === f.id);
-    const ma = majorityOf(fa);
-    const mb = majorityOf(fb);
-    if (ma === null || mb === null || ma === mb) continue;
-    // Each side's reps that agree with its verdict come first, as verdict.ts verdictFlips lists them.
-    const lead = (rows: RunRow[], passes: boolean) => [...rows.filter((r) => (r.status === "pass") === passes), ...rows.filter((r) => (r.status === "pass") !== passes)].map((r) => r.id);
-    out.push({ freezeId: f.id, name: f.name, visibility: f.visibility, direction: mb ? "fixed" : "broke", before: lead(fa, ma), after: lead(fb, mb) });
-  }
-  return out;
-}
-
-export function flipsBetween(st: FixtureState, a: Batch, b: Batch): FlipsResult {
-  if (!sameFooting(a, b)) {
-    const why = a.model !== b.model ? `the model moved from ${a.model} to ${b.model}` : `the judge ruler moved from ${a.ruler} to ${b.ruler}`;
-    return { ok: false, reason: `Not on the same footing: ${why}.`, a: footingOf(a), b: footingOf(b) };
-  }
-  return { ok: true, flips: flipsOf(st, a, b) };
-}
-
-/** The live batches a strip, verdict and ledger read: dry renders graded nothing. */
+/** The live batches a bisect is started on: dry renders graded nothing. */
 export const gradedBatches = (st: FixtureState, surface: string) => (st.batches.get(surface) ?? []).filter((b) => !b.dry);
-
-/** b weighed against `against`, or (nightly) a pool of up to three earlier nightly batches on its footing, or the previous one. */
-export function verdict(st: FixtureState, b: Batch, against?: Batch): BatchVerdict {
-  const list = gradedBatches(st, b.surface);
-  const skipped: { batch: string; freezeId: string; why: "model" | "judge" }[] = [];
-  const base: Batch[] = against ? [against] : [];
-  const pooled = !against && b.cadence === "nightly";
-  if (!against) {
-    for (let i = list.indexOf(b) - 1; i >= 0 && base.length < (pooled ? 3 : 1); i--) {
-      if (pooled && list[i].cadence !== "nightly") continue;
-      if (sameFooting(list[i], b)) {
-        base.push(list[i]);
-        continue;
-      }
-      const first = rowsIn(st, list[i])[0];
-      skipped.push({ batch: list[i].name, freezeId: first?.freezeId ?? "", why: list[i].model !== b.model ? "model" : "judge" });
-    }
-  }
-  const set = batchStats(st, b);
-  const cur = scoredOf(rowsIn(st, b)).map((r) => r.score as number);
-  const prev = base.flatMap((x) => scoredOf(rowsIn(st, x)).map((r) => r.score as number));
-  // A cadence baseline is weighed night by night per freeze (verdict.ts pooledRuns, nightStrata), however
-  // many nights it holds; the others by the per-rep Mann-Whitney.
-  const separation = !base.length ? ({ kind: "too-few" } as SeparationResult) : pooled ? separateNights(nightStrataOf(st, b, base)) : fixtureSeparate(prev, cur);
-  const nearest = base[0];
-  const flips = nearest && sameFooting(nearest, b) ? flipsOf(st, nearest, b) : [];
-  return {
-    surface: b.surface,
-    batch: b.name,
-    footing: footingOf(b),
-    models: [b.model],
-    dry: b.dry,
-    set,
-    baseline: base.length ? { kind: against ? "against" : pooled ? "pooled" : "previous", batches: base.map((x) => x.name), reps: prev.length, cadence: pooled ? b.cadence : null, skipped } : null,
-    compared: { current: cur, previous: prev, previousFreezes: new Set(base.flatMap((x) => rowsIn(st, x).map((r) => r.freezeId))).size },
-    separation,
-    footingNotes: against && !sameFooting(against, b) ? [{ freezeId: rowsIn(st, b)[0]?.freezeId ?? "", model: against.model !== b.model ? { then: against.model, now: b.model } : null, judge: against.ruler !== b.ruler }] : [],
-    flips,
-    gatesFailed: [...new Set(rowsIn(st, b).flatMap((r) => r.gatesFailed))],
-    regression: separation.kind === "worse",
-  };
-}
-
-/** Each freeze both sides graded, as verdict.ts nightStrata shapes it: tonight's mean on it and each earlier night's mean. */
-function nightStrataOf(st: FixtureState, b: Batch, nights: Batch[]): Array<{ current: number; previous: number[] }> {
-  const meanOn = (x: Batch, f: string) => mean(scoredOf(rowsIn(st, x)).filter((r) => r.freezeId === f).map((r) => r.score as number));
-  const freezes = [...new Set(scoredOf(rowsIn(st, b)).map((r) => r.freezeId))];
-  return freezes.flatMap((f) => {
-    const previous = nights.map((n) => meanOn(n, f)).filter((v): v is number => v !== null);
-    const current = meanOn(b, f);
-    return current !== null && previous.length ? [{ current, previous }] : [];
-  });
-}
-
-export function epochsOf(st: FixtureState, surface: string): Epoch[] {
-  surfaceDef(st, surface);
-  const list = st.batches.get(surface) ?? [];
-  const starts = [0, ...(st.epochStarts.get(surface) ?? [])];
-  const fz = [...st.freezes.values()].filter((f) => f.surface === surface);
-  return starts.map((start, i) => {
-    const end = (starts[i + 1] ?? list.length) - 1;
-    const first = list[start];
-    return {
-      n: i + 1,
-      surface,
-      firstBatch: first.name,
-      firstBatchAt: iso(first.at),
-      lastBatch: list[end].name,
-      gitHead: first.gitHead,
-      changedFreezes: i === 0 ? fz.map((f) => f.id) : fz.filter((f) => f.index % 2 === 0 || i === 1).map((f) => f.id),
-      scope: surface === "org-review" ? "analyzer-only" : "rendered",
-    };
-  });
-}
-
-export function footingMarkers(st: FixtureState, surface: string): FootingMarker[] {
-  const list = gradedBatches(st, surface);
-  const out: FootingMarker[] = [];
-  for (let i = 1; i < list.length; i++) {
-    const [a, b] = [list[i - 1], list[i]];
-    if (a.model !== b.model) out.push({ batch: b.name, batchAt: iso(b.at), kind: "model", from: a.model, to: b.model });
-    if (a.ruler !== b.ruler) out.push({ batch: b.name, batchAt: iso(b.at), kind: "judge", from: a.ruler, to: b.ruler });
-  }
-  return out;
-}
-
-/** The freeze ledger; a well's flip is the flip its batch's verdict reports, as views.ts ledgerOf reads batchFlips. */
-export function ledger(st: FixtureState, surface: string, list: Batch[]): LedgerRow[] {
-  const out: LedgerRow[] = [];
-  const flipsAt = new Map(list.map((b) => [b.name, new Map(verdict(st, b).flips.map((f) => [f.freezeId, f.direction]))]));
-  for (const f of st.freezes.values()) {
-    if (f.surface !== surface) continue;
-    const cells: LedgerRow["cells"] = {};
-    let flips = 0;
-    for (const b of list) {
-      const rows = rowsIn(st, b).filter((r) => r.freezeId === f.id);
-      if (!rows.length) continue;
-      const scored = scoredOf(rows);
-      const flip = flipsAt.get(b.name)?.get(f.id) ?? null;
-      if (flip) flips++;
-      cells[b.name] = { reps: rows.length, passed: scored.filter((r) => r.status === "pass").length, mean: mean(scored.map((r) => r.score as number)), majority: majorityOf(rows), flip };
-    }
-    out.push({ freezeId: f.id, name: f.name, visibility: f.visibility, flips, cells });
-  }
-  return out.sort((a, b) => b.flips - a.flips || a.name.localeCompare(b.name));
-}

@@ -8,6 +8,7 @@ import {
   type Model,
 } from "@mariozechner/pi-ai";
 import { streamSimpleAnthropic } from "@mariozechner/pi-ai/anthropic";
+import { streamSimpleOpenAIResponses } from "@mariozechner/pi-ai/openai-responses";
 
 /**
  * A stream that ends at once with an error message, the way pi's providers
@@ -39,8 +40,8 @@ export function errorStream(model: Model<Api>, error: unknown): AssistantMessage
 }
 
 /**
- * Streams one model call. Anthropic goes through a static import of pi-ai's
- * Anthropic provider; pi-ai's own `streamSimple` reaches every built-in
+ * Streams one model call. Anthropic and OpenAI (the fallback tier) go through
+ * static imports of pi-ai's providers; pi-ai's own `streamSimple` reaches every built-in
  * provider through a dynamic `import()`, which a Convex isolate refuses at
  * call time. Any other api (the faux provider in tests, one an app registers)
  * is looked up in pi-ai's provider registry.
@@ -49,6 +50,9 @@ export const streamModel: StreamFn = (model, context, options) => {
   try {
     if (model.api === "anthropic-messages") {
       return streamSimpleAnthropic(model as Model<"anthropic-messages">, context, options);
+    }
+    if (model.api === "openai-responses") {
+      return streamSimpleOpenAIResponses(model as Model<"openai-responses">, context, options);
     }
     const provider = getApiProvider(model.api);
     if (!provider) return errorStream(model, new Error(`No provider is registered for api "${model.api}"`));

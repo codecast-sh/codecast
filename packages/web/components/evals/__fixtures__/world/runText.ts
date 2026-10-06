@@ -1,9 +1,10 @@
 // Part of the fixture world (../world.ts), which every caller imports. The
-// text the run pages read: moments, replies, prompts, guard lines and a run in
-// full. Nothing here is real data.
+// text the run pages read: moments, replies, the prompt files each rep wrote,
+// guard lines and a run's folder. Nothing here is real data.
 
-import type { CallDetail, EvalFlip, GuardEntry, GuardStatus, MomentMessage, PromptFilePair, RunFileEntry, RunResponse, RunRow, VerdictFlip } from "@codecast/shared/contracts/evalsApi";
-import { type Batch, DAY, type FixtureState, JUDGE_MODEL, PASS_MARK, batchOf, clamp01, iso, round, rowsIn, surfaceDef } from "./model";
+import type { CallDetail, EvalFlip, GuardEntry, GuardStatus, MomentMessage, RunFileEntry, RunResponse, RunRow } from "@codecast/shared/contracts/evalsApi";
+import { flipOf, gradedSet, type PromptReader } from "@platform/evals/analysis";
+import { DAY, type FixtureState, JUDGE_MODEL, PASS_MARK, clamp01, fixturePolicy, iso, round, surfaceDef } from "./model";
 
 // ── Text the run pages read ─────────────────────────────────────────────────
 
@@ -54,11 +55,12 @@ export function replyOf(row: RunRow): string {
   }
 }
 
+/** One prompt file as a rep rendered it. The rules grow with the prompt epoch the rep rendered, the one its promptSha names. */
 function promptOf(st: FixtureState, row: RunRow, file: string): string {
   const def = surfaceDef(st, row.surface);
-  const b = batchOf(st, row.surface, row.batch ?? "");
-  const extra = b.epoch >= 2 ? "\n- If the human was asked anything, the session is waiting, whatever else is true." : "";
-  const extra3 = b.epoch >= 3 ? "\n- A finished fix with tests passing is done. Prefer done when work is verified." : "";
+  const epoch = st.promptEpochs.get(row.id) ?? 1;
+  const extra = epoch >= 2 ? "\n- If the human was asked anything, the session is waiting, whatever else is true." : "";
+  const extra3 = epoch >= 3 ? "\n- A finished fix with tests passing is done. Prefer done when work is verified." : "";
   if (file.endsWith("system.md")) return `You read one coding session and answer for the ${def.id} surface.\n\nRules:\n- Read the last assistant turn first.${extra}${extra3}\n- Answer in JSON only.`;
   if (file.endsWith("then2.md")) return "Anything else you would do before ending the turn?";
   return momentOf(st, row.freezeId).map((m) => `${m.from}: ${m.text}`).join("\n");
@@ -90,7 +92,35 @@ function guardOf(row: RunRow): GuardEntry[] {
   return out;
 }
 
-export function runResponse(st: FixtureState, row: RunRow): RunResponse {
+/** The prompt files a rep of this route wrote, in the order the model saw them. */
+const promptFilesOf = (route: string) => (route === "agent" ? ["agent1/prompt.md", "agent1/then2.md"] : ["call1/system.md", "call1/prompt.md"]);
+
+/** The world's prompt files, as the epoch walk, the prompt diffs and attribution read them from run folders. */
+export function promptReader(st: FixtureState): PromptReader {
+  const text = (runId: string, file: string) => {
+    const row = st.byId.get(runId);
+    return row && promptFilesOf(surfaceDef(st, row.surface).route).includes(file) ? promptOf(st, row, file) : null;
+  };
+  return {
+    files: (runId) => {
+      const row = st.byId.get(runId);
+      return row ? promptFilesOf(surfaceDef(st, row.surface).route) : [];
+    },
+    text,
+    size: (runId, file) => {
+      const t = text(runId, file);
+      return t === null ? null : byteLength(t);
+    },
+  };
+}
+
+/** What the judge wrote about a check it scored. */
+const judgeNote = (score: number) => (score >= PASS_MARK ? "It answers the question the moment asks and invents nothing." : "It reads as finished, but the session ended on an unanswered question.");
+
+/** A rep's folder as codecast reads it: everything on its page but the row and its neighbours, which the query adds. */
+export type FixtureRunDetail = Omit<RunResponse, "row" | "siblings" | "adjacent">;
+
+export function runDetail(st: FixtureState, row: RunRow): FixtureRunDetail {
   const def = surfaceDef(st, row.surface);
   const scored = row.status === "pass" || row.status === "fail";
   // A dry rep calls no model: a call's reply is its prompt echoed back (adapters/dryRun.ts), an agent's a fixed line.
@@ -133,7 +163,7 @@ export function runResponse(st: FixtureState, row: RunRow): RunResponse {
         score: row.score as number,
         passMark: PASS_MARK,
         gates,
-        checks: Object.entries(row.checks).map(([id, s]) => ({ id, ask: id === "criteria" ? def.criteria : "Does it sound like the person, not like a model?", weight: id === "criteria" ? 0.7 : 0.3, score: s, must: id === "criteria" ? 0.4 : null, reasoning: s >= PASS_MARK ? "It answers the question the moment asks and invents nothing." : "It reads as finished, but the session ended on an unanswered question.", evidence: null })),
+        checks: Object.entries(row.checks).map(([id, s]) => ({ id, ask: id === "criteria" ? def.criteria : "Does it sound like the person, not like a model?", weight: id === "criteria" ? 0.7 : 0.3, score: s, must: id === "criteria" ? 0.4 : null, reasoning: judgeNote(s), evidence: null })),
         missedFloors: row.missedFloors.map((id) => ({ id, score: row.checks[id] ?? 0, must: 0.4 })),
         judgeCostUsd: row.judgeCostUsd,
         judgeModel: row.judgeModel,
@@ -150,11 +180,7 @@ export function runResponse(st: FixtureState, row: RunRow): RunResponse {
     ...(agents.length ? [{ path: "agent1", kind: "dir" as const, size: 0 }, { path: "agent1/prompt.md", kind: "file" as const, size: 0 }, { path: "agent1/then2.md", kind: "file" as const, size: 0 }, { path: "agent1/stream.jsonl", kind: "file" as const, size: 0 }, { path: "calls.log", kind: "file" as const, size: 0 }] : []),
     ...(row.status === "crash" ? [{ path: "run.log", kind: "file" as const, size: 0 }] : []),
   ];
-  const b = batchOf(st, row.surface, row.batch ?? "");
-  const list = st.batches.get(row.surface) ?? [];
-  const sameFreeze = (x: Batch | undefined) => (x ? rowsIn(st, x).find((r) => r.freezeId === row.freezeId && r.seed === row.seed)?.id ?? null : null);
-  const res: RunResponse = {
-    row,
+  const res: FixtureRunDetail = {
     run: { freezeId: row.freezeId, notes: null, model: row.model ?? def.model, route: def.route, sourceHash: row.sourceHash ?? "", sourceHashDisk: row.sourceHashDisk, treePatch: row.treePatch, freezeSha: row.freezeSha, promptSha: row.promptSha, judgeModel: row.judgeModel, budgetUsd: 8, gitHead: row.gitHead ?? "", dirty: row.dirty, dry: row.status === "dry", temperatureProd: [0], temperatureReplay: "cli-default", liveReads: row.liveReads, batch: row.batch ?? "", cadence: row.cadence, title: `${row.surface} ${row.freezeName}` },
     result: { scenario: row.freezeName, seed: row.seed, title: `${row.surface} ${row.freezeName}`, startedAt: row.stamp, endedBecause: row.status === "crash" ? "failed" : "done", stopReason: row.status === "crash" ? "the replay exited 1 before replying" : null, steps: calls.length + agents.length, virtualElapsedMs: 0, realElapsedMs: row.realMs, costUsd: row.costUsd, captures: 1 },
     score,
@@ -172,41 +198,34 @@ export function runResponse(st: FixtureState, row: RunRow): RunResponse {
     guard: def.route === "agent" ? guardOf(row) : [],
     files,
     logTail: row.status === "crash" ? "replay: spawning claude -p\nerror: the model returned an empty stream\n    at readStream (adapters/replay.ts:211)\nexit 1" : null,
-    siblings: rowsIn(st, b).filter((r) => r.freezeId === row.freezeId && r.id !== row.id),
-    adjacent: { previous: sameFreeze(list[b.index - 1]), next: sameFreeze(list[b.index + 1]) },
     extra: row.surface === "org-review" ? { gradeAuto: { named: 7, exist: 7, owners: 6 }, hashes: { analyzer: row.promptSha } } : null,
   };
   const texts = runFileTexts(res);
   return { ...res, files: files.map((f) => (f.kind === "dir" ? f : { ...f, size: byteLength(texts.get(f.path) ?? "") })) };
 }
 
-export function promptPair(st: FixtureState, a: RunRow, b: RunRow): PromptFilePair[] {
-  const files = surfaceDef(st, a.surface).route === "agent" ? ["agent1/prompt.md", "agent1/then2.md"] : ["call1/system.md", "call1/prompt.md"];
-  return files.map((file) => ({ freezeId: a.freezeId, file, a: { runId: a.id, text: promptOf(st, a, file) }, b: { runId: b.id, text: promptOf(st, b, file) } }));
-}
-
-export function examplesOf(st: FixtureState, flips: VerdictFlip[]): EvalFlip[] {
-  return flips.map((f) => {
-    // The reps that show the flip: one on each side with the side's majority outcome, as flipOf picks them.
-    const pick = (ids: string[], pass: boolean) => ids.map((id) => st.byId.get(id)).find((r) => r && (r.status === "pass") === pass) ?? st.byId.get(ids[0]);
-    const before = pick(f.before, f.direction === "broke");
-    const after = pick(f.after, f.direction !== "broke");
-    return {
-      freeze: f.freezeId,
-      name: f.name,
-      direction: f.direction,
-      input: momentOf(st, f.freezeId).slice(-2).map((m) => `${m.from}: ${m.text}`).join(" "),
-      before: before ? replyOf(before) : "",
-      after: after ? replyOf(after) : "",
-      note: f.direction === "broke" ? "It calls the session done although the agent's last line asks the human a question." : "It now names the open question and calls the session waiting.",
-    };
+/**
+ * The reply text behind flips between two batches, for the before and after
+ * cards: per freeze, both sides' graded reps handed to the engine's flipOf,
+ * which picks one rep a side that matches its side's verdict.
+ */
+export function flipExamples(st: FixtureState, surface: string, freezeIds: string[], a: string, b: string): EvalFlip[] {
+  const mine = st.rows.filter((r) => r.surface === surface);
+  const side = (batch: string, freezeId: string) => ({
+    batch,
+    sha: "",
+    reps: gradedSet(mine, batch).filter((r) => r.freezeId === freezeId).map((r) => ({ passed: fixturePolicy.passed(r), score: r.score, reply: replyOf(r), judge_note: judgeNote(r.checks.criteria ?? r.score ?? 0), cost_usd: r.costUsd, gates_failed: r.gatesFailed })),
+  });
+  return freezeIds.flatMap((id) => {
+    const flip = flipOf({ freeze: id, name: st.freezes.get(id)?.name ?? id.slice(0, 8), kind: "guard", proven: false, input: momentOf(st, id).slice(-2).map((m) => `${m.from}: ${m.text}`).join(" "), base: side(a, id), branch: side(b, id) });
+    return flip ? [flip] : [];
   });
 }
 
 export const byteLength = (text: string) => new TextEncoder().encode(text).length;
 
 /** Each file of a run folder as the file route serves it. */
-export function runFileTexts(r: RunResponse): Map<string, string> {
+export function runFileTexts(r: FixtureRunDetail): Map<string, string> {
   const map: Record<string, unknown> = {
     "run.json": r.run,
     "result.json": r.result,

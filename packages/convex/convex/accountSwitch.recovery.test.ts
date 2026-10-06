@@ -567,10 +567,16 @@ describe("token switches through the backend handler", () => {
     const onToken = f.conversation("conversations_tok", "limit", { cc_account: "tok", pending_api_error_at: f.now - 600_000, updated_at: f.now - 600_000 });
     const unpinned = f.conversation("conversations_old", "limit", { cc_account: undefined, pending_api_error_at: f.now - 600_000, updated_at: f.now - 600_000 });
     f.tables.conversations.push(onToken, unpinned);
-    // The keychain login is pegged, but the fleet is not on it: a free continue.
-    expect(await f.run()).toMatchObject({ acted: "continue", conversations: 2, restarted: 1 });
-    // The token session gets a plain continue; the unpinned one ran on the
-    // keychain and is restarted with its pin corrected to the token account.
+    // The keychain login is pegged, but the fleet is not on it: a free
+    // continue, staged behind a probe because two rows are parked.
+    expect(await f.run()).toMatchObject({ acted: "continue", conversations: 1, staged: 1, restarted: 1 });
+    // The unpinned one (the probe) ran on the keychain and is restarted with
+    // its pin corrected to the token account; the token session gets a plain
+    // continue once the probe has cleared.
+    expect(f.db._inserted.filter((i: any) => i.table === "pending_messages")).toHaveLength(0);
+    unpinned.pending_api_error = false;
+    const tick = await (throttleContinueCheck as any)._handler({ db: f.db, scheduler: f.scheduler }, { user_id: "users_owner" });
+    expect(tick).toMatchObject({ acted: "released", remaining: 0 });
     const sent = f.db._inserted.filter((i: any) => i.table === "pending_messages");
     expect(sent.map((i: any) => i.doc.conversation_id)).toEqual([onToken._id]);
     expect(unpinned.cc_account).toBe("tok");
@@ -589,5 +595,94 @@ describe("token switches through the backend handler", () => {
     const res = await f.run();
     expect(res.acted).not.toBe("continue");
     expect(f.tables.daemon_commands).toHaveLength(0);
+  });
+});
+
+describe("staged continue behind a probe after a limit reset", () => {
+  // Five sessions parked on the active account's window; the window rolled.
+  const staged = () => {
+    const f = fixture();
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now - 5_000 } } as any;
+    const rows = [1, 2, 3, 4, 5].map((n) =>
+      f.conversation(`conversations_l${n}`, "limit", {
+        cc_account: undefined,
+        pending_api_error_at: f.now - (6 - n) * 60_000,
+        updated_at: f.now - (6 - n) * 60_000,
+      }),
+    );
+    f.tables.conversations.push(...rows);
+    const sentIds = () => f.db._inserted.filter((i: any) => i.table === "pending_messages").map((i: any) => i.doc.conversation_id);
+    const tick = () => (throttleContinueCheck as any)._handler({ db: f.db, scheduler: f.scheduler }, { user_id: "users_owner" });
+    return { ...f, rows, sentIds, tick };
+  };
+
+  test("the loop continues only the most recently parked session and books the paced tick", async () => {
+    const f = staged();
+    expect(await f.run()).toMatchObject({ acted: "continue", conversations: 1, staged: 4 });
+    expect(f.sentIds()).toEqual(["conversations_l5"]);
+    const state = f.device.cc_auto_switch_state;
+    expect(state.limit_probe).toMatchObject({ conversation_id: "conversations_l5", kind: "limit" });
+    expect(state.throttle_check_at).toBe(state.limit_probe.at + 20_000);
+    expect(f.scheduled.some((s) => s.at === state.throttle_check_at)).toBe(true);
+    // The continue attempt is recorded once for the whole release.
+    expect(state.attempts.filter((a: any) => a.profile === AUTO_SWITCH_CONTINUE_KEY)).toHaveLength(1);
+  });
+
+  test("a probe still parked on its old stamp is left to settle; once clear, the rest go out in batches", async () => {
+    const f = staged();
+    await f.run();
+    expect(await f.tick()).toMatchObject({ acted: "probe_settling" });
+    expect(f.sentIds()).toEqual(["conversations_l5"]);
+    // The probe's continue was delivered and the session is working again.
+    f.rows[4].pending_api_error = false;
+    expect(await f.tick()).toMatchObject({ acted: "released", continued: 3, remaining: 1 });
+    expect(f.sentIds()).toEqual(["conversations_l5", "conversations_l1", "conversations_l2", "conversations_l3"]);
+    expect(f.device.cc_auto_switch_state.limit_probe).toBeDefined();
+    for (const id of ["conversations_l1", "conversations_l2", "conversations_l3"]) {
+      f.rows.find((r) => r._id === id)!.pending_api_error = false;
+    }
+    expect(await f.tick()).toMatchObject({ acted: "released", continued: 1, remaining: 0 });
+    expect(f.sentIds()).toContain("conversations_l4");
+    expect(f.device.cc_auto_switch_state.limit_probe).toBeUndefined();
+    expect(f.device.cc_auto_switch_state.throttle_check_at).toBeUndefined();
+  });
+
+  test("a probe that parks again on the same limit releases nothing and hands back to the account loop", async () => {
+    const f = staged();
+    await f.run();
+    const probeAt = f.device.cc_auto_switch_state.limit_probe.at;
+    f.rows[4].pending_api_error_at = probeAt + 5_000;
+    f.rows[4].updated_at = probeAt + 5_000;
+    expect(await f.tick()).toMatchObject({ acted: "probe_reparked", probe: "conversations_l5" });
+    expect(f.sentIds()).toEqual(["conversations_l5"]);
+    expect(f.device.cc_auto_switch_state.limit_probe).toBeUndefined();
+    expect(f.scheduled.some((s) => s.delay === 0)).toBe(true);
+    // The account loop reads the fresh park against the continue it already
+    // spent: no second continue, exhausted until the next known reset. The
+    // immediate pass lands in the probe's own cooldown and books the look
+    // right after it; that look is what decides.
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now + 3_600_000 } } as any;
+    expect(await f.run()).toMatchObject({ acted: "cooldown" });
+    expect(f.device.cc_auto_switch_state.next_check_at).toBe(f.device.cc_auto_switch_state.last_action_at + 3 * 60_000 + 5_000);
+    f.device.cc_auto_switch_state.last_action_at = f.now - 4 * 60_000;
+    f.device.cc_auto_switch_state.next_check_at = undefined;
+    const res = await f.run();
+    expect(res).toMatchObject({ acted: "exhausted" });
+    expect((res as any).next_check_at).toBe(f.now + 3_600_000 + 2 * 60_000);
+    expect(f.sentIds()).toEqual(["conversations_l5"]);
+  });
+
+  test("ask mode still proposes a switch instead of probing when the account is pegged", async () => {
+    const f = staged();
+    f.device.cc_recovery_ask = true;
+    f.device.cc_accounts.profiles[0].usage = { fetched_at: f.now, session: { percent: 100, resets_at: f.now + 3_600_000 } } as any;
+    f.device.cc_accounts.profiles.push({
+      name: "roomier", email: "roomier@example.com", token: { expires_at: f.now + 86_400_000 },
+      usage: { fetched_at: f.now - 1_000, session: { percent: 2, resets_at: f.now + 3_600_000 } },
+    } as any);
+    expect(await f.run()).toMatchObject({ acted: "proposed", profile: "roomier" });
+    expect(f.sentIds()).toEqual([]);
+    expect(f.device.cc_auto_switch_state.limit_probe).toBeUndefined();
+    expect(f.device.cc_auto_switch_state.last_decision).toMatchObject({ kind: "propose", target_email: "roomier@example.com" });
   });
 });

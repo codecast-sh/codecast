@@ -12,11 +12,11 @@ import { type RepoPulse, REPO_PULSE_URL, pulseWords } from "../../lib/repoPulse"
 // it uses, refreshed once a minute.
 //
 // Before the read answers, and wherever it cannot (a prerendered page, a
-// blocked network), the chip shows only the octocat: a link that says less,
-// never one that says "0" for lack of an answer. It still holds the width of
-// a typical answer with an invisible stand-in, so the nav does not shift when
-// the numbers arrive.
+// blocked network), the chip shows the last answer this browser saw, in dim
+// gray, through the same markup as a live answer, so the nav does not shift
+// when the numbers arrive. A first visit dims a typical answer instead.
 import Link from "next/link";
+import { useEffect, useSyncExternalStore } from "react";
 import { Star } from "lucide-react";
 import { usePublicRepoRead } from "@/lib/repoTransport";
 import { repoSessionsHref } from "@/lib/repoView";
@@ -41,7 +41,8 @@ export function GitHubIcon({ className = "w-5 h-5" }: { className?: string }) {
 
 export function RepoPulseChip({ className = "" }: { className?: string }) {
   const read = usePublicRepoRead<RepoPulse>(REPO_PULSE_URL);
-  const pulse = read.data;
+  const remembered = useRememberedPulse(read.data);
+  const pulse = read.data ?? remembered ?? STAND_IN;
 
   return (
     <Link
@@ -52,23 +53,48 @@ export function RepoPulseChip({ className = "" }: { className?: string }) {
       aria-label="Codecast's source, with the agent sessions working on it"
     >
       <GitHubIcon className="w-4 h-4 shrink-0" />
-      {pulse ? <PulseRun pulse={pulse} /> : (
-        <span className="flex opacity-0" aria-hidden="true">
-          <PulseRun pulse={STAND_IN} />
-        </span>
-      )}
+      <PulseRun pulse={pulse} dim={!read.data} />
     </Link>
   );
 }
 
-// The shape of a typical answer, rendered invisibly to hold the chip's width.
+// A typical answer, dimmed, for a browser that has never seen a real one.
 const STAND_IN: RepoPulse = { stargazers_count: 10, live: 2 };
 
-function PulseRun({ pulse }: { pulse: RepoPulse }) {
+const PULSE_KEY = "codecast.repoPulse";
+const noSubscribe = () => () => {};
+const readStoredPulse = () => {
+  try {
+    return localStorage.getItem(PULSE_KEY);
+  } catch {
+    return null;
+  }
+};
+
+// The last answer this browser saw. Read through useSyncExternalStore so a
+// prerendered page hydrates with the stand-in and switches before paint.
+function useRememberedPulse(fresh: RepoPulse | undefined): RepoPulse | null {
+  const stored = useSyncExternalStore(noSubscribe, readStoredPulse, () => null);
+  useEffect(() => {
+    if (!fresh) return;
+    try {
+      localStorage.setItem(PULSE_KEY, JSON.stringify(fresh));
+    } catch {}
+  }, [fresh]);
+  if (!stored) return null;
+  try {
+    return JSON.parse(stored) as RepoPulse;
+  } catch {
+    return null;
+  }
+}
+
+function PulseRun({ pulse, dim = false }: { pulse: RepoPulse; dim?: boolean }) {
   const words = pulseWords(pulse.live);
-  const live = pulse.live > 0;
+  const live = !dim && pulse.live > 0;
+  const ink = dim ? DIM : INK;
   const stars = pulse.stargazers_count !== null ? (
-    <span className="flex items-center gap-1 tabular-nums" style={{ color: INK }}>
+    <span className="flex items-center gap-1 tabular-nums" style={{ color: ink }}>
       {pulse.stargazers_count.toLocaleString()}
       <Star className="w-3 h-3" style={{ color: DIM }} aria-hidden="true" />
     </span>
@@ -88,9 +114,9 @@ function PulseRun({ pulse }: { pulse: RepoPulse }) {
             {live && <span className="absolute inline-flex h-full w-full rounded-full opacity-60 motion-safe:animate-ping" style={{ backgroundColor: GREEN }} />}
             <span className="relative inline-flex h-2 w-2 rounded-full" style={{ backgroundColor: live ? GREEN : DIM }} />
           </span>
-          <span style={{ color: live ? INK : MUTED }}>{words.now}</span>
+          <span style={{ color: dim ? DIM : live ? INK : MUTED }}>{words.now}</span>
         </span>
-        <span className="col-start-1 row-start-1 invisible group-hover:visible" style={{ color: INK }}>{words.hover}</span>
+        <span className="col-start-1 row-start-1 invisible group-hover:visible" style={{ color: ink }}>{words.hover}</span>
       </span>
     </>
   );

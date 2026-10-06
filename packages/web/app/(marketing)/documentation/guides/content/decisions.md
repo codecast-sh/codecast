@@ -2,6 +2,11 @@ An agent that reaches a real fork has two bad choices. It can stop and ask, whic
 
 `cast decide` is a third path. The agent writes one question, 2 to 9 options, and the reasoning into a row that lands in a queue. You clear the queue in one sitting, when you choose to. The answer goes back into the asking session as a message, and the agent continues from it.
 
+```figure
+DecisionRoundTripFigure
+The agent asks and parks, the row waits until you sit down with the queue, and your keypress returns as an ordinary message.
+```
+
 The cost model is the point. An interruption is expensive, so the usual rule for agents is to decide alone. A queued question costs you almost nothing to receive, so the bar for asking drops. The decide snippet ([how snippets work](/documentation/agent-snippets)) tells the agent this directly: a choice it would have made silently and mentioned in passing goes to the queue instead. Install it with `cast install decide`.
 
 ```bash
@@ -45,11 +50,18 @@ Blocking is the default. The agent posts the decision and ends its turn. The ses
 
 An advisory decision keeps the agent working on the default it declared. Your answer can still override that default later. The help text and the snippet both restrict this to a default that is cheap to undo. The reason is timing: the snippet tells the agent that answers tend to land about an hour later and often disagree. Everything built on the default in that hour is then work to remove. If the reversal would cost more than the wait, the agent must block.
 
+```figure
+BlockingAdvisoryFigure
+Blocking spends time waiting. Advisory spends the same hour building on a guess, and a disagreeing answer turns that hour into work to undo.
+```
+
 `cast decide edit --blocking` turns an advisory decision into a blocking one and clears its default.
 
 ## What you see
 
 The decision renders as a card in the conversation, at the place where the agent ran the command. The same row appears in the queue at `/questions`. The snippet tells the agent to write nothing about the decision in prose after the command, because the card already holds the full payload.
+
+![A decision card answered inline in a conversation](/documentation/shots/hero.webp "Exponential or fixed backoff?, asked as sd-1290 in Retry failed webhooks: the card carries the agent's evidence and shows the chosen answer, Exponential, 5 attempts.")
 
 The queue has two modes. The list mode groups pending decisions by stack and then by scope, as compact cards that link to each decision's page. The step mode (`/questions?mode=step`) shows one decision at full width and advances when you answer.
 
@@ -62,6 +74,11 @@ The queue has two modes. The list mode groups pending decisions by stack and the
 | `o` | Open the session |
 
 The order is fixed by a rule and not by a score. Blocked decisions whose session can still receive an answer come first. Blocked decisions on a stopped or unresponsive session come second. Advisory decisions come last. Inside each group the oldest decision comes first, because a parked agent costs more the longer it waits.
+
+```figure
+QueueOrderFigure
+Three groups, oldest first inside each. Nothing in the order depends on the session, the project or the wording.
+```
 
 Each decision also has a document page at `/decisions/<sd-N>`. The page shows the question, the asking session, the body or the embedded report, each option with its own page, and the answer controls. The card links to this page when a decision has a document, an option page, or an answer kind other than a single choice.
 

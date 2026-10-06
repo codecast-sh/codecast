@@ -5,6 +5,7 @@ import {
   type MutationCtx,
 } from "./functions";
 import { v } from "convex/values";
+import { roleOfRun } from "./orgLineMerge";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -43,6 +44,10 @@ export type SessionRef = {
   title: string;
   author_name?: string;
   author_image?: string;
+  // The line run the session worked under and its role (fix loop).
+  run_id?: Id<"workflow_runs">;
+  role_id?: Id<"org_roles">;
+  role_handle?: string;
 };
 
 // How a line reached its session. `trailer`: the commit's own
@@ -110,12 +115,22 @@ async function sessionRefFor(
     users.set(userKey, { name: user?.name ?? undefined, image: user?.image ?? undefined });
   }
   const user = users.get(userKey)!;
+  // The line run and role the session worked under (fix loop: an introducing
+  // commit is traced to a run and a role through its session).
+  let role: any = conv.org_role_id ? await ctx.db.get(conv.org_role_id) : null;
+  if (!role && conv.workflow_run_id) {
+    const run = await ctx.db.get(conv.workflow_run_id);
+    if (run) role = await roleOfRun(ctx, run);
+  }
   return {
     conversation_id: conv._id,
     short_id: conv.short_id ?? undefined,
     title: conv.title || "Untitled",
     author_name: user.name,
     author_image: user.image,
+    run_id: conv.workflow_run_id ?? undefined,
+    role_id: role?._id ?? undefined,
+    role_handle: role?.handle ?? undefined,
   };
 }
 

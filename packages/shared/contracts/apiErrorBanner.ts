@@ -486,10 +486,11 @@ export function blockedContinueClientId(conversationId: string, at: number): str
 
 // A "continue" that account recovery sent on the person's behalf, read off its
 // client_id: the auto-switch loop's (auto-switch-continue-*), the daemon's
-// post-switch revive when no caller painted one (acct-switch-*), and the
-// shared un-park id above. A revive the person clicked in the web
-// (acct-revive-*) is theirs and reads as their own message.
-const RECOVERY_CONTINUE_ID_RE = /^(?:auto-switch-continue-|acct-switch-|continue-blocked-)/;
+// post-switch revive when no caller painted one (acct-switch-*), the
+// shared un-park id above, and the watchdog's revive of a session whose
+// process died mid-work (revive-*, cli midWorkRevive.ts). A revive the person
+// clicked in the web (acct-revive-*) is theirs and reads as their own message.
+const RECOVERY_CONTINUE_ID_RE = /^(?:auto-switch-continue-|acct-switch-|continue-blocked-|revive-)/;
 
 export function isRecoveryContinueClientId(clientId: string | null | undefined): boolean {
   return !!clientId && RECOVERY_CONTINUE_ID_RE.test(clientId);

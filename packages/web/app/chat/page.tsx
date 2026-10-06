@@ -700,8 +700,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
                   anchorTitle={`#${activeChannel.name}`}
                   channelMemberCount={channelHuddleMemberIds(activeChannel.kind, activeChannel.memberIds, teamMembers)?.length}
                   className="shrink-0"
-                  // A phone header has no room for the word beside the icon.
-                  compact={narrowViewport}
+                  compact
                 />
               )}
               {!community && <SearchPill onOpen={() => setSearchOpen(true)} />}

@@ -3,9 +3,9 @@
 // footing, the default pair and both cards' run records. FreezeView takes it as
 // props in the mount test and in a static rig.
 
-import type { FootingMarker, FreezeResponse, LedgerCell, RunResponse, SurfaceResponse } from "@codecast/shared/contracts/evalsApi";
+import type { FootingMarker, FreezeResponse, LedgerCell, RunResponse } from "@codecast/shared/contracts/evalsApi";
 import { evalsFixtureWorld } from "./world";
-import { defaultFreezePair, type DefaultFreezePair } from "../freezeModel";
+import { defaultFreezePair, type DefaultFreezePair } from "@platform/evals/client";
 
 export interface FreezeFixture {
   freeze: FreezeResponse;
@@ -17,15 +17,15 @@ export interface FreezeFixture {
   steady: { freeze: FreezeResponse; cells: Record<string, LedgerCell> };
 }
 
-export function freezeFixture(now = Date.parse("2026-10-03T12:00:00.000Z")): FreezeFixture {
+export async function freezeFixture(now = Date.parse("2026-10-03T12:00:00.000Z")): Promise<FreezeFixture> {
   const world = evalsFixtureWorld({ now });
-  const surface = world.answer("GET /surface/:id", { id: "settle" }, {}) as SurfaceResponse;
+  const surface = await world.answer("GET /surface/:id", { id: "settle" });
   // settle's regression: unresolvable-error held for a month, then broke at the newest epoch, where the prompt changed.
   const flipped = surface.ledger.find((r) => r.name === "unresolvable-error")!;
-  const freeze = world.answer("GET /freeze/:id", { id: flipped.freezeId }, {}) as FreezeResponse;
+  const freeze = await world.answer("GET /freeze/:id", { id: flipped.freezeId });
   const pick = defaultFreezePair(freeze.runs, flipped.cells, null);
   const runs: Record<string, RunResponse> = {};
-  for (const r of freeze.runs) runs[r.id] = world.answer("GET /run/:id", { id: r.id }, {}) as RunResponse;
+  for (const r of freeze.runs) runs[r.id] = await world.answer("GET /run/:id", { id: r.id });
   return {
     freeze,
     cells: flipped.cells,

@@ -28,12 +28,18 @@ describe("RepoPulseChip", () => {
     expect(html).toContain('href="/r/codecast-sh/codecast/sessions"');
     expect(html).not.toContain("github.com");
   });
-  test("before the read answers it shows the octocat alone, holding its width with a hidden stand-in", () => {
-    const html = renderToStaticMarkup(<RepoPulseChip />);
-    const shown = html.replace(/<span class="flex opacity-0" aria-hidden="true">.*<\/span><\/a>$/, "</a>");
-    expect(shown.replace(/<[^>]+>/g, "")).toBe("");
-    expect(html).toContain('aria-hidden="true"');
-    expect(html).toContain("agents now");
+  test("before the read answers it shows the same run, visible and dimmed, so the width does not change", () => {
+    const loading = renderToStaticMarkup(<RepoPulseChip />);
+    answer = { data: { stargazers_count: 10, live: 2 } };
+    const loaded = renderToStaticMarkup(<RepoPulseChip />);
+    answer = {};
+    expect(loading).not.toContain("opacity-0");
+    expect(loading).toContain("2 agents now");
+    expect(loading).not.toContain("animate-ping");
+    const text = (h: string) => h.replace(/<[^>]+>/g, "");
+    expect(text(loading)).toBe(text(loaded));
+    expect(loading).toContain("color:#93a1a1");
+    expect(loading).not.toContain("color:#002b36");
   });
   test("with an answer it shows stars and the live count", () => {
     answer = { data: { stargazers_count: 1234, live: 4 } };

@@ -39,16 +39,13 @@ const { ConvexProvider } = await import("convex/react");
 // Session pills resolve through Convex; the marketing stub answers every query with nothing.
 const { heroConvexStub } = await import("../../../app/(marketing)/heroFly/convexStub");
 const { useEvalsStore } = await import("../../../store/evalsStore");
+const { CodecastEvalsProvider } = await import("../host");
 const { fixtureTransport } = await import("../../../lib/evals/fixtureTransport");
 const { surfaceFixture } = await import("../__fixtures__/surface");
-const { SurfaceView } = await import("../SurfaceView");
-const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair } = await import("../surfaceModel");
-const { surfaceColumns } = await import("../seismographModel");
-const { ledgerOrder } = await import("../surfaceModel");
-const { niceCeil, axisUsd } = await import("../charts/scale");
-const { separationTitle } = await import("../verdictModel");
-const { SurfacePage } = await import("../pages/SurfacePage");
-type SurfaceViewProps = import("../SurfaceView").SurfaceViewProps;
+const { SurfaceView } = await import("@platform/evals/react");
+const { DEFAULT_SURFACE_FILTERS, nextPins, orderedPair, surfaceColumns, ledgerOrder, niceCeil, axisUsd, separationTitle } = await import("@platform/evals/client");
+const { SurfacePage } = await import("@platform/evals/react");
+type SurfaceViewProps = import("@platform/evals/react").SurfaceViewProps;
 
 // A loaded machine renders a DiffView in seconds, not milliseconds.
 setDefaultTimeout(60_000);
@@ -58,7 +55,7 @@ afterAll(() => {
   restoreGlobals();
 });
 
-const settle = surfaceFixture();
+const settle = await surfaceFixture();
 
 async function mount(node: React.ReactNode) {
   const container = document.createElement("div");
@@ -66,7 +63,7 @@ async function mount(node: React.ReactNode) {
   const root = createRoot(container);
   const wrap = (n: React.ReactNode) => (
     <ConvexProvider client={heroConvexStub}>
-      <MemoryRouter initialEntries={["/evals/s/settle"]}>{n}</MemoryRouter>
+      <MemoryRouter initialEntries={["/evals/s/settle"]}><CodecastEvalsProvider>{n}</CodecastEvalsProvider></MemoryRouter>
     </ConvexProvider>
   );
   await act(async () => root.render(wrap(node)));
@@ -198,8 +195,8 @@ describe("the seismograph", () => {
   });
 
   it("puts a diamond on the axis where the model moved and a violet slash where the ruler moved, and facets by model", async () => {
-    const insight = surfaceFixture({ surface: "insight" });
-    const title = surfaceFixture({ surface: "title" });
+    const insight = await surfaceFixture({ surface: "insight" });
+    const title = await surfaceFixture({ surface: "title" });
     const a = await mount(<SurfaceView {...props({}, insight).p} />);
     expect(a.container.querySelectorAll('[data-ev-seismograph] [data-ev-footing="model"]').length).toBe(1);
     const facet = [...a.container.querySelectorAll(".ev-sf-toggle")].find((b) => b.textContent?.includes("facet"))!;
@@ -293,7 +290,9 @@ describe("the compare drawer and the epoch sheet", () => {
     const sheet = document.body.querySelector(`[data-ev-epoch-sheet="${n}"]`)!;
     expect(sheet).not.toBeNull();
     expect(sheet.querySelectorAll("[data-ev-prompt-diff]").length).toBe(settle.epoch.diffs.filter((p) => p.a.text !== p.b.text).length);
-    expect(sheet.querySelectorAll("[data-ev-unchanged]").length).toBeGreaterThan(0);
+    // GET /epoch hands over only the files that changed across the boundary, so the sheet has none to name as unchanged.
+    expect(settle.epoch.diffs.length).toBeGreaterThan(0);
+    expect(sheet.querySelectorAll("[data-ev-unchanged]").length).toBe(0);
     expect(sheet.querySelectorAll("[data-ev-commit]").length).toBe(settle.epoch.commits.length);
     // A commit opens its diff scoped to the surface; its session reads from the
     // trailer (a full link as git log hands it over) as a pill, never as a raw URL.

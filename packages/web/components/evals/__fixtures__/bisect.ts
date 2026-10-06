@@ -7,7 +7,7 @@
 // will on a real bisect. Nothing here is real data.
 
 import type { BisectAnswer, BisectPlan, BisectProbe, BisectRep, BisectState, BisectStep, Candidate, RenderClass } from "@codecast/shared/contracts/evalsApi";
-import { candidateSha, orderCandidates } from "../bisectModel";
+import { candidateSha, orderCandidates } from "@platform/evals/client";
 
 export type FixtureBisectKind = "running" | "stalled" | "drift" | "crashed" | "culprit" | "range";
 
@@ -237,7 +237,7 @@ export interface AttributionPair {
   bad: string;
 }
 
-type WorldLike = { rows: readonly { surface: string; batch: string | null; status: string }[]; answer: (key: "GET /attribution", p: Record<string, string>, q: Record<string, string>) => unknown };
+type WorldLike = { rows: readonly { surface: string; batch: string | null; batchAt: string | null; status: string }[]; answer: (key: "GET /attribution", p: Record<string, string>, q: Record<string, string>) => Promise<unknown> };
 
 type AnswerLike = { answer: { kind: string; confidence?: string; candidates?: Array<{ kind: string }> } };
 
@@ -256,16 +256,18 @@ const caseOf = (a: AnswerLike, surface: string): AttributionCase | null => {
 };
 
 /** A pair of batches in the world for each case: the newest pairs first, adjacent and a few apart. */
-export function attributionPairs(world: WorldLike): Partial<Record<AttributionCase, AttributionPair>> {
+export async function attributionPairs(world: WorldLike): Promise<Partial<Record<AttributionCase, AttributionPair>>> {
   const out: Partial<Record<AttributionCase, AttributionPair>> = {};
   const surfaces = [...new Set(world.rows.map((r) => r.surface))];
   for (const surface of surfaces) {
-    const batches = [...new Set(world.rows.filter((r) => r.surface === surface && r.status !== "dry").map((r) => r.batch!))];
+    // Oldest first, by when each began: the rows come newest first.
+    const graded = world.rows.filter((r) => r.surface === surface && r.status !== "dry" && r.batch);
+    const batches = [...new Map(graded.map((r) => [r.batch!, r.batchAt ?? ""]))].sort((a, b) => (a[1] < b[1] ? -1 : 1)).map(([name]) => name);
     for (let i = batches.length - 1; i > 0; i--) {
       for (const gap of [1, 2, 4]) {
         if (i - gap < 0) continue;
         const pair = { surface, good: batches[i - gap], bad: batches[i] };
-        const a = world.answer("GET /attribution", {}, pair) as AnswerLike;
+        const a = (await world.answer("GET /attribution", {}, pair)) as AnswerLike;
         const k = caseOf(a, surface);
         if (k && !out[k]) out[k] = pair;
       }

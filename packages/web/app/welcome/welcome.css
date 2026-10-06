@@ -257,6 +257,37 @@
 
 .wl-auth.is-quiet svg { width: 1.05rem; height: 1.05rem; }
 
+/* Email as a way in, where Google is not offered: a button like Apple's, and
+   the quiet provider (GitHub) moves below it. */
+.wl-auth.is-email { text-decoration: none; }
+.wl-auth-list:not(.has-lead) .wl-auth.is-quiet { order: 1; }
+
+/* ── The email form ──────────────────────────────────────────────────── */
+
+.wl-form { display: grid; gap: 0.9rem; max-width: 26rem; }
+
+.wl-field { display: grid; gap: 0.35rem; }
+.wl-field > span { color: var(--sl-ink-2); font-size: 0.9rem; font-weight: 560; }
+
+.wl-field input {
+  min-height: 3.1rem;
+  padding: 0 1rem;
+  border: 1px solid var(--sl-line-strong);
+  border-radius: var(--sl-radius-sm);
+  background: var(--sl-sheet);
+  color: var(--sl-ink);
+  font: inherit;
+  font-size: 1rem;
+  transition: box-shadow 200ms var(--sl-ease), border-color 200ms var(--sl-ease);
+}
+
+.wl-field input::placeholder { color: var(--sl-faint); }
+.wl-field input:focus-visible { outline: none; border-color: var(--sl-soft); box-shadow: 0 0 0 5px var(--sl-wash); }
+.wl-field.is-code input { font-family: var(--sl-mono); font-size: 1.2rem; letter-spacing: 0.4em; text-align: center; }
+
+.wl-form .wl-error { margin: 0; }
+.wl-form .wl-connect { justify-self: start; margin-top: 0.3rem; }
+
 .wl-aside {
   margin: 1.15rem 0 0;
   color: var(--sl-soft);
