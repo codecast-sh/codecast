@@ -34,6 +34,17 @@ export const CODECAST_EVENTS = defineCatalog({
   },
   desktop_download_clicked: { location: LOCATION },
   ios_app_clicked: { location: LOCATION },
+  // The desktop app setting up the CLI and daemon itself, behind one click.
+  desktop_setup_started: { location: LOCATION },
+  desktop_setup_finished: {
+    ok: { type: "boolean" },
+    error: { type: "string", values: ["invalid_token", "unsupported_platform", "installer_failed", "threw"], optional: true },
+  },
+  // The way in for people who do not write code (the hosted assistant's
+  // /welcome), from the marketing page or signup.
+  assistant_path_clicked: { location: LOCATION },
+  // The empty inbox's first run: which start a person with no machine chose.
+  first_run_start_chosen: { start: { type: "string", values: ["assistant", "machine"] } },
   // The landing page tour film: a start, and each jump to a chapter.
   landing_tour_started: { chapter: COUNT },
   landing_tour_chapter: { chapter: COUNT, from: { type: "string", values: ["chapter_list", "section_link"] } },

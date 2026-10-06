@@ -1,21 +1,16 @@
-// The lane switch in settings: on puts the person in the simple lane (the
-// hosted assistant's calm home), off returns them to the full app. The lane
-// itself carries the way back in its own menu (SimpleShell's LaneMenu).
+// The hosted mode switch in settings: on is hosted mode (ui.lane "simple"),
+// off the developer default. The main app follows the preference where the
+// person is (lib/surfaces.ts), so the switch only writes it.
 import { Switch } from "../ui/switch";
 import { SettingsRow } from "../settings/ui";
-import { useInboxStore } from "../../store/inboxStore";
-import { LANE_SWITCH, laneOf } from "./lanePref";
-import { useSetLane } from "./useSetLane";
+import { useHostedMode } from "../../lib/surfaces";
+import { LANE_SWITCH, writeLane } from "./lanePref";
 
 export function LaneSettingRow() {
-  const simple = useInboxStore((s) => laneOf(s.clientState?.ui) === "simple");
-  const setLane = useSetLane();
+  const hosted = useHostedMode();
   return (
-    <SettingsRow
-      label={LANE_SWITCH.label}
-      description={LANE_SWITCH.description}
-    >
-      <Switch checked={simple} onCheckedChange={(on) => setLane(on ? "simple" : "full")} aria-label={LANE_SWITCH.label} />
+    <SettingsRow label={LANE_SWITCH.label} description={LANE_SWITCH.description}>
+      <Switch checked={hosted} onCheckedChange={(on) => writeLane(on ? "simple" : "full")} aria-label={LANE_SWITCH.label} />
     </SettingsRow>
   );
 }

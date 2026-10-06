@@ -5,12 +5,13 @@
 // under it, where its body, its why, its worded risks and its evidence live.
 // Risks are read there too, or through the risk filter: on a row they were noise.
 import * as Accordion from "@radix-ui/react-accordion";
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { StoryRow as Story } from "../../hooks/useSyncChanges";
 import { ink } from "./areaColor";
 import { EvidenceDrawer } from "./EvidenceDrawer";
 import { FadeText, KindGlyph, RiskSrText } from "./StoryParts";
 import { useStoryAttrs, useStoryCtx } from "./storyContext";
+import { mediaOf } from "./storyMedia";
 
 export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
   const ctx = useStoryCtx();
@@ -19,6 +20,8 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
   const waiting = ctx.waiting.has(key);
   // The pending bar holds the dek's place only while notes can still come.
   const pending = !story.dek && story.prose_status === "pending" && !!ctx.proseLive;
+  // The story's first screenshot, a glance at what changed before it is opened.
+  const shot = useMemo(() => mediaOf(story.body).find((m) => m.kind === "image"), [story.body]);
   return (
     <Accordion.Item
       value={key}
@@ -36,6 +39,14 @@ export const StoryRow = memo(function StoryRow({ story }: { story: Story }) {
               </span>
               {waiting && <span className="shrink-0 font-mono text-[10px] text-sol-text/45">waiting</span>}
               <RiskSrText story={story} />
+              {shot?.kind === "image" && (
+                <img
+                  src={shot.src}
+                  alt=""
+                  loading="lazy"
+                  className="h-9 w-14 shrink-0 self-center rounded-[4px] border border-sol-border/30 object-cover object-top group-data-[state=open]:hidden"
+                />
+              )}
               {/* The column keeps its width with nothing in it, so sizes line up down the block. */}
               <span
                 className="w-[5.5rem] shrink-0 text-right font-mono text-[10px] tabular-nums"

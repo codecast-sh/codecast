@@ -1,0 +1,59 @@
+/* Reset, body font, focus ring, shared keyframes, reduced motion, .keys. */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+body {
+  font: 500 15px/1.4 var(--ui);
+  color: var(--ink);
+  background: var(--butter);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+button, input, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: 0; }
+a { color: inherit; }
+img { display: block; }
+:focus { outline: none; }
+:focus-visible { box-shadow: var(--focus); }
+
+.keys { display: inline-flex; align-items: center; gap: var(--s1); }
+.keys kbd {
+  background: var(--paper) !important;
+  color: var(--ink) !important;
+  border: var(--line-thin) !important;
+  border-bottom-width: 4px !important;
+  border-radius: var(--r-xs) !important;
+  font: 700 11px var(--mono) !important;
+  padding: 1px 6px;
+  min-width: 22px;
+  height: auto;
+  line-height: 1.5;
+  display: inline-block;
+  text-align: center;
+}
+
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@keyframes arrive { from { opacity: 0; transform: translateY(12px) scale(.96); } }
+@keyframes pop { from { transform: scale(.9); } }
+@keyframes wobble {
+  0%, 100% { transform: rotate(0) scale(1); }
+  30% { transform: rotate(-4deg) scale(1.03, .97); }
+  60% { transform: rotate(3deg) scale(.98, 1.02); }
+}
+@keyframes bob { 50% { translate: 0 -8px; } }
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes march { to { background-position: 28px 0; } }
+@keyframes orbit { to { transform: rotate(360deg); } }
+@keyframes hop { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-4px); } }
+@keyframes ring-mint { from { box-shadow: 0 0 0 0 var(--mint); } to { box-shadow: 0 0 0 14px transparent; } }
+@keyframes pulse-ring { from { box-shadow: 0 0 0 0 var(--mint); } to { box-shadow: 0 0 0 7px transparent; } }
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-iteration-count: 1 !important;
+    animation-duration: 150ms !important;
+    transition-duration: 150ms !important;
+    transition-property: opacity !important;
+  }
+}

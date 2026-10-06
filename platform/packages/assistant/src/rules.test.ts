@@ -1,7 +1,7 @@
 // Approval rules over the package's own tool scopes: what an allow or refuse
 // rule decides, how outside content narrows them, and what the card shows.
 import { describe, expect, test } from "bun:test";
-import { allowScopeIn, approvalContext, plainEvery, withRules, type AllowScopes, type RuleView } from "./rules";
+import { allowScopeIn, approvalContext, plainEvery, plainSchedule, withRules, type AllowScopes, type RuleView } from "./rules";
 import { MAIL_SCOPES } from "./mail";
 import { CALENDAR_SCOPES } from "./calendar";
 import { WEB_SCOPES } from "./web";
@@ -75,12 +75,13 @@ describe("approvalContext", () => {
     const now = Date.parse("2026-10-06T12:00:00Z");
     const input = { title: "Daily plan", first_run: "2026-10-07T08:00:00-04:00", repeat_every_hours: 24 };
     const md = approvalContext(input, { timezone: "America/New_York", now });
-    expect(md).toContain("**First run:** Wednesday, October 7 at 8:00 AM");
-    expect(md).toContain("**Repeats:** every day");
+    expect(md).toContain("**When:** Every day at 8:00 AM, starting Wednesday, October 7");
     expect(md).not.toContain("2026-10-07T");
+    // A start alone says its own name.
+    expect(approvalContext({ first_run: input.first_run }, { timezone: "America/New_York", now })).toBe("**First run:** Wednesday, October 7 at 8:00 AM");
     // The same instant on another clock, and with no zone known it says UTC.
-    expect(approvalContext(input, { timezone: "America/Los_Angeles", now })).toContain("October 7 at 5:00 AM");
-    expect(approvalContext(input, { now })).toContain("October 7 at 12:00 PM UTC");
+    expect(approvalContext(input, { timezone: "America/Los_Angeles", now })).toContain("Every day at 5:00 AM, starting Wednesday, October 7");
+    expect(approvalContext(input, { now })).toContain("Every day at 12:00 PM UTC, starting");
     // Another year is named; text that only looks like a date stays literal.
     expect(approvalContext({ first_run: "2027-01-04T09:30:00Z" }, { timezone: "UTC", now })).toContain("Monday, January 4, 2027 at 9:30 AM");
     expect(approvalContext({ note: "2026-10-07" })).toContain("**Note:** `2026-10-07`");
@@ -91,13 +92,27 @@ describe("approvalContext", () => {
     const md = approvalContext(input, { timezone: "America/New_York", question: 'Set up a routine: "Morning weather"?' });
     // The question already quotes the title; the schedule reads as one pair.
     expect(md).not.toContain("Title");
-    expect(md).toBe("**Instruction:** `Tell me the weather`  \n**First run:** Wednesday, October 7 at 8:00 AM  \n**Repeats:** every day");
+    expect(md).toBe("**What I'll do**\n\n> Tell me the weather\n\n**When:** Every day at 8:00 AM, starting Wednesday, October 7");
     // A text the question shows only as part of a longer word still shows.
     expect(approvalContext({ to: "Dan" }, { question: "Send an email to Dana?" })).toContain("**To:** `Dan`");
     expect(approvalContext({ to: "Dana" }, { question: "Send an email to Dana?" })).toBe("");
     // Long text is the draft itself and always shows, whatever the question says.
     const body = "x".repeat(130);
     expect(approvalContext({ body }, { question: `Send ${body}?` })).toContain(body);
+  });
+
+  test("a routine's plan reads as a quote in plain words, its markdown shown as written", () => {
+    const md = approvalContext({ instruction: "Remind you to plan the week.\n- a [short](https://x.example) *checklist*" });
+    expect(md).toBe("**What I'll do**\n\n> Remind you to plan the week\\.\n> \\- a \\[short\\]\\(https://x\\.example\\) \\*checklist\\*");
+  });
+
+  test("a weekly routine names its weekday and hour on the person's clock", () => {
+    const now = Date.parse("2026-10-06T12:00:00Z");
+    const monday = Date.parse("2026-10-12T09:00:00-04:00");
+    expect(plainSchedule(monday, 168, "America/New_York", now)).toBe("every Monday at 9:00 AM, starting October 12");
+    expect(plainSchedule(monday, 336, "America/New_York", now)).toBe("every 2 weeks on Monday at 9:00 AM, starting October 12");
+    expect(plainSchedule(monday, 6, "America/New_York", now)).toBe("every 6 hours, starting Monday, October 12 at 9:00 AM");
+    expect(plainSchedule(monday, 168, undefined, now)).toBe("every Monday at 1:00 PM UTC, starting October 12");
   });
 
   test("says a repeat by its largest whole unit", () => {
