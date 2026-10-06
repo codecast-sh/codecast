@@ -10,6 +10,8 @@ cast pr shepherd on 123                     # bind this session to the pull requ
 cast integrations import github acme/api --project "API"
 ```
 
+![A pull request page in codecast](/documentation/shots/pull-request.webp "A pull request with its owning session, linked sessions and task, checks, review decision, merge state, and the timeline of pushes and reviews.")
+
 ## References and read verbs
 
 Every `cast pr` verb takes the same reference: a number (`123`), `owner/repo#123`, a GitHub or codecast URL, or nothing. Nothing means the pull request this session is bound to, and failing that the one for the branch you stand on. `--repo <owner/name>` names the repository when a bare number is ambiguous. Every read takes `--json`.
@@ -28,6 +30,11 @@ Every `cast pr` verb takes the same reference: a number (`123`), `owner/repo#123
 The GitHub app delivers webhooks to `/api/webhooks/github-app`. Each delivery is verified, deduplicated by delivery id, stored in `github_webhook_events`, and handed to the handler for its kind. The handled kinds are `pull_request`, `pull_request_review`, `pull_request_review_comment`, `pull_request_review_thread`, `push`, `check_run`, `check_suite`, `workflow_run`, `status`, `issues` and `issue_comment`.
 
 The inbound handler is the only writer of the `pull_requests` row. Nothing on the outbound side writes it. GitHub answers every act with a webhook, and that webhook updates the row. This is what keeps the two sides from disagreeing.
+
+```figure
+MirrorLoopFigure
+Every act leaves through the provider and returns as a webhook, so the row only ever holds what GitHub confirmed.
+```
 
 | Kept in sync | How |
 |--------------|-----|
@@ -53,6 +60,11 @@ cast pr resolve <thread> 123                # unresolve reopens it
 ```
 
 A held note is yours alone until you submit. Nobody else sees it, nothing reaches GitHub, and no session is woken by it. `cast pr review` sends every held note as one GitHub review (`reviews.submitReviewWithNotes`). The comment ids that GitHub returns are stamped onto the rows. `cast pr comment` without `--hold` posts now. With `--file` and `--line` it lands on the diff. Without them it lands on the conversation. A thread is named by the short id that `cast pr threads` prints, or by `file:line`.
+
+```figure
+ReviewBatchFigure
+Notes stay private until the verdict; then one review leaves under your name and the owning session hears it once.
+```
 
 ## Whose name is on it
 
@@ -83,6 +95,11 @@ Only a wake sets that trigger to run. Each wake rebuilds the prompt from the row
 | Checks go green, new commits, a review is requested, the branch merges cleanly again | No |
 
 Reviews and comments from bots and from the author of the pull request do not wake the session. If the session is in the middle of a run, the wake retries every 20 seconds, up to 5 times, and collects the reasons. The most urgent one leads the prompt: a conflict, then a failed check, then requested changes.
+
+```figure
+ShepherdWakeFigure
+The shepherd wakes for what needs the author's hands, waits out a busy run, and leads with the most urgent reason.
+```
 
 A review submitted through codecast reaches the owning session as one message: the verdict, the summary and every note (`reviews.deliverSubmittedReview`). The webhook for that same review waits 20 seconds and stands down when it finds the delivery stamp, so the session hears the review once. Delivery is best effort and is reported as `delivered_to`. A session that cannot take the message never fails a review that GitHub already holds.
 

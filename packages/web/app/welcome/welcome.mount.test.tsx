@@ -1,5 +1,5 @@
 // /welcome mounted on the real store: each screen shows for the facts that
-// call for it, "Not now" moves on and puts the person in the simple lane, and
+// call for it, "Not now" moves on and puts the person in hosted mode, and
 // tapping the first ask starts a hosted conversation with it and lands in it.
 // The promise follows what the deployment can connect, the first ask waits
 // for what the grant allows, and a failed read never strands the page.
@@ -34,6 +34,7 @@ const localAuth = await import("../../lib/localAuth");
 mock.module("../../lib/localAuth", () => ({ ...localAuth, useLocalAuth: () => signedIn }));
 mock.module("../../components/simple/LaneSync", () => ({ LaneSync: () => null }));
 let connectAvailable = true;
+let googleOffered = true;
 let connectionsError: Error | undefined;
 const syncSettings = await import("../../hooks/useSyncSettings");
 const realSettingsData = syncSettings.useSettingsData;
@@ -47,7 +48,7 @@ mock.module("../../hooks/useSyncSettings", () => ({
 mock.module("../../hooks/useQueryNoThrow", () => ({
   useQueryNoThrow: (ref: any) => {
     const name = getFunctionName(ref);
-    const data = name === "auth:signInProviders" ? { google: true } : name === "whisk:connectAvailable" ? connectAvailable : undefined;
+    const data = name === "auth:signInProviders" ? { google: googleOffered } : name === "whisk:connectAvailable" ? connectAvailable : undefined;
     return { data, error: undefined, retry() {} };
   },
 }));
@@ -155,6 +156,32 @@ describe("/welcome", () => {
     connectAvailable = true;
   });
 
+  test("signed out without Google: Apple and email are the ways in, GitHub sits quietly", async () => {
+    signedIn = false;
+    googleOffered = false;
+    await open();
+    await settle(() => text().includes("Continue with Apple"));
+    const email = [...container().querySelectorAll("a")].find((a) => a.textContent?.trim() === "Continue with email");
+    expect(email?.getAttribute("href")).toBe("/welcome?email=signup");
+    expect(container().querySelector("button[data-provider=apple]")?.className).toBe("wl-auth");
+    expect(container().querySelector("button[data-provider=github]")?.className).toBe("wl-auth is-quiet");
+    signedIn = true;
+    googleOffered = true;
+  });
+
+  test("signed out, by email: the form shows here, in the page's own look", async () => {
+    signedIn = false;
+    await open("/welcome?email=signup");
+    await settle(() => text().includes("Create your account"));
+    expect(container().querySelector("[data-welcome] form.wl-form")).toBeTruthy();
+    expect(container().querySelectorAll("form.wl-form input")).toHaveLength(3);
+    expect(text()).not.toContain("Continue with Google");
+    await open("/welcome?email=signin");
+    await settle(() => text().includes("Welcome back"));
+    expect(container().querySelectorAll("form.wl-form input")).toHaveLength(2);
+    signedIn = true;
+  });
+
   test("not connected: connect, and Not now moves on and joins the lane", async () => {
     setMail(false);
     await open();
@@ -174,7 +201,7 @@ describe("/welcome", () => {
     await settle(() => text().includes(ASKS.week));
     await act(async () => { (container().querySelector(".wl-lead") as HTMLButtonElement).click(); });
     await settle(() => !!container().querySelector("[data-landed]"));
-    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/simple/c/");
+    expect(container().querySelector("[data-landed]")?.textContent).toStartWith("/conversation/");
     await settle(() => starts.length > 0);
     expect(starts[0]).toMatchObject({ agent_type: "codecast", first_message: ASKS.week });
   });

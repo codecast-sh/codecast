@@ -7,7 +7,7 @@
 // will on a real bisect. Nothing here is real data.
 
 import type { BisectAnswer, BisectPlan, BisectProbe, BisectRep, BisectState, BisectStep, Candidate, RenderClass } from "@codecast/shared/contracts/evalsApi";
-import { candidateSha, orderCandidates } from "../bisectModel";
+import { candidateSha, orderCandidates } from "@platform/evals/client";
 
 export type FixtureBisectKind = "running" | "stalled" | "drift" | "crashed" | "culprit" | "range";
 

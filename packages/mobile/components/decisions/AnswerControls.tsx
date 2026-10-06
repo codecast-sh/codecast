@@ -7,7 +7,8 @@
 // turn it into an answer are lib/decisionAnswer's, shared with the web.
 //
 // The colours come from the caller (AnswerLook), so the decision screen
-// draws them in the app's palette and the assistant lane in its own, and the
+// draws them in the app's palette and a hosted conversation's approval card
+// in its hosted colours (components/hosted), and the
 // typeface follows whatever FaceContext the caller sits in.
 import { useState } from 'react';
 import { Pressable, StyleSheet, View, type PressableProps, type StyleProp, type ViewStyle } from 'react-native';
@@ -40,7 +41,7 @@ export interface AnswerLook {
   numbered?: boolean;
   /** The icon family the surrounding screen draws with. */
   icons?: 'fontawesome' | 'feather';
-  /** How a press shows: a fade, or the slight shrink the lane's buttons use. */
+  /** How a press shows: a fade, or the slight shrink the hosted buttons use. */
   press?: 'fade' | 'shrink';
 }
 

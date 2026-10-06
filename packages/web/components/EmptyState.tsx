@@ -4,6 +4,16 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { copyToClipboard } from "../lib/utils";
 import { track } from "../lib/analytics";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
+import { bridge, type DaemonSetupState } from "../lib/desktop";
+import { useMountEffect } from "../hooks/useMountEffect";
+import { useSurface } from "../lib/surfaces";
+import { useInboxStore } from "../store/inboxStore";
+import { AssistantIntro } from "./AssistantIntro";
+import { AgentTypeIcon } from "./AgentTypeIcon";
+import { useConnectAvailable } from "./simple/assistantPromise";
+import { TerminalSquare } from "lucide-react";
+import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 
 interface EmptyStateProps {
   title: string;
@@ -121,7 +131,9 @@ function FakeSessionCard({ session, className = "" }: { session: typeof FAKE_SES
   );
 }
 
-function SetupTokenCommand() {
+/** `onStart` fires when the person asks for the command (the first-run
+ *  card counts it as choosing their own machine). */
+function SetupTokenCommand({ onStart }: { onStart?: () => void }) {
   const [copied, setCopied] = useState(false);
   const [setupToken, setSetupToken] = useState<string | null>(null);
   const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
@@ -137,6 +149,7 @@ function SetupTokenCommand() {
   };
 
   const generateSetupToken = async () => {
+    onStart?.();
     setIsGenerating(true);
     try {
       const result = await createSetupToken({});
@@ -215,54 +228,178 @@ function SetupTokenCommand() {
   );
 }
 
+const SETUP_ERRORS = ["invalid_token", "unsupported_platform", "installer_failed"] as const;
+const setupError = (e?: string) => SETUP_ERRORS.find((k) => k === e) ?? "threw";
+
+// In the desktop app there is no terminal step: one click mints a setup token
+// and the shell runs the installer with it. A browser tab, an older shell or a
+// failed run falls back to the command to paste.
+function SetupThisMachine({ onConnected, onStart }: { onConnected: () => void; onStart?: () => void }) {
+  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
+  const [machine, setMachine] = useState<DaemonSetupState | null>(null);
+  const [phase, setPhase] = useState<"idle" | "running" | "failed">("idle");
+  useMountEffect(() => {
+    bridge("getDaemonSetup")?.().then(setMachine).catch(() => {});
+  });
+  const run = bridge("runDaemonSetup");
+
+  if (!run || !machine?.supported || phase === "failed") {
+    return (
+      <>
+        {phase === "failed" && (
+          <p className="text-sm text-sol-text-muted text-center mb-3">
+            Setup did not finish from here. Paste this in a terminal instead:
+          </p>
+        )}
+        <SetupTokenCommand onStart={phase === "failed" ? undefined : onStart} />
+      </>
+    );
+  }
+
+  const start = async () => {
+    onStart?.();
+    setPhase("running");
+    track("desktop_setup_started", { location: "onboarding_empty_state" });
+    try {
+      const { token } = await createSetupToken({});
+      const result = await run(token);
+      track("desktop_setup_finished", result.ok ? { ok: true } : { ok: false, error: setupError(result.error) });
+      if (!result.ok) return setPhase("failed");
+      markCliConnected();
+      onConnected();
+    } catch {
+      track("desktop_setup_finished", { ok: false, error: "threw" });
+      setPhase("failed");
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <button
+        onClick={start}
+        disabled={phase === "running"}
+        className="w-full px-4 py-3 bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors disabled:opacity-60"
+      >
+        {phase === "running" ? "Setting up this machine…" : "Set up this machine"}
+      </button>
+      <p className="text-xs text-sol-text-dim text-center">
+        Installs the cast CLI and a background daemon, and syncs your agent sessions to your private workspace.
+      </p>
+    </div>
+  );
+}
+
+/** The assistant start: a composer on the hosted assistant, whatever the
+ *  default agent would be, since nothing has to be installed for it. */
+function useAskAssistant(): () => void {
+  const openCompose = useInboxStore((s) => s.openCompose);
+  return () => {
+    track("first_run_start_chosen", { start: "assistant" });
+    openCompose(undefined, { agentType: HOSTED_AGENT_TYPE });
+  };
+}
+
+const chooseMachine = () => track("first_run_start_chosen", { start: "machine" });
+
+const SETUP_GUIDE = (
+  <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
+    Setup guide
+  </a>
+);
+
+// The first run for a signed-in person with no machine: two starts side by
+// side, the hosted assistant right here or the coding tools on their own
+// machine, worded so each reader knows which is theirs. A first message to
+// the assistant moves them to hosted mode (lib/firstRun.ts). A machine that
+// just connected replaces both with the wait for its sessions.
 function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean }) {
-  if (hasOtherSessions) {
+  const [connected, setConnected] = useState(() => cliJustConnected());
+  const onConnected = () => setConnected(true);
+  const askAssistant = useAskAssistant();
+  const mail = useConnectAvailable().available === true;
+  if (hasOtherSessions && !connected) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center px-4">
         <div className="max-w-sm w-full">
           <p className="text-sm text-sol-text-muted mb-4">
             No personal sessions yet. Install the CLI to start syncing your own sessions.
           </p>
-          <SetupTokenCommand />
+          <SetupThisMachine onConnected={onConnected} onStart={chooseMachine} />
           <p className="text-xs text-sol-text-dim mt-3">
-            Works with Claude Code, Codex, Cursor, and Gemini.{" "}
-            <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
-              Setup guide
-            </a>
+            Works with Claude Code, Codex, Cursor, and Gemini. {SETUP_GUIDE}
           </p>
+          <button type="button" onClick={askAssistant} className="mt-5 text-sm text-sol-text-muted underline decoration-sol-border underline-offset-4 transition-colors hover:text-sol-text">
+            Or ask the Codecast assistant, nothing to install
+          </button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="relative overflow-hidden">
-      <div className="space-y-3 opacity-[0.12] pointer-events-none select-none" aria-hidden="true">
+    // The faded sessions and the card share one grid cell, so the card sets
+    // the height on a phone, where its two starts stack.
+    <div className="relative grid grid-cols-1 overflow-hidden">
+      <div className="[grid-area:1/1] min-w-0 space-y-3 opacity-[0.12] pointer-events-none select-none" aria-hidden="true">
         {FAKE_SESSIONS.map((session, i) => (
           <FakeSessionCard key={i} session={session} />
         ))}
       </div>
 
-      <div className="absolute inset-0 flex items-start justify-center pt-16 sm:pt-24">
-        <div className="relative max-w-lg w-full mx-4">
-          <div className="rounded-2xl border border-sol-border/60 bg-sol-bg/90 dark:bg-sol-bg/95 backdrop-blur-xl shadow-2xl p-6 sm:p-8">
-            <div className="text-center mb-6">
-              <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
-                Start syncing your sessions
-              </h2>
-              <p className="text-sm text-sol-text-muted">
-                Install the CLI to automatically capture and sync your coding sessions.
-              </p>
-            </div>
+      <div className="[grid-area:1/1] min-w-0 flex items-start justify-center pt-10 pb-6 sm:pt-20">
+        <div className="relative max-w-2xl w-full min-w-0 mx-1 sm:mx-4">
+          <div className="rounded-2xl border border-sol-border/60 bg-sol-bg/90 dark:bg-sol-bg/95 backdrop-blur-xl shadow-2xl p-5 sm:p-8">
+            {connected ? (
+              <div className="text-center">
+                <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                  This machine is connected
+                </h2>
+                <p className="text-sm text-sol-text-muted">
+                  Your sessions start appearing here the moment the daemon starts, past ones included. If your terminal is asking setup questions, finish them first.
+                </p>
+              </div>
+            ) : (
+              <>
+                <div className="text-center mb-6">
+                  <h2 className="text-xl sm:text-2xl font-semibold text-sol-text mb-2 font-serif">
+                    How would you like to start?
+                  </h2>
+                  <p className="text-sm text-sol-text-muted">
+                    Ask the assistant right here, or connect the coding tools on your computer.
+                  </p>
+                </div>
 
-            <SetupTokenCommand />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <section className="flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
+                    <div className="mb-2 flex items-center gap-2">
+                      <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="h-5 w-5" />
+                      <h3 className="text-sm font-semibold text-sol-text">Ask the Codecast assistant</h3>
+                    </div>
+                    <p className="mb-4 flex-1 text-sm leading-relaxed text-sol-text-muted">
+                      Nothing to install. Ask in plain words for research, writing and planning{mail ? ", or for help with your mail and calendar through Whisk" : ""}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={askAssistant}
+                      className="w-full rounded-xl bg-sol-text px-4 py-3 text-sm font-medium text-sol-bg transition-opacity hover:opacity-90"
+                    >
+                      Start a conversation
+                    </button>
+                  </section>
 
-            <p className="text-xs text-sol-text-dim text-center mt-4">
-              Works with Claude Code, Codex, Cursor, and Gemini.{" "}
-              <a href="/settings/cli" className="text-sol-yellow hover:text-sol-yellow/80 transition-colors">
-                Setup guide
-              </a>
-            </p>
+                  <section className="flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
+                    <div className="mb-2 flex items-center gap-2">
+                      <TerminalSquare aria-hidden className="h-5 w-5 text-sol-yellow" />
+                      <h3 className="text-sm font-semibold text-sol-text">Connect your coding tools</h3>
+                    </div>
+                    <p className="mb-4 flex-1 text-sm leading-relaxed text-sol-text-muted">
+                      For developers: sync your Claude Code, Codex, Cursor and Gemini sessions, and run them from anywhere. {SETUP_GUIDE}
+                    </p>
+                    <SetupThisMachine onConnected={onConnected} onStart={chooseMachine} />
+                  </section>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -270,9 +407,29 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
   );
 }
 
+// Hosted mode's first run: nothing to install, so the empty inbox offers the
+// assistant. A starter opens the compose popup with its request typed in.
+function HostedEmptyState() {
+  const openCompose = useInboxStore((s) => s.openCompose);
+  return (
+    <div className="flex h-full min-h-[360px] flex-col py-16">
+      <AssistantIntro onStarter={(text) => openCompose(text)}>
+        <button
+          type="button"
+          onClick={() => openCompose()}
+          className="mt-2 rounded-full bg-sol-text px-4 py-1.5 text-sm font-medium text-sol-bg transition-opacity hover:opacity-90"
+        >
+          Start a conversation
+        </button>
+      </AssistantIntro>
+    </div>
+  );
+}
+
 export function EmptyState({ title, description, action, variant, hasOtherSessions }: EmptyStateProps) {
+  const installCli = useSurface("empty.installCli");
   if (variant === "onboarding") {
-    return <OnboardingEmptyState hasOtherSessions={hasOtherSessions} />;
+    return installCli ? <OnboardingEmptyState hasOtherSessions={hasOtherSessions} /> : <HostedEmptyState />;
   }
 
   return (

@@ -31,7 +31,7 @@ import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
 import { markConnectionLost } from "./lib/sourceHealth";
 import { linkReplayToGroup, upsertReplayManifest } from "./replays";
 import { takeFromWindow, windowSpent } from "./ipRateLimit";
-import { rowByRef } from "./lib/rowByRef";
+import { readableRowByRef, rowByRef } from "./lib/rowByRef";
 import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf, sourceByRef } from "./lib/ingestScope";
 import { commitBySha } from "./commits";
@@ -365,6 +365,21 @@ export const getSource = query({
   handler: async (ctx, args) => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
     return await sourceViewOf(ctx, await sourceByRef(ctx, userId, workspaceKey, args.source));
+  },
+});
+
+/**
+ * A source as a reference names it (`src-N` or Convex id), for the pill and
+ * card a conversation renders: null when it is missing or the reader's
+ * workspace does not hold it, never an error, so the reference reads as text.
+ */
+export const webGetSource = query({
+  args: { ref: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token).catch(() => null);
+    if (!userId) return null;
+    const row = await readableRowByRef(ctx, "event_sources", userId, args.ref);
+    return row ? await sourceViewOf(ctx, row) : null;
   },
 });
 

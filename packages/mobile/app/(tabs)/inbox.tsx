@@ -18,13 +18,16 @@ import {
   sessionsWakeSig, pendingSendWakeSig, sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import {
-  AGENT_MODEL_CONFIG, compareMachineChips, featuredModelOptions, launchRailOptions, toConvexAgentType,
-  type AgentClientId, type LocalAgentClientId, type DeviceModelInventory,
+  AGENT_MODEL_CONFIG, compareMachineChips, featuredModelOptions, fromConvexAgentType, isHostedAgentType, launchRailOptions, toConvexAgentType,
+  type AgentClientId, type DeviceModelInventory,
 } from '@codecast/shared/contracts';
 import { defaultMachineId } from '@codecast/web/lib/machinePicker';
 import { ModelEffortSheet } from '@/components/ModelEffortSheet';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { usePinnedLaunchOptions } from '@codecast/web/hooks/usePinnedAgents';
+import { useDefaultAgentType, useOnlyHostedAgent, usePinnedPickerOptions } from '@codecast/web/hooks/usePinnedAgents';
+import { useModeWords, useSurface } from '@codecast/web/lib/surfaces';
+import { startHostedConversation } from '@codecast/web/lib/startHostedConversation';
+import { AssistantIntro, AssistantStart } from '@/components/hosted/AssistantStart';
 import { useScopedRecentProjects } from '@codecast/web/hooks/useScopedRecentProjects';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
@@ -112,7 +115,7 @@ function HiddenSessionRow({ session, variant, onPress, onRestore, onKill }: {
 // Per-client accents, matching web's AGENT_COLORS (CommandPalette) where it
 // has one. Tints the selected pill's border/background/label; the logo tile
 // itself is the shared AgentLogoSvg (same marks as web's AgentTypeIcon).
-const agentAccents: Record<LocalAgentClientId, string> = {
+const agentAccents: Record<AgentClientId, string> = {
   claude: Theme.orange,
   codex: Theme.green,
   cursor: Theme.violet,
@@ -121,6 +124,7 @@ const agentAccents: Record<LocalAgentClientId, string> = {
   pi: Theme.cyan,
   grok: Theme.text,
   muse: Theme.greenBright,
+  codecast: Theme.cyan,
 };
 
 // Web's MODE_ITEMS (StableContextCards), verbatim: same four stops, same
@@ -212,10 +216,18 @@ function CollapsibleSection({ label, summary, open, onToggle, disabled, children
   );
 }
 
-function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: boolean; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
+function NewSessionModal({ visible, seed, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; onClose: () => void; onSessionCreated: (conversationId: string) => void }) {
   const Theme = useTheme();
-  const [agentId, setAgentId] = useState<AgentClientId>("claude");
-  const agentOptions = usePinnedLaunchOptions(agentId);
+  const words = useModeWords();
+  // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
+  // in hosted mode or with no machine) until they pick one here. Where only
+  // the hosted assistant can answer, the agent row is not offered at all.
+  const defaultAgent = fromConvexAgentType(useDefaultAgentType());
+  const onlyHosted = useOnlyHostedAgent();
+  const [agentPick, setAgentId] = useState<AgentClientId | null>(null);
+  const agentId: AgentClientId = onlyHosted ? defaultAgent : agentPick ?? defaultAgent;
+  const hosted = isHostedAgentType(agentId);
+  const agentOptions = usePinnedPickerOptions(agentId);
   // An explicit folder pick only; null = untouched, so the field shows the
   // top recent folder from the store on the very first frame.
   const [pathPick, setProjectPath] = useState<string | null>(null);
@@ -310,6 +322,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
 
   const finishSessionCreate = (conversationId: string) => {
     setSubmitError(null);
+    setAgentId(null);
     setProjectPath("");
     setDeviceId(null);
     setModel("default");
@@ -331,6 +344,14 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
   // stub, a first message typed meanwhile queues locally, and the store rekeys
   // stub → real id when the create lands. A create the server refuses surfaces
   // through watchSessionCreate with a retry under the same session_id.
+  // The hosted assistant's start: its first message rides the create
+  // (startHostedConversation), so the sheet sends the words with it.
+  const startHosted = (text: string) => {
+    const stubId = startHostedConversation(text);
+    stampLabelIntent(stubId);
+    finishSessionCreate(stubId);
+  };
+
   const handleSubmit = () => {
     setSubmitError(null);
     const store = useInboxStore.getState();
@@ -368,7 +389,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
 
   // The launch model/effort rail for the selected agent — absent for clients
   // with no model UI (cursor, gemini), which hides the chip entirely.
-  const modelCfg = AGENT_MODEL_CONFIG[agentId];
+  const modelCfg = hosted ? undefined : AGENT_MODEL_CONFIG[agentId];
   const selectedDevice = devices.find((d) => d.device_id === selectedDeviceId);
   // model_inventory is the {hash, collected_at, clients} record the daemon
   // heartbeats (DeviceModelInventory), keyed by client id inside `clients` —
@@ -441,7 +462,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardAvoidingView style={modalStyles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <RNView style={modalStyles.header}>
-          <RNText style={modalStyles.title}>New Session</RNText>
+          <RNText style={modalStyles.title}>{words.newConversation}</RNText>
           <TouchableOpacity
             onPress={onClose}
             hitSlop={{ top: 14, bottom: 14, left: 14, right: 14 }}
@@ -451,9 +472,11 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
         </RNView>
 
         <ScrollView style={modalStyles.body} contentContainerStyle={modalStyles.bodyContent} keyboardShouldPersistTaps="handled">
+          {onlyHosted ? null : (<>
           <RNText style={modalStyles.label}>Agent</RNText>
-          {/* The viewer's pinned agents (users.pinned_agents, registry order). A 3-up grid of tiles — the mark
-              above the name, tinted with the client's accent when active. */}
+          {/* The viewer's pinned agents (users.pinned_agents, registry order), the
+              hosted assistant among them. A 3-up grid of tiles: the mark above the
+              name, tinted with the client's accent when active. */}
           <RNView style={modalStyles.agentGrid}>
             {agentOptions.map((a) => {
               const active = agentId === a.id;
@@ -484,7 +507,15 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               );
             })}
           </RNView>
+          </>)}
 
+          {/* The hosted assistant needs no machine, folder, model or context:
+              its sheet is the first ask. */}
+          {hosted ? (
+            <RNView style={{ marginTop: onlyHosted ? Spacing.sm : Spacing.lg }}>
+              <AssistantStart key={seed ?? ''} seed={seed} onStart={startHosted} />
+            </RNView>
+          ) : (<>
           {/* Machine row. One machine is no choice at all, so it only appears
               once there are two — a single-device account sees the old sheet. */}
           {devices.length > 1 && (
@@ -667,6 +698,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
               trackColor={{ true: Theme.cyan, false: Theme.borderLight }}
             />
           </RNView>
+          </>)}
 
           {labels.length > 0 && (
             <RNView style={modalStyles.labelPillRow}>
@@ -694,6 +726,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
           ) : null}
         </ScrollView>
 
+        {hosted ? null : (
         <RNView style={modalStyles.footer}>
           <TouchableOpacity
             style={modalStyles.cancelBtn}
@@ -712,6 +745,7 @@ function NewSessionModal({ visible, onClose, onSessionCreated }: { visible: bool
             </RNView>
           </TouchableOpacity>
         </RNView>
+        )}
 
         {rail && (
           <ModelEffortSheet
@@ -1015,6 +1049,16 @@ export default function InboxScreen() {
   // Both list memos below bake palette values into React nodes.
   const scheme = useActiveScheme();
   const [showNewSession, setShowNewSession] = useState(false);
+  // A starter tapped in the empty inbox opens the sheet with its words typed in.
+  const [newSeed, setNewSeed] = useState<string | null>(null);
+  const openNewSession = useCallback((seed: string | null = null) => {
+    setNewSeed(seed);
+    setShowNewSession(true);
+  }, []);
+  const words = useModeWords();
+  // Hosted mode: no CLI to install, and no project chips.
+  const installCli = useSurface('empty.installCli');
+  const gitChips = useSurface('gitChips');
   const [showStashed, setShowStashed] = useState(false);
   const [showKilled, setShowKilled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -1404,6 +1448,18 @@ export default function InboxScreen() {
       if (!hydrated || sessionsFirstLoad !== false) {
         return [<SessionListSkeleton key="skeleton" />];
       }
+      if (!installCli) {
+        // Hosted mode's first run: nothing to install, so the empty inbox
+        // offers the assistant (web HostedEmptyState).
+        return [(
+          <RNView key="empty" style={[styles.emptyInbox, { paddingHorizontal: Spacing.xl }]}>
+            <AssistantIntro onStarter={(text) => openNewSession(text)} />
+            <TouchableOpacity style={styles.emptyStart} onPress={() => openNewSession()} activeOpacity={0.8} accessibilityRole="button">
+              <RNText style={styles.emptyStartText}>{words.newConversation}</RNText>
+            </TouchableOpacity>
+          </RNView>
+        )];
+      }
       return [(
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
@@ -1417,7 +1473,7 @@ export default function InboxScreen() {
         <RNView key="empty" style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
-          <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
+          <RNText style={styles.emptySubtext}>All {words.conversations.toLowerCase()} stashed, killed, or idle</RNText>
         </RNView>
       )];
     }
@@ -1473,7 +1529,7 @@ export default function InboxScreen() {
     sections.push(renderSection("Dormant", statusDormant, Theme.blue, undefined, countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, installCli, openNewSession, words]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -1567,7 +1623,8 @@ export default function InboxScreen() {
     ...(hasPlanSessions ? [{ key: "plan", label: "By plan", icon: "sitemap" }] : []),
   ] as Array<{ key: InboxViewMode; label: string; icon: any }>), [visibleBuckets.length, hasPlanSessions]);
 
-  const hasChips = labelChips.length > 0 || projectCounts.length > 1;
+  const projectChips = gitChips ? projectCounts : [];
+  const hasChips = labelChips.length > 0 || projectChips.length > 1;
   const filterActive = !!(activeBucketFilter || activeProjectFilter);
   const showChips = !isSearching && hasChips && (chipsOpen || filterActive);
 
@@ -1701,7 +1758,7 @@ export default function InboxScreen() {
                 </TouchableOpacity>
               );
             })}
-            {projectCounts.map(([name, count]) => {
+            {projectChips.map(([name, count]) => {
               const active = activeProjectFilter === name;
               return (
                 <TouchableOpacity
@@ -1754,6 +1811,7 @@ export default function InboxScreen() {
 
       <NewSessionModal
         visible={showNewSession}
+        seed={newSeed}
         onClose={() => setShowNewSession(false)}
         onSessionCreated={(conversationId) => {
           // focus=1: a just-created session opens ready to type (composer focused).
@@ -1764,8 +1822,10 @@ export default function InboxScreen() {
       <RNView style={styles.fabContainer} pointerEvents="box-none">
         <TouchableOpacity
           style={styles.fab}
-          onPress={() => setShowNewSession(true)}
+          onPress={() => openNewSession()}
           activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityLabel={words.newConversation}
         >
           <FontAwesome name="plus" size={18} color="#fff" />
         </TouchableOpacity>
@@ -1866,6 +1926,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   emptySubtext: {
     fontSize: 14,
     color: Theme.textMuted0,
+  },
+  emptyStart: {
+    marginTop: Spacing.lg,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: Theme.text,
+  },
+  emptyStartText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Theme.bg,
   },
   sectionHeader: {
     flexDirection: 'row',

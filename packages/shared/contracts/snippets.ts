@@ -26,13 +26,50 @@ import { manifestHash } from "./capabilities";
 import { ASSIGNEE_MEANS } from "./orgAssignee";
 import { BROWSER_EXTENSION_STORE_URL } from "./browserExtension";
 
+export type SnippetCategory = "context" | "together" | "work" | "show" | "hands";
+
+/**
+ * The groups agent features are listed under, in reading order. Each names
+ * what a person gets, not how it is built, so the page reads as a menu of
+ * abilities rather than a list of config keys.
+ */
+export const SNIPPET_CATEGORIES: { id: SnippetCategory; name: string; blurb: string }[] = [
+  {
+    id: "context",
+    name: "Context",
+    blurb: "What an agent knows before it starts: past sessions, and where each thread stands.",
+  },
+  {
+    id: "together",
+    name: "Working together",
+    blurb: "Sessions that delegate, message each other, and bring you a decision instead of an interruption.",
+  },
+  {
+    id: "work",
+    name: "Tracking & automation",
+    blurb: "Tasks and plans on your board, runs that fire later or on events, and pull requests seen through to merge.",
+  },
+  {
+    id: "show",
+    name: "Showing the work",
+    blurb: "Visuals in the conversation, pages you can share, and mods that extend this app.",
+  },
+  {
+    id: "hands",
+    name: "Hands on the machine",
+    blurb: "Your browser, native apps and simulators, plus the shared typecheck and limit recovery that keep a fleet running.",
+  },
+];
+
 export interface SnippetDescriptor {
   /** What you type: `cast install <slug>`. Stable, lowercase, no spaces. */
   slug: string;
   /** Alternate names accepted on the CLI (e.g. "work" → tasks). */
   aliases?: string[];
-  /** Human label shown in `-h`, the wizard, and the Settings page. */
+  /** Human label shown in `-h`, the wizard, and the Agent features page. */
   name: string;
+  /** The group it is listed under (SNIPPET_CATEGORIES). */
+  category: SnippetCategory;
   /** One-line summary. */
   desc: string;
   /** The full explanation — same prose the `cast install` wizard prints. */
@@ -306,6 +343,9 @@ cast workflow list                          # available templates
 cast workflow push                          # push a workflow to the web UI
 cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate
 cast role line @handle [--set <slug>]       # read or set the workflow a role's tasks run on (default: line)
+cast line profile                           # this repo's line: commands, finders, limits, where each value comes from
+cast line set <key> <value> | unset <key>   # edit .codecast/line.toml in place: checked, then published to the app
+cast line finder set <id> --source … | rm <id>   # the sources that file signals into the line
 \`\`\`
 
 \`\`\`dot
@@ -393,7 +433,7 @@ EOF
 
 **Forks** branch this conversation. Each branch keeps the history up to the fork point (by default just before the latest user message, so the fork request never enters a branch; \`--at <line>\` picks another spot, \`-s <id>\` forks another session). When forking is your own idea, pass \`--tip\`: there is no fork request to strip, and the default would drop the human's real latest message. With two or more directions you take the first in place and each other becomes a branch, so issue ONE \`cast fork\` with all N directions and carry on with the first instead of ending the turn to report a roster. One direction spins off a single branch while you continue. \`--all-branches\` leaves this thread out of the fan-out. A branch receives its direction as its human's next message: it doesn't know it is a fork and reports to nobody. Never message, monitor, wait on or coordinate branches; write each direction as a complete instruction for a thread reading it cold.
 
-**Cloud hosts.** \`--cloud\` on \`cast spawn\` or \`cast fork\` runs the session on the person's cloud host, starting from this checkout as it stands: uncommitted and gitignored files travel, dependency and build folders are rebuilt there. The host carries their agent config, shell, logins and CLIs; on it \`$CODECAST_CLOUD\` is \`1\`. A cloud session's folder can be kept in step with a copy on the laptop, both ways (\`cast sync start <session>\` from the laptop). When something you expect is missing on the host, \`cast sync status\` says why, and \`cast sync pull <path>\` fetches it from the laptop (a file that stayed there, one outside the repo, or \`--ref <branch>\` for a branch only the laptop has) rather than recreating it; \`cast sync push\` sends your changes to the laptop copy. What a repo needs on a host (system packages, services, setup commands) belongs in the \`[host]\` table of \`.codecast/workspace.toml\`, and what should or should not travel in its \`[sync]\` table.
+**Cloud hosts.** \`--cloud\` on \`cast spawn\` or \`cast fork\` runs the session on the person's cloud host, starting from this checkout as it stands: uncommitted and gitignored files travel, dependency and build folders are rebuilt there. The host carries their agent config, shell, logins and CLIs; on it \`$CODECAST_CLOUD\` is \`1\`. A cloud session's folder can be kept in step with a copy on the laptop, both ways (\`cast sync start <session>\` from the laptop). When something you expect is missing on the host, \`cast sync status\` says why, and \`cast sync pull <path>\` fetches it from the laptop (a file that stayed there, one outside the repo, or \`--ref <branch>\` for a branch only the laptop has) rather than recreating it; \`cast sync push\` sends your changes to the laptop copy. A laptop folder the person approved with \`cast hosts reach\` is mounted on the host at its laptop path and has no copy: read and edit it there in place, and when it holds only a \`.cast-reach\` note the laptop is offline. What a repo needs on a host (system packages, services, setup commands) belongs in the \`[host]\` table of \`.codecast/workspace.toml\`, and what should or should not travel in its \`[sync]\` table.
 
 Every launch starts working immediately and knows only what you give it (plus, for a fork, the history up to the fork point), so seed each with a sharp, self-contained prompt. When you launch several, tell the human in one line what runs where, then continue.
 
@@ -982,6 +1022,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
   {
     slug: "memory",
     name: "Memory",
+    category: "context",
     desc: "Cross-session recall (cast search / context / feed)",
     detail:
       "Adds `cast search`, `cast context`, and `cast feed` so agents can find prior " +
@@ -1005,6 +1046,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "messaging",
     aliases: ["send"],
     name: "Messaging",
+    category: "together",
     desc: "Session-to-session messages (cast send)",
     detail:
       "Use `cast send <session> \"…\"` when it changes the recipient's next action, answers a question, " +
@@ -1022,6 +1064,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "pr",
     aliases: ["pull-requests", "pulls", "review"],
     name: "Pull requests",
+    category: "work",
     desc: "Review and steer pull requests from the shell (cast pr)",
     detail:
       "Adds `cast pr`: list and inspect pull requests, hold notes on lines of the diff and send them " +
@@ -1037,6 +1080,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "mods",
     aliases: ["mod", "plugins", "extensions"],
     name: "Mods",
+    category: "show",
     desc: "Agents build mods that extend the codecast app, live in the conversation (cast mod)",
     detail:
       "Teaches agents to build mods: small sandboxed modules that add panes, palette commands, sidebar " +
@@ -1055,6 +1099,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "forks",
     aliases: ["fork", "spawn", "sessions", "exec", "switch"],
     name: "Forks & Sessions",
+    category: "together",
     desc: "Delegate nested workers, hand off independent inbox threads, or run a prompt",
     detail:
       "For delegated implementers, reviewers and audits that report back to you, use " +
@@ -1078,6 +1123,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "tasks",
     aliases: ["task", "plans", "work"],
     name: "Tasks & Plans",
+    category: "work",
     desc: "Work tracking for agents (cast task / plan)",
     detail:
       "Gives agents `cast task` and `cast plan` to track what they're working on — they " +
@@ -1106,6 +1152,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "triggers",
     aliases: ["trigger", "scheduling", "schedule", "async"],
     name: "Triggers",
+    category: "work",
     desc: "Delayed, recurring, and event-driven agent runs (cast trigger)",
     detail:
       "Adds `cast trigger` so agents can queue follow-up work. For example, an agent " +
@@ -1131,6 +1178,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "workflows",
     aliases: ["workflow"],
     name: "Workflows",
+    category: "work",
     desc: "Execution graphs with approval gates (cast workflow)",
     detail:
       "Adds `cast workflow` for running .cast files — directed graphs in DOT syntax where " +
@@ -1150,6 +1198,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "visual",
     aliases: ["canvas", "visuals"],
     name: "Visual Canvas",
+    category: "show",
     desc: "Inline HTML visuals from agents (cast-canvas)",
     detail:
       "Teaches agents to render rich visuals inline with a `cast-canvas` HTML block — " +
@@ -1170,6 +1219,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "publish",
     aliases: ["pages", "artifacts", "artifact", "htmlpub"],
     name: "Publish",
+    category: "show",
     desc: "Shareable published pages (cast publish)",
     detail:
       "Adds `cast publish <file.html>` so agents can publish HTML deliverables — reports, " +
@@ -1187,6 +1237,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "state",
     aliases: ["threadstate", "pinned", "pin"],
     name: "Thread State",
+    category: "context",
     desc: "A pinned, agent-maintained status per thread (cast state)",
     detail:
       "Adds `cast state \"…\"` so an agent keeps a short pinned state on its session: what it " +
@@ -1209,6 +1260,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "chat",
     aliases: ["channels", "channel"],
     name: "Team chat",
+    category: "together",
     desc: "Post to and read team channels (cast chat)",
     detail:
       "Adds `cast chat` so agents can talk where the team talks: post progress to a channel " +
@@ -1225,6 +1277,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "calls",
     aliases: ["huddles", "call"],
     name: "Calls",
+    category: "together",
     desc: "Read transcribed team calls (cast calls)",
     detail:
       "Adds `cast calls` and `cast call <id>` so agents can read the team's huddles: the " +
@@ -1242,6 +1295,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "browser",
     aliases: ["chrome", "browse", "web"],
     name: "Browser",
+    category: "hands",
     desc: "Use your Chrome through the Cast extension",
     detail:
       "Adds `cast browser` for opening pages, reading, clicking, typing, screenshots, " +
@@ -1267,6 +1321,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "computer",
     aliases: ["computer-use", "desktop", "mac", "native"],
     name: "Computer",
+    category: "hands",
     desc: "Drive a native macOS app (cast computer)",
     detail:
       "Adds `cast computer` so agents can work in desktop apps the way they already work " +
@@ -1286,6 +1341,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "sim",
     aliases: ["simulator", "ios", "simulators"],
     name: "iOS Simulator",
+    category: "hands",
     desc: "Drive iOS simulators from a shared pool, on a laptop or a cloud Mac (cast sim)",
     detail:
       "Adds `cast sim` so agents share a machine's iOS simulators instead of booting their own: a " +
@@ -1303,6 +1359,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "check",
     aliases: ["typecheck", "tsc", "types"],
     name: "Typecheck",
+    category: "hands",
     desc: "Typecheck through one shared tsc watcher per project (cast check)",
     detail:
       "Adds `cast check` so agents typecheck through one shared `tsc --watch` per tree and " +
@@ -1321,6 +1378,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "decide",
     aliases: ["decisions-queue", "queue"],
     name: "Decision queue",
+    category: "together",
     desc: "Hand your human one well-formed decision (cast decide)",
     detail:
       "Adds `cast decide` so an agent that hits a real fork — a tradeoff, an irreversible " +
@@ -1338,6 +1396,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "limits",
     aliases: ["usage", "usage-limits", "limit"],
     name: "Usage limits",
+    category: "hands",
     desc: "Keep working through usage limits (codecast recovers parked sessions)",
     detail:
       "Tells agents that a usage limit is a pause, not a stop: codecast resumes limit-parked " +
@@ -1356,6 +1415,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "orchestration",
     aliases: ["orchestrate", "orch"],
     name: "Orchestration",
+    category: "work",
     desc: "Multi-agent plan execution (/orchestrate)",
     detail:
       "Installs an /orchestrate skill and three agent types (implementer, reviewer, critic). " +
@@ -1372,6 +1432,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
     slug: "skills",
     aliases: ["skill", "commands"],
     name: "Skills",
+    category: "work",
     desc: "Slash commands over the team's shared state (/cast-pickup, /cast-why, /cast-ship, …)",
     detail:
       "Installs the cast-* skills: rituals that need what one session cannot see. " +

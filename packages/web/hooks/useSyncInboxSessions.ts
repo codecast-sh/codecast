@@ -160,13 +160,18 @@ export type InboxFloorFlags = {
   floorStamped: boolean;
   logStamped: boolean;
 };
+/** The floor has been cut for this principal: every session in the horizon
+ *  is in the cache, so an empty cache means there are none (lib/firstRun.ts). */
+export function inboxFloorStamped(s: { syncMeta: Record<string, { backfilledAt?: number } | undefined> }, principalId: string | null | undefined): boolean {
+  return !!s.syncMeta[syncMetaKey("sessions", inboxCrawlWsKey(principalId))]?.backfilledAt;
+}
 export function inboxFloorFlags(s: ReturnType<typeof useInboxStore.getState>, principalId: string | null | undefined): InboxFloorFlags {
   const wsKey = inboxCrawlWsKey(principalId);
   return {
     wsKey,
     principalId,
     hydrated: s.clientStateInitialized,
-    floorStamped: !!s.syncMeta[syncMetaKey("sessions", wsKey)]?.backfilledAt,
+    floorStamped: inboxFloorStamped(s, principalId),
     logStamped: principalId != null && s.syncLogScopeStamps[`user:${principalId}`] !== undefined,
   };
 }

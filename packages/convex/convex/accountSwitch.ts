@@ -50,6 +50,8 @@ import {
   THROTTLE_CONTINUE_DELAY_MS,
   THROTTLE_CONTINUE_SPACING_MS,
   pickThrottleContinueBatch,
+  pickLimitProbe,
+  limitProbeStep,
   throttleContinueAttemptKey,
   PACED_CONTINUE_KINDS,
   tokenBackedProfile,
@@ -1260,6 +1262,43 @@ async function scheduleThrottleContinue(
   if (primary) await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, throttle_check_at: at } });
 }
 
+// The client id of the loop's continue for a limit-parked row: bucketed so a
+// repeated pass inside the minute cannot queue a second row, and shared by
+// the probe and the batches it releases (limit_probe.bucket).
+function limitContinueClientIds(blocked: Array<{ _id: string }>, bucket: number): Record<string, string> {
+  return Object.fromEntries(blocked.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]));
+}
+
+// The account loop's "continue" for limit-parked rows. One row goes out as it
+// always did. Two or more go out in stages behind a probe (pickLimitProbe):
+// the probe now, the rest from throttleContinueCheck once the probe has
+// shown the account really has room, at the throttle pace. Returns the probe
+// to store on the switch state (null when nothing was staged) and the
+// booked tick, for the caller's state write.
+async function continueLimitParks(
+  ctx: { db: any; scheduler: { runAt: (at: number, fn: any, args: any) => Promise<any> } },
+  userId: Id<"users">,
+  input: { blocked: Doc<"conversations">[]; online: Doc<"devices">[]; primary: Doc<"devices">; now: number },
+): Promise<{ restarted: number; probe: ReturnType<typeof pickLimitProbe>; throttle_check_at?: number }> {
+  const { blocked, online, primary, now } = input;
+  const probe = blocked.length > 1 ? pickLimitProbe(blocked, now) : null;
+  const bucket = probe?.bucket ?? Math.floor(now / 60_000);
+  const sending = probe ? blocked.filter((c) => c._id === probe.conversation_id) : blocked;
+  const res = await insertSwitchCommands(ctx, userId, {
+    profile: undefined,
+    blocked: sending,
+    online,
+    primary,
+    continueBlocked: true,
+    now,
+    continueClientIds: limitContinueClientIds(sending, bucket),
+  });
+  if (!probe) return { restarted: res.restarted, probe: null };
+  const at = now + THROTTLE_CONTINUE_SPACING_MS;
+  await ctx.scheduler.runAt(at, internal.accountSwitch.throttleContinueCheck, { user_id: userId });
+  return { restarted: res.restarted, probe, throttle_check_at: at };
+}
+
 export const throttleContinueCheck = internalMutation({
   args: { user_id: v.id("users") },
   handler: async (ctx, args) => {
@@ -1276,6 +1315,48 @@ export const throttleContinueCheck = internalMutation({
     };
     const { blocked, skipped } = await listBlockedConversations(ctx, args.user_id, false);
     const dismissed = await dismissSkippedWorkersAutomatically(ctx, primary, skipped);
+
+    // A staged limit release in flight (continueLimitParks) comes first: the
+    // probe's fate decides whether anything else leaves this tick.
+    const probe = state.limit_probe;
+    if (probe && primary) {
+      const step = limitProbeStep(blocked, probe, now);
+      if (step.step === "reparked") {
+        // The account is still spent. The account loop reads the new park
+        // against the continue it already recorded (continueHasNewEvidence)
+        // and lands on its exhausted branch, booked at the next known reset,
+        // or on a switch where one is allowed.
+        await writeState({ limit_probe: undefined, throttle_check_at: undefined });
+        await ctx.scheduler.runAfter(0, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        return { acted: "probe_reparked", dismissed, probe: probe.conversation_id };
+      }
+      if (step.step === "settling") {
+        const at = now + THROTTLE_CONTINUE_SPACING_MS;
+        await book(at);
+        return { acted: "probe_settling", dismissed, probe: probe.conversation_id, next_check_at: at };
+      }
+      const res = await insertSwitchCommands(ctx, args.user_id, {
+        profile: undefined,
+        blocked: step.batch,
+        online,
+        primary,
+        continueBlocked: true,
+        now,
+        continueClientIds: limitContinueClientIds(step.batch, probe.bucket),
+      });
+      if (step.remaining > 0) {
+        const at = now + THROTTLE_CONTINUE_SPACING_MS;
+        await book(at);
+        return { acted: "released", continued: res.messaged + res.restarted, dismissed, remaining: step.remaining, next_check_at: at };
+      }
+      await writeState({ limit_probe: undefined, throttle_check_at: undefined });
+      state.limit_probe = undefined;
+      if (step.batch.length > 0) {
+        return { acted: "released", continued: res.messaged + res.restarted, dismissed, remaining: 0 };
+      }
+      // Nothing left to release: fall through to the paced throttle rows.
+    }
+
     const { batch, remaining, waiting, nextDueAt } = pickThrottleContinueBatch(blocked, now, attempts);
     if (batch.length === 0) {
       if (nextDueAt !== null) {
@@ -1937,20 +2018,10 @@ export const autoSwitchCheck = internalMutation({
       }
 
       if (codexDecision.action === "continue") {
-        const bucket = Math.floor(now / 60_000);
-        const res = await insertSwitchCommands(ctx, args.user_id, {
-          profile: undefined,
-          blocked: codexLimit,
-          online,
-          primary,
-          continueBlocked: true,
-          now,
-          continueClientIds: Object.fromEntries(
-            codexLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
-          ),
-        });
+        const res = await continueLimitParks(ctx, args.user_id, { blocked: codexLimit, online, primary, now });
+        if (res.probe) state = { ...state, limit_probe: res.probe, throttle_check_at: res.throttle_check_at };
         await recordAction("codex_continue", [AUTO_SWITCH_CODEX_CONTINUE_KEY]);
-        console.log(`autoSwitchCheck: continuing ${codexLimit.length} Codex limit-parked conversation(s)`);
+        console.log(`autoSwitchCheck: continuing ${res.probe ? 1 : codexLimit.length} of ${codexLimit.length} Codex limit-parked conversation(s)`);
         return { acted: "codex_continue", conversations: codexLimit.length, restarted: res.restarted };
       }
 
@@ -2046,24 +2117,16 @@ export const autoSwitchCheck = internalMutation({
 
     if (decision.action === "continue") {
       // Same no-switch revive the banner uses: a message where one can
-      // reach the session, a restart (pin corrected) where it cannot.
-      const bucket = Math.floor(now / 60_000);
-      const res = await insertSwitchCommands(ctx, args.user_id, {
-        profile: undefined,
-        blocked: claudeLimit,
-        online,
-        primary,
-        continueBlocked: true,
-        now,
-        continueClientIds: Object.fromEntries(
-          claudeLimit.map((conv) => [conv._id, `auto-switch-continue-${conv._id}-${bucket}`]),
-        ),
-      });
+      // reach the session, a restart (pin corrected) where it cannot. Two or
+      // more rows go out in stages behind a probe (continueLimitParks).
+      const res = await continueLimitParks(ctx, args.user_id, { blocked: claudeLimit, online, primary, now });
+      if (res.probe) state = { ...state, limit_probe: res.probe, throttle_check_at: res.throttle_check_at };
       await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue", activeProfile));
       await releaseWorkers();
       return {
         acted: "continue",
-        conversations: claudeLimit.length,
+        conversations: res.probe ? 1 : claudeLimit.length,
+        staged: res.probe ? claudeLimit.length - 1 : 0,
         restarted: res.restarted,
       };
     }

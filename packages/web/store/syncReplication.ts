@@ -367,9 +367,10 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
         // Every lock this window holds on the sibling's rows, which the merge
         // below would read as a value echo and retire.
         const entries: Array<{ id: string; field: string; value: unknown; ts?: number; ack?: unknown }> = [];
+        const pendingEntries = Object.entries(current.pending);
         for (const row of u.upserts) {
           const prefix = `${u.key}:${String(row._id)}:`;
-          for (const [k, entry] of Object.entries(current.pending)) {
+          for (const [k, entry] of pendingEntries) {
             if (!k.startsWith(prefix) || (entry as any)?.type !== "field") continue;
             entries.push({ id: String(row._id), field: k.slice(prefix.length), value: (entry as any).value, ts: (entry as any).ts, ack: (entry as any).ack });
           }

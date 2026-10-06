@@ -4,7 +4,7 @@
 // form that is safe to store before the tab system keeps it, wherever the
 // path came from: a link, the address bar, a hydrated tab list. Today that is
 // the Evals area, whose addresses may name private freezes and batches
-// (components/evals/evalsPaths.ts evalsCanonicalPath); every other path
+// (the Evals address grammar's canonicalPath, components/evals/evalsPaths.ts); every other path
 // passes through unchanged. Pure and relative-imported, so the store, the
 // stage and the router compat layer can all call it. A tab's title persists
 // beside its path, so an Evals tab is named from its storable address and
@@ -13,15 +13,15 @@
 // that carry a tab address have their args brought to the same form at both
 // sinks (storableActionArgs).
 
-import { evalsCanonicalPath, evalsTabLabel, isEvalsPath } from "../components/evals/evalsPaths";
+import { codecastEvalsPaths } from "../components/evals/evalsPaths";
 
 export function tabSafePath(path: string): string {
-  return isEvalsPath(path) ? evalsCanonicalPath(path) : path;
+  return codecastEvalsPaths.isPath(path) ? codecastEvalsPaths.canonicalPath(path) : path;
 }
 
 /** The title a tab may keep for `path`: an Evals tab's label from its storable address, any other tab's own title. */
 export function tabSafeTitle(path: string, title: string): string {
-  return isEvalsPath(path) ? evalsTabLabel(tabSafePath(path)) : title;
+  return codecastEvalsPaths.isPath(path) ? codecastEvalsPaths.tabLabel(tabSafePath(path)) : title;
 }
 
 /**
@@ -33,7 +33,7 @@ export function tabSafeTitle(path: string, title: string): string {
 const TAB_PATH_ACTIONS = new Set(["openTab", "updateTab", "saveCurrentTabState", "stageInsertLeaf", "stageSetLeafPath", "applyWorkbench"]);
 
 function storable(v: unknown): unknown {
-  if (typeof v === "string") return isEvalsPath(v) ? tabSafePath(v) : v;
+  if (typeof v === "string") return codecastEvalsPaths.isPath(v) ? tabSafePath(v) : v;
   if (Array.isArray(v)) {
     const next = v.map(storable);
     return next.some((x, i) => x !== v[i]) ? next : v;
@@ -46,7 +46,7 @@ function storable(v: unknown): unknown {
     if (x !== rec[k]) (out ??= { ...rec })[k] = x;
   }
   const r = out ?? rec;
-  if (typeof rec.path === "string" && typeof rec.title === "string" && isEvalsPath(rec.path)) {
+  if (typeof rec.path === "string" && typeof rec.title === "string" && codecastEvalsPaths.isPath(rec.path)) {
     const title = tabSafeTitle(rec.path, rec.title);
     if (title !== r.title) (out ??= { ...rec }).title = title;
   }

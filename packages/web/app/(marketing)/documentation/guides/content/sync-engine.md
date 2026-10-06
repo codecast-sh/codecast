@@ -8,6 +8,8 @@ This article explains each idea, with the real identifiers from the code, for en
 
 A component never renders the result of a live query. A hook subscribes to the query and hands each push to one store function, `syncTable`. The component reads the store. The store is persisted to IndexedDB, the database built into the browser, so a populated cache is the normal first paint. A skeleton is honest only when the cache is cold (`!ready && rows.length === 0`).
 
+![The codecast inbox: sessions grouped by who acts next beside an open conversation](/documentation/shots/inbox.webp "The inbox and the open conversation paint from the local store. Each row's state, message count and age arrive through feeders and the liveness overlay, never by rendering a query result directly.")
+
 ```ts
 // Feeder: mounted once, renders nothing.
 useSyncCollection("agentTasks", api.agentTasks.webList, args);
@@ -31,7 +33,12 @@ pending["tasks:<id>:status"] = { type: "field", value: "done", ts }
 pending["tasks:<id>"]        = { type: "exclude", ts }   // a local delete
 ```
 
-While a lock exists, `syncTable` keeps the local value for that field and accepts every other field from the server. The lock retires when the server sends back the same value. A second rule, described below, retires it when the sync log passes the position of the write.
+While a lock exists, `syncTable` keeps the local value for that field and accepts every other field from the server. The lock retires when the server sends back the same value. A second rule, described below, retires it once the sync log has delivered the write and the client has applied it.
+
+```figure
+PendingLockFigure
+The write paints in the same tick and locks its field. A stale push cannot put the old value back; the server's echo retires the lock.
+```
 
 Derived fields are the known trap. A server row can carry `assignee_info`, an object joined from `assignee`. If the store locked that object, the lock would never retire, because the comparison is `===` and the server builds a new object each time. So the client derives such fields at render from the raw field and the team list it already holds (`lib/liveEntities`).
 
@@ -64,17 +71,26 @@ sync_heads:   { scope_key, position, floor }
 sync_actions: { scope_key, position, entity_type, entity_id, op, ts,
                 patch, unset, full, partial, omitted,
                 access_owner, access_key, access_grants }
+sync_outbox:  one slot per (scope, entity): the latest undelivered change,
+              its revision, and the revision and position delivered last
 ```
 
-Every tracked write to conversations, tasks, docs, plans or projects reads the head row of the scope, takes `position = head + 1`, and writes the action in the same Convex mutation transaction as the data. Convex mutations are serializable. So positions in a scope rise strictly in commit order, and a reader that has seen head H has seen every action at or below H. That is the whole ordering proof. `ts` exists for retention and is never an ordering key.
+Every tracked write to conversations, tasks, docs, plans or projects also writes a pending slot in `sync_outbox`, in the same Convex mutation transaction as the data. A slot is keyed by scope and entity, so two saves of different rows never touch a shared counter, and a second save of the same row before delivery merges into the slot. The save schedules a delivery worker. In its own transaction the worker reads the scope's head row, takes `position = head + 1` for each slot it drains (at most 32 a run), writes the actions, and marks each slot delivered at that revision and position. Convex mutations are serializable, so positions in a scope rise strictly in the order deliveries commit, and a reader that has seen head H has seen every action at or below H. One entity's changes deliver in the order they were saved; two entities may deliver in either order, which is safe because the client always applies current state. A sweep every minute reschedules any slot a failed worker left pending. `ts` exists for retention and is never an ordering key.
 
-Two rules keep the table small. An entity has at most one active row in a scope: a new write moves that row to the new head. And a patch that touches only fields in `CHURN_ONLY_FIELDS` (`last_heartbeat`, `message_count`, `updated_at` and similar) emits no action. Without that rule every streaming session of a user would contend on one head row.
+The outbox shipped on 2026-10-06 (`5fc5d1df6`). Before it, each save took its position itself, so unrelated saves in one scope contended on the head row, and one of them could exhaust its retries because of another.
+
+Two rules keep the table small. An entity has at most one active row in a scope: a new write moves that row to the new head. And a patch that touches only fields in `CHURN_ONLY_FIELDS` (`last_heartbeat`, `message_count`, `updated_at` and similar) emits no action. Without that rule every streamed token would become a delivery.
 
 ### Reading, cursors and acks
 
 The client holds one live subscription, `getHeads`, which returns `{ position, floor }` for each scope the caller holds. The payload is a few integers, and it changes only on a tracked write. When a head moves, the applier waits 1500 ms to collect a burst, then reads `getRange { scope_key, from, limit, cargo }` as one shot queries, up to 500 actions or 1 MB for each page. It applies the page through the store's sync actions and then advances the cursor, which is stored in `syncMeta` under `synclog:v1:<scope_key>`.
 
-Positions also acknowledge writes. `dispatch` takes an optional `ack_positions` flag and then returns `{ __syncAckV1, result }` with the positions its transaction created. The store stamps those positions on the pending locks that still protect the dispatched value. When the scope cursor reaches a stamped position, the lock retires. The value comparison stays as a permanent second rule, because writes that the server defers to a scheduled function produce no ack.
+```figure
+SyncLogFigure
+One task edit: the save and its outbox slot commit together, a worker gives it the next position in each scope it reaches, and the client reads the range once its heads move.
+```
+
+Delivery also acknowledges writes. `dispatch` takes an optional `ack_positions` flag and then returns `{ __syncAckV1, __syncAckV2, result }`. V2 carries a receipt for each outbox slot the write touched (slot, entity and revision), limited to scopes the caller holds, and it returns as soon as the save commits, before any position exists. The store stamps each receipt on the pending locks of that entity. A lock retires when the slot's delivered revision covers its write and the scope cursor has applied that delivery's position. The value comparison stays as a permanent second rule, for older bundles and for writes that the server defers to a scheduled function, which produce no receipt.
 
 ### Cargo and the access stamp
 
@@ -95,7 +111,7 @@ The stamp decides two things. Fan out: an action lands in the owner's user scope
 | Reads a row that has no stamp | The action without cargo; the client fetches by id |
 | Is not authorized | A bare `delete` |
 
-The direct queries use the same rule. `canAccessTask`, `canAccessDoc`, `canAccessPlan` and `canAccessProject` are defined as evaluating that stamp, and a property test pins the pure evaluator to the one that reads memberships. The log and the fetch by id therefore cannot disagree. A log `delete` alone never removes a row on the client: the client asks the authorized query, and removes only ids that the query omits.
+The direct queries use the same rule. `canAccessTask`, `canAccessDoc`, `canAccessPlan` and `canAccessProject` are defined as evaluating that stamp, and a property test pins the pure evaluator to the one that reads memberships. The log and the fetch by id therefore cannot disagree. While a row's newer save still waits in the outbox, `getRange` returns its action without cargo, so the client fetches the current row by id: a revoked access fences old cargo at once. A log `delete` alone never removes a row on the client: the client asks the authorized query, and removes only ids that the query omits.
 
 ### Retention, and the client that is far behind
 
@@ -116,6 +132,11 @@ Election uses Web Locks, the browser API that grants a named lock to one holder 
 A follower skips every global feeder (they mount inside `HostFeeders`, or gate on `useIsSyncHost()`). It asks the host for a snapshot, which arrives in batches of at most 256 rows, and then applies the stream. Every message carries `{ hostId, seq }`, and a gap or a new host id triggers a fresh snapshot. Replicated rows enter through `syncTable`, the same path a Convex push takes, so the follower's own pending locks still win.
 
 Writes do not change. Each window dispatches its own mutations to the server. A follower also offers each optimistic write to the host as a `mut` message, and that is how the write appears in sibling windows before the server echo. An edited row ships as only the fields the action wrote. The follower's copy of the other fields is one hop behind the host's, so a whole row would move the host's fresher values back a step. The host applies the fields under the same locks the follower holds.
+
+```figure
+SyncHostFigure
+One window holds the lock, subscribes and persists, and streams rows to the others. A follower's own write goes to the server and, as a mut, to the host.
+```
 
 Every registry key is classified in `REPLICATION_CLASSIFICATION`, a `Record` over all keys, so a new key without a class is a compile error.
 

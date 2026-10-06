@@ -13,6 +13,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MOBILE_PULSE, MOBILE_SESSION_STYLE } from '@codecast/shared/render/mobileSessionStyle';
 import { AgentLogoSvg } from '@/components/AgentLogo';
+import { useSurface } from '@codecast/web/lib/surfaces';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 
 export type SessionData = {
@@ -182,7 +183,9 @@ function StatusDot({ session }: { session: SessionData }) {
 
 export function SessionItem({ session, isUnread, onPress, onPin, onLongPress, roleSessions, onOpenRole }: { session: SessionData; isUnread?: boolean; onPress: () => void; onPin?: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void }) {
   const Theme = useTheme();
-  const project = projectName(session);
+  // Hosted mode hides project chips (lib/surfaces gitChips).
+  const gitChips = useSurface('gitChips');
+  const project = gitChips ? projectName(session) : null;
   const agent = agentLabel(session.agent_type ?? "");
   const durationMs = session.updated_at - (session.started_at ?? session.updated_at);
   const sColor = statusColor(session);

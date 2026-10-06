@@ -50,7 +50,6 @@ import { useManagedSessionFields } from '@codecast/web/hooks/useManagedSessionFi
 import { useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
 import { beginLocalFork } from '@codecast/web/store/beginLocalFork';
 import { useMissingSessionLookup } from '@codecast/web/hooks/useMissingSessionRow';
-import { useEnsureDispatch } from '@codecast/web/hooks/useEnsureDispatch';
 import { useAckActiveSession } from '@/hooks/useAckActiveSession';
 import { PermissionCard } from '@/components/PermissionCard';
 import { SuggestionPills } from '@/components/SuggestionPills';
@@ -61,14 +60,16 @@ import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { showActionSheet, type SheetItem } from '@/lib/actionSheet';
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
-import { agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
+import { HostedConversation } from '@/components/hosted/HostedConversation';
+import { useIsHostedConversation } from '@codecast/web/hooks/useConversationAgentType';
+import { agentDisplayName, agentSupportsFork, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption, stripMentionContext, stripPastedContent } from '@codecast/shared/contracts';
 import { renderInlineMarkdown, MarkdownContent, MarkdownTextBlock, CodeBlockWithCopy, HighlightedCodeText, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipTint, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
-import { MOBILE_AGENT_LABEL, MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
+import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_PULSE, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
   toolSummary,
@@ -482,8 +483,7 @@ function formatModel(model?: string): string {
 }
 
 function formatAgentType(agentType?: string): string {
-  if (!agentType) return 'Unknown';
-  return MOBILE_AGENT_LABEL[agentType] ?? agentType.charAt(0).toUpperCase() + agentType.slice(1);
+  return agentType ? agentDisplayName(agentType) : 'Unknown';
 }
 
 function agentTypeColor(agentType?: string): string {
@@ -2411,7 +2411,7 @@ function SystemMessage({ message }: { message: Message }) {
 }
 
 function assistantLabel(agentType?: string): string {
-  return (agentType && MOBILE_AGENT_LABEL[agentType]) || 'Claude';
+  return agentDisplayName(agentType);
 }
 
 function formatTokenCount(n: number): string {
@@ -3516,6 +3516,11 @@ function ForkFamilyRow({ node, router, currentId, onClose }: { node: FlatForkNod
 
 export default function SessionDetailScreen() {
   const { id, message, focus } = useLocalSearchParams<{ id: string; message?: string; focus?: string }>();
+  // A conversation with the hosted assistant has no machine, model or
+  // terminal: it opens as its own screen (components/hosted). A stub keeps
+  // its row under the real id once the server has it, so ask by the live id.
+  const hosted = useIsHostedConversation(useInboxStore((s) => s.resolveLiveSessionId(id)));
+  if (hosted) return <HostedConversation id={id} />;
   return <SessionScreen id={id} message={message} focus={focus} />;
 }
 
@@ -3525,14 +3530,13 @@ export default function SessionDetailScreen() {
  *  role's standing session finds its own. */
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
   const Theme = useTheme();
-  // Wire the store's server dispatch (idempotent — just sets a ref). The inbox
-  // tab mounts useSyncInboxSessions and stays mounted under this pushed screen,
-  // so dispatch is usually already wired; but a cold deep-link can reach this
-  // screen before any tab mounts, and without this store.sendMessage would
-  // dispatch to a no-op. We wire ONLY dispatch here (not the inbox
-  // subscriptions/soundIdle that useSyncInboxSessions owns) to avoid duplicate
-  // subscriptions and double-firing idle sounds.
-  useEnsureDispatch();
+  // The store's server dispatch is wired once, at the root (StoreSyncBridge
+  // mounts useSyncCore above every screen), and must not be wired again here:
+  // the binding is a single slot with an owner, so a screen that binds takes
+  // it from the root, rejects the writes in flight (a create fired a moment
+  // before this screen opened), and on closing clears it, leaving every later
+  // write parked until the app restarts. A write made before the root has
+  // armed waits in the outbox and drains when it binds.
 
   // Claim store.currentSessionId while this screen is focused (re-asserted on
   // stack pop-back). The liveness reconciler prunes a conversation's optimistic

@@ -8,6 +8,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { EmptyState } from "../../components/EmptyState";
 import { OpsShell } from "../../components/ops/OpsShell";
 import { parseOpsPath, type OpsTab, type OpsView } from "../../components/ops/opsPaths";
+import { useOpsSources } from "../../hooks/useSyncOps";
 
 type TabPage = ComponentType<{ source: string | null; app: string | null }>;
 
@@ -35,7 +36,15 @@ export default function OpsPage() {
   const pathname = usePathname();
   const search = useSearchParams();
   const query = search.toString();
-  const view = useMemo(() => parseOpsPath(pathname, query), [pathname, query]);
+  const parsed = useMemo(() => parseOpsPath(pathname, query), [pathname, query]);
+  // The tabs narrow by a source's name; a reference opens Ops by its `src-N`
+  // (entityRoute), so a short id or Convex id reads as the name it stands for.
+  const sources = useOpsSources();
+  const view = useMemo<OpsView>(() => {
+    if (parsed.view !== "tab" || !parsed.source) return parsed;
+    const named = sources.find((s) => s.short_id === parsed.source || s._id === parsed.source);
+    return named ? { ...parsed, source: named.name } : parsed;
+  }, [parsed, sources]);
   return (
     <AuthGuard>
       <div className="h-full min-h-0">

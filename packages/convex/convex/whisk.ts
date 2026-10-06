@@ -53,9 +53,12 @@ const internalApi = internal as any;
 
 const TOKEN_HKDF_INFO = "codecast-whisk-app-token-v1";
 
-/** The lane pages a connect may come back to. A fixed list: the return path
- *  rides the signed state, and finishConnect sends the browser only here. */
-export const WHISK_RETURN_PATHS = ["/simple/connections", "/welcome"] as const;
+/** The pages a connect may come back to: Settings > Integrations (the
+ *  default), /welcome, the main shell's inbox, and the phone lane's
+ *  Connections, whose web address now redirects to Integrations. A fixed
+ *  list: the return path rides the signed state, and finishConnect sends the
+ *  browser only here. */
+export const WHISK_RETURN_PATHS = ["/settings/integrations", "/welcome", "/inbox", "/simple/connections"] as const;
 export type WhiskReturnPath = (typeof WHISK_RETURN_PATHS)[number];
 
 export function whiskReturnPath(raw: unknown): WhiskReturnPath | undefined {

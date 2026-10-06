@@ -35,6 +35,7 @@ const TYPE_LABEL: Record<EntityType, string> = {
   pr: 'Pull request',
   commit: 'Commit',
   call: 'Call',
+  source: 'Source',
 };
 
 // Web pill palette: session=blue, plan=cyan, task=violet, doc=green,
@@ -52,6 +53,7 @@ const TYPE_COLOR: Record<EntityType, string> = {
   pr: Theme.green,
   commit: Theme.yellow,
   call: Theme.red,
+  source: Theme.orange,
 };
 
 const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']> = {
@@ -67,6 +69,7 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   pr: 'git-pull-request',
   commit: 'git-commit',
   call: 'phone',
+  source: 'radio',
 };
 
 // Mobile stand-in for web's StatusCircle glyphs: the circle "fills in" as the
@@ -140,8 +143,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   // a moment (`cl-42@2:30`) the time, the way the web pill labels them.
   const callRef = type === 'call' ? parseCallRef(rawId) : null;
   const call = useQueryNoThrow(api.transcripts.webGetCallRef, callRef && !named ? { ref: callRef.call } : 'skip').data;
+  const source = useQueryNoThrow(api.ingest.webGetSource, type === 'source' && !named ? { ref: rawId } : 'skip').data;
 
-  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : undefined;
+  const served: any = type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : undefined;
 
   const entity: any = served ?? seed;
 

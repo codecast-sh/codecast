@@ -8,6 +8,7 @@ import { Section } from "../identity/RoleScopeView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { sealSecret, useInstanceLessons, useTemplateActions, useTemplateInstance, useTemplateLearning } from "../../hooks/useTemplateHire";
 import { buildUpgradeSpec } from "./orgTemplateSpec";
+import { releasesBehindLabel, updateCard, type UpdateCard } from "./templateUpdate";
 import { LEARNING_OPT_IN_LABEL, LEARNING_OPT_IN_SENTENCE } from "@codecast/shared/contracts/orgTemplateLearning";
 
 // A template role's right column, under its project card (docs/architecture/
@@ -37,6 +38,8 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
   const authority = ((instance.authority ?? []) as any[]).filter((g) => !g.expires_at || g.expires_at > now);
   const routines = (instance.routines ?? []) as any[];
   const readiness = instance.readiness ?? {};
+  const card = updateCard(instance);
+  const behind = releasesBehindLabel(instance.releases_behind);
   const age = (at?: number) => at ? `${Math.max(1, Math.round((now - at) / 3_600_000))}h ago` : "";
   return (
     <div data-scope-template={instance.instance}>
@@ -119,16 +122,13 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
       )}
       <Section density="page" label="Template" name="template-release">
         <ul className="space-y-0.5 px-2.5 pb-1.5 text-[12px] text-sol-text-muted">
-          <li>{instance.template?.name ?? instance.template_id} {instance.version} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
-          {instance.update_available && (
-            <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-sol-text" data-template-update={instance.update_available}>
-              <span>Update available: {instance.update_available}{instance.pending_upgrade ? ` (accepted; its machine moves it on the next host step)` : proposed ? ` (proposed: ${proposed})` : ""}</span>
-              {canEdit && !instance.pending_upgrade && !proposed && instance.update_digest && <button type="button" disabled={busy === "update"} onClick={() => void act("update", async () => { const r = await propose({ team_id: teamId, ...buildUpgradeSpec(instance) }); setProposed(r.short_id); })} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50" data-template-update-propose>Update</button>}
-              {proposed && <Link href={`/org?proposal=${proposed}`} className="text-[11px] text-sol-cyan hover:underline">decide it</Link>}
-            </li>
-          )}
+          <li>{instance.template?.name ?? instance.template_id} {instance.version}{behind && <span className="text-sol-yellow" data-template-behind={instance.releases_behind}> · {behind}</span>} <span className="text-sol-text-dim">sha256 {String(instance.digest).slice(0, 12)}</span>{instance.host ? <span className="text-sol-text-dim"> · on {instance.host.machine}</span> : null}</li>
           {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
         </ul>
+        {card && (
+          <UpdateCardView card={card} to={instance.update_available} status={instance.pending_upgrade ? "accepted; its machine moves it on the next host step" : proposed ? `proposed: ${proposed}` : null} proposed={proposed} busy={busy === "update"}
+            onPropose={canEdit && !instance.pending_upgrade && !proposed && instance.update_digest ? () => void act("update", async () => { const r = await propose({ team_id: teamId, ...buildUpgradeSpec(instance) }); setProposed(r.short_id); }) : null} />
+        )}
         {instance.phase === "ready" && ((instance.secrets ?? []) as any[]).some((s) => !s.bound) && <HostStep instance={instance} canEdit={canEdit} purpose="secrets" />}
         {instance.pending_upgrade && instance.phase === "ready" && <HostStep instance={instance} canEdit={canEdit} purpose="update" />}
         <LearningSwitch teamId={teamId} canEdit={canEdit} />
@@ -140,6 +140,47 @@ export function TemplateSections({ roleId, canEdit, teamId }: { roleId: string; 
         )}
       </Section>
       {error && <p role="alert" className="px-2.5 text-[12px] text-sol-red">{error}</p>}
+    </div>
+  );
+}
+
+/**
+ * The Update card (sd-424): a stable instance moves only on a person's click,
+ * so the card leads with what kind of change it is, lists what the role will do
+ * differently, and shows every changelog in between, newest open and the rest
+ * folded. An authority change offers no button; a withdrawn release offers
+ * Roll back through the same proposal.
+ */
+function UpdateCardView({ card, to, status, proposed, busy, onPropose }: { card: UpdateCard; to: string; status: string | null; proposed: string | null; busy: boolean; onPropose: (() => void) | null }) {
+  const tone = card.kind === "rollback" ? "text-sol-red" : card.kind === "authority" ? "text-sol-orange" : card.kind === "structure" ? "text-sol-yellow" : "text-sol-green";
+  const [latest, ...earlier] = card.changelogs;
+  const section = (c: { version: string; text: string }) => (
+    <div key={c.version} className="mt-1" data-template-changelog={c.version}>
+      <p className="text-[11px] text-sol-text-dim">{c.version}</p>
+      <MarkdownRenderer content={c.text} className="cc-cmt-md prose-headings:mb-1 prose-headings:mt-1 prose-headings:text-[12px] prose-ol:pl-4 prose-ul:pl-4" />
+    </div>
+  );
+  return (
+    <div className="mx-2.5 mb-1.5 rounded-lg border border-sol-border/50 bg-sol-bg-alt/60 px-2.5 py-2 text-[12px] leading-relaxed" data-template-update={to} data-update-class={card.kind}>
+      <div className="flex flex-wrap items-start gap-x-2 gap-y-1">
+        <p className="min-w-[12rem] flex-1 text-sol-text">
+          {card.kind === "rollback" ? `Roll back to ${to}` : `Update available: ${to}`}
+          {card.heading && <span className={`block font-semibold ${tone}`} data-update-heading>{card.heading}</span>}
+          {status && <span className="block text-sol-text-dim">{status}</span>}
+        </p>
+        {onPropose && card.action && <button type="button" disabled={busy} onClick={onPropose} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50" data-template-update-propose>{card.action}</button>}
+        {proposed && <Link href={`/org?proposal=${proposed}`} className="shrink-0 text-[11px] text-sol-cyan hover:underline">decide it</Link>}
+      </div>
+      {card.changes.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sol-text" data-update-changes>{card.changes.map((line) => <li key={line}>{line}</li>)}</ul>}
+      {card.note && <p className="mt-1 text-sol-text-muted" data-update-note>{card.note}</p>}
+      {latest && card.kind === "rollback" && <p className="mt-1 text-sol-text-muted">What rolling back undoes:</p>}
+      {latest && section(latest)}
+      {earlier.length > 0 && (
+        <details className="mt-1" data-template-changelog-earlier={earlier.length}>
+          <summary className="cursor-pointer select-none text-[11px] text-sol-cyan">{earlier.length} earlier release{earlier.length === 1 ? "" : "s"}</summary>
+          {earlier.map(section)}
+        </details>
+      )}
     </div>
   );
 }

@@ -15,6 +15,7 @@
   },
   "routines": [
     { "id": "lessons-weekly", "title": "Weekly lessons for {{project.name}}", "every": "7d", "prompt": "org/prompts/lessons-weekly.md", "mode": "apply" },
+    { "id": "fix-loop-weekly", "title": "Weekly fix loop for {{project.name}}", "every": "7d", "prompt": "org/prompts/fix-loop-weekly.md", "mode": "apply" },
     { "id": "finder-health", "title": "Finder health for {{project.name}}", "every": "1d", "prompt": "org/prompts/finder-health.md", "mode": "apply", "requires": { "evidence": ["profile"] } },
     { "id": "expectations-daily", "title": "Expectations for {{project.name}}", "every": "1d", "prompt": "org/prompts/expectations-daily.md", "mode": "apply" }
   ],

@@ -33,6 +33,7 @@ export interface SignalAddOptions {
   url?: string;
   subject?: string;
   goalHint?: string;
+  role?: string;
 }
 
 export interface SignalRow {
@@ -45,6 +46,7 @@ export interface SignalRow {
   evidence_url?: string;
   subject?: string;
   goal_hint?: string;
+  role_handle?: string;
   observed_at: number;
   created_at: number;
   attach: "fingerprint" | "judge" | "new" | "person";
@@ -74,6 +76,7 @@ export function signalAddBody(options: SignalAddOptions): Record<string, string>
   if (options.url?.trim()) body.evidence_url = options.url.trim();
   if (options.subject?.trim()) body.subject = options.subject.trim();
   if (options.goalHint?.trim()) body.goal_hint = options.goalHint.trim();
+  if (options.role?.trim()) body.role_handle = options.role.trim().replace(/^@/, "");
   return body;
 }
 
@@ -151,6 +154,7 @@ export function registerSignalCommand(program: Command, deps: PublishDeps): void
     .option("--url <url>", "Where a person can see it")
     .option("--subject <ref>", "The file, surface, prompt id or route it concerns")
     .option("--goal-hint <key>", "The initiative metric the finder believes it threatens")
+    .option("--role <handle>", "The role whose run introduced what it saw (the fix-loop finder); counted on the health board")
     .option("--project <ref>", "Project to file it in: id, short id or title (default: the repo profile's [line] project, else none)")
     .option("--team <name|id|personal>", "Workspace to file it in (default: the repo profile's [line] team, else the session's team, else the directory's mapping)")
     .option("--json", "Machine-readable output")
